@@ -7,6 +7,7 @@ import os
 import re
 from datetime import timezone
 from typing import Literal
+from urllib.parse import quote
 
 import yaml
 from fastapi import Query, Request
@@ -119,6 +120,8 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
             ((bot,) if bot is not None else ()) + (since, since, limit)))
     stored = H.prime_messages(c, [row["message_id"] for row in found])
     privacy.prime_messages(c, list(stored.values()))
+    from . import threads
+    threads.prime_members(c, who, [row["conversation_id"] for row in stored.values()])
     privacy.prime_attempts(c, [row["id"] for row in found])
     prime_attempt_details(c, [row["id"] for row in found])
     for row in found:
@@ -1037,7 +1040,7 @@ DECISIVE_DAYS = 1
 KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "setup": 1, "declined": 2, "stale": 3, "task": 3, "report": 4,
              # Thread items (backend/thread_attention.py): an ask, a held message or a paused thread blocks a bot; a
              # mention or an unread DM is a person's to read.
-             "thread_ask": 1, "thread_held": 1, "thread_capped": 1, "thread_unsent": 1, "thread_mention": 2, "thread_dm": 2}
+             "thread_ask": 1, "thread_held": 1, "thread_capped": 1, "thread_mention": 2, "thread_dm": 2}
 # A card whose bot has not yet said plainly what it needs (`ask_missing`) waits at the very bottom: there is nothing
 # for the person to do on it until the bot restates it (backend/restate_asks.py asks it to).
 
@@ -1225,7 +1228,7 @@ def need_of(item):
         return "decide"         # a thread's question to the person, answered in the thread
     if kind == "thread_held":
         return "review"         # a message held for review (backend/org_rule_check.py)
-    if kind in ("thread_mention", "thread_dm", "thread_capped", "thread_unsent"):
+    if kind in ("thread_mention", "thread_dm", "thread_capped"):
         return "do"             # read or answer in the thread
     if item.get("reconnect"):
         return "connect"        # an account or credential a bot's task stopped on (backend/reconnects.py)
@@ -1857,7 +1860,6 @@ def needs_marks(items):
     return marks, version
 
 
-FLEET_CACHE_S = 15
 NEEDS_IDS_MAX = 100     # the most a live `needs` event names; more changed than that reads the list whole
 NEEDS_PAGE = 50         # a page of Needs you when `cursor` comes without `limit`
 NEEDS_PAGE_MAX = 200
@@ -1913,14 +1915,48 @@ def needs_actor(it, me):
             actor = (next((a for a in options if H.is_bot(a) and a != me), None)
                      or next((a for a in options if a and a != me), None))
     return actor
-_FLEET_CACHE = {}
 
 
-def fleet_snapshot_cached(c, auth, identity, task_view, ttl=FLEET_CACHE_S):
-    """Build a fresh snapshot so participant changes revoke every read immediately."""
-    # Participant changes revoke reads immediately, including already warmed snapshots.
-    return fleet_snapshot(c, auth, identity, task_view)
+NEEDS_SUMMARY_ITEMS = 10     # the newest items listed under each bot (at most)
+NEEDS_SUMMARY_BOTS = 25      # the bots listed, most waiting first; the rest are counted in `bots_left`
 
+
+def needs_summary(c, auth, who, task_view, limit):
+    """What the caller's Needs you holds, counted the way the list counts it (`count=1`): the total, the number per kind,
+    and per bot (`by_bot`): its count, the ones made this week and the ones older than three days, and its newest
+    `limit` items. A finished task that still holds an open ask is `done_but_open`. Items no bot put there are grouped
+    under `other`. Ages are days from each item's `created_at`."""
+    items = needs_items(c, auth, who, task_view, count_only=True)
+    now = H.now()
+    week, older = H.shift(now, days=-7), H.shift(now, days=-3)
+    groups, kinds, this_week = {}, {}, 0
+    for it in items:
+        key = needs_actor(it, who.actor) or "other"
+        created = it.get("created_at") or now
+        kinds[it["kind"]] = kinds.get(it["kind"], 0) + 1
+        this_week += created >= week
+        group = groups.setdefault(key, {"count": 0, "this_week": 0, "older_than_3_days": 0, "items": []})
+        group["count"] += 1
+        group["this_week"] += created >= week
+        group["older_than_3_days"] += created < older
+        group["items"].append({"id": str(it["id"]), "short_id": str(it["id"])[:8], "kind": it["kind"],
+                               "title": _clip(it.get("title"), 80), "created_at": created,
+                               "age_days": round(age_days(created, now), 1),
+                               "done_but_open": it.get("status") in ("done", "closed") and bool(it.get("open_asks"))})
+    ordered = sorted(groups.items(), key=lambda kv: (-kv[1]["count"], kv[0]))
+    by_bot = []
+    for key, group in ordered[:NEEDS_SUMMARY_BOTS]:
+        group["items"].sort(key=lambda x: x["created_at"], reverse=True)
+        by_bot.append({"bot": key, "name": H.actor_name(c, key) if key != "other" else "Other",
+                       **{k: v for k, v in group.items() if k != "items"}, "items": group["items"][:limit]})
+    return {"actor": who.actor, "total": len(items), "this_week": this_week, "by_kind": kinds, "by_bot": by_bot,
+            "bots_left": max(0, len(ordered) - len(by_bot))}
+
+
+def age_days(created, now):
+    """Whole-day age in days (fractions kept) from an ISO time to `now`; 0 when it does not parse."""
+    start, end = H.parse_ts(created), H.parse_ts(now)
+    return max(0.0, (end - start).total_seconds() / 86400) if start and end else 0.0
 
 def fleet_snapshot(c, auth, identity, task_view):
     """One live, actor-scoped control-plane snapshot for Tico's private room."""
@@ -1995,6 +2031,113 @@ def fleet_snapshot(c, auth, identity, task_view):
             "needs_you": items,
             "approvals": [row for row in items if row.get("kind") == "approval"]}
 
+
+APPROVAL_STATUSES = ("pending", "approved", "declined")
+APPROVALS_PAGE = 20
+APPROVALS_PAGE_MAX = 100
+APPROVAL_SUMMARY = 200      # one line of a row's summary at most
+APPROVAL_LIST_BYTES = 64 * 1024   # a page stops here, as the other lists do (automations.page); `next` picks it up
+
+
+def _list_row(aid, status, from_actor, kind, payload, task_id, task_title, readable, message_id, conversation_id, created):
+    """One list row. Its link is the task it came with when the caller may see that task, else the thread of the message
+    it came in, else null. `task_title` is passed only for a readable task."""
+    if readable and task_id:
+        link = "#/task/" + quote(task_id, safe="")
+    elif conversation_id:
+        link = "#/thread/%s?m=%s" % (quote(conversation_id, safe=""), quote(message_id, safe=""))
+    else:
+        link = None
+    return {"id": aid, "status": status, "from_actor": from_actor,
+            "summary": approval_title(kind, payload, task_title)[:APPROVAL_SUMMARY],
+            "message_id": message_id, "task_id": task_id, "created": created, "link": link}
+
+
+def pending_rows(c, auth, who, task_view):
+    """The approvals in Needs you's approval set, newest first: `needs_items`, the same read its count takes, so the
+    list and that count cannot disagree. Each row passes the checks GET /api/v2/approvals/{aid} makes."""
+    ids = [x["id"] for x in needs_items(c, auth, who, task_view, count_only=True) if x.get("kind") == "approval"]
+    rows = []
+    for aid in ids:
+        row = H.approval(c, aid)
+        msg = H.message(c, row["message_id"]) if row and row.get("message_id") else None
+        if not row or not msg or msg["recipient_id"] != who.actor:
+            continue
+        try:
+            privacy.require_payload(c, who, row)
+            privacy.require_message(c, who, msg)
+        except Problem:
+            continue
+        task_id = row.get("task_id")
+        readable = bool(task_id) and bool(_readable_task_ids(c, auth.task_sql(c, who), [task_id]))
+        task = H.task(c, task_id) if readable else None
+        rows.append(_list_row(row["id"], "pending", row["requested_by_id"], row["kind"], row["payload"], task_id,
+                              (task or {}).get("title"), readable, msg["id"], msg.get("conversation_id"),
+                              row["created_at"]))
+    return sorted(rows, key=lambda r: (r["created"], r["id"]), reverse=True)
+
+
+def history_rows(c, auth, who, status, from_actor, before, since, need):
+    """The approvals addressed to the caller in a decided `status`, newest first, until `need` of them pass the checks
+    (or the history ends). One SQL read per window: the caller's messages joined to their approvals (approvals_message
+    serves the join), the filters in the WHERE, keyset-paged on (created_at, id), so the rows read are the window's and
+    never the company's history. Returns (rows, total) where total counts the rows the SQL filters match, before the
+    checks; the checks are per row of the window."""
+    clauses, args = ["m.recipient_id = ?", "a.decision = ?"], [who.actor, status]
+    if from_actor:
+        clauses.append("a.requested_by_id = ?")
+        args.append(from_actor)
+    if before:
+        clauses.append("a.created_at < ?")
+        args.append(before)
+    if since:
+        clauses.append("a.created_at >= ?")
+        args.append(since)
+    where = " AND ".join(clauses)
+    total = c.execute("SELECT COUNT(*) FROM messages m CROSS JOIN approvals a WHERE a.message_id=m.id AND " + where,
+                      args).fetchone()[0]
+    message_cols = [r[1] for r in c.execute("PRAGMA table_info(messages)")]
+    select = ", ".join(["a.id", "a.kind", "a.task_id", "a.message_id", "a.payload", "a.requested_by_id", "a.created_at",
+                        "a.decision", "t.title AS task_title"]
+                       + [f'm."{k}" AS "m_{k}"' for k in message_cols])
+    # CROSS JOIN keeps messages as the outer loop: the recipient index seeks the caller's messages, not a scan of approvals.
+    sql = (f"SELECT {select} FROM messages m CROSS JOIN approvals a ON a.message_id=m.id "
+           f"LEFT JOIN tasks t ON t.id=a.task_id WHERE {where}")
+    visible_task = auth.task_sql(c, who)
+    visible, cursor, window = [], None, max(2 * need, 40)
+    while len(visible) < need:
+        cut, cut_args = ("", []) if cursor is None else (
+            " AND (a.created_at < ? OR (a.created_at = ? AND a.id < ?))", [cursor[0], cursor[0], cursor[1]])
+        cur = c.execute(sql + cut + " ORDER BY a.created_at DESC, a.id DESC LIMIT ?", [*args, *cut_args, window])
+        names = [d[0] for d in cur.description]
+        found = [dict(zip(names, r, strict=True)) for r in cur.fetchall()]
+        if not found:
+            break
+        cursor = (found[-1]["created_at"], found[-1]["id"])
+        readable = _readable_task_ids(c, visible_task, [r["task_id"] for r in found if r["task_id"]])
+        for r in found:
+            if len(visible) >= need:
+                break
+            msg = {k[2:]: v for k, v in r.items() if k.startswith("m_")}
+            msg["refs"] = H._json(msg.get("refs"), {}) or {}
+            payload = H._json(r["payload"], {}) or {}
+            row = {"id": r["id"], "kind": r["kind"], "task_id": r["task_id"], "message_id": r["message_id"],
+                   "payload": payload, "requested_by_id": r["requested_by_id"], "decision": r["decision"],
+                   "created_at": r["created_at"], "decision_owner": msg["recipient_id"]}
+            try:
+                if not privacy.message_readable(c, privacy.actor(who), msg, current=True):
+                    continue
+                privacy.require_payload(c, who, row)
+            except Problem:
+                continue
+            task_id = r["task_id"]
+            ok = bool(task_id) and task_id in readable
+            visible.append(_list_row(r["id"], r["decision"], r["requested_by_id"], r["kind"], payload, task_id,
+                                     r["task_title"] if ok else None, ok, r["message_id"], msg.get("conversation_id"),
+                                     r["created_at"]))
+        if len(found) < window:
+            break
+    return visible[:need], total
 
 def install_views(app, store, auth, mutate, task_view):
     def visible_turns(c, who, bot=None, limit=200):
@@ -2760,6 +2903,34 @@ def install_views(app, store, auth, mutate, task_view):
             return {"actor": who.actor, "since": since,
                     "bots": recent_bots(c, auth, who, since, limit, needs_items(c, auth, who, task_view))}
 
+    @app.get("/api/v2/approvals")
+    def approval_list(request: Request, status: str = "pending", limit: int = APPROVALS_PAGE, offset: int = 0,
+                      from_actor: str | None = Query(None, alias="from"), before: str | None = None,
+                      since: str | None = None):
+        """The approvals addressed to you, newest first: `status` pending (the set Needs you counts), approved or declined;
+        `from` the actor that asked; `before` and `since` a date (YYYY-MM-DD). `next` is the offset of the page after."""
+        who = request.state.identity
+        human_only(who)
+        if status not in APPROVAL_STATUSES:
+            raise Problem("validation", "status is pending, approved or declined", 422)
+        limit, offset = max(1, min(int(limit), APPROVALS_PAGE_MAX)), max(0, int(offset))
+        need = offset + limit + 1          # one row past the page says whether there is a next page
+        with store.read_transaction() as c:
+            if status == "pending":
+                rows = pending_rows(c, auth, who, task_view)
+                if from_actor:
+                    rows = [r for r in rows if r["from_actor"] == from_actor]
+                if before:
+                    rows = [r for r in rows if r["created"] < before]
+                if since:
+                    rows = [r for r in rows if r["created"] >= since]
+                total, rows = len(rows), rows[:need]
+            else:
+                rows, total = history_rows(c, auth, who, status, from_actor, before, since, need)
+            from .automations import page      # local: automations imports this module
+            shown, more = page(rows[offset:], limit, offset, APPROVAL_LIST_BYTES)
+            return {"actor": who.actor, "status": status, "total": total, "approvals": shown, "next": more}
+
     @app.get("/api/v2/needs-you")
     def needs(request: Request, count: bool = False, ids: str | None = None, version: str | None = None,
               limit: int | None = None, cursor: str | None = None):
@@ -2798,6 +2969,15 @@ def install_views(app, store, auth, mutate, task_view):
                     out["restart"] = True
             needs_visuals(c, who, out["items"])
             return out
+
+    @app.get("/api/v2/needs-you/summary")
+    def needs_summary_route(request: Request, limit: int = NEEDS_SUMMARY_ITEMS):
+        """What the Needs you list holds, counted as the board counts it: the total, per kind and per bot, with each
+        bot's newest `limit` items (at most 10). `hub needs-you show` over MCP. A person only: the list is theirs."""
+        who = request.state.identity
+        human_only(who)
+        with store.read_transaction() as c:
+            return needs_summary(c, auth, who, task_view, max(0, min(int(limit), NEEDS_SUMMARY_ITEMS)))
 
     def needs_visuals(c, who, items):
         """A question's files under review (backend/file_reviews.py) as this reader sees them, with fresh addresses,
@@ -2919,7 +3099,7 @@ def runnable_choices(c, who, auth, settings):
     # computer, shared by its bots) and each bot's config are read once here, not once per check.
     for row in c.execute("SELECT bot,runner_id FROM assignments").fetchall():
         read_cache.prime(c, PLACED_SQL, {(row["bot"],): read_cache.one(c, RUNNER_SQL, (row["runner_id"],))})
-    rows = c.execute("SELECT a.bot,b.runtime,bc.config FROM assignments a JOIN bots b ON b.id=a.bot "
+    rows = c.execute("SELECT a.bot,bc.config FROM assignments a JOIN bots b ON b.id=a.bot "
                      "LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE b.state<>'archived' ORDER BY a.bot").fetchall()
     read_cache.prime(c, CONFIG_SQL, {(row["bot"],): row for row in rows})
     for row in rows:
@@ -2927,7 +3107,7 @@ def runnable_choices(c, who, auth, settings):
         if not auth.bot_manager(c, who, bot):
             continue
         # The bot's own harness too: the picker keeps it shown when its provider is no longer offered.
-        own = resolve_harness(H._json(row["config"], {}) or {}, row["runtime"])
+        own = resolve_harness(H._json(row["config"], {}) or {}, None)
         for harness in sorted(set(harnesses) | ({own} if own in HARNESS_BY_ID and not HARNESS_BY_ID[own].get("external") else set())):
             runtime = HARNESS_BY_ID[harness]["runtime"]
             answer = runtime_choice(c, bot, runtime, who, computers, harness=harness)

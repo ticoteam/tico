@@ -19,28 +19,8 @@ from . import hubdb as H
 from . import idempotency_messages
 from . import message_links
 from . import people as P
-from .harnesses import EXTERNAL_HARNESSES
 
-
-# A person's own spoken Tico turns, spoken decisions and what a live tool did are history,
-# not work: they never queue a job. A live ask does; that is how the text Tico is reached.
-# A bot run by an external agent (a Hermes profile) has no runner to claim a job: the message
-# waits in its inbox until the agent reads it, so no job is queued for it. A synced bot delivered
-# through its platform's desktop app on a computer (backend/app_delivery.py) is the exception while
-# that computer is registered: the computer's runner takes the message as a job.
-EXTERNAL_BOT_SQL = ("EXISTS (SELECT 1 FROM bot_config WHERE bot=substr(NEW.recipient_id,5) AND "
-                    "json_extract(config,'$.harness') IN ("
-                    + ",".join("'" + h + "'" for h in EXTERNAL_HARNESSES) + ") AND NOT EXISTS ("
-                    "SELECT 1 FROM runners r WHERE r.id=json_extract(config,'$.app_delivery.computer') "
-                    "AND r.revoked_at IS NULL))")
-QUEUE_TRIGGER = (
-    "CREATE TRIGGER IF NOT EXISTS queue_bot_message AFTER INSERT ON messages "
-    "WHEN NEW.recipient_id LIKE 'bot:%' AND COALESCE(NEW.sender_id, '') != NEW.recipient_id "
-    "AND COALESCE(json_extract(NEW.refs,'$.live.kind'), '') NOT IN ('transcript','decision','tool') "
-    "AND COALESCE(json_extract(NEW.refs,'$.quiet'), 0) = 0 "
-    "AND NOT " + EXTERNAL_BOT_SQL + " BEGIN "
-    "INSERT INTO jobs(id,message_id,bot_id,created_at) "
-    "VALUES(NEW.id,NEW.id,substr(NEW.recipient_id,5),NEW.created_at); END")
+# A message to a bot queues its job in Python, in the writer's transaction: backend/enqueue.py.
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS cloud_migrations(version INTEGER PRIMARY KEY, applied TEXT NOT NULL);
@@ -228,11 +208,18 @@ CREATE TABLE IF NOT EXISTS attempt_captures(
 CREATE INDEX IF NOT EXISTS attempt_captures_created ON attempt_captures(created_at);
 -- A run that had a secret taken out while it was going: its capture, handed in at the end, is not kept.
 CREATE TABLE IF NOT EXISTS attempt_capture_drops(attempt_id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
+-- One table for the request cache (binding NULL: a saved answer, swept after IDEMPOTENCY_RETENTION_HOURS) and the
+-- retained operation bindings (binding names the operation; never swept). docs/status-and-state.md has the states.
+-- Migration 0050_idempotency_one_table.py builds this same table, with its indexes, on every file (test_migrations
+-- checks the two match), so this statement only declares it.
 CREATE TABLE IF NOT EXISTS idempotency(
  actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL,
- request_hash TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL,
+ request_hash TEXT NOT NULL, response TEXT, created_at TEXT NOT NULL, updated_at TEXT,
+ binding TEXT CHECK(binding IS NULL OR binding IN ('invites','github_product_repo','github_review')),
+ subject TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'completed' CHECK(state IN ('pending','completed','refused')),
+ error_code TEXT, error_detail TEXT, error_status INTEGER,
  PRIMARY KEY(actor,operation,key));
-CREATE INDEX IF NOT EXISTS idempotency_by_created ON idempotency(created_at);
+CREATE INDEX IF NOT EXISTS idempotency_answers_by_created ON idempotency(created_at) WHERE binding IS NULL;
 CREATE TABLE IF NOT EXISTS schedule_occurrences(
  schedule_id TEXT NOT NULL REFERENCES schedules(id), occurrence TEXT NOT NULL,
  task_id TEXT REFERENCES tasks(id), outcome TEXT NOT NULL,
@@ -350,7 +337,7 @@ CREATE TABLE IF NOT EXISTS learnings(
  id TEXT PRIMARY KEY, integration TEXT NOT NULL, actor TEXT NOT NULL, text TEXT NOT NULL,
  created_at TEXT NOT NULL, deleted_at TEXT);
 CREATE INDEX IF NOT EXISTS learnings_by_integration ON learnings(integration,created_at);
-""" + QUEUE_TRIGGER + ";\n"
+"""
 
 # The Slack gateway's own tables (backend/slack_gateway.py, docs/slack-gateway.md). An event is
 # persisted before its envelope is acknowledged and is unique on Slack's event id and on the
@@ -384,13 +371,13 @@ CREATE INDEX IF NOT EXISTS slack_digests_reader ON slack_digests(reader, created
 CREATE TABLE IF NOT EXISTS slack_threads(
  channel TEXT NOT NULL, thread_ts TEXT NOT NULL, bot TEXT NOT NULL,
  conversation_id TEXT NOT NULL REFERENCES conversations(id), created_at TEXT NOT NULL,
- last_routed_at TEXT, PRIMARY KEY(channel, thread_ts, bot));
+ last_routed_at TEXT, recipient_actor TEXT, PRIMARY KEY(channel, thread_ts, bot));
 CREATE INDEX IF NOT EXISTS slack_threads_conversation ON slack_threads(conversation_id);
 CREATE TABLE IF NOT EXISTS slack_posts(
  message_id TEXT PRIMARY KEY REFERENCES messages(id), channel TEXT NOT NULL,
  thread_ts TEXT NOT NULL, bot TEXT NOT NULL, text TEXT NOT NULL,
  state TEXT NOT NULL DEFAULT 'ready', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT,
- slack_ts TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+ slack_ts TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, recipient_actor TEXT);
 CREATE INDEX IF NOT EXISTS slack_posts_state ON slack_posts(state, next_attempt_at);
 CREATE INDEX IF NOT EXISTS slack_task_completion_notices ON messages(
  json_extract(refs,'$.task'), json_extract(refs,'$.task_completion.status'), created_at)
@@ -433,7 +420,8 @@ def refused(c, identity, exc, savepoint="domain_write"):
 
 # A client retries a failed write with the same Idempotency-Key within seconds, so two
 # days of stored responses is generous. Without a bound the table kept every mutating
-# request's response forever: most of the database file.
+# request's response forever: most of the database file. Operation bindings share the table
+# (binding is not NULL) and are never swept: an ambiguous external call is never repeated.
 IDEMPOTENCY_RETENTION_HOURS = 48
 MAIL_RETENTION_DAYS = 180
 # Polls carry nothing a retry could double: a replayed heartbeat or lease renewal just
@@ -484,7 +472,8 @@ def sweep_idempotency(store, now=None, batch=5000):
     while True:
         with store.transaction() as c:
             removed = c.execute("DELETE FROM idempotency WHERE rowid IN "
-                                "(SELECT rowid FROM idempotency WHERE created_at<? LIMIT ?)", (cutoff, batch)).rowcount
+                                "(SELECT rowid FROM idempotency WHERE binding IS NULL AND created_at<? LIMIT ?)",
+                                (cutoff, batch)).rowcount
         deleted += removed
         if removed < batch:
             return deleted
@@ -554,7 +543,7 @@ def sweep_tokens(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
     transactions like `sweep_deltas`; returns the count.
 
     Money and usage never come from these rows: a run's totals are its turns row (input_tokens, cached_tokens,
-    output_tokens, est_cost_usd, written by turn_finish), turn_usage_segments and attempts.result. The rows go only
+    output_tokens, est_cost_usd, written by turn_finish), usage_facts and attempts.result. The rows go only
     once that turn is finished with its totals written, and no job of the run is 'uncertain': auto_reconcile's hop_failed
     and review_jobs read them there. Attempts are walked in creation order from the mark 'tokens-sweep-mark', as
     sweep_deltas does; one still unfinished when the walk passes it keeps its rows."""
@@ -1147,10 +1136,6 @@ class Store:
             from . import system_routines as _system_routines
             c.executescript(_system_routines.SCHEMA)
             _system_routines.ensure(c)
-            from . import thread_followups as _thread_followups
-            _thread_followups.ensure(c)
-            from . import thread_digest as _thread_digest
-            _thread_digest.ensure(c)
             from . import task_rules as _task_rules
             c.executescript(_task_rules.SCHEMA)
             from . import teammate_access as _teammate_access
@@ -1188,7 +1173,6 @@ class Store:
             c.executescript(_support.SCHEMA)
             from . import inbound as _inbound
             c.executescript(_inbound.SCHEMA)
-            _inbound.ensure(c)
             from . import bills_address as _bills_address
             c.executescript(_bills_address.SCHEMA)
             from . import support_access as _support_access
@@ -1229,25 +1213,18 @@ class Store:
             c.executescript(_invariants.SCHEMA)
             from . import slack_channels as _slack_channels
             c.executescript(_slack_channels.SCHEMA)
-            from . import slack_threads as _slack_threads
-            _slack_threads.ensure(c)
             from . import flight as _flight
             c.executescript(_flight.SCHEMA)
             for column, kind in (("sql_ms", "REAL"), ("wait_ms", "REAL"), ("queries", "INTEGER")):
                 H.add_column(c, "flight_slow", column, kind)
             from . import performance as _performance
             c.executescript(_performance.SCHEMA)
-            from . import invites as _invites
-            c.executescript(_invites.SCHEMA)
             _updates.purge_rejected(c)
             # Which stored retry answers quote which message (backend/idempotency_messages.py).
             idempotency_messages.ensure(c)
             # Destinations saved in Settings > Listening (backend/listening.py).
             from . import listening as _listening
             _listening.ensure(c)
-            # Tico Meet calls and their people (backend/calls.py): a call belongs to a thread.
-            from . import calls as _calls
-            _calls.ensure(c)
             # Each credential's newest use per (actor, bot) (credentials.last_used): credentials.record_use keeps it.
             H.backfill_credential_uses(c)
             c.execute("BEGIN IMMEDIATE")
@@ -1293,8 +1270,6 @@ class Store:
                 # column arrives. It gives no rights: those come from `member_stored` (backend/credentials.py `owned`).
                 # The person a Slack DM mapping was opened for, and the person a queued copy is for. A DM with no verified
                 # inbound message yet has none: its copies fail closed. A backfill reads each DM's verified history once.
-                H.add_column(c, "slack_threads", "recipient_actor", "TEXT")
-                H.add_column(c, "slack_posts", "recipient_actor", "TEXT")
                 for (channel,) in c.execute("SELECT DISTINCT channel FROM slack_threads WHERE channel LIKE 'D%' "
                                             "AND recipient_actor IS NULL").fetchall():
                     actors = {r[0] for r in c.execute(
@@ -1385,14 +1360,15 @@ class Store:
                         if name not in columns:
                             c.execute(f"ALTER TABLE bot_config ADD COLUMN {name} {declaration}")
                     for row in c.execute(
-                            "SELECT bc.bot,bc.config,b.model,b.effort FROM bot_config bc "
+                            "SELECT bc.bot,bc.config,b.effort FROM bot_config bc "
                             "JOIN bots b ON b.slug=bc.bot").fetchall():
                         config = json.loads(row["config"] or "{}")
                         # A model decision moves the previously seeded Grok
                         # workers from medium to high. Do this once for an existing cloud DB;
                         # subsequent choices remain backend-managed and are never reconciled
-                        # from the bootstrap YAML.
-                        if ((config.get("model") or row["model"]) == "grok-4.6"
+                        # from the bootstrap YAML. (The model is read from config: migration 0043 copied
+                        # the old bots.model into it where config had none.)
+                        if (config.get("model") == "grok-4.6"
                                 and (config.get("reasoning_effort") or row["effort"]) == "medium"):
                             config["reasoning_effort"] = "high"
                             c.execute("UPDATE bots SET effort='high' WHERE slug=?", (row["bot"],))
@@ -1425,14 +1401,7 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=8").fetchone():
                     # A bot cannot usefully execute a message it sent to itself. The former
                     # trigger queued those rows and could turn an accidental task ask into a
-                    # reply cascade. Replace it explicitly because IF NOT EXISTS above does
-                    # not update a trigger already present in an existing cloud database.
-                    c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
-                    c.execute("CREATE TRIGGER queue_bot_message AFTER INSERT ON messages "
-                              "WHEN NEW.recipient_id LIKE 'bot:%' "
-                              "AND COALESCE(NEW.sender_id, '') != NEW.recipient_id BEGIN "
-                              "INSERT INTO jobs(id,message_id,bot_id,created_at) "
-                              "VALUES(NEW.id,NEW.id,substr(NEW.recipient_id,5),NEW.created_at); END")
+                    # reply cascade; backend/enqueue.py queues no job for one.
                     c.execute("UPDATE jobs SET state='completed' WHERE state='queued' AND EXISTS "
                               "(SELECT 1 FROM messages m WHERE m.id=jobs.message_id "
                               "AND m.sender_id=m.recipient_id)")
@@ -1458,16 +1427,11 @@ class Store:
                     c.execute("INSERT INTO cloud_migrations VALUES(10,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=11").fetchone():
                     # Native live transcripts are written into the room without queueing a
-                    # runner turn. Replace the trigger explicitly; IF NOT EXISTS above leaves
-                    # an existing cloud database's older definition in place.
-                    c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
-                    c.execute(QUEUE_TRIGGER)
+                    # runner turn. The queue rule is backend/enqueue.py (migration 0052 dropped the trigger).
                     c.execute("INSERT INTO cloud_migrations VALUES(11,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=12").fetchone():
                     # Spoken decisions and live tool lines join transcripts as room history
-                    # that never queues a turn. Same explicit replacement as migration 11.
-                    c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
-                    c.execute(QUEUE_TRIGGER)
+                    # that never queues a turn (backend/enqueue.py).
                     c.execute("INSERT INTO cloud_migrations VALUES(12,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=13").fetchone():
                     # `import_refs` makes "one recording per outside call" a uniqueness
@@ -1493,10 +1457,9 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=16").fetchone():
                     from .harnesses import backfill_config
                     for row in c.execute(
-                            "SELECT bc.bot,bc.config,b.runtime FROM bot_config bc "
+                            "SELECT bc.bot,bc.config FROM bot_config bc "
                             "JOIN bots b ON b.slug=bc.bot").fetchall():
-                        config, changed = backfill_config(json.loads(row["config"] or "{}"),
-                                                          slug=row["bot"], runtime=row["runtime"])
+                        config, changed = backfill_config(json.loads(row["config"] or "{}"), slug=row["bot"])
                         if changed:
                             c.execute("UPDATE bot_config SET config=? WHERE bot=?",
                                       (encode(config), row["bot"]))
@@ -1511,9 +1474,7 @@ class Store:
                     c.execute("INSERT INTO cloud_migrations VALUES(18,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=19").fetchone():
                     # A bot run by an external agent gets no job for a message (it reads its
-                    # inbox itself). The trigger text changed, and IF NOT EXISTS keeps the old one.
-                    c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
-                    c.execute(QUEUE_TRIGGER)
+                    # inbox itself): backend/enqueue.py.
                     c.execute("INSERT INTO cloud_migrations VALUES(19,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=20").fetchone():
                     # The Slack gateway's queue tables (SLACK_SCHEMA): CREATE TABLE IF NOT EXISTS
@@ -1558,7 +1519,7 @@ class Store:
                     # pipeline, a rank is the place in the owner's queue, labels stand in for
                     # projects (blockers are task_relations rows now, migration 60). task_links and
                     # preferences are created above. A comment tagged `quiet` never queues a
-                    # turn (same explicit trigger replacement as migration 11).
+                    # turn (backend/enqueue.py).
                     columns = {row[1] for row in c.execute("PRAGMA table_info(tasks)")}
                     if "lane" not in columns:
                         c.execute("ALTER TABLE tasks ADD COLUMN lane TEXT NOT NULL DEFAULT 'company'")
@@ -1576,8 +1537,6 @@ class Store:
                     c.execute(f"UPDATE tasks SET lane='product' WHERE status IN ({marks}) AND owner_id IN "
                               f"(SELECT 'bot:' || bot FROM bot_config WHERE team IN ({','.join('?' * len(H.LANE_TEAMS))}))",
                               (*H.ACTIVE_STATUSES, *H.LANE_TEAMS))
-                    c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
-                    c.execute(QUEUE_TRIGGER)
                     c.execute("INSERT INTO cloud_migrations VALUES(29,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=30").fetchone():
                     # main_pushes (backend/github.py): CREATE TABLE IF NOT EXISTS above installs it;
@@ -2046,10 +2005,8 @@ class Store:
                                     "bot_file_versions(poster_blob_id) WHERE poster_blob_id IS NOT NULL"),
                                    ("bot_file_versions_thumb",
                                     "bot_file_versions(thumb_blob_id) WHERE thumb_blob_id IS NOT NULL"),
-                                   # privacy_index names these two with INDEXED BY. hubdb.migrate also makes them,
-                                   # but runs before cloud migration 57 adds tasks.private on an upgraded database.
-                                   ("tasks_private_parties",
-                                    "tasks(id, requester_id, owner_id, guest, private) WHERE private IS NOT 0"),
+                                   # row_clock and task_privacy name this with INDEXED BY. hubdb.migrate also makes
+                                   # it, but runs before cloud migration 57 adds tasks.private on an upgraded database.
                                    ("tasks_private_status",
                                     "tasks(id, requester_id, owner_id, guest, private, status, waiting_on) WHERE private IS NOT 0"),
                                    # The task list's and status rows' covering indexes (hubdb.migrate), for the same reason.
@@ -2083,14 +2040,6 @@ class Store:
                 from .meetings import retire_capture
                 retire_capture(c)
                 retire_health_rows(c)
-                # Whenever the queue trigger's SQL changes (an external harness added, a rule changed) the
-                # stored trigger is rebuilt; no migration number, so no collision with another branch's.
-                # SQLite keeps the statement as written, less "IF NOT EXISTS".
-                stored = c.execute("SELECT sql FROM sqlite_master WHERE type='trigger' "
-                                   "AND name='queue_bot_message'").fetchone()
-                if not stored or stored[0] != QUEUE_TRIGGER.replace(" IF NOT EXISTS", "", 1):
-                    c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
-                    c.execute(QUEUE_TRIGGER)
                 if seed_market and not self.settings.test_identities:
                     from . import market as Market
                     from .blobs import Blobs
@@ -2119,6 +2068,10 @@ class Store:
                 # Every bot gets a profile by its name, once; a bot that has one is left alone (backend/profiles.py).
                 from . import profiles as Profiles
                 Profiles.migrate(c)
+                # Stale ticket review's converted automation (a no-op) is undone, once, and its team rule set from it
+                # (backend/redesign_migration.py repair_stale_review). Idempotent by its marker.
+                from . import redesign_migration as Redesign
+                Redesign.repair_stale_review(c)
                 from . import releases as Releases
                 Releases.record_start(c, H.now())
                 from .credentials import FILE_MIGRATION, HUB_MIGRATION
@@ -2157,9 +2110,6 @@ class Store:
             # What each message's and run's readability depends on (backend/read_deps.py); settled beside the server.
             from . import read_deps
             read_deps.ensure(c)
-            # Federation between installs (backend/federation_schema.py): its own tables, kept beside the threads.
-            from . import federation_schema
-            federation_schema.ensure(c)
             # Every start, in short batches of their own: rows written since the last pass, including any an
             # older server wrote after a rollback, get their task links (backend/message_links.py).
             message_links.backfill(c)
@@ -2274,14 +2224,21 @@ class Store:
                 c.provenance_start = provenance_clock.current(c)
                 yield c
                 message_links.refresh_dirty(c)
+                H.owed_sync(c)
                 c.commit()
                 # Work that must see the committed rows (a delivery worker's doorbell) runs once the write is durable.
-                for after in c.after_commit:
+                # A barrier (hubdb.durable_commit's WAL sync) runs first and its error is the request's: the write is
+                # not answered as done until it is on disk.
+                hooks = sorted(c.after_commit, key=lambda after: not getattr(after, "barrier", False))
+                c.after_commit.clear()
+                for after in hooks:
+                    if getattr(after, "barrier", False):
+                        after()
+                        continue
                     try:
                         after()
                     except Exception:
                         logging.getLogger(__name__).exception("after-commit callback failed")
-                c.after_commit.clear()
             except BaseException:
                 c.rollback()
                 c.after_commit.clear()
@@ -2351,22 +2308,23 @@ class Store:
         """Whether this Idempotency-Key already has a saved answer here: `mutate` replays it (or refuses other content
         under the key) without running the write again, so a check made before `mutate` must not refuse it."""
         return bool(key) and len(key) <= 200 and c.execute(
-            "SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
+            "SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
             (self._principal(identity), operation, key)).fetchone() is not None
 
-    def mutate(self, identity, operation, key, body, fn, check=None):
+    def mutate(self, identity, operation, key, body, fn, check=None, durable=False):
         if not key or len(key) > 200:
             raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
         hashed = digest(encode(body))
         principal = self._principal(identity)
         refusal = logged = None
-        with self.transaction() as c:
+        # Only a money write asks for the durable commit; every other keyed write keeps the plain call.
+        with (self.transaction(durable=True) if durable else self.transaction()) as c:
             # Authenticate leases again under the same write lock as the mutation.
             from .auth import validate_identity
             validate_identity(c, identity)
             if check:
                 check(c)
-            row = c.execute("SELECT * FROM idempotency WHERE actor=? AND operation=? AND key=?",
+            row = c.execute("SELECT * FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                             (principal, operation, key)).fetchone()
             if row:
                 if row["request_hash"] != hashed:
@@ -2433,7 +2391,7 @@ class Store:
             if not is_poll(operation, result):
                 cached = ({k: v for k, v in result.items() if k != 'requester_token'}
                           if isinstance(result, dict) else result)
-                c.execute("INSERT INTO idempotency VALUES(?,?,?,?,?,?)",
+                c.execute("INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)",
                           (principal, operation, key, hashed, encode(cached), H.now()))
         self.ring(logged)
         if refusal:
@@ -2471,8 +2429,9 @@ class Store:
         ring(self, seq)
 
     def enqueue_existing(self):
+        from .enqueue import external_bot_sql
         with self.transaction() as c:
             c.execute("INSERT OR IGNORE INTO jobs(id,message_id,bot_id,created_at) "
-                      "SELECT id,id,substr(recipient_id,5),created_at FROM messages NEW "
-                      "WHERE recipient_id LIKE 'bot:%' AND delivered_at IS NULL AND deleted_at IS NULL AND NOT "
-                      + EXTERNAL_BOT_SQL)
+                      "SELECT m.id,m.id,substr(m.recipient_id,5),m.created_at FROM messages m "
+                      "WHERE m.recipient_id LIKE 'bot:%' AND m.delivered_at IS NULL AND m.deleted_at IS NULL AND NOT "
+                      + external_bot_sql("m.recipient_id"))

@@ -26,6 +26,17 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage({viewport: {width: 1300, height: 820}, serviceWorkers: 'block'});
+  // Counts the live event streams each document opens, so send() knows the newest one has reached the route.
+  await page.addInitScript(() => {
+    const Native = window.EventSource;
+    window.EventSource = class extends Native {
+      constructor(url, ...rest) {
+        super(url, ...rest);
+        if (new URL(url, location.href).pathname === '/api/v2/events') window.__liveStreams = (window.__liveStreams || 0) + 1;
+      }
+    };
+  });
+  const made = new Map();   // per document: event streams that reached the route
   const errors = [], streams = [], reads = {snapshot: 0, tasks: 0, active: 0, changed: [], labels: [], needs: []};
   page.on('pageerror', e => errors.push(e.message));
   const threads = threadsFake({bot: 'ops'});
@@ -43,7 +54,11 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
       {name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
     if (p === '/api/issues') return json([]);
-    if (p === '/api/v2/events') { streams.push({url, route, document: route.request().headers().referer}); return; }        // held open until the test sends
+    if (p === '/api/v2/events') {                                                        // held open until the test sends
+      const document = route.request().headers().referer;
+      made.set(document, (made.get(document) || 0) + 1);
+      streams.push({url, route, document}); return;
+    }
     const answer = threads(p, url, route.request().method());
     if (answer !== undefined) return json(answer);
     if (p === '/api/v2/assistant') return json(assistantView('c-ops', snapshot));
@@ -72,14 +87,16 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     return json(unrouted(p));
   });
   // Navigation and thread subscriptions can leave canceled routes queued. Deliver only to the page's active stream.
+  // A reconnect can reopen the same URL: wait until the page's newest EventSource has reached the route, or the
+  // blocks go to the closed one and are lost.
   const send = async (match, ...blocks) => {
     const deadline = Date.now() + t(8000);
     const document = new URL(page.url()); document.hash = '';
     let stream;
     for (;;) {
-      const active = await page.evaluate(() => LIVE.es?.url);
+      const [active, started] = await page.evaluate(() => [LIVE.es?.url, window.__liveStreams || 0]);
       stream = streams.filter(s => s.document === document.href && s.url.href === active && match(s.url)).at(-1);
-      if (stream) break;
+      if (stream && (made.get(document.href) || 0) >= started) break;
       if (Date.now() > deadline) throw new Error('no stream: ' + streams.map(s => s.url.search).join(' | '));
       await new Promise(r => setTimeout(r, 50));
     }
@@ -87,6 +104,19 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     for (const old of streams.splice(0)) await old.route.abort().catch(() => {});   // superseded ones the page closed
     await stream.route.fulfill({contentType: 'text/event-stream', body: blocks.join('')});
     return stream.url;
+  };
+  // A block goes to the stream the page holds at that moment. The page can replace that connection before it reads the
+  // block (a reconnect), and the block is then lost with the old one: what the page did not show is sent again, to the
+  // stream it holds now (the server resends from the last change number on reconnect; the same change number is harmless).
+  const sendUntil = async (match, blockText, shown, arg) => {
+    for (let attempt = 1; ; attempt++) {
+      const url = await send(match, blockText);
+      const done = await page.waitForFunction(shown, arg, {timeout: t(4000)}).then(() => true, error => {
+        if (attempt === 3) throw error;
+        return false;
+      });
+      if (done) return url;
+    }
   };
   const following = url => url.searchParams.get('conversation') === 'c-ops';
 
@@ -202,18 +232,17 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     await page.locator('#bot-tip:not([hidden])').waitFor();
     assert.doesNotMatch(await page.locator('#bot-tip').innerText(), /Waiting for.*ChatGPT/);
     const waiting = 'Waiting for the ChatGPT login (held by Scribe on #7 Count the words since 19:06Z; position 2)';
-    const onBotPage = await send(url => url.searchParams.get('party') === 'bot:ops', block(seq++, 'bots', {bot: 'ops', status: {bot: 'ops', state: 'waiting_bot', focus: waiting,
-      waiting, changed_at: now, open_tasks: 1, needs_human: 0}}));
+    const onBotPage = await sendUntil(url => url.searchParams.get('party') === 'bot:ops', block(seq++, 'bots', {bot: 'ops', status: {bot: 'ops', state: 'waiting_bot', focus: waiting,
+      waiting, changed_at: now, open_tasks: 1, needs_human: 0}}),
+    text => !document.querySelector('#bot-tip').hidden && document.querySelector('#bot-tip').textContent.includes(text) && !LIVE_SOON.has('bots'), waiting)
+      .catch(async error => {
+        console.error('tooltip live state', await page.evaluate(() => ({width: innerWidth,
+          hidden: document.querySelector('#bot-tip')?.hidden, text: document.querySelector('#bot-tip')?.textContent,
+          status: S.v2.status.ops, stream: LIVE.es?.url, cursor: LIVE.after, queued: [...LIVE_SOON.keys()]})));
+        throw error;
+      });
     assert.equal(onBotPage.searchParams.get('party'), 'bot:ops', "a bot's page is sent its own tasks' changes, not every task's");
-    await page.waitForFunction(text => !document.querySelector('#bot-tip').hidden
-      && document.querySelector('#bot-tip').textContent.includes(text) && !LIVE_SOON.has('bots'), waiting).catch(async error => {
-      console.error('tooltip live state', await page.evaluate(() => ({width: innerWidth,
-        hidden: document.querySelector('#bot-tip')?.hidden, text: document.querySelector('#bot-tip')?.textContent,
-        status: S.v2.status.ops, stream: LIVE.es?.url, cursor: LIVE.after, queued: [...LIVE_SOON.keys()]})));
-      throw error;
-    });
-    await send(() => true, block(seq++, 'bots', {bot: 'ops', status: null}));
-    await page.waitForFunction(() => !document.querySelector('#bot-tip').hidden
+    await sendUntil(() => true, block(seq++, 'bots', {bot: 'ops', status: null}), () => !document.querySelector('#bot-tip').hidden
       && !document.querySelector('#bot-tip').textContent.includes('Waiting for the ChatGPT') && !LIVE_SOON.has('bots'));
     assert.equal(await page.evaluate(() => S.v2.status.ops), undefined);
   }

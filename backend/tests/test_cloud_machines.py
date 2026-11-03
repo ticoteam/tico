@@ -33,6 +33,7 @@ class FakeHQ:
 
     def __init__(self):
         self.calls, self.fail, self.machines, self.n = [], {}, {}, 0
+        self.clock = None               # a test's fake clock (an ISO time): start and stop then stamp as HQ does
 
     def _check(self, action):
         failing = self.fail.get(action)
@@ -68,13 +69,15 @@ class FakeHQ:
         self.calls.append(("start", machine_id, size))
         self._check("start")
         machine = self.machines[machine_id]
-        return self._machine(machine_id, state="starting", size=size or machine["size"],
-                             starts_month=machine["starts_month"] + 1)
+        changes = {"state": "starting", "size": size or machine["size"], "starts_month": machine["starts_month"] + 1}
+        if self.clock:
+            changes["started_at"] = self.clock()
+        return self._machine(machine_id, **changes)
 
     def stop(self, machine_id):
         self.calls.append(("stop", machine_id))
         self._check("stop")
-        return self._machine(machine_id, state="stopped", stopped_at=H.now())
+        return self._machine(machine_id, state="stopped", stopped_at=self.clock() if self.clock else H.now())
 
     def heartbeat(self, machine_id):
         self.calls.append(("heartbeat", machine_id))
@@ -288,6 +291,23 @@ def test_decide_holds_the_idle_stop_while_its_runner_is_updating():
     assert CM.decide(on, facts(updating=True), 2000, 300) == ("heartbeat", None)
 
 
+def test_idle_for_waits_longer_only_after_a_stop_shorter_than_break_even():
+    """A machine whose last stop was shorter than its idle time stays on SHORT_GAP_FACTOR times longer. A longer stop, a
+    stale one (stopped after it started) or a missing or unreadable time leaves the idle time as it is."""
+    stopped = "2026-11-03T10:00:00.000000Z"
+
+    def started(seconds):
+        return H.shift(stopped, seconds=seconds)
+    assert CM.idle_for({"stopped_at": stopped, "started_at": started(60)}, 300) == 300 * CM.SHORT_GAP_FACTOR
+    assert CM.idle_for({"stopped_at": stopped, "started_at": started(299)}, 300) == 300 * CM.SHORT_GAP_FACTOR
+    assert CM.idle_for({"stopped_at": stopped, "started_at": started(300)}, 300) == 300
+    assert CM.idle_for({"stopped_at": stopped, "started_at": started(3600)}, 300) == 300
+    assert CM.idle_for({"stopped_at": started(60), "started_at": stopped}, 300) == 300
+    assert CM.idle_for({"stopped_at": None, "started_at": started(60)}, 300) == 300
+    assert CM.idle_for({"stopped_at": stopped}, 300) == 300
+    assert CM.idle_for({"stopped_at": stopped, "started_at": "not a time"}, 300) == 300
+
+
 # ----------------------------------------------------------------------------- the manager, against a fake HQ
 def test_off_cloud_nothing_changes(api):  # noqa: F811
     store, fake = api.app.state.store, FakeHQ()
@@ -356,6 +376,36 @@ def test_heartbeat_then_idle_stop_at_break_even_then_wake_with_a_resize(cloud):
     cloud.hq.calls.clear()
     cloud.tick(10)
     assert cloud.hq.actions() == []                              # running now: no second start
+
+
+def test_a_machine_woken_soon_after_its_break_even_stop_stays_on_longer(cloud):
+    cloud.hq.clock = lambda: stamp(cloud)                       # HQ stamps started_at and stopped_at by the fake clock
+    enrolled(cloud)
+    cloud.hq.calls.clear()
+    cloud.manager.synced = None
+    cloud.tick()
+    with cloud.store.transaction() as c:                        # the queued chat is not why it stays on
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
+    cloud.at[0] = cloud.row()["active_at"] + 299
+    cloud.tick()
+    cloud.tick(1)
+    assert cloud.hq.actions()[-1] == "stop" and cloud.row()["state"] == "stopped"   # its first stop: at break-even
+    stopped = cloud.at[0]
+    # Woken 60 s after that stop, which cost more than staying on would have: this time it stays on four times longer.
+    work(cloud, text="Another thing")
+    cloud.at[0] = stopped + 60
+    cloud.hq.calls.clear()
+    assert cloud.tick() == ["start"]
+    woke = cloud.at[0]
+    cloud.hq.calls.clear()
+    cloud.at[0] = woke + 300                                    # the break-even from before: not this time
+    cloud.tick()
+    assert "stop" not in cloud.hq.actions()
+    cloud.at[0] = woke + 1199
+    cloud.tick()
+    assert "stop" not in cloud.hq.actions()
+    cloud.tick(1)
+    assert cloud.hq.actions()[-1] == "stop" and cloud.row()["state"] == "stopped"
 
 
 def test_work_its_machine_never_takes_does_not_start_it_again_but_new_work_does(cloud):
@@ -588,6 +638,53 @@ def test_no_create_follows_a_refused_one_until_hq_is_listed(cloud):
     assert cloud.hq.actions().count("create") == CM.ENROLL_TRIES
 
 
+def test_a_look_that_raises_is_named_on_its_row_until_the_next_create_goes_out(cloud, monkeypatch):
+    adopt(cloud)
+    work(cloud)
+    real_mint = CM.mint
+
+    def unowned(c, key, owner=None):
+        raise Problem("operator", "Nobody on the roster to own this cloud machine's computer", 409)
+    monkeypatch.setattr(CM, "mint", unowned)
+    assert cloud.tick(10) == []                                 # the look raised before HQ was asked
+    assert cloud.row()["problem"] == "error:operator" and cloud.row()["problem_at"]
+    assert employee(cloud.api)["cloud_machine"]["problem"] == "Couldn't be made or started (operator): trying again"
+    with cloud.store.read() as c:
+        assert "couldn't be made or started (operator)" in CM.waiting(c, "ops")
+    monkeypatch.setattr(CM, "mint", real_mint)
+    assert cloud.tick(10) == ["create"] and cloud.row()["problem"] == ""
+
+
+def test_a_look_that_raises_with_nothing_to_do_is_cleared_by_the_next_clean_look(cloud, monkeypatch):
+    adopt(cloud)                                                # no work: no machine is wanted
+    real_facts = CM.facts
+
+    def broken(*args):
+        raise RuntimeError("database is locked")
+    monkeypatch.setattr(CM, "facts", broken)
+    assert cloud.tick(10) == [] and cloud.row()["problem"] == "error:RuntimeError"
+    monkeypatch.setattr(CM, "facts", real_facts)
+    assert cloud.tick(10) == [] and cloud.row()["problem"] == ""
+
+
+def test_a_create_waiting_on_a_refused_list_says_so_on_its_row_and_goes_out_once_listed(cloud):
+    adopt(cloud)
+    work(cloud)
+    cloud.hq.fail["create"] = [CM.Refused("boat_error", 502)]   # refused once: the create after it waits on HQ's list
+    assert cloud.tick(10) == ["create"] and cloud.row()["problem"] == "hq:boat_error"
+    adopt(cloud, "cpo")
+    work(cloud, "cpo")
+    listed = cloud.hq.list
+
+    def down():
+        raise CM.Refused("unreachable", 0)
+    cloud.hq.list = down
+    cloud.hq.calls.clear()
+    assert cloud.tick(CM.BACKOFF) == [] and cloud.row("cpo")["problem"] == "hq:unreachable"
+    cloud.hq.list = listed
+    assert cloud.tick(CM.BACKOFF_MAX) == ["create", "create"] and cloud.row("cpo")["problem"] == ""
+
+
 def test_a_create_hq_answers_as_failed_counts_too(cloud):
     adopt(cloud)
     work(cloud)
@@ -692,6 +789,49 @@ def test_a_resume_right_after_a_stop_retries_soon_without_counting_a_failure(clo
     assert cloud.tick(10) == ["start"]
     assert cloud.row()["failures"] == 0 and cloud.row()["problem"] == ""
     assert cloud.tick(5) == ["start", "start"] and cloud.row()["state"] == "starting"
+
+
+def test_a_same_choice_reposted_keeps_the_start_refusal_and_its_wake_guard(cloud):
+    enrolled(cloud)
+    cloud.tick(400)
+    work(cloud, text="More")
+    cloud.hq.fail["start"] = [CM.Refused("starts_full", 429)]
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == ["start"] and cloud.row()["problem"] == "hq:starts_full" and cloud.row()["wake_key"]
+    refused = cloud.row()
+    # Re-posting the choice a bot already has (a script reading the view it returns) changes none of it.
+    for body in ({"mode": "cloud"}, {"mode": "cloud", "placement": "own"}):
+        post(cloud.api, "bots/ops/cloud-machine", body)
+        assert employee(cloud.api)["cloud_machine"]["problem"] == "Didn't start (starts_full): trying again"
+        after = cloud.row()
+        assert (after["problem"], after["problem_at"], after["wake_key"], after["mode"], after["placement"]) == (
+            refused["problem"], refused["problem_at"], refused["wake_key"], "cloud", "own")
+
+
+def test_a_same_choice_reposted_does_not_wake_a_machine_whose_work_already_stuck(cloud):
+    enrolled(cloud)
+    cloud.tick(400)                                             # the chat was never claimed there: idle, stopped
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == [] and cloud.tick(600) == [] and cloud.row()["problem"] == "stuck"
+    post(cloud.api, "bots/ops/cloud-machine", {"mode": "cloud"})
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == [] and cloud.tick(600) == [] and cloud.row()["problem"] == "stuck"
+
+
+def test_a_real_change_of_placement_still_clears_the_refusal_and_its_wake_guard(cloud):
+    enrolled(cloud)
+    cloud.tick(400)
+    work(cloud, text="More")
+    cloud.hq.fail["start"] = [CM.Refused("starts_full", 429)]
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == ["start"] and cloud.row()["problem"] == "hq:starts_full" and cloud.row()["wake_key"]
+    idle(cloud)
+    post(cloud.api, "bots/ops/cloud-machine", {"placement": "shared"})
+    assert cloud.row()["placement"] == "shared" and cloud.row()["problem"] == "" and cloud.row()["wake_key"] is None
+    with cloud.store.transaction() as c:                        # a refusal and a wake guard on its row, moving back
+        CM.save(c, "ops", problem="hq:starts_full", problem_at=H.now(), wake_key="job:old")
+    post(cloud.api, "bots/ops/cloud-machine", {"placement": "own"})
+    assert cloud.row()["placement"] == "own" and cloud.row()["problem"] == "" and cloud.row()["wake_key"] is None
 
 
 def test_a_machine_hq_no_longer_has_is_made_again_and_replaces_the_old_computer(cloud):
@@ -1782,3 +1922,113 @@ def test_decide_stops_a_paused_machine_out_of_credit_whatever_its_runner_does():
     for busy in ({"updating": True}, {"turns": True}, {}):
         assert CM.decide(on, facts(active=False, frozen=True, **busy), 1100, 300) == ("stop", "out_of_credit")
     assert CM.decide(machine_row(), facts(active=False, frozen=True), 1100, 300) == (None, "out_of_credit")
+
+
+
+def codex_heartbeat(cloud, computer):
+    """The computer reports Claude and Codex installed and neither signed in: a throwaway machine nobody signs in to."""
+    post(cloud.api, "runners/heartbeat", {
+        "version": "test", "platform": "linux", "capabilities": [MS.CAPABILITY],
+        "readiness": {"schema_version": 1, "runtimes": {
+            "claude": {"installed": True, "authenticated": "missing"},
+            "codex": {"installed": True, "authenticated": "missing"}}, "bots": {}}}, token=computer["token"])
+
+
+def test_a_codex_bot_moved_onto_a_running_shared_machine_takes_the_chatgpt_plan(cloud):
+    plan_company(cloud, "cpo")
+    shared = shared_for(cloud, "cpo", token="ben-test")
+    codex_heartbeat(cloud, shared)
+    csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    on(cloud.api, "ops", "codex", "gpt-6.1-sol")
+    box = runner(cloud.api, label="Box")
+    assign(cloud.api, box, "ops")
+    idle(cloud)
+    change_as(cloud, "ops", "ben-test", mode="cloud", placement="shared")
+    assert placed(cloud)["ops"] == shared["runner_id"]
+    assert given(cloud, shared["runner_id"]) == {"claude": given(cloud, shared["runner_id"])["claude"], "codex": csid}
+
+
+def health_of(cloud):
+    body = cloud.api.get("/api/v2/health", headers=headers("ana-test")).json()
+    return {check["id"]: check for check in body["checks"]}
+
+
+def issue_kinds(cloud):
+    return {i["kind"] for i in cloud.api.get("/api/v2/health/issues", headers=headers("ana-test")).json()["issues"]}
+
+
+def test_a_plan_on_the_computer_is_not_a_missing_sign_in_on_health(cloud):
+    plan_company(cloud, "cpo")
+    shared = shared_for(cloud, "cpo")
+    codex_heartbeat(cloud, shared)
+    on(cloud.api, "ops", "codex", "gpt-6.1-sol")
+    change_as(cloud, "ops", mode="cloud", placement="shared")
+    checks = health_of(cloud)
+    assert "Codex" in checks["computer_signin"]["summary"] and "Claude" not in checks["computer_signin"]["summary"]
+    assert checks["models"]["status"] == "ok"                # Claude signs in with the plan: the model is signed in
+    shared_row = next(x for x in cloud.api.get("/api/v2/health", headers=headers("ana-test")).json()["computers"]
+                      if x["id"] == shared["runner_id"])
+    claude = next(r for r in shared_row["runtimes"] if r["name"] == "claude")
+    assert claude["plan"] == "subscription" and claude["ready"] and not claude["signable"]
+    from backend import getting_started
+    with cloud.store.read() as c:
+        online = getting_started._online_runners(c)
+        assert getting_started._signed_in_runtime(online, {"claude"}, c) == "claude"
+        assert getting_started._login_target(online, {"claude"}, c) is None
+    add(cloud.api, "codex_login", codex_file(), name="ChatGPT")
+    with cloud.store.transaction() as c:
+        sid = c.execute("SELECT id FROM model_subscriptions WHERE kind='codex_login'").fetchone()[0]
+    give(cloud.api, shared, "codex", sid)
+    checks = health_of(cloud)
+    assert "computer_signin" not in checks and "computer_logins" not in checks
+
+
+def test_a_cloud_machine_stopped_when_idle_is_not_offline_on_health(cloud):
+    plan_company(cloud, "cpo")
+    shared = shared_for(cloud, "cpo")
+    hour_ago = H.shift(H.now(), hours=-1)
+    with cloud.store.transaction() as c:
+        CM.save(c, CM.SHARED, state="stopped")
+        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (hour_ago, shared["runner_id"]))
+    work(cloud, "cpo")                                       # work waits for it: it starts for that, it is not silent
+    checks = health_of(cloud)
+    assert checks["computers"]["status"] == "ok" and "stopped until work comes" in checks["computers"]["summary"]
+    assert not [k for k in checks if k.startswith("runner_load:")]
+    assert "computer_offline" not in issue_kinds(cloud)
+    with cloud.store.read() as c:
+        from backend import health
+        assert health.silent_computers(c) == []
+    with cloud.store.transaction() as c:                     # a machine with a problem is offline as before
+        CM.save(c, CM.SHARED, problem="out_of_credit")
+    assert health_of(cloud)["computers"]["summary"] == "Every computer is offline."
+    assert "computer_offline" in issue_kinds(cloud)
+
+
+def test_a_list_that_breaks_outside_hq_still_lets_the_looks_run_and_says_why(cloud):
+    adopt(cloud)
+    work(cloud)
+    cloud.hq.fail["create"] = [CM.Refused("boat_error", 502)]   # refused once: the next create waits on HQ's list
+    assert cloud.tick(10) == ["create"]
+    adopt(cloud, "cpo")
+    work(cloud, "cpo")
+    listed = cloud.hq.list
+
+    def broken():
+        raise ValueError("bad page")
+    cloud.hq.list = broken
+    cloud.hq.calls.clear()
+    assert cloud.tick(CM.BACKOFF) == [] and cloud.row("cpo")["problem"] == "hq:ValueError"
+    cloud.hq.list = listed
+    assert "create" in cloud.tick(CM.BACKOFF_MAX) and cloud.row("cpo")["problem"] == ""
+
+
+def test_a_failing_look_never_hides_a_named_problem_and_a_listed_outage_clears_without_a_create(cloud):
+    adopt(cloud)
+    with cloud.store.transaction() as c:
+        CM.save(c, "ops", problem="out_of_credit", problem_at=H.now())
+    cloud.manager.failed("ops", RuntimeError("blip"))
+    assert cloud.row()["problem"] == "out_of_credit"            # its credit retry keys on it
+    with cloud.store.transaction() as c:
+        CM.save(c, "ops", problem="hq:unreachable", problem_at=H.now())   # said while a create waited on the list
+    cloud.manager.synced = None                                 # (this server has no memory of the outage: a restart)
+    assert cloud.tick(10) == [] and cloud.row()["problem"] == ""          # the list is back; no work, nothing made

@@ -3,12 +3,14 @@ import copy
 import json
 import re
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from backend import company_file as C
 from backend import market_spend as MS
+from backend import people_remove, views
 from backend.app import create_app
 from backend.auth import Identity
 from backend.company_file import starter
@@ -161,6 +163,7 @@ def test_people_who_hold_roles_are_kept_to_invite_and_the_seats_under_them_wait_
     saved = rows(api, "SELECT value FROM registry_metadata WHERE key='onboarding.company_file'")[0]["value"]
     assert '"person":"ana"' in saved and '"person":"ben"' in saved
     invited_from_setup(api, finance[0]["id"])
+    an_older_releases_roster_add_retries_after_the_upgrade(api)
     # A coworker who holds no role still joins in Tico, not by import.
     loose = C.from_yaml(text)
     loose["people"].append({"id": "cara", "name": "Cara", "role": "Designer", "dept": None, "owner": False, "isNew": True})
@@ -184,20 +187,21 @@ def invited_from_setup(api, finance):
 
     # On a Tico account sign-in the issuer sends it: Invite again sends to the person already added, once. A repeat of
     # one request (same Idempotency-Key, ui/app/api.js) sends nothing more, nor does a copy overlapping it.
-    from backend import invites
+    from backend import company_import, invites
     keyed = lambda key, email="someone-else@acme.example": api.post(
         "/api/v2/onboarding/company/people/ana/invite", json={"email": email},
         headers={**signed_in(), "Idempotency-Key": key})
 
     class Issuer:
         name, calls, overlap = "oidc", [], []
+        answer = (202, {"status": "sent"})
 
         def invite(self, email):
             if not self.overlap:
                 self.overlap.append(None)
                 self.overlap[0] = keyed("k-1")
             self.calls.append(email)
-            return 202, {"status": "sent"}
+            return self.answer
     api.app.state.auth.proxy = Issuer()
     try:
         sent = keyed("k-1")
@@ -217,9 +221,101 @@ def invited_from_setup(api, finance):
         finally:
             invites.record = record
         assert keyed("k-2").status_code == 200 and len(Issuer.calls) == 2
+        # A repeat answers from its binding: the roster is not written again.
+        with mock.patch.object(company_import, "add_invitee", side_effect=AssertionError("roster written")):
+            assert keyed("k-1").status_code == 200 and len(Issuer.calls) == 2
+        # A send the issuer refuses is bound too, and its refusal names the address: removal must scrub that.
+        Issuer.answer = (202, {"error": "not_sent"})
+        try:
+            assert keyed("k-3").status_code == 422
+        finally:
+            Issuer.answer = (202, {"status": "sent"})
+        sends = list(Issuer.calls)
         assert invite("nobody", "x@acme.example").status_code == 404
+        # Removed since: the seats her invite moved under her are not her history, so Remove is offered, and they go
+        # back to the owner removing her.
+        assert api.post("/api/v2/people/%s" % ana["id"], json={"left": True}, headers=signed_in()).status_code == 200
+        with api.app.state.store.read() as c:
+            gone = next(p for p in views.roster(c)["people"] if p["id"] == ana["id"])
+            assert people_remove.removable(c, gone) and people_remove.history(c, ana["id"]) == ""
+            under = [r[0] for r in c.execute("SELECT id FROM seats WHERE reports_to=?", ("human:" + ana["id"],))]
+        assert under
+        assert api.delete("/api/v2/people/%s" % ana["id"], headers=signed_in()).status_code == 200
+        with api.app.state.store.read() as c:
+            assert not c.execute("SELECT 1 FROM seats WHERE reports_to=?", ("human:" + ana["id"],)).fetchone()
+            assert all(c.execute("SELECT reports_to FROM seats WHERE id=?", (s,)).fetchone()[0].startswith("human:")
+                       for s in under)
+        assert ana["id"] not in [p["id"] for p in api.get("/api/people", headers=signed_in()).json()["people"]]
+        # Removed, a repeat of a bound key still answers from its binding and never invites her again. The binding keeps
+        # neither the address (its hash) nor the refusal text that named it.
+        bound = rows(api, "SELECT key,state,request_hash,error_detail FROM idempotency WHERE binding='invites' AND subject=?",
+                     (ana["id"],))
+        assert {row["state"] for row in bound} == {"completed", "refused"}
+        assert all(row["request_hash"] == "" for row in bound)
+        assert not [row for row in bound if "acme.example" in (row["error_detail"] or "")]
+        refused_key, = [row["key"] for row in bound if row["state"] == "refused"]
+        with mock.patch.object(company_import, "add_invitee", side_effect=AssertionError("roster written")):
+            replayed = api.post("/api/v2/onboarding/company/people/ana/invite", json={"email": "ana@acme.example"},
+                                headers={**signed_in(), "Idempotency-Key": refused_key})
+            assert replayed.status_code == 422 and replayed.json()["error"]["code"] == "invite_failed"
+            assert replayed.json()["error"]["detail"] == invites.REMOVED
+            assert keyed("k-1").status_code == 200 and Issuer.calls == sends
+        assert ana["id"] not in [p["id"] for p in api.get("/api/people", headers=signed_in()).json()["people"]]
     finally:
         api.app.state.auth.proxy = None
+
+
+def an_older_releases_roster_add_retries_after_the_upgrade(api):
+    """An older release's onboarding route stored its roster add as an answer under the request's key before it bound
+    the invite, so a refusal (or a crash) between the two left an answer with no binding and nothing sent. Migration
+    0050 removes it: the retry after the upgrade sends once and answers, and its repeat sends nothing more."""
+    import sqlite3
+    from contextlib import closing
+
+    from backend.store import digest
+
+    url, key, body = "/api/v2/onboarding/company/people/ben/invite", "legacy-ben", {"email": "ben@acme.example"}
+    refused = api.post(url, json=body, headers={**signed_in(), "Idempotency-Key": key})   # no sign-in mail here
+    assert refused.status_code == 422 and refused.json()["error"]["code"] == "invite_unavailable"
+    ben, = [p for p in api.get("/api/people", headers=signed_in()).json()["people"] if p["email"] == body["email"]]
+    settings = api.app.state.store.settings
+    with closing(sqlite3.connect(settings.db_path)) as c, c:
+        assert not c.execute("SELECT 1 FROM idempotency WHERE key=?", (key,)).fetchone()
+        # The older layout: the answers alone in `idempotency`, the invite bindings in invite_sends.
+        c.execute("CREATE TABLE idempotency_legacy(actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL, "
+                  "request_hash TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL, "
+                  "PRIMARY KEY(actor,operation,key))")
+        c.execute("INSERT INTO idempotency_legacy SELECT actor,operation,key,request_hash,response,created_at "
+                  "FROM idempotency WHERE binding IS NULL")
+        c.execute("CREATE TABLE invite_sends(actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL, "
+                  "request_hash TEXT NOT NULL, person TEXT NOT NULL, state TEXT NOT NULL, error_code TEXT, "
+                  "error_detail TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(actor,operation,key))")
+        c.execute("INSERT INTO invite_sends SELECT actor,operation,key,request_hash,subject,"
+                  "CASE state WHEN 'pending' THEN 'sending' WHEN 'completed' THEN 'sent' ELSE state END,"
+                  "error_code,error_detail,created_at,coalesce(updated_at,created_at) FROM idempotency "
+                  "WHERE binding='invites'")
+        actor = c.execute("SELECT actor FROM invite_sends LIMIT 1").fetchone()[0]
+        c.execute("INSERT INTO idempotency_legacy VALUES(?,?,?,?,?,?)",
+                  (actor, url, key, digest(encode(body)), encode({"id": ben["id"]}), H.now()))
+        c.execute("DROP TABLE idempotency")
+        c.execute("ALTER TABLE idempotency_legacy RENAME TO idempotency")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0050' AND version NOT LIKE 'legacy_%'")
+
+    class Issuer:
+        name, calls = "oidc", []
+
+        def invite(self, email):
+            self.calls.append(email)
+            return 202, {"status": "sent"}
+    with TestClient(create_app(settings), follow_redirects=False) as upgraded:
+        upgraded.app.state.auth.proxy = Issuer()
+        for _ in range(2):
+            again = upgraded.post(url, json=body, headers={**signed_in(), "Idempotency-Key": key})
+            assert again.status_code == 200, again.text
+            assert Issuer.calls == ["ben@acme.example"]
+        with upgraded.app.state.store.read() as c:
+            row = c.execute("SELECT binding,subject,state FROM idempotency WHERE key=?", (key,)).fetchone()
+        assert tuple(row) == ("invites", ben["id"], "completed")
 
 
 def test_import_lays_out_the_chart_once_across_retry_and_runner_enrollment(environment):

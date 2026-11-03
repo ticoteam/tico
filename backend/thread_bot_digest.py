@@ -24,8 +24,8 @@ def _waiting(c):
 
 
 def _batch_open(c, slug):
-    return c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
-                     "AND j.state IN ('queued','leased') AND json_extract(m.refs,'$.wake')=? LIMIT 1",
+    return c.execute("SELECT 1 FROM jobs j JOIN message_refs m ON m.id=j.message_id WHERE j.bot_id=? "
+                     "AND j.state IN ('queued','leased') AND m.ref_wake=? LIMIT 1",
                      (slug, WAKE)).fetchone() is not None
 
 

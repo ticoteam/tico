@@ -342,8 +342,12 @@ def annotate(c, auth, who, messages):
             detail = (json.loads(row["detail"] or "{}") or {}).get("detail") or ""
             did[aid].append({"kind": "refused", "rule": row["rule"], "text": clip(detail, 200), "at": row["created_at"]})
     events = {aid: [] for aid in turns}
-    for row in c.execute(f"SELECT attempt_id,kind,payload,created_at FROM attempt_events WHERE attempt_id IN "
-                         f"({','.join('?' * len(turns))}) AND {STEP_EVENTS} ORDER BY attempt_id,seq", tuple(turns)):
+    step_rows = c.execute(f"SELECT attempt_id,kind,payload,created_at FROM attempt_events WHERE attempt_id IN "
+                          f"({','.join('?' * len(turns))}) AND {STEP_EVENTS} ORDER BY attempt_id,seq", tuple(turns)).fetchall()
+    # Each step names its tool calls by id, a new string per step, and its run by id: look up the tasks they could name
+    # in one pass, not one query per step (or per run).
+    privacy.prime_references(c, [dict(row) for row in step_rows])
+    for row in step_rows:
         if not privacy.content_readable(c, privacy.actor(who), dict(row)):
             continue
         events[row["attempt_id"]].append((row["kind"], json.loads(row["payload"]), row["created_at"]))

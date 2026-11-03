@@ -28,6 +28,12 @@ journey('e2e-roles', async ({hub, browser, phone}) => {
     owner: 'engineering-lead'}, 'the public task'));
   const P1 = idOf(await must(hub, 'omar', 'POST', 'tasks', {title: TITLES.P1, body: 'Omar and Dana only.',
     owner: 'dana', private: true}, 'the person-only private task'));
+  // Reach (docs/reach.md): release-manager and builder-claude are not near each other on the chart, nor builder-claude
+  // and Gina; Dana's lines let these two sends through (the second run finds them made).
+  for (const [sender, receiver] of [['bot:release-manager', 'bot:builder-claude'], ['bot:builder-claude', 'human:gina']]) {
+    const line = await call(hub, 'dana', 'POST', 'reach/lines', {sender, receiver, per_day: null});
+    assert.ok(line.status === 200 || line.status === 409, `the line ${sender} -> ${receiver}: ${line.status}`);
+  }
   const P2 = idOf(await must(hub, 'release-manager', 'POST', 'tasks', {title: TITLES.P2, body: 'Bots, a manager and a guest.',
     owner: 'builder-claude', private: true}, 'the bot-only private task'));
   await must(hub, 'builder-claude', 'POST', 'tasks', {title: 'Gina checks the cut', body: 'Gina is brought in here.',

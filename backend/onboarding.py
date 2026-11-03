@@ -966,10 +966,13 @@ class Onboarding:
         choice = {"template": card["template"], "display_name": card["name"], "instructions": card["instructions"]}
         restored = bool(row and row["state"] == "archived")
         if restored:
-            # The restore keeps the bot's own model and settings; only the name and description are renewed.
+            # The restore keeps the bot's own model and settings; only the name and description are renewed. The model
+            # is in the bot's config (bot_config.config): bots has no model column since migration 0043.
+            kept = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+            kept_model = (H._json(kept[0], {}) or {}).get("model") if kept else ""
             self.admin.create_bot(c, who, M.BotDefinitionCreate(
                 slug=slug, display_name=choice["display_name"], description=str(card.get("summary") or ""),
-                status="planned", repo=self._recorded_repo(c, slug), thread_mode="personal", model=row.get("model") or "restore",
+                status="planned", repo=self._recorded_repo(c, slug), thread_mode="personal", model=kept_model or "restore",
                 effort=row.get("effort") or "high", owners=[H.actor_id(who.actor)]))
         elif not row:
             self._define(c, who, slug, choice, card)
@@ -1022,17 +1025,62 @@ class Onboarding:
 
     def _seed_routines(self, c, who, slug, template):
         """The template's `routines:` (older: `schedules:`) become the bot's first routines, once. A routine a person
-        changed or deleted is never put back: only a key the bot has never had is created. (A bot
-        BotOps builds gets these from `hub bot create`; a built-in one is made here.)"""
-        made = []
+        changed or deleted is never put back: only a key the bot has never had is created. The bot's config names every
+        key it has had (`routines_seeded`), so a key stays seeded even if its schedule row is gone; a key whose row
+        exists (deleted, moved to an automation or changed) counts as seeded too. (A bot BotOps builds gets these from
+        `hub bot create`; a built-in one is made here.) Returns the keys it created."""
+        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        declared = (_json(row[0], {}) or {}) if row else {}
+        had = list(declared.get("routines_seeded") or [])
+        seeded, made = list(had), []
         for entry in self._template_routines(c, template):
-            if c.execute("SELECT 1 FROM schedules WHERE bot=? AND routine_key=?", (slug, entry["id"])).fetchone():
+            key = entry["id"]
+            if key in seeded:
+                continue
+            if c.execute("SELECT 1 FROM schedules WHERE bot=? AND routine_key=?", (slug, key)).fetchone():
+                seeded.append(key)
                 continue
             routines.create(c, who.actor, slug, {"title": entry["title"], "text": entry["instructions"],
                                                  "cron": entry["cron"], "on": entry["on"],
                                                  "timezone": entry["timezone"],
-                                                 "enabled": entry["enabled"]}, key=entry["id"])
-            made.append(entry["id"])
+                                                 "enabled": entry["enabled"]}, key=key)
+            seeded.append(key)
+            made.append(key)
+        if row and seeded != had:
+            declared["routines_seeded"] = seeded
+            self._write_config(c, slug, declared)
+        return made
+
+    def ensure_builtin_routines(self, c):
+        """At startup (an update): the active Assistant gets its template's routines it has never had, its daily sweep,
+        which a company from before it existed never had. Only keys the bot has never had are created (`_seed_routines`),
+        so a routine a person deleted or changed stays so. No other built-in bot is backfilled: its routines are set up
+        with the bot (`_turn_on`), and a backfill would switch on what nobody asked for (a bookkeeper's monthly report).
+        A planned bot gets them when it is set up; a paused or archived bot is a person's stop and is left alone. Returns
+        the (bot, key) pairs it created."""
+        # Only the Assistant (a bootstrap card): its daily sweep is the one routine an install from before it never had.
+        boot = {card["template"] for card in read_cards(self.settings) if card.get("bootstrap")} & {"assistant"}
+        if not boot:
+            return []
+        try:
+            who = self.auth.owner_identity(c)
+        except Problem:
+            return []
+        made = []
+        for bot in c.execute("SELECT bc.bot, bc.config FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+                             "WHERE b.state='active'").fetchall():
+            declared = _json(bot["config"], {}) or {}
+            if declared.get("template") not in boot:
+                continue
+            # Best effort per bot: one bot's failure does not stop the others (the same savepoint pattern as _ensure_builtin).
+            c.execute("SAVEPOINT builtin_routines")
+            try:
+                keys = self._seed_routines(c, who, bot["bot"], declared["template"])
+                c.execute("RELEASE builtin_routines")
+                made += [(bot["bot"], key) for key in keys]
+            except (Problem, ValueError):
+                c.execute("ROLLBACK TO builtin_routines")
+                c.execute("RELEASE builtin_routines")
         return made
 
     def start_setup(self, c, who, slug):
@@ -1260,7 +1308,7 @@ class Onboarding:
         for key in ("runtime", "model", "harness", "reasoning_effort"):
             declared.pop(key, None)
         self._write_config(c, slug, declared)
-        c.execute("UPDATE bots SET runtime='',model='',effort='' WHERE id=?", (slug,))
+        c.execute("UPDATE bots SET effort='' WHERE id=?", (slug,))
 
     def _setup_task(self, c, who, slug, choice, card, answers):
         """BotOps builds every bot people picked. A bootstrap template (the assistant, BotOps

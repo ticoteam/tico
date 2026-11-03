@@ -254,6 +254,7 @@ def _view(c, auth, who, rid):
         access.append({"actor": r["actor"], "name": (person or {}).get("name") or H.actor_id(r["actor"])})
     return {
         "id": row["id"], "title": row["title"], "state": row["state"], "owner_actor": row["owner_actor"],
+        "link": auth.settings.public_url + "/#/meetings/live/" + row["id"],
         "visibility": row["visibility"], "access": access, "client": row["client"],
         "seq": row["seq"], "event_id": row["next_event_id"], "window_ms": row["window_ms"],
         "cooldown_ms": row["cooldown_ms"], "reply_cap": row["reply_cap"], "threshold": row["threshold"],
@@ -475,11 +476,11 @@ def _dispatch_turn(c, rid, turn_id, slug, retry=0):
 def _wait_for_update(c, rid, turn_id, slug):
     """Say once per meeting and bot when no computer running the bot can take a private meeting's turn: one without
     private lanes is never handed it (execution.PRIVATE_LANES), so the turn waits for its runner's update."""
-    from .execution import PRIVATE_LANES, _capability_set
+    from .execution import PRIVATE_LANES, capability_set
     computers = c.execute("SELECT r.label,r.capabilities FROM assignments a JOIN runners r ON r.id=a.runner_id "
                           "WHERE a.bot=? AND r.revoked_at IS NULL", (slug,)).fetchall()
     old = [r["label"] or "This bot's computer" for r in computers
-           if PRIVATE_LANES not in _capability_set(r["capabilities"])]
+           if PRIVATE_LANES not in capability_set(r["capabilities"])]
     if not computers or len(old) < len(computers):
         return
     if c.execute("SELECT 1 FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_waiting' "
@@ -1249,11 +1250,19 @@ def install_live_meetings(app, store, auth, write):
                                          (who.actor, body.client_id)).fetchone()
                     if existing:
                         _require_read(c, auth, who, existing["id"])
-                cached = c.execute("SELECT response FROM idempotency WHERE actor=? AND operation=? AND key=?",
+                cached = c.execute("SELECT response FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                                    (who.actor, request.url.path, request.headers.get("idempotency-key"))).fetchone()
                 if cached:
                     _require_read(c, auth, who, (H._json(cached["response"], {}) or {}).get("id"))
         return write(request, body, work, check=check)
+
+    from .meeting_screen import install as install_screen
+    install_screen(app, store, auth, _require_read, _connector)
+    @app.get("/api/v2/recorder/browser")
+    def recorder_browser(request: Request):
+        human_only(request.state.identity)
+        auth.domain(request.state.identity)
+        return {"url": auth.settings.public_url}
 
     @app.post("/api/v2/live-meetings")
     def connect(request: Request, body: Connect):
@@ -1378,7 +1387,12 @@ def install_live_meetings(app, store, auth, write):
                 _event(c, rid, "meeting.access", {"visibility": visibility, "added": added, "removed": removed,
                                                    "changed_by": who.actor})
             return _view(c, auth, who, rid)
-        return mutate(request, body, work)
+        if body.visibility is not None:
+            app.state.meeting_frames.stop(rid)
+        result = mutate(request, body, work)
+        if body.visibility is not None:
+            app.state.meeting_frames.stop(rid)
+        return result
 
     @app.post("/api/v2/live-meetings/{rid}/chunks")
     def chunks(request: Request, rid: str, body: ChunkBatch):
@@ -1526,6 +1540,8 @@ def install_live_meetings(app, store, auth, write):
                 _end_open_turns(c, rid)
             return _view(c, auth, who, rid)
         result = mutate(request, body, work)
+        if body.action != "resume":
+            app.state.meeting_frames.stop(rid)
         if body.action == "end":
             _run_windows(app, rid, final=True)
             with store.read() as c:

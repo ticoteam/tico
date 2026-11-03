@@ -74,7 +74,7 @@ async function needsRecommend(button, ask, version) {
 // task rows' columns (task-list.js taskListRowHTML), with nothing to select and no status.
 // The thread items (backend/thread_attention.py): each names its kind, and opens its thread rather than a decide card.
 const THREAD_NEED_KINDS = {thread_ask: 'Question', thread_mention: 'Mention', thread_dm: 'Direct message',
-                           thread_held: 'Held', thread_capped: 'Paused', thread_unsent: 'Not sent'};
+                           thread_held: 'Held', thread_capped: 'Paused'};
 function needRowHTML(it, ctx = {}) {
   const key = decideItemKey(it), stale = it.kind === 'stale', thread = THREAD_NEED_KINDS[it.kind];
   const from = stale ? '' : taskRequester(it) || it.requester_id || '';
@@ -97,8 +97,11 @@ function needRowHTML(it, ctx = {}) {
     <time class="tl-age tnum" datetime="${esc(it.ready_since || it.created_at || '')}" title="${esc(fmt(it.ready_since || it.created_at))}">${esc(ageShort(it.ready_since || it.created_at))}</time>
   </div>`);
 }
-// The items Needs you lists outside any task, without the ones just answered on a card (decide.js decideGone).
-const needsExtras = () => (S.v2?.needs || []).filter(it => ['approval', 'stale', 'ask', 'memory_tidy', ...Object.keys(THREAD_NEED_KINDS)].includes(it.kind) && !decideGone(decideItemKey(it)));
+// The items Needs you lists outside any task, without the ones just answered on a card (decide.js decideGone). A
+// thread's items (a mention or question in a thread, a person's DM, a held message) are Inbox's (threads.js), not the
+// Tasks page's: each thing that waits on someone is in one place. A bot's question outside any task stays here: its
+// card is where it is answered.
+const needsExtras = () => (S.v2?.needs || []).filter(it => ['approval', 'stale', 'ask', 'memory_tidy'].includes(it.kind) && !decideGone(decideItemKey(it)));
 // How long an approval's exact payload has been ready to decide, in seconds (until its decision once decided), and whose
 // decision it is: "Ready 2 h 10 min, waiting on Chris" (backend/hubdb.py approval_wait). Counted here from `ready_since`
 // so a page left open stays right.

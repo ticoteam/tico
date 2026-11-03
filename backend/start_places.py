@@ -48,7 +48,18 @@ MEMORY_HOLD = 'computer busy: memory'
 NOT_REPORTING = 'computer not reporting'
 
 
-def computer_hold(c, runner_id, now=None, status=None):
+def hold_rows(c, runner_ids):
+    """The runner rows computer_hold reads, for many computers in one read: {runner id: row}."""
+    ids = sorted({rid for rid in runner_ids if rid})
+    out = {}
+    for start in range(0, len(ids), 500):
+        part = ids[start:start + 500]
+        for row in c.execute(f"SELECT * FROM runners WHERE id IN ({','.join('?' * len(part))})", part):
+            out[row['id']] = row
+    return out
+
+
+def computer_hold(c, runner_id, now=None, status=None, row=None):
     """Why this computer holds a bot's new start, as (wait reason, words for people), or None. Diagnostics on only.
 
     - Sustained CPU or memory overload (performance.load_status): "computer busy", as before.
@@ -57,19 +68,29 @@ def computer_hold(c, runner_id, now=None, status=None):
       has never sampled is not held: older runners never sent samples.
     - Memory at 85% or more: "computer busy: memory N%". It is admitted again below 80%; between the two it keeps
       the state its newest sample set (performance.ingest), so the queue does not flap.
-    A person's own message skips this at each caller, as it skips the overload hold."""
-    from .performance import MEM_HOLD_AT, MEM_HOLD_CLEAR, load_status, on
+    A person's own message skips this at each caller, as it skips the overload hold. `row` is the computer's runner
+    row from hold_rows when the caller has it: the same columns, read once for all its computers."""
+    from .performance import MEM_HOLD_AT, MEM_HOLD_CLEAR, load_status
+
+    def runner():
+        nonlocal row
+        if row is None:
+            row = c.execute("SELECT * FROM runners WHERE id=?", (runner_id,)).fetchone()
+        return row
+
+    def diagnostics_on():
+        found = runner()
+        return bool(found) and found['revoked_at'] is None and found['performance'] == 'on'
     if status is None:
-        if not on(c, runner_id):
+        if not diagnostics_on():
             return None
         status = load_status(c, runner_id, now)
     latest = status['latest_sample']
     if latest is None:
         # Samples past retention are gone, but a computer that reported before still reports nothing now.
-        if not on(c, runner_id):
+        if not diagnostics_on():
             return None
-        seen = c.execute("SELECT last_sampled_at FROM runners WHERE id=?", (runner_id,)).fetchone()
-        return (NOT_REPORTING, NOT_REPORTING) if seen and seen[0] else None
+        return (NOT_REPORTING, NOT_REPORTING) if runner()['last_sampled_at'] else None
     if latest['stale']:
         return NOT_REPORTING, NOT_REPORTING
     if status['overloaded']:
@@ -77,8 +98,8 @@ def computer_hold(c, runner_id, now=None, status=None):
     mem = latest['mem_pct']
     if mem is None:
         return None
-    held = c.execute("SELECT memory_hold FROM runners WHERE id=?", (runner_id,)).fetchone()
-    if mem >= MEM_HOLD_AT or (mem >= MEM_HOLD_CLEAR and held and held[0]):
+    held = runner()
+    if mem >= MEM_HOLD_AT or (mem >= MEM_HOLD_CLEAR and held and held['memory_hold']):
         return MEMORY_HOLD, f'{MEMORY_HOLD} {round(mem)}%'
     return None
 
@@ -151,6 +172,20 @@ def at_turn_limit(c, bot):
     row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     limit = bot_limit(H._json(row[0], {}) if row else {})
     return limit is not None and bot_held(c, bot) >= limit
+
+
+def held_counts(c, bots):
+    """{bot: the turns it holds on every computer} for every bot in `bots`, in set queries: bot_held's predicate,
+    grouped by bot."""
+    from .hubdb import chunks
+    now = H.now()
+    counts = {}
+    for part in chunks(bots):
+        for bot, count in c.execute(
+                "SELECT a.bot_id,count(*) FROM attempts a WHERE a.bot_id IN (" + ",".join("?" * len(part)) + ") "
+                "AND (a.state='running' OR (a.state='leased' AND a.lease_until>?)) GROUP BY a.bot_id", (*part, now)):
+            counts[bot] = count
+    return {bot: counts.get(bot, 0) for bot in bots}
 
 
 def bot_held(c, bot, exclude=None):
@@ -324,7 +359,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
             why = reasons.get(refused, 'pre-start requirements') if refused else ''
         if not why:
             if rid not in holds:
-                holds[rid] = computer_hold(c, rid, status=statuses[rid])
+                holds[rid] = computer_hold(c, rid, status=statuses[rid], row=runners.get(rid))
             why = holds[rid][0] if holds[rid] else ''
         if why:
             add(rid, why, row['n'], row['oldest'])

@@ -167,7 +167,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.deepEqual(writes.at(-1)[1], {});
     computers = [{id: 'ana-mac', label: 'My Mac', owner_id: 'ana', bots: ['architect-sam']}];
     await page.evaluate(() => {
-      S.emps.push({name: 'architect-sam', shared_from: 'architect', owner_id: 'sam', machine: {runner_id: 'ana-mac'}});
+      // A roster row has an id and a display name, as the API sends it: the bot's name lookup reads them on any later render.
+      S.emps.push({id: 'architect-sam', name: 'architect-sam', slug: 'architect-sam', display_name: 'Architect', status: 'active',
+        shared_from: 'architect', owner_id: 'sam', machine: {runner_id: 'ana-mac'}});
       return botBranchCreate('architect');
     });
     await dialog.locator('.bot-editor-body > p').filter({hasText: /Your computers already run/}).waitFor();

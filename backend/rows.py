@@ -20,6 +20,8 @@ class TaskRow(TypedDict):
     owner_id: str | None
     status: str | None
     due_at: str | None
+    check_back_at: str | None
+    check_back_note: str | None
     conversation_id: str | None
     created_at: str | None
     updated_at: str | None
@@ -72,6 +74,14 @@ class TaskRow(TypedDict):
     request_id: str | None
     version: int
     acceptance: str
+
+
+class TaskCheckBackWakeRow(TypedDict):
+    """A reminder occurrence; jobs and attempts retain all execution state."""
+    task_id: str
+    check_back_at: str
+    sent_at: str
+    message_id: str | None
 
 
 class AttemptRow(TypedDict):
@@ -182,6 +192,37 @@ class MemoryTidyPassRow(TypedDict):
     cost_usd: float
 
 
+class FeedbackRow(TypedDict):
+    """One person's 👍 or 👎 on something a bot made (backend/feedback.py); the run fields are None where it had none."""
+    id: str
+    person_id: str
+    subject_type: str
+    subject_id: str
+    bot_id: str
+    conversation_id: str | None
+    attempt_id: str | None
+    model: str | None
+    harness: str | None
+    subject_revision: int | None
+    rating: str
+    reason: str
+    outcome: str
+    note_id: str | None
+    org_rule_id: str | None
+    created_at: str
+    updated_at: str
+
+
+class ThreadRankingRow(TypedDict):
+    """A root thread's Important level (backend/thread_rank.py); `score` is None until a call answers."""
+    thread_id: str
+    score: int | None
+    ranked_seq: int
+    tried_at: str
+    created_at: str
+    updated_at: str
+
+
 class MemoryTidyPacketRow(TypedDict):
     """Trusted runner custody for one editing and verification attempt."""
     attempt_id: str
@@ -196,3 +237,56 @@ class MemoryTidyPacketRow(TypedDict):
     conflicts: int | None
     flags: str
     stage: str
+
+
+class UsageFactRow(TypedDict):
+    """One `usage_facts` row (SELECT *): a metered segment, append-only (backend/usage_facts.py)."""
+    id: int
+    source: str
+    run_id: str | None
+    position: int
+    bot_id: str | None
+    task_id: str | None
+    provider: str | None
+    model: str | None
+    family: str | None
+    runtime: str | None
+    harness: str | None
+    effort: str | None
+    profile: str | None
+    billing: str | None
+    input_tokens: int
+    cached_tokens: int
+    output_tokens: int
+    cost_nano: int | None
+    low_estimate: int | None
+    meter_key: str | None
+    gateway_key_id: str | None
+    install_id: str | None
+    started_at: str
+    metered_at: str
+    created_at: str
+
+
+class UsageMeterReadRow(TypedDict):
+    """One `usage_meter_reads` row (SELECT *): the newest read of the Gateway's meter taken for a month
+    (backend/usage_facts.py `record_meter`)."""
+    id: int
+    month: str
+    as_of: str
+    total_nano: int
+    read_at: str
+
+
+class BudgetNodeRow(TypedDict):
+    """One `budget_nodes` row (SELECT *): a money limit, its amount, period and scope (backend/usage_limits.py)."""
+    id: str
+    scope: str
+    team_id: str | None
+    bot_id: str | None
+    per_bot: int
+    period: str
+    amount_nano: int
+    created_at: str
+    updated_at: str
+    updated_by_id: str | None

@@ -557,10 +557,10 @@ def test_a_login_check_that_raises_for_one_job_holds_that_job_and_the_bots_other
     bad, other = [job["id"] for job in jobs_of(api, "ops")]
     real = execution.login_refusal
 
-    def raising(c, settings, runner_id, bot, config, job_id=None, ctx=None):
+    def raising(c, settings, runner_id, bot, config, job_id=None, ctx=None, loads=None):
         if job_id == bad:
             raise RuntimeError("the job's continuation cannot be read")
-        return real(c, settings, runner_id, bot, config, job_id, ctx)
+        return real(c, settings, runner_id, bot, config, job_id, ctx, loads=loads)
     monkeypatch.setattr(execution, "login_refusal", raising)
 
     turn = claim(api, machine)

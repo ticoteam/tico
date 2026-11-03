@@ -176,8 +176,8 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
   group or any group above it. **members**, **personal** and **participants** threads open to a bot only as a member (or
   a participant). An external agent (an agent token) gets no company or team reading: only the threads it is in.
   Posting in a Home takes **Write** on its owner, for bots as for people.
-- A thread can reach outside the company through a linked Slack channel or a shared install. Taking that away (unlink,
-  unshare) removes the outside readers at once ([Slack](slack.md), [Federation](federation.md)).
+- A thread can reach outside the company through a linked Slack channel. Unlinking it removes the outside readers at
+  once ([Slack](slack.md)).
 - A message the org rules hold writes nothing. The author may withdraw it, and so may the person a bot reports to; only
   the reviewer sends it anyway ([Rules](rules-plan.md)).
 
@@ -201,7 +201,7 @@ The product favours getting going fast, and the owner tightens it later. Setting
 
 | Rule | On (default) | Off |
 | --- | --- | --- |
-| **Assistant acts without asking** | the Assistant makes tasks for bots, comments on tasks no other human is on, and messages bots directly, and does the task actions the human asks for in their Assistant chat; a card is for anything else ([Assistant](assistant.md)) | the Assistant acts directly only on the human's own tasks; a task, message or comment involving a bot, and a task action they asked for, is a card |
+| **Assistant acts without asking** | the Assistant does what the human asks for in their Assistant chat, as them, with their rights as the ceiling; only what it may never do there (credentials, sign-in, owner transfer, support reports, deleting people, the server connection or storage) is a card ([Assistant](assistant.md)) | the Assistant writes only the human's own tasks and changes to tasks that are theirs alone; everything else, including what they asked for in chat, is a card |
 | **People may let their Assistant decide their approvals** | each person may turn on "My assistant can decide approvals for me" in Settings > General; their own Assistant then approves or declines approvals addressed to them on their words in its chat, recorded and undoable ([Assistant](assistant.md#letting-it-decide-your-approvals)) | approving is the person's click on a card again, whatever their own setting |
 | **BotOps changes providers and limits without asking** (`botops_direct`) | BotOps changes the AI providers and raises spending limits for the person who asked, with their rights | a provider change, or a limit raised or removed, is a Confirm card in that person's BotOps chat; lowering a limit stays direct |
 | **BotOps manages every bot** (`botops_manages_bots`) | in its own runs (the daily update, or a routine the owner set for BotOps) BotOps manages every bot but the built-in ones: their Tools, repositories, contact and Instructions, with write access to each bot's repository in its GitHub token (below) | BotOps in its own runs changes only itself |
@@ -731,19 +731,41 @@ what `set` does when BotOps or the Assistant asks for a person (the same answer 
 - **confirm** (spending more, people and roles, sending or publishing outside, anything destructive, team rules,
   ownership, the Strategy Bot): BotOps gets a Confirm card for the person to tap; nothing changes until they do, and nothing
   confirms it for them. A wake rule is direct unless it sends a webhook or forwards the call. The person's own
-  `hub settings set` runs at once. A confirm entry whose route BotOps can't yet put on a card is person-only until it
-  can (`NO_CARD_YET`; the catalogue test fails once one can, so it goes back to confirm).
-- **person** (a sign-in, a secret value, an upload such as the team icon, the person's own approvals and mail): BotOps
-  answers with a one-line reason and the card's link.
+  `hub settings set` runs at once. The person's tap is their own click, also on the routes that take only that (the
+  Strategy Bot's level and checks, company storage, turning the Assistant on). A confirm entry whose route BotOps can't yet
+  put on a card is person-only until it can (`NO_CARD_YET`, empty now; the catalogue test fails once one can, so it
+  goes back to confirm).
+- **person** (a sign-in, a secret value, an upload such as the team icon, the person's own approvals and mail, and a
+  new outgoing webhook or Gateway wake URL, whose signing secret is shown only once, in Settings): BotOps answers with
+  a one-line reason and the card's link.
 
 The Assistant's Confirm card is in the person's own Assistant chat (the owner's Strategy Bot chat), and it may card every
-catalogue route BotOps may. A direct entry runs on the person's own words: the write cites their message in that chat
-(`--on-behalf-of turn`), as a task action does. Without it, or while the owner's "Assistant acts without asking" is off,
-a direct entry is a card too. A card or a cited write from the Assistant is exactly one entry's body: two settings at
-once, or a person-only one, is refused.
+catalogue route BotOps may. A direct or a confirm entry runs on the person's own words: the Assistant's run cites their
+message in that chat, as a task action does (its route checks who may change it). Without that, or while the owner's
+"Assistant acts without asking" is off, it is a card too. A card or a cited write from the Assistant is exactly one
+entry's body: two settings at once, or a person-only one, is refused.
 
 Someone without the rights is refused with who can change it ("Only the owner or an admin changes Release times").
-The route still makes its own check after the catalogue's. `backend/tests/test_settings_catalog.py` reads every write
+"Whose it is" is read from the thing itself: a trigger's or an outgoing webhook's maker (a bot that made an incoming
+trigger manages it too, as its route allows), a computer's operator, and the people who manage a wake rule's scope (the
+owner or an admin for a team rule); a person's role is the owner's alone.
+The route still makes its own check after the catalogue's, and when the route refuses a write BotOps or the Assistant
+made for a person (`hub api`), the refusal carries the same who-may line (`fix`, `who_may`).
+
+**Ask someone who can.** BotOps or the Assistant then offers "Shall I ask an admin?" ("the owner" for the owner's
+settings). On the person's yes, `hub settings ask <key> <value>` (`--to <person>` names one) sends one request to one
+person who may: the setting's Confirm card in their BotOps chat and a task on their list that the asker requested. Only
+their tap changes it, with their rights; their tap or cancel settles the task, done or declined, and the asker is told
+in the chat they asked from. A card nobody taps expires after a day (the hourly approval expiry sweep), which declines
+the task and tells the asker too; a confirm cut off before it finished (a restart) declines it and tells the asker it
+may or may not have changed, and nothing runs again. The Assistant cites the person's words for it; a bot on its own
+rights never asks, a person-only setting can't be asked for (it is typed in Settings, by someone who may or, for each
+person's own, by them), and someone who may change it is told to set it. A person has at most five asks waiting at once,
+one per setting and target (asking again for one that waits is refused, `already_asked`). The same ask again is the same
+request; one for exactly the change already waiting for that person on someone else's ask or on their own card is
+refused (`already_waiting`), so every accepted request has its own requester and is told once.
+
+`backend/tests/test_settings_catalog.py` reads every write
 the Settings pages make and fails when no entry covers one; a one-off action (check, replay, undo, run now) is listed
 in `NOT_SETTINGS` with the reason it needs none.
 

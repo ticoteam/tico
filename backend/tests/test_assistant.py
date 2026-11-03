@@ -1,6 +1,6 @@
-"""The Assistant (backend/assistant.py, docs/assistant.md): a private room per person, a fast path that
-needs no bot turn, a bot turn that acts as the person and never more, and side effects that wait for the
-person's own click."""
+"""The Assistant (backend/assistant.py, docs/assistant.md): a private room per person, every message a bot turn
+that reads it, a bot turn that acts as the person and never more, and side effects that wait for the person's own
+click."""
 
 import hashlib
 
@@ -29,8 +29,7 @@ def assistant_turn(api, person, text="Please plan my week around the launch", bu
     r = runner(api)
     assign(api, r, "coo")
     ready(api, r, ["coo"])
-    said = say(api, text, person)
-    assert said["fast"] is False
+    say(api, text, person)
     body = {} if busy_bots is None else {"busy_bots": busy_bots}
     return r, post(api, "jobs/claim", body, token=r["token"])["attempt"]
 
@@ -89,13 +88,16 @@ def test_the_assistant_acts_as_the_person_and_never_more(api):
     assert get(api, "me", token)["actor"] == "human:ben"           # its tools are ben's, not the bot's
     # What ben may not see or touch, his Assistant may not.
     get(api, "tasks/" + secret, token, expected=404)
-    post(api, "tasks/" + secret + "/comments", {"text": "Looking"}, token=token, expected=403)
-    # Nothing that changes settings, people or bots runs on its own, whoever it acts for.
+    post(api, "tasks/" + secret + "/comments", {"text": "Looking"}, token=token, expected=404)
+    # Nothing that changes settings, people or bots is the person's to make on a member's rights: the route refuses.
     post(api, "bots/ops/archive", {"expected_revision": 1}, token=token, expected=403)
-    assert api.put("/api/v2/providers", json={}, headers=headers(token)).json()["error"]["code"] == "confirm_required"
-    # Settling a task is deciding a Needs-you item: it is proposed, never done directly.
+    # The AI provider choice is the owner's: a member's Assistant gets the route's own refusal, not a chat card.
+    providers = api.put("/api/v2/providers", json={"enabled": [], "expected_revision": 0}, headers=headers(token))
+    assert providers.status_code == 403, providers.text
+    # The turn cites the message that started it, so settling a task of ben's own runs as ben.
     mine = post(api, "tasks", {"owner": "human:ben", "title": "Pick the launch date", "body": "Oct 1 or Oct 8?"}, token=token)
-    post(api, "tasks/" + mine["id"], {"version": mine["version"], "status": "done"}, token=token, expected=403)
+    settled = post(api, "tasks/" + mine["id"], {"version": mine["version"], "status": "done"}, token=token)
+    assert settled["status"] == "done"
     # A low-risk write runs directly, as ben, and says so in the record.
     made = post(api, "tasks", {"owner": "human:ben", "title": "Draft the launch post", "body": "For Oct 1."}, token=token)
     assert made["requester_id"] == "human:ben"
@@ -113,8 +115,10 @@ def test_a_side_effect_runs_only_after_the_person_confirms(api):
         revision = c.execute("SELECT revision FROM bot_config WHERE bot='ops'").fetchone()[0]
     operation = {"summary": "Archive the Ops bot", "method": "POST", "path": "/api/v2/bots/ops/archive",
                  "body": {"expected_revision": revision}}
-    # The bot cannot do it itself, and only proposes.
-    post(api, "bots/ops/archive", operation["body"], token=token, expected=403)
+    # With the owner's rule off, the bot cannot do it itself, and only proposes.
+    assert api.put("/api/v2/access/rules", json={"assistant_direct": False}, headers=headers()).status_code == 200
+    assert post(api, "bots/ops/archive", operation["body"], token=token, expected=403)["error"]["code"] == "confirm_required"
+    assert api.put("/api/v2/access/rules", json={"assistant_direct": True}, headers=headers()).status_code == 200
     action = post(api, "assistant/actions", operation, token=token)["action"]
     assert action["status"] == "pending" and action["owner"] == "human:ana"
     post(api, "assistant/actions", {**operation, "path": "/api/v2/me/tokens"}, token=token, expected=422)
@@ -172,9 +176,9 @@ def test_a_proposal_cannot_smuggle_a_route_and_never_stores_an_answer(api):
 
 def test_an_assistant_message_never_lends_the_persons_authority_to_botops(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                  "VALUES('botops','botops','BotOps','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('botops','{}',NULL,'ana')")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('botops','botops','BotOps','','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('botops','{\"runtime\":\"fake\",\"host\":\"keeper\"}',NULL,'ana')")
         H.VIA.set("assistant")
         via = H.say(c, "human:ana", "bot:botops", "Rename the Ops bot to Operations", kind="say")
         H.VIA.set("")
@@ -196,30 +200,31 @@ def test_direct_writes_stay_inside_the_team(api):
         theirs = H.task_create(c, "human:ana", "Review the plan", "Please review.", "human:ben")
         anas = H.task_create(c, "human:ben", "Ana's own item", "For Ana to decide.", "human:ana")
         botwork = H.task_create(c, "human:ben", "Plan the launch", "For ops.", "bot:ops")
+    assert api.put("/api/v2/access/rules", json={"assistant_direct": False}, headers=headers()).status_code == 200
     r, attempt = assistant_turn(api, "ben-test")
     token = attempt["token"]
-    # Nothing that spends, messages another person, or changes a task that is not theirs alone, runs directly.
+    # With "Assistant acts without asking" off, nothing that spends, messages anyone, or changes a task that is not theirs
+    # alone runs directly: each is a card.
     post(api, "messages", {"to": "human:cara", "text": "Hello"}, token=token, expected=403)
-    post(api, "messages", {"to": "cara", "text": "Hello"}, token=token, expected=403)                # a bare name may be a person
+    post(api, "messages", {"to": "ops", "text": "Hello"}, token=token, expected=403)
     post(api, f"tasks/{theirs['id']}/run-now", {}, token=token, expected=403)
     post(api, f"tasks/{theirs['id']}", {"version": theirs["version"], "owner": "ops"}, token=token, expected=403)
     post(api, f"tasks/{anas['id']}", {"version": anas["version"], "note": "x"}, token=token, expected=403)   # not ben's
-    post(api, f"tasks/{theirs['id']}/comments", {"text": "Started"}, token=token, expected=403)   # Ana is on it: it tells her
-    post(api, "notes", {"to": "ops", "text": "Remember the launch"}, token=token, expected=403)      # no unmarked notes
-    post(api, "tasks", {"owner": "ben", "title": "Draft my week", "body": "Monday."}, token=token, expected=403)  # a bare name
-    # Creating a task for another person runs directly too (reversible, unlike settling one).
-    for_cara = post(api, "tasks", {"owner": "human:cara", "title": "Review the plan", "body": "Please."}, token=token)
-    assert for_cara["owner_id"] == "human:cara" and for_cara["requester_id"] == "human:ben"
-    # A task for a bot, a comment on it and a message to a bot stay in the team: they run directly, as ben.
-    made = post(api, "tasks", {"owner": "ops", "title": "Draft the launch post", "body": "For Oct 1."}, token=token)
-    assert made["owner_id"] == "bot:ops" and made["requester_id"] == "human:ben"
-    post(api, f"tasks/{botwork['id']}/comments", {"text": "Please hurry"}, token=token)
+    post(api, f"tasks/{theirs['id']}/comments", {"text": "Started"}, token=token, expected=403)   # Ana is on it
+    post(api, "tasks", {"owner": "human:cara", "title": "Review the plan", "body": "Please."}, token=token, expected=403)
+    post(api, "tasks", {"owner": "ops", "title": "Draft the launch post", "body": "For Oct 1."}, token=token, expected=403)
+    post(api, f"tasks/{botwork['id']}/comments", {"text": "Please hurry"}, token=token, expected=403)
+    # What is ben's alone still runs: his own tasks, and marking updates read.
+    post(api, "tasks", {"owner": "human:ben", "title": "Draft my week", "body": "Monday first."}, token=token)
+    post(api, "updates/read", {"all": True}, token=token)
+    assert api.put("/api/v2/access/rules", json={"assistant_direct": True}, headers=headers()).status_code == 200
+    # With the rule on, the same messages and tasks run as ben, and each is marked as the assistant's doing.
+    post(api, "messages", {"to": "human:cara", "text": "Hello"}, token=token)
     post(api, "messages", {"to": "ops", "text": "Hello"}, token=token)
     post(api, "chat/ops", {"text": "Hello again"}, token=token)
-    # And what only touches them, as before.
-    post(api, "tasks", {"owner": "human:ben", "title": "Draft my week", "body": "Monday first."}, token=token)
-    post(api, f"tasks/{theirs['id']}", {"version": theirs["version"], "note": "On it"}, token=token)
-    post(api, "updates/read", {"all": True}, token=token)
+    post(api, f"tasks/{botwork['id']}/comments", {"text": "Please hurry"}, token=token)
+    made = post(api, "tasks", {"owner": "ops", "title": "Draft the launch post", "body": "For Oct 1."}, token=token)
+    assert made["owner_id"] == "bot:ops" and made["requester_id"] == "human:ben"
     with api.app.state.store.read() as c:
         # What it wrote is marked, so BotOps ignores it.
         assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:ops' AND refs LIKE '%\"via\": \"assistant\"%'"
@@ -236,8 +241,6 @@ def test_the_assistant_creates_a_task_for_another_person_without_a_card(api):
         assert c.execute("SELECT count(*) FROM assistant_actions WHERE status='pending'").fetchone()[0] == 0
         assert c.execute("SELECT via FROM task_events WHERE task_id=? ORDER BY created_at LIMIT 1",
                          (made["id"],)).fetchone()[0] == "assistant"
-    # The person is named by their full actor id, as for the person's own tasks: a bare name is not enough.
-    post(api, "tasks", {"owner": "cara", "title": "Review it again", "body": "Please."}, token=token, expected=403)
     # The owner's "Assistant acts without asking" off puts the card back.
     assert api.put("/api/v2/access/rules", json={"assistant_direct": False}, headers=headers()).status_code == 200
     refused = post(api, "tasks", {"owner": "human:cara", "title": "Review the budget", "body": "Please."},
@@ -307,9 +310,11 @@ def test_the_assistant_does_the_task_actions_the_person_asked_for_in_their_chat(
         old = H.task_create(c, "human:ben", "Book the venue", "Last year's.", "human:ben")
     r, attempt = assistant_turn(api, "ben-test", "Mark the plan review done, close the launch and the venue tasks")
     token, said = attempt["token"], turn_message(api, attempt)
-    # Without citing what they said it is a card, as before.
+    # The run cites the message that started it, so it runs as ben, with no click. With the owner's rule off it is a card.
+    assert api.put("/api/v2/access/rules", json={"assistant_direct": False}, headers=headers()).status_code == 200
     refused = post(api, f"tasks/{launch['id']}", {"version": launch["version"], "close": True}, token=token, expected=403)
     assert refused["error"]["code"] == "confirm_required"
+    assert api.put("/api/v2/access/rules", json={"assistant_direct": True}, headers=headers()).status_code == 200
     # Citing the message that started this run, it runs as ben, with no click.
     done = asked(api, f"tasks/{review['id']}", {"version": review["version"], "status": "done", "note": "Reviewed"},
                  token, "turn")["task"]
@@ -364,9 +369,11 @@ def test_the_assistants_tools_cite_the_message_for_it(api):
     declined = hubtools.BY_NAME["hub_approval_decline"]["fn"](turn, {"id": spend, "note": "Not now", "on_behalf_of": "turn"})
     assert declined["decision"] == "declined" and declined["decided_by_id"] == "human:ben"
     assert {"hub_approval_decline", "hub_question_answer"} <= {t["name"] for t in hubtools.listing(kind="assistant")}
+    assert api.put("/api/v2/access/rules", json={"assistant_direct": False}, headers=headers()).status_code == 200
     with pytest.raises(APIError) as refused:
         hubtools.BY_NAME["hub_task_close"]["fn"](turn, {"id": launch["id"]})
     assert refused.value.code == "confirm_required"
+    assert api.put("/api/v2/access/rules", json={"assistant_direct": True}, headers=headers()).status_code == 200
     closed = hubtools.BY_NAME["hub_task_close"]["fn"](turn, {"id": launch["id"], "note": "As you asked", "on_behalf_of": "turn"})
     assert closed["task"]["status"] == "closed"
     assert "hub_task_close" in {t["name"] for t in hubtools.listing(kind="assistant")}
@@ -395,12 +402,12 @@ def test_a_cited_message_must_be_the_persons_own_recent_words_in_their_assistant
     # Not a person's own credential either: a citation lends nothing to anyone but their Assistant's run.
     plain = api.post("/api/v2/" + path, json=body, headers={**headers("ben-test"), "X-Tico-On-Behalf-Of": said})
     assert plain.status_code == 403
-    # Only task actions: run-now, an approval and a message to another person stay cards whatever is cited.
-    assert asked(api, f"tasks/{mine['id']}/run-now", {}, token, "turn", expected=403)["error"]["code"] == "confirm_required"
-    assert asked(api, "messages", {"to": "human:ana", "text": "Hi"}, token, "turn", expected=403)["error"]["code"] == "confirm_required"
-    # When the owner turns "Assistant acts without asking" off, asking in chat is a card again.
+    # When the owner turns "Assistant acts without asking" off, asking in chat is a card again: a task action, run-now
+    # and a message to another person alike.
     assert api.put("/api/v2/access/rules", json={"assistant_direct": False}, headers=headers()).status_code == 200
     assert asked(api, path, body, token, "turn", expected=403)["error"]["code"] == "confirm_required"
+    assert asked(api, f"tasks/{mine['id']}/run-now", {}, token, "turn", expected=403)["error"]["code"] == "confirm_required"
+    assert asked(api, "messages", {"to": "human:ana", "text": "Hi"}, token, "turn", expected=403)["error"]["code"] == "confirm_required"
     assert api.put("/api/v2/access/rules", json={"assistant_direct": True}, headers=headers()).status_code == 200
     # Too old: they have to ask again.
     with api.app.state.store.transaction() as c:
@@ -596,7 +603,7 @@ def test_the_assistant_decides_approvals_in_bulk_once_the_person_turns_it_on(api
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "read-back"}, token=r["token"])
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Want me to email this?",
                                                      "last_seq": 0}, token=r["token"])
-    assert say(api, "yes", "ben-test")["fast"] is False
+    assert say(api, "yes", "ben-test")
     attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
     token = attempt["token"]
     # On his yes: every old batch on the list, no card and no click each; nothing else.
@@ -797,91 +804,12 @@ def test_a_close_card_written_as_status_closed_runs_as_a_close(api):
         assert [H.task(c, t["id"])["status"] for t in tasks] == ["closed"] * 3
 
 
-def no_decisions(monkeypatch):
-    calls = []
-    async def unavailable(*args, **kwargs):
-        calls.append(args)
-        return None
-    monkeypatch.setattr(assistant, "decide", unavailable)
-    return calls
-
-
-@pytest.mark.parametrize("text", [
-    "what kind of task types do we use here?",
-])
-def test_task_types_question_is_answered_from_the_api_with_no_model_or_job(api, monkeypatch, text):
-    post(api, "task-types", {"name": "Fixture repairs", "steps": [{"name": "Triage", "status": "open"}]})
-    decisions = no_decisions(monkeypatch)
-    before = jobs(api)
-    result = post(api, "assistant/messages", {"text": text}, key="task-types")
-    assert result["fast"] is True
-    assert not decisions, "A simple inventory must not wait for an intent provider"
-    answer = result["reply"]["body"]
-    assert "General" in answer and "Fixture repairs" in answer
-    assert "From [Task types and steps]" not in answer
-    # Dev tickets is an example in the documentation, not in this company's inventory.
-    assert "Dev tickets" not in answer
-    retry = post(api, "assistant/messages", {"text": text}, key="task-types")
-    assert retry["reply"]["id"] == result["reply"]["id"]
-    messages = room(api)["messages"]
-    assert len(messages) == 2
-    assert jobs(api) == before
-
-
-def test_a_greeting_is_answered_at_once_with_no_model_or_job(api, monkeypatch):
-    decisions = no_decisions(monkeypatch)
-    before = jobs(api)
-    result = post(api, "assistant/messages", {"text": "hi"}, key="greeting")
-    assert result["fast"] is True and result["reply"]["body"]
-    assert not decisions, "A simple greeting must not wait for an intent provider"
-    retry = post(api, "assistant/messages", {"text": "hi"}, key="greeting")
-    assert retry["reply"]["id"] == result["reply"]["id"]
-    assert len(room(api)["messages"]) == 2 and jobs(api) == before
-    # The canned line once per chat: a second "hi" is the model's to answer, not the same line again.
-    again = post(api, "assistant/messages", {"text": "hi"}, key="greeting-again")
-    assert again["fast"] is False and again["reply"] is None
-    assert [m["body"] for m in room(api)["messages"]].count(result["reply"]["body"]) == 1
-
-
-def test_a_greeting_after_real_work_goes_to_the_model(api, monkeypatch):
-    no_decisions(monkeypatch)
-    assert post(api, "assistant/messages", {"text": "plan tomorrow's launch with the venue"}, key="work")["fast"] is False
-    later = post(api, "assistant/messages", {"text": "hi"}, key="hi-later")
-    assert later["fast"] is False and later["reply"] is None
-
-
-@pytest.mark.parametrize("status_code", [403])
-def test_task_types_the_api_refuses_are_not_shown_as_none(api, monkeypatch, status_code):
-    decisions = no_decisions(monkeypatch)
-    calls = []
-
-    async def rejected(_self, method, path, **kwargs):
-        calls.append((method, path))
-        return type("Response", (), {"status_code": status_code})()
-
-    monkeypatch.setattr(assistant.Internal, "call", rejected)
-    before = jobs(api)
-    result = post(api, "assistant/messages", {"text": "what task types do we use?"}, key="task-types-refused")
-    assert result["fast"] is True
-    assert result["reply"]["body"] == "I couldn't read the task types for this Tico workspace. Please try again later."
-    assert calls == [("GET", "task-types")]
-    assert not decisions
-    assert jobs(api) == before
-
-
-def test_how_to_questions_get_the_docs_and_a_greeting_with_work_goes_to_the_model(api, monkeypatch):
-    result = post(api, "assistant/messages", {"text": "How do I create a task type?"})
-    assert result["fast"] is True and result["intent"] == "help"
-    assert "From [" in result["reply"]["body"]
-    async def no_decision(*args, **kwargs):
-        return None
-    monkeypatch.setattr(assistant, "decide", no_decision)
-    result = post(api, "assistant/messages", {"text": "Hi, please plan tomorrow's launch"})
-    assert result["fast"] is False
-
-
-@pytest.mark.parametrize("text", [
-    "what task types do we use and create one?",
-])
-def test_task_types_question_that_also_asks_for_a_change_goes_to_the_model(text):
-    assert assistant.route(text) == (None, None)
+@pytest.mark.parametrize("text", ["help", "what is waiting on me?", "open tasks"])
+def test_a_question_the_old_lookups_answered_starts_a_bot_turn(api, text):
+    """No canned answer: "help", "what is waiting on me" and "open tasks" are read by the model in a bot turn."""
+    r = runner(api)
+    assign(api, r, "coo")
+    ready(api, r, ["coo"])
+    said = say(api, text)
+    assert "reply" not in said and "fast" not in said
+    assert post(api, "jobs/claim", {}, token=r["token"])["attempt"] is not None

@@ -33,8 +33,8 @@ code then applies the verdict inside the write (`apply`). Nothing here calls an 
   draft=False, skip=(), place=None, attempt_id="", origin=None)` checks one output held as `principal`, sent by
   `sender` by route `via`. `inbound(store, primary, principal, operation, output, recipients=(), *, source,
   authenticated="", origin="", place=None, context=None, obj="")` checks a message from outside this server (a Slack
-  message, or one from another Tico): `principal` is the teammate it is held for (or None, and then it is held as
-  `source:origin`), `source` names the route (`slack`, `federation`), `authenticated` is the actor the caller proved,
+  message): `principal` is the teammate it is held for (or None, and then it is held as
+  `source:origin`), `source` names the route (`slack`), `authenticated` is the actor the caller proved,
   and `origin` the message's id on its side. `apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None)`
   writes the verdict inside the write and returns None (deliver), `{"warn": line}` (deliver with the line), or
   `{"held": view}` (write nothing); `answer(gate)` is what the write answers with. `changed(...)` answers a write whose
@@ -103,7 +103,7 @@ OPERATIONS = {
     "task_ask": "a question on a task", "bulk": "a change to several tasks", "note": "a note to a bot",
     "reply": "a reply in a conversation", "automation": "an automation's write", "slack": "a Slack reply",
     "mail": "an email", "update": "an update", "task_question": "a question put to a person",
-    "slack_message": "a Slack message", "federated_message": "a message from another Tico",
+    "slack_message": "a Slack message",
     "slack_dm": "a Slack message to a bot",
     "threads": "a thread message", "threads_edit": "an edit to a thread message",
     "chat_upload": "a chat message with files", "assistant_message": "a message to the Assistant",
@@ -352,8 +352,7 @@ def place_for(c, author, recipients=(), conversation_id=""):
     threads are rows of `conversations`). `root` and `audience`: the thread's root and the audience its root names
     (backend/threads.py), so a sub-thread has its root's. `kind`: `dm` for a direct chat, a personal thread (a DM under
     core's audiences) or a write with no conversation, else `thread`. `teams`: the groups the sender and the thread's
-    owner are in, and the team an audience names. `outside`: someone in it is outside the roster, or a Slack or
-    federated actor. A write with no conversation (a direct message) has an empty `thread` and `root`."""
+    owner are in, and the team an audience names. `outside`: someone in it is outside the roster, or a Slack actor. A write with no conversation (a direct message) has an empty `thread` and `root`."""
     conv = H.conversation(c, conversation_id) if conversation_id else None
     row = T.thread_row(c, conversation_id) if conv is not None else None
     root = T.root_of(c, row) if row is not None else None
@@ -376,7 +375,7 @@ def place_for(c, author, recipients=(), conversation_id=""):
 
 
 def _outside(c, people):
-    """Whether someone in `people` is outside the roster, or a Slack or federated actor."""
+    """Whether someone in `people` is outside the roster, or a Slack actor."""
     roster = {p.get("id") for p in (G._roster(c).get("people") or []) if p.get("id")}
     return any((H.is_human(a) and H.actor_id(a) not in roster) or (a and not H.is_human(a) and not H.is_bot(a))
                for a in people)
@@ -512,11 +511,11 @@ def preflight(store, primary, who, operation, output, recipients=(), context=Non
 
 def inbound(store, primary, principal, operation, output, recipients=(), *, source, authenticated="", origin="",
             place=None, context=None, obj=""):
-    """The check for a message that came in from outside this server: a Slack message, or one from another Tico. The
-    bridge and federation builders call it. `principal` is who the message is held as: a roster person or bot, or the
-    outside sender's actor. With no principal it is held as `source:origin`, which only Who everyone and With rules
-    name, so no message skips the check. `authenticated` is the bridge's own actor (default: the principal), `source`
-    the route ("slack", "federation") and `origin` the outside id. The verdict and any hold keep all of them. A message
+    """The check for a message that came in from outside this server: a Slack message. The Slack bridge calls it.
+    `principal` is who the message is held as: a roster person or bot, or the outside sender's actor. With no principal
+    it is held as `source:origin`, which only Who everyone and With rules name, so no message skips the check.
+    `authenticated` is the bridge's own actor (default: the principal), `source` the route ("slack") and `origin` the
+    outside id. The verdict and any hold keep all of them. A message
     held here needs its own replayer (`replayer`), registered by the bridge, or Send anyway refuses it."""
     held_as = principal or f"{source}:{origin}"
     return check_as(store, primary, held_as, authenticated or held_as, source, operation, output, recipients,
@@ -951,9 +950,10 @@ def _is_author(who, hold):
 
 def _is_reviewer(who, hold, c=None, auth=None):
     """Whether `who` reviews the hold: may send it or keep it. Not exclusive of authorship: a rule's author or editor,
-    or an Admin, reviews their own hold too. A bot's hold is reviewed by its reviewer, and by an Admin when the reviewer
-    is missing or gone (with `c` and `auth`); a person's hold by the reviewer it names and the editors and Admins of its
-    rules (`_person_reviewer`). An Assistant or BotOps acting for a person releases nothing."""
+    or an Admin, reviews their own hold too. A bot's hold is reviewed by its reviewer, by the owner always (whoever can
+    change a block's source can waive it, reviewer named or not), and by an Admin when the reviewer is missing or gone
+    (with `c` and `auth`); a person's hold by the reviewer it names and the editors and Admins of its rules
+    (`_person_reviewer`). An Assistant or BotOps acting for a person releases nothing."""
     actor = who.actor
     if not H.is_human(actor) or who.via in ("botops", "assistant"):
         return False
@@ -961,8 +961,11 @@ def _is_reviewer(who, hold, c=None, auth=None):
         return c is not None and auth is not None and _person_reviewer(c, who, hold, auth)
     if actor == hold["reviewer"]:
         return True
-    return c is not None and auth is not None and auth.bot_admin(who) and \
-        not (hold["reviewer"] and _present(c, hold["reviewer"]))
+    if c is None or auth is None:
+        return False
+    if who.role == "owner":
+        return True
+    return auth.bot_admin(who) and not (hold["reviewer"] and _present(c, hold["reviewer"]))
 
 
 def _is_represented(who, hold, c=None):
@@ -1196,11 +1199,9 @@ def replay_identity(c, hold, auth):
     """The identity a held write runs as on Send anyway: the person it was held for, rebuilt with their own permissions
     (`auth.identity_for_actor`, refused once they are off the team), or for a bot's hold the bot, with the run it came
     from (its private tasks and meetings)."""
-    if H.is_human(hold["author"]) and not T.remote_guest(c, hold["author"]):
+    if H.is_human(hold["author"]):
         return auth.identity_for_actor(c, hold["author"])
     from .auth import Identity
-    if T.remote_guest(c, hold["author"]):               # another company's person or bot: never on this roster
-        return Identity(hold["author"], "guest", agent="org-rule-hold")
     return Identity(hold["author"], "bot", agent="org-rule-hold",
                     attempt_id=hold_provenance(hold).get("attempt_id") or "")
 
@@ -1482,26 +1483,6 @@ def _blocked_again(c, hold, verdict):
         "hold": hold["id"], "operation": "mail", "rules": rules, "cached": bool(verdict.get("cached")),
         "reviewer": hold["reviewer"], "repeat": True, **({"task": task_id} if task_id else {})})
     return _hold(c, hold["id"])
-
-
-def federated_hold(c, origin_id, revision):
-    """Whether this revision of a message from another install was held before: a catch-up brings it again, and the
-    first hold stands, whatever its reviewer decided."""
-    return c.execute("SELECT 1 FROM org_rule_holds WHERE operation='federated_message' "
-                     "AND json_extract(payload,'$.replay.origin_id')=? "
-                     "AND json_extract(payload,'$.replay.revision')=? LIMIT 1",
-                     (origin_id, int(revision))).fetchone() is not None
-
-
-def supersede_federated(c, origin_id, revision):
-    """A newer revision of a message from another install came: holds on its older revisions close, kept, so a late
-    Send anyway cannot put old words back. Their review tasks close with them."""
-    from .auth import Identity
-    rows = c.execute("SELECT * FROM org_rule_holds WHERE state='held' AND operation='federated_message' "
-                     "AND json_extract(payload,'$.replay.origin_id')=? "
-                     "AND json_extract(payload,'$.replay.revision')<?", (origin_id, int(revision))).fetchall()
-    for row in rows:
-        _decide(c, Identity(H.KEEPER, "service"), dict(row), "kept", "org_rule_hold.superseded")
 
 
 def supersede_mail(c, hold_id):

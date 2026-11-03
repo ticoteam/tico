@@ -411,7 +411,8 @@ class Settings:
         self.credential_admins_follow_owner = not _emails(",".join(self.credential_admins))
         self.credential_admins = _emails(",".join(self.credential_admins)) or tuple(
             filter(None, [self.owner_email]))
-        if self.local_owner_token_file and not self.loopback:
+        # A public demo is that session on purpose: it is read-only (backend/demo.py).
+        if self.local_owner_token_file and not self.loopback and not (self.demo and self.demo_public):
             raise RuntimeError(
                 "Local owner sign-in mints its own session and is only safe on loopback; "
                 + self.public_url + " is reachable by others. Unset TICO_LOCAL_OWNER_TOKEN_FILE "
@@ -452,7 +453,8 @@ class Settings:
                 "github_owner": self.github_owner,
                 "compose_project": self.compose_project, "server_network": self.server_network,
                 "local": self.local_signin, "hosted": self.hosted, "release": self.release_id,
-                "owner_email": self.owner_email, "owner_name": self.owner_name, "demo": self.demo, "rehearsal": self.rehearsal}
+                "owner_email": self.owner_email, "owner_name": self.owner_name, "demo": self.demo,
+                "demo_public": self.demo and self.demo_public, "rehearsal": self.rehearsal}
 
     def allows_origin(self, origin):
         """Whether a browser write comes from this server's own page. A demo is opened by whatever

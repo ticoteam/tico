@@ -1,5 +1,5 @@
-"""System routines 2/3 (backend/system_routines.py CONTROLS): on/off and a schedule preset for the six jobs that use AI or
-reach people, Run now, who may change them (owner and admins; Health scan only the owner; enforced on the server), the
+"""System routines 2/3 (backend/system_routines.py CONTROLS): on/off and a schedule preset for the timed jobs (those that use
+AI or reach people, the books, and the nightly auto dream), Run now, who may change them (owner and admins; Health scan only the owner; enforced on the server), the
 flat list's WHEN/THEN rows, department tag and search words, and the stale review and Topic changed switches moved from
 Settings > General > Team. Routines spec tests 3-9 and 12, task-rules spec tests 1-3 (built-in rows). Ana owns the
 team, Ben is an admin, Cara a member (backend/tests/test_api.py). Synthetic fixtures only."""
@@ -18,26 +18,27 @@ from backend.store import H
 from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
 from backend.tests.test_stale_review import FakeDecide
 
-SIX = {"stale_review", "still_wanted", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
-       "engineering_exceptions", "bookkeeper_check", "memory_tidy"}   # six, the Task Manager's report, engineering exceptions, books
+TIMED = {"stale_review", "still_wanted", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
+         "engineering_exceptions", "bookkeeper_check", "memory_tidy", "auto_dream"}   # the jobs with a schedule preset
 
 
 def rows(api, token="ana-test"):
     return {job["key"]: job for job in get(api, "system-routines", token=token)["jobs"]}
 
 
-def test_admin_sees_a_switch_and_a_schedule_on_the_six_and_housekeeping_has_none(api):
+def test_admin_sees_a_switch_and_a_schedule_on_the_timed_jobs_and_housekeeping_has_none(api):
     jobs = rows(api, "ben-test")
     timed = {k for k, j in jobs.items() if j["presets"]}
-    assert timed == SIX | {"task-rule-close-after-done"}
-    assert {k for k, j in jobs.items() if j["switch"]} == SIX | {"topic_fresh", "stall_triage", "task-rule-close-after-done"}
-    for key in SIX - {"health_scan"}:
+    assert timed == TIMED | {"task-rule-close-after-done"}
+    assert {k for k, j in jobs.items() if j["switch"]} == TIMED | {"topic_fresh", "stall_triage", "task-rule-close-after-done", "task_check_backs"}
+    for key in TIMED - {"health_scan"}:
         assert jobs[key]["can_change"] is True, key
     for key, job in jobs.items():
         if job["needed"]:
             assert not job["switch"] and not job["presets"] and not job["can_change"], key
     assert jobs["stale_review"]["schedule"] == "Hourly" and jobs["still_wanted"]["schedule"] == "Daily at 09:00"
     assert jobs["learnings"]["on"] is True and jobs["learnings"]["schedule"] == "Nightly at 03:00"
+    assert jobs["auto_dream"]["on"] is True and jobs["auto_dream"]["schedule"] == "Nightly at 02:00"
 
 
 def test_ai_jobs_are_never_offered_every_15_minutes_and_the_server_refuses_it(api):
@@ -223,7 +224,7 @@ def test_every_row_reads_when_then_with_one_department_from_the_chart_and_search
     with store.transaction() as c:
         row = c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()
         roster = {**(json.loads(row[0]) if row else {}), "org_groups": {
-            "engineering": {"name": "Engineering"}, "marketing": {"name": "Marketing"},
+            "engineering": {"name": "Engineering"}, "marketing": {"name": "Marketing"}, "finance": {"name": "Finance"},
             "web": {"name": "Web", "parent": "engineering"}}}
         c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO UPDATE SET "
                   "value=excluded.value", (json.dumps(roster),))
@@ -232,7 +233,8 @@ def test_every_row_reads_when_then_with_one_department_from_the_chart_and_search
     assert "Web" not in data["departments"], "only fixed departments, never arbitrary subgroups"
     for job in data["jobs"]:
         assert job["when"] and job["then"], job["key"]
-        assert job["department"]["name"] == "Engineering" and job["department"]["in_chart"], job["key"]
+        books = job["key"].startswith("bookkeeper_")
+        assert job["department"]["name"] == ("Finance" if books else "Engineering") and job["department"]["in_chart"], job["key"]
     jobs = {j["key"]: j for j in data["jobs"]}
     assert jobs["stale_review"]["when"] == ["every hour"]
     assert jobs["stale_review"]["then"][0] == "check stale tickets"

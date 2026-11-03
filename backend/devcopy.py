@@ -9,7 +9,7 @@ added after this list, is emptied and named in the output: a new table is safe u
 
 Runs stay for realism: finished attempts in the window keep their events, conversations and inputs (inputs are
 message links, no text, and decide who may see a run). Unfinished jobs and attempts go. The tokens on kept rows are
-replaced by values no token hashes to: bots, external agents, runners (also revoked) and attempts (lease ended).
+replaced by values no token hashes to: external agents, runners (also revoked) and attempts (lease ended).
 The key files that sit beside a database (backup.KEY_FILES) are never copied, so a credential row missed here still
 opens nothing. Beside the copy go a `server.env` with TICO_REHEARSAL=1 (nothing runs on a timer, nothing leaves the
 server, and runners are refused), a fresh local sign-in token, and empty registry and attachment folders.
@@ -38,10 +38,9 @@ from .hubdb import now, shift
 # Emptied, never pruned: one surviving row is one thing the copy could do.
 EMPTY = (
     # queued work
-    "job_recovery", "service_jobs", "doc_source_jobs", "update_queue", "task_reminders", "calendar_actions",
-    "meeting_deliveries", "worktree_waits", "check_waits", "check_head_provenance", "idempotency",
+    "job_recovery", "service_jobs", "doc_source_jobs", "update_queue", "task_reminders", "task_check_back_wakes", "calendar_actions",
+    "meeting_deliveries", "worktree_waits", "check_waits", "check_head_provenance", "idempotency",   # bindings too
     "idempotency_messages", "blob_media_retries", "seat_requests",   # a cloud agent request's key: a replay re-files
-    "github_product_repo_operations", "github_review_operations", "invite_sends",
     # milestone waits: each pending row is a wake the copy could send; the milestones seen only settle those
     "task_milestone_waits", "milestones",
     # reconnect cards: an open one is a wake the copy could send; the refusals only settle those
@@ -99,11 +98,6 @@ EMPTY = (
     # Calls: a live call's room and recorder are on the source's LiveKit, so the copy holds no live call. Its
     # transcripts and action items are thread messages, kept with the history.
     "calls", "call_participants", "call_holds",
-    # Federation: the install's keys, its peerings and what it sends or received from other installs; a copy never
-    # speaks for the source to another company (the shared threads' messages are kept with the history).
-    "federation_keys", "federation_peerings", "federation_outbox_items", "federation_receipts", "federation_states",
-    "federation_directory_entries", "federation_threads", "federation_members", "federation_items", "federation_messages",
-    "federation_deferrals",
     # Slack links: an active link posts to Slack both ways; its queue and message map only serve that link.
     "slack_thread_links", "slack_link_members", "slack_message_links", "slack_inbound_events",
     # The Company page: the readers (their addresses, sessions and invite hashes, the messages they wrote, what they read,
@@ -137,7 +131,7 @@ KEEP = frozenset((
     "kpis", "learning_cursors",
     # Threads: the search index (its triggers follow the messages kept), and the digest and follow-up ledgers, which
     # stop the copy emailing or nudging again what the source already did.
-    "thread_digests", "thread_followups", "thread_earlier_notices", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs", "learned_entries", "linked_docs", "listening_destinations",
+    "thread_digests", "thread_followups", "thread_earlier_notices", "thread_rankings", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs", "learned_entries", "linked_docs", "listening_destinations",
     "listen_items", "listen_judgments", "listen_runs", "live_meeting_chat", "live_meeting_chat_routes",
     "live_meeting_access", "live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_events", "live_meeting_humans",
     "live_meeting_turns", "live_meeting_windows", "live_meetings", "mail_agent_instructions", "mail_messages",
@@ -151,8 +145,12 @@ KEEP = frozenset((
     "system_runs", "tags", "task_assets",
     "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_links", "task_relations",
     "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
-    "turn_usage_segments", "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
-    "usage_limits", "usage_pools", "task_caps",
+    "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
+    "usage_facts", "usage_meter_reads", "budget_nodes", "task_caps", "reach_settings", "reach_lines",
+    # A copy of a database from before migrations 0053/0054 still holds these: kept, so the dev server's first start
+    # moves them into usage_facts and budget_nodes (the copy is pruned before it is migrated).
+    "turn_usage_segments", "usage_limits", "usage_pools",
+    "feedbacks",       # 👍/👎 on bot work (backend/feedback.py)
     # Shared records (backend/records): locations, items and projects
     "items", "locations", "projects", "record_aliases",
     # Growth and brand (backend/growth.py, backend/brand.py)
@@ -349,8 +347,6 @@ def prune(c, days, keep_automations=False):
                 for child, col, key in refs)
             delete(table, where, (cutoff,))
     # Kept rows keep no way in: a value no token hashes to (the columns are NOT NULL UNIQUE where not nullable).
-    if "bots" in present:
-        c.execute("UPDATE bots SET token_hash=NULL")
     if "agents" in present:
         c.execute("UPDATE agents SET token_hash='devcopy-revoked:'||bot, revoked_at=coalesce(revoked_at,?), "
                   "revoked_by=coalesce(revoked_by,'devcopy')", (stamp,))
@@ -379,7 +375,7 @@ def prune(c, days, keep_automations=False):
                 delete(table, "message_id NOT IN (SELECT id FROM messages)")
     if "message_deliveries" in present:
         c.execute("UPDATE message_deliveries SET state='moot' WHERE state IN ('pending','capped','held') "
-                  "AND (recipient LIKE 'slack:%' OR recipient LIKE 'peer:%')")
+                  "AND recipient LIKE 'slack:%'")
     return {t: n for t, n in removed.items() if n}
 
 

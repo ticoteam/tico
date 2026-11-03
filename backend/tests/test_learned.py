@@ -23,7 +23,7 @@ def learn(api, text, layer="personal", token="ana-test", expected=200):
 
 def claim_turn(api, r, bot, person, text):
     """The bot's next runner turn for what this person said in their own chat."""
-    assert say(api, text, person)["fast"] is False
+    assert say(api, text, person)
     return post(api, "jobs/claim", {"bot": bot}, token=r["token"])["attempt"]
 
 

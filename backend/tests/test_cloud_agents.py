@@ -640,13 +640,23 @@ def test_a_request_for_a_seat_with_no_team_under_a_teamed_bot_asks_that_teams_ru
     assert filed(hq) == []
 
 
-def test_a_seat_under_an_unfilled_seat_waits_for_its_manager_before_an_add(environment, hq):
+def bot_reports_to(api, bot):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (bot,)).fetchone()[0]
+
+
+def test_a_seat_under_an_open_seat_adds_its_bot_above_it_and_moves_it_under_the_manager_when_that_fills(environment, hq):
     api = environment(catalog_dir=SHIPPED)
     head = ask(api, "seats", {"title": "Head of Engineering"})
     seat = ask(api, "seats", {"title": "Engineer", "reports_to": "seat:" + head["id"]})
     before = bot_count(api)
-    assert ask(api, "cloud-agents/codex/add", {"seat_id": seat["id"]}, expected=409)["error"]["code"] == "manager_seat"
-    assert bot_count(api) == before
+    added = ask(api, "cloud-agents/codex/add", {"seat_id": seat["id"]})
+    assert bot_count(api) == before + 1
+    assert not bot_reports_to(api, added["bot"]).startswith("seat:")    # a bot never reports to a seat
+    # The manager seat fills: the bot added under it moves under the manager's bot.
+    manager = ask(api, "cloud-agents/claude/add", {"seat_id": head["id"]})["bot"]
+    assert bot_reports_to(api, added["bot"]) == manager
+    assert seats(api) == []
 
 
 def plant_stale_filing(api, seat_id, actor="dead-process", key=None, request_hash="x", made=0):

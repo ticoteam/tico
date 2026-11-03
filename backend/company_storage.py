@@ -94,9 +94,10 @@ def view(c, settings, blobs):
             "doc": "https://github.com/ticoteam/tico/blob/main/docs/files.md#a-companys-own-bucket"}
 
 
-def require_owner(who):
-    """The owner, as themselves: never a bot, BotOps or the Assistant acting for them."""
-    if who.role != "owner" or who.via or who.task_actor:
+def require_owner(who, tap=False):
+    """The owner, as themselves: never a bot, BotOps or the Assistant acting for them. `tap`: their own tap on a Confirm
+    card counts too (a change with no secret in it; backend/assistant.py confirm)."""
+    if who.role != "owner" or (who.via and not (tap and who.confirmed)) or who.task_actor:
         raise Problem("forbidden", "Only the owner sets where the company's files are stored, signed in to Tico", 403)
 
 
@@ -269,7 +270,7 @@ def install(app, store, auth):
         """New files go back to the server's own storage; files already in the bucket are still read from it."""
         who = request.state.identity
         auth.domain(who)
-        require_owner(who)
+        require_owner(who, tap=True)
         if store.settings.rehearsal or store.settings.demo:
             raise Problem("rehearsal", "Storage can't be changed in a rehearsal or the demo", 409)
         turn_off(store, who)

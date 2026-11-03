@@ -9,7 +9,8 @@
 'use strict';
 
 const RH_LABEL = 'rule-review';
-const RH_OUTCOME = {blocked: ['Block', 'rh-blk'], escalated: ['Escalate', 'rh-esc']};
+// The rule's If broken, in the words the Rules page uses for it (ui/app/org-rules.js RU_BROKEN).
+const RH_OUTCOME = {blocked: ['Stop', 'rh-blk'], escalated: ['Ask first', 'rh-esc']};
 
 // ----------------------------------------------------------------- a review task's holds
 // The section moves into each redraw of the task, as its pages do (taskPagesAdopt), so a redraw reads nothing again.
@@ -52,7 +53,7 @@ async function ruleHoldRedraw(slot, id, card) {
 }
 function ruleHoldHTML(h) {
   const [word, cls] = RH_OUTCOME[h.outcome] || RH_OUTCOME.blocked;
-  const rules = (h.rules || []).map(r => `<div class="rh-rule">${esc(r.text)}</div>`).join('');
+  const rules = (h.rules || []).map(r => `<div class="rh-rule">${ruTextHTML(r.text)}</div>`).join('');
   // The reviewer releases or keeps a hold. Its author takes it back to edit and resend; the person a bot's hold is held
   // for may only withdraw it (it stays blocked).
   const reviewer = !!h.nonce || h.can_send;

@@ -55,6 +55,14 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            run reads it (with --defer, a run starts by then if none came)
     hub note list [--to me|X] [--from me|X] [--since 24h|ISO] [--waiting]   notes, newest first
     hub note delete <id>                   take back a note no run has carried yet
+    hub feedback give message|task|approval <id> up|down [--reason R] [--tell-bot]   a person's 👍/👎 on a bot's work;
+                                           again replaces it; --tell-bot (👎) leaves the bot a note
+    hub feedback remove <id>               take back your feedback (and its note, if no run carried it)
+    hub feedback markers message|task|approval <id> [<id>...]   your feedback on these and everyone's up/down counts
+    hub feedback list [--bot B] [--rating up|down] [--since 7d] [--cursor C] [--limit N]   newest first
+    hub feedback reasons                   your five latest distinct reasons
+    hub feedback rule-draft <id>           a one-sentence rule drafted from your 👎; stores nothing
+    hub feedback rule <id> "<text>" [--all-bots]   your 👎 as an org rule: active if you manage the bot, else suggested
     hub task create --owner <bot|human> --title "..." [--body "..."|--body-file f] [--due D] [--parent ID]
                     [--goal ID] [--model M [--effort E] [--harness H]] [--dry-run] the checks a create would fail,
                     nothing written
@@ -139,13 +147,16 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub page list [--bot X] [--task ID] [--archived]   pages you may read, newest first
     hub page show <id>                     one page's status: updated, by, version, cadence, stale or replaced
     hub page archive <id> [--restore]      hide a page from lists and search, or bring it back
-    hub card list [--place P]              what is pinned at dashboard, team:<group>, bot:<slug>, task:<id> or
-                                           person:me (My dashboard)
+    hub card list [--place P]              what is pinned at dashboard, growth, team:<group>, bot:<slug>, task:<id>
+                                           or person:me (My dashboard)
     hub card add <template> [--place P] [--team G] [--weeks N] [--count N] [--kpi ID] [--title T] [--size S]
+                                           [--metric M] [--channel C] [--months N]
                                            tasks_by_status, done_per_week, needs_you, spend, kpi, automation_runs,
                                            latest_pages, needs_attention, unread_threads, my_tasks, updates; a bot
-                                           pins to its own sidebar or task
-    hub card update <id> [--title T] [--team G] [--weeks N] [--count N] [--kpi ID]
+                                           pins to its own sidebar or task. The Growth page's cards (growth_number,
+                                           growth_funnel, growth_channels, growth_retention, growth_board) go on
+                                           --place growth only; --metric and --channel are for growth_number
+    hub card update <id> [--title T] [--team G] [--weeks N] [--count N] [--kpi ID] [--metric M] [--channel C] [--months N]
     hub card remove <id>
     hub connections list [--cursor C] [--limit N]
                                            every connection you may see: status, scope, who reads it, its bots
@@ -193,6 +204,17 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            in a person's own chat: save what they taught you, in their own
                                            layer (--company: the Strategy Bot, about the company, owner's chat only)
     hub assistant learned                  what a person's chat bot has learned (What it has learned)
+    hub assistant proposals [--proposer botops] [--owner human:ana]
+                                           the Confirm cards still waiting for their owner, with their ids
+    hub assistant withdraw <id> [--reason "..."]
+                                           take back a Confirm card that waits: it never runs, and the owner's chat
+                                           says who withdrew it (only the owner confirms)
+    hub assistant change list [--days N] [--limit N] [--before NEXT]
+                                           what your Assistant did for you, with the words it acted on, and whether
+                                           each can be undone (and why not)
+    hub assistant change restore <id>      undo one of those changes as you; restoring it again changes nothing
+    hub origin show <ref>                  why an item is on your list: who made it, its cause (automation, rule,
+                                           parent task, bot), its siblings this week, and commands that stop it
     hub replay show [--from ISO] [--to ISO] [--bot B|--person P|--team T]
                                            what happened in a window (default the last 24 hours), as you may see it
     hub goal list [--owner me|X] [--all]   what you are for: your goals in order, the chain above
@@ -315,6 +337,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            if the owner already said send in Tico, skip this and
                                            `mail send --approve <their-message-id>`
     hub approval show <id>
+    hub approval list [--status pending|approved|declined] [--from ACTOR] [--before DATE] [--since DATE] [--limit N] [--offset N]
+                                           pending is what Needs you counts; the rows you may open, newest first
     hub approval read-back <id>...         the Assistant: the list it will approve, as its reply; the person's yes runs it
     hub approval approve <id> [--note "..."] [--on-behalf-of turn]
                                            a person approves one addressed to them (the Assistant: when they let it
@@ -370,15 +394,6 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            who changed caps, spend, groups, automations and inboxes; the owner sees all
     hub automation inbox <inbox> [--send on|off]
                                            an inbox's send switch (email, slack:dm, slack:#chan); off = drafts only
-    hub peer list                          this install's federation: key, Gateway, peerings, shared threads
-    hub peer key | rotate-key              make this install's key, or a new one (both sides approve again)
-    hub peer request <install>             ask another install to peer with this one; it approves, then you do
-    hub peer approve|pause|resume|revoke <peering>
-                                           approve it, the kill switch, resume it, or end it
-    hub peer share|unshare <thread> <install>
-                                           give an active peer a thread you own, or take an install out of one
-    hub peer retry <thread> <install>      send again what that install has not taken from the thread
-    hub peer add-reader <thread> <actor>   let a person here read a shared copy of a thread (an admin adds them)
     hub trigger list                       webhooks people and bots made; an automation runs on one
     hub trigger create <name> [--id X]     make one; the address (with its secret) is shown once
     hub trigger show <id>                  address, settings, 24-hour counts, automations
@@ -415,6 +430,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            change it as yourself (BotOps, the Assistant: as the person who asked; a
                                            confirm one is their Confirm card, a person-only one says why and links the
                                            card; the Assistant cites their words for a direct one)
+    hub settings ask <key> <value> [--to P] [--note "..."] [--bot B|...] [--on-behalf-of turn]
+                                           one you may not change: on your yes, its Confirm card and a request go to
+                                           one person who may (an admin, or the owner for the owner's); you're told
+                                           when they confirm or say no
     hub release now [--note "..."]         ask the Release Manager to release what is at Pending Release now
     hub release schedule [--on|--off] [--time HH:MM ...] [--manager BOT] [--writer BOT]
                                            show or change the daily release (company time; an owner or admin)
@@ -451,6 +470,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub brief [--since ISO]                alerts, who needs the person, what bots said since --since
     hub mcp stats [--days N] [--via LABEL] per-tool timing and answer size of assistants' calls
     hub needs-you start|next|respond|commit|abandon   a person's walk through what needs them (backend/batch.py)
+    hub needs-you show [--by bot|kind] [--limit N]    what needs you, counted as the board counts it, per kind and
+                                                      per bot, with each bot's newest items
     hub calendar list [--calendar EMAIL]
                                            appointments visible on a company calendar
     hub calendar schedule --title "..." --start ISO --end ISO [--calendar EMAIL]
@@ -629,6 +650,7 @@ API token as `HUB_TOKEN` (Settings, Computers, API tokens) and no `HUB_BOT`: eve
 then that person (docs/how-it-works.md, "Calling the API from a script").
 """
 import argparse
+import difflib
 import json
 import os
 import re
@@ -835,8 +857,130 @@ def thread_page_flags(s):
     s.add_argument("--limit", type=int, help="items in the page (50 by default, 100 at most)")
 
 
+def server_release(timeout=3):
+    """The release the hub server reports on its unauthenticated /healthz, or "" when it cannot say (no hub set, or it
+    does not answer within `timeout` seconds). A turn's runner strips TICO_* from the environment, so a released CLI
+    has no version of its own and asks the server it talks to."""
+    api = os.environ.get("HUB_API_URL", "")
+    if not api:
+        return ""
+    origin = api.split("/api/", 1)[0].rstrip("/")
+    try:
+        from clients import gateway
+        with gateway.branded_opener().open(origin + "/healthz", timeout=timeout) as reply:
+            return str(json.loads(reply.read().decode()).get("release") or "")
+    except Exception:
+        return ""
+
+
+class _Version(argparse.Action):
+    """`hub --version`: the Tico version this CLI was stamped with, else the release of the server it talks to."""
+
+    def __init__(self, option_strings, dest=argparse.SUPPRESS, default=argparse.SUPPRESS, help=None):
+        super().__init__(option_strings, dest, nargs=0, default=default, help=help)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        from clients.hubtools import release_version
+        version = release_version()
+        if version == "dev":
+            version = server_release() or "unknown (this CLI build is not stamped)"
+        print(version)
+        parser.exit()
+
+
+def command_paths(p, prefix=()):
+    """Every command under `p` as a tuple of words, e.g. ('task', 'list'). Only commands that parse are listed."""
+    paths = []
+    for action in p._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            seen = set()
+            for name, sub in action.choices.items():
+                if id(sub) in seen:                  # an alias: the same command as the name before it
+                    continue
+                seen.add(id(sub))
+                paths.extend(command_paths(sub, prefix + (name,)) or [prefix + (name,)])
+    return paths
+
+
+def did_you_mean(words, names):
+    """A one-line hint naming the closest of `names` (commands that exist), or "" when none is close."""
+    close = difflib.get_close_matches(" ".join(words), names, n=2, cutoff=0.5)
+    return f" Did you mean: {', '.join('hub ' + name for name in close)}?" if close else ""
+
+
+def typed_words(argv):
+    """The command words on a line: everything before the first flag."""
+    words = []
+    for a in argv:
+        if a.startswith("-"):
+            break
+        words.append(a)
+    return words
+
+
+def unknown_flag_hint(p, argv, unknown):
+    """The closest flag of the command the line names, for a flag it does not take (`--where-status` is `--status`)."""
+    node, words = p, []
+    for a in argv:
+        sub = next((act for act in node._actions if isinstance(act, argparse._SubParsersAction)), None)
+        if a.startswith("-") or not sub or a not in sub.choices:
+            continue
+        node = sub.choices[a]
+        words.append(a)
+    flags = []
+    for flag in unknown:
+        if flag.startswith("--"):
+            flags += difflib.get_close_matches(flag, list(node._option_string_actions), n=1, cutoff=0.6)
+    if flags:
+        return f" Did you mean {', '.join(flags)}?"
+    takes = [flag for flag in node._option_string_actions if flag.startswith("--") and flag != "--help"]
+    if takes and words:
+        return f" It takes: {', '.join(sorted(takes))}"
+    return did_you_mean(words, [" ".join(path) for path in command_paths(p)]) if words else ""
+
+
+def example_line(p):
+    """`hub task show <id>`: the command's name with a placeholder for each positional it takes."""
+    parts = [p.prog]
+    for a in p._actions:
+        if a.option_strings or isinstance(a, argparse._SubParsersAction):
+            continue
+        if a.choices:
+            parts.append("{" + "|".join(str(c) for c in a.choices) + "}")
+        else:
+            parts.append(f"<{a.metavar if isinstance(a.metavar, str) else a.dest}>")
+    return " ".join(parts)
+
+
+class HubParser(argparse.ArgumentParser):
+    """The parser of the root and of every command: argparse builds each subparser from this class, so one error
+    method covers all of them. Each error says what would have worked: the closest command, the closest flag, or the
+    example of a command that was missing its id."""
+
+    def error(self, message):
+        if message.startswith("the following arguments are required"):
+            self.print_usage(sys.stderr)
+            print(f"Example: {example_line(self)}", file=sys.stderr)
+            self.exit(2, f"{self.prog}: error: {message}\n")
+        hint = ""
+        argv = getattr(self, "hub_argv", None)
+        if argv is not None and message.startswith("argument cmd: invalid choice"):
+            names = [" ".join(path) for path in command_paths(self)]
+            hint = did_you_mean(typed_words(argv), names)
+        elif argv is not None and message.startswith("unrecognized arguments: "):
+            hint = unknown_flag_hint(self, argv, message[len("unrecognized arguments: "):].split())
+        elif "invalid choice" in message and self.prog != "hub":     # a bad word under a command, e.g. `task lst`
+            bad = message.split("invalid choice: '", 1)[-1].split("'", 1)[0]
+            under = self.prog.split()[1:]
+            names = [" ".join(under + list(path)) for path in command_paths(self)]
+            hint = did_you_mean(under + [bad], names)
+        self.print_usage(sys.stderr)
+        self.exit(2, f"{self.prog}: error: {message}{hint}\n")
+
+
 def parser():
-    p = argparse.ArgumentParser(prog="hub", description="the company hub: messages, tasks, status")
+    p = HubParser(prog="hub", description="the company hub: messages, tasks, status")
+    p.add_argument("--version", action=_Version, help="print the Tico version")
     sub = p.add_subparsers(dest="cmd")
 
     sub.add_parser("whoami").set_defaults(fn="whoami")
@@ -1137,6 +1281,39 @@ def parser():
     s.add_argument("id")
     s.set_defaults(fn="note delete")
 
+    feedback = sub.add_parser("feedback", help="a person's 👍/👎 on a bot's work: give, list, make a rule").add_subparsers(dest="sub")
+    subjects = ("message", "task", "approval")
+    s = feedback.add_parser("give", help="rate a message, task or approval a bot made; again replaces it")
+    s.add_argument("subject_type", choices=subjects)
+    s.add_argument("subject_id")
+    s.add_argument("rating", choices=("up", "down"))
+    s.add_argument("--reason")
+    s.add_argument("--tell-bot", dest="tell_bot", action="store_true", help="a 👎 only: a note for the bot's next run")
+    s.set_defaults(fn="feedback give")
+    s = feedback.add_parser("remove", help="take back your feedback, and its note if no run carried it")
+    s.add_argument("id")
+    s.set_defaults(fn="feedback remove")
+    s = feedback.add_parser("markers", help="your feedback on these subjects and everyone's up/down counts")
+    s.add_argument("subject_type", choices=subjects)
+    s.add_argument("subject_ids", nargs="+")
+    s.set_defaults(fn="feedback markers")
+    s = feedback.add_parser("list", help="feedback newest first, a page at a time")
+    s.add_argument("--bot", dest="bot_id")
+    s.add_argument("--rating", choices=("up", "down"))
+    s.add_argument("--since", help="an ISO time, or 24h / 7d")
+    s.add_argument("--cursor")
+    s.add_argument("--limit", type=int)
+    s.set_defaults(fn="feedback list")
+    feedback.add_parser("reasons", help="your five latest distinct reasons").set_defaults(fn="feedback reasons")
+    s = feedback.add_parser("rule-draft", help="a one-sentence rule drafted from your 👎; stores nothing")
+    s.add_argument("id")
+    s.set_defaults(fn="feedback rule-draft")
+    s = feedback.add_parser("rule", help="your 👎 as an org rule: active if you manage the bot, else suggested")
+    s.add_argument("id")
+    s.add_argument("text")
+    s.add_argument("--all-bots", dest="all_bots", action="store_true")
+    s.set_defaults(fn="feedback rule")
+
     files = sub.add_parser("file", help="what you publish for people: reports, documents, imported objects").add_subparsers(dest="sub")
     s = files.add_parser("archive", help="archive a File with your rights")
     s.add_argument("id")
@@ -1228,6 +1405,9 @@ def parser():
         s.add_argument("--weeks", type=int)
         s.add_argument("--count", type=int)
         s.add_argument("--kpi")
+        s.add_argument("--metric")
+        s.add_argument("--channel")
+        s.add_argument("--months", type=int)
         if name == "add":
             s.add_argument("--place")
             s.add_argument("--size", choices=["small", "medium", "large"])
@@ -1312,6 +1492,8 @@ def parser():
     s.add_argument("--path", required=True)
     s.add_argument("--method", default="POST", choices=["POST", "PUT", "PATCH", "DELETE"])
     s.add_argument("--body", default="{}", help="the request's JSON body")
+    s.add_argument("--for", dest="for_person", default=None,
+                   help="the Assistant's own background run only: the person (human:<id>) whose chat gets the card")
     s.set_defaults(fn="assistant propose")
     s = assistant.add_parser("learn", help="save one thing the person taught you (What it has learned)")
     s.add_argument("text", help="one short line, in their words")
@@ -1320,6 +1502,24 @@ def parser():
     s.set_defaults(fn="assistant learn")
     assistant.add_parser("learned", help="what your chat bot has learned: your layer, and the company's for the owner") \
         .set_defaults(fn="assistant learned")
+    s = assistant.add_parser("withdraw", help="take back a Confirm card that waits: it never runs (any teammate)")
+    s.add_argument("id", help="the card's proposal id (hub assistant proposals)")
+    s.add_argument("--reason", default="", help="why, in one short sentence: the person reads it in their chat")
+    s.set_defaults(fn="assistant withdraw")
+    change = assistant.add_parser("change", help="what your Assistant did for you, and undoing one of those changes") \
+        .add_subparsers(dest="subsub")
+    s = change.add_parser("list", help="the Assistant's changes for you, newest first, with the words it acted on")
+    s.add_argument("--days", type=int, help="how far back (default 30, at most 90)")
+    s.add_argument("--limit", type=int, help="changes per page (default 50, at most 100)")
+    s.add_argument("--before", help="the `next` of the page before, to read older changes")
+    s.set_defaults(fn="assistant change list")
+    s = change.add_parser("restore", help="undo one change as you; restoring it again changes nothing")
+    s.add_argument("id", help="the change's id (hub assistant change list)")
+    s.set_defaults(fn="assistant change restore")
+    s = assistant.add_parser("proposals", help="the Confirm cards still waiting for their owner (find one to withdraw)")
+    s.add_argument("--proposer", choices=["botops", "assistant"], default=None, help="only the cards one proposed")
+    s.add_argument("--owner", default=None, help="only one person's cards, e.g. human:ana")
+    s.set_defaults(fn="assistant proposals")
     # Tags keep the existing task --label key contract.
     tag = sub.add_parser("tag", help="tags and checklist templates").add_subparsers(dest="sub")
     s = tag.add_parser("list")
@@ -1350,7 +1550,7 @@ def parser():
     s.add_argument("--owner")
     s.set_defaults(fn="tag update")
 
-    task = sub.add_parser("task").add_subparsers(dest="sub")
+    task = sub.add_parser("task", aliases=["tasks"]).add_subparsers(dest="sub")
     s = task.add_parser("child", help="create a subtask")
     s.add_argument("parent")
     s.add_argument("--owner", help="who does it; a --check-model subtask is your own (`me`)")
@@ -1394,6 +1594,8 @@ def parser():
     s.add_argument("--body", default="")
     s.add_argument("--body-file", dest="body_file")
     s.add_argument("--due")
+    s.add_argument("--check-back-at", help="ISO timestamp or duration such as 45m")
+    s.add_argument("--check-back-note", help="what result to inspect")
     s.add_argument("--parent", help="file it as a subtask of this task")
     s.add_argument("--label", action="append", help="a label (repeat, or comma-separate); a project is a label")
     s.add_argument("--change-path", dest="change_paths", action="append", help="changed path for automatic QA classification")
@@ -1723,6 +1925,13 @@ def parser():
     s.add_argument("--clear", action="store_true",
                    help="clear the task's own model: its runs use the bot's task model again")
     s.set_defaults(fn="task model")
+    s = task.add_parser("check-back", help="schedule the next follow-up on bot work")
+    s.add_argument("id")
+    timing = s.add_mutually_exclusive_group(required=True)
+    timing.add_argument("--at", help="ISO date-time with timezone")
+    timing.add_argument("--in", dest="in_duration", help="duration such as 45m or 2h")
+    s.add_argument("--for", dest="check_back_note", help="the result or handoff to inspect")
+    s.set_defaults(fn="task check-back")
     s = task.add_parser("snooze", help="set a task aside until a date: off the lists, Needs you and stall wakes "
                         "until then, when its owner bot is woken once")
     s.add_argument("id")
@@ -1966,7 +2175,7 @@ def parser():
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help="turn or the message id of the owner's plain yes to a goal read-back")
     s.set_defaults(fn="proposal decide")
 
-    rules = sub.add_parser("rules", help="org rules: what teammates follow (internal) and what someone outside requires "
+    rules = sub.add_parser("rules", aliases=["rule"], help="org rules: what teammates follow (internal) and what someone outside requires "
                                          "(external), and their due dates").add_subparsers(dest="sub")
     s = rules.add_parser("list", help="the rules in force; --mine: your bot's rules and its settings as sentences")
     s.add_argument("--kind", choices=["internal", "external"])
@@ -2542,7 +2751,7 @@ def parser():
     s.add_argument("id", help="the tool id from `hub tool list --bot`")
     s.set_defaults(fn="tool remove")
 
-    auto = sub.add_parser("automation", help="automations: a trigger and steps").add_subparsers(dest="sub")
+    auto = sub.add_parser("automation", aliases=["automations"], help="automations: a trigger and steps").add_subparsers(dest="sub")
     s = auto.add_parser("list")
     s.add_argument("--owner", help="person:<id>, bot:<slug> or group:<id>")
     s.add_argument("--limit", type=int)
@@ -2620,39 +2829,6 @@ def parser():
     s.add_argument("--group", help="only this group: task, approval, needs_you, bot, release, meeting, strategy, market, "
                                    "inbound, health, webhook, tico, custom")
     s.set_defaults(fn="event-types")
-    peer = sub.add_parser("peer", help="federation: shared threads with other Tico installs, through Tico HQ").add_subparsers(dest="sub")
-    s = peer.add_parser("list", help="this install's key, Gateway, peerings and shared threads")
-    s.set_defaults(fn="peer list")
-    s = peer.add_parser("key", help="make this install's federation key (does nothing when it has one)")
-    s.set_defaults(fn="peer key")
-    s = peer.add_parser("rotate-key", help="a new key; every peering needs approving again on both sides")
-    s.set_defaults(fn="peer rotate-key")
-    s = peer.add_parser("request", help="ask another install to peer with this one; it approves, then you do")
-    s.add_argument("install", help="the other install's id: gi_ and 24 hex digits")
-    s.set_defaults(fn="peer request")
-    for verb, text in (("approve", "approve a peering, having checked the other install's key"),
-                       ("pause", "the kill switch: nothing crosses a paused peering"),
-                       ("resume", "let a paused peering carry again; what was missed is caught up"),
-                       ("revoke", "end a peering; a new request starts over")):
-        s = peer.add_parser(verb, help=text)
-        s.add_argument("peering", help="the peering's id from `hub peer list`")
-        s.set_defaults(fn="peer " + verb)
-    s = peer.add_parser("share", help="give an active peer a thread you own: it gets the thread from now on")
-    s.add_argument("thread", help="the thread's id")
-    s.add_argument("install", help="the other install's id")
-    s.set_defaults(fn="peer share")
-    s = peer.add_parser("unshare", help="take an install out of a thread you own; it gets the removal and nothing after")
-    s.add_argument("thread", help="the thread's id")
-    s.add_argument("install", help="the other install's id")
-    s.set_defaults(fn="peer unshare")
-    s = peer.add_parser("retry", help="send again now what that install has not taken from a shared thread")
-    s.add_argument("thread", help="the thread's id on this install")
-    s.add_argument("install", help="the other install's id")
-    s.set_defaults(fn="peer retry")
-    s = peer.add_parser("add-reader", help="let a person on this install read a shared copy of a thread")
-    s.add_argument("thread", help="the thread's id on this install (a shared copy)")
-    s.add_argument("actor", help="the person, as human:<name>")
-    s.set_defaults(fn="peer add-reader")
     trigger = sub.add_parser("trigger", help="webhooks that start automations (Settings > Webhooks)").add_subparsers(dest="sub")
     s = trigger.add_parser("list")
     s.set_defaults(fn="trigger list")
@@ -2772,12 +2948,16 @@ def parser():
     s.add_argument("words")
     s.set_defaults(fn="settings find")
     for leaf, text in (("show", "one setting: its value, who may change it and its card"),
-                       ("set", "change one setting as yourself, or BotOps or the Assistant as the person who asked")):
+                       ("set", "change one setting as yourself, or BotOps or the Assistant as the person who asked"),
+                       ("ask", "a setting you may not change: ask one person who may, with its Confirm card")):
         s = catalogue.add_parser(leaf, help=text)
         s.add_argument("key", help="the key `hub settings find` gives, e.g. team.rules.admin_sql")
-        if leaf == "set":
+        if leaf in ("set", "ask"):
             s.add_argument("value", help="on/off, a number, text, a comma-separated list or JSON")
             s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
+        if leaf == "ask":
+            s.add_argument("--to", help="the person's id to ask; default an admin who may (the owner for the owner's)")
+            s.add_argument("--note", help="a line for them from you, shown on the request")
         target = s.add_mutually_exclusive_group()
         target.add_argument("--bot", help="the bot, for a setting set per bot")
         target.add_argument("--computer", help="the computer, for a setting set per computer")
@@ -2799,7 +2979,7 @@ def parser():
     s.add_argument("--writer", help="the Technical Writer's bot slug; empty finds it by starter template")
     s.set_defaults(fn="release schedule")
 
-    appr = sub.add_parser("approval").add_subparsers(dest="sub")
+    appr = sub.add_parser("approval", aliases=["approvals"]).add_subparsers(dest="sub")
     s = appr.add_parser("request",
                         help="ask for a yes; if the owner already said send, mail send --approve <their message id>")
     s.add_argument("--kind", required=True, choices=list(APPROVAL_KINDS))
@@ -2812,6 +2992,14 @@ def parser():
     s = appr.add_parser("show")
     s.add_argument("id")
     s.set_defaults(fn="approval show")
+    s = appr.add_parser("list", help="the approvals addressed to you: pending (what Needs you counts), or approved or declined")
+    s.add_argument("--status", choices=["pending", "approved", "declined"], default="pending")
+    s.add_argument("--from", dest="from_actor", metavar="ACTOR", help="only the ones this actor asked for")
+    s.add_argument("--before", metavar="DATE", help="only those asked before this date (YYYY-MM-DD)")
+    s.add_argument("--since", metavar="DATE", help="only those asked on or after this date (YYYY-MM-DD)")
+    s.add_argument("--limit", type=int, default=20)
+    s.add_argument("--offset", type=int, default=0)
+    s.set_defaults(fn="approval list")
     s = appr.add_parser("read-back", help="the Assistant: list in the person's chat the approvals it will approve")
     s.add_argument("ids", nargs="+")
     s.set_defaults(fn="approval read-back")
@@ -2933,6 +3121,10 @@ def parser():
     s.add_argument("--days", type=int)
     s.add_argument("--via", help="one assistant's token label, e.g. grok-bot")
     s.set_defaults(fn="mcp stats")
+    origin = sub.add_parser("origin", help="why an item is on a person's list").add_subparsers(dest="sub")
+    s = origin.add_parser("show", help="who made a task, message or approval, its cause, its siblings and what stops it")
+    s.add_argument("ref", help="a task id (or its first 8 characters), a message id or an approval id")
+    s.set_defaults(fn="origin show")
     bt = sub.add_parser("needs-you", help="a person's walk through what needs them: respond, commit "
                                           "(backend/batch.py)").add_subparsers(dest="sub")
     s = bt.add_parser("start", help="start the batch of the bot that most needs you, or resume the one in progress")
@@ -2957,6 +3149,10 @@ def parser():
     s = bt.add_parser("abandon", help="drop the batch without applying anything")
     s.add_argument("batch")
     s.set_defaults(fn="needs-you abandon")
+    s = bt.add_parser("show", help="what needs you, counted as the board counts it: per kind and per bot")
+    s.add_argument("--by", choices=["bot", "kind"], default="bot", help="print the counts per bot (default) or per kind")
+    s.add_argument("--limit", type=int, help="the newest items listed under each bot (default 5, at most 10)")
+    s.set_defaults(fn="needs-you show")
 
     runs = sub.add_parser("run", help="a bot's runs").add_subparsers(dest="sub")
     s = runs.add_parser("list", help="a bot's recent runs")
@@ -3188,7 +3384,10 @@ def parser():
     s.set_defaults(fn="doc fetch")
     sub.add_parser("template", help="the bot templates this company can pick from").add_subparsers(dest="sub").add_parser(
         "list", help="the bot templates this company can pick from").set_defaults(fn="template list")
-    bot = sub.add_parser("bot", help="build a bot from a template (BotOps), change it, place it, its status").add_subparsers(dest="sub")
+    bot = sub.add_parser("bot", aliases=["bots"], help="build a bot from a template (BotOps), change it, place it, its status").add_subparsers(dest="sub")
+    s = bot.add_parser("show", help="one bot: its profile, and for one you may read also its status, machine, queue and goals")
+    s.add_argument("slug")
+    s.set_defaults(fn="bot show")
     s = bot.add_parser("create", help="build a bot from a template in the workspace and register it; --record-only only registers")
     s.add_argument("slug", nargs="?", help="leave out: Tico picks one from --name, else the template's name")
     s.add_argument("--template", help="a template from `hub template list`")
@@ -3719,6 +3918,7 @@ RENAMED = [
     (("goals",), ("goal", "list"), (), None),
     (("goal", "auto"), ("goal", "status"), (), _goal_auto),
     (("goal", "checkins"), ("goal", "checkin-list"), (), None),
+    (("goal", "checkin", "list"), ("goal", "checkin-list"), (), None),
     (("kpi", "add"), ("kpi", "create"), (), None),
     (("kpi", "readings"), ("kpi", "show"), (), None),
     (("context", "search"), ("doc", "search"), (), _context_search),
@@ -3827,6 +4027,7 @@ def parse(p, argv):
     """`p.parse_args(argv)`, except that a `--json` no command on the line takes is ignored, so a bot that adds it out of
     habit gets the command's normal answer instead of a usage error. One parse: a value read from standard input is read
     once, a `--json` after `--` stays a value, and a command with its own `--json` (`hub tool list`) still gets it."""
+    p.hub_argv = list(argv)                 # the errors below name the closest command the line could have meant
     args, extra = p.parse_known_args(argv)
     left = [a for a in extra if a != "--json"]
     if left:

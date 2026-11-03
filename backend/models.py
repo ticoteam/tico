@@ -200,6 +200,8 @@ class TaskCreate(Contract):
     title: str = Field(min_length=1, max_length=300)
     body: Text
     owner: ID
+    check_back_at: str | None = Field(default=None, max_length=80)
+    check_back_note: str | None = Field(default=None, max_length=500)
     due: str | None = None
     relations: list[TaskRelationRef] = Field(default_factory=list, max_length=20)
     goal_id: ID | None = None
@@ -265,6 +267,8 @@ class TaskUpdate(Contract):
     note: str | None = Field(default=None, max_length=200_000)
     quiet: bool = False
     owner: ID | None = None
+    check_back_at: str | None = Field(default=None, max_length=80)
+    check_back_note: str | None = Field(default=None, max_length=500)
     due: str | None = None
     body: Text | None = None
     goal_id: str | None = Field(default=None, max_length=200)   # "" takes the goal off
@@ -1924,7 +1928,7 @@ class BotTaskChoice(Contract):
     harness: ID | None = None
     model: ID | None = None
     effort: ID | None = None
-    compact_at: Literal[150_000, 250_000, 400_000, 600_000, 1_000_000] | None = None
+    compact_at: Literal[100_000, 150_000, 250_000, 400_000, 600_000, 1_000_000] | None = None
 
 
 class BotTaskModel(Contract):
@@ -1934,7 +1938,7 @@ class BotTaskModel(Contract):
 
 
 class BotCompactAt(Contract):
-    compact_at: Literal[150_000, 250_000, 400_000, 600_000, 1_000_000]
+    compact_at: Literal[100_000, 150_000, 250_000, 400_000, 600_000, 1_000_000]
     expected_revision: int = Field(ge=1)
 
 
@@ -2500,6 +2504,11 @@ class BotGoLive(Contract):
     setup: bool = True
 
 
+class TaskCheckBack(Contract):
+    at: str = Field(min_length=2, max_length=80)
+    note: str | None = Field(default=None, max_length=500)
+
+
 class TaskSnooze(Contract):
     # An ISO-8601 date (the start of that day in the team's zone) or a date-time (backend/task_snooze.py).
     until: str = Field(min_length=10, max_length=40)
@@ -2561,6 +2570,14 @@ class SettingsPlan(Contract):
     id: str | None = Field(default=None, max_length=200)
 
 
+class SettingsAsk(SettingsPlan):
+    """Ask a person who may change a settings catalogue entry to change it (backend/settings_asks.py): the value and
+    target as for a plan, `to` a person's id to ask (else an admin, or the owner for the owner's settings), and an
+    optional `note` from the asker shown on the request."""
+    to: str | None = Field(default=None, max_length=200)
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class ReleaseNow(Contract):
     """Ask the Release Manager to release what is at Pending Release now; `note` goes in its task."""
     note: str | None = Field(default=None, max_length=1000)
@@ -2609,6 +2626,11 @@ class DocsAsk(Contract):
     new_conversation: bool = False        # close the docs conversation and start a fresh one (no context)
 
 
+class AssistantWithdraw(Contract):
+    """A bot takes back a Confirm card it proposed; the reason (optional) goes to the person in one line."""
+    reason: str = Field(default="", max_length=1000)
+
+
 class AssistantAction(Contract):
     """What the Assistant proposes: one operation on this API, run as the person only when they
     confirm it (backend/assistant.py)."""
@@ -2616,6 +2638,8 @@ class AssistantAction(Contract):
     method: Literal["POST", "PUT", "PATCH", "DELETE"] = "POST"
     path: Annotated[str, Field(min_length=9, max_length=300)]
     body: dict = Field(default_factory=dict)
+    # The Assistant's own background run puts the card in this person's Assistant chat (`for`); otherwise it is the caller's.
+    for_person: Annotated[str, Field(min_length=1, max_length=200)] | None = Field(default=None, alias="for")
 
 
 class InboxOnly(Contract):

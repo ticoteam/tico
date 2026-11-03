@@ -373,7 +373,8 @@ def test_the_owner_lists_and_decides_a_hold_whose_reviewer_lost_sign_in_and_a_me
     row = hold_row(api, say(api, "Our favorite color is gold")["held"]["id"])
     assert row["reviewer"] == "human:dan"
     listed = f"rule-holds?task={row['task_id']}"
-    assert get(api, listed, token="ana-test")["holds"] == []        # Dan reviews it while Dan can sign in
+    assert get(api, listed, token="cara-test")["holds"] == []       # Dan reviews it while Dan can sign in, the owner too
+    assert [h["id"] for h in get(api, listed, token="ana-test")["holds"]] == [row["id"]]
     with api.app.state.store.transaction() as c:
         raw = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         next(p for p in raw["people"] if p["id"] == "dan")["sign_in"] = False
@@ -416,12 +417,12 @@ def test_a_hold_with_no_reviewer_is_a_block_the_owner_or_an_admin_releases(ruled
     assert len(bodies(api, "favorite color is teal")) == 1
 
 
-def test_keep_blocked_and_only_the_reviewer_or_author_reads_a_hold(ruled):
+def test_keep_blocked_and_only_the_reviewer_author_or_owner_reads_a_hold(ruled):
     api, _ = ruled
     color_rule(api, reviewer="ben")
     held = say(api, "Our favorite color is gold")["held"]
     get(api, f"rule-holds/{held['id']}", token="cara-test", expected=404)
-    get(api, f"rule-holds/{held['id']}", token="ana-test", expected=404)        # the owner too: not the reviewer
+    assert "nonce" in get(api, f"rule-holds/{held['id']}", token="ana-test")    # the owner too, with Ben named as reviewer
     assert "nonce" not in get(api, f"rule-holds/{held['id']}", token="ops-test")
     # The held text is in no conversation, comment or inbox, and makes no work.
     assert bodies(api, "gold") == [] and sql(api, "SELECT id FROM jobs WHERE bot_id='ana'") == []
@@ -429,6 +430,22 @@ def test_keep_blocked_and_only_the_reviewer_or_author_reads_a_hold(ruled):
     kept = post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")
     assert kept["state"] == "kept"
     post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test", expected=409)
+
+
+def test_the_owner_lists_keeps_and_sends_every_bot_hold_even_when_its_named_reviewer_is_on_the_team(ruled):
+    api, _ = ruled
+    color_rule(api, reviewer="ben")
+    gold, teal = say(api, "Our favorite color is gold")["held"], say(api, "Our favorite color is teal")["held"]
+    assert hold_row(api, gold["id"])["reviewer"] == "human:ben"              # Ben is on the team and can sign in
+    both = sorted([gold["id"], teal["id"]])
+    owner = get(api, "rule-holds", token="ana-test")["holds"]
+    assert sorted(h["id"] for h in owner) == both and all(h["can_send"] for h in owner)
+    assert sorted(h["id"] for h in get(api, "rule-holds", token="ben-test")["holds"]) == both
+    assert get(api, "rule-holds", token="cara-test")["holds"] == []
+    assert post(api, f"rule-holds/{gold['id']}/keep", {}, token="ana-test")["state"] == "kept"   # a call Ben has not made
+    view = get(api, f"rule-holds/{teal['id']}", token="ana-test")
+    assert post(api, f"rule-holds/{teal['id']}/send", {"nonce": view["nonce"]}, token="ana-test")["hold"]["state"] == "sent"
+    assert len(bodies(api, "favorite color is teal")) == 1
 
 
 def test_the_person_a_bot_reports_to_reads_and_withdraws_its_held_post_but_cannot_release_it(ruled):

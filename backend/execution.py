@@ -1,6 +1,5 @@
 """Durable delivery, runner enrollment, and transactionally fenced execution attempts."""
 
-import functools
 import json
 import re
 import secrets
@@ -14,7 +13,7 @@ from clients import gateway, sessions
 
 from . import auto_tasks, start_places, org_turns, app_delivery, check_models, learned, rooms, rules as wake_rule_engine, updates_chat, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
 from . import task_privacy as privacy
-from . import browser_exit, claim_holds, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, runner_wire, runs, thread_bot_digest, turn_budgets
+from . import browser_exit, claim_holds, claim_loads, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, runner_wire, runs, thread_bot_digest, turn_budgets
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
@@ -219,18 +218,18 @@ def claimed_busy(runner_id, fresh=CLAIMED_FRESH):
     return seen[0], frozenset(tuple(entry.split("|", 1)) for entry in seen[1] if "|" in entry)
 
 
-@functools.lru_cache(maxsize=256)
-def _capability_set(capabilities_json):
-    """Parse a runner's capabilities_json once; claim/Health ask several flags per computer."""
+def capability_set(capabilities_json):
+    """A runner's capability flags as a set. Parsed each time it is asked: the claim parses its runner's row once per
+    pass and passes the set to every check (candidate, _claim_refusal); Health and the flag helpers parse the row they hold."""
     return frozenset(H._json(capabilities_json, []) or [])
 
 
 def lanes_on(runner):
-    return bool(runner) and LANES in _capability_set(runner["capabilities"])
+    return bool(runner) and LANES in capability_set(runner["capabilities"])
 
 
 def private_lanes_on(runner):
-    return bool(runner) and PRIVATE_LANES in _capability_set(runner["capabilities"])
+    return bool(runner) and PRIVATE_LANES in capability_set(runner["capabilities"])
 
 
 def private_job(c, job):
@@ -240,19 +239,19 @@ def private_job(c, job):
 
 
 def roots_on(runner):
-    return bool(runner) and ROOTS in _capability_set(runner["capabilities"])
+    return bool(runner) and ROOTS in capability_set(runner["capabilities"])
 
 
 def threads_on(runner):
-    return bool(runner) and THREADS in _capability_set(runner["capabilities"])
+    return bool(runner) and THREADS in capability_set(runner["capabilities"])
 
 
 def task_goals_on(runner):
-    return bool(runner) and TASK_GOALS in _capability_set(runner["capabilities"])
+    return bool(runner) and TASK_GOALS in capability_set(runner["capabilities"])
 
 
 def capacity_continue_on(runner):
-    return bool(runner) and CAPACITY_CONTINUE in _capability_set(runner["capabilities"])
+    return bool(runner) and CAPACITY_CONTINUE in capability_set(runner["capabilities"])
 
 
 def session_task_id(c, bot, config, task_id, roots):
@@ -1614,18 +1613,21 @@ def person_wrote_since(c, bot, since):
                      (bot, max(since, last or ""))).fetchone() is not None
 
 
-def cooling_off(c, bot):
+def cooling_off(c, bot, loads=None):
     """Whether a usage limit, or the wait after the Tico AI Gateway was unavailable, still holds the bot: its status is
     `limited` and the cooldown has not passed (or the Gateway's wait has not), and no person has written to it since
-    (a person's message is worth one try). Asked once a bot in a snapshot: Health asks for a limited bot's twice."""
+    (a person's message is worth one try). Asked once a bot in a snapshot: Health asks for a limited bot's twice.
+    `loads`: the claim's rows (claim_loads), which are read once per pass and so are not memoized here."""
+    if loads is not None:
+        return _cooling_off(c, bot, loads)
     from .read_cache import value
     return value(c, ("cooling_off", bot), lambda: _cooling_off(c, bot))
 
 
-def _cooling_off(c, bot):
+def _cooling_off(c, bot, loads=None):
     from .repositories import metadata
-    status = H.status(c, bot) or {}
-    wait = metadata(c, GATEWAY_WAIT + bot)
+    status = (loads.status_of(c, bot) if loads is not None else H.status(c, bot)) or {}
+    wait = loads.wait_of(c, bot) if loads is not None else metadata(c, GATEWAY_WAIT + bot)
     if wait.get("until") and wait["until"] > H.now() and not person_wrote_since(c, bot, wait.get("since") or ""):
         return True
     return bool(status.get("state") == "limited" and status.get("changed_at")
@@ -1794,11 +1796,12 @@ def finance_run_hold(c, bot, job_id):
 
 
 def finance_run_ended(c, job_id, turn_id):
-    """Settle the job's run hold at the run's priced Gateway cost, or release it when nothing was Gateway-billed."""
+    """Settle the job's run hold at the run's priced Gateway cost, or release it when nothing was Gateway-billed. Stamped
+    with the hub's clock, as the claim's hold is (its own `at`), not the wall clock."""
     from .finance import actions as finance
     c.execute("SAVEPOINT finance_settle")
     try:
-        finance.run_ended(c, job_id, turn_id)
+        finance.run_ended(c, job_id, turn_id, H.now())
     except (*FINANCE_FAULTS, finance.FinanceError) as exc:
         c.execute("ROLLBACK TO finance_settle")
         c.execute("RELEASE finance_settle")
@@ -1808,30 +1811,36 @@ def finance_run_ended(c, job_id, turn_id):
 
 
 def claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_bots=(), subscription_context=None,
-                  default=None):
+                  default=None, *, caps=None, loads=None):
     """Why `runner`'s claim passes over all of `bot`'s queued work, or (None, config) when it may look at the bot's
-    jobs. A bot at its own "Turns at once" holds its work on every computer ("bot_limit") once nothing else holds it."""
+    jobs. A bot at its own "Turns at once" holds its work on every computer ("bot_limit") once nothing else holds it.
+    `caps`: the runner's capability set (capability_set), and `loads`: the rows the checks read for the runner's bots
+    (claim_loads.read), when the caller has them; without them each check reads its own rows as before."""
     why, config = _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_bots,
-                                 subscription_context, default)
-    if why is None and (limit := start_places.bot_limit(config)) is not None and start_places.bot_held(c, bot) >= limit:
+                                 subscription_context, default, caps=caps, loads=loads)
+    if why is None and (limit := start_places.bot_limit(config)) is not None and (
+            loads.held_of(c, bot) if loads is not None else start_places.bot_held(c, bot)) >= limit:
         return "bot_limit", None
     return why, config
 
 
 def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_bots=(), subscription_context=None,
-                   default=None):
+                   default=None, *, caps=None, loads=None):
     """Why `runner`'s claim passes over all of `bot`'s queued work before it looks at any one job: (reason, None), or
     (None, config) when it may look at the bot's jobs. The claim (Execution.candidate) and Health (bot_refusal) use
     this one rule, so Health never calls work the claim holds on purpose a Tico bug. `held_bots`: bots the runner
     says are busy (a lane runner sends only the bots whose worktrees it is maintaining) and, for a runner without
-    lanes, every bot with a running turn. `ready` is the computer's readiness document."""
+    lanes, every bot with a running turn. `ready` is the computer's readiness document. `caps`, `loads`: see claim_refusal."""
+    if caps is None:
+        caps = capability_set(runner["capabilities"])
     if draining:
         return "draining", None
-    if cloud_access.locked(c):
+    if cloud_access.locked(c, loads.access if loads is not None else cloud_access.access(c)):
         return "cloud_locked", None         # a locked Tico Cloud company runs no bot (backend/cloud_access.py)
     if bot in held_bots:
         return ("maintaining" if lanes_on(runner) else "lane_held"), None
-    if (why := run_backoff.refusal(c, bot)) and not (why == "backoff" and run_backoff.person_waiting(c, bot)):
+    state = loads.backoff_of(c, bot) if loads is not None else None
+    if (why := run_backoff.refusal(c, bot, state)) and not (why == "backoff" and run_backoff.person_waiting(c, bot)):
         return why, None            # waiting out failed runs, or held until a person releases it (backend/run_backoff.py)
     try:
         config = json.loads(config_json)
@@ -1842,13 +1851,15 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
     from .subscriptions import login_upgrade
     if login_upgrade(runner, ready, bot=bot):
         return "login_upgrade", None
-    if browser_exit.CAPABILITY not in _capability_set(runner["capabilities"]) and browser_exit.bot_exit(c, bot):
+    if browser_exit.CAPABILITY not in caps and (loads.exit_of(c, bot) if loads is not None
+                                                 else browser_exit.bot_exit(c, bot)):
         return "browser_exit_update", None
-    record = providers.load(c, settings)
+    record = loads.record if loads is not None else providers.load(c, settings)
     filled = providers.fill(record, config)
     # A runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
-    ready = model_subscriptions.covered(ready, model_subscriptions.covered_runtimes(c, runner, filled))
-    if cloud_access.frozen(c) and (gateway_connection.is_tico(filled.get("model"))
+    ready = model_subscriptions.covered(ready, model_subscriptions.covered_runtimes(c, runner, filled, loads))
+    access = loads.access if loads is not None else cloud_access.access(c)
+    if cloud_access.frozen(c, access) and (gateway_connection.is_tico(filled.get("model"))
                                    or models_preset.waiting(record, ready, filled)):
         # A Tico Cloud company out of credit: no new turn that would spend it. A bot on its own subscription or keys
         # still runs; this one starts again once credit lands, with no restart.
@@ -1867,45 +1878,49 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
         if (check.get("repository_present") is not True or check.get("configuration_valid") is not True
                 or ((ready.get("runtimes") or {}).get(models_preset.GATEWAY_RUNTIME) or {}).get("installed") is not True):
             return "not_ready", None
-        if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default):
+        mine = loads.limit_of(c, bot) if loads is not None else None
+        if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default, mine=mine):
             return "limit", None
-        return ("cooling_off", None) if cooling_off_here(c, settings, runner, bot, config) else (None, config)
+        return (("cooling_off", None) if cooling_off_here(c, settings, runner, bot, config, loads=loads)
+                else (None, config))
     if check.get("ready") is not True:
         reported = check.get("ready") is False and bot in (ready.get("bots") or {})
         return ("not_ready" if reported else "readiness_unknown"), None
     if ((ready.get("runtimes", {}).get(check.get("runtime")) or {}).get("authenticated") == "rejected"
             and not check.get("profile") and check.get("sign_in") != "ready"):
         return "sign_in_rejected", None
-    if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default):
+    mine = loads.limit_of(c, bot) if loads is not None else None
+    if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default, mine=mine):
         return "limit", None
     # While the bot's own login is held, that hold decides (login_refusal), so a ready fallback can take the turn;
     # otherwise the bot's own cooldown does, as for a limit its fallback met.
-    if (cooling_off_here(c, settings, runner, bot, config, subscription_context)
-            and not primary_hold(c, settings, runner["id"], bot, config, ctx=subscription_context)
-            or login_refusal(c, settings, runner["id"], bot, config, ctx=subscription_context)):
+    if (cooling_off_here(c, settings, runner, bot, config, subscription_context, loads=loads)
+            and not primary_hold(c, settings, runner["id"], bot, config, ctx=subscription_context, loads=loads)
+            or login_refusal(c, settings, runner["id"], bot, config, ctx=subscription_context, loads=loads)):
         # Already-started fallback work continues its own login even if new fallbacks have since been disabled.
         pending = c.execute("SELECT id FROM jobs WHERE bot_id=? AND state='queued' AND held=0", (bot,))
-        if not any(source_continuation(c, j['id']) and not login_refusal(c, settings, runner['id'], bot, config, j['id'])
+        if not any(source_continuation(c, j['id']) and not login_refusal(c, settings, runner['id'], bot, config, j['id'],
+                                                                          loads=loads)
                    for j in pending):
             return "cooling_off", None
     return None, config
 
 
-def cooling_off_here(c, settings, runner, bot, config, ctx=None):
+def cooling_off_here(c, settings, runner, bot, config, ctx=None, loads=None):
     """cooling_off for a turn of `bot` on `runner`, judged on the login that turn would sign in with. A limit met on a
     company subscription holds that subscription (backend/login_holds.py `sub:<id>`), which the computer then passes
     over (model_subscriptions.in_effect): the turn runs on the computer's own login or the Gateway instead, so the
     subscription's cooldown does not keep it waiting. That login's own hold, if any, still decides (login_refusal)."""
-    if not cooling_off(c, bot):
+    if not cooling_off(c, bot, loads):
         return False
     last = last_limit(c, bot)
     held = str((login_holds.for_attempt(c, last["id"]) if last else {}).get("profile") or "")
     if held.startswith(login_holds.SUBSCRIPTION) and runner:
-        return login_key(c, settings, runner["id"], bot, config, ctx)[1] == held
+        return login_key(c, settings, runner["id"], bot, config, ctx, loads)[1] == held
     return True
 
 
-def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None):
+def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None, loads=None):
     """Whether a hold on the bot's own login keeps it waiting (backend/login_holds.py): before the hold ends, no bot
     on the login starts a turn; after it, only the probe job does until its turn ends. A bot with a fallback that is
     ready here and not held itself does not wait: its turn runs there (primary_hold marks the job so the runner skips
@@ -1915,28 +1930,28 @@ def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None):
     if source:
         return login_wait(c, runner_id, login_holds.canonical(c, runner_id, source["profile"], source["runtime"]),
                           source["runtime"], bot, job_id)
-    why = primary_hold(c, settings, runner_id, bot, config, job_id, ctx)
+    why = primary_hold(c, settings, runner_id, bot, config, job_id, ctx, loads)
     if why and job_id and continuation_thread(c, job_id):
         return why          # only its own thread, on its own login, continues it
     return None if why and fallback_choice(c, settings, runner_id, bot, config, job_id, ctx) else why
 
 
-def primary_hold(c, settings, runner_id, bot, config, job_id=None, ctx=None):
+def primary_hold(c, settings, runner_id, bot, config, job_id=None, ctx=None, loads=None):
     """Why the bot's own login takes no turn now ("held" or "probing"), or None."""
-    _, profile, runtime = login_key(c, settings, runner_id, bot, config, ctx)
-    why = login_wait(c, runner_id, profile, runtime, bot, job_id)
-    hold = login_holds.get(c, runner_id, profile, runtime)
+    _, profile, runtime = login_key(c, settings, runner_id, bot, config, ctx, loads)
+    why = login_wait(c, runner_id, profile, runtime, bot, job_id, loads)
+    hold = login_holds.get(c, runner_id, profile, runtime, loads)
     if why == "held" and not hold.get("reset") and person_wrote_since(c, bot, hold.get("since") or ""):
         return None         # a person who writes has often just renewed the plan: one try (cooling_off)
     return why
 
 
-def login_wait(c, runner_id, profile, runtime, bot, job_id=None):
+def login_wait(c, runner_id, profile, runtime, bot, job_id=None, loads=None):
     """login_holds.holding for one of `bot`'s jobs; without `job_id`, for the bot: a probe of its own still lets
     it through, for the per-job answer."""
-    why = login_holds.holding(c, runner_id, profile, runtime, job_id)
+    why = login_holds.holding(c, runner_id, profile, runtime, job_id, loads=loads)
     if why == "probing" and job_id is None:
-        probe = login_holds.get(c, runner_id, profile, runtime).get("probe_job")
+        probe = login_holds.get(c, runner_id, profile, runtime, loads).get("probe_job")
         if c.execute("SELECT 1 FROM jobs WHERE id=? AND bot_id=?", (probe, bot)).fetchone():
             return None
     return why
@@ -1994,10 +2009,10 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
     return None
 
 
-def login_key(c, settings, runner_id, bot, config, ctx=None):
+def login_key(c, settings, runner_id, bot, config, ctx=None, loads=None):
     """(runner, login, runtime) of the bot's own login, as holds key it (login_holds.canonical)."""
-    runtime = providers.bot_choice(c, settings, config)[0]
-    return runner_id, login_holds.canonical(c, runner_id, "", runtime), runtime
+    runtime = providers.bot_choice(c, settings, config, record=loads.record if loads is not None else None)[0]
+    return runner_id, login_holds.canonical(c, runner_id, "", runtime, loads=loads), runtime
 
 
 def unfenced_sql():
@@ -2097,9 +2112,13 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
     task_id = work_task_id(message, conversation)
     task = H.task(c, task_id) if task_id else None
     refs = message.get("refs") or {}
-    if task and task['owner_id'] == 'bot:' + job['bot_id'] and auto_tasks.put_back_held(c, task) and not refs.get('run_now'):
+    from . import task_check_backs
+    if task_check_backs.stale(c, message, job["bot_id"]):
+        return "obsolete_check_back"
+    check_back = message["sender_id"] == H.KEEPER and refs.get("wake") == "check_back"
+    if task and task['owner_id'] == 'bot:' + job['bot_id'] and auto_tasks.put_back_held(c, task) and not refs.get('run_now') and not check_back:
         return 'task_wait'
-    if task and task['owner_id'] == 'bot:' + job['bot_id'] and message['sender_id'] == H.KEEPER and not refs.get("run_now"):
+    if task and task['owner_id'] == 'bot:' + job['bot_id'] and message['sender_id'] == H.KEEPER and not refs.get("run_now") and not check_back:
         # A subtask's result (hubdb._deliver_subtask_result) is what the task waits for: its other open subtasks
         # do not hold it back, though a snooze, a person, an approval or a worktree still does.
         if why := auto_tasks.refusal(c, task, followed, woken=True, result=bool(refs.get("subtask")), message=message, suspect=suspect):
@@ -2139,27 +2158,35 @@ def obsolete_notices_sql():
     itself SQLite starts from every keeper notice ever sent, tens of milliseconds on each of a runner's claims."""
     # A held job waits: a wake preset's or a quota reset's until its release, a claim's until its wait ends. The pass
     # takes it once it is free, and the claim then closes the item its hold opened (claim_holds.clear).
-    return ("FROM assignments x CROSS JOIN jobs j CROSS JOIN messages m "
+    return ("FROM assignments x CROSS JOIN jobs j CROSS JOIN message_refs m "
             f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
             f"WHERE x.runner_id=? AND j.bot_id=x.bot AND j.state='queued' AND {H.unheld_sql()} AND m.id=j.message_id "
             "AND m.sender_id=? AND (m.kind='say' AND json_extract(m.refs,'$.review_gate') IS NOT NULL "
             "AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=t.id AND e.created_at>m.created_at AND e.field='step') "
             "OR m.kind='notice' "
-            "AND ((t.status IN ('done','closed','declined') "
-            "AND coalesce(json_extract(m.refs,'$.caused_by'),'') NOT LIKE 'human:%') "
+            "AND ((m.ref_wake='check_back' AND ("
+            "t.check_back_at IS NOT json_extract(m.refs,'$.check_back_at') OR "
+            "coalesce(json_extract((SELECT value FROM registry_metadata WHERE key='system_routines'),'$.task_check_backs.on'),0)=0 OR "
+            "(t.snoozed_until>?3 AND t.snoozed_by_id LIKE 'human:%') OR t.status='closed' OR "
+            "(t.status IN ('done','declined') AND (t.requester_id NOT LIKE 'bot:%' OR t.requester_id=t.owner_id)) OR "
+            "m.recipient_id<>CASE WHEN t.status IN ('done','declined') THEN t.requester_id "
+            "WHEN t.owner_id LIKE 'bot:%' THEN t.owner_id ELSE t.requester_id END)) OR "
+            "(t.status IN ('done','closed','declined') "
+            "AND coalesce(json_extract(m.refs,'$.caused_by'),'') NOT LIKE 'human:%' "
+            "AND coalesce(m.ref_wake,'')<>'check_back') "
             "OR (m.body LIKE 'New task from %' AND m.recipient_id=t.owner_id "
             "AND json_extract(m.refs,'$.filed_in') IS NOT NULL "
-            "AND (t.status='waiting' OR t.snoozed_until>?) "
+            "AND (t.status='waiting' OR t.snoozed_until>?3) "
             "AND NOT EXISTS (SELECT 1 FROM attempts fa WHERE fa.id=json_extract(m.refs,'$.filed_in') "
             "AND fa.state IN ('leased','running'))) "
-            "OR ((json_extract(m.refs,'$.wake') IN ('status_check','stalled','step_status') "
+            "OR ((m.ref_wake IN ('status_check','stalled','step_status') "
             "OR json_extract(m.refs,'$.rule')='status_check') AND EXISTS (SELECT 1 FROM task_events "
             "e WHERE e.task_id=t.id AND e.created_at>m.created_at AND e.actor<>m.sender_id)) "
             "OR (json_extract(m.refs,'$.step_late') AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=t.id "
             "AND e.created_at>m.created_at AND e.field='step')) "
             "OR (json_extract(m.refs,'$.at_step') IS NOT NULL AND json_extract(m.refs,'$.at_step')<>"
             "coalesce(t.step_id,'') AND coalesce(json_extract(m.refs,'$.caused_by'),'') NOT LIKE 'human:%') "
-            "OR (json_extract(m.refs,'$.wake')='pr_checks_done' AND json_extract(m.refs,'$.pr_head') IS NOT NULL "
+            "OR (m.ref_wake='pr_checks_done' AND json_extract(m.refs,'$.pr_head') IS NOT NULL "
             "AND EXISTS (SELECT 1 FROM task_links l WHERE l.task_id=t.id AND l.kind='pr' AND coalesce(l.state,'')<>'closed' "
             "AND coalesce(json_extract(l.detail,'$.head_sha'),'')<>'') "
             "AND NOT EXISTS (SELECT 1 FROM task_links l WHERE l.task_id=t.id AND l.kind='pr' "
@@ -2309,7 +2336,8 @@ def prime_job_checks(c, jobs):
     check_models.prime(c, pairs)
 
 
-def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_job=False, *, suspect=None):
+def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_job=False, *, suspect=None,
+                  loads=None):
     """(reason, first, person) for `bot`'s queued work on `runner_id`'s next claim: `reason` as bot_refusal says it;
     otherwise None with `first`, when the job the claim would hand out next was queued, and `person`, True when a
     person sent it. The scan keeps the claim's own order (Execution.candidate: a redirect, then a person's message, then
@@ -2333,7 +2361,7 @@ def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_
     held_bots, held_lanes = claimed_busy(runner_id)
     ready = readiness_document(runner["readiness"])
     why, config = claim_refusal(c, settings, runner, bot, row["config"], row["draining"], ready, held_bots,
-                                default=default)
+                                default=default, loads=loads)
     if why:
         if oldest:
             first = min(rows(c, queued_jobs_sql(), (bot,)), key=lambda j: (j["created_at"], j["id"]), default=None)
@@ -2353,7 +2381,7 @@ def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_
             why = "private_update"
         else:
             why = job_refusal(c, job, followed, ready, busy, lanes, roots, suspect=suspect, runner=runner) or (
-                "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"]) else None)
+                "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"], loads=loads) else None)
         if why is None or (oldest and why != "lane_held"):
             return result(why, job["created_at"], person, job["id"])
         if refused is None or job["created_at"] < refused[0]:
@@ -2377,7 +2405,7 @@ def _queue_suspects(c, queue):
     return suspect
 
 
-def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, suspect=None):
+def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, suspect=None, loads=None):
     """Each queued job with its own claim reason; common bot fences are read once. `suspect`: the suspects of every
     queue the caller reads at once (_queue_suspects), so a page of many bots reads them once, not a bot at a time."""
     from .read_cache import one, rows
@@ -2389,7 +2417,7 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, s
     held_bots, held_lanes = claimed_busy(runner_id)
     ready = readiness_document(runner["readiness"])
     why, config = (claim_refusal(c, settings, runner, bot, row["config"], row["draining"], ready, held_bots,
-                                 default=default) if row else ("config", {}))
+                                 default=default, loads=loads) if row else ("config", {}))
     queue = rows(c, queued_jobs_sql(), (bot,))
     if oldest:
         queue = sorted(queue, key=lambda j: (j["created_at"], j["id"]))
@@ -2411,7 +2439,7 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, s
             why = "private_update"
         else:
             why = job_refusal(c, job, followed, ready, busy, lanes, roots, live, suspect=suspect, runner=runner) or (
-                "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"]) else None)
+                "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"], loads=loads) else None)
         yield job, why
 
 
@@ -3091,8 +3119,10 @@ class Execution:
         ClaimFaults, which takes each job whose checks raise and moves on to the next candidate, passes over the bot of
         a bot-wide check that raises, and stops picking once CLAIM_HOLDS jobs are held; without it the error
         propagates. `skip`: the job ids a claim has already dropped, which are passed over."""
-        lanes, roots, continues = lanes_on(runner), roots_on(runner), capacity_continue_on(runner)
-        private_lanes = private_lanes_on(runner)
+        # The runner's flags, parsed once for this pass: every check below reads this set.
+        caps = capability_set(runner["capabilities"])
+        lanes, roots, continues = LANES in caps, ROOTS in caps, CAPACITY_CONTINUE in caps
+        private_lanes = PRIVATE_LANES in caps
         # Taken lanes, each "bot|lane": the server's active attempts and the runner's own busy list. A runner
         # without lanes runs one turn per bot, so any active attempt takes the whole bot.
         busy = set(live_lanes(c))
@@ -3119,11 +3149,16 @@ class Execution:
         # holding the writer. Resolve its current bot, state and hold here.
         queued = ("a.bot=(SELECT bot_id FROM jobs WHERE id=? AND state='queued' AND held=0)" if job_id is not None else
                   "EXISTS(SELECT 1 FROM jobs j WHERE j.bot_id=a.bot AND j.state='queued' AND j.held=0)")
-        for row in c.execute(f"SELECT a.bot,bc.config,{DRAINING_SQL} draining FROM assignments a "
+        assigned = c.execute(f"SELECT a.bot,bc.config,{DRAINING_SQL} draining FROM assignments a "
                              "JOIN bots b ON b.id=a.bot JOIN bot_config bc ON bc.bot=a.bot "
                              "WHERE a.runner_id=? AND b.state='active' AND (? IS NULL OR a.bot=?) "
                              f"AND {queued}",
-                             (who.runner_id, only, only, *((job_id,) if job_id is not None else ()))).fetchall():
+                             (who.runner_id, only, only, *((job_id,) if job_id is not None else ()))).fetchall()
+        # What the per-bot checks read for every one of these bots, in fixed set queries, before the first check
+        # (claim_loads). No queued bot, no reads.
+        loads = (claim_loads.read(c, self.store.settings, {runner["id"]: runner}, [row["bot"] for row in assigned],
+                                  exits=browser_exit.CAPABILITY not in caps) if assigned else None)
+        for row in assigned:
             bot = row["bot"]
             if failed is not None and bot in failed.bots:
                 continue            # its check raised earlier in this claim: passed over for the rest of it
@@ -3132,7 +3167,8 @@ class Execution:
             try:
                 with shared_check():
                     why, config = claim_refusal(c, self.store.settings, runner, bot, row["config"],
-                                                row["draining"], ready, held_bots, subscription_context, default)
+                                                row["draining"], ready, held_bots, subscription_context, default,
+                                                caps=caps, loads=loads)
                     if why:
                         continue
                     followed_bot = follow(c, bot, config)
@@ -3183,8 +3219,7 @@ class Execution:
                 part = candidates[i:i + PRIME_QUEUED]
                 privacy.prime_queued(c, H.prime_messages(c, [job["message_id"] for job in part]).values())
             try:
-                if source_continuation(c, row["id"]) and (
-                        SOURCE_CONTINUE not in _capability_set(runner["capabilities"])):
+                if source_continuation(c, row["id"]) and SOURCE_CONTINUE not in caps:
                     continue        # old strict-primary runners cannot route a saved fallback
                 if not continues and continuation_thread(c, row["id"]):
                     continue        # left queued for a runner that continues its thread: this one would start it afresh
@@ -3198,7 +3233,7 @@ class Execution:
                     # The job's own login hold: an error reading it holds this job alone. The bot's login as a whole is
                     # checked once per bot, in claim_refusal, where an error passes the bot over.
                     waiting = login_refusal(c, self.store.settings, runner["id"], row["bot_id"], followed[row["bot_id"]],
-                                            row["id"], subscription_context)
+                                            row["id"], subscription_context, loads=loads)
                     if not waiting:
                         return row
             except Exception as exc:
@@ -3281,7 +3316,8 @@ class Execution:
         is due, an obsolete notice to suppress. Any of them, or a job to hand out, sends the claim
         on to `claim`, which repeats every check under the lock."""
         # A retry of a claim that took a job is answered from the record of it, not from here.
-        if not key or c.execute("SELECT 1 FROM idempotency WHERE actor=? AND operation='/api/v2/jobs/claim' AND key=?",
+        if not key or c.execute("SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? "
+                                "AND operation='/api/v2/jobs/claim' AND key=?",
                                 (who.actor, key)).fetchone():
             return None
         answer = self._idle_claim(c, who, body, selected, failed)
@@ -4835,7 +4871,7 @@ class Execution:
             same = c.execute(
                 "SELECT m.id FROM idempotency i JOIN messages m "
                 "ON m.id=coalesce(json_extract(i.response,'$.id'),json_extract(i.response,'$.message.id')) "
-                "WHERE i.actor=? AND i.operation IN (?,?,?) "
+                "WHERE i.binding IS NULL AND i.actor=? AND i.operation IN (?,?,?) "
                 "AND m.conversation_id=? AND m.sender_id=? AND m.body=?",
                 (actor + ":" + aid, "/api/v2/messages", "/api/v2/conversations/" + conv["id"] + "/messages",
                  "/api/v2/threads/" + conv["id"] + "/messages", conv["id"], actor, text)).fetchone()
@@ -5160,7 +5196,9 @@ class Execution:
                 H.mark_delivered(c, H.KEEPER, extra["message_id"])
                 H.event(c, H.KEEPER, "job.coalesce", extra["id"], {"attempt_id": aid, "job_id": row["job_id"]})
         if body.outcome == "completed":
-            # Each next-run task this run carried and left: back to the next run, unless it was worked or deferred.
+            from . import task_check_backs
+            task_check_backs.finished_turn(c, aid, row["bot_id"], work_task_id(msg, conv))
+            # Check obligations before settle clears unworked carried_by receipts.
             quiet_work.settle(c, aid, row["bot_id"], row["started_at"] or row["created_at"])
         # A push from the task's worktrees is the run acting too, though only its runner saw it.
         run_triggers.pushed(c, aid, row["runner_id"], body.pushes)

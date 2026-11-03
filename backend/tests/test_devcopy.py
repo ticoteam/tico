@@ -13,6 +13,7 @@ from backend.auth import Identity
 from backend.config import Settings
 from backend.execution import Execution
 from backend.finance import actions as finance
+from backend.enqueue import enqueue_stored
 from backend.store import H, Problem, Store
 
 OLD = "2020-01-01T00:00:00.000000Z"
@@ -24,13 +25,14 @@ def source_db(tmp_path):
     now = H.now()
     with store.transaction() as c:
         c.execute("INSERT INTO humans(id,name,email) VALUES('morgan','Morgan','morgan@acme.example')")
-        c.execute("INSERT INTO bots(id,slug,token_hash,state) VALUES('sales','sales','botsecret','active')")
+        c.execute("INSERT INTO bots(id,slug,state) VALUES('sales','sales','active')")
         c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','mac','morgan','rh',?)", (now,))
         c.execute("INSERT INTO enrollments(code_hash,owner_id,expires_at) VALUES('ch','morgan',?)", (now,))
         c.execute("INSERT INTO conversations(id) VALUES('cv')")
         for mid, at in (("old", OLD), ("new", now), ("ran", now), ("ran-long-ago", OLD)):
             c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at) "
-                      "VALUES(?,'cv','human:morgan','bot:sales','ask',?,?)", (mid, "Request " + mid, at))   # the trigger queues a job
+                      "VALUES(?,'cv','human:morgan','bot:sales','ask',?,?)", (mid, "Request " + mid, at))
+            enqueue_stored(c, mid)
         c.execute("UPDATE jobs SET state='completed' WHERE id IN ('ran','ran-long-ago')")
         # A run in progress, a finished run in the window, and a finished run from long ago.
         for aid, job, state, at, finished in (("live", "new", "running", now, None), ("done", "ran", "completed", now, now),
@@ -68,7 +70,6 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
     with closing(sqlite3.connect(dest)) as c:
         for table in devcopy.emptied(c):
             assert c.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0, table
-        assert c.execute("SELECT token_hash FROM bots").fetchall() == [(None,)]
         assert c.execute("SELECT id FROM messages ORDER BY id").fetchall() == [("new",), ("ran",)]
         # The finished run stays, with its steps and inputs, and no way back in.
         assert c.execute("SELECT id,token_hash,lease_until=finished_at FROM attempts").fetchall() == [
@@ -78,7 +79,7 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
         assert c.execute("SELECT attempt_id FROM attempt_inputs").fetchall() == [("done",)]
         assert c.execute("SELECT token_hash,revoked_at IS NOT NULL FROM runners").fetchall() == [("devcopy-revoked:r1", 1)]
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
-        assert c.execute("SELECT count(*) FROM sqlite_master WHERE name='queue_bot_message'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM sqlite_master WHERE name='message_links_insert'").fetchone()[0] == 1
     env = dict(line.split("=", 1) for line in (dest.parent / "server.env").read_text().splitlines()
                if "=" in line and not line.startswith("#"))
     assert (env["TICO_REHEARSAL"], env["TICO_DB"], env["TICO_PUBLIC_URL"]) == ("1", str(dest.resolve()), "http://127.0.0.1:8879")
@@ -221,3 +222,22 @@ def test_a_dev_copy_cuts_old_audit_rows_and_keeps_the_audit_log_append_only(tmp_
         assert [r[0] for r in c.execute("SELECT id FROM audit_log ORDER BY id")] == ["new"]
         triggers = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
         assert {"audit_log_no_update", "audit_log_no_delete"} <= triggers
+
+
+def test_a_copy_of_a_database_from_before_usage_facts_keeps_what_the_migration_moves(tmp_path):
+    """devcopy prunes before the copy is migrated: the tables 0053 and 0054 move from keep their rows."""
+    source = source_db(tmp_path)
+    with closing(sqlite3.connect(source)) as c:
+        c.execute("CREATE TABLE turn_usage_segments (turn_id TEXT, position INTEGER, est_cost_usd REAL)")
+        c.execute("CREATE TABLE usage_limits (bot TEXT PRIMARY KEY, daily_usd REAL)")
+        c.execute("CREATE TABLE usage_pools (scope TEXT PRIMARY KEY, daily_usd REAL)")
+        c.execute("INSERT INTO turn_usage_segments VALUES ('t1', 0, 0.25)")
+        c.execute("INSERT INTO usage_limits VALUES ('sales', 5)")
+        c.execute("INSERT INTO usage_pools VALUES ('company', 80)")
+        c.commit()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    _, loose = devcopy.build(source, dest, days=30)
+    assert loose == []
+    with closing(sqlite3.connect(dest)) as c:
+        assert [c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
+                for t in ("turn_usage_segments", "usage_limits", "usage_pools")] == [1, 1, 1]

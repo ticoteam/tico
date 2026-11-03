@@ -1,6 +1,7 @@
 // A Gateway bot's model is a pick (Settings > Bots): Department · Level · Fast · Version under the Tico AI Gateway, one
 // muted line with what runs and the price, the department from the bot's group, old ids as "(old lineup)"; Settings >
-// Gateway lists the picks in use and the services in two flat tables; Settings > Computers > Models has the Decisions
+// Gateway lists the picks in use and the services in two flat tables, and links the owner of a connected install to
+// API keys on app.tico.dev; Settings > Computers > Models has the Decisions
 // level. The catalog is the one the server sends (backend/gateway_tiers.py). With TICO_SHOTS set, it saves screenshots there.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -30,7 +31,7 @@ const shotsDir = process.env.TICO_SHOTS || '';
       gateway_department: department, machine: {runner_id: 'r1', label: 'Box', owner_id: 'ana', generation: 1}, ...extra});
     const bots = [bot('seller', 'Seller', 'tico-sales-medium-1.0', 'sales'), bot('old', 'Old Hand', 'tico-mid-1.0', 'general'),
       bot('writer', 'Writer', 'tico-marketing-low-fast', 'marketing'), bot('banker', 'Banker', 'tico-finance-medium-1.1', 'finance')];
-    let decide = 'low', saved = null;
+    let decide = 'low', saved = null, connected = true;
     await page.route('**/*', route => {
       const req = route.request(), p = new URL(req.url()).pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -52,7 +53,7 @@ const shotsDir = process.env.TICO_SHOTS || '';
         providers: [{id: 'tico', label: 'Tico AI Gateway', gateway: true}]});
       if (p === '/api/v2/providers/gateway') return json({label: 'Tico AI Gateway', connected: true, source: 'settings', url: 'https://updates.tico.team/v1/gateway',
         default_url: 'https://updates.tico.team/v1/gateway', editable: true, preview: 'tgw…def', revision: 1, state: 'connected', working: true, message: 'Connected.'});
-      if (p === '/api/v2/gateway') return json({connection: {connected: true, state: 'connected', working: true, spent_usd: 12.4, cap_usd: 100},
+      if (p === '/api/v2/gateway') return json({connection: connected ? {connected: true, state: 'connected', working: true, spent_usd: 12.4, cap_usd: 100} : {connected: false},
         decide_level: decide, as_of: '2026-10-25',
         picks: [{id: 'tico-sales-medium-1.0', name: 'Sales · Medium', model: 'Claude Sonnet 5.5', version: '1.0', bots: 3, price: '$2.50 / $12.50 per 1M', old: false},
           {id: 'tico-marketing-low-fast', name: 'Marketing · Low · Fast', model: 'DeepSeek V4.1 Flash', version: 'auto', bots: 1, price: '$0.45 / $1.80 per 1M', old: false},
@@ -166,7 +167,23 @@ const shotsDir = process.env.TICO_SHOTS || '';
     assert.equal(await page.locator('[data-gateway-service=search] .gw-tools').innerText(), 'hub_gateway_search');
     assert.equal(await page.locator('[data-gateway-service=fetch] .gw-tools').innerText(), 'hub_gateway_fetch');
     assert.equal(await page.locator('[data-gateway-key-link]').getAttribute('href'), '#/settings/models');
+    // API keys are made on app.tico.dev: one row for the owner of a connected install, opening there in a new tab.
+    const apiKeys = page.locator('[data-gateway-api-keys-link]');
+    assert.deepEqual(await page.locator('[data-gateway-api-keys] td').allInnerTexts(), ['API keys', 'Use the Gateway from other tools', 'Open']);
+    assert.equal(await apiKeys.getAttribute('href'), 'https://app.tico.dev/gateway#api-keys');
+    assert.equal(await apiKeys.getAttribute('target'), '_blank');
+    assert.match(await apiKeys.getAttribute('rel'), /\bnoopener\b/);
     await shot('desktop-gateway.png');
+    // An admin who is not the owner, or an install with no Gateway connection: no row.
+    await page.evaluate(() => { S.me.role = 'member'; S.me.bot_admin = true; return renderSettingsGateway(); });
+    await page.locator('[data-gateway-picks]').waitFor();
+    assert.equal(await page.locator('[data-gateway-api-keys]').count(), 0, 'owner only');
+    connected = false;
+    await page.evaluate(() => { S.me.role = 'owner'; delete S.me.bot_admin; return renderSettingsGateway(); });
+    await page.locator('[data-gateway-line]').waitFor();
+    assert.equal(await page.locator('[data-gateway-line]').innerText(), 'Not connected');
+    assert.equal(await page.locator('[data-gateway-api-keys]').count(), 0, 'only with a Gateway connection');
+    connected = true;
 
     // 5. Decisions: a company level in Settings > Models > Defaults, saved with the rest.
     await page.evaluate(() => settingsShow('models'));
@@ -195,6 +212,8 @@ const shotsDir = process.env.TICO_SHOTS || '';
     await page.evaluate(() => settingsShow('gateway'));
     await page.locator('[data-gateway-picks]').waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll on Settings > Gateway');
+    const [name, open] = await Promise.all(['.gw-name', '.gw-open'].map(sel => page.locator(`[data-gateway-api-keys] ${sel}`).boundingBox()));
+    assert.ok(Math.abs(name.y - open.y) < 4 && open.x > name.x, 'on a phone, Open sits beside API keys');
     await shot('phone-gateway.png');
     assert.deepEqual(errors, []);
     console.log('ok');

@@ -50,7 +50,7 @@ def system_key(flow):
 
 def kind_of(flow):
     """The trigger as the page groups it: its type, or `system` for Tico's own jobs (their mirrors, the Health
-    Monitor, and a job that became a real automation, Stale ticket review)."""
+    Monitor)."""
     trigger = flow.get("trigger") or {}
     if flow.get("builtin") and (system_key(flow) or trigger.get("name") == "tico.builtin.health"
                                 or (flow.get("source") or {}).get("kind") == "system_job"):

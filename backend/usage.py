@@ -9,7 +9,6 @@ Who sees what: the owner and the bot administrators see every bot; anyone else s
 run or own. A bot's own credentials see nothing here.
 """
 
-import json
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import Request
@@ -25,9 +24,19 @@ DIMENSIONS = {"harness": "coalesce(t.harness, '')", "model": "coalesce(t.model, 
               "effort": "coalesce(t.effort, '')", "subscription": "CASE WHEN t.billing='subscription' AND coalesce(t.profile, '') != '' "
               "THEN coalesce((SELECT 'subscription:' || json_array(a.runner_id, t.profile) FROM attempts a WHERE a.id=t.id), "
               "'legacy-profile:' || t.profile) ELSE '' END"}
-GROUPS = ("bot", "day", "routine", *DIMENSIONS)
+# A run's task by its title, so a routine's runs add up under one row; a private task is named only as one, a task the
+# reader cannot open now (moved to a bot whose activity they may not read) only as that, and a run with no task (a chat,
+# a check) is "". `visible` is auth.task_sql for the reader; its bare columns are the task's.
+HIDDEN_TASK = "A task you can't open"
+
+
+def task_key(visible):
+    return (f"coalesce((SELECT CASE WHEN tk.private=1 THEN 'A private task' WHEN NOT ({visible}) THEN "
+            f"'{HIDDEN_TASK.replace(chr(39), chr(39) * 2)}' ELSE tk.title END FROM tasks tk WHERE tk.id=t.task_id), '')")
+GROUPS = ("bot", "day", "routine", "task", *DIMENSIONS)
 MAX_DAYS = 366
 TOP_ROUTINES = 10
+TOP_TASKS = 25
 
 # A priced run whose estimate may be low: its model's long prompts cost more and the runner did not send every
 # request's tokens (providers.estimate). A run recorded before that was marked is judged by its model alone.
@@ -183,14 +192,25 @@ def save_limit(c, auth, who, bot, body, via=None):
                 raise Problem("limit", f"The company default is ${default[key]:g}; a bot's limit can be lower, not higher", 403)
     stored = usage_limits.own(c, bot)
     before, saved = _caps_of(stored), {**stored, **wanted}
-    marks = ",".join("?" * len(usage_limits.KEYS))
-    c.execute(f"INSERT INTO usage_limits(bot, {', '.join(usage_limits.KEYS)}, updated_at, updated_by) VALUES(?,{marks},?,?) "
-              "ON CONFLICT(bot) DO UPDATE SET " + ", ".join(f"{key}=excluded.{key}" for key in usage_limits.KEYS) +
-              ", updated_at=excluded.updated_at, updated_by=excluded.updated_by",
-              (bot, *(saved[key] for key in usage_limits.KEYS), H.now(), who.actor))
+    usage_limits.save_own(c, bot, saved, who.actor)
     H.event(c, who.actor, "usage.limit-set", H.bot_actor(bot), wanted)
     _audit(c, who, "spend:" + bot, before, _caps_of(usage_limits.own(c, bot)), via)
     return default, allowed
+
+
+def query(c, key, join, slugs, first, last, filters=None):
+    """Grouped sums for the runs that finished in the window on these bots. Module level so the demo's billing sample
+    (backend/demo_billing.py) sums the same runs the usage page does."""
+    if not slugs:
+        return []
+    marks = ",".join("?" * len(slugs))
+    sql = (f"SELECT {key} AS k, {SUMS} FROM {RUNS} t {join} WHERE t.finished_at IS NOT NULL AND t.started_at >= ? "
+           f"AND t.started_at < ? AND t.bot IN ({marks})")
+    args = [first.isoformat() + "T00:00:00", (last + timedelta(days=1)).isoformat() + "T00:00:00", *sorted(slugs)]
+    for dimension, value in (filters or {}).items():
+        sql += f" AND {DIMENSIONS[dimension]} = ?"
+        args.append("" if value == "__unknown__" else value)
+    return c.execute(sql + " GROUP BY k", args).fetchall()
 
 
 def install(app, store, auth, mutate, settings):
@@ -206,19 +226,6 @@ def install(app, store, auth, mutate, settings):
         if (last - first).days >= MAX_DAYS:
             raise Problem("range", f"A range is at most {MAX_DAYS} days", 422)
         return first, last
-
-    def query(c, key, join, slugs, first, last, filters=None):
-        """Grouped sums for the runs that finished in the window on these bots."""
-        if not slugs:
-            return []
-        marks = ",".join("?" * len(slugs))
-        sql = (f"SELECT {key} AS k, {SUMS} FROM {RUNS} t {join} WHERE t.finished_at IS NOT NULL AND t.started_at >= ? "
-               f"AND t.started_at < ? AND t.bot IN ({marks})")
-        args = [first.isoformat() + "T00:00:00", (last + timedelta(days=1)).isoformat() + "T00:00:00", *sorted(slugs)]
-        for dimension, value in (filters or {}).items():
-            sql += f" AND {DIMENSIONS[dimension]} = ?"
-            args.append("" if value == "__unknown__" else value)
-        return c.execute(sql + " GROUP BY k", args).fetchall()
 
     def totals(rows):
         keys = ("runs", "input_tokens", "cached_tokens", "output_tokens", "api_usd", "subscription_usd",
@@ -262,6 +269,13 @@ def install(app, store, auth, mutate, settings):
                             "spent": usage_limits.spent_now(c, scope=usage_limits.COMPANY, default=default)},
                 "groups": groups}
 
+    def usage_bots(c, auth, who):
+        """The bots whose spend the caller sees: their own, plus a group lead's led bots, as /usage/limits lists them."""
+        allowed = own_bots(c, auth, who)
+        if auth.bot_admin(who):
+            return allowed
+        return allowed | (led_bots(c, who) & {row["id"] for row in H.bots(c)})
+
     @app.get("/api/v2/usage/limits")
     def limits(request: Request):
         """The company default, the limits of every bot the caller may see usage for (a lead's: also the bots in the
@@ -278,7 +292,6 @@ def install(app, store, auth, mutate, settings):
             from . import groups as G
             led = None if admin else G.led_groups(c, who.actor)
             allowed = own_bots(c, auth, who) | ((led_bots(c, who) & {row["id"] for row in H.bots(c)}) if led else set())
-            usage_limits.prime_own(c, allowed)
             pools = pool_views(c, default) if admin else pool_views(c, default, led) if led else None
             return {"default": default, "may_edit_default": admin, "pools": pools, "leads": sorted(led or ()),
                     "bots": {bot: limit_view(c, who, bot, default, allowed) for bot in sorted(allowed)}}
@@ -298,8 +311,7 @@ def install(app, store, auth, mutate, settings):
             counted = body.count_subscription if "count_subscription" in body.model_fields_set else stored["count_subscription"]
             value = {**{key: stored[key] for key in usage_limits.KEYS}, **amounts(c, body),
                      "count_subscription": bool(counted)}
-            c.execute("INSERT INTO registry_metadata(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                      (usage_limits.KEY, json.dumps(value)))
+            usage_limits.save_default(c, value, value["count_subscription"], who.actor)
             H.event(c, who.actor, "usage.default", "company", value)
             return {"default": usage_limits.company(c)}
         return mutate(request, body, work)
@@ -336,8 +348,9 @@ def install(app, store, auth, mutate, settings):
 
     @app.get("/api/v2/usage")
     def usage(request: Request, group: str = "bot", department: str | None = None, bot: str | None = None):
-        """Estimated model spend per bot, per day or per routine over `from`..`to` (UTC dates, default the last
-        seven days); `bot` is one bot's daily series and top routines."""
+        """Estimated model spend per bot, per day, per routine, per task (its top TOP_TASKS by spend) or per dimension
+        over `from`..`to` (UTC dates, default the last seven days); `bots` (slugs, comma separated) narrows it to those
+        bots; `bot` is one bot's daily series and top routines."""
         who = request.state.identity
         auth.domain(who)
         if who.role not in ("owner", "human"):
@@ -347,7 +360,7 @@ def install(app, store, auth, mutate, settings):
             raise Problem("group", "group must be one of: " + ", ".join(GROUPS), 422)
         filters = {key: request.query_params[key] for key in DIMENSIONS if request.query_params.get(key)}
         with store.read() as c:
-            allowed = own_bots(c, auth, who)
+            allowed = usage_bots(c, auth, who)
             people, configs = views.roster(c), views.entries(c, settings.github_owner)
             depts = {slug: P.team_of(slug, configs, people) or "" for slug in allowed}
             names = {row["id"]: row["display_name"] or row["slug"] for row in H.bots(c)}
@@ -369,7 +382,9 @@ def install(app, store, auth, mutate, settings):
                         "limit": limit_view(c, who, bot, usage_limits.company(c), allowed),
                         "totals": totals(query(c, "'all'", "", {bot}, first, last, filters)), "daily": series,
                         "routines": routines[:TOP_ROUTINES]}
-            slugs = {s for s in allowed if not department or depts.get(s) == department}
+            only = {(H.resolve_bot(c, s) or {}).get("id", s)
+                    for s in (s.strip() for s in (request.query_params.get("bots") or "").split(",")) if s}
+            slugs = {s for s in allowed if (not department or depts.get(s) == department) and (not only or s in only)}
             total = totals(query(c, "'all'", "", slugs, first, last, filters))
             if group == "bot":
                 default = usage_limits.company(c)
@@ -378,6 +393,9 @@ def install(app, store, auth, mutate, settings):
                         for r in query(c, "t.bot", "", slugs, first, last, filters)]
             elif group == "day":
                 rows = [{"day": r["k"], **figures(r)} for r in query(c, "substr(t.started_at, 1, 10)", "", slugs, first, last, filters)]
+            elif group == "task":
+                rows = [{"value": r["k"] or None, "name": r["k"] or "Chats and other runs", **figures(r)}
+                        for r in query(c, task_key(auth.task_sql(c, who)), "", slugs, first, last, filters)]
             elif group in DIMENSIONS:
                 rows = [{"value": r["k"] or None, "name": usage_label(c, r["k"] or "") if group == "subscription" else r["k"] or "Not recorded / not applicable", **figures(r)}
                         for r in query(c, DIMENSIONS[group], "", slugs, first, last, filters)]
@@ -390,6 +408,8 @@ def install(app, store, auth, mutate, settings):
                 rows.sort(key=lambda r: r["day"])
             else:
                 rows.sort(key=lambda r: (-spend(r), -(r["input_tokens"] + r["cached_tokens"] + r["output_tokens"]), -r["runs"]))
+            if group == "task":
+                rows = rows[:TOP_TASKS]
             dimensions = {key: query(c, expression, "", slugs, first, last)
                           for key, expression in DIMENSIONS.items()}
             return {**base, "group": group, "department": department or None, "totals": total, "rows": rows,

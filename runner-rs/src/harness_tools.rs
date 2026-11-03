@@ -1193,6 +1193,7 @@ impl Harnesses {
             self.section(key).remove(&m.id);
         }
         self.save();
+        crate::readiness::request_probe();
         log(&format!("Tico runner: removed {}; it is turned off on this computer", m.name));
     }
 
@@ -1236,6 +1237,7 @@ impl Harnesses {
             self.section("overrides").insert(m.id.clone(), json!({"policy": "pinned", "pin": version}));
         }
         self.save();
+        crate::readiness::request_probe();
         log(&if job.kind == "update" {
             format!("Tico runner: {} {}d to {version}", m.name, job.kind)
         } else {

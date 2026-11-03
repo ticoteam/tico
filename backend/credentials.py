@@ -366,14 +366,14 @@ class Vault:
             if isinstance(payload.get('secret'), SecretStr):
                 payload['secret'] = payload['secret'].get_secret_value()
             fingerprint = hmac.new(self.cipher.key(c), b'tico-request:v1:' + encode(payload).encode(), hashlib.sha256).hexdigest()
-            old = c.execute('SELECT request_hash,response FROM idempotency WHERE actor=? AND operation=? AND key=?',
+            old = c.execute('SELECT request_hash,response FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?',
                             (who.actor, operation, key)).fetchone()
             if old:
                 if not hmac.compare_digest(old['request_hash'], fingerprint):
                     raise Problem('idempotency_conflict', 'This request key was already used for different content', 409)
                 return json.loads(old['response'])
             result = fn(c)
-            c.execute('INSERT INTO idempotency VALUES(?,?,?,?,?,?)',
+            c.execute('INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)',
                       (who.actor, operation, key, fingerprint, encode(result), H.now()))
             return result
 
@@ -675,6 +675,14 @@ def install_credentials(app,store,delegate=None,propose=None):
         # credential a person asked it to grant (no manual steps).
         who=acting(request,None,on_behalf_of) if on_behalf_of else request.state.identity
         with store.read() as c:
+            if who.role=='bot' and not on_behalf_of and str(who.actor).startswith('bot:'):
+                # A bot sees the names and env names of what it is granted (granted: the same rule a run's values
+                # follow), so it can check they reach its turn. No preview, no other subject's grants, no people.
+                ids=granted(c,who.actor)
+                mine=[{k:v for k,v in vault.brief(row).items() if k!='preview'}|{'can_reveal':False,'grants':[]}
+                      for row in c.execute('SELECT * FROM credentials ORDER BY lower(name),id') if row['id'] in ids]
+                return {'credentials':mine,'can_manage':False,'people':[],'bots':[],'computers':[],
+                        'configured':vault.configured,'key_storage':vault.cipher.storage}
             if who.role not in ('human','owner') or not can_open(c,who,vault.admins):
                 raise Problem('forbidden',ask_admin_detail(c,vault.admins,'share credentials, or grant you access to one'),403)
             admin=administrator(c,who,vault.admins)

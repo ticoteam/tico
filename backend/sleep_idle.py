@@ -182,7 +182,7 @@ def fixed_times(c, when):
         last = SR.last_started(c, list(SR.CONTROLS))
         for key, cfg in SR.config(c).items():
             if cfg["on"] and cfg["preset"] == SR.DAILY:
-                found = SR.next_night(c, cfg, when) if key == "learnings" else SR.next_due(cfg, last.get(key), when)
+                found = SR.next_night(c, cfg, when, key) if key in SR.NIGHT_CLAIMS else SR.next_due(cfg, last.get(key), when)
                 if found:
                     out.append(found.timestamp())
     except Exception:

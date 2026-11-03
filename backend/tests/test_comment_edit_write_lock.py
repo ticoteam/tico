@@ -34,7 +34,7 @@ def _answers(c, count, quoting=None):
             other = {"id": str(uuid.uuid4()), "from_actor": "bot:ops", "body": "x" * 200, "kind": "say"}
             return json.dumps({"comment": other, "task": {"id": str(uuid.uuid4())}})
         return json.dumps({"ok": True, "id": str(uuid.uuid4()), "detail": "y" * 300})
-    c.executemany("INSERT INTO idempotency VALUES(?,?,?,?,?,?)",
+    c.executemany("INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)",
                   [(f"bot:b{i % 40}", "/api/v2/x", str(uuid.uuid4()), "h", answer(i), H.now()) for i in range(count)])
 
 
@@ -162,7 +162,7 @@ def test_retry_answers_are_rewritten_as_reading_every_answer_did(api, change, mo
         rows = [json.dumps(shape(dict(said, body="old"))) for shape in SHAPES]
         # Answers SQLite does not read as JSON: not JSON at all, and Python's NaN.
         rows += ["not json " + said["id"], '{"n": NaN, "comment": {"id": "%s", "from_actor": "x"}}' % said["id"]]
-        c.executemany("INSERT INTO idempotency VALUES(?,?,?,?,?,?)",
+        c.executemany("INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)",
                       [("human:ana", "/api/v2/shapes", f"k{i}", "h", row, H.now()) for i, row in enumerate(rows)])
 
     def outcome(indexed):

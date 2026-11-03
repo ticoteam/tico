@@ -782,13 +782,15 @@ def task_reply(hub, private, attachments):
 def test_a_task_reply_with_a_visual_links_to_that_message_in_the_task(gateway, hub):
     link_task_requester(hub)
     task, reply = task_reply(hub, False, [visual(), visual("svg", 2)])
+    with hub.read() as c:
+        followup = H.task(c, task)["check_back_at"]
     gateway.originate()
     gateway.mirror()
     gateway.deliver()
     [post] = gateway.slack.posts
     assert post["text"] == ("Here is the quarter.\n\n"
                             f"<https://tico.example.com/?task={task}&amp;message={reply}|2 visuals - view in Tico>"
-                            f"\n\n(sent from Legal on <https://tico.example.com/#/task/{task}|Q3 numbers>)")
+                            f"\n\n(sent from Legal on <https://tico.example.com/#/task/{task}|Q3 numbers>)\nFollow up by {followup}")
 
 
 def test_a_task_reply_names_and_links_its_task(gateway, hub):
@@ -797,12 +799,13 @@ def test_a_task_reply_names_and_links_its_task(gateway, hub):
     task, _ = task_reply(hub, False, [])
     with hub.transaction() as c:
         c.execute("UPDATE tasks SET number=19332, title=? WHERE id=?", ("Voice <tokens> & keys", task))
+        followup = H.task(c, task)["check_back_at"]
     gateway.originate()
     gateway.mirror()
     gateway.deliver()
     [post] = gateway.slack.posts
     assert post["text"] == ("Here is the quarter.\n\n"
-                            f"(sent from Legal on <https://tico.example.com/#/task/{task}|#19332 Voice &lt;tokens&gt; &amp; keys>)")
+                            f"(sent from Legal on <https://tico.example.com/#/task/{task}|#19332 Voice &lt;tokens&gt; &amp; keys>)\nFollow up by {followup}")
 
 
 def test_a_private_task_reply_with_a_visual_never_reaches_slack(gateway, hub):

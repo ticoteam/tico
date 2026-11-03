@@ -1,4 +1,4 @@
-/* ui/app/threads-page.js — The Threads page (#/threads, ?view=dms, ?with=<actor>), one thread's page (#/thread/<id>),
+/* ui/app/threads-page.js — The Threads page (#/threads, ?view=inbox, ?view=dms, ?with=<actor>), one thread's page (#/thread/<id>),
    New thread, a thread's Members and menu, and Make task on a message.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -22,10 +22,11 @@ function pageThread(id) {
 // ----------------------------------------------------------------- the list
 async function pageThreads() {
   const q = new URLSearchParams(S.route.split('?')[1] || '');
-  const withActor = q.get('with') || '', dms = q.get('view') === 'dms';
-  const title = dms ? 'DMs' : withActor ? `Threads with ${actorName(withActor)}` : 'Threads';
+  const withActor = q.get('with') || '', dms = q.get('view') === 'dms', inbox = !withActor && !dms && q.get('view') === 'inbox';
+  const title = dms ? 'DMs' : withActor ? `Threads with ${actorName(withActor)}` : inbox ? 'Inbox' : 'Threads';
   const main = $('#main');
-  main.innerHTML = `<div class="threads-page"><header class="threads-head"><h1>${esc(title)}</h1><span class="spacer"></span>
+  let sort = threadsSort();
+  main.innerHTML = `<div class="threads-page"><header class="threads-head"><h1>${esc(title)}</h1>${withActor || dms ? '' : threadsSortHTML(inbox ? 'inbox' : sort)}<span class="spacer"></span>
       <button type="button" class="ghost thp-search" id="th-search" aria-label="Search" title="Search"><span class="nav-icon" aria-hidden="true">search</span></button>
       <button type="button" class="primary" data-thp-new>${dms ? 'New DM' : 'New thread'}</button></header>
     ${withActor ? `<p class="thp-filter"><a class="linkish" href="${THREADS_ROUTE}">All threads</a></p>` : ''}
@@ -36,30 +37,103 @@ async function pageThreads() {
   threadSearchWire(main);
   main.querySelector('[data-thp-new]').onclick = () => threadNewOpen({dm: dms, members: withActor ? [withActor] : []});
   const route = S.route;
-  const st = {attention: [], threads: [], dms: [], next: null};
+  let st = {attention: [], threads: [], dms: [], next: null}, gen = 0;
   const load = async cursor => {
-    const p = new URLSearchParams({limit: '50'});
+    const p = new URLSearchParams({limit: '50', sort});
     if (cursor) p.set('cursor', cursor);
     if (withActor) p.set('with', withActor);
-    const r = await get('/v2/threads?' + p, {fresh: true});
-    if (S.route !== route) return;
+    // Each switch starts a new list: a page asked for before it is dropped, whatever order it was for, and so is its error.
+    const mine = gen;
+    let r;
+    try { r = await get('/v2/threads?' + p, {fresh: true}); }
+    catch (e) { if (S.route !== route || mine !== gen) return; throw e; }
+    if (S.route !== route || mine !== gen) return;
     for (const key of ['attention', 'threads', 'dms']) {
       const have = new Set(st[key].map(t => t.id));
       st[key].push(...(r[key] || []).filter(t => !have.has(t.id)));
     }
     st.next = r.next_cursor || null;
+    st.lastAttention = (r.attention || []).length;
     draw();
   };
   const section = (head, list, opts) => list.length ? `<section class="thp-sec">${head ? `<h2>${esc(head)}</h2>` : ''}<ul class="th-list thp-list">${
     list.map(t => threadRowHTML(t, opts).replace('</a></li>', `<time class="muted thp-at">${esc(ago(t.last_message_at))}</time></a></li>`)).join('')}</ul></section>` : '';
   const draw = () => {
+    if (inbox) {
+      // What waits on the viewer, newest first, then each held message with its review card (opened from its row).
+      const rows = st.attention.filter(t => t && !t.archived_at), holds = inboxHolds();
+      $('#threads-all').innerHTML = rows.length || holds.length
+        ? section('', rows) + (holds.length ? `<div class="thp-holds" role="list">${holds.map(it => needRowHTML(it)).join('')}</div>` : '')
+        : '<p class="empty">All caught up</p>';
+      // Needs attention ranks first on every page, so a page that ends in other rows has listed all of it.
+      $('#threads-more').hidden = !st.next || st.lastAttention < 50;
+      return;
+    }
     const seen = new Set(st.attention.map(t => t.id));
-    const html = dms ? section('', threadsOrder(st.dms))
-      : section('Needs attention', st.attention, {attention: true}) + section(st.attention.length ? 'Threads' : '', threadsOrder(st.threads, seen))
-        + section('DMs', threadsOrder(st.dms, seen));
+    // A DM with one bot is on that bot's page and counted on its row in Team; the list leaves it out.
+    const dmRows = threadsOrder(st.dms, seen, sort).filter(t => withActor || !threadIsBotDm(t));
+    const html = dms ? section('', threadsOrder(st.dms, new Set(), sort))
+      : section('Needs attention', st.attention, {attention: true}) + section(st.attention.length ? 'Threads' : '', threadsOrder(st.threads, seen, sort))
+        + section('DMs', dmRows);
     $('#threads-all').innerHTML = html || `<p class="empty">${dms ? 'No DMs yet' : 'No threads yet'}</p>`;
     $('#threads-more').hidden = !st.next;
   };
+  // A new list from the top: after a switch, or when a thread's level moved while Important is shown.
+  const reload = (quiet = false) => {
+    gen++;
+    st = {attention: [], threads: [], dms: [], next: null};
+    if (!quiet) { $('#threads-all').innerHTML = '<div class="muted">Loading…</div>'; $('#threads-more').hidden = true; }
+    load('').catch(e => { if (S.route === route) $('#threads-all').innerHTML = `<p class="empty">${esc(e.message)}</p>`; });
+  };
+  main.querySelector('.thp-sort')?.addEventListener('click', ev => {
+    if (ev.target.closest('[data-th-view]')) { if (!inbox) location.hash = INBOX_ROUTE; return; }
+    const k = ev.target.closest('[data-th-sort]')?.dataset.thSort;
+    if (!k) return;
+    // From Inbox a sort opens the whole list in that order.
+    if (inbox) { threadsSortSet(k); if (k !== sort) void threadsLoad(); location.hash = THREADS_ROUTE; return; }
+    if (k === sort) return;
+    sort = k;
+    threadsSortSet(k);
+    main.querySelectorAll('[data-th-sort]').forEach(b => { const on = b.dataset.thSort === k; b.classList.toggle('cur', on); b.setAttribute('aria-selected', String(on)); });
+    // The sidebar follows the same choice.
+    void threadsLoad();
+    reload();
+  });
+  const off = liveOn('threads', d => {
+    if (S.route !== route) return off();
+    // Inbox is what waits on the viewer: it is read again whenever that moves, as the sidebar is.
+    if (inbox && d.kind !== 'activity') return liveThrottle('threads-page-inbox', () => { if (S.route === route) reload(true); }, 1500);
+    if (d.kind === 'ranked' && sort === 'important' && !withActor) liveSoon('threads-page-ranked', () => { if (S.route === route) reload(true); }, 1500);
+  });
+  if (inbox) {
+    // Its held messages come from Needs you, read a page at a time to the end so none is missed; the sidebar counts
+    // them too. Read again whenever Needs you moves; before its first read there is no next page to follow, so it is
+    // read here.
+    let paging = false;
+    const readHolds = async () => {
+      if (paging || typeof needsAll !== 'function') return;
+      paging = true;
+      try {
+        if (!S.v2.needsVersion && await v2NeedsRead() && S.route === route) {
+          draw();
+          if (typeof threadsSideRender === 'function') threadsSideRender();
+        }
+        while (S.route === route && !needsAll()) {
+          if (await v2NeedsMore() === false) break;
+          if (S.route !== route) break;
+          draw();
+          if (typeof threadsSideRender === 'function') threadsSideRender();
+        }
+      } finally { paging = false; }
+    };
+    // A hold kept or withdrawn moves Needs you and the thread's attention: draw the holds now, read the threads again.
+    const offNeeds = liveOn('needs-list', () => {
+      if (S.route !== route) return offNeeds();
+      draw(); void readHolds();
+      liveThrottle('threads-page-inbox', () => { if (S.route === route) reload(true); }, 1500);
+    });
+    void readHolds();
+  }
   $('#threads-more').onclick = ev => { ev.currentTarget.disabled = true; load(st.next).finally(() => { ev.currentTarget.disabled = false; }); };
   try { await load(''); }
   catch (e) { if (S.route === route) $('#threads-all').innerHTML = `<p class="empty">${esc(e.status === 404 ? 'Threads are not on this server yet' : e.message)}</p>`; }
@@ -297,7 +371,7 @@ function threadShareOpen(view) {
   const dlg = threadDialog('thread-share', 'Who can read');
   dlg.innerHTML = `<form>${threadDialogHead('Who can read')}<div class="dash-form">${threadAudienceHTML(t, {titled: true})}<div class="tcn-host"></div></div>${threadDialogFoot('Save')}</form>`;
   threadDialogWire(dlg);
-  renderThreadConnect(t, dlg.querySelector('.tcn-host'));   // Slack and Shared with (ui/app/thread-connect.js)
+  renderThreadConnect(t, dlg.querySelector('.tcn-host'));   // Slack (ui/app/thread-connect.js)
   const form = dlg.querySelector('form');
   form.onsubmit = async ev => {
     ev.preventDefault();
