@@ -43,7 +43,7 @@ What waits on you from elsewhere comes at the end of the DM as cards: a Confirm 
 its own Home, with its Confirm and Cancel, and up to three bots' questions to you from Needs you. A question with two to
 six picks is answered with a tap, any other with a line of words (a question with several picks at once links to its
 task). You can also just tell the Assistant: "tell BotOps yes" answers BotOps' open question in your words (`hub
-question answer --on-behalf-of turn`, below). A Confirm card always needs your own tap.
+question answer --on-behalf-of turn`, below). A Confirm card needs your own tap. A goal suggestion can also be confirmed by a plain yes in your chat ([below](#goals-agreed-in-words)).
 
 ## Helpers through the Assistant
 
@@ -60,8 +60,8 @@ wrote in your own Assistant DM in the last 30 minutes, and the owner's rule "Ass
 The task opens with your words quoted.
 For the Strategy Bot and the Librarian the event `assistant.asked_helper` records it (with `helper`, `for` and
 `cited`). Each helper runs its own turn with its own rights, and only BotOps borrows yours (below). So a strategy change
-stays the owner's: the Strategy Bot proposes it on a Confirm card, and only the owner can confirm. The Strategy Bot's own
-goal suggestions work the same way. Your own goal changes are agreed in words instead ([below](#goals-agreed-in-words)).
+stays the owner's: the Strategy Bot proposes it on a Confirm card, and only the owner can confirm. The Strategy Bot's goal
+suggestions are agreed the way your own goal changes are: a plain yes in your chat confirms one ([below](#goals-agreed-in-words)).
 A task for any other bot that cites your words is refused (`422 request_id`). A person's post to the Strategy Bot's DM (`POST /api/v2/chat/goal-manager`) lands in their
 Assistant DM instead.
 
@@ -72,7 +72,7 @@ On the first start after the update, Confirm cards still waiting there move to t
 
 ### Goals, agreed in words
 
-For your own goals, measures and targets, the Assistant saves nothing on the first ask. It writes the change back to you
+For your own goals, measures and targets, and for the Strategy Bot's goal suggestions, the Assistant saves nothing on the first ask. It writes the change back to you
 in your chat as a numbered read-back, with the exact steps. Only your yes saves it:
 
 - A plain yes as your next message, such as **yes**, **ok**, **go ahead** or **save it**, saves every change in it.
@@ -86,8 +86,10 @@ Colour, done or dropped and archive are not agreed in words. They stay your clic
 says so and leaves them out. A KPI reading, the company Vision, strategy drafts and bets, and recovery suggestions stay
 clicks too.
 
-A "no" to a suggestion the Assistant makes in your chat is recorded at once, with your words as the reason, and needs no
-read-back. Only the owner gets this. For anyone else, a goal change still comes as a card.
+A suggestion the Strategy Bot made that you confirm with a plain yes leaves **Needs you**, as it does when you confirm
+its card. A "no" in your chat to a goal's wording, a KPI added to a goal, a KPI's definition, a KPI target or a flag is
+recorded at once, with your words as the reason, and needs no read-back and no second yes. A "no" to a Why line stays a
+click on its card. Only the owner gets the "no" in chat. For anyone else, a goal change still comes as a card.
 
 ### BotOps
 

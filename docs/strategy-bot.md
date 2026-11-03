@@ -135,7 +135,7 @@ Nobody messages the Strategy Bot directly, the owner included: everyone's one DM
 [Assistant](assistant.md#helpers-through-the-assistant). Ask it for strategy advice and it files the
 Strategy Bot a task citing your words. The Strategy Bot works that task in its own turn with its own rights, so a change
 that stays yours (below) comes back to you as a proposal or a Confirm card. Your own goal changes do not go to it that way:
-the Assistant reads each one back in your chat, and only your plain yes saves it ([Goals, agreed in words](assistant.md#goals-agreed-in-words)).
+the Assistant reads each one back in your chat, and only your plain yes saves it ([Goals, agreed in words](assistant.md#goals-agreed-in-words)). The Strategy Bot's goal suggestions are read back the same way: a plain yes in your chat confirms one, and it leaves **Needs you**.
 Bots still message it, in its goals session.
 
 Before this change the owner messaged the Strategy Bot itself. That DM stays yours as read-only history under
