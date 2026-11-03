@@ -3304,12 +3304,13 @@ class Execution:
             # Share RUNNER_SQL with bot_claimable for the snapshot; skip revoked computers in Python.
             found = one(c, RUNNER_SQL, (rid,)) if remote else runner
             target = found if found and not found["revoked_at"] else None
+            gate = None if remote else body
             if (not target or (remote and not claiming(rid, CLAIMED_WAITING_FRESH))
                     or not target['last_seen_at'] or target['last_seen_at'] < H.shift(H.now(), seconds=-90)
                     or not self.awake(target['awake_since'], H.now()) or runner_versions.paused(c, rid)
                     or cloud_machines.held(c, rid)
                     or load_status(c, rid)['overloaded'] or start_places.ready_waiting(c, rid)
-                    or sum(turns_here(c, rid).values()) >= start_places.turn_limit(target)):
+                    or sum(start_places.live(c, rid).values()) >= start_places.claim_limit(target, gate)):
                 continue
             busy_bots, busy_lanes = claimed_busy(rid, CLAIMED_WAITING_FRESH)
             scope = Claim(busy_bots=list(busy_bots), busy_lanes=['|'.join(x) for x in busy_lanes]) if remote else body
@@ -3370,8 +3371,8 @@ class Execution:
         people_only, held = self.held_starts(c, who.runner_id)
         if held:
             return held
-        count = sum(turns_here(c, who.runner_id).values())
-        if count >= start_places.turn_limit(runner) or not self.awake(awake_since, now):
+        count = sum(start_places.live(c, who.runner_id).values())
+        if count >= start_places.claim_limit(runner, body) or not self.awake(awake_since, now):
             return {"attempt": None}
         row = self.candidate(c, who, body, runner, people_only=people_only, failed=failed)
         if failed:
@@ -3495,8 +3496,8 @@ class Execution:
             return held
         if people_only:
             selected, prepared = None, False     # chosen before the hold, perhaps not a person's
-        count = sum(turns_here(c, who.runner_id).values())
-        if count >= start_places.turn_limit(runner):
+        count = sum(start_places.live(c, who.runner_id).values())
+        if count >= start_places.claim_limit(runner, body):
             return {"attempt": None}
         # A machine that has only just come back cannot be trusted with a 90 s lease yet.
         # Its work keeps its place in the queue and goes out once the machine is really up.
@@ -3659,7 +3660,9 @@ class Execution:
                   "VALUES(?,?,?,?,?,?,'leased',?,?,?)",
                   (aid, row["id"], row["bot_id"], who.runner_id, row["generation"], digest(token), until, H.now(), lane))
         if body.start_places:
-            start_places.claim(c, aid)
+            # Decided now, under this write lock: granted a place while the computer holds fewer than its turn limit. A turn
+            # past the limit is leased (it counts toward live_limit) and holds no place until one frees.
+            start_places.admit(c, aid, runner, self.store.settings)
         c.execute('DELETE FROM org_turn_waits WHERE job_id=?', (row['id'],))
         from . import run_diagnostics
         run_diagnostics.touch(c, aid, "leased")

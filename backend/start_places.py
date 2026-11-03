@@ -126,17 +126,53 @@ def held(c, runner_id):
     return out
 
 
+# The explicit state IN is what lets SQLite search attempts_runner_state (runner_id, state); the OR alone does not.
+LIVE_SQL = ("SELECT a.bot_id,count(*) FROM attempts a WHERE a.runner_id=? AND a.state IN ('leased','running') "
+            "AND (a.state='running' OR a.lease_until>?) GROUP BY a.bot_id")
+
+
+def live(c, runner_id):
+    """{bot: turns it holds on this computer}: running turns and unexpired leases, whether starting, parked on a wait
+    (login, quota, lane, pre-start) or neither. The claim gate counts these against `claim_limit`, so a computer's claimed
+    work stays bounded; work past that stays queued on the server, unleased.
+
+    Cached for the read snapshot, like `held`.
+    """
+    from . import read_cache
+    values = read_cache.cache(c)
+    key = ("start_places.live", runner_id)
+    if values is not None and key in values:
+        return values[key]
+    now = H.now()
+    out = MappingProxyType({r[0]: r[1] for r in c.execute(LIVE_SQL, (runner_id, now))})
+    if values is not None:
+        values[key] = out
+    return out
+
+
 # Without the hint SQLite walked attempts_runner_finished (every attempt ever run) to skip the GROUP BY sort:
 # 48 ms on Tico Team's 37k attempts, 0.1 ms over the live ones.
+LIVE_TOTALS_SQL = (
+    "SELECT a.runner_id,count(*) FROM attempts a INDEXED BY attempts_live_lease "
+    "WHERE a.state IN ('leased','running') AND (a.state='running' OR a.lease_until>?) GROUP BY a.runner_id")
+
+
+def live_totals(c):
+    """{runner_id: turns held} for every computer in one pass, counted as `live` counts them. Health's capacity fence
+    used to call `live` once per runner while already walking the fleet."""
+    return {r[0]: r[1] for r in c.execute(LIVE_TOTALS_SQL, (H.now(),))}
+
+
+# held() for every computer in one pass: the places in use, which is what start admission and Health's full check count
+# against the turn limit. A parked turn with its place given up does not count.
 HELD_TOTALS_SQL = (
     "SELECT a.runner_id,count(*) FROM attempts a INDEXED BY attempts_live_lease LEFT JOIN start_places p "
-    "ON p.attempt_id=a.id WHERE a.state IN ('leased','running') AND (a.state='running' OR (a.state='leased' "
-    "AND a.lease_until>? AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) GROUP BY a.runner_id")
+    "ON p.attempt_id=a.id WHERE a.state IN ('leased','running') AND (a.state='running' OR a.lease_until>?) "
+    "AND (a.state='running' OR p.start_until>? OR p.attempt_id IS NULL OR p.managed=0) GROUP BY a.runner_id")
 
 
 def held_totals(c):
-    """{runner_id: turns held} for every computer in one pass. Health's capacity fence used to call
-    `held` once per runner while already walking the fleet."""
+    """{runner_id: places in use} for every computer in one pass, counted as `held` counts them."""
     now = H.now()
     return {r[0]: r[1] for r in c.execute(HELD_TOTALS_SQL, (now, now))}
 
@@ -159,6 +195,24 @@ def turn_limit(runner):
     if TURNS_AT_ONCE in frozenset(H._json(runner["capabilities"], []) or []):
         return setting
     return min(setting, reported)
+
+
+# Claims stop once a computer holds this many times its turn limit in claimed work, waiting turns included. A parked
+# turn has no harness process and takes no start place, so a login or quota wait does not hold the computer's other
+# work; the bound only stops the server from leasing without limit.
+LIVE_CAP_FACTOR = 2
+
+
+def live_limit(runner):
+    """The most claimed turns (running, starting and parked) this computer may hold: LIVE_CAP_FACTOR x turn_limit."""
+    return LIVE_CAP_FACTOR * turn_limit(runner)
+
+
+def claim_limit(runner, body=None):
+    """The most claimed turns a claim may leave on this computer. A claim that negotiates start places gets `live_limit`:
+    a turn past its turn limit is leased and parked, holding no place. Any other claim keeps `turn_limit`, since an older
+    runner's leases start unconditionally, so its lease count is its start count. A remote computer's gate passes no body."""
+    return live_limit(runner) if getattr(body, 'start_places', False) else turn_limit(runner)
 
 
 def bot_limit(config):
@@ -199,6 +253,19 @@ def bot_held(c, bot, exclude=None):
 def claim(c, aid):
     c.execute("INSERT INTO start_places(attempt_id,start_until,managed) VALUES(?,?,1)",
               (aid, H.shift(H.now(), seconds=START_SECONDS)))
+
+
+def admit(c, aid, runner, settings=None):
+    """A claimed turn's start place, decided when its lease is written under the claim's write lock. The row is managed
+    from the start, with no start yet, so the new lease does not count as held while it is decided. While the computer
+    holds fewer places than its turn limit, `reserve` grants this turn one. A turn claimed past that limit holds no place
+    and is not yet waiting: it is leased (it counts toward `live_limit`), and its start is refused "computer busy" until a
+    place frees, when the runner asks for it (`reserve`, from start-place or started)."""
+    c.execute("INSERT INTO start_places(attempt_id,managed) VALUES(?,1)", (aid,))
+    attempt = c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
+    if sum(held(c, attempt['runner_id']).values()) >= turn_limit(runner):
+        return {"reserved": False}
+    return reserve(c, attempt, settings)
 
 
 def waiting(c, aid, reason):

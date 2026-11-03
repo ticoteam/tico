@@ -84,8 +84,11 @@ def test_health_below_warning_counts_queued_work_without_asking_each_bot_why(api
     assert line['turn_counts']['waiting'] + line['turn_counts']['queued'] == 2
 
 
-def test_unrelated_work_and_free_turn_ignore_37_login_waiters(api):
-    """Spec 2: a different login starts immediately on an otherwise idle computer."""
+def test_parked_logins_take_no_start_place_so_another_login_starts_and_claims_go_on(api):
+    """37 logins parked on a shared login and 3 running on a 40-turn computer: the parked ones take no start place, so
+    another login starts at once (free_turn stays ''), and its claim goes through below twice the limit (80)."""
+    from backend import start_places
+    from backend.views import free_turn
     computer = waiters(api)
     rid = computer['runner_id']
     assign(api, computer, 'finance')
@@ -93,11 +96,12 @@ def test_unrelated_work_and_free_turn_ignore_37_login_waiters(api):
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE runner_states SET capacity=40 WHERE runner_id=?', (rid,))
     post(api, 'chat/finance', {'text': 'Independent work on another login'})
+    with api.app.state.store.read() as c:
+        assert sum(start_places.live(c, rid).values()) == 40
+        assert sum(start_places.held(c, rid).values()) == 3
+        assert free_turn(c, 'ops', {'machine': {'runner_id': rid, 'label': 'Test Mac'}}) == ''
     attempt = claim(api, computer, 'finance')
     assert attempt is not None and attempt['bot'] == 'finance'
-    with api.app.state.store.read() as c:
-        from backend.views import free_turn
-        assert free_turn(c, 'ops', {'machine': {'runner_id': rid, 'label': 'Test Mac'}}) == ''
 
 
 def test_two_ready_waiters_claim_last_start_place_atomically(api):
@@ -256,8 +260,9 @@ def test_legacy_runner_preparation_survives_upgrade_and_three_minutes(api, monke
         assert start_places.managed(c, fresh['id'])
 
 
-def test_legacy_wait_keeps_capacity_until_its_unchecked_start_finishes(api):
-    """A worker without start-place support cannot release capacity then start over the limit."""
+def test_legacy_wait_takes_one_of_the_two_claims_the_limit_allows_until_its_unchecked_start_finishes(api):
+    """A worker without start-place support keeps its claim while it waits. Claims go on to twice the limit (2 here),
+    so the wait leaves one claim for another bot and the start it has not confirmed releases nothing early."""
     from backend.tests.test_api import runner
     computer = runner(api)
     assign(api, computer, 'ops')
@@ -271,11 +276,9 @@ def test_legacy_wait_keeps_capacity_until_its_unchecked_start_finishes(api):
         {'seq': 1, 'kind': 'status', 'payload': {'waiting': 'shared login', 'login': 'ChatGPT'}}
     ]}, computer['token'])
     post(api, 'chat/finance', {'text': 'New protocol contender'})
-    assert claim(api, computer, 'finance') is None
-    post(api, f"attempts/{old['id']}/started", {'thread_id': 'legacy'}, computer['token'])
-    assert claim(api, computer, 'finance') is None
-    post(api, f"attempts/{old['id']}/complete", {'outcome': 'completed', 'text': '', 'last_seq': 1}, computer['token'])
     assert claim(api, computer, 'finance') is not None
+    post(api, f"attempts/{old['id']}/started", {'thread_id': 'legacy'}, computer['token'])
+    post(api, f"attempts/{old['id']}/complete", {'outcome': 'completed', 'text': '', 'last_seq': 1}, computer['token'])
 
 
 def test_a_turn_waiting_for_a_docker_turn_user_gives_its_place_back(api):
@@ -490,8 +493,8 @@ def test_operations_and_computers_share_one_company_default_across_runners(api, 
     assert computer_calls == 1, computer_calls
 
 
-def test_held_totals_match_each_computers_held_counts(api):
-    """Health's capacity fence used one held() query per computer; the fleet pass must agree."""
+def test_live_totals_match_each_computers_live_counts(api):
+    """Health's capacity fence used one live() query per computer; the fleet pass must agree."""
     from backend import start_places
     from backend.tests.test_api import runner
 
@@ -500,9 +503,9 @@ def test_held_totals_match_each_computers_held_counts(api):
     assign(api, second, 'finance')
     ready(api, second, ['finance'])
     with api.app.state.store.read() as c:
-        totals = start_places.held_totals(c)
+        totals = start_places.live_totals(c)
         for rid in (first['runner_id'], second['runner_id']):
-            assert totals.get(rid, 0) == sum(start_places.held(c, rid).values())
+            assert totals.get(rid, 0) == sum(start_places.live(c, rid).values())
 
 
 def memory(api, computer, mem, at=None):

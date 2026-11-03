@@ -26,7 +26,7 @@ from . import app_delivery, login_holds, providers, runner_versions, runs
 from .harnesses import resolve_harness
 from . import personal_tokens, profiles, rooms, team_rules, turns, wake_presets
 from . import auto_tasks, bot_stops, pipeline_stats, run_triggers
-from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, bump_bot_session_epoch, turns_here
+from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, bump_bot_session_epoch
 from pathlib import Path
 
 from . import read_cache, roster_clock
@@ -833,14 +833,16 @@ def own_sign_in(c, bot, settings=None):
 
 
 def free_turn(c, bot, location, human=False):
-    """The computer whose running work and short starts occupy all its places, or ''."""
+    """The computer where no turn can start now, or '': its start places are all taken by running and starting turns
+    (start_places.held), or it already holds as many claimed turns as it may lease (start_places.live_limit)."""
     machine = location.get("machine") or {}
     row = c.execute("SELECT * FROM runners_with_state WHERE id=?", (machine.get("runner_id"),)).fetchone()
     if not row:
         return ""
-    held = turns_here(c, machine["runner_id"])
-    from .start_places import turn_limit
-    return (machine.get("label") or "its computer") if sum(held.values()) >= turn_limit(row) else ""
+    from .start_places import held, live, live_limit, turn_limit
+    rid = machine["runner_id"]
+    full = sum(held(c, rid).values()) >= turn_limit(row) or sum(live(c, rid).values()) >= live_limit(row)
+    return (machine.get("label") or "its computer") if full else ""
 
 
 def cloud_machine_wait(c, bot):
