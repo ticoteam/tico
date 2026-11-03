@@ -71,6 +71,31 @@ FORWARDERS = {
     "getattr package": ("from new import jobs as _real\n\n\ndef __getattr__(name):\n    return getattr(_real, name)\n", True),
     "forwarder plus a function": ("import sys\n\nfrom new import jobs as _real\n\nsys.modules[__name__] = _real\n\n\n"
                                   "def helper(value):\n    return value\n", False),
+    # Each of these hides code in an allowed form's expressions: the file is code, so its allowances stay put.
+    "run_module with an init_globals call": ('import runpy\n\nrunpy.run_module("new.jobs", init_globals=print("ran"))\n',
+                                             False),
+    "run_module with a second positional": ('import runpy\n\nrunpy.run_module("new.jobs", print("ran"))\n', False),
+    "run_module with a call as run_name": ('import runpy\n\nrunpy.run_module("new.jobs", run_name=print("ran"))\n', False),
+    "__getattr__ with an annotation call": ("from new import jobs as _real\n\n\n"
+                                            "def __getattr__(name: print('ran')):\n    return getattr(_real, name)\n",
+                                            False),
+    "__getattr__ with a return annotation call": ("from new import jobs as _real\n\n\n"
+                                                  "def __getattr__(name) -> print('ran'):\n"
+                                                  "    return getattr(_real, name)\n", False),
+    "__getattr__ whose getattr has a third call": ("from new import jobs as _real\n\n\n"
+                                                   "def __getattr__(name):\n    return getattr(_real, name, print('ran'))\n",
+                                                   False),
+    "__getattr__ whose getattr has a keyword": ("from new import jobs as _real\n\n\n"
+                                                "def __getattr__(name):\n"
+                                                "    return getattr(_real, name, default=print('ran'))\n", False),
+    "sys.modules set to another name": ("import sys\n\nfrom new import jobs as _real\n\nsys.modules[__name__] = print\n",
+                                        False),
+    "sys.modules with an annotation": ("import sys\n\nfrom new import jobs as _real\n\n"
+                                       "sys.modules[__name__]: object = _real\n", False),
+    "main test with a call": ('import sys\n\nif __name__ == "__main__" or print("ran"):\n'
+                              '    from new import jobs as _real\n\n    sys.modules[__name__] = _real\n', False),
+    "target import bound to another name": ("import sys\n\nfrom new import jobs\n\nsys.modules[__name__] = jobs\n",
+                                            False),
 }
 
 
