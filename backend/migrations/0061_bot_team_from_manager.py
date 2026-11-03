@@ -11,20 +11,28 @@ group:
   follows that chain, as it always did.
 
 Left alone: a bot that names a team, an empty one too (`""` keeps a bot out of groups on purpose, and the groups migration
-wrote it for bots it found in none); the company's own bots and helpers (backend/groups.py `SYSTEM_BOTS`, the helper cards
-in templates/catalog); the inbox bots; a bot whose manager is in no group.
+wrote it for bots it found in none); the company's own bots and helpers (backend/groups.py `SYSTEM_BOTS`, the Assistant of
+this install (`TICO_ASSISTANT_BOT`, else `coo`), the helper cards in templates/catalog); the inbox bots; a bot whose manager
+is in no group.
 
 The rules are copied here on purpose: a migration records the rules as they were when it ran. Run again it changes
 nothing, because every bot it could move has a team now.
 """
 import json
+import os
 
-# The company's own bots, by slug (backend/groups.py SYSTEM_BOTS, and the COO the Assistant is by default), and the
-# templates that sit outside groups: the built-in ones and the helpers (templates/catalog/*/card.yaml, kind: helper).
+# The company's own bots, by slug (backend/groups.py SYSTEM_BOTS), and the templates that sit outside groups: the built-in
+# ones and the helpers (templates/catalog/*/card.yaml, kind: helper). The Assistant is not in the list: it is the install's
+# own (backend/config.py `assistant_bot`), read in `_assistant`, as backend/groups.py `outside` reads it.
 BUILT_IN_SLUGS = frozenset({"assistant", "botops", "librarian", "goal-manager", "health-monitor", "task-manager",
-                            "bookkeeper", "tico-counsel", "coo"})
+                            "bookkeeper", "tico-counsel"})
 OUTSIDE_TEMPLATES = frozenset({"assistant", "botops", "librarian", "goal-manager", "bookkeeper", "health-monitor",
                                "inbox", "task-manager", "tico-counsel"})
+
+
+def _assistant():
+    """The install's Assistant slug: TICO_ASSISTANT_BOT, else `coo`."""
+    return os.environ.get("TICO_ASSISTANT_BOT", "").strip() or "coo"
 
 
 def _text(value):
@@ -108,11 +116,13 @@ def up(conn):
         return                                   # a new file: the module's tables are made after the migrations
     groups, roots, people, inbox = _roster(conn)
     bots = _bots(conn)
+    assistant = _assistant()
     moves = []
     for bot, entry in bots.items():
         if entry["config"] is None or entry["stored"] or entry["named"] is not None:
             continue                             # a bot that has a team, or whose config this cannot read
-        if entry["slug"] in BUILT_IN_SLUGS or entry["template"] in OUTSIDE_TEMPLATES or bot in inbox:
+        if (entry["slug"] in BUILT_IN_SLUGS or assistant in (entry["slug"], bot)
+                or entry["template"] in OUTSIDE_TEMPLATES or bot in inbox):
             continue
         if bot in roots:
             team, through_person = roots[bot], False

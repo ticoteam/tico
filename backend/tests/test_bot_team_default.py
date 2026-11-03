@@ -185,3 +185,24 @@ def test_migration_on_a_new_file_with_no_tables_does_nothing():
     conn = sqlite3.connect(":memory:")
     MIGRATION.up(conn)
     assert conn.execute("SELECT count(*) FROM sqlite_master").fetchone()[0] == 0
+
+
+def test_migration_keeps_the_install_assistant_out_of_groups_even_without_its_template(monkeypatch):
+    """With TICO_ASSISTANT_BOT=ace the Assistant is `ace` (Groups.outside reads the same setting). A template-less `ace`
+    under a person in a group stays out, and `coo` is an ordinary bot on that install."""
+    monkeypatch.setenv("TICO_ASSISTANT_BOT", "ace")
+    conn = _db()
+    _bot(conn, "ace", "human:arthur", slug="ace")
+    _bot(conn, "coo", "human:arthur", slug="coo")
+    MIGRATION.up(conn)
+    state = _state(conn)
+    assert state["ace"] == (None, "<absent>")
+    assert state["coo"] == ("engineering", "engineering")
+
+
+def test_migration_keeps_coo_out_of_groups_when_no_assistant_is_named(monkeypatch):
+    monkeypatch.delenv("TICO_ASSISTANT_BOT", raising=False)
+    conn = _db()
+    _bot(conn, "coo", "human:arthur", slug="coo")
+    MIGRATION.up(conn)
+    assert _state(conn)["coo"] == (None, "<absent>")
