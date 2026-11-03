@@ -248,10 +248,11 @@ def test_a_copy_of_a_database_from_before_the_history_move_keeps_its_change_logs
     and a deleted task's trash snapshot of them), so the move still has every row to copy into history_events."""
     import json
     from backend.tests.test_history_events import OLD, migration
+    stamp = "2020-01-01T00:00:00.000000Z"
     source = source_db(tmp_path)
     snapshot = json.dumps({"rows": {"task_events": [{"_rowid": 1, "id": "t9", "task_id": "task-9", "field": "status",
                                                      "old": "open", "new": "done", "actor": "human:ana",
-                                                     "created_at": OLD}]}})
+                                                     "created_at": stamp}]}})
     with closing(sqlite3.connect(source)) as c, c:
         # Before 0061: no history table, the five logs are there, and the migration has not run.
         c.execute("DROP TABLE history_events")
@@ -262,9 +263,9 @@ def test_a_copy_of_a_database_from_before_the_history_move_keeps_its_change_logs
                   "'done','',NULL,NULL)")
         c.execute("INSERT INTO task_events VALUES('t2','task-1',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)")
         c.execute("INSERT INTO goal_events(id, goal_id, created_at, actor, field, old, new, note) "
-                  "VALUES('g1','goal-1',?,'human:ana','status','on_track','at_risk','')", (OLD,))
+                  "VALUES('g1','goal-1',?,'human:ana','status','on_track','at_risk','')", (stamp,))
         c.execute("INSERT INTO task_trash(task_id, number, title, status, private, deleted_at, deleted_by, rows) "
-                  "VALUES('task-9', 9, 'Gone', 'done', 1, ?, 'human:ana', ?)", (OLD, snapshot))
+                  "VALUES('task-9', 9, 'Gone', 'done', 1, ?, 'human:ana', ?)", (stamp, snapshot))
     dest = tmp_path / "copy" / "hub.sqlite"
     removed, loose = devcopy.build(source, dest, days=30)
     assert loose == [] and not {"task_events", "goal_events", "task_trash"} & set(removed)
