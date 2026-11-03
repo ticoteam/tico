@@ -372,8 +372,9 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None, card_direct
     # A turn's direct change runs only where the gate would admit the run itself (the Assistant's own switches, a credential,
     # SQL, token or support grant, a sign-in or a removal are the person's own tap): those stay Confirm cards.
     if direct_ok:
-        from .assistant import admits_on_turn
-        direct_ok = admits_on_turn(e.method, "/api/v2/" + request["path"], body)
+        from .assistant import admits_on_turn, needs_persons_tap
+        direct_ok = (admits_on_turn(e.method, "/api/v2/" + request["path"], body)
+                     and not needs_persons_tap(e.method, "/api/v2/" + request["path"]))
         card_direct = not direct_ok
     needs_card = kind == "confirm" or (kind == "direct" and card_direct)
     if direct_ok and not (tried and tried[0]):

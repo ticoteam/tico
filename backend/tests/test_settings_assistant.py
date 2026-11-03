@@ -296,4 +296,4 @@ def test_every_setting_does_for_the_assistant_what_it_does_for_botops(api, role)
             unproven[e.key] = got
     assert not wrong, "\n".join(wrong)
     new = {k: v for k, v in unproven.items() if k not in parity.NOT_PROVEN}
-    assert not new, new
+    assert not new, {k: f"{v} [{parity.LAST.get(k, '')}]" for k, v in new.items()}

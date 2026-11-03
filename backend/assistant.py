@@ -686,6 +686,18 @@ def catalogue_card(method, path):
             and valid_operation(method, path, None, "botops"))
 
 
+# Routes whose handler accepts only the person's own tap (`owner(request, tap=True)`, backend/tico_storage.py): an
+# Assistant or BotOps run of them is refused, so on a turn they are a Confirm card, never a direct run.
+TAP_ONLY_ROUTES = [(m, re.compile(p)) for m, p in (
+    ("POST", r"/api/v2/system/storage/move"),
+)]
+
+
+def needs_persons_tap(method, path):
+    path = canonical(path)
+    return any(m == method and p.fullmatch(path or "") for m, p in TAP_ONLY_ROUTES)
+
+
 def valid_operation(method, path, settings=None, proposer="assistant"):
     path = normalize_path(path)
     if not path or (settings is not None and path == "/api/v2/chat/" + settings.assistant_bot):
