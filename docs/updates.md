@@ -285,7 +285,7 @@ Every computer runs the Rust runner (`tico-runner`, from `runner-rs/`). The laun
 - **Mac or Linux checkout:** a checkout on a release tag downloads that release's `tico-runner-<os>-<arch>.gz` from
   GitHub, checked against the release's `tico-runner-SHA256SUMS`, into `runner-rs/target/dist/`. Any other checkout
   with `cargo` on PATH builds it (`cargo build --release`). `scripts/tico install` and every update get the binary
-  before the runner restarts (`python -m runner.engine prepare`); an update that cannot get it backs out and the
+  before the runner restarts (`python -m runner_support.engine prepare`); an update that cannot get it backs out and the
   runner keeps running the old release.
 
 A binary is only run when it was built from this checkout's `runner-rs` sources. When there is none and none can be
@@ -293,7 +293,13 @@ had, the runner does not start: it logs why and launchd or systemd tries again. 
 not drive is not ready, with the reason on that bot; the other bots on the computer run.
 
 The Python runner is gone. `"engine": "python"` in `runner.json` and `TICO_RUNNER_ENGINE=python` are ignored. Python
-still runs the side jobs (connectors, Close calls, meeting importers), the catalog set-up and the update process.
+still runs the side jobs (connectors, Close calls, meeting importers), the catalog set-up and the update process, from
+`runner_support/`. A small `runner/` package forwards the old `python -m runner ...` commands and imports there, so
+launchd plists, systemd units and cloud machine images written before the move, and a runner or update process of an
+earlier release still running while its checkout moves, keep working. What is saved on a computer and started later
+keeps the old names on purpose: `scripts/tico install` still writes `python -m runner --config <path> <job>` into the
+launchd plists and systemd units, and a cloud machine image still boots `python -m runner.cloud_machine boot`. So a
+computer moved back to a release from before the move (hosted staff can set an older target) still starts.
 
 ## A Docker runner
 

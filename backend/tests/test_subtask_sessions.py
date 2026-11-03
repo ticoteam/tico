@@ -4,7 +4,7 @@ import json
 
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
-from runner import state
+from runner_support import state
 
 
 def tasks(api, *specs):
