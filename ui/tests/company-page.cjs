@@ -207,7 +207,7 @@ async function shotPart(page, id, name) {
     // Overview as it always was: no tab, no way in by address, and search doesn't offer it.
     const tab = await open(browser, {viewer: 'erin', hash: '#/overview', ready: false});
     assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Company', 'Campus', 'Graph']);
-    assert.equal(await tab.page.evaluate(() => searchEntries().some(x => x.label === 'Company page')), false);
+    assert.equal(await tab.page.evaluate(() => searchEntries().some(x => x.label === 'Share')), false);
     await tab.page.evaluate(h => { location.hash = h; }, '#/overview/company-page');
     await tab.page.locator('#cp-tab-body .empty-state').waitFor();
     assert.equal(await tab.page.locator('.cp-frame, [data-cp-preview], [data-cp-share], [data-cp-manage]').count(), 0, 'no frame, no controls');
@@ -224,7 +224,7 @@ async function shotPart(page, id, name) {
     assert.match(await page.locator('#cp-page').innerText(), /Owners and admins only/);
     await page.evaluate(h => { location.hash = h; }, '#/overview/company-page');
     await page.locator('#cp-tab-body .empty-state').waitFor();
-    assert.deepEqual(await tabLabels(page), ['Mine', 'Company', 'Campus', 'Graph', 'Company page']);
+    assert.deepEqual(await tabLabels(page), ['Mine', 'Company', 'Campus', 'Graph', 'Share']);
     assert.equal(await page.locator('.cp-frame').count(), 0, 'no frame');
     assert.equal(await page.locator('.cp-tab-acts').isVisible(), false, 'no controls');
     assert.deepEqual(hub.previews, []);
@@ -621,15 +621,15 @@ async function shotPart(page, id, name) {
   // Overview's tab: the page in a sandboxed frame, the share panel, Manage and back.
   {
     const {page, hub, errors, natives, close} = await open(browser, {hash: '#/overview', theme: 'dark', ready: false});
-    assert.deepEqual(await tabLabels(page), ['Mine', 'Company', 'Campus', 'Graph', 'Company page']);
-    assert.equal(await page.evaluate(() => searchEntries().find(x => x.label === 'Company page')?.href), '#/overview/company-page', 'search finds it');
-    await page.locator('.dash-tabs a', {hasText: 'Company page'}).click();
+    assert.deepEqual(await tabLabels(page), ['Mine', 'Company', 'Campus', 'Graph', 'Share']);
+    assert.equal(await page.evaluate(() => searchEntries().find(x => x.label === 'Share')?.href), '#/overview/company-page', 'search finds it');
+    await page.locator('.dash-tabs a', {hasText: 'Share'}).click();
     const frame = page.locator('iframe.cp-frame');
     await frame.waitFor();
     assert.equal(await frame.getAttribute('sandbox'), 'allow-scripts', 'the frame gets no origin');
     assert.match(await frame.getAttribute('src'), /\/api\/v2\/company-page\/preview\?audience=a-board&theme=dark$/, 'the first audience on, in the app\'s theme');
     assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate(a => a.classList.contains('cur')), 'Overview stays lit');
-    assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Company page');
+    assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Share');
     const pick = page.locator('.cp-tab-acts select');
     await pick.selectOption('a-pub');
     await page.waitForFunction(() => document.querySelector('iframe.cp-frame')?.src.includes('audience=a-pub'));

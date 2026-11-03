@@ -25,7 +25,7 @@ const dashApi = place => '/v2/places/' + encodeURIComponent(place);
 const dashReadUrl = state => dashApi(state.place) + (state.month ? '?month=' + encodeURIComponent(state.month) : '');
 const dashKey = state => state.place + (state.month ? '?month=' + state.month : '');
 const dashTabsHTML = on => `<nav class="tabs slim strat-tabs dash-tabs" aria-label="Overview">${
-  [['mine', HOME, 'Mine'], ['dashboard', OVERVIEW, 'Company'], ['campus', OVERVIEW_CAMPUS, 'Campus'], ['graph', OVERVIEW_GRAPH, 'Graph'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Company page']] : [])].map(([id, href, label]) =>
+  [['mine', HOME, 'Mine'], ['dashboard', OVERVIEW, 'Company'], ['campus', OVERVIEW_CAMPUS, 'Campus'], ['graph', OVERVIEW_GRAPH, 'Graph'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Share']] : [])].map(([id, href, label]) =>
     `<a href="${href}"${on === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const dashNum = n => n == null ? '–' : Number(n).toLocaleString(undefined, {maximumFractionDigits: 2});
 const dashMoney = n => n == null ? '–' : '$' + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
