@@ -81,8 +81,10 @@ server is upgraded; the runner retains those reports for retry.
 
 **Dream**, at the top of the Learnings panel, asks the bot to tidy its own instructions and memory, as Claude Code's
 `/dream` does: orient, gather what happened in its chats and tasks since its last dream (two weeks back the first
-time), consolidate, then prune and index, keeping the working rules short. Midway it may ask the person who started
-it up to three questions in one message, and waits for the answer. A stateless bot keeps no memory and has nothing
+time), consolidate, then prune and index, keeping the working rules short. It may change any of those files, AGENT.md
+included, without asking. Midway it may ask the person who started it up to three questions in one message, about the
+business only (what to do, for whom, by which rule or priority), never for permission or about the dream itself, and
+waits for the answer. A stateless bot keeps no memory and has nothing
 to dream about (409).
 
 A dream is an ordinary task (`backend/dream.py`): the bot owns it, the person who clicked asked for it, it carries the
@@ -93,7 +95,7 @@ event, not the label, is what makes a task a dream, since anyone can label a tas
 bot's own model, and its session resumes after the question. The question is the task's one `hub_task_ask`; ask
 ingest never judges it, since the person started the dream to be asked. They answer it in the panel, on the bot's
 page, where it shows until answered, or in Needs you; the answer wakes the bot as any answer does. The bot ends with
-one memory commit, `Dream: ...`, and marks the task done with a short summary. The panel then shows that summary and
+one commit of everything it changed, `Dream: ...`, and marks the task done with a short summary. The panel then shows that summary and
 the commits whose source is the dream's task, and **Wake up** returns to the history. **Stop** closes the task.
 
 `GET` answers `{dream: {task, status, state, questions, summary, closed_at, started_at}}` for the bot's open dream

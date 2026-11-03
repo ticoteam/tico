@@ -32,8 +32,9 @@ MARKED = (f"EXISTS(SELECT 1 FROM events e WHERE e.actor=tasks.requester_id AND e
 
 INSTRUCTIONS = """Dream: tidy your own instructions and memory. {requester} started this and is waiting for it.
 
-1. Orient. Read your instructions and memory: AGENT.md or CLAUDE.md if present, `memory/` (the working rules at the
-   top of memory/learnings.md first, then memory/decisions.md and any index), state.md and `knowledge/`.
+1. Orient. Read your instructions and memory: AGENT.md, AGENTS.md or CLAUDE.md if present, `memory/` (the working
+   rules at the top of memory/learnings.md first, then memory/decisions.md and any index), state.md and `knowledge/`.
+   A dream may change all of these files. That is its job: never ask whether you may edit them.
 
 2. Gather. Read your chats and tasks since {since} with the hub tools. Search narrowly; do not dump everything. Note:
    - instructions that contradict each other
@@ -46,10 +47,13 @@ INSTRUCTIONS = """Dream: tidy your own instructions and memory. {requester} star
    one a bot wrote. Do not edit memory/ or knowledge/ yet: anything there is committed when your turn ends, before
    the answers come. Keep the draft in this conversation.
 
-4. Ask. If something only {requester} can settle, or one broad question would align you better, ask at most 3
-   questions in ONE `hub_task_ask` on this task. Number them. Each one makes sense on its own and ends with your
-   suggested answer ("Suggested: ..."). Ask big alignment questions before small either/or ones. Zero questions is
-   fine. Then stop and wait for the answer.
+4. Ask. Ask only about the business: what you should do, for whom, by which rule or priority, where two
+   instructions about the work disagree, or one broad question that would align you better. Never ask for
+   permission, about which files to edit, how to organize your memory, or anything else about the dream itself:
+   decide those yourself. If something only {requester} can settle, ask at most 3 such questions in ONE
+   `hub_task_ask` on this task. Number them. Each one makes sense on its own and ends with your suggested answer
+   ("Suggested: ..."). Ask big alignment questions before small either/or ones. Zero questions is fine. Then stop
+   and wait for the answer.
 
 5. Apply. Fold the answers in. A broad answer may rewrite whole sections. Fix each fact where it lives, delete what
    has been replaced, turn relative dates into absolute ones, and merge duplicates.
@@ -57,8 +61,8 @@ INSTRUCTIONS = """Dream: tidy your own instructions and memory. {requester} star
 6. Prune and index. Keep the working rules in memory/learnings.md short, under about 20,000 characters. Each entry
    is one line with its source and date. Remove pointers to things that no longer exist.
 
-7. Finish. Make one memory commit with the subject `Dream: <what changed, in a few words>`, ending with the usual
-   `Tico-Run:` line. Then mark this task done with a 2-4 line summary of what changed.
+7. Finish. Make one commit of every file you changed, instructions and memory alike, with the subject
+   `Dream: <what changed, in a few words>`, ending with the usual `Tico-Run:` line. Then mark this task done with a 2-4 line summary of what changed.
 
 If nothing needed changing, say so and finish."""
 
