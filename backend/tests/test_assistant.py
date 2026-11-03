@@ -1,6 +1,6 @@
-"""The Assistant (backend/assistant.py, docs/assistant.md): a private room per person, a fast path that
-needs no bot turn, a bot turn that acts as the person and never more, and side effects that wait for the
-person's own click."""
+"""The Assistant (backend/assistant.py, docs/assistant.md): a private room per person, every message a bot turn
+that reads it, a bot turn that acts as the person and never more, and side effects that wait for the person's own
+click."""
 
 import hashlib
 
@@ -29,8 +29,7 @@ def assistant_turn(api, person, text="Please plan my week around the launch", bu
     r = runner(api)
     assign(api, r, "coo")
     ready(api, r, ["coo"])
-    said = say(api, text, person)
-    assert said["fast"] is False
+    say(api, text, person)
     body = {} if busy_bots is None else {"busy_bots": busy_bots}
     return r, post(api, "jobs/claim", body, token=r["token"])["attempt"]
 
@@ -596,7 +595,7 @@ def test_the_assistant_decides_approvals_in_bulk_once_the_person_turns_it_on(api
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "read-back"}, token=r["token"])
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Want me to email this?",
                                                      "last_seq": 0}, token=r["token"])
-    assert say(api, "yes", "ben-test")["fast"] is False
+    assert say(api, "yes", "ben-test")
     attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
     token = attempt["token"]
     # On his yes: every old batch on the list, no card and no click each; nothing else.
@@ -797,131 +796,12 @@ def test_a_close_card_written_as_status_closed_runs_as_a_close(api):
         assert [H.task(c, t["id"])["status"] for t in tasks] == ["closed"] * 3
 
 
-def no_decisions(monkeypatch):
-    calls = []
-    async def unavailable(*args, **kwargs):
-        calls.append(args)
-        return None
-    monkeypatch.setattr(assistant, "decide", unavailable)
-    return calls
-
-
-@pytest.mark.parametrize("text", [
-    "what kind of task types do we use here?",
-])
-def test_task_types_question_is_answered_from_the_api_with_no_model_or_job(api, monkeypatch, text):
-    post(api, "task-types", {"name": "Fixture repairs", "steps": [{"name": "Triage", "status": "open"}]})
-    decisions = no_decisions(monkeypatch)
-    before = jobs(api)
-    result = post(api, "assistant/messages", {"text": text}, key="task-types")
-    assert result["fast"] is True
-    assert not decisions, "A simple inventory must not wait for an intent provider"
-    answer = result["reply"]["body"]
-    assert "General" in answer and "Fixture repairs" in answer
-    assert "From [Task types and steps]" not in answer
-    # Dev tickets is an example in the documentation, not in this company's inventory.
-    assert "Dev tickets" not in answer
-    retry = post(api, "assistant/messages", {"text": text}, key="task-types")
-    assert retry["reply"]["id"] == result["reply"]["id"]
-    messages = room(api)["messages"]
-    assert len(messages) == 2
-    assert jobs(api) == before
-
-
-def test_a_greeting_is_answered_at_once_with_no_model_or_job(api, monkeypatch):
-    decisions = no_decisions(monkeypatch)
-    before = jobs(api)
-    result = post(api, "assistant/messages", {"text": "hi"}, key="greeting")
-    assert result["fast"] is True and result["reply"]["body"]
-    assert not decisions, "A simple greeting must not wait for an intent provider"
-    retry = post(api, "assistant/messages", {"text": "hi"}, key="greeting")
-    assert retry["reply"]["id"] == result["reply"]["id"]
-    assert len(room(api)["messages"]) == 2 and jobs(api) == before
-    # The canned line once per chat: a second "hi" is the model's to answer, not the same line again.
-    again = post(api, "assistant/messages", {"text": "hi"}, key="greeting-again")
-    assert again["fast"] is False and again["reply"] is None
-    assert [m["body"] for m in room(api)["messages"]].count(result["reply"]["body"]) == 1
-
-
-def test_a_greeting_after_real_work_goes_to_the_model(api, monkeypatch):
-    no_decisions(monkeypatch)
-    assert post(api, "assistant/messages", {"text": "plan tomorrow's launch with the venue"}, key="work")["fast"] is False
-    later = post(api, "assistant/messages", {"text": "hi"}, key="hi-later")
-    assert later["fast"] is False and later["reply"] is None
-
-
-@pytest.mark.parametrize("status_code", [403])
-def test_task_types_the_api_refuses_are_not_shown_as_none(api, monkeypatch, status_code):
-    decisions = no_decisions(monkeypatch)
-    calls = []
-
-    async def rejected(_self, method, path, **kwargs):
-        calls.append((method, path))
-        return type("Response", (), {"status_code": status_code})()
-
-    monkeypatch.setattr(assistant.Internal, "call", rejected)
-    before = jobs(api)
-    result = post(api, "assistant/messages", {"text": "what task types do we use?"}, key="task-types-refused")
-    assert result["fast"] is True
-    assert result["reply"]["body"] == "I couldn't read the task types for this Tico workspace. Please try again later."
-    assert calls == [("GET", "task-types")]
-    assert not decisions
-    assert jobs(api) == before
-
-
-def test_how_to_questions_get_the_docs_and_a_greeting_with_work_goes_to_the_model(api, monkeypatch):
-    result = post(api, "assistant/messages", {"text": "How do I create a task type?"})
-    assert result["fast"] is True and result["intent"] == "help"
-    assert "From [" in result["reply"]["body"]
-    async def no_decision(*args, **kwargs):
-        return None
-    monkeypatch.setattr(assistant, "decide", no_decision)
-    result = post(api, "assistant/messages", {"text": "Hi, please plan tomorrow's launch"})
-    assert result["fast"] is False
-
-
-@pytest.mark.parametrize("text", [
-    "what task types do we use and create one?",
-])
-def test_task_types_question_that_also_asks_for_a_change_goes_to_the_model(text):
-    assert assistant.route(text) == (None, None)
-
-
-@pytest.mark.parametrize("text", [
-    "I see a ton of stuck tasks. What is going on and how can I fix?",
-    "how do I fix the stuck tasks?",
-    "why is nothing moving",
-])
-def test_a_problem_to_look_into_goes_to_the_model_not_a_docs_excerpt(api, monkeypatch, text):
-    """Nov 2: "I see a ton of stuck tasks. What is going on and how can I fix?" got an instant "From [Work that is
-    waiting]" excerpt. A problem needs the company's own state, so the model takes it, whatever the intent check says."""
-    async def says_help(*args, **kwargs):
-        return "help"
-    monkeypatch.setattr(assistant, "decide", says_help)
-    result = post(api, "assistant/messages", {"text": text})
-    assert result["fast"] is False and result["reply"] is None
-
-
-def test_a_model_picked_help_intent_is_not_answered_from_the_docs(api, monkeypatch):
-    real_get, real_call, asked = assistant.Internal.get, assistant.Internal.call, []
-
-    async def get(self, path, /, **params):
-        return {"configured": True} if path == "decisions" else await real_get(self, path, **params)
-
-    async def call(self, method, path, **kwargs):
-        if path != "decisions":
-            return await real_call(self, method, path, **kwargs)
-        asked.append(path)
-        return type("Response", (), {"status_code": 200, "json": lambda _r: {
-            "answers": {"intent": {"choice": "help", "confidence": 0.95}}}})()
-    monkeypatch.setattr(assistant.Internal, "get", get)
-    monkeypatch.setattr(assistant.Internal, "call", call)
-    result = post(api, "assistant/messages", {"text": "tasks seem slow to start these days"})
-    assert asked, "the intent check ran"
-    assert result["fast"] is False and result["reply"] is None
-
-
-def test_a_docs_excerpt_leaves_code_blocks_out():
-    text, _ = assistant.help_answer("how do I set a task to waiting on a blocker")
-    assert text and "```" not in text and "hub task relate --kind" not in text
-
+@pytest.mark.parametrize("text", ["help", "what is waiting on me?", "open tasks"])
+def test_a_question_the_old_lookups_answered_starts_a_bot_turn(api, text):
+    """No canned answer: "help", "what is waiting on me" and "open tasks" are read by the model in a bot turn."""
+    r = runner(api)
+    assign(api, r, "coo")
+    ready(api, r, ["coo"])
+    said = say(api, text)
+    assert "reply" not in said and "fast" not in said
+    assert post(api, "jobs/claim", {}, token=r["token"])["attempt"] is not None

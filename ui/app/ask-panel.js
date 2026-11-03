@@ -330,7 +330,7 @@ async function askLoad(chat) {
       const r = await cloudCompose('/v2/assistant/messages', {text: text || 'Attached files.', page: askPage()}, files);
       CHAT_CACHE.delete(info.bot);                    // the Assistant page reads the conversation again when it opens
       if (!current()) return;
-      for (const m of [r.message, r.reply].filter(Boolean)) if (!messages.some(x => x.id === m.id)) messages.push(m);
+      if (!messages.some(x => x.id === r.message.id)) messages.push(r.message);
       if (r.message?.conversation_id && r.message.conversation_id !== info.room_id) { info.room_id = r.message.conversation_id; watch(); }
       pillAcknowledge(P, text, files); stickScroll(thread).toBottom(); draw();
       if (!es && !poll) watch();

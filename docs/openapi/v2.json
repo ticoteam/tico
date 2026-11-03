@@ -847,7 +847,7 @@
     },
     "/api/v2/assistant/messages": {
       "post": {
-        "summary": "Say something to the Assistant. A lookup is answered at once (fast: true, with the reply); anything else is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. `place: updates` (the Updates chat) always takes a turn, handed the recent updates the caller may read",
+        "summary": "Say something to the Assistant. It is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. `place: updates` (the Updates chat) is handed the recent updates the caller may read",
         "operationId": "sendAssistantMessage",
         "requestBody": {
           "content": {
@@ -41589,25 +41589,9 @@
         "properties": {
           "message": {
             "$ref": "#/components/schemas/Message"
-          },
-          "reply": {
-            "type": [
-              "object",
-              "null"
-            ]
-          },
-          "fast": {
-            "type": "boolean"
-          },
-          "intent": {
-            "type": [
-              "string",
-              "null"
-            ]
           }
         },
         "required": [
-          "fast",
           "message"
         ],
         "additionalProperties": true
