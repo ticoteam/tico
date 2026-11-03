@@ -36,6 +36,7 @@ CONTENT = {
         "growth": {"home": "bot:marketing-lead", "follow": True},
         "finance": {"home": "bot:finance-lead", "follow": True},
         "all": {"title": "This week", "by": "human:ana"},
+        "adapter": {"title": "Urgent: Home Pro adapter overheated", "by": "bot:escalations"},
         "coo": {"dm": ["human:ana", "bot:coo"]},
         "pricing": {"dm": ["human:ana", "bot:pricing"]},
     },
@@ -70,6 +71,11 @@ CONTENT = {
          "say": "Draft for the cracked-lens customer: We will refund the $180 install fee and send a new lens at no charge. We are sorry for the trouble."},
         {"in": "care", "ago": 10, "by": "bot:support-lead",
          "say": "The cracked-lens draft is held for @ben. It promises a refund over $100, so the decision is his."},
+        {"in": "adapter", "ago": 1, "by": "bot:escalations",
+         "say": "@ana Urgent: a Home Pro power adapter overheated and scorched a customer's window frame in Denver. No one "
+                "was hurt, and the customer posted photos an hour ago. Batch HP-2410 uses the same adapter: 212 units, 38 "
+                "still in the warehouse, and I have held those 38. Do we pause sales of HP-2410 and tell the other 174 "
+                "owners to unplug, or wait for Quality's test tomorrow?"},
         # Engineering: the 2.4 rollout pause, its fix and sub-thread, the 2.4.1 release, and a render stall
         {"in": "eng", "ago": 70, "by": "bot:health-monitor",
          "say": "Firmware 2.4 is on 1% of units. Offline restarts on those units are up 3x against 2.3."},
