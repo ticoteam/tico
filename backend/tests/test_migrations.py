@@ -250,3 +250,51 @@ def test_a_database_below_the_bridge_is_refused_before_anything_is_written(tmp_p
 def test_cloud_version_is_the_newest_cloud_step_store_writes():
     newest = max(int(n) for n in re.findall(r"INSERT INTO cloud_migrations VALUES\((\d+),", STORE_SOURCE.read_text()))
     assert migrations.CLOUD_VERSION == newest
+
+
+def _back_to_before(path, version):
+    """The file as it was before `version` ran: the migration rows from it on are forgotten, so the next boot runs them."""
+    with sqlite3.connect(path) as c:
+        c.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy_%'", (version,))
+
+
+def _shape(path):
+    """Each table's columns (an added column sits last, so not the CREATE text) and every other object's SQL."""
+    with sqlite3.connect(path) as c:
+        tables = {name: sorted(tuple(row)[1:] for row in c.execute(f'PRAGMA table_info("{name}")'))
+                  for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        return tables, sorted(c.execute("SELECT type,name,sql FROM sqlite_master WHERE type<>'table'").fetchall())
+
+
+def test_an_older_threads_shape_gets_the_missing_columns_tables_triggers_and_search_index_once(tmp_path):
+    """Migration 0044: the threads schema the modules used to make on every start. A file missing some of it (columns
+    added later, a helper table, an older trigger, the search index) ends with the shape a new file has, the new search
+    index holds the messages already there, and a second boot changes nothing."""
+    path = fresh(tmp_path)
+    new = _shape(path)
+    with sqlite3.connect(path) as c:
+        for table, column in (("calls", "finalized_at"), ("federation_states", "company"), ("inbound_inboxes", "audience"),
+                              ("org_rules", "where_terms"), ("slack_posts", "recipient_actor"),
+                              ("live_meetings", "thread_id")):
+            c.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+        c.execute("DROP TABLE thread_digests")
+        c.execute("DROP TABLE teammate_accesses")
+        c.execute("DROP TRIGGER threads_revisions_deleted")
+        c.execute("CREATE TRIGGER threads_revisions_deleted AFTER UPDATE OF deleted_at ON messages BEGIN SELECT 1; END")
+        for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'message_search_%'"
+                                 ).fetchall():
+            c.execute(f"DROP TRIGGER {name}")
+        c.execute("DROP TABLE message_search")
+        c.execute("DROP TABLE message_search_keys")
+        c.execute("INSERT INTO conversations(id,kind,created_at) VALUES('c-acme','direct','2026-01-01T00:00:00Z')")
+        c.execute("INSERT INTO messages(id,conversation_id,sender_id,kind,body,created_at) "
+                  "VALUES('m-acme','c-acme','human:ana','say','Acme quarterly memo','2026-01-01T00:00:00Z')")
+    _back_to_before(path, "0044")
+    boot(path)
+    once = snapshot(path)
+    assert _shape(path) == new
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT k.message_id FROM message_search JOIN message_search_keys k ON k.id=message_search.rowid "
+                         "WHERE message_search MATCH 'quarterly'").fetchall() == [("m-acme",)]
+    boot(path)
+    assert snapshot(path) == once

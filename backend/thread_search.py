@@ -17,85 +17,20 @@ that key, so no write scans the index.
 """
 
 import re
-import sqlite3
 
 HITS_MAX = 50             # hits in one page
 SCAN_BATCH = 200          # candidates read at a time
 SCAN_MAX = 2000           # candidates one page decides; a full scan with hits still offers the next page
 MATCH_WORDS = 16          # words a query may use; the rest are dropped
-TEXT_MAX = 20_000         # characters of a body that are indexed
+TEXT_MAX = 20_000         # characters of a body that are indexed (written into migration 0044's triggers)
 EXCERPT_WORDS = 16        # words of text each hit shows
 WORD = re.compile(r"\w+")
 
-SEARCHED_COLUMNS = {"id", "body", "deleted_at", "refs"}   # the `messages` columns the index and its triggers read
-
-KEYS = ("CREATE TABLE IF NOT EXISTS message_search_keys(id INTEGER PRIMARY KEY AUTOINCREMENT, "
-        "message_id TEXT NOT NULL UNIQUE)")
-# Created apart so a SQLite built without FTS5 still starts: search then finds nothing (ensure returns False).
-FTS = ("CREATE VIRTUAL TABLE IF NOT EXISTS message_search USING fts5(body, message_id UNINDEXED, "
-       "tokenize='porter unicode61')")
-
-
-def _searchable(row):
-    """SQL: a `messages` row (alias `row`) that has text, is not deleted and is not a carrier."""
-    carries = f"(CASE WHEN json_valid({row}.refs) THEN json_extract({row}.refs,'$.carries') END)"
-    return f"{row}.body IS NOT NULL AND {row}.body<>'' AND {row}.deleted_at IS NULL AND {carries} IS NULL"
-
-
-def _reindex(row):
-    """Statements that index `row` (a trigger's NEW, or the alias `m`) when it is searchable."""
-    return [f"INSERT OR IGNORE INTO message_search_keys(message_id) SELECT {row}.id WHERE {_searchable(row)}",
-            f"INSERT INTO message_search(rowid, body, message_id) SELECT k.id, substr({row}.body,1,{TEXT_MAX}), {row}.id "
-            f"FROM message_search_keys k WHERE k.message_id={row}.id AND {_searchable(row)}"]
-
-
-_UNINDEX = ("DELETE FROM message_search WHERE rowid=(SELECT id FROM message_search_keys WHERE message_id={id})")
-
-# (trigger name, event on messages, body). A trigger whose SQL changes is replaced at the next ensure().
-TRIGGERS = [
-    ("message_search_insert", "AFTER INSERT ON messages", _reindex("NEW")),
-    ("message_search_update", "AFTER UPDATE OF body, deleted_at, refs ON messages",
-     [_UNINDEX.format(id="OLD.id")] + _reindex("NEW")),
-    ("message_search_delete", "AFTER DELETE ON messages",
-     [_UNINDEX.format(id="OLD.id"), "DELETE FROM message_search_keys WHERE message_id=OLD.id"]),
-]
-
-
-def _trigger_sql(name, event, body):
-    return f"CREATE TRIGGER {name} {event} BEGIN {'; '.join(body)}; END"
-
 
 def ensure(c):
-    """Idempotent. Creates the key table, the index and its triggers, and fills the index from existing messages the
-    first time it is made. Returns False when this SQLite has no FTS5 or there is no messages table yet."""
-    tables = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if "messages" not in tables:
-        return False
-    # The app installs its routes before Store.initialize runs the migrations, so an upgraded database can still have
-    # the old column names here (refs_json before the cleanup's rename to refs). Wait for the migrated schema; the
-    # first search after it makes the index.
-    if not SEARCHED_COLUMNS <= {row[1] for row in c.execute("PRAGMA table_info(messages)")}:
-        return False
-    existed = "message_search" in tables
-    c.execute(KEYS)
-    try:
-        c.execute(FTS)
-    except sqlite3.OperationalError:
-        return False
-    installed = {row[0]: row[1] for row in c.execute(
-        "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND name LIKE 'message\\_search\\_%' ESCAPE '\\'")}
-    for name, event, body in TRIGGERS:
-        sql = _trigger_sql(name, event, body)
-        if installed.get(name) == sql:
-            continue
-        c.execute(f"DROP TRIGGER IF EXISTS {name}")
-        c.execute(sql)
-    if not existed:
-        c.execute(f"INSERT OR IGNORE INTO message_search_keys(message_id) SELECT m.id FROM messages m "
-                  f"WHERE {_searchable('m')} ORDER BY m.rowid")
-        c.execute(f"INSERT INTO message_search(rowid, body, message_id) SELECT k.id, substr(m.body,1,{TEXT_MAX}), m.id "
-                  f"FROM message_search_keys k JOIN messages m ON m.id=k.message_id WHERE {_searchable('m')}")
-    return True
+    """Whether the index is there to search: migration 0044 makes it, its key table and its triggers, and fills it from
+    the messages a file already has. False on a SQLite built without FTS5 (search then finds nothing)."""
+    return c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_search'").fetchone() is not None
 
 
 def match_expression(query):

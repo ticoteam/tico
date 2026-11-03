@@ -1,10 +1,14 @@
 """Thread message search: the FTS5 index follows edits and deletes, carriers stay out, and a hidden thread or message is
 never selected, so nothing about it shows."""
 
+import importlib
 import sqlite3
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import thread_search as search
+
+# The index, its key table and triggers are made by this migration (backend/migrations/0044_native_threads_schema.py).
+SCHEMA = importlib.import_module("backend.migrations.0044_native_threads_schema")
 
 # The visibility a viewer gets in these tests: company threads only, and never a message from one actor.
 THREADS = "cv.audience='company'"
@@ -20,6 +24,8 @@ def database():
           refs TEXT, created_at TEXT, deleted_at TEXT);
         INSERT INTO conversations VALUES ('t-open', 'Budget', 'company'), ('t-private', 'Launch', 'members');
     """)
+    assert not search.ensure(c)
+    assert SCHEMA.search_schema(c)
     assert search.ensure(c)
     return c
 
@@ -105,7 +111,7 @@ def test_query_punctuation_never_reaches_match_as_syntax():
     assert search.match_expression('a "b" c-d') == '"a"* AND "b"* AND "c"* AND "d"*'
 
 
-def test_ensure_fills_an_index_from_existing_messages_and_keeps_it():
+def test_the_migration_fills_a_new_index_from_existing_messages_and_a_second_run_keeps_it():
     c = sqlite3.connect(":memory:")
     c.row_factory = sqlite3.Row
     c.executescript("""
@@ -115,16 +121,17 @@ def test_ensure_fills_an_index_from_existing_messages_and_keeps_it():
         INSERT INTO conversations VALUES ('t-open', 'Budget', 'company');
         INSERT INTO messages VALUES ('old', 't-open', 'human:ana', 'Old budget memo', NULL, '2026-10-01', NULL);
     """)
-    assert search.ensure(c)
+    assert SCHEMA.search_schema(c)
     assert ids(find(c, "memo")) == ["old"]
     before = c.execute("SELECT COUNT(*) FROM message_search").fetchone()[0]
-    assert search.ensure(c)
+    assert SCHEMA.search_schema(c)
     assert c.execute("SELECT COUNT(*) FROM message_search").fetchone()[0] == before == 1
     assert ids(find(c, "memo")) == ["old"]
 
 
-def test_ensure_waits_for_the_renamed_columns_on_an_upgraded_database():
-    """v0.5.54: the app installs routes before Store.initialize renames refs_json to refs; the boot must not crash."""
+def test_ensure_makes_nothing_on_an_upgraded_database_before_its_migrations():
+    """v0.5.54: the app installs routes before Store.initialize renames refs_json to refs; the boot must not crash.
+    ensure only reports: nothing is made until the migration (after the rename) makes and fills the index."""
     c = sqlite3.connect(":memory:")
     c.row_factory = sqlite3.Row
     c.executescript("""
@@ -137,6 +144,7 @@ def test_ensure_waits_for_the_renamed_columns_on_an_upgraded_database():
     assert not search.ensure(c)
     assert not c.execute("SELECT name FROM sqlite_master WHERE name LIKE 'message_search%'").fetchall()
     c.execute("ALTER TABLE messages RENAME COLUMN refs_json TO refs")
+    assert SCHEMA.search_schema(c)
     assert search.ensure(c)
     assert ids(find(c, "memo")) == ["old"]
 
