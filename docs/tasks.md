@@ -1197,9 +1197,11 @@ idle; **Defer** wakes nobody and goes in with the bot's next turn on this task, 
 under it (30m to 7d, or Never; 24h unless picked). A Defer sent while the bot works on this task goes in queued; a turn
 on another task does not count. **Set as goal**, apart in the menu, makes the text the goal of the bot's session for
 this task, as `/goal` does in a thread (no files, not public; [chat goals](chat-goals.md)). Only someone on the task (its
-owner, requester or a mover) may steer, queue or set the goal; anyone else may defer. The caret opens the ways, and the
-choice is kept per task in this browser. Only a choice made there is sent: with none, the comment goes the way the
-paragraph on comments above says. Before you send, the box says what the chosen way does, and after, if the server
+owner, requester or a mover) may steer, queue or set the goal; anyone else may defer. Send's icon shows the way, and the caret
+(or a right-click or long press on Send) opens the ways. The web always sends the shown way: your kept way
+(`compose.send_way`, [Steer, queue or defer](using-tico.md#steer-queue-or-defer)), or the nearest one you may use
+here (Steer becomes Queue; otherwise Defer). Set as goal is for one comment. A comment that names no way (the API, CLI
+or MCP) goes the way the paragraph on comments above says. Before you send, the box says what the chosen way does, and after, if the server
 sent it another way (a defer that rode along). With no bot on the task (everyone on it is a person) the send is a plain arrow, and the box says no bot gets the
 message. `GET /v2/tasks/{id}` carries
 this view: each bot reply in `comments` has its `run`; `execution` is the owning bot's newest run in the task's own

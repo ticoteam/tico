@@ -4,7 +4,7 @@
 // fold's steps and "Stopping…"; someone who may not read the bot's runs is told why its steps are hidden. On a person's
 // task the bot that asked it answers: your message shows the bot chat's pending line (Sent, Queued, "<Bot> is working",
 // then the reply, or Reply failed), and the composer says before sending when no bot will get it. Where a bot gets the
-// comment, the send says how it arrives (steer, queue, defer or goal), and the choice is kept per task.
+// comment, Send's icon says how it arrives (steer, queue, defer or goal), and the way is kept per person on the server.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -245,23 +245,25 @@ async function answered(viewport, shot) {
   } finally { await browser.close(); }
 }
 
-// The send says how a comment reaches its bot: Steer, Queue, Defer <duration>, or Set as goal apart. With no pick nothing
-// is sent and the button shows the server's default; a pick is kept per task under a new key (the first version's
-// "queue" meant Defer), a bot-filed task's plain comment defers and an @mention queues it, and a task with no bot keeps
-// the arrow.
-async function deliveryChoice(viewport, shot) {
+// The send says how a comment reaches its bot: Send's icon is the way (Steer, Queue, Defer with its deadline as a
+// badge, Set as goal), and the caret, a right-click or a long press opens the ways. The way is the person's, kept on
+// the server (preference compose.send_way) and read again after a reload; every comment names it. Set as goal is for
+// one comment. A reader who may not steer gets the nearest way they may use, and a task with no bot has a plain Send
+// and no caret.
+async function deliveryChoice(viewport, shot, theme = 'light') {
   const browser = await launch();
   try {
-    const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-    // A pick saved with the old meaning ("queue" = do not wake) is ignored.
-    await page.addInitScript(() => { try { localStorage.setItem('hub.task.delivery', '[["t-plan","queue"]]'); } catch {} });
+    const phone = viewport.width < 761;
+    const ctx = await browser.newContext({viewport, serviceWorkers: 'block', ...(phone ? {isMobile: true, hasTouch: true} : {})});
+    const page = await ctx.newPage();
+    await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
     const errors = [];
     const plan = {id: 't-plan', title: 'Plan the launch', owner_id: 'human:ana', requester_id: 'bot:lead', status: 'open',
       lane: 'company', version: 1, created_at: at(30), updated_at: at(5), conversation_id: 'r-plan'};
     const said = [{id: 'p1', conversation_id: 'r-plan', sender_id: 'bot:lead', kind: 'say', body: 'What should launch first?', created_at: at(20)}];
-    const sent = [], posted = [];
+    const sent = [], posted = [], prefs = {}, prefPosts = [];
     let to = {bot: 'lead', wakes: true, mention: []};
-    let choices = {default: 'queue', default_for: null, steer: true, queue: true, steers: true, goal: true};
+    let choices = {default: 'defer', default_for: '24h', steer: true, queue: true, steers: true, goal: true};
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
@@ -276,6 +278,9 @@ async function deliveryChoice(viewport, shot) {
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
+      const pref = p.match(/^\/api\/v2\/preferences\/([^/]+)$/);
+      if (pref && req.method() === 'POST') { const v = JSON.parse(req.postData() || '{}').value; prefs[pref[1]] = v; prefPosts.push([pref[1], v]); return json({key: pref[1], value: v}); }
+      if (pref) return json({key: pref[1], value: prefs[pref[1]] ?? null});
       if (p === '/api/v2/tasks') return json({tasks: [plan]});
       if (p === '/api/v2/tasks/t-plan/comments' && req.method() === 'POST') {
         const body = JSON.parse(req.postData() || '{}');
@@ -289,30 +294,39 @@ async function deliveryChoice(viewport, shot) {
       if (p.endsWith('/files')) return json({files: []});
       return json(unrouted(p));
     });
-    await page.goto('https://tico-ui.test/#/tasks');
-    await page.waitForFunction(() => typeof taskModalShow === 'function' && S.emps?.length);
-    await page.evaluate(t => taskModalShow(t), plan);
     const modal = page.locator('#task-modal'), main = modal.locator('[data-task-main]'), caret = modal.locator('[data-task-caret]');
     const menu = modal.locator('[data-task-menu]');
+    const openTask = async (reload = false) => {
+      if (reload) await page.reload(); else await page.goto('https://tico-ui.test/#/tasks');
+      await page.waitForFunction(() => typeof taskModalShow === 'function' && S.emps?.length);
+      await page.evaluate(t => taskModalShow(t), plan);
+      await modal.locator('.task-comments', {hasText: 'What should launch first?'}).waitFor();
+    };
     const ways = () => menu.locator('[data-deliver]').evaluateAll(xs => xs.map(x => x.dataset.deliver));
+    const looks = async () => ({shows: await main.getAttribute('data-shows'), label: await main.getAttribute('aria-label'),
+      badge: await main.locator('.p-way-badge').count() ? await main.locator('.p-way-badge').innerText() : ''});
+    const pick = async way => { await caret.click(); await menu.locator(`[data-deliver="${way}"]`).last().click(); assert.equal(await menu.isHidden(), true); };
     const send = async text => {
       await modal.locator('textarea').fill(text);
       await main.click();
       await modal.locator('.task-comments', {hasText: text}).waitFor();
+      await page.waitForFunction(() => !document.querySelector('#task-modal [data-task-main]').disabled);
       return posted.at(-1);
     };
-    await modal.locator('.task-comments', {hasText: 'What should launch first?'}).waitFor();
+    await openTask();
 
-    // No pick (the old key is ignored): the button shows the server's default and the comment carries no delivery.
-    assert.equal(await main.innerText(), 'Queue');
-    assert.deepEqual(await send('Which is first?'), {text: 'Which is first?', public: false});
-    assert.equal(await page.evaluate(() => localStorage.getItem('hub.task.delivery.v2')), null);
+    // Nothing kept yet: Steer, today's arrow, and the comment says so (the server's own default, a 24h defer on a task
+    // a bot filed, is for senders that name no way).
+    assert.deepEqual(await looks(), {shows: 'steer:', label: 'Send', badge: ''});
+    assert.equal(await caret.isVisible(), true, 'the caret shows where a bot gets the comment');
+    assert.deepEqual(await send('Which is first?'), {text: 'Which is first?', public: false, delivery: 'steer'});
 
-    // The menu: Steer, Queue, Defer and its durations (24h by default), then Set as goal apart; upward, inside the width,
-    // every target at least 34 px.
+    // The menu: Steer, Queue, Defer and its durations, then Set as goal apart, each with Send's icon; upward, inside
+    // the width, every target at least 34 px.
     await caret.click();
     assert.deepEqual(await ways(), ['steer', 'queue', 'defer:24h', 'defer:30m', 'defer:1h', 'defer:4h', 'defer:24h', 'defer:2d', 'defer:7d', 'defer:never', 'goal']);
     assert.equal(await menu.locator('.sep + [data-deliver="goal"]').count(), 1, 'Set as goal sits below a separator');
+    assert.equal(await menu.locator('[data-deliver="steer"][aria-checked="true"] .p-way-i svg').count(), 1, 'the kept way is checked, with its icon');
     const box = await menu.boundingBox(), arrow = await caret.boundingBox();
     assert.ok(box.y + box.height <= arrow.y, 'the menu opens upward, over the thread');
     assert.ok(box.x >= 0 && box.x + box.width <= viewport.width, `the menu fits the ${viewport.width} px width`);
@@ -321,65 +335,212 @@ async function deliveryChoice(viewport, shot) {
     const small = await menu.locator('button').evaluateAll(bs => bs.map(b => b.getBoundingClientRect()).filter(r => r.height < 34 || r.width < 34).map(r => `${r.width}x${r.height}`));
     assert.deepEqual(small, [], 'every menu target is at least 34 px');
     if (shot) await page.screenshot({path: shot});
-    // Escape closes the menu, not the task.
+    // The arrows move through it; Escape closes it, not the task, and puts focus back on the caret.
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset.deliver), 'steer');
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset.deliver), 'queue');
     await page.keyboard.press('Escape');
     assert.equal(await menu.isHidden(), true);
     assert.equal(await modal.isVisible(), true, 'Escape in the menu leaves the task open');
+    assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-task-caret')), true, 'focus is back on the caret');
 
-    // Queue picked: sent as queue, and kept for this task under the new key.
-    await caret.click();
-    await menu.locator('[data-deliver="queue"]').click();
-    assert.equal(await menu.isHidden(), true);
+    // Queue: the icon changes, the comment names it, and it is kept on the server.
+    await pick('queue');
+    assert.deepEqual(await looks(), {shows: 'queue:', label: 'Send, queue', badge: ''});
+    if (shot) await page.screenshot({path: shot.replace('.png', '-queue.png'), clip: await modal.locator('.task-pill').boundingBox()});
     assert.equal((await send('Billing first, then the docs.')).delivery, 'queue');
-    assert.equal(await page.evaluate(() => localStorage.getItem('hub.task.delivery.v2')), '[["t-plan","queue"]]');
+    await page.waitForFunction(() => !SEND_WAY_TIMER);
+    assert.deepEqual(prefPosts.at(-1), ['compose.send_way', 'queue']);
 
-    // Defer 4h: the button shows the duration, the comment carries it, and the pick stays for the next one.
-    await caret.click();
-    await menu.locator('.p-for [data-deliver="defer:4h"]').click();
-    assert.equal(await main.innerText(), 'Defer 4h');
+    // Defer 4h: a clock with a 4h badge, and it stays after the send.
+    await pick('defer:4h');
+    assert.deepEqual(await looks(), {shows: 'defer:4h', label: 'Send, defer 4h', badge: '4h'});
+    if (shot) await page.screenshot({path: shot.replace('.png', '-defer.png'), clip: await modal.locator('.task-pill').boundingBox()});
     assert.deepEqual(await send('After lunch is fine.'), {text: 'After lunch is fine.', public: false, delivery: 'defer', defer_for: '4h'});
-    assert.equal(await main.innerText(), 'Defer 4h');
+    assert.deepEqual(await looks(), {shows: 'defer:4h', label: 'Send, defer 4h', badge: '4h'});
     // A press outside closes the menu.
     await caret.click();
     await modal.locator('.task-comments').click({position: {x: 5, y: 5}});
     assert.equal(await menu.isHidden(), true);
 
-    // Set as goal goes as the goal of the task's session.
-    await caret.click();
-    await menu.locator('[data-deliver="goal"]').click();
+    // Set as goal is for one comment: the target, then back to Defer 4h; it is never kept.
+    await pick('goal');
+    assert.deepEqual(await looks(), {shows: 'goal:', label: 'Set as goal', badge: ''});
     assert.equal((await send('Finish the billing migration.')).delivery, 'goal');
+    assert.deepEqual(await looks(), {shows: 'defer:4h', label: 'Send, defer 4h', badge: '4h'}, 'back to the kept way');
+    await page.waitForFunction(() => !SEND_WAY_TIMER);
+    assert.deepEqual(prefPosts.map(([, v]) => v), ['queue', 'defer:4h'], 'goal is never written');
 
-    // A task the bot filed: a plain comment defers 24h, an @mention of the bot flips it to queue; nothing is picked, so
-    // nothing is sent and the server reads the text.
-    await page.evaluate(() => localStorage.removeItem('hub.task.delivery.v2'));
-    choices = {default: 'defer', default_for: '24h', steer: true, queue: true, steers: true, goal: false};
-    to = {bot: 'lead', wakes: false, mention: ['lead']};
-    await reread(page);
-    await page.waitForFunction(() => document.querySelector('#task-modal [data-task-main]').textContent === 'Defer 24h');
-    await modal.locator('textarea').fill('Billing first; @lead, is the API page in?');
-    assert.equal(await main.innerText(), 'Queue');
-    await main.click();
-    await modal.locator('.task-comments', {hasText: 'Billing first; @lead'}).waitFor();
-    assert.equal('delivery' in posted.at(-1), false);
-    assert.equal(await main.innerText(), 'Defer 24h', 'the empty box is back to the default');
-
-    // A reader who may not wake the bot only defers.
-    choices = {default: 'defer', default_for: 'never', steer: false, queue: false, steers: false, goal: false};
-    await reread(page);
-    await modal.locator('textarea').fill('@lead too');
-    assert.match(await main.innerText(), /^Defer/);
-    await caret.click();
-    assert.deepEqual((await ways()).filter(w => !w.startsWith('defer')), []);
+    // Send itself opens the ways: a right-click on a computer, a long press on a phone; neither sends.
+    const before = posted.length;
+    await modal.locator('textarea').fill('Not yet');
+    if (phone) {
+      const at = await main.boundingBox(), x = at.x + at.width / 2, y = at.y + at.height / 2;
+      const cdp = await ctx.newCDPSession(page);
+      await cdp.send('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: [{x, y}]});
+      await menu.waitFor();
+      await cdp.send('Input.dispatchTouchEvent', {type: 'touchEnd', touchPoints: []});
+    } else await main.click({button: 'right'});
+    await menu.waitFor();
+    await page.waitForTimeout(200);
+    assert.equal(posted.length, before, 'opening the ways sends nothing');
     await page.keyboard.press('Escape');
     await modal.locator('textarea').fill('');
 
-    // A task with no bot keeps the plain arrow, and its comment carries no delivery.
+    // A reload reads the kept way back from the server.
+    await openTask(true);
+    await page.waitForFunction(() => document.querySelector('#task-modal [data-task-main]')?.dataset.shows === 'defer:4h');
+    assert.deepEqual(await looks(), {shows: 'defer:4h', label: 'Send, defer 4h', badge: '4h'});
+    await pick('steer');
+
+    // A reader who may not steer queues; one who may not wake the bot only defers, with the task's deadline.
+    choices = {default: 'defer', default_for: '24h', steer: false, queue: true, steers: true, goal: false};
+    await reread(page);
+    assert.equal((await looks()).shows, 'queue:');
+    assert.equal((await send('Queued instead')).delivery, 'queue');
+    choices = {default: 'defer', default_for: 'never', steer: false, queue: false, steers: false, goal: false};
+    await reread(page);
+    assert.deepEqual(await looks(), {shows: 'defer:never', label: 'Send, defer', badge: ''});
+    await caret.click();
+    assert.deepEqual((await ways()).filter(w => !w.startsWith('defer')), []);
+    await page.keyboard.press('Escape');
+    assert.deepEqual(await send('Deferred'), {text: 'Deferred', public: false, delivery: 'defer', defer_for: 'never'});
+    // A kept deadline is not theirs to give either (the server 403s it), nor a server default with one: Defer with none.
+    await page.evaluate(() => sendWayPick('defer:4h'));
+    choices = {...choices, default_for: '24h'};
+    await reread(page);
+    assert.deepEqual(await looks(), {shows: 'defer:never', label: 'Send, defer', badge: ''});
+    await caret.click();
+    assert.deepEqual(await ways(), ['defer:never'], 'no deadlines to pick');
+    await page.keyboard.press('Escape');
+    assert.deepEqual(await send('No deadline'), {text: 'No deadline', public: false, delivery: 'defer', defer_for: 'never'});
+    await page.waitForFunction(() => !SEND_WAY_TIMER);
+    assert.equal(prefs['compose.send_way'], 'defer:4h', 'the kept way stays what the person picked');
+
+    // A task with no bot keeps the plain arrow and no caret, and its comment carries no delivery.
     to = {bot: null, wakes: false, mention: []}; choices = null;
     await reread(page);
     await modal.locator('[data-task-chat-to]').filter({hasText: 'No bot gets this message'}).waitFor();
     assert.equal(await caret.isHidden(), true);
-    assert.ok(await main.isVisible(), 'the plain arrow stays');
+    assert.deepEqual(await looks(), {shows: 'steer:', label: 'Send', badge: ''});
     assert.equal('delivery' in (await send('Anyone around?')), false);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+}
+
+// The old bot chat composer (pill.js botPill, P.ways): no target button, Send shows the kept way, a pick sticks and comes
+// back after a reload, and Set as goal is goal mode for one goal. Mounted by hand: no page opens this composer today.
+async function botChatWays(viewport) {
+  const browser = await launch();
+  try {
+    const ctx = await browser.newContext({viewport, serviceWorkers: 'block'});
+    const page = await ctx.newPage();
+    const errors = [], chats = [], goals = [], prefs = {};
+    let slowRead = false;
+    page.on('pageerror', e => errors.push(e.message));
+    await page.route('**/*', async route => {
+      const req = route.request(), url = new URL(req.url()), p = url.pathname;
+      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      if (ui && fs.existsSync(uiFile(ui[1])))
+        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+      if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
+      if (p === '/api/employees') return json([{name: 'lead', display_name: 'Head of Engineering', host: 'keeper', status: 'active', can_chat: true, schedules: [], users: [{id: 'ana'}]}]);
+      if (p === '/api/issues') return json([]);
+      if (p === '/api/v2/conversations') return json({conversations: []});
+      if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
+      const pref = p.match(/^\/api\/v2\/preferences\/([^/]+)$/);
+      if (pref && req.method() === 'POST') { prefs[pref[1]] = JSON.parse(req.postData() || '{}').value; return json({key: pref[1], value: prefs[pref[1]]}); }
+      if (pref) {
+        const value = prefs[pref[1]] ?? null;                  // what the server held when the read came in
+        if (slowRead) await new Promise(done => setTimeout(done, 1500));
+        return json({key: pref[1], value});
+      }
+      if (p === '/api/v2/chat/lead' && req.method() === 'POST') {
+        const body = JSON.parse(req.postData() || '{}'); chats.push(body);
+        return json({message: {id: 'm' + chats.length, conversation_id: 'r-lead', sender_id: 'human:ana', kind: 'say', body: body.text, created_at: at(0)}});
+      }
+      if (p === '/api/v2/conversations/r-lead/goal' && req.method() === 'POST') { goals.push(JSON.parse(req.postData() || '{}')); return json({goal: null}); }
+      return json(unrouted(p));
+    });
+    const mount = async (reload = false) => {
+      if (reload) await page.reload(); else await page.goto('https://tico-ui.test/#/tasks');
+      await page.waitForFunction(() => typeof botPill === 'function' && S.emps?.length);
+      await page.evaluate(() => {
+        v2ChatAdopt = () => {};                                  // no chat page around this composer
+        V2C = {slug: 'lead', conv: {id: 'r-lead'}, goal: null, goalSupported: true, messages: [], mine: []};
+        const P = botPill('lead');
+        P.el.id = 'bot-chat-pill';
+        Object.assign(P.el.style, {position: 'fixed', left: '20px', right: '20px', top: '440px', zIndex: '50'});   // room above for the menu
+        document.body.append(P.el);
+        chatGoalRender(V2C);
+      });
+    };
+    const pill = page.locator('#bot-chat-pill'), send = pill.locator('.p-send'), caret = pill.locator('.p-way'), menu = pill.locator('.p-ways');
+    const shows = () => send.getAttribute('data-shows');
+    const pick = async way => { await caret.click(); await menu.locator(`[data-deliver="${way}"]`).last().click(); assert.equal(await menu.isHidden(), true); };
+    const say = async text => {
+      const n = chats.length + goals.length;
+      await pill.locator('.p-text').fill(text);
+      await send.click();
+      await page.waitForFunction(k => document.querySelector('#bot-chat-pill .p-text').value === '' && !document.querySelector('#bot-chat-pill .p-send').disabled, n);
+    };
+    await mount();
+    assert.equal(await pill.locator('.p-goal').count(), 0, 'no target button: Set as goal is in the menu');
+    assert.equal(await caret.isVisible(), true, 'the caret shows in a bot chat');
+    assert.equal(await shows(), 'steer:');
+    await say('Hello');
+    assert.equal(chats.at(-1).delivery, 'steer', 'every message names its way');
+
+    await pick('queue');
+    assert.equal(await shows(), 'queue:');
+    assert.equal(await send.getAttribute('aria-label'), 'Send, queue');
+    await say('After this run');
+    assert.equal(chats.at(-1).delivery, 'queue');
+    assert.equal(await shows(), 'queue:', 'the pick sticks after a send');
+    await pick('defer:4h');
+    assert.equal(await shows(), 'defer:4h');
+    assert.equal(await send.locator('.p-way-badge').innerText(), '4h');
+    await say('Later today');
+    assert.deepEqual([chats.at(-1).delivery, chats.at(-1).defer_for], ['defer', '4h']);
+    await page.waitForFunction(() => !SEND_WAY_TIMER);
+    assert.equal(prefs['compose.send_way'], 'defer:4h');
+
+    // Set as goal: the target on Send for one goal, then back to the kept way; never kept.
+    await pick('goal');
+    assert.equal(await shows(), 'goal:');
+    await say('Ship the launch');
+    assert.deepEqual(goals.at(-1), {action: 'set', objective: 'Ship the launch'});
+    assert.equal(await shows(), 'defer:4h', 'back to the kept way after the goal is set');
+    // Picking a way leaves goal mode too.
+    await pick('goal');
+    await pick('queue');
+    assert.equal(await shows(), 'queue:');
+    await page.waitForFunction(() => !SEND_WAY_TIMER);
+    assert.equal(prefs['compose.send_way'], 'queue', 'goal is never written');
+
+    // A right-click on Send opens the ways and sends nothing; Escape puts focus on the caret.
+    const before = chats.length;
+    await pill.locator('.p-text').fill('Not yet');
+    await send.click({button: 'right'});
+    await menu.waitFor();
+    assert.equal(chats.length, before);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('p-way')), true);
+
+    // A read of the kept way that answers after a pick (its write already done) does not undo the pick.
+    prefs['compose.send_way'] = 'steer'; slowRead = true;
+    await page.evaluate(async () => { const read = sendWaySync(); sendWayPick('queue'); await read; });
+    slowRead = false;
+    assert.equal(prefs['compose.send_way'], 'queue', "the pick's write went out before the read answered");
+    assert.equal(await shows(), 'queue:', 'a late read loses to the pick');
+    await page.waitForFunction(() => !SEND_WAY_TIMER);
+    // A reload reads the kept way back; goal mode does not come back.
+    await mount(true);
+    await page.waitForFunction(() => document.querySelector('#bot-chat-pill .p-send')?.dataset.shows === 'queue:');
+    assert.equal(await page.evaluate(() => !!BOT_PILL.goalMode), false);
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 }
@@ -391,6 +552,7 @@ async function deliveryChoice(viewport, shot) {
   await answered({width: 1200, height: 800}, shot('task-session-answered.png'));
   await answered({width: 390, height: 844}, shot('task-session-answered-phone.png'));
   await deliveryChoice({width: 1200, height: 800}, shot('task-session-delivery.png'));
-  await deliveryChoice({width: 390, height: 844}, shot('task-session-delivery-phone.png'));
+  await deliveryChoice({width: 390, height: 844}, shot('task-session-delivery-phone.png'), 'dark');
+  await botChatWays({width: 1200, height: 800});
   console.log('ok');
 })().catch(e => { console.error(e); process.exit(1); });
