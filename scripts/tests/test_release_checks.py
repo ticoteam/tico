@@ -413,7 +413,7 @@ def test_run_batches_stops_at_an_interrupted_batch_but_runs_past_a_failing_one(m
     assert run_all([-15, 0]) == (-15, 1)   # killed by SIGTERM: the run stops there
 
 
-def test_batches_write_their_own_junit_report_when_the_release_step_names_one(tmp_path):
+def test_batches_write_their_own_junit_report_when_the_release_step_names_one(tmp_path, monkeypatch):
     env = {'PYTEST_ADDOPTS': f'--durations=25 -o junit_family=xunit1 --junitxml={tmp_path}/python-1-of-2.xml'}
     commands = release_checks.batch_commands([['a.py'], ['b.py']], '4', ('-m', 'slow or not slow'), env)
     assert [[arg for arg in command if arg.startswith('--junitxml=')] for command in commands] == [
@@ -422,3 +422,12 @@ def test_batches_write_their_own_junit_report_when_the_release_step_names_one(tm
     assert all(command[command.index('-m', 2) + 1] == 'slow or not slow' for command in commands)   # index 1 is python's -m
     # With no junit report in PYTEST_ADDOPTS, no batch adds one.
     assert not any('--junitxml' in command for command in release_checks.batch_commands([['a.py']], '4', (), {}))
+    # Collection runs with the same PYTEST_ADDOPTS but must not write the base-name report: it drops only the junit option.
+    seen = []
+
+    def collect(command, **kwargs):
+        seen.append(kwargs['env']['PYTEST_ADDOPTS'])
+        return SimpleNamespace(returncode=0, stdout='', stderr='')
+    monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(run=collect))
+    release_checks.collected_counts(env, ())
+    assert seen == ['--durations=25 -o junit_family=xunit1'] and '--junitxml' in env['PYTEST_ADDOPTS']

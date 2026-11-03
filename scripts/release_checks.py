@@ -274,6 +274,7 @@ NATIVE_SHARDS = 2
 
 def collected_counts(env, selection):
     """{test file: its number of collected tests} for pytest's `selection` (by default the release Python step's)."""
+    env = {**env, 'PYTEST_ADDOPTS': re.sub(r'\s*--junitxml=\S+', '', env.get('PYTEST_ADDOPTS', ''))}   # no report from collection
     result = subprocess.run([sys.executable, '-m', 'pytest', '--collect-only', '-q', '-n', '0', *selection],
                             cwd=ROOT, env=env, capture_output=True, text=True)
     if result.returncode:
@@ -454,6 +455,9 @@ def record_browser_timings(*logs):
 # about 25 MB per test per worker until the 32 GB VM ran out. A shard therefore runs as batches of about this many
 # tests, each in a fresh pytest process, so the workers start empty for every batch.
 TESTS_PER_BATCH = 400
+# The release step's budget. Its unbatched 16-vCPU shard 4/4 (7190 tests in one process) ran out of memory at 61.6 GiB,
+# about 31 MiB kept per test, so 600 tests keep a batch near 20 GiB, under the 24 GiB target.
+RELEASE_TESTS_PER_BATCH = 600
 
 
 def batches(files, counts, limit=TESTS_PER_BATCH):
@@ -597,7 +601,8 @@ def release(args):
             files = sorted(counts)
         # One pytest process per batch, run by a child of this step: a single process keeps every test's memory.
         plan = logs / f'{name}-batches.json'
-        plan.write_text(json.dumps(batch_commands(batches(files, counts), workers, RELEASE_SELECTION, test_env)))
+        plan.write_text(json.dumps(batch_commands(batches(files, counts, limit=RELEASE_TESTS_PER_BATCH), workers,
+                                                  RELEASE_SELECTION, test_env)))
         checks.append(Check(name, [sys.executable, str(ROOT / 'scripts/release_checks.py'), '--run-batches', str(plan)],
                             logs, test_env, tests=True))
     if runs('browser'):
