@@ -660,13 +660,13 @@ def test_owner_product_creation_uses_exact_name_private_empty_and_idempotent_rec
         assert event and event["target"] == "Acme/tico-recorder"
         assert c.execute("SELECT COUNT(*) FROM bot_repo_access").fetchone()[0] == 0
         assert c.execute("SELECT COUNT(*) FROM idempotency WHERE operation='/api/v2/github/product-repos' AND key='product-create-same'").fetchone()[0] == 1
-        operation = c.execute("SELECT state,target_org,target_name FROM github_product_repo_operations "
-                              "WHERE operation='/api/v2/github/product-repos' AND key='product-create-same'").fetchone()
-        assert tuple(operation) == ("completed", "Acme", "tico-recorder")
+        operation = c.execute("SELECT state,subject FROM idempotency WHERE binding='github_product_repo' "
+                              "AND operation='/api/v2/github/product-repos' AND key='product-create-same'").fetchone()
+        assert tuple(operation) == ("completed", "Acme/tico-recorder")
     calls_before_durable_replay = len([call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"])
     with api.app_state.store.transaction() as c:
-        c.execute("DELETE FROM idempotency WHERE actor='human:ana' AND operation=? AND key=?",
-                  ("/api/v2/github/product-repos", "product-create-same"))
+        c.execute("DELETE FROM idempotency WHERE actor='human:ana' AND operation=? AND key=? AND binding IS NULL",
+                  ("/api/v2/github/product-repos", "product-create-same"))     # the answer only; the binding stays
     durable_replay = product_repo_request(api, body, key="product-create-same")
     assert durable_replay.status_code == 200 and durable_replay.json() == created.json()
     assert len([call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"]) == calls_before_durable_replay
@@ -739,14 +739,14 @@ def test_lost_github_create_response_keeps_durable_key_binding_and_never_retries
     assert len(create_calls) == 1
     assert gh.created_repositories == {"Acme/tico-recorder"}
     with api.app_state.store.read() as c:
-        operation = c.execute("SELECT actor,operation,key,request_hash,target_org,target_name,state,response "
-                              "FROM github_product_repo_operations WHERE actor='human:ana' AND key=?",
+        operation = c.execute("SELECT actor,operation,key,request_hash,subject,state,response "
+                              "FROM idempotency WHERE binding='github_product_repo' AND actor='human:ana' AND key=?",
                               ("lost-create-response",)).fetchone()
         assert operation["actor"] == "human:ana"
         assert operation["operation"] == "/api/v2/github/product-repos"
         assert operation["key"] == "lost-create-response"
         assert operation["request_hash"] == G.digest(encode(body))
-        assert operation["target_org"] == "Acme" and operation["target_name"] == "tico-recorder"
+        assert operation["subject"] == "Acme/tico-recorder"
         assert operation["state"] == "pending" and operation["response"] is None
 
 

@@ -265,7 +265,7 @@ CARRIED = "acting for someone"
 def nothing_made(api, gh):
     assert not creates(gh)
     with api.app_state.store.read() as c:
-        assert c.execute("SELECT COUNT(*) FROM github_product_repo_operations").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM idempotency WHERE binding='github_product_repo'").fetchone()[0] == 0
         assert c.execute("SELECT COUNT(*) FROM events WHERE action='github.product_repo_created'").fetchone()[0] == 0
         assert c.execute("SELECT COUNT(*) FROM repositories WHERE full_name='Acme/tico-services'").fetchone()[0] == 0
         assert c.execute("SELECT COUNT(*) FROM messages WHERE recipient_id='human:ana' AND kind='notice'").fetchone()[0] == 0
