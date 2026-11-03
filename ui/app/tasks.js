@@ -301,8 +301,10 @@ function taskSnoozed(t) {
   const until = taskHold(t, 'snoozed')?.until;
   return !!until && !taskFinished(t) && parseServerTime(until) > Date.now();
 }
+// The year shows only when it isn't this one ("Oct 20, 2028"), so a far-off snooze can't pass for a past date.
 function snoozeDay(t) {
-  return new Date(parseServerTime(taskHold(t, 'snoozed')?.until)).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+  const at = new Date(parseServerTime(taskHold(t, 'snoozed')?.until));
+  return at.toLocaleDateString(undefined, {month: 'short', day: 'numeric', ...(at.getFullYear() === new Date().getFullYear() ? {} : {year: 'numeric'})});
 }
 function snoozeChip(t) {
   return taskSnoozed(t) ? `<span class="tl-due wake" title="Snoozed until ${esc(fmt(taskHold(t, 'snoozed').until))}">Snoozed to ${esc(snoozeDay(t))}</span>` : '';
