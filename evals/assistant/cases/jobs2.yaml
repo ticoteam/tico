@@ -1,0 +1,751 @@
+# Everyday jobs, the ones jobs.yaml does not cover: the board, catch-up, meetings and files, owners and goals, why something
+# happened, closing and reopening a task, handing work to a bot (answer, ask, tell, pause, resume, model, routine time), undo
+# of an automation change, rules, and a support report that is only a link. Each case is independent; its canned rows
+# cover every read the job makes. Owner Dana Okafor; Priya Shah is the CFO; bots are named by slug.
+
+- id: jobs2-what-needs-me
+  group: jobs2
+  prompt: "What needs me right now? Just the real ones."
+  hub:
+    - match: '^needs-you show'
+      out:
+        total: 8
+        by_kind: {task: 4, question: 2, approval: 2}
+        created_this_week: 6
+        older_than_3_days: 3
+    - match: '^message list'
+      out:
+        actor: "human:dana"
+        messages:
+          - {id: 0a6d4b92-6100-4000-8000-000000000001, kind: notice, from_actor: "bot:release-manager", text: 'Approve this publish: {"release": "v0.5.0", "channel": "stable"}', refs: {approval: 5f3e21c0-6100-4000-8000-000000000001, task: 7d21c4a0-1000-4000-8000-000000000008}, created: "2026-11-01T09:00:00Z"}
+          - {id: 0a6d4b92-6100-4000-8000-000000000002, kind: notice, from_actor: "bot:pr-reviewer", text: 'Approve this merge: {"repo": "tico", "pull_request": 2041}', refs: {approval: 6e1f0c2a-6100-4000-8000-000000000002}, created: "2026-11-02T14:00:00Z"}
+          - {id: 0b7e4c19-6100-4000-8000-000000000003, kind: question, from_actor: "bot:engineering-lead", text: "Should the staging banner stay on through the holiday week? Options: keep it, or take it down on Nov 10.", created: "2026-11-02T11:00:00Z"}
+          - {id: 1c8f5d2a-6100-4000-8000-000000000004, kind: question, from_actor: "bot:ceo-bot", text: "Which goal does CEO Bot own: the hiring plan or the budget?", created: "2026-10-31T11:00:00Z"}
+        more_messages: false
+        tasks: []
+        notices: []
+    - match: '^task list'
+      out:
+        tasks:
+          - {id: 7d21c4a0-1000-4000-8000-000000000008, title: "Approve the v0.5.0 release publish", status: waiting, owner: "human:dana", requester: "bot:release-manager", note: "Ready for your publish approval.", created: "2026-10-29T09:00:00Z", updated: "2026-11-01T09:00:00Z"}
+          - {id: 9f7e3a2c-1000-4000-8000-000000000010, title: "CEO Bot: which goals does it own?", status: waiting, owner: "human:dana", requester: "bot:botops", note: "Two questions open.", created: "2026-10-27T11:00:00Z", updated: "2026-10-31T11:00:00Z"}
+          - {id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4, title: "Spring launch: pricing page", status: open, owner: "human:dana", requester: "human:dana", note: "", created: "2026-10-20T10:05:00Z", updated: "2026-10-20T10:05:00Z"}
+          - {id: c2d3e4f5-1000-4000-8000-000000000011, title: "Website preview deploy failing", status: open, owner: "human:dana", requester: "bot:engineering-lead", note: "", created: "2026-10-14T09:00:00Z", updated: "2026-10-14T09:00:00Z"}
+        next_offset: null
+  must:
+    - '^(needs-you show|message list)\b'
+  must_not:
+    - '^approval (approve|decline)(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help)'
+    - '^task (close|bulk close|update)(?! -h\b| --help)'
+  reply: |
+    Lists what waits on Dana from the record, in a few plain lines with links: the v0.5.0 publish approval, the tico pull request
+    2041 merge approval, the Engineering Lead question about the staging banner, the CEO Bot goal question, and the pricing page
+    task she owns. The count is the tool's: 8 items (4 tasks, 2 questions, 2 approvals), quoted as the record gives it. It names
+    which ones are real decisions. It does not approve, decline or answer anything, and changes nothing.
+
+- id: jobs2-board-open
+  group: jobs2
+  prompt: "What is open on my board?"
+  hub:
+    - match: '^task list'
+      out:
+        tasks:
+          - {id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4, title: "Spring launch: pricing page", status: open, owner: "human:dana", requester: "human:dana", note: "", created: "2026-10-20T10:05:00Z", updated: "2026-10-20T10:05:00Z"}
+          - {id: a13f9e20-71cd-4b8e-a0f3-2c9d5e6b7a10, title: "Spring launch: launch email", status: doing, owner: "bot:copywriter", requester: "human:dana", note: "Draft 2 is in review.", created: "2026-10-14T15:20:00Z", updated: "2026-10-31T11:40:00Z"}
+          - {id: 7d21c4a0-1000-4000-8000-000000000008, title: "Approve the v0.5.0 release publish", status: waiting, owner: "human:dana", requester: "bot:release-manager", note: "Ready for your publish approval.", created: "2026-10-29T09:00:00Z", updated: "2026-11-01T09:00:00Z"}
+          - {id: 3e90c7b2-14fa-4d6e-b5a8-7c1f0e9d3b26, title: "Q2 paid trials into the sheet", status: done, owner: "bot:analytics", requester: "human:dana", note: "Loaded Q2 paid trials. Next refresh monthly.", created: "2026-07-02T10:00:00Z", updated: "2026-07-09T17:02:00Z"}
+        next_offset: null
+  must:
+    - '^task list\b'
+  must_not:
+    - '^task (create|close|bulk close|update)(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    Lists what is open on Dana's board from the record, grouped by status (open, doing, waiting), with links such as
+    [Spring launch: pricing page](#/task/5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4). Done items may be left out or named as done. Titles
+    and statuses match the record. It changes nothing, closes nothing and messages nobody.
+
+- id: jobs2-catch-me-up
+  group: jobs2
+  prompt: "I was offline most of yesterday. Catch me up."
+  hub:
+    - match: '^brief'
+      out:
+        alerts:
+          - "Release v0.5.20 shipped at 23:00 UTC on Nov 2. Its docs task is done but still open."
+          - "Runner queue ping from Health Monitor failed twice on Nov 2."
+        waiting_on_you: {count: 8}
+        bots_down: []
+        what_bots_said: "Copywriter sent launch email draft 2 for your review. Release Manager is waiting on your v0.5.0 publish approval. CEO Bot has two goal questions for you."
+    - match: '^needs-you show'
+      out: {total: 8, by_kind: {task: 4, question: 2, approval: 2}, created_this_week: 6, older_than_3_days: 3}
+    - match: '^task list'
+      out:
+        tasks:
+          - {id: a13f9e20-71cd-4b8e-a0f3-2c9d5e6b7a10, title: "Spring launch: launch email", status: doing, owner: "bot:copywriter", requester: "human:dana", note: "Draft 2 is in review. It cannot be scheduled until the final price line is in.", created: "2026-10-14T15:20:00Z", updated: "2026-10-31T11:40:00Z"}
+          - {id: 7d21c4a0-1000-4000-8000-000000000008, title: "Approve the v0.5.0 release publish", status: waiting, owner: "human:dana", requester: "bot:release-manager", note: "Ready for your publish approval.", created: "2026-10-29T09:00:00Z", updated: "2026-11-01T09:00:00Z"}
+        next_offset: null
+  must:
+    - '^brief\b'
+  must_not:
+    - '^message send(?! -h\b| --help)'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+    - '^task (close|bulk close|update)(?! -h\b| --help)'
+  reply: |
+    A short catch-up from the brief, not a dump: what shipped overnight (v0.5.20 at 23:00 UTC on Nov 2), what is waiting on Dana
+    (8 items, the tool's count, with the real decisions named, such as the v0.5.0 publish approval and the CEO Bot questions), that
+    no bot is down, and what Copywriter did (launch email draft 2 is ready for review but needs the price line). Links where the
+    record gives ids. It approves, closes and sends nothing.
+
+- id: jobs2-find-meeting
+  group: jobs2
+  prompt: "Find the meeting where we talked about the Harbor Co renewal. What did we decide?"
+  hub:
+    - match: '^meeting search'
+      out:
+        results:
+          - {id: 3f9a1c7e-6b2d-4e8a-9c1f-2d7b5e0a4c11, title: "Harbor Co renewal call", date: "2026-10-29", participants: ["human:dana", "human:priya"], snippet: "Harbor Co asked for the annual plan at list price. Priya to decide any discount."}
+        next_offset: null
+    - match: '^meeting read'
+      out:
+        id: 3f9a1c7e-6b2d-4e8a-9c1f-2d7b5e0a4c11
+        title: "Harbor Co renewal call"
+        date: "2026-10-29"
+        summary: "Harbor Co is ready to renew at list price, $4,800 a year. No discount was agreed on the call. Priya will decide whether any discount is allowed before the renewal."
+        action_items:
+          - {owner: "human:priya", text: "Decide whether any discount is allowed before the renewal."}
+  must:
+    - '^meeting search\b'
+  must_not:
+    - '^message send(?! -h\b| --help)'
+    - '^task (create|close|update|bulk close)(?! -h\b| --help)'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+  reply: |
+    Names the meeting from Oct 29, "Harbor Co renewal call", with its link ([Harbor Co renewal call](#/meetings?meeting=3f9a1c7e-6b2d-4e8a-9c1f-2d7b5e0a4c11)).
+    From the record only: Harbor Co is ready to renew at list price, $4,800 a year, no discount was agreed, and Priya decides
+    any discount. It does not invent a decision or a discount. It sends nothing to Harbor Co and changes nothing.
+
+- id: jobs2-find-file
+  group: jobs2
+  prompt: "Where's the Q3 pitch deck? I need the file, not the notes about it."
+  hub:
+    - match: '^file search'
+      out:
+        results:
+          - {id: 8c1d4e20-5a7b-4f93-b2e6-1f0d9a3c7e58, title: "Q3 pitch deck v4", bot: "bot:copywriter", created: "2026-10-22", status: current, link: "#/files/8c1d4e20-5a7b-4f93-b2e6-1f0d9a3c7e58"}
+          - {id: 2e7b9f03-0c4a-4d1e-8b6f-9a2c5d7e1f40, title: "Q3 pitch deck v3", bot: "bot:copywriter", created: "2026-09-30", status: superseded, link: "#/files/2e7b9f03-0c4a-4d1e-8b6f-9a2c5d7e1f40"}
+        next: null
+  must:
+    - '^file search\b'
+  must_not:
+    - '^message send(?! -h\b| --help)'
+    - '^file (delete|archive|publish|link)(?! -h\b| --help)'
+    - '^task create(?! -h\b| --help)'
+  reply: |
+    Gives the current file, "Q3 pitch deck v4" (made by Copywriter on Oct 22), with the link the search returned. It does not give
+    v3 as the answer; mentioning that v3 is superseded is fine. It does not send the file to anyone or publish or change it.
+    Short.
+
+- id: jobs2-who-owns
+  group: jobs2
+  prompt: "Who owns the website preview deploy? Is it moving?"
+  hub:
+    - match: '^team show'
+      out:
+        people:
+          - {id: dana, name: "Dana Okafor", title: "Founder", team: leadership, primary_for: ["*"], about: "Decides direction, hiring and approvals."}
+          - {id: priya, name: "Priya Shah", title: "CFO", team: finance, primary_for: [pricing, finance], about: "Signs off prices, discounts and any spend over $1,000."}
+        bots:
+          - {id: website, display_name: Website, description: "Maintains the site and opens its pull requests.", team: engineering, reports_to: dana, template: website}
+          - {id: engineering-lead, display_name: Engineering Lead, description: "Triages build failures and opens engineering tasks.", team: engineering, reports_to: dana, template: engineering-lead}
+        org_groups:
+          - {id: leadership, name: Leadership}
+          - {id: engineering, name: Engineering}
+    - match: '^task show c2d3e4f5'
+      out:
+        task:
+          id: c2d3e4f5-1000-4000-8000-000000000011
+          title: "Website preview deploy failing"
+          status: open
+          owner: "bot:website"
+          requester: "bot:engineering-lead"
+          body: "The preview deploy fails on the build step. Opened by Engineering Lead on Oct 14."
+        events: []
+        comments: []
+    - match: '^task list'
+      out:
+        tasks:
+          - {id: c2d3e4f5-1000-4000-8000-000000000011, title: "Website preview deploy failing", status: open, owner: "bot:website", requester: "bot:engineering-lead", note: "", created: "2026-10-14T09:00:00Z", updated: "2026-10-14T09:00:00Z"}
+        next_offset: null
+  must:
+    - '^(team show|task show|task list)\b'
+  must_not:
+    - '^task (create|close|update|bulk close|comment)(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    Says the Website bot owns the preview deploy task (its owner on the record), that it reports to Dana, and that the task was
+    opened by Engineering Lead on Oct 14 and has had no event since. On "is it moving", it says what the record shows (no progress
+    since Oct 14) and does not claim progress it cannot see. It links the task. It changes nothing.
+
+- id: jobs2-my-goal
+  group: jobs2
+  prompt: "What is my goal this quarter, and where does it stand?"
+  hub:
+    - match: '^goal list'
+      out:
+        goals:
+          - {id: goal_4f2a9c1b, title: "Paid trials to 400 a month by year end", owner: "human:dana", status: at_risk, bet: "Self-serve trials", kpis: [{name: "Paid trials per month", latest: 318, target: 400, as_of: "2026-10-31"}]}
+        next: null
+    - match: '^goal show goal_4f2a9c1b'
+      out:
+        goal:
+          id: goal_4f2a9c1b
+          title: "Paid trials to 400 a month by year end"
+          owner: "human:dana"
+          status: at_risk
+          body: "Grow paid trials from the self-serve page. Reviewed monthly."
+          kpis: [{name: "Paid trials per month", latest: 318, target: 400, as_of: "2026-10-31"}]
+  must:
+    - '^goal (list|show)\b'
+  must_not:
+    - '^goal (save|create|update|checkin|refresh|status)(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    Names Dana's goal, "Paid trials to 400 a month by year end", with its status (at risk) and its number from the record: 318 a
+    month against 400, as of Oct 31. It links it as [title](#/goals/goal_4f2a9c1b). It does not invent numbers, does not check in,
+    save or change the goal, and says nothing it cannot see in the record.
+
+- id: jobs2-why-happened
+  group: jobs2
+  prompt: "Why did the Harbor Co reminder go out twice yesterday?"
+  hub:
+    - match: '^replay show'
+      out:
+        window: {from: "2026-11-02T00:00:00Z", to: "2026-11-02T23:59:59Z"}
+        events:
+          - {at: "2026-11-02T09:02:00Z", actor: "bot:support-bot", kind: automation.run, automation: auto_renewal_reminder, title: "Renewal reminder to Harbor Co billing", result: "sent"}
+          - {at: "2026-11-02T09:04:00Z", actor: "bot:support-bot", kind: automation.run, automation: auto_renewal_reminder, title: "Renewal reminder to Harbor Co billing", result: "sent", note: "Run retried two minutes after the first; the mail relay timed out at 09:03."}
+    - match: '^automation show auto_renewal_reminder'
+      out:
+        automation:
+          id: auto_renewal_reminder
+          name: "Renewal reminder to customers"
+          owner: "bot:support-bot"
+          trigger: {kind: "due", days_before: 14}
+          steps: [{action: "mail.send", to: "billing@harbor.example", template: "renewal-reminder"}]
+          enabled: true
+          version: 2
+    - match: '^automation list'
+      out:
+        automations:
+          - {id: auto_renewal_reminder, name: "Renewal reminder to customers", owner: "bot:support-bot", trigger: "14 days before renewal", enabled: true, runs_7d: 2, creates: "one reminder per renewal"}
+        next: null
+  must:
+    - '^(replay show|automation show)\b'
+  must_not:
+    - '^message send(?! -h\b| --help)'
+    - '^automation (update|delete)(?! -h\b| --help)'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+  reply: |
+    Explains from the record: the renewal reminder automation ran twice on Nov 2, at 09:02 and again at 09:04, and the second run
+    is marked as a retry after the mail relay timed out at 09:03. It says the record does not show whether the first send
+    reached Harbor Co. It offers the next step in one line (ask Support Bot to check, or turn the automation off) and waits for
+    Dana. It does not message Harbor Co, does not change the automation, and does not guess beyond the record.
+
+- id: jobs2-is-anything-broken
+  group: jobs2
+  prompt: "Is anything broken?"
+  hub:
+    - match: '^health check'
+      out:
+        problems:
+          - {area: "bot", subject: "website", finding: "The preview deploy has failed since Oct 14 (task c2d3e4f5).", fix: "Engineering Lead has the build log. Ask it for the fix, or ask Website to re-run the preview deploy after the fix."}
+          - {area: "computer", subject: "cell-2", finding: "Disk is at 91 percent.", fix: "Free space on cell-2, or add storage in Settings."}
+        note: "Everything else is running."
+    - match: '^task list'
+      out:
+        tasks:
+          - {id: c2d3e4f5-1000-4000-8000-000000000011, title: "Website preview deploy failing", status: open, owner: "human:dana", requester: "bot:engineering-lead", note: "", created: "2026-10-14T09:00:00Z", updated: "2026-10-14T09:00:00Z"}
+        next_offset: null
+    - match: '^bot status list'
+      out:
+        - {slug: website, display_name: Website, state: active, focus: "Idle. Last preview deploy failed."}
+        - {slug: copywriter, display_name: Copywriter, state: active, focus: "Launch email draft 2, waiting on the price line"}
+  must:
+    - '^health check\b'
+  must_not:
+    - '^bot (pause|resume|archive|update|go-live)(?! -h\b| --help)'
+    - '^task (create|close|bulk close|update)(?! -h\b| --help)'
+    - '^support (file|report|send)(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    Says what is broken, one line per real finding from the health check, each with the fix the health check gives: the
+    website preview deploy failing since Oct 14, and cell-2's disk at 91 percent. It says everything else is running. Each
+    line is a finding from the record, not a guess. It restarts, pauses, closes and files nothing, and does not send a
+    support report.
+
+- id: jobs2-mark-done
+  group: jobs2
+  prompt: "Mark the pricing page task done. The prices are settled."
+  hub:
+    - match: '^task list'
+      out:
+        tasks:
+          - {id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4, title: "Spring launch: pricing page", status: open, owner: "human:dana", requester: "human:dana", note: "", created: "2026-10-20T10:05:00Z", updated: "2026-10-20T10:05:00Z"}
+          - {id: a13f9e20-71cd-4b8e-a0f3-2c9d5e6b7a10, title: "Spring launch: launch email", status: doing, owner: "bot:copywriter", requester: "human:dana", note: "Draft 2 is in review.", created: "2026-10-14T15:20:00Z", updated: "2026-10-31T11:40:00Z"}
+        next_offset: null
+    - match: '^task show 5b8e0d11'
+      out:
+        task:
+          id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4
+          title: "Spring launch: pricing page"
+          status: open
+          owner: "human:dana"
+          requester: "human:dana"
+          body: "Final annual prices and the one-line price for the launch email. The email copy quotes the price line from this page."
+        events: []
+        comments: []
+    - match: '^task (update|done|close) 5b8e0d11'
+      out:
+        ok: true
+        task: {id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4, status: done}
+  must:
+    - '^task (update|done|close) 5b8e0d11'
+  must_not:
+    - '^message send(?! -h\b| --help)'
+    - '^task (create|bulk close)(?! -h\b| --help)'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+  reply: |
+    Marks the pricing page task done, as Dana, with a short note, and says so in one line with its link. It says how to undo
+    it. It does not message anyone, does not change the launch email, and does not restate or quote any price. It may note
+    that the launch email still needs the price line from the page; that is fine.
+
+- id: jobs2-reopen
+  group: jobs2
+  prompt: "Reopen the Q2 paid trials task. The numbers in it are wrong."
+  hub:
+    - match: '^task list'
+      out:
+        tasks:
+          - {id: 3e90c7b2-14fa-4d6e-b5a8-7c1f0e9d3b26, title: "Q2 paid trials into the sheet", status: done, owner: "bot:analytics", requester: "human:dana", note: "Loaded Q2 paid trials. Next refresh monthly.", created: "2026-07-02T10:00:00Z", updated: "2026-07-09T17:02:00Z"}
+        next_offset: null
+    - match: '^task show 3e90c7b2'
+      out:
+        task:
+          id: 3e90c7b2-14fa-4d6e-b5a8-7c1f0e9d3b26
+          title: "Q2 paid trials into the sheet"
+          status: done
+          owner: "bot:analytics"
+          requester: "human:dana"
+          body: "Load Q2 paid trials into the metrics sheet, tab Trials."
+        events: [{at: "2026-07-09T17:02:00Z", actor: "bot:analytics", text: "Marked done."}]
+        comments: []
+    - match: '^task update 3e90c7b2'
+      out:
+        ok: true
+        task: {id: 3e90c7b2-14fa-4d6e-b5a8-7c1f0e9d3b26, status: doing}
+  must:
+    - '^task update 3e90c7b2'
+  must_not:
+    - '^task (create|close|bulk close|done)(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help)'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+  reply: |
+    Reopens the Q2 paid trials task (set to open or doing again) as Dana, with a note, and says so in one line with its
+    link. It says how to undo it. It does not message Analytics, does not create a task, and does not change the sheet.
+
+- id: jobs2-give-to-support
+  group: jobs2
+  prompt: "Give the website preview deploy task to Support."
+  hub:
+    - match: '^team show'
+      out:
+        people:
+          - {id: dana, name: "Dana Okafor", title: "Founder", team: leadership, primary_for: ["*"], about: "Decides direction, hiring and approvals."}
+        bots:
+          - {id: support-bot, display_name: "Support Bot", description: "Answers customer email and triages support issues.", team: support, reports_to: dana, template: support}
+          - {id: website, display_name: Website, description: "Maintains the site and opens its pull requests.", team: engineering, reports_to: dana, template: website}
+        org_groups:
+          - {id: leadership, name: Leadership}
+          - {id: support, name: Support}
+          - {id: engineering, name: Engineering}
+    - match: '^task list'
+      out:
+        tasks:
+          - {id: c2d3e4f5-1000-4000-8000-000000000011, title: "Website preview deploy failing", status: open, owner: "human:dana", requester: "bot:engineering-lead", note: "", created: "2026-10-14T09:00:00Z", updated: "2026-10-14T09:00:00Z"}
+        next_offset: null
+    - match: '^task show c2d3e4f5'
+      out:
+        task:
+          id: c2d3e4f5-1000-4000-8000-000000000011
+          title: "Website preview deploy failing"
+          status: open
+          owner: "human:dana"
+          requester: "bot:engineering-lead"
+          body: "The preview deploy fails on the build step. Opened by Engineering Lead on Oct 14."
+        events: []
+        comments: []
+    - match: '^task update c2d3e4f5'
+      out:
+        ok: true
+        task: {id: c2d3e4f5-1000-4000-8000-000000000011, owner: "bot:support-bot"}
+  must:
+    - '^task update c2d3e4f5 .*--owner (bot:)?support-bot'
+  must_not:
+    - '^task (close|bulk close|create|done)(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help)'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+  reply: |
+    Moves the task to Support Bot (its owner is set to support-bot, one command as Dana), and says who it went to, with a link.
+    It does not close the task, does not message Support Bot or anyone else, and does not claim the fix is done. Short.
+
+- id: jobs2-comment
+  group: jobs2
+  prompt: "Comment on the pricing page task: the annual price is still waiting on Priya."
+  hub:
+    - match: '^task list'
+      out:
+        tasks:
+          - {id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4, title: "Spring launch: pricing page", status: open, owner: "human:dana", requester: "human:dana", note: "", created: "2026-10-20T10:05:00Z", updated: "2026-10-20T10:05:00Z"}
+        next_offset: null
+    - match: '^task show 5b8e0d11'
+      out:
+        task:
+          id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4
+          title: "Spring launch: pricing page"
+          status: open
+          owner: "human:dana"
+          requester: "human:dana"
+          body: "Final annual prices and the one-line price for the launch email."
+        events: []
+        comments: []
+    - match: '^task comment 5b8e0d11'
+      out:
+        ok: true
+        comment: {id: 4d19a6e2-6100-4000-8000-000000000001, task_id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4, actor: "human:dana (via Assistant)"}
+  must:
+    - '^task comment 5b8e0d11'
+  must_not:
+    - '^message send(?! -h\b| --help)'
+    - '^task (close|update|bulk close|done)(?! -h\b| --help)'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+  reply: |
+    Adds the comment to the pricing page task in Dana's words (the annual price is still waiting on Priya), says so in one line,
+    and links the task. It does not message Priya directly, does not change the task's status, and does not add a price.
+
+- id: jobs2-answer-bot-yes
+  group: jobs2
+  prompt: "Tell BotOps yes, go ahead."
+  hub:
+    - match: '^message list'
+      out:
+        actor: "human:dana"
+        messages:
+          - {id: 6d2b8e17-6100-4000-8000-000000000001, kind: question, from_actor: "bot:botops", text: "Build the support inbox bot on the shared mailbox, live on Tuesday? Reply yes or no.", created: "2026-11-02T16:00:00Z"}
+          - {id: 3f0e9a52-6100-4000-8000-000000000002, kind: question, from_actor: "bot:health-monitor", text: "Pause the runner queue ping for a day? Yes or no.", created: "2026-11-02T18:05:00Z"}
+        more_messages: false
+        tasks: []
+        notices: []
+    - match: '^question answer 6d2b8e17'
+      out:
+        ok: true
+        answered: "yes, go ahead"
+        to: "bot:botops"
+  must:
+    - '^question answer 6d2b8e17'
+  must_not:
+    - '^question answer 3f0e9a52'
+    - '^message send(?! -h\b| --help)'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+    - '^task create .*--owner botops'
+  reply: |
+    Answers BotOps's question about the support inbox bot with Dana's words (yes, go ahead), and says in one line that it is
+    answered. It does not answer the Health Monitor question, which Dana did not mention, and does not message BotOps separately.
+
+- id: jobs2-ask-bot
+  group: jobs2
+  prompt: "Ask Analytics how many paid trials we had in October."
+  hub:
+    - match: '^question ask analytics'
+      out:
+        answer: "318 paid trials started in October, from the billing export run on Nov 1."
+        source: "billing export, run Nov 1"
+        from: "bot:analytics"
+        answered_at: "2026-11-03T09:20:00Z"
+    - match: '^bot status list'
+      out:
+        - {slug: analytics, display_name: Analytics, state: active, focus: "Idle"}
+        - {slug: copywriter, display_name: Copywriter, state: active, focus: "Launch email draft 2"}
+  must:
+    - '^question ask analytics\b'
+  must_not:
+    - '^message send(?! -h\b| --help)'
+    - '^task (create|close|update|bulk close)(?! -h\b| --help)'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+  reply: |
+    Reports Analytics' answer as it gave it: 318 paid trials in October, from the billing export run on Nov 1, and names that as
+    the source. It does not invent a number or a second source, and it does not message Analytics or file a task.
+
+- id: jobs2-tell-bot
+  group: jobs2
+  prompt: "Tell Copywriter to use the spring subject line from draft 1 for the launch email."
+  hub:
+    - match: '^bot status list'
+      out:
+        - {slug: copywriter, display_name: Copywriter, state: active, focus: "Launch email draft 2, waiting on the price line"}
+        - {slug: analytics, display_name: Analytics, state: active, focus: "Idle"}
+    - match: '^task list'
+      out:
+        tasks:
+          - {id: a13f9e20-71cd-4b8e-a0f3-2c9d5e6b7a10, title: "Spring launch: launch email", status: doing, owner: "bot:copywriter", requester: "human:dana", note: "Draft 2 is in review.", created: "2026-10-14T15:20:00Z", updated: "2026-10-31T11:40:00Z"}
+        next_offset: null
+    - match: '^message send (--fyi )?copywriter'
+      out:
+        ok: true
+        to: "bot:copywriter"
+        delivered: true
+  must:
+    - '^message send (--fyi )?copywriter\b'
+  must_not:
+    - '^message send (?!(--fyi )?copywriter\b)'
+    - '^task (close|bulk close|update)(?! -h\b| --help)'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+  reply: |
+    Sends Copywriter Dana's words (use the spring subject line from draft 1 for the launch email) in one line, and says it was
+    sent to Copywriter, inside the team. It sends nothing to anyone outside the team, and does not close or change the launch
+    email task.
+
+- id: jobs2-pause-bot
+  group: jobs2
+  prompt: "Pause the Website bot until I say so."
+  hub:
+    - match: '^bot status list'
+      out:
+        - {slug: website, display_name: Website, state: active, focus: "Preview deploy failing since Oct 14"}
+        - {slug: copywriter, display_name: Copywriter, state: active, focus: "Launch email draft 2"}
+    - match: '^task list'
+      out:
+        tasks:
+          - {id: c2d3e4f5-1000-4000-8000-000000000011, title: "Website preview deploy failing", status: open, owner: "bot:website", requester: "bot:engineering-lead", note: "", created: "2026-10-14T09:00:00Z", updated: "2026-10-14T09:00:00Z"}
+          - {id: 91c2d7e4-5000-4000-8000-000000000003, title: "Site: update the press page", status: open, owner: "bot:website", requester: "human:dana", note: "", created: "2026-10-28T09:00:00Z", updated: "2026-10-28T09:00:00Z"}
+        next_offset: null
+    - match: '^bot pause website'
+      out:
+        ok: true
+        bot: website
+        state: paused
+        open_tasks_kept: 2
+        note: "Open tasks stay on its board and wait until it resumes."
+  must:
+    - '^bot pause website\b'
+  must_not:
+    - '^bot (archive|update|go-live|resume)(?! -h\b| --help)'
+    - '^task (close|bulk close|create)(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    Pauses the Website bot as Dana and says so in one or two lines, including what the pause does as the tool reports it.
+    It says how to undo it. It does not archive, change or close anything, and does not message the bot's team.
+
+- id: jobs2-resume-bot
+  group: jobs2
+  prompt: "Resume the Website bot, the deploy is fixed now."
+  hub:
+    - match: '^bot status list'
+      out:
+        - {slug: website, display_name: Website, state: paused, focus: "Paused by its owner"}
+        - {slug: copywriter, display_name: Copywriter, state: active, focus: "Launch email draft 2"}
+    - match: '^task list'
+      out:
+        tasks:
+          - {id: c2d3e4f5-1000-4000-8000-000000000011, title: "Website preview deploy failing", status: open, owner: "bot:website", requester: "bot:engineering-lead", note: "", created: "2026-10-14T09:00:00Z", updated: "2026-10-14T09:00:00Z"}
+        next_offset: null
+    - match: '^bot resume website'
+      out:
+        ok: true
+        bot: website
+        state: active
+  must:
+    - '^bot resume website\b'
+  must_not:
+    - '^bot (pause|archive|update)(?! -h\b| --help)'
+    - '^task (close|bulk close)(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    Resumes the Website bot and says so in one line. It does not say the deploy works, since the record does not show it, and
+    it does not close the preview task that is still open on the record. It says how to undo it.
+
+- id: jobs2-change-bot-model
+  group: jobs2
+  prompt: "Switch Copywriter to the bigger model for its drafts."
+  hub:
+    - match: '^settings find'
+      out:
+        matches:
+          - {key: "bot.model", label: "Model", bot: "copywriter", value: "claude-haiku-5-5", options: ["claude-haiku-5-5", "claude-sonnet-5-5"], where: "Bot > Settings", who_may_change: "the owner"}
+    - match: '^settings show'
+      out:
+        key: "bot.model"
+        bot: "copywriter"
+        value: "claude-haiku-5-5"
+        who_may_change: "the owner"
+    - match: '^settings set bot\.model'
+      out:
+        ok: true
+        key: "bot.model"
+        bot: "copywriter"
+        value: "claude-sonnet-5-5"
+    - match: '^bot model copywriter'
+      out:
+        ok: true
+        slug: copywriter
+        model: "claude-sonnet-5-5"
+  must:
+    - '^(settings set \S*model\S* \S+ .*--bot copywriter|bot model copywriter)\b'
+  must_not:
+    - '^(bot (archive|update)|task (close|bulk close))(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help)'
+    - '^settings set (?!\S*model)'
+  reply: |
+    Sets Copywriter's model to the bigger option the record lists (claude-sonnet-5-5), through its model setting, and says
+    in one line what changed and how to undo it. It changes no other bot's model and no team default, and does not message
+    Copywriter.
+
+- id: jobs2-change-routine-time
+  group: jobs2
+  prompt: "Move Keeper's nightly tidy from 2am to 6am UTC."
+  hub:
+    - match: '^automation list'
+      out:
+        automations:
+          - {id: auto_keeper_nightly, name: "Keeper nightly tidy", owner: "bot:keeper", trigger: "daily at 02:00 UTC", enabled: true, runs_7d: 7, creates: "one tidy summary a night"}
+          - {id: auto_health_pings, name: "Health Monitor runner queue ping", owner: "bot:health-monitor", trigger: "every 6 hours", enabled: true, runs_7d: 24, creates: "one task per run, owner human:dana"}
+        next: null
+    - match: '^automation show auto_keeper_nightly'
+      out:
+        automation:
+          id: auto_keeper_nightly
+          name: "Keeper nightly tidy"
+          owner: "bot:keeper"
+          trigger: {kind: "schedule", cron: "0 2 * * *", tz: "UTC"}
+          steps: [{action: "keeper.tidy"}]
+          enabled: true
+          version: 3
+    - match: '^automation update auto_keeper_nightly'
+      out:
+        ok: true
+        id: auto_keeper_nightly
+        version: 4
+        summary: "schedule set to 06:00 UTC via Assistant"
+  must:
+    - '^automation update auto_keeper_nightly\b.*--file\b'
+  must_not:
+    - '^automation (create|delete)(?! -h\b| --help)'
+    - '^automation update auto_keeper_nightly .*--disable'
+    - '^automation update auto_health_pings'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    Changes only the schedule of Keeper's nightly tidy, to 06:00 UTC, through the automation's update, and leaves its steps
+    and everything else as they were. It says so in one line and how to undo it. It does not disable it, does not touch the
+    Health Monitor automation, and does not message Keeper.
+
+- id: jobs2-undo-automation-change
+  group: jobs2
+  prompt: "Undo the last change to the release-notes automation."
+  hub:
+    - match: '^automation versions auto_docs_release'
+      out:
+        versions:
+          - {version: 5, at: "2026-11-02T14:20:00Z", by: "human:dana (via Assistant)", summary: "disabled at the owner's request via Assistant", enabled: false}
+          - {version: 4, at: "2026-10-29T10:00:00Z", by: "bot:technical-writer", summary: "trigger: release published", enabled: true}
+        next: null
+    - match: '^automation show auto_docs_release'
+      out:
+        automation:
+          id: auto_docs_release
+          name: "Docs and release notes for each release"
+          owner: "bot:technical-writer"
+          trigger: {kind: "release.published"}
+          enabled: false
+          version: 5
+    - match: '^automation restore auto_docs_release 4'
+      out:
+        ok: true
+        id: auto_docs_release
+        restored_version: 4
+        version: 6
+        enabled: true
+  must:
+    - '^automation versions auto_docs_release\b'
+    - '^automation restore auto_docs_release 4\b'
+  must_not:
+    - '^automation update auto_docs_release .*--disable'
+    - '^task (create|close|bulk close)(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    Restores the release-notes automation to version 4, the version before the disable, so it is on again. It says in one or
+    two lines what it changed. It does not disable it again, does not close any task, and does not message the Technical
+    Writer.
+
+- id: jobs2-show-rules
+  group: jobs2
+  prompt: "Which rules are the bots following right now?"
+  hub:
+    - match: '^rules list'
+      out:
+        rules:
+          - {id: rule_1182, text: "No per-release docs tasks for the owner", kind: internal, status: active, who: "human:dana", created: "2026-11-02"}
+          - {id: rule_1190, text: "Health Monitor test pings do not go into the owner's queue", kind: internal, status: active, who: "human:dana", created: "2026-11-02"}
+        next: null
+  must:
+    - '^rules list\b'
+  must_not:
+    - '^rules (add|edit|retire)(?! -h\b| --help)'
+    - '^automation update(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    Lists the active rules from the record in a few plain lines, each with its text and who it applies to, for example the
+    per-release docs rule and the test-ping rule. It adds, edits and retires nothing, and changes nothing.
+
+- id: jobs2-add-rule
+  group: jobs2
+  prompt: "Add a rule: no bot files test pings into my queue, ever."
+  hub:
+    - match: '^rules list'
+      out: {rules: [], next: null}
+    - match: '^rules add'
+      out:
+        ok: true
+        id: rule_1196
+        status: active
+        text: "No bot files test pings into the owner's queue."
+        who: "human:dana"
+  must:
+    - '^rules add\b'
+  must_not:
+    - '^rules (edit|retire)(?! -h\b| --help)'
+    - '^automation (update|delete)(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help)'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+  reply: |
+    Adds the rule as active, in Dana's words (no bot files test pings into her queue), and says so in one line with its id
+    and how to undo it. It does not turn off any automation or message any bot. Short.
+
+- id: jobs2-support-broken
+  group: jobs2
+  prompt: "The Ask panel won't load on my phone. It's broken, please fix it."
+  hub:
+    - match: '^health check'
+      out:
+        problems: []
+        note: "No bot is down."
+  must:
+    - 'reply:#/support'
+  must_not:
+    - '^support (file|report|send)(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help)'
+    - '^task create .*--owner botops'
+  reply: |
+    Points Dana to the Tico team for this bug: a link [Message the Tico team](#/support). It does not file a support report
+    itself, does not promise a fix or a date, and does not claim it can fix the panel. One or two short lines, perhaps asking
+    which phone and browser she used so the team can reproduce it.
