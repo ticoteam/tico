@@ -323,10 +323,11 @@ function decideRender(st, enter = false) {
       <div class="dc-who-text"><div class="dc-who-name">${chat ? `<a class="dc-who-link" href="${esc(chat)}" title="${esc(`Open ${name}`)}">${esc(name)}</a>` : esc(name)}${origin ? `<span class="dc-origin"> · ${esc(origin)}</span>` : ''}</div>
         <div class="dc-who-sub">${esc(sub)}</div></div>
       ${decideDue(c.it) ? `<span class="tl-due${decideDue(c.it).late ? ' late' : ''}">${esc(decideDue(c.it).words)}</span>` : ''}
-      <span class="pill needs">${esc(chip)}</span></div>
+      <span class="pill needs">${esc(chip)}</span>${fbButtonsHTML(decideFeedbackKey(c), {fixed: true})}</div>
     <div class="dc-body"></div>${note}
   </article>`;
   decidePaintBody(st);
+  fbSync();
   actions.innerHTML = actions.dataset.html = decideActionsHTML(c);
   const card = $('.dc-card', stage);
   if (enter) requestAnimationFrame(() => requestAnimationFrame(() => card.classList.remove('in')));
@@ -334,6 +335,16 @@ function decideRender(st, enter = false) {
   void decideLoad(st, c);
   const next = st.cards.get(decideStepKey(st, 1));
   if (next) void decideLoad(st, next);
+}
+// What a card's 👍 / 👎 rates (ui/app/feedback.js): the approval a bot asked for, a bot's question, or a task a bot asked
+// for. It is never an answer: it goes nowhere near the outbox, and the card stays where it is.
+function decideFeedbackKey(c) {
+  const it = c.it, bot = a => String(a || '').startsWith('bot:');
+  if (c.type === 'approve') return bot(it.requester_id) ? fbKey('approval', it.id) : '';
+  if (c.type === 'ask') return bot(it.requester_id) ? fbKey('message', it.message_id || it.id) : '';
+  if (c.type === 'pick') return bot(it.ask?.sender_id) && it.ask?.id ? fbKey('message', it.ask.id) : '';
+  if (c.type === 'task') return fbTaskKey(it);
+  return '';
 }
 // A card's deadline: a person's task's due date (a bot's own task's due is only when it looks again).
 const decideDue = it => { const d = ['approval', 'ask', 'stale', 'memory_tidy'].includes(it.kind) ? null : taskDueInfo(it); return d?.kind === 'deadline' ? d : null; };
