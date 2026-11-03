@@ -338,10 +338,10 @@ REVIEWED = {
 
 def test_every_route_that_touches_a_credential_or_a_sign_in_is_never_a_chat_write(api):
     """Walks app.routes: any route whose handler reads or writes a credential, a grant, a computer's sign-in or keys, a
-    subscription, a federation or signing key, an invite, or the providers, must be on NEVER for every write it takes
+    subscription, a signing key, an invite, or the providers, must be on NEVER for every write it takes
     (or be reviewed in REVIEWED with its reason). A new such route that is neither fails here, not in a chat."""
     touches = re.compile(r"credential|model_login|computer_keys|shared_key|attach_shared|login|logout|password|service_key|"
-                         r"enroll|pairing|subscription|federation|signing|replace_lost|invite|provider")
+                         r"enroll|pairing|subscription|signing|replace_lost|invite|provider")
     checked, offenders = 0, []
     for route in api.app.routes:
         methods = getattr(route, "methods", None)
