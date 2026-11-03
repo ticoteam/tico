@@ -293,7 +293,7 @@ def test_a_persons_message_carried_to_another_bot_in_a_task_reads_as_the_person(
         _wake_by_hand(c, "msg-carry", "coo")
     shown = get(api, f"tasks/{tid}")["execution"]
     assert (shown["message_id"], shown["bot_id"], shown["state"], shown["from_person"]) == ("msg-carry", "coo", "queued", True)
-    assert humans[-1] is True, "the carried message is a person's, so a bot's computer hold does not apply to it"
+    assert humans and all(h is True for h in humans), "the carried message is a person's: no bot's computer hold applies"
 
 
 def test_an_opt_in_login_queue_names_the_holder_only_to_who_may_see_it(api, queued_login):

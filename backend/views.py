@@ -914,7 +914,8 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
 
 # The queued job of a task. INDEXED BY jobs_queued: the expression on the message cannot use an index, and with the
 # stale sqlite_stat1 row for messages the planner scanned all of them (40-44 ms a call on TIDY v0.5.1, 545 an hour).
-TASK_WAIT_SQL = ("SELECT j.bot_id FROM jobs j INDEXED BY jobs_queued JOIN messages m ON m.id=j.message_id "
+TASK_WAIT_SQL = (f"SELECT j.bot_id,{H.person_sent_sql()} AS person_sent FROM jobs j INDEXED BY jobs_queued "
+                 "JOIN messages m ON m.id=j.message_id "
                  "JOIN conversations cv ON cv.id=m.conversation_id "
                  f"WHERE j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at LIMIT 1")
 
@@ -924,7 +925,7 @@ def task_wait(c, task_id, settings=None):
     job = c.execute(TASK_WAIT_SQL, (task_id,)).fetchone()
     if not job:
         return ""
-    label = queued_label(c, job["bot_id"], machine(c, job["bot_id"]), settings)[0]
+    label = queued_label(c, job["bot_id"], machine(c, job["bot_id"]), settings, human=bool(job["person_sent"]))[0]
     reason = label.removeprefix("Saved — ")
     return "Queued" if reason == "queued" else reason[:1].upper() + reason[1:]
 
