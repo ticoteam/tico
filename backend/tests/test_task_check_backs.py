@@ -448,3 +448,17 @@ def test_first_wake_fleet_cap_applies_across_bots(followups, monkeypatch):
         due(c, H.task_create(c, "human:ana", "Inspect finance work", "x", "bot:finance", lint=False))
         checked = CB.sweep(c)
         assert len(checked["woke"]) == len(checked["blocked"]) == 1
+
+
+def test_results_returned_while_disabled_remain_audit_only_after_enable(followups):
+    with followups.app.state.store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('system_routines',?)", (json.dumps({CB.KEY: {"on": False}}),))
+        returned = []
+        for status in ("done", "declined"):
+            row = H.task_create(c, "bot:finance", "Inspect an offline result " + status, "x", "bot:ops", lint=False)
+            H.task_update(c, "bot:ops", row["id"], status=status)
+            returned.append(row["id"])
+        assert all(H.task(c, tid)["check_back_at"] is None for tid in returned)
+        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('system_routines',?)", (json.dumps({CB.KEY: {"on": True}}),))
+        assert CB.sweep(c)["woke"] == []
+        assert CB.coverage(c)["results"] == 2

@@ -165,6 +165,9 @@ def ensure(c, row, at=None):
         clear(c, row)
         return
     if row["status"] in RESULT:
+        if not enabled(c):
+            clear(c, row)
+            return  # results returned during shadow mode belong to the historical audit, not an enable-time queue
         consumer = actor_for(row)
         parent = H.task(c, H.TR.parent_of(c, row["id"]) or "")
         if not consumer or parent and parent["status"] in ACTIVE and actor_for(parent) == consumer:
@@ -179,7 +182,7 @@ def moved(c, row, at=None):
     H = _H()
     at = at or H.now()
     ensure(c, row, at)
-    if row["status"] not in RESULT:
+    if row["status"] not in RESULT or not enabled(c):
         return
     consumer = actor_for(row)
     if not consumer:

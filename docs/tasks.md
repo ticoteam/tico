@@ -1729,7 +1729,7 @@ resume and deadline dates; otherwise they receive staggered provisional dates. A
 wakes per bot and 50 first wakes across the fleet are delivered in an hour (`TICO_TASK_CHECK_BACKS_PER_BOT_HOUR`
 and `TICO_TASK_CHECK_BACKS_FLEET_HOUR` change those caps). Due work beyond a cap stays visible and is delivered by a
 later pass. Historical Done/Declined results remain in audit counts without automatically waking their requesters;
-new result transitions and explicit new activity establish consumption recovery. Age never proves acceptance. Health shows missing dates, overdue work and returned
+new result transitions and explicit new activity while enabled establish consumption recovery. Age never proves acceptance. Health shows missing dates, overdue work and returned
 results even while the feature is in shadow mode; it never publishes unreadable task details.
 
 System appointment repairs do not refresh a task’s human-idle clock or edit version. Scheduler candidates are read
