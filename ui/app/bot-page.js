@@ -372,7 +372,7 @@ async function pageBot(slug, tab) {
     <a class="ghost bot-more-btn" id="bot-more-btn" href="${base}/info" aria-label="Info" title="Info"><span class="nav-icon" aria-hidden="true">more_vert</span></a>
   </div>
   <div id="bot-banners"><div id="bot-limit-host">${limited ? '' : botLimitHTML(slug)}</div>
-  <div id="bot-onboard-host">${frBotBannerHTML(e)}</div></div>
+  <div id="bot-onboard-host">${frBotBannerHTML(e)}</div><div id="bot-dream-host"></div></div>
   <a class="bot-back" id="bot-back" href="${base}" hidden>‹ ${BOT_TAB_LABELS[work[0]] || 'Tasks'}</a>
 
   <div class="bot-work" id="bot-work">
@@ -488,6 +488,7 @@ async function pageBot(slug, tab) {
   if (!limited) {
     void botBranchesLoad(slug);
     void botLearningsLoad(slug);
+    void botDreamLoad(slug);
   }
   if (!limited) void botGoalLoad(slug);
   $('#btabs').onclick = ev => {
