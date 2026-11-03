@@ -175,3 +175,17 @@ def test_a_close_restores_the_exact_status_it_closed_from(api):
     restore(api, changes_for(api, f"task:{task['id']}")[0]["id"])
     row = task_row(api, task["id"])
     assert (row["status"], row["closed_at"], row["closed_by_id"]) == ("doing", None, None)
+
+
+def test_a_manager_who_is_not_the_owner_undoes_their_own_assistant_setting(api):
+    """A co-owner of the bot made the setting through their Assistant; the list says so and restore does it."""
+    post(api, "bots/ops/co-owners", {"add": ["cara"]})
+    rev = get(api, "bots/ops", "cara-test")["revision"]
+    post(api, "bots/ops/keep-tasks-going", {"keep_tasks_going": 2, "expected_revision": rev}, token="cara-test")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE settings_changes SET via='assistant' WHERE bot='ops' AND field='keep_tasks_going'")
+    [change] = [c for c in get(api, "assistant/changes?days=30", "cara-test")["changes"]
+                if c["object"] == "setting:ops:keep_tasks_going"]
+    assert change["undoable"] is True
+    restore(api, change["id"], token="cara-test")
+    assert get(api, "bots/ops", "cara-test")["keep_tasks_going"] is None

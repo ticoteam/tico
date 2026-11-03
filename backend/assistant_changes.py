@@ -211,8 +211,8 @@ def undoable(c, who, kind, row, detail, settings):
     if kind == "setting":
         if row["undone_at"]:
             return False, "it was undone already"
-        if who.role != "owner":
-            return False, "only the owner undoes a bot setting"
+        if not settings.may_undo(c, who, row):
+            return False, "you no longer manage this bot"
         if settings.snapshot(c, row["bot"], row["field"]) != _json(row["after"]):
             return False, "it changed again since"
         return True, ""
