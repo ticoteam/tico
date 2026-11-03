@@ -177,7 +177,7 @@ legend.nt-lbl{margin-bottom:6px}
   /* One line: the title gives way (ellipsis) to back, pin, call, faces and ⋯. */
   .tr-pane .thv-titleline{flex-wrap:nowrap;gap:2px}
   .tr-pane .thv-title{flex:1 1 auto;min-width:0}
-  .tr-pane .thv-aud{display:none}     /* "Private" on a DM: its face already says who; the name gets the room */
+  .tr-pane .thv-aud{order:0;flex:none}   /* on the title's line, not a line of its own */
   /* The rows and buttons show their own pressed state; no grey flash on tap. */
   .tr-rail :is(a,button),.thv-head :is(a,button),.cu-dialog button{-webkit-tap-highlight-color:transparent}
   .cu-dialog{position:fixed;inset:0 0 calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));width:100%;max-width:none;height:auto;max-height:none;margin:0;padding:max(18px,env(safe-area-inset-top)) 16px 12px;background:var(--bg)}

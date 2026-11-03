@@ -278,7 +278,8 @@ function thvHeadHTML(view) {
   const crumbs = (view.breadcrumb || []).filter(c => c.id !== t.id);
   // A thread the rail lists says what it is with its mark (# or a lock); a Home or a DM says it in words.
   const hash = threadOnRail(t);
-  const aud = hash ? '' : t.audience === 'company' ? 'Company' : t.audience === 'team' ? groupName(t.audience_group_id)
+  // A DM's face already says who it is with, so it carries no "Private"; the name keeps the room on a phone.
+  const aud = hash || threadIsDm(t) ? '' : t.audience === 'company' ? 'Company' : t.audience === 'team' ? groupName(t.audience_group_id)
     : t.audience === 'home' ? 'Home' : threadPrivate(t) ? 'Private' : '';
   const back = crumbs.length ? `<a class="thv-back" href="${threadHref(crumbs[crumbs.length - 1].id)}" aria-label="Back" title="Back">‹</a>`
     : view.opts.back ? `<a class="thv-back thv-back-rail" href="${esc(view.opts.back)}" aria-label="Threads" title="Threads">‹</a>` : '';
