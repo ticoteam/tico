@@ -220,7 +220,18 @@ def view(auth, c, who, row):
     by = str(row["description_by"] or "")
     seat.update(description_by="person" if by.startswith("human:") or by == lifecycle.EARLIER else "chart",
                 can_edit=_may_edit(auth, c, who, row))
+    if str(row["reports_to"] or "").startswith(lifecycle.SEAT_PREFIX):
+        seat["reports_now"] = _reports_now(auth, c, who, row)
     return seat
+
+
+def _reports_now(auth, c, who, row):
+    """Who a bot hired into this seat reports to until its manager seat is hired (`lifecycle.bot_parent`), and that
+    seat's title: the Hire page says both in one line. The name is "" when the caller may not see that person or bot."""
+    manager = c.execute("SELECT title FROM seats WHERE id=? AND closed_at IS NULL",
+                        (row["reports_to"][len(lifecycle.SEAT_PREFIX):],)).fetchone()
+    return {"name": boss_name(auth, c, who, lifecycle.bot_parent(c, row["reports_to"])),
+            "until": manager["title"] if manager else ""}
 
 
 def show(auth, c, who, seat_id):
@@ -730,6 +741,29 @@ def brief(c, onboarding, card, row):
     return record, rendered, description, instructions
 
 
+def _follow_filled(c, who, seat_id, bot, now):
+    """Bots hired into this seat while it was open report to the bot that fills it: their seats closed at `seat:<this>`.
+    One moves only while it still reports where it was placed (`placed_under`), so a line someone changed by hand stays.
+    A move that would close a circle (this seat's manager was moved under the bot hired into it while it was open) is
+    skipped, and that bot stays where it was placed. `_set_parent` revalidates Finance's org."""
+    from .settings_admin import SettingsAdmin, _set_parent
+    for seat in c.execute("SELECT filled_by FROM seats WHERE reports_to=? AND closed_at IS NOT NULL AND filled_by<>''",
+                          ("seat:" + seat_id,)).fetchall():
+        found = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (seat["filled_by"],)).fetchone()
+        if not found:
+            continue
+        placed = (json.loads(found["config"] or "{}") or {}).get("placed_under")
+        if placed is None or (found["reports_to"] or "") != placed:
+            continue
+        try:
+            SettingsAdmin._parent(c, seat["filled_by"], bot)     # the bot hierarchy's own check: no circle, bot exists
+        except Problem as err:
+            if err.code == "hierarchy":
+                continue
+            raise
+        _set_parent(c, who.actor, seat["filled_by"], bot, now)
+
+
 def onboard(c, who, onboarding, row, card, slug, *, name, description, instructions, rendered, answers, model):
     """Put the bot that fills a seat into Onboarding, in the seat's place, and only then give it its repository: a starter's
     computer builds it from this definition (`materialize`), any other template's BotOps does on its "Set up" task. A hire
@@ -742,8 +776,11 @@ def onboard(c, who, onboarding, row, card, slug, *, name, description, instructi
         from .finance import actions as FA
         FA.revalidate_org(c)                 # the seat's team is part of the org chart Finance's grants follow (spec 7.5)
     declared = onboarding._declared(c, slug)
+    # The line the bot was created on (its hire or add placed it there): a bot hired under this seat while it was open
+    # follows the bot that fills it only while it still reports there (_follow_filled).
+    placed = c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (slug,)).fetchone()["reports_to"] or ""
     declared.update(template=card["template"], instructions=instructions, template_version=releases.version(),
-                    recruited_from=row["id"])
+                    recruited_from=row["id"], placed_under=placed)
     onboarding._write_config(c, slug, declared)
     # Onboarding from the start: it learns, takes no work, and a person above it marks it complete (lifecycle.py).
     c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot=?", (lifecycle.statuses.NEEDS_SETUP, slug))
@@ -754,6 +791,7 @@ def onboard(c, who, onboarding, row, card, slug, *, name, description, instructi
     # Seats that reported to this one move under the bot that fills it, rather than under a closed seat.
     c.execute("UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",
               (slug, now, who.actor, "seat:" + row["id"]))
+    _follow_filled(c, who, row["id"], slug, now)
     end_draft(c, row, "The seat was filled")
     H.event(c, who.actor, "seat.filled", row["id"], {"bot": slug, "template": card["template"], "model": model})
     if card["starter"]:
@@ -796,11 +834,14 @@ def hire(auth, onboarding, c, who, seat_id, body):
     record, rendered, description, instructions = brief(c, onboarding, card, row)
     name = (body.name or row["title"]).strip()[:100] or row["title"][:100]
     slug = onboarding.admin.pick_slug(c, name)
+    # A bot reports to a person or a bot, never to a seat: under an open manager seat it goes under the nearest one above
+    # (lifecycle.bot_parent), and moves under the manager when that seat fills (_follow_filled).
+    under = lifecycle.bot_parent(c, row["reports_to"])
     # The bot first, under the rules for any bot this person adds: who may create one, under whom, on which model and
     # computer.
     created = onboarding.admin.create_bot(c, who, M.BotDefinitionCreate(
         slug=slug, display_name=name, description=description[:2000], status="planned",
-        repo="bot-" + slug, thread_mode="personal", reports_to=row["reports_to"] or None,
+        repo="bot-" + slug, thread_mode="personal", reports_to=under or None,
         shared=bool(card.get("shared")), template=card["template"], model=model, effort=effort,
         owners=[H.actor_id(who.actor)], runner_id=body.runner_id or None))
     bot_id = H.resolve_bot(c, slug)["id"]
@@ -809,6 +850,8 @@ def hire(auth, onboarding, c, who, seat_id, body):
         model = ""
     setup_task = onboard(c, who, onboarding, row, card, bot_id, name=name, description=description,
                          instructions=instructions, rendered=rendered, answers=record["answers"], model=model)
-    return {"bot": bot_id, "slug": slug, "name": name, "seat": seat_id, "stage": lifecycle.ONBOARDING, "reports_to": row["reports_to"],
+    # The line the bot was created on, which may be the default manager create_bot gives a member rather than `under`.
+    reports_to = c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (bot_id,)).fetchone()["reports_to"] or None
+    return {"bot": bot_id, "slug": slug, "name": name, "seat": seat_id, "stage": lifecycle.ONBOARDING, "reports_to": reports_to,
             "template": card["template"], "model": model, "setup_task_id": setup_task,
             "note": (created or {}).get("note") if isinstance(created, dict) else None}
