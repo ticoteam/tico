@@ -211,6 +211,10 @@ pub(super) struct Exits {
     /// Usage of each tunnel, by slot. A released slot goes to `free` and is reused.
     rows: Vec<TunnelUsage>,
     free: Vec<u32>,
+    /// The last day a slot counted on. The first count on another day moves every slot's earlier-day counts into the
+    /// day's totals before anything is counted on it, so earlier days' keys take their rows first, as when each frame
+    /// counted straight into the totals.
+    counted_day: u32,
     /// Per bot, the oldest selection generation still admitted.
     bot_generations: HashMap<String, u64>,
     /// Bytes and closed tunnels not yet in a batch, each on the UTC day it happened.
@@ -330,6 +334,14 @@ impl Exits {
 
     /// Starts slot `usage` on `day`: the counts it has move to the day they were counted on first.
     fn roll(&mut self, usage: u32, day: u32) {
+        if self.counted_day != day {
+            self.counted_day = day;
+            for other in 0..self.rows.len() {
+                if self.rows[other].day != day {
+                    self.flush(other as u32);
+                }
+            }
+        }
         if self.rows[usage as usize].day != day {
             self.flush(usage);
             self.rows[usage as usize].day = day;
@@ -1405,6 +1417,25 @@ mod tests {
             ),
             (11, 1, "www.acme.example", "ops")
         );
+    }
+
+    #[test]
+    fn the_first_count_on_a_new_day_moves_every_open_tunnels_earlier_counts_first() {
+        let mut exits = exits();
+        let _opens = exits.connect_link("laptop");
+        exits.set_policy("laptop", policy(1, &["ops"], 10_000)).unwrap();
+        exits.admit(&grant("a", "ops", 1, 0)).unwrap();
+        let mut docs = grant("b", "ops", 1, 0);
+        docs.host = "docs.acme.example".into();
+        exits.admit(&docs).unwrap();
+        exits.spend("a", 5).unwrap();
+        exits.spend("b", 7).unwrap();
+        exits.day = Some("2026-11-02".into());
+        exits.close("a", Close::new(1000, ""));
+        // b has done nothing on the new day; its bytes from the day before are already in the totals.
+        let mut totals: Vec<(u64, u64)> = exits.usage.values().copied().collect();
+        totals.sort();
+        assert_eq!(totals, vec![(0, 1), (5, 0), (7, 0)]);
     }
 
     #[test]
