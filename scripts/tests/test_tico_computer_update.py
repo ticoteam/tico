@@ -6,8 +6,8 @@ that moves on.
 
 Two starting points. A computer already on a release that has `tico-computer` (its `update` execs
 `$HUB/scripts/tico-computer`, a path that exists before and after the pull) must update through the rename and again
-after it. A computer still on the pre-rename release runs that release's `update`, which execs `$SELF`; after the pull
-that is the bot command, so its restart cannot work by content alone (the strict xfail below).
+after it. A computer still on the pre-rename release runs that release's `update`, which execs `$SELF`; after the pull that is
+the bot command, which forwards a computer verb outside a bot's turn to tico-computer, so that restart still lands.
 """
 import os
 import shutil
@@ -106,12 +106,13 @@ def test_a_computer_on_the_new_command_updates_through_the_rename_and_again_afte
     assert len(restarts(calls)) == 2
 
 
-@pytest.mark.xfail(strict=True, reason="a pre-rename computer runs its own update, which execs $SELF: after the pull "
-                   "that is the bot command, which restarts nothing (see the report that added this test)")
 def test_a_pre_rename_computer_restarts_its_bot_after_the_rename_pull(tmp_path):
+    # The pre-rename updater runs `update` from scripts/tico, pulls, then execs $SELF (the same path). After the pull
+    # that is the bot command, which forwards a computer verb outside a turn to tico-computer (clients/hubcli.main).
     world = computer(tmp_path, [("scripts/tico", OLD_COMMAND)], "old release")
     origin, checkout, env, calls = world["origin"], world["checkout"], world["env"], world["calls"]
     publish(origin, "rename the computer command to tico-computer", RENAME)
     done = subprocess.run(["bash", str(checkout / "scripts" / "tico"), "update"], cwd=checkout, env=env,
                           capture_output=True, text=True, timeout=120)
     assert done.returncode == 0 and len(restarts(calls)) == 1, done.stdout + done.stderr
+    assert "tico restart moved to tico-computer restart; forwarding" in done.stderr

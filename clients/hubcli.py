@@ -3945,20 +3945,21 @@ def split_human(argv):
     return argv, who
 
 
-# The verbs of the computer's own command (scripts/tico-computer). With no bot in the environment they have moved there:
-# `tico` says where, and runs nothing. A bot's turn always has its bot, so inside a turn these words are the bot's own.
+# The verbs of the computer's own command (scripts/tico-computer). Outside a bot's turn `tico` forwards them there; inside
+# a turn they answer where they moved and run nothing (main).
 COMPUTER_VERBS = ("install", "uninstall", "restart", "status", "doctor", "logs", "update", "open", "env", "enroll",
                   "profile", "screen", "server")
-MOVED_BY_BOT = ("TICO_BOT", "HUB_BOT", "HUB_EMPLOYEE")
+MOVED_BY_BOT = ("TICO_BOT", "HUB_BOT", "HUB_EMPLOYEE")   # the runner sets HUB_BOT and HUB_EMPLOYEE on every bot turn
+COMPUTER = Path(__file__).resolve().parent.parent / "scripts" / "tico-computer"
+
+
+def in_bot_turn():
+    return any(os.environ.get(name) for name in MOVED_BY_BOT)
 
 
 def moved_verb(argv):
-    """The computer verb `argv` names when it has moved to tico-computer, else None.
-
-    Only outside a bot's turn. `tico update` with a sub-noun is the updates command even outside a turn, and `-e ENV`
-    before the verb is skipped the way tico-computer reads it."""
-    if any(os.environ.get(name) for name in MOVED_BY_BOT):
-        return None
+    """The computer verb `argv` names (tico-computer owns it), else None. `tico update` with a sub-noun is the updates
+    command, and `-e ENV` before the verb is skipped the way tico-computer reads it."""
     words = list(argv)
     while words and (words[0] in ("-e", "--env") or words[0].startswith("--env=")):
         words = words[1:] if words[0].startswith("--env=") else words[2:]
@@ -3972,10 +3973,23 @@ def moved_verb(argv):
 
 
 def main(argv):
+    """A computer verb inside a bot's turn answers where it moved and runs nothing (exit 2). Outside a turn it is
+    forwarded: one stderr line, then tico-computer runs with the same arguments. That is what lets a computer still on
+    the pre-rename release reach tico-computer when its updater execs `$SELF` (the bot command) after the pull.
+    `bot create` stays a guarded line outside a turn, as before."""
     moved = moved_verb(argv)
-    if moved:
+    if moved == "bot create":
+        if not in_bot_turn():
+            print(f"This moved: tico-computer {moved}", file=sys.stderr)
+            return 2
+    elif moved and in_bot_turn():
         print(f"This moved: tico-computer {moved}", file=sys.stderr)
         return 2
+    elif moved:
+        name = "hub" if os.environ.get("TICO_CLI_ALIAS") == "hub" else "tico"
+        print(f"{name} {moved} moved to tico-computer {moved}; forwarding", file=sys.stderr)
+        sys.stderr.flush()
+        os.execv(str(COMPUTER), [str(COMPUTER), *argv])
     argv, who = split_human(argv)
     old = legacy_idea(argv)
     if old:

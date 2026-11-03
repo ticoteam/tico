@@ -2,7 +2,8 @@
 """`tico`: the bot and agent command line (clients/hubcli.py). See clients/hubcli.py and docs/connect-an-agent.md.
 
 The computer's own operations (install, restart, status, update ...) are scripts/tico-computer. Outside a bot's turn
-those words answer with where they moved and run nothing (hubcli.moved_verb).
+those words forward to tico-computer with one stderr line; inside a turn they answer where they moved and run nothing
+(hubcli.main).
 
 Resolves the checkout from its own path, so the symlink in ~/.local/bin works from anywhere and a second checkout uses
 its own clients/.

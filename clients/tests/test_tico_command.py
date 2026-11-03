@@ -31,7 +31,7 @@ def outside_a_turn(monkeypatch):
     (["bot", "create", "acme-bot"], "bot create"),
     (["logs", "bot", "-n", "20"], "logs"),
 ])
-def test_a_computer_verb_outside_a_turn_has_moved(outside_a_turn, argv, verb):
+def test_a_computer_verb_names_its_verb(outside_a_turn, argv, verb):
     assert hubcli.moved_verb(argv) == verb
 
 
@@ -42,29 +42,47 @@ def test_a_computer_verb_outside_a_turn_has_moved(outside_a_turn, argv, verb):
     ["bot", "status", "acme"],
     [],
 ])
-def test_bot_commands_are_not_moved_outside_a_turn(outside_a_turn, argv):
+def test_bot_commands_name_no_computer_verb(outside_a_turn, argv):
     assert hubcli.moved_verb(argv) is None
 
 
 @pytest.mark.parametrize("name", BOT_ENV)
-def test_inside_a_turn_nothing_has_moved(monkeypatch, name):
+def test_inside_a_turn_a_computer_verb_is_refused_and_nothing_runs(monkeypatch, capsys, name):
     for other in BOT_ENV:
         monkeypatch.delenv(other, raising=False)
     monkeypatch.setenv(name, "acme-bot")
-    assert hubcli.moved_verb(["status"]) is None
-    assert hubcli.moved_verb(["bot", "create", "x"]) is None
-
-
-def test_a_moved_verb_prints_one_line_and_runs_nothing(outside_a_turn, capsys):
-    with mock.patch("clients.remotecli.main") as remote:
-        assert hubcli.main(["restart", "bot"]) == 2
-    remote.assert_not_called()
+    with mock.patch("os.execv") as execv:
+        assert hubcli.main(["status"]) == 2
+    execv.assert_not_called()
     captured = capsys.readouterr()
-    assert captured.out == "" and captured.err == "This moved: tico-computer restart\n"
+    assert captured.out == "" and captured.err == "This moved: tico-computer status\n"
 
 
-def test_the_bot_command_and_the_alias_refuse_a_moved_verb_the_same_way(outside_a_turn):
+def test_outside_a_turn_a_computer_verb_is_forwarded_to_tico_computer(outside_a_turn, capsys):
+    with mock.patch("os.execv") as execv:
+        hubcli.main(["-e", "acme", "restart", "bot"])
+    script = str(ROOT / "scripts" / "tico-computer")
+    execv.assert_called_once_with(script, [script, "-e", "acme", "restart", "bot"])
+    assert capsys.readouterr().err == "tico restart moved to tico-computer restart; forwarding\n"
+
+
+def test_the_alias_says_hub_when_it_forwards(outside_a_turn, monkeypatch, capsys):
+    monkeypatch.setenv("TICO_CLI_ALIAS", "hub")
+    with mock.patch("os.execv"):
+        hubcli.main(["install", "bot"])
+    assert capsys.readouterr().err == "hub install moved to tico-computer install; forwarding\n"
+
+
+def test_bot_create_outside_a_turn_is_still_a_guarded_line(outside_a_turn, capsys):
+    with mock.patch("os.execv") as execv:
+        assert hubcli.main(["bot", "create", "acme-bot"]) == 2
+    execv.assert_not_called()
+    assert capsys.readouterr().err == "This moved: tico-computer bot create\n"
+
+
+def test_the_bot_command_and_the_alias_refuse_a_computer_verb_inside_a_turn(monkeypatch):
     env = {k: v for k, v in os.environ.items() if k not in BOT_ENV}
+    env["HUB_BOT"] = "acme-bot"
     for script in ("tico", "hub"):
         done = subprocess.run([sys.executable, str(ROOT / "scripts" / script), "install", "bot"], env=env,
                               capture_output=True, text=True, timeout=60)

@@ -2131,6 +2131,18 @@ def view(c, who, settings, auth, github, config):
                              [_fix("Open Runs", "#/settings", "runs")] if full else []))
     else:
         checks.append(_check("queue", "Work queueing", "ok", "No work is waiting long."))
+    # Calls that still use the old `hub` name (backend/alias_uses.py): owners and admins see who, others see nothing.
+    if full:
+        from . import alias_uses
+        old = alias_uses.report(c)
+        if old["count"]:
+            where = (" From " + ", ".join(old["bots"] + old["computers"]) + ".") if old["bots"] or old["computers"] else ""
+            checks.append(_check("old_names", "Old names still in use", "info",
+                                 f"{_plural(old['count'], 'call')} used the old hub name in the last {old['days']} days."
+                                 + where))
+        else:
+            checks.append(_check("old_names", "Old names still in use", "ok",
+                                 f"No call used the old hub name in the last {old['days']} days."))
     for slug, name, count, what, oldest in unfinished_setup(c) if full else ():
         checks.append(_check("setup:" + slug, "Onboarding not finished", "warn",
                              f"{name} is still onboarding; {_plural(count, what)} waiting since {oldest[:10]}.",

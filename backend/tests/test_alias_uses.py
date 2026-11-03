@@ -32,3 +32,18 @@ def test_a_bots_old_name_call_names_the_bot(api):
                               lambda c: alias_uses.record(c, bot, "mcp", "task_show"))
     assert alias_events(api) == [("bot:acme-ops", "task_show", {"form": "mcp", "bot": "acme-ops", "command": "task_show",
                                                                 "computer": "r1"})]
+
+
+def test_the_health_read_counts_the_last_seven_days_and_names_the_recent_callers(api):
+    def old_call(c):
+        c.execute("INSERT INTO events (id, created_at, actor, action, target, detail) VALUES (?, ?, ?, ?, ?, ?)",
+                  ("old-call", "2000-01-01T00:00:00.000000Z", "bot:acme-old", alias_uses.ACTION, "task_show",
+                   json.dumps({"form": "mcp", "bot": "acme-old", "command": "task_show", "computer": "r0"})))
+    api.app.state.store.write(Identity("human:ana", "owner", "ana@acme.example"), old_call)
+    for bot, runner in (("acme-ops", "r1"), ("acme-tidy", "r2")):
+        api.app.state.store.write(Identity("human:ana", "owner", "ana@acme.example"),
+                                  lambda c, bot=bot, runner=runner: alias_uses.record(
+                                      c, Identity(f"bot:{bot}", "bot", runner_id=runner), "cli", "task show"))
+    with api.app.state.store.read() as c:
+        report = alias_uses.report(c)
+    assert report == {"days": 7, "count": 2, "bots": ["acme-tidy", "acme-ops"], "computers": ["r2", "r1"]}

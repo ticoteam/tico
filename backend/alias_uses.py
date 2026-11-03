@@ -4,6 +4,9 @@ A `hub` call says so on its first request (the X-Tico-Alias header, clients/tico
 `alias.hub_used` event: the caller, the form (`cli` or `mcp`), its bot and the command words without values. Health
 reads these events (`alias_report`); nothing else does, and no event goes to a webhook or a routine.
 """
+import json
+from datetime import datetime, timedelta, timezone
+
 from . import hubdb as H
 
 ACTION = "alias.hub_used"
@@ -24,3 +27,31 @@ def record(c, identity, form, command):
     command = " ".join(str(command or "").split())[:80]
     H.event(c, identity.actor, ACTION, command,
             {"form": form, "bot": bot, "command": command, "computer": identity.runner_id or ""})
+
+
+WINDOW_DAYS = 7
+
+
+def report(c, days=WINDOW_DAYS, limit=5):
+    """Old-name calls in the last `days` days: how many, and the most recent bots and computers that made them."""
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    rows = c.execute("SELECT created_at, actor, detail FROM events WHERE action=? AND created_at>=? "
+                     "ORDER BY created_at DESC", (ACTION, since)).fetchall()
+    bots, computers = [], []
+    for row in rows:
+        detail = _detail(row["detail"])
+        bot = detail.get("bot") or ""
+        computer = detail.get("computer") or ""
+        if bot and bot not in bots and len(bots) < limit:
+            bots.append(bot)
+        if computer and computer not in computers and len(computers) < limit:
+            computers.append(computer)
+    return {"days": days, "count": len(rows), "bots": bots, "computers": computers}
+
+
+def _detail(text):
+    try:
+        value = json.loads(text) if text else {}
+    except ValueError:
+        value = {}
+    return value if isinstance(value, dict) else {}
