@@ -5,7 +5,7 @@ Every substantive change cites an evidence row. Write that row first. The quote 
 A source kind is one of: reddit, x, linkedin, news, filing, site, sales-call, meeting, peec, syften, page-change, other.
 `page-change` is filed by the server when a watched page changes (`playbooks/curate-the-market.md` step 4).
 
-An entity or edge create needs at least one evidence id. Changing `summary`, `properties`, `since`, `until` or `tier` needs one too. Adding an alias or setting `last_verified` does not.
+An entity or edge create needs at least one evidence id. Changing `summary`, `properties`, `since`, `until` or `tier` needs one too. Adding an alias or setting `last_verified_at` does not.
 
 No evidence, no write. A report without a source you can point at is `rejected` with one sentence, or `needs-human` if it matters and you cannot check it.
 

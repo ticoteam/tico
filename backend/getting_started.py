@@ -34,7 +34,7 @@ def _owner(who, what):
 
 
 def load_state(c, who):
-    row = c.execute("SELECT value_json FROM preferences WHERE actor=? AND key=?",
+    row = c.execute("SELECT value FROM preferences WHERE actor=? AND key=?",
                     (who.actor, PREFERENCE)).fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
@@ -46,8 +46,8 @@ def load_state(c, who):
 
 
 def save_state(c, who, state):
-    c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES(?,?,?,?) "
-              "ON CONFLICT(actor,key) DO UPDATE SET value_json=excluded.value_json, updated=excluded.updated",
+    c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) "
+              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
               (who.actor, PREFERENCE, encode(state), H.now()))
 
 
@@ -69,28 +69,36 @@ def change_state(c, who, body):
 # ------------------------------------------------------------------ live checks
 def _online_runners(c):
     since = H.shift(H.now(), seconds=-ONLINE_SECONDS)
-    return c.execute("SELECT id,label,readiness_json FROM runners WHERE revoked_at IS NULL "
-                     "AND last_seen>? ORDER BY last_seen DESC", (since,)).fetchall()
+    return c.execute("SELECT id,label,readiness FROM runners WHERE revoked_at IS NULL "
+                     "AND last_seen_at>? ORDER BY last_seen_at DESC", (since,)).fetchall()
 
 
 _wanted_runtimes = providers.wanted_runtimes
 
 
-def _signed_in_runtime(runners, wanted):
+def _covered(c, runner, name):
+    """Whether the company's plan or key given to this computer signs `name` in (model_subscriptions.in_effect)."""
+    from .model_subscriptions import in_effect
+    return c is not None and in_effect(c, runner["id"], name) is not None
+
+
+def _signed_in_runtime(runners, wanted, c=None):
+    """A wanted runtime an online computer is signed in to: by its own login, or (with `c`) the company's plan."""
     for runner in runners:
-        for name, row in (readiness_document(runner["readiness_json"]).get("runtimes") or {}).items():
-            if name in wanted and row.get("installed") and row.get("authenticated") == "ready":
+        for name, row in (readiness_document(runner["readiness"]).get("runtimes") or {}).items():
+            if name in wanted and row.get("installed") and (row.get("authenticated") == "ready"
+                                                             or _covered(c, runner, name)):
                 return name
     return ""
 
 
-def _login_target(runners, wanted):
-    """A computer that has a wanted runtime installed but not signed in, and that the browser
-    can sign in (backend/model_login.py): where the checklist's Sign in button goes."""
+def _login_target(runners, wanted, c=None):
+    """A computer that has a wanted runtime installed but not signed in, nor (with `c`) given the company's plan for
+    it, and that the browser can sign in (backend/model_login.py): where the checklist's Sign in button goes."""
     for runner in runners:
-        for name, row in sorted((readiness_document(runner["readiness_json"]).get("runtimes") or {}).items()):
+        for name, row in sorted((readiness_document(runner["readiness"]).get("runtimes") or {}).items()):
             if name in wanted and name in model_login.RUNTIMES and row.get("installed") \
-                    and row.get("authenticated") != "ready":
+                    and row.get("authenticated") != "ready" and not _covered(c, runner, name):
                 return {"runner_id": runner["id"], "runtime": name, "machine": runner["label"]}
     return None
 
@@ -104,18 +112,18 @@ def built_in(settings):
 def own_bots(c, settings):
     """Bots the company added, as opposed to the ones built in."""
     bootstrap = built_in(settings)
-    return [row["slug"] for row in c.execute("SELECT slug FROM bots WHERE state!='archived' ORDER BY slug")
-            if row["slug"] not in bootstrap]
+    return [row["id"] for row in c.execute("SELECT id FROM bots WHERE state!='archived' ORDER BY slug")
+            if row["id"] not in bootstrap]
 
 
 def _next_bot(c, settings):
     """The starter bot to onboard next: Onboarding (`needs_setup`), in the order first run put them, which
-    puts the team's first bot first. Returns (slug, name, why), or None when nothing is waiting."""
-    rows = c.execute("SELECT bc.bot,b.display_name,bc.config_json FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+    puts the team's first bot first. Returns (id, name, why), or None when nothing is waiting."""
+    rows = c.execute("SELECT bc.bot,b.display_name,bc.config FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                      "WHERE bc.onboarding_state IN " + PARKED_SQL + " AND b.state!='archived'").fetchall()
     if not rows:
         return None
-    ranked = sorted(((json.loads(row["config_json"] or "{}"), row) for row in rows),
+    ranked = sorted(((json.loads(row["config"] or "{}"), row) for row in rows),
                     key=lambda pair: (pair[0].get("setup_rank", 999), pair[1]["bot"]))
     row = ranked[0][1]
     why = "Press Start onboarding on its page and answer its questions; it drafts a first result for you to approve."
@@ -125,7 +133,7 @@ def _next_bot(c, settings):
 def _first_output(c):
     """A starter bot has been onboarded: its onboarding is complete and a person has seen its first
     result. The bot says so itself (`hub bot setup-done`), so this is what the database records."""
-    return c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+    return c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                      "WHERE bc.onboarding_state='onboarded' AND b.state!='archived' LIMIT 1").fetchone()
 
 
@@ -139,12 +147,12 @@ def checklist(c, who, settings, github):
     record = providers.load(c, settings)
     runners = _online_runners(c)
     wanted = _wanted_runtimes(record)
-    signed = _signed_in_runtime(runners, wanted)
+    signed = _signed_in_runtime(runners, wanted, c)
     login = (providers.PROVIDER_BY_RUNTIME.get(next(iter(sorted(wanted)), ""), {}) or {}).get("login", "")
     botops = H.bot(c, BOTOPS)
     mine = own_bots(c, settings)
-    building = c.execute("SELECT id FROM tasks WHERE owner=? AND title LIKE 'Build a bot:%' "
-                         "AND status NOT IN ('done','closed','declined') ORDER BY created DESC LIMIT 1",
+    building = c.execute("SELECT id FROM tasks WHERE owner_id=? AND title LIKE 'Build a bot:%' "
+                         "AND status NOT IN ('done','closed','declined') ORDER BY created_at DESC LIMIT 1",
                          ("bot:" + BOTOPS,)).fetchone()
     installed = bool(github and github["installation_id"])
     waiting = _next_bot(c, settings)
@@ -155,7 +163,7 @@ def checklist(c, who, settings, github):
         _item("model", "A model is signed in on it", signed,
               ("Sign in to a model on the computer" + (" (run `" + login + "`)" if login else "") + "."
                if wanted else "Choose your AI providers first."),
-              "#/settings", "devices" if wanted else "models", login=_login_target(runners, wanted)),
+              "#/settings", "devices" if wanted else "models", login=_login_target(runners, wanted, c)),
         _item("github", "GitHub is connected", installed,
               "Lets bots keep their work in your GitHub.", "#/settings", "cloud", optional=True),
         _item("botops", "BotOps is active", botops and botops["state"] == "active",
@@ -232,7 +240,7 @@ def _market_title(c, owner, actor):
     marks = ",".join("?" * len(H.LIVE_STATUSES))
     for n in range(1, 20):
         title = MARKET_TASK if n == 1 else f"{MARKET_TASK} ({n})"
-        if not c.execute(f"SELECT 1 FROM tasks WHERE requester=? AND owner=? AND title=? AND status IN ({marks})",
+        if not c.execute(f"SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status IN ({marks})",
                          (actor, owner, title, *H.LIVE_STATUSES)).fetchone():
             return title
     return f"{MARKET_TASK} ({n})"

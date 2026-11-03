@@ -56,7 +56,7 @@ def stream(c, audience_ids, before=None, limit=10, company_name=""):
                      "AND published_at<? ORDER BY published_at DESC LIMIT ?", (*audience_ids, before or "~", limit))
     return [{"anchor": anchor_of(r), "title": r["title"], "author": {"name": "Ops", "kind": "bot", "actor": "bot:ops"},
              "period": "Oct", "published_at": r["published_at"], "version": 1, "correction_note": None,
-             "approval_id": "INTERNAL-APPROVAL", "body_json": "INTERNAL-BODY",
+             "approval_id": "INTERNAL-APPROVAL", "body": "INTERNAL-BODY",
              "sections": [{"key": "asks", "items": [{"body": "Intro?", "ask_id": "ask-1", "source": "INTERNAL-SOURCE"}]}]}
             for r in rows]
 
@@ -666,13 +666,13 @@ def test_a_reply_reaches_the_owner_as_untrusted_text_and_wakes_no_bot(site, monk
     with site.store.read() as c:
         task = H.task(c, message["task_id"])
         requester = dict(c.execute("SELECT * FROM task_requesters WHERE task_id=?", (task["id"],)).fetchone())
-    assert task["owner"].startswith("human:") and task["private"] == 1
+    assert task["owner_id"].startswith("human:") and task["private"] == 1
     assert "pat@other.example" not in task["title"] + task["body"]
     assert "untrusted" in task["body"] and "<outside-text>" in task["body"]
     assert task["body"].count("</outside-text>") == 1          # the writer can't close the fence
     assert requester["email"] == "pat@other.example" and requester["actor"] is None
-    assert not [r for r in site.rows("SELECT detail_json FROM events") if "pat@other.example" in str(r["detail_json"])]
-    assert not site.rows("SELECT 1 FROM tasks WHERE id=? AND owner LIKE 'bot:%'", task["id"])
+    assert not [r for r in site.rows("SELECT detail FROM events") if "pat@other.example" in str(r["detail"])]
+    assert not site.rows("SELECT 1 FROM tasks WHERE id=? AND owner_id LIKE 'bot:%'", task["id"])
 
 
 def test_a_warned_message_says_so_to_the_owner(site, monkeypatch):

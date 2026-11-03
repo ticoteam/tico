@@ -492,6 +492,7 @@ fn an_action_item_becomes_one_private_task_carrying_the_transcript() {
     let who = json!({"actor":"human:test","name":"Chris"});
     let (tico, seen, worker) = server(vec![
         Some(who.clone()),
+        Some(json!({"url":"https://acme.example"})),
         Some(json!({"task":{"id":"task-fixture"}})),
         Some(who),
     ]);
@@ -534,7 +535,12 @@ fn an_action_item_becomes_one_private_task_carrying_the_transcript() {
         (item.task_id.as_str(), item.sent_to.as_str()),
         ("task-fixture", "Sales Bot")
     );
-    assert!(item.task_url.ends_with("/#/task/task-fixture"));
+    assert_eq!(item.task_url, "https://acme.example/#/task/task-fixture");
+    assert!(
+        requests
+            .iter()
+            .any(|row| row.0.starts_with("GET /api/v2/recorder/browser "))
+    );
     // The meeting now belongs to this Tico: Send offers only it.
     assert_eq!(context.live_destination, tico.destination.id);
 }
@@ -1952,6 +1958,7 @@ fn item_send_requires_quote_review_and_filters_the_surrounding_transcript() {
     let (tico, seen, worker) = server(vec![
         Some(who.clone()),
         Some(who),
+        Some(json!({"url":"https://acme.example"})),
         Some(json!({"task":{"id":"synthetic-task"}})),
     ]);
     let error = tico
@@ -1984,7 +1991,7 @@ fn item_send_requires_quote_review_and_filters_the_surrounding_transcript() {
     .unwrap();
     worker.join().unwrap();
     let requests = seen.lock().unwrap();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 4);
     assert!(requests[0].0.starts_with("GET /api/v2/me "));
     assert!(requests[1].0.starts_with("GET /api/v2/me "));
     let tasks: Vec<_> = requests
@@ -2101,6 +2108,7 @@ fn title_only_item_needs_confirmation_after_each_edit_before_any_task_post() {
         Some(who.clone()),
         Some(who.clone()),
         Some(who),
+        Some(json!({"url":"https://acme.example"})),
         Some(json!({"task":{"id":"synthetic-title-task"}})),
     ]);
     for title in ["Secret launch date", "Changed secret launch date"] {
@@ -2141,14 +2149,15 @@ fn title_only_item_needs_confirmation_after_each_edit_before_any_task_post() {
     .unwrap();
     worker.join().unwrap();
     let requests = seen.lock().unwrap();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 5);
     assert!(
         requests[..3]
             .iter()
             .all(|r| r.0.starts_with("GET /api/v2/me "))
     );
-    assert!(requests[3].0.starts_with("POST /api/v2/tasks "));
-    assert_eq!(requests[3].1["title"], "Changed secret launch date");
+    assert!(requests[3].0.starts_with("GET /api/v2/recorder/browser "));
+    assert!(requests[4].0.starts_with("POST /api/v2/tasks "));
+    assert_eq!(requests[4].1["title"], "Changed secret launch date");
     assert_eq!(
         store.context(&record.id).unwrap().items[0].task_id,
         "synthetic-title-task"
@@ -2264,4 +2273,91 @@ fn live_send_refuses_unknown_privacy_before_approval() {
         store.get(&record.id).unwrap().deliveries[0].receipt["approved"],
         true
     );
+}
+
+#[test]
+fn browser_links_require_server_support_and_a_safe_browser_address() {
+    let (tico, _, worker) = server(vec![Some(json!({"status":404}))]);
+    assert!(tico.browser_url().is_err());
+    worker.join().unwrap();
+    let (tico, _, worker) = server(vec![Some(json!({"url":"https://acme.example"}))]);
+    assert_eq!(tico.browser_url().unwrap(), "https://acme.example");
+    worker.join().unwrap();
+    let (tico, _, worker) = server(vec![Some(
+        json!({"url":"https://user:secret@acme.example"}),
+    )]);
+    assert!(tico.browser_url().is_err());
+    worker.join().unwrap();
+}
+
+#[test]
+fn task_links_keep_old_server_compatibility_and_transient_errors_never_send() {
+    for (old, oauth) in [(false, false), (true, false), (true, true), (false, true)] {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        let record = transcript(&store, "Synthetic task links");
+        store
+            .update_context(&record.id, |context| {
+                context.items.push(crate::workspace::Item {
+                    id: "link-item".into(),
+                    title: "Follow up".into(),
+                    ..Default::default()
+                });
+                Ok(())
+            })
+            .unwrap();
+        let mut replies = vec![
+            Some(json!({"actor":"human:test","name":"Fixture"})),
+            Some(json!({"status": if old {404} else {503}})),
+        ];
+        if old {
+            replies.push(Some(json!({"task":{"id":"synthetic-task"}})));
+        }
+        let (mut tico, seen, worker) = server(replies);
+        tico.oauth = oauth;
+        let result = tico.send_task(
+            &store,
+            &record.id,
+            "link-item",
+            "bot:fixture",
+            "Fixture",
+            true,
+        );
+        worker.join().unwrap();
+        let requests = seen.lock().unwrap();
+        if old {
+            result.unwrap();
+            assert!(
+                requests
+                    .iter()
+                    .any(|row| row.0.starts_with("POST /api/v2/tasks "))
+            );
+            let task_url = &store.context(&record.id).unwrap().items[0].task_url;
+            if oauth {
+                assert!(
+                    task_url.is_empty(),
+                    "An older OAuth server must not link to its runner hostname"
+                );
+            } else {
+                assert!(task_url.ends_with("/#/task/synthetic-task"));
+            }
+        } else {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("task was not sent")
+            );
+            assert!(requests.iter().all(|row| !row.0.starts_with("POST")));
+            assert!(
+                store.context(&record.id).unwrap().items[0]
+                    .task_id
+                    .is_empty()
+            );
+        }
+    }
+    let (tico, _, worker) = server(vec![Some(json!({"url":"https://acme.example"}))]);
+    assert_eq!(tico.browser_url().unwrap(), "https://acme.example");
+    assert_eq!(tico.browser_url().unwrap(), "https://acme.example");
+    worker.join().unwrap();
 }

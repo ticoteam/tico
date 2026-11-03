@@ -15,12 +15,12 @@ from backend.tests.test_api import api, get, headers, post, put  # noqa: F401  (
 
 def set_roster(api, doc):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(doc),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(doc),))
 
 
 def as_bot(api, slug, token):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                   (slug, "test", "x-" + slug, H.now(), "human:ana"))
     api.app.state.store.settings.test_identities[token] = Identity(f"bot:{slug}", "bot", agent="test")
 
@@ -36,8 +36,8 @@ def org(api):
                        "support-tier-2": {"name": "Support Tier 2", "parent": "support"}},
     })
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET team='support-tier-2', config_json=json_set(config_json, '$.team', 'support-tier-2') WHERE bot='finance'")
-        c.execute("UPDATE bot_config SET team='product', config_json=json_set(config_json, '$.team', 'product') WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET team='support-tier-2', config=json_set(config, '$.team', 'support-tier-2') WHERE bot='finance'")
+        c.execute("UPDATE bot_config SET team='product', config=json_set(config, '$.team', 'product') WHERE bot='ops'")
     as_bot(api, "ops", "ops-test")
     as_bot(api, "finance", "finance-test")
 
@@ -61,7 +61,7 @@ def matched(api, author, recipients=()):
 
 def audit(api, rule_id):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM audit_log WHERE object=? ORDER BY at, id", ("org_rule:" + rule_id,))]
+        return [dict(r) for r in c.execute("SELECT * FROM audit_log WHERE object=? ORDER BY created_at, id", ("org_rule:" + rule_id,))]
 
 
 def test_who_matches_a_group_a_nested_group_a_person_all_bots_and_a_later_bot(api):
@@ -75,8 +75,8 @@ def test_who_matches_a_group_a_nested_group_a_person_all_bots_and_a_later_bot(ap
     assert everyone_bots in matched(api, "bot:finance")
     # A bot made after the rule is covered by all_bots, with no edit to the rule.
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug, display_name, state) VALUES('late-bot', 'Late', 'active')")
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('late-bot','{}','', 'ana')")
+        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('late-bot', 'late-bot', 'Late', 'active')")
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('late-bot','{}','', 'ana')")
     as_bot(api, "late-bot", "late-test")
     assert everyone_bots in matched(api, "bot:late-bot")
     assert support not in matched(api, "bot:late-bot")
@@ -90,7 +90,7 @@ def test_a_bot_changing_its_group_changes_which_group_rules_reach_it(api):
     support = rule(api, {"kind": "internal", "text": "Log every refund.", "who": {"groups": ["support"]}})["id"]
     assert support not in matched(api, "bot:ops")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET team='support-tier-2', config_json=json_set(config_json, '$.team', 'support-tier-2') WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET team='support-tier-2', config=json_set(config, '$.team', 'support-tier-2') WHERE bot='ops'")
     assert support in matched(api, "bot:ops")
 
 
@@ -101,6 +101,22 @@ def test_with_matches_any_of_several_recipients(api):
     assert r in matched(api, "human:cara", ["bot:ops"])
     assert r in matched(api, "human:cara", ["bot:doc-updater", "bot:finance"])
     assert r not in matched(api, "human:cara", ["bot:doc-updater"])
+
+
+def test_a_peer_rule_from_add_rule_keeps_its_mention_with_and_ask_first_reviewer(api):
+    """Add rule sends Who, With, If broken and (under Ask first) a reviewer in one write; the text keeps its @mention as
+    written, for the Rules page to show as a chip. With a person, it reaches a bot only when that person is a recipient."""
+    org(api)
+    made = rule(api, {"kind": "internal", "text": "Ask @cara before you assign her a task.", "who": {"all_bots": True},
+                      "with": {"people": ["cara"]}, "if_broken": "escalate", "reviewer": "ben"})
+    assert made["text"] == "Ask @cara before you assign her a task."
+    assert made["if_broken"] == "escalate" and made["reviewer"]["id"] == "ben"
+    assert made["who"]["all_bots"] and [p["id"] for p in made["with"]["people"]] == ["cara"]
+    assert made["id"] in matched(api, "bot:ops", ["human:cara"])
+    assert made["id"] not in matched(api, "bot:ops", ["human:ben"])
+    # Stop is the default when If broken is left as the dialog opens it.
+    plain = rule(api, {"kind": "internal", "text": "Cite a source.", "who": {"all_bots": True}, "if_broken": "block"})
+    assert plain["if_broken"] == "block" and plain["reviewer"] is None
 
 
 def test_everyone_by_a_plain_member_is_refused(api):
@@ -135,7 +151,7 @@ def test_accept_writes_an_audit_row_with_the_actor_and_how_it_came(api):
     assert accepted.json()["rule"]["status"] == "active"
     rows = audit(api, r["id"])
     assert [row["actor"] for row in rows] == ["bot:ops", "human:ana"]
-    assert rows[-1]["via"] and json.loads(rows[-1]["after_json"])["status"] == "active"
+    assert rows[-1]["via"] and json.loads(rows[-1]["after"])["status"] == "active"
 
 
 def test_a_stale_version_is_a_conflict(api):
@@ -150,7 +166,7 @@ def test_a_quote_hides_when_its_file_is_not_readable(api):
     r = rule(api, {"kind": "external", "text": "Keep receipts for seven years.", "who": {"bots": ["finance"]},
                    "source_id": _source(api)})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE org_rules SET cite_json=? WHERE id=?",
+        c.execute("UPDATE org_rules SET cite=? WHERE id=?",
                   (json.dumps({"file_id": "no-such-file", "quote": "SECRET-QUOTE-MARKER"}), r["id"]))
     for path in ("rules", "bots/finance/rules", "rules?mine=true&bot=finance"):
         body = get(api, path, token="cara-test")
@@ -169,7 +185,7 @@ def test_the_settings_sentences_match_the_live_setting(api):
     texts = [s["text"] for s in settings]
     assert any(t.startswith("Everyone can message") for t in texts)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET access_json=? WHERE bot='ops'",
+        c.execute("UPDATE bot_config SET access=? WHERE bot='ops'",
                   (json.dumps({"write": {"everyone": False, "people": ["cara"], "teams": [], "bots": []}}),))
     texts = [s["text"] for s in get(api, "bots/ops/rules")["settings"]]
     assert "Only Cara can message ops" in texts
@@ -235,7 +251,7 @@ def test_the_rules_list_is_paged(api):
 def test_a_turn_limit_set_on_the_bot_reads_back_as_its_sentence(api):
     org(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json, '$.turns_per_hour', 7) WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET config=json_set(config, '$.turns_per_hour', 7) WHERE bot='ops'")
     texts = [s["text"] for s in get(api, "bots/ops/rules")["settings"]]
     assert "Up to 7 turns per hour" in texts
     assert "Team default: 2500 turns per day" in texts
@@ -246,25 +262,25 @@ def test_a_bot_with_no_team_of_its_own_is_in_its_managers_group(api):
     org(api)
     support = rule(api, {"kind": "internal", "text": "Log every refund.", "who": {"groups": ["support"]}})["id"]
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug, display_name, state) VALUES('intern', 'Intern', 'active')")
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator,reports_to) VALUES('intern','{}','','ana','finance')")
+        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('intern', 'intern', 'Intern', 'active')")
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id,reports_to) VALUES('intern','{}','','ana','finance')")
     assert support in matched(api, "bot:intern")
 
 
 def _lead(api, gid, lead):
     with api.app.state.store.transaction() as c:
-        raw = c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0]
+        raw = c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0]
         doc = json.loads(raw)
         doc["org_groups"][gid]["lead"] = lead
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(doc),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(doc),))
 
 
 def _add_group(api, gid):
     with api.app.state.store.transaction() as c:
-        raw = c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0]
+        raw = c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0]
         doc = json.loads(raw)
         doc["org_groups"][gid] = {"name": gid.title()}
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(doc),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(doc),))
 
 
 def _ids(items):
@@ -274,14 +290,14 @@ def _ids(items):
 def _access(api, bot, everyone, people):
     grant = {"everyone": everyone, "people": people, "teams": [], "bots": []}
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET access_json=? WHERE bot=?",
+        c.execute("UPDATE bot_config SET access=? WHERE bot=?",
                   (json.dumps({"see": grant, "read": grant, "write": grant}), bot))
 
 
 def test_a_co_owner_of_the_bot_can_edit_and_retire_its_rule(api):
     org(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET bot_owners_json=? WHERE bot='ops'", (json.dumps(["cara"]),))
+        c.execute("UPDATE bot_config SET bot_owners=? WHERE bot='ops'", (json.dumps(["cara"]),))
     r = rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
     edited = edit(api, r["id"], {"version": 1, "text": "Ops answers today."}, token="cara-test")
     assert edited["text"] == "Ops answers today."
@@ -292,7 +308,7 @@ def test_a_co_owner_of_the_bot_can_edit_and_retire_its_rule(api):
 def test_a_conversation_member_of_the_bot_cannot_edit_or_retire_its_rule(api):
     org(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET owner_ids_json=? WHERE bot='ops'", (json.dumps(["cara"]),))
+        c.execute("UPDATE bot_config SET owner_ids=? WHERE bot='ops'", (json.dumps(["cara"]),))
     r = rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
     edit(api, r["id"], {"version": 1, "text": "Ops answers today."}, token="cara-test", expected=403)
     post(api, f"rules/{r['id']}/retire", {"version": 1}, token="cara-test", expected=403)
@@ -303,12 +319,12 @@ def test_a_replayed_write_checks_the_quote_again_once_file_access_is_revoked(api
     _lead(api, "support", "person:cara")
     _access(api, "ops", True, [])
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,locator,first_activity_at,last_activity_at)"
+        c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,locator,first_activity_at,last_activity_at)"
                   " VALUES('receipt-file','ops','bot','ops','Receipts','document','receipts','2026','2026')")
     r = rule(api, {"kind": "external", "text": "Keep receipts for seven years.", "who": {"groups": ["support"]},
                    "source_id": _source(api)})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE org_rules SET cite_json=? WHERE id=?",
+        c.execute("UPDATE org_rules SET cite=? WHERE id=?",
                   (json.dumps({"file_id": "receipt-file", "version": 1, "quote": "QUOTE-IN-THE-FILE"}), r["id"]))
     body = {"version": 1, "text": "Keep receipts for seven years, then discard them."}
     key = "replay-after-revoke"

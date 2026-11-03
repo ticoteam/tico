@@ -35,6 +35,7 @@ const historyStatus = v => { const w = statusWord(v); return w.charAt(0).toUpper
 function settingsDefinitionChange(before, after) {
   const b = before || {}, a = after || {}, out = [];
   if (b.display_name !== a.display_name) out.push(b.display_name ? `Renamed from ${b.display_name} to ${a.display_name}` : `Named ${a.display_name}`);
+  if (b.slug && a.slug && b.slug !== a.slug) out.push(`Slug ${b.slug} → ${a.slug}`);
   if (b.status !== a.status) out.push(`${historyStatus(b.status) || 'New'} → ${historyStatus(a.status)}`);
   if ((b.reports_to || '') !== (a.reports_to || '')) out.push(a.reports_to ? `Now reports to ${settingsBotName(a.reports_to)}` : 'Now at the top level');
   return out.join(' · ') || 'No visible change';
@@ -59,19 +60,19 @@ function settingsRunsHTML(list) {
   if (!list.length) return `<div class="empty">No runs yet.</div>`;
   return `<div class="runs-list"><div class="run-row run-head"><span>Bot</span><span>Result</span><span>Model</span><span>Took</span><span>Cost</span><span>Finished</span><span></span></div>
     ${list.map(r => {
-      const attempt = r.record_kind === 'attempt', ok = !attempt && r.exit === 0;
-      // An attempt reads its outcome alone; "attempt" and its id are in the pill's tooltip.
+      const unfinished = runUnfinished(r), ok = !unfinished && r.exit === 0;
+      // A failed or expired run reads its outcome alone; its id is in the pill's tooltip.
       const result = ok ? 'Done' : r.outcome || `exit ${r.exit}`;
-      const why = attempt ? r.failure_reason || '' : '';
+      const why = unfinished ? r.failure_reason || '' : '';
       const cost = r.cost_usd != null ? '$' + r.cost_usd.toFixed(2) : r.output_tokens != null ? `${settingsRunTokens.format(r.output_tokens)} out` : '';
       return `<div class="run-row">
         <span class="run-bot">${empChip(r.employee)}</span>
-        <span class="run-result"><span class="pill ${ok ? 'ok' : 'fail'}"${attempt ? ` title="${esc(`Attempt ${r.attempt_id || ''}`.trim())}"` : ''}>${esc(result)}</span>${ok ? '' : runsReportHTML(r, true)}</span>
+        <span class="run-result"><span class="pill ${ok ? 'ok' : 'fail'}"${unfinished ? ` title="${esc(`Run ${r.id || ''}`.trim())}"` : ''}>${esc(result)}</span>${ok ? '' : runsReportHTML(r, true)}</span>
         <span class="run-model">${why ? `<span class="run-why" title="${esc(why)}">${esc(why)}</span>` : ''}<span class="mono" title="The model that did the work; a fallback changes it">${esc(ranOn(r.ran_on))}</span>${r.fallback
           ? `<span class="pill waiting" title="Ran on the fallback after the primary was unavailable">${esc(r.fallback)}</span>` : ''}${r.resumed ? '<span class="run-tag" title="Picked up where it left off">resumed</span>' : ''}</span>
         <span class="run-took tnum">${settingsRunTook(r.duration_s)}</span>
         <span class="run-cost tnum">${cost}</span>
-        <span class="run-when tnum" title="${esc(fmt(r.finished))}">${esc(ago(r.finished))}</span>
+        <span class="run-when tnum" title="${esc(fmt(r.finished_at))}">${esc(ago(r.finished_at))}</span>
         <a class="run-log" href="${API}/runs/${encodeURIComponent(r.run)}/log" target="_blank" rel="noopener">Log</a></div>`;
     }).join('')}</div>`;
 }
@@ -95,7 +96,7 @@ function renderSettingsHistory(el = $('#set-history'), history = SETTINGS_DATA.h
   const transitionById = new Map(transitions.map(t => [t.id, t]));
   const pendingRows = pending.map(t => `<div class="settings-history-row"><span>${avatar(t.bot, 24, stateOf(t.bot))}</span><div><strong>${esc(settingsBotName(t.bot))} · ${t.kind === 'model' ? 'model change' : 'computer move'}</strong><p>${esc(t.state === 'preparing' ? `Checkpointing ${t.progress.prepared} of ${t.progress.total} conversations` : t.error || t.state)}</p></div><div class="history-action"><span class="pill ${t.state === 'failed' ? 'fail' : 'waiting'}">${esc(t.state)}</span><button class="ghost" type="button" data-transition-review="${esc(t.id)}">Review</button></div></div>`).join('');
   const rows = changes.map(change => {
-    const e = S.emps.find(row => row.name === change.bot), transition = transitionById.get(change.transition_id);
+    const e = botRow(change.bot), transition = transitionById.get(change.transition_id);
     const field = {owners:'who it works for',access:'access',model:'model',placement:'computer',fallback:'fallback',
       compact_at:'compact at',wake_preset:'wakes',profile:'profile',keep_tasks_going:'keep tasks going',
       turns_at_once:'Turns at once',definition:'setup',task_model:'task model',identity:'name and description',
@@ -107,7 +108,7 @@ function renderSettingsHistory(el = $('#set-history'), history = SETTINGS_DATA.h
     // A manager bot's change says so: it acted for the bot, as its manager (backend/report_managers.py).
     const by = change.via === 'report_manager' ? `${actorLabel(change.actor)}, as its manager` : actorLabel(change.actor);
     return `<div class="settings-history-row"><span>${avatar(change.bot, 24, stateOf(change.bot))}</span><div><strong>${esc(settingsBotName(change.bot))} · ${esc(field)}</strong>
-      <p>${esc(what)}</p><p>${esc(by)} · ${esc(fmt(change.created))}${change.undone_at ? ` · undone ${esc(ago(change.undone_at))}` : ''}</p></div>
+      <p>${esc(what)}</p><p>${esc(by)} · ${esc(fmt(change.created_at))}${change.undone_at ? ` · undone ${esc(ago(change.undone_at))}` : ''}</p></div>
       <div class="history-action">${change.can_undo && e ? `<button class="ghost" type="button" data-settings-undo="${esc(change.id)}" data-bot="${esc(change.bot)}" data-revision="${e.revision}">Undo</button>` : ''}</div>
       ${settingsCheckpointDetails(transition)}</div>`;
   }).join('');

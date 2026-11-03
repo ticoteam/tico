@@ -5,6 +5,7 @@ import json
 import urllib.error
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 from backend import hubdb as H
 from backend import usage_limits
@@ -20,7 +21,7 @@ NOON = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
 
 def _turn(c, bot, finished, cost, model="tico-medium", billing="api", tid=None):
     tid = tid or f"t{bot}{finished}{model}"
-    c.execute("INSERT INTO turns(id, bot, started, finished, model, est_cost_usd, billing) VALUES(?,?,?,?,?,?,?)",
+    c.execute("INSERT INTO turns(id, bot, started_at, finished_at, model, est_cost_usd, billing) VALUES(?,?,?,?,?,?,?)",
               (tid, bot, finished, finished, model, cost, billing))
     return tid
 
@@ -76,6 +77,22 @@ def test_usage_posting_matches_gateway_billed_runs_once(books):
         assert sum(v for (_, code), v in _usage_lines(c).items() if code == "5100") == 62
 
 
+def test_gateway_usage_in_a_raw_totals_month_posts_nothing_because_the_totals_carry_it(books):
+    """§4.1 and §9: a month holding raw totals already carries its Gateway spend, so the usage run posts nothing there
+    (a posting into that month is refused) and the month's usage posts no entry at all."""
+    raw = (Path(__file__).parent / "fixtures" / "finance" / "raw_totals.csv").read_text()
+    mapping = {"Software subscriptions": "6100", "Office rent": "6900", "Sales revenue": "4000", "Cash at bank": "1000"}
+    with books.transaction() as c:
+        assert act(c, OWNER, "import_raw_totals", {"csv": raw, "basis": "cash", "mapping": mapping,
+                                                   "source_name": "Acme history"}).status == "committed"
+        _turn(c, "coder", "2026-02-15T13:00:00.000000Z", 0.30)
+        meter = _meter("2026-02-28T16:00:00Z", **{"tico-medium": "0.30", "tico-fast": "0.10", "tico-image": "0.07"})
+        meter["month"] = "2026-02"
+        assert FA.usage_snapshot(c, meter, fetched_at="2026-02-28T16:01:00.000000Z")
+        assert FA.post_usage(c, "2026-02-28T16:05:00.000000Z") == []
+        assert _usage_lines(c) == {}
+
+
 def test_a_run_hold_settles_once_and_the_posting_takes_it_in(books):
     with books.transaction() as c:
         ai = budget(c, "AI services")
@@ -123,7 +140,7 @@ def test_a_video_production_cutoff_pauses_no_bot(books):
 
 def test_warn_and_cutoff_fire_once_per_period_and_tell_the_owner(books):
     def notices(c):
-        return c.execute("SELECT count(*) FROM messages WHERE to_actor=? AND kind='notice'", (OWNER,)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM messages WHERE recipient_id=? AND kind='notice'", (OWNER,)).fetchone()[0]
 
     with books.transaction() as c:
         ai = budget(c, "AI services")
@@ -216,7 +233,7 @@ def _events(c, bid, name=None):
 
 def _job(c, jid, state):
     c.execute("INSERT INTO messages(id) VALUES(?)", ("m" + jid,))
-    c.execute("INSERT INTO jobs(id, message_id, bot, state, created) VALUES(?,?,?,?,?)", (jid, "m" + jid, "coder", state, AT))
+    c.execute("INSERT INTO jobs(id, message_id, bot_id, state, created_at) VALUES(?,?,?,?,?)", (jid, "m" + jid, "coder", state, AT))
 
 
 def test_bots_get_only_their_own_recorded_cost_and_image_runs_land_on_video(books):
@@ -319,7 +336,12 @@ def test_a_bots_own_allocation_is_its_to_spend(books):
         assert act(c, OWNER, "allocation_set", {"budget_id": ai, "target_kind": "teammate", "target_id": "bot:coder",
                                                 "amount": 100}).status == "committed"
         assert usage_limits.blocked(c, "coder", at=NOON) is None
-        assert usage_limits.blocked(c, "seller", at=NOON)
+        assert not FA.run_hold(c, "coder", "job-coder", at=AT).refused        # coder spends what was set aside for it
+        # Nothing is spent, so no budget is at its cutoff and the reserve pauses no bot on its own (spec 4.4). A run claim
+        # is work, not a request for budget: the reserve does not refuse the seller's run either, it is held against the
+        # spend room that is left (only a budget at its cutoff refuses a run).
+        assert usage_limits.blocked(c, "seller", at=NOON) is None
+        assert not FA.run_hold(c, "seller", "job-seller", at=AT).refused
         assert jobs.cap_wanted(c, AT)[0] == "clear"
 
 
@@ -383,9 +405,9 @@ def test_a_retry_after_a_revoked_grant_shows_no_amount(api):
 
 def _attempt(c, jid, aid, state="running"):
     _job(c, jid, state)
-    c.execute("INSERT OR IGNORE INTO runners(id, label, operator, token_hash, created) VALUES('r1', 'r1', 'ana', 'h', ?)",
+    c.execute("INSERT OR IGNORE INTO runners(id, label, owner_id, token_hash, created_at) VALUES('r1', 'r1', 'ana', 'h', ?)",
               (AT,))
-    c.execute("INSERT INTO attempts(id, job_id, bot, runner_id, generation, token_hash, state, lease_until, created) "
+    c.execute("INSERT INTO attempts(id, job_id, bot_id, runner_id, generation, token_hash, state, lease_until, created_at) "
               "VALUES(?,?,?,?,?,?,?,?,?)", (aid, jid, "coder", "r1", 1, "h" + aid, "running", AT, AT))
 
 
@@ -452,7 +474,8 @@ def test_no_settled_hold_outlives_its_months_final_posting(books):
         assert _hold(c, late)[1] is not None
     with books.transaction() as c:
         # Settled in September, but September's meter billed nothing: the final posting frees it.
-        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 1_000, "effective_from": "2026-09-01"})
+        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 1_000, "effective_from": "2026-09-01"},
+            at="2026-08-15T12:00:00.000000Z")
         lone = FA.run_hold(c, "coder", "jsep", at="2026-09-20T10:00:00.000000Z").hold_id
         run = _turn(c, "coder", "2026-09-20T11:00:00.000000Z", 0.20)
         FA.run_ended(c, "jsep", run, "2026-09-20T11:00:01.000000Z")

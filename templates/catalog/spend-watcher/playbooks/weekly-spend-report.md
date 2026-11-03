@@ -1,7 +1,7 @@
 # Weekly spend report
 
 Schedule: Mondays at 09:00 team time (routine `weekly-spend-report`), after setup. Also run by hand on request. Budget 35 minutes. The outcome is one page for the requester:
-what changed, what needs a human, and what renews soon. Nothing is cancelled, paid or sent.
+what changed, what needs a human, and what renews soon. Nothing is canceled, paid or sent.
 
 Inputs: this period's and last period's exports (card, bank, cloud, billing), `knowledge/thresholds.md`, `knowledge/vendors.md`, `knowledge/renewals.md` and last week's report.
 

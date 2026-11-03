@@ -632,7 +632,7 @@ async function onbCompleted(state, record) {
 async function onbRevisions(state) {
   const bots = await v2Get('/v2/bots?include_archived=1');
   if (ONB !== state || !Array.isArray(bots)) return;
-  state.revisions = Object.fromEntries(bots.map(bot => [bot.slug, bot.revision]));
+  state.revisions = Object.fromEntries(bots.map(bot => [bot.id, bot.revision]));
 }
 async function onbPoll(state) {
   if (ONB !== state || state.busy) return;
@@ -646,11 +646,11 @@ async function onbPoll(state) {
 }
 async function onbActivate(state, slug, button) {
   button.disabled = true;
-  const bot = (state.record.bots || []).find(row => row.slug === slug);
+  const bot = (state.record.bots || []).find(row => row.id === slug);
   try {
     await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {status: 'active', expected_revision: state.revisions[slug]});
     if (bot) bot.status = 'active';
-    toast(`${bot?.display_name || slug} is active`);
+    toast(`${bot?.display_name || bot?.slug || slug} is active`);
     await onbRevisions(state);
     if (ONB !== state) return;
     onbRenderDone(state);

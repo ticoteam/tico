@@ -28,6 +28,8 @@ approver. Use it when unsure, then send the same command without it. A kind's fi
 ## Posting, attaching, rules
 - `hub finance act categorize --payload '{"feed_id":"<feed id>","account_id":"<account id>"}' --operation-id categorize:<feed id>` — posts a bank or card row to a line.
 - `hub finance act attach --payload '{"subject_kind":"<bill|feed|entry|invoice>","subject_id":"<id>","file_ids":["<file id>"]}' --operation-id attach:<file id>` — adds a file to an existing document. For a receipt with no match, `subject_kind` is `unmatched` and there is no `subject_id`.
+- `hub api GET finance/chart` — the chart of accounts: each line's id, number (its code), name and type.
+- `hub finance act account_create --payload '{"code":"<a number no line has>","name":"Legal and professional fees","type":"expense"}' --operation-id account:<name>` — asks for a new chart line; the Finance approver approves it.
 - `hub finance act rule_create --payload '<JSON with the fields from help>' --operation-id rule:<counterparty>` — proposes a posting rule; the owner approves it.
 - `hub finance act contact_create --payload '<JSON with the fields from help>' --operation-id contact:<name>` — a new vendor, only when no search finds one.
 - `hub finance act reconcile --payload '<JSON with the fields from help>' --operation-id reconcile:<money account id>:<statement end>` — matches a statement to the feed.
@@ -65,6 +67,6 @@ approver. Use it when unsure, then send the same command without it. A kind's fi
 - `close_period` refuses a `note` field. The variance note is a task comment.
 - `bill_create` refuses `date` and `currency`. The fields are `bill_date` and the ones `help` lists.
 - `hub task show` takes ids only: it has no `--json`.
-- Quote only the `--q` value: `hub finance search --kind bill --q "Summit Leasing"`. A flag list in one quoted string is one argument, and the hub refuses it.
+- Quote only the `--q` value: `hub finance search --kind bill --q "Summit Leasing"`. A flag list in one quoted string is one argument, and the command is refused.
 - An action's status is `hub finance action <action id>`. `finance act action` does not exist.
 - `hub finance inbox --kind` takes only the kinds listed above. `bill_email` is not one.

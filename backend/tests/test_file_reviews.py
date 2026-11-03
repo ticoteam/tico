@@ -76,7 +76,7 @@ def test_a_pick_spend_is_approved_once_and_spent_once(api):
     assert approved(api, bot, file=a["id"])["approved"] and not approved(api, bot, file=b["id"])["approved"]
     with api.app.state.store.transaction() as c:
         row = H.approval(c, aid)
-        assert row["kind"] == "spend" and row["decision"] == "approved" and row["requested_by"] == "bot:ops"
+        assert row["kind"] == "spend" and row["decision"] == "approved" and row["requested_by_id"] == "bot:ops"
         assert c.execute("SELECT count(*) FROM approvals WHERE kind='spend'").fetchone()[0] == 1
         H.approval_consume(c, "bot:ops", aid)
     with pytest.raises(H.Refused):

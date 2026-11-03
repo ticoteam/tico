@@ -8,7 +8,8 @@ import pytest
 
 from backend.finance import actions as FA
 from backend.finance.store import schema
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, budget, finance_template, spend, store  # noqa: F401
+from backend.tests.test_finance_fixtures import (  # noqa: F401
+    AT, OWNER, FakeMercury, account, act, books, budget, connect, finance_template, spend, store)
 
 
 def _rollups_match_lines(c: sqlite3.Connection) -> None:
@@ -36,13 +37,13 @@ def test_migration_64_on_an_existing_hub(store):
             c.execute(f"DROP TRIGGER {name}")
         for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'fin_%'").fetchall():
             c.execute(f"DROP TABLE {name}")
-        c.execute("INSERT INTO registry_metadata(key, value_json) VALUES('kept', '1')")
+        c.execute("INSERT INTO registry_metadata(key, value) VALUES('kept', '1')")
     store.initialize(seed_market=False)
     store.initialize(seed_market=False)
     with store.read() as c:
         tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'fin_%'")}
         assert tables == {t for t in schema.table_names()}
-        assert c.execute("SELECT value_json FROM registry_metadata WHERE key='kept'").fetchone()[0] == "1"
+        assert c.execute("SELECT value FROM registry_metadata WHERE key='kept'").fetchone()[0] == "1"
         assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=64").fetchone()[0] == 1
 
 
@@ -50,15 +51,15 @@ def test_migration_65_adds_phase_1_to_an_install_from_64(store):
     with store.transaction() as c:
         c.execute("DELETE FROM cloud_migrations WHERE version=65")
         c.execute("DROP TABLE fin_payments")
-        # Migration 69 adds the Stripe indexes on raw_json, which an install from 64 does not have; SQLite will not
+        # Migration 69 adds the Stripe indexes on raw, which an install from 64 does not have; SQLite will not
         # drop a column an index names.
         c.execute("DROP INDEX IF EXISTS fin_feed_txns_stripe_link")
         c.execute("DROP INDEX IF EXISTS fin_feed_txns_stripe_source")
-        c.execute("ALTER TABLE fin_feed_txns DROP COLUMN raw_json")
+        c.execute("ALTER TABLE fin_feed_txns DROP COLUMN raw")
     store.initialize(seed_market=False)
     with store.read() as c:
         assert c.execute("SELECT 1 FROM sqlite_master WHERE name='fin_payments'").fetchone()
-        assert "raw_json" in {r[1] for r in c.execute("PRAGMA table_info(fin_feed_txns)")}
+        assert "raw" in {r[1] for r in c.execute("PRAGMA table_info(fin_feed_txns)")}
         assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=65").fetchone()[0] == 1
 
 
@@ -245,3 +246,128 @@ def test_migration_74_adds_the_mirror_columns_and_credit_refunds_to_an_install_f
                               ("fin_bill_lines", "external_line"), ("fin_invoice_lines", "external_line")):
             assert column in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
         assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=74").fetchone()[0] == 1
+
+
+MIGRATION = "0037_finance_combined"
+
+
+def test_migration_0037_adds_its_tables_and_columns_to_an_install_from_main(store):
+    """An install that took main's migrations (cloud step 77, files to 0035) gets 0037 on its next start: covered
+    history, prepaid lines and their postings, the refund link, invoice reminders, invoice email delivery, the payment
+    cancel ask, the card's merchant and the re-read mark. A second start changes nothing."""
+    with store.transaction() as c:
+        c.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy%'", (MIGRATION,))
+        c.execute("DROP INDEX fin_feed_txns_refund")
+        c.execute("ALTER TABLE fin_feed_txns DROP COLUMN refund_of")
+        c.execute("DROP TABLE fin_prepaid_postings")
+        c.execute("ALTER TABLE fin_bill_lines DROP COLUMN prepaid_start")
+        c.execute("ALTER TABLE fin_bill_lines DROP COLUMN prepaid_months")
+        c.execute("DROP TABLE fin_invoice_reminders")
+        for column in ("send_approval_id", "send_to", "send_text", "delivered_at", "delivery_reason"):
+            c.execute(f"ALTER TABLE fin_invoices DROP COLUMN {column}")
+        c.execute("ALTER TABLE fin_payments DROP COLUMN cancel_asked_at")
+        c.execute("ALTER TABLE fin_payments DROP COLUMN cancel_asked_by")
+        c.execute("ALTER TABLE fin_cards DROP COLUMN merchant")
+        c.execute("ALTER TABLE fin_external_refs DROP COLUMN seen_gen")
+    columns = {
+        "fin_feed_txns": ("refund_of",), "fin_bill_lines": ("prepaid_start", "prepaid_months"),
+        "fin_invoices": ("send_approval_id", "send_to", "send_text", "delivered_at", "delivery_reason"),
+        "fin_invoice_reminders": ("send_approval_id", "delivered_at", "delivery_reason"),
+        "fin_payments": ("cancel_asked_at", "cancel_asked_by"), "fin_cards": ("merchant",),
+        "fin_external_refs": ("seen_gen",),
+    }
+
+    def check(c) -> None:
+        for table, names in columns.items():
+            assert set(names) <= {r[1] for r in c.execute(f"PRAGMA table_info({table})")}, table
+        for table in ("fin_prepaid_postings", "fin_invoice_reminders"):
+            assert c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone(), table
+        assert c.execute("SELECT count(*) FROM schema_migrations WHERE version=?", (MIGRATION,)).fetchone()[0] == 1
+        assert c.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='fin_feed_txns_refund'").fetchone()
+
+    store.initialize(seed_market=False)
+    with store.read() as c:
+        check(c)
+    store.initialize(seed_market=False)
+    with store.read() as c:
+        check(c)
+
+
+def _rewind(c: sqlite3.Connection, version: int, *, refund_of: bool) -> None:
+    """Make this hub's schema what an install at cloud step `version` (76 or 77) has: the steps after it and migration
+    0037 and later files are not recorded, what 0037 adds is taken away, and at 76 what step 77 adds too. The feed table keeps its
+    status CHECK as step 77 left it (no 'covered'), and keeps refund_of only when `refund_of` says so (an install that
+    ran this branch's step 77 before 0037 existed has it)."""
+    for later in range(version + 1, 78):
+        c.execute("DELETE FROM cloud_migrations WHERE version=?", (later,))
+    c.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy%'", (MIGRATION,))
+    c.execute("DROP TABLE IF EXISTS fin_prepaid_postings")
+    c.execute("DROP TABLE IF EXISTS fin_invoice_reminders")
+    c.execute("ALTER TABLE fin_bill_lines DROP COLUMN prepaid_start")
+    c.execute("ALTER TABLE fin_bill_lines DROP COLUMN prepaid_months")
+    for column in ("send_approval_id", "send_to", "send_text", "delivered_at", "delivery_reason"):
+        c.execute(f"ALTER TABLE fin_invoices DROP COLUMN {column}")
+    c.execute("ALTER TABLE fin_payments DROP COLUMN cancel_asked_at")
+    c.execute("ALTER TABLE fin_payments DROP COLUMN cancel_asked_by")
+    c.execute("ALTER TABLE fin_cards DROP COLUMN merchant")
+    c.execute("ALTER TABLE fin_external_refs DROP COLUMN seen_gen")
+    if version == 76:
+        c.execute("DROP INDEX IF EXISTS fin_bill_lines_po_line")
+        c.execute("ALTER TABLE fin_bill_lines DROP COLUMN po_line_id")
+        for table in ("fin_bill_retained", "fin_estimate_lines", "fin_estimates", "fin_po_lines", "fin_purchase_orders"):
+            c.execute(f"DROP TABLE {table}")
+    # The feed table as migration 77 left it: the status CHECK has no 'covered' (SQLite cannot widen it in place, so the
+    # table is rebuilt with the old text, keeping its rows).
+    current = str(c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='fin_feed_txns'").fetchone()[0])
+    before = current.replace("'ignored','covered'", "'ignored'")
+    if not refund_of:
+        before = before.replace(", refund_of TEXT", "")
+    c.execute("ALTER TABLE fin_feed_txns RENAME TO fin_feed_txns_was")
+    c.execute(before)
+    cols = [str(r[1]) for r in c.execute("PRAGMA table_info(fin_feed_txns)")]
+    c.execute(f"INSERT INTO fin_feed_txns({','.join(cols)}) SELECT {','.join(cols)} FROM fin_feed_txns_was")
+    c.execute("DROP TABLE fin_feed_txns_was")
+
+
+@pytest.mark.parametrize("version, refund_of", [(76, False), (77, False), (77, True)])
+def test_migration_0037_upgrades_an_install_from_76_or_77(books, version, refund_of):
+    """A live install is at cloud step 76 or 77 and starts on this build: migration 0037 runs, then step 77 where it is
+    missing; the feed table is rebuilt with its rows and refund_of kept, every table and column 0037 adds exists, and a
+    second start changes nothing."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        money = c.execute("SELECT id FROM fin_money_accounts ORDER BY id LIMIT 1").fetchone()[0]
+        _rewind(c, version, refund_of=refund_of)
+        c.executemany("INSERT INTO fin_feed_txns(id, money_account_id, provider_id, txn_date, amount, currency, status, "
+                      "created_at, created_by, entry_line_id) VALUES(?,?,?,?,?,?,?,'2026-02-10T00:00:00Z','bot',?)",
+                      [("f1", money, "p1", "2026-02-10", -1_500, "USD", "posted", "L1"),
+                       ("f2", money, "p2", "2026-02-11", 900, "USD", "new", None)])
+        if refund_of:
+            c.execute("UPDATE fin_feed_txns SET refund_of='f1' WHERE id='f2'")
+
+    def state(c) -> list[tuple]:
+        return c.execute("SELECT id, status, amount, entry_line_id, "
+                         + ("refund_of" if refund_of else "NULL") + " FROM fin_feed_txns ORDER BY id").fetchall()
+
+    def check(c) -> None:
+        assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=77").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM schema_migrations WHERE version=?", (MIGRATION,)).fetchone()[0] == 1
+        assert "'covered'" in str(c.execute("SELECT sql FROM sqlite_master WHERE name='fin_feed_txns'").fetchone()[0])
+        assert {"refund_of"} <= {r[1] for r in c.execute("PRAGMA table_info(fin_feed_txns)")}
+        assert set(schema.table_names()) <= {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        for table, names in {"fin_bill_lines": ("prepaid_start", "prepaid_months"), "fin_cards": ("merchant",),
+                             "fin_payments": ("cancel_asked_at", "cancel_asked_by"),
+                             "fin_external_refs": ("seen_gen",)}.items():
+            assert set(names) <= {r[1] for r in c.execute(f"PRAGMA table_info({table})")}, table
+
+    with books.read() as c:
+        rows = state(c)
+    assert [r[0] for r in rows] == ["f1", "f2"]
+    books.initialize(seed_market=False)
+    with books.read() as c:
+        check(c)
+        assert state(c) == rows
+    books.initialize(seed_market=False)
+    with books.read() as c:
+        check(c)
+        assert state(c) == rows

@@ -72,24 +72,35 @@ async function needsRecommend(button, ask, version) {
 // One line in Needs you for an item outside any task (an approval, a question, the Stale tickets card): who asks, what,
 // and its kind. A click opens its card (decide.js); nothing unfolds in the list. Its key is the card's. It keeps the
 // task rows' columns (task-list.js taskListRowHTML), with nothing to select and no status.
+// The thread items (backend/thread_attention.py): each names its kind, and opens its thread rather than a decide card.
+const THREAD_NEED_KINDS = {thread_ask: 'Question', thread_mention: 'Mention', thread_dm: 'Direct message',
+                           thread_held: 'Held', thread_capped: 'Paused', thread_unsent: 'Not sent'};
 function needRowHTML(it, ctx = {}) {
-  const key = decideItemKey(it), stale = it.kind === 'stale';
-  const from = stale ? '' : taskRequester(it) || it.requester || '';
+  const key = decideItemKey(it), stale = it.kind === 'stale', thread = THREAD_NEED_KINDS[it.kind];
+  const from = stale ? '' : taskRequester(it) || it.requester_id || '';
   const name = stale ? 'Tico' : actorLabel(from) || 'Tico';
   const title = stale ? it.title || 'Stale tickets' : approvalTitle(it) || it.first_line || it.title || v2Firstline(it.body) || V2_KIND[it.kind] || 'Item';
-  const kind = it.kind === 'approval' ? 'Approval' : stale ? 'Stale check' : it.kind === 'memory_tidy' ? 'Nightly memory tidy' : 'Question';
+  const kind = it.kind === 'approval' ? 'Approval' : stale ? 'Stale check' : it.kind === 'memory_tidy' ? 'Nightly memory tidy' : thread || 'Question';
   const face = stale ? personCircle('Tico', 18) : actorFace(from, 18);
+  const open = thread && it.conversation_id
+    ? `<a class="tl-open" href="#/thread/${encodeURIComponent(it.conversation_id)}" tabindex="-1"><span class="tl-title"><b class="req-from">${esc(name)}:</b> ${esc(plainActors(title))}</span></a>`
+    : it.kind === 'thread_held'
+      ? `<button type="button" class="tl-open" data-hold-review="${esc(it.id)}" tabindex="-1"><span class="tl-title"><b class="req-from">${esc(name)}:</b> ${esc(plainActors(title))}</span></button>`
+    : `<button type="button" class="tl-open" data-open-task="n${esc(key)}" tabindex="-1" aria-haspopup="dialog"><span class="tl-title"><b class="req-from">${esc(name)}:</b> ${esc(plainActors(title))}</span></button>`;
   return tasksSigned(`<div class="tl-row tl-need" data-task-key="n${esc(key)}" data-need-card="${esc(key)}" role="listitem" aria-level="1" style="--depth:0">
     <span class="tl-check-pad${ctx.select ? ' tl-check-room' : ''}"></span><span class="tl-chev-pad"></span>
-    <button type="button" class="tl-open" data-open-task="n${esc(key)}" tabindex="-1" aria-haspopup="dialog"><span class="tl-title"><b class="req-from">${esc(name)}:</b> ${esc(plainActors(title))}</span></button>
+    ${open}
     <span class="tl-fill"></span>
     <span class="tl-chips"><span class="pill needs">${esc(kind)}</span>${stale && (it.rows || []).length ? `<span class="tl-folded tnum">${(it.rows || []).length}</span>` : ''}</span>
     ${ctx.by === 'status' ? '' : '<span class="tl-status-pad"></span>'}
     <span class="tl-people"><span class="tl-face" title="${esc(name)}">${face}</span></span>
-    <time class="tl-age tnum" datetime="${esc(it.ready_since || it.created || '')}" title="${esc(fmt(it.ready_since || it.created))}">${esc(ageShort(it.ready_since || it.created))}</time>
+    <time class="tl-age tnum" datetime="${esc(it.ready_since || it.created_at || '')}" title="${esc(fmt(it.ready_since || it.created_at))}">${esc(ageShort(it.ready_since || it.created_at))}</time>
   </div>`);
 }
-// The items Needs you lists outside any task, without the ones just answered on a card (decide.js decideGone).
+// The items Needs you lists outside any task, without the ones just answered on a card (decide.js decideGone). A
+// thread's items (a mention or question in a thread, a person's DM, a held message) are Inbox's (threads.js), not the
+// Tasks page's: each thing that waits on someone is in one place. A bot's question outside any task stays here: its
+// card is where it is answered.
 const needsExtras = () => (S.v2?.needs || []).filter(it => ['approval', 'stale', 'ask', 'memory_tidy'].includes(it.kind) && !decideGone(decideItemKey(it)));
 // How long an approval's exact payload has been ready to decide, in seconds (until its decision once decided), and whose
 // decision it is: "Ready 2 h 10 min, waiting on Chris" (backend/hubdb.py approval_wait). Counted here from `ready_since`
@@ -379,7 +390,7 @@ function askFilteredRow(it) {
     : `<button type="button" class="ghost" data-let-through="${esc(it.id)}">Let it through</button>`;
   return `<div class="tl-filtered-row" role="listitem">
     <span class="tl-filtered-text"><span class="req-from">${esc(it.asker_name || actorLabel(it.asker) || 'A bot')}:</span> ${title}
-      <span class="muted">${esc(rehearsal ? '' : what + ' · ')}${esc(ASK_FILTER_WHY[it.reason] || '')} · ${esc(ago(it.created))}</span></span>
+      <span class="muted">${esc(rehearsal ? '' : what + ' · ')}${esc(ASK_FILTER_WHY[it.reason] || '')} · ${esc(ago(it.created_at))}</span></span>
     <span class="tl-filtered-act">${act}</span></div>`;
 }
 function askFilteredHTML(state) {
@@ -410,8 +421,8 @@ document.addEventListener('click', async ev => {
 // window's comment box, or the card's reply box) goes with Done as the outcome; otherwise nothing extra is sent.
 // Closing never takes one.
 function taskOutcomeNote(task, action, typed) {
-  if (!task || action.close || !String(task.owner || '').startsWith('human:') ||
-      !String(task.requester || '').startsWith('bot:')) return '';
+  if (!task || action.close || !String(task.owner_id || '').startsWith('human:') ||
+      !String(task.requester_id || '').startsWith('bot:')) return '';
   return String(typed || '').trim();
 }
 // The task window's typed outcome went with Done: it is not left behind to be sent again as a comment.
@@ -442,5 +453,65 @@ document.addEventListener('click', ev => {
     const rows = [...(host?.querySelectorAll('[data-stale-row][data-stale-action]') || [])]
       .map(li => ({id: li.dataset.staleRow, version: Number(li.dataset.staleVersion)}));
     if (rows.length) void staleDecide(sa, '/v2/stale-review/accept-all', {rows});
+  }
+});
+
+// Browser notifications for new thread items, while the page is in the background, when the person turned them on
+// (their Notifications card, person-page.js). The ids already notified are kept per person (their id, from /api/me) in
+// localStorage, so a reload does not repeat them; the first read after a fresh start records what is listed without
+// notifying. Both reads of the list call this (hub-v2.js after a refresh, refresh.js after a live change), and the calls
+// run one after another, so they share one memory and an item is notified once.
+let notifyQueue = Promise.resolve();
+function notifyNewThreadNeeds(items) {
+  notifyQueue = notifyQueue.then(() => notifyThreadNeedsOnce(items)).catch(() => {});
+  return notifyQueue;
+}
+async function notifyThreadNeedsOnce(items) {
+  const id = S.me?.id;
+  if (!id) return;                  // the identity has not loaded: there is no person to keep a memory for yet
+  if (S.notifyBrowser === undefined) {
+    // The person's own row in the people list carries the setting (there is no one-person read).
+    try { S.notifyBrowser = ((await v2Get('/humans'))?.people || []).find(p => p.id === id)?.notify_browser === true; }
+    catch { S.notifyBrowser = false; }
+  }
+  const key = 'tico.notified.' + id;
+  const thread = items.filter(it => THREAD_NEED_KINDS[it.kind]);
+  let seen = null;
+  try { seen = JSON.parse(localStorage.getItem(key) || 'null'); } catch { seen = null; }
+  const first = !Array.isArray(seen);
+  const known = new Set(first ? [] : seen);
+  const fresh = thread.filter(it => !known.has(String(it.id)));
+  if (fresh.length) {
+    const ids = [...known, ...fresh.map(it => String(it.id))].slice(-200);
+    try { localStorage.setItem(key, JSON.stringify(ids)); } catch { /* private window: notify without memory */ }
+  }
+  if (first || !fresh.length || !S.notifyBrowser || !document.hidden || !('Notification' in window)
+      || Notification.permission !== 'granted') return;
+  for (const it of fresh) {
+    try { new Notification(`${THREAD_NEED_KINDS[it.kind]} in Tico`, {body: it.title || '', tag: 'need-' + it.id}); }
+    catch { /* a browser that refuses a notification shows nothing; the list still has it */ }
+  }
+}
+// A write held for review (org_rule_holds) has no thread to open: its hold card opens under the row, the card the task
+// page shows, with Send anyway and Keep blocked for its reviewer. The card is read from the hold, so its text reaches
+// only the reviewer, who is the one who may read it.
+document.addEventListener('click', async ev => {
+  const review = ev.target.closest('[data-hold-review]');
+  if (!review) return;
+  const holdId = review.dataset.holdReview, row = review.closest('[data-need-card]');
+  if (!row) return;
+  const open = row.parentElement?.querySelector(`[data-hold-slot="${CSS.escape(holdId)}"]`);
+  if (open) { open.remove(); return; }
+  const slot = document.createElement('div');
+  slot.className = 'needs-hold';
+  slot.dataset.holdSlot = holdId;
+  slot.dataset.task = holdId;       // ruleHoldRedraw checks a card's slot by this id, as a task page does
+  row.after(slot);
+  try {
+    const hold = await get('/v2/rule-holds/' + encodeURIComponent(holdId), {fresh: true});
+    slot.innerHTML = ruleHoldHTML(hold);
+    ruleHoldsWire(slot, holdId);
+  } catch (e) {
+    slot.textContent = e.message;
   }
 });

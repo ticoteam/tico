@@ -1,7 +1,7 @@
 // The Finance tab (ui/app/finance*.js) against a fake hub: Acme (acme.example) with an owner (Ana), a manager (Cara,
 // who leads Engineering) and a few bots. The owner sees every tab; the manager only P&L (expenses), Cards, Transactions
-// and Access, and Balance sheet / Sources stay hidden even by address. A budget cell edits on a double-click only in a
-// future month and sends budget_update with effective_from; the card rail's Freeze sends card_freeze. Payables and
+// and Access, and Balance sheet / Sources stay hidden even by address. A budget cell edits on a double-click in a
+// future month (or this one, where it has a budget), dry run first, and sends budget_update with effective_from; the card rail's Freeze sends card_freeze. Payables and
 // Receivables list bills and invoices with no totals row; their decisions run a dry run first and send the right action,
 // and both tabs hide from a viewer without payables or receivables (a payables grant shows only Payables, read only).
 // The Balance sheet's "+ Add" enters a journal entry and offers Loan, Asset and Import history. Cards: Unfreeze only
@@ -46,7 +46,7 @@ const MATES = [
 function access(viewer, apGrant = false, apRights = []) {
   const base = {teams, private_lines: [{account_id: 'a-6200', name: 'Payroll', others_see: 'totals', full_detail: ['bot:bookkeeper']}],
     defaults: {manager: 'team_expenses', member: 'own_expenses', manager_payroll: 'totals'}, view_version: 'v1'};
-  if (viewer === 'ana') return {...base, teammates: MATES.map(m => ({...m, may_grant: m.teammate !== 'human:ana'})), can_view_as: true, can_edit_defaults: true};
+  if (viewer === 'ana') return {...base, teammates: MATES.map(m => ({...m, may_grant: m.teammate !== 'human:ana'})), can_view_as: true, can_edit_defaults: true, finance_approver: null};
   const mine = ['human:cara', 'bot:eng-lead', 'bot:builder'];
   const payables = {id: 'g4', subject_kind: 'teammate', subject: 'human:cara', what: 'payables', whose: 'company', whose_team: null, account_ids: [],
     new_members: false, granted_by: 'human:ana', expires_at: null, status: 'active', live: true};
@@ -73,8 +73,17 @@ const LINES = [
 const pad = n => String(n).padStart(2, '0');
 const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const day = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
-function columns(start, end) {
+function columns(start, end, period = 'month') {
   const out = [], today = iso(new Date());
+  if (period === 'day' || period === 'week') {
+    const step = period === 'day' ? 1 : 7, first = day(start);
+    if (period === 'week') first.setDate(first.getDate() - (first.getDay() + 6) % 7);
+    for (let d = first; iso(d) <= end; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + step)) {
+      const s = iso(d), e = iso(new Date(d.getFullYear(), d.getMonth(), d.getDate() + step - 1));
+      out.push({start: s, end: e, label: s, state: e < today ? 'past' : s <= today ? 'current' : 'future'});
+    }
+    return out;
+  }
   for (let d = day(start); iso(d) <= end; d = new Date(d.getFullYear(), d.getMonth() + 1, 1)) {
     const a = new Date(d.getFullYear(), d.getMonth(), 1), z = new Date(d.getFullYear(), d.getMonth() + 1, 0);
     const [s, e] = [iso(a), iso(z)];
@@ -83,7 +92,7 @@ function columns(start, end) {
   return out;
 }
 function pnl(url, me, noRevenue = false, noCogsProjection = false) {
-  const q = url.searchParams, cols = columns(q.get('start'), q.get('end')), view = q.get('view') || 'company';
+  const q = url.searchParams, cols = columns(q.get('start'), q.get('end'), q.get('period')), view = q.get('view') || 'company';
   const lines = LINES.filter(l => (view === 'company' && !noRevenue) || l[3] === 'expense');
   const wave = (v, i) => v ? Math.round(v * (1 + ((i * 7) % 5 - 2) / 40) / 100) * 100 : 0;
   // A private line is hidden from all but the owner (backend/finance/reads.py pnl): renamed, no actuals or projections.
@@ -94,6 +103,7 @@ function pnl(url, me, noRevenue = false, noCogsProjection = false) {
     : ({account_id, code, name: base0, type, section: section(code), parent_id, private: false,
     actual: cols.map((c, i) => c.state === 'future' ? null : c.state === 'current' ? Math.round(wave(base, i) * 0.9) : wave(base, i)),
     total: 0, budget: budget == null ? null : cols.map(() => budget),
+    budget_to_date: budget == null ? null : cols.map(c => c.state === 'current' ? Math.round(budget / 2) : null),
     projection: cols.map((c, i) => c.state === 'future' && !(noCogsProjection && code.startsWith('5')) ? wave(base, i + 1) : null), projection_method: 'trend'}));
   const sum = type => cols.map((c, i) => rows.filter(r => r.type === type).reduce((a, r) => a + (r.actual?.[i] || 0), 0));
   const income = sum('income'), expense = sum('expense');
@@ -104,7 +114,7 @@ function pnl(url, me, noRevenue = false, noCogsProjection = false) {
       {teammate: 'human:cara', kind: 'person', spent: 41000, budget: null}]} : {})};
 }
 const budget = (id, name, account_id, amount, extra = {}) => ({id, name, period: 'month', account_id, catch_all: false, team: null, teammate: null, vendor: null,
-  parent_id: null, owner: 'human:ana', warn_pct: 80, at_limit: 'ask', rollover: false, active: true,
+  parent_id: null, owner_id: 'human:ana', warn_pct: 80, at_limit: 'ask', rollover: false, active: true,
   state: {amount, actual: Math.round(amount * 0.8), held: 0, remaining: Math.round(amount * 0.2), pct: 80, crossed_warn: true, at_limit: false}, ...extra});
 const BUDGETS = [budget('b-software', 'Software', 'a-6100', 300000), budget('b-hosting', 'Hosting', 'a-5100', 400050),
   budget('b-figma', 'Figma', 'a-6100', 135000, {vendor: 'Figma', parent_id: 'b-software', at_limit: 'decline', period: 'quarter'}),
@@ -161,7 +171,7 @@ const CARDS = [
 const TRANSFERS = [{id: 'xf-1', status: 'queued', amount: 500000, currency: 'USD', memo: 'to savings', from: {id: 'm1', name: 'Checking', last4: '0001'},
   to: {id: 'm2', name: 'Savings', last4: '0002'}, created_by: 'human:ana', created_at: '2026-10-29T10:00:00Z', settled_at: null, last_error: null}];
 const SALES_TAX = {year: 2026, currency: 'USD', rows: [{period: '2026-Q3', code: 'CA', jurisdiction: 'California', taxable_sales: 1200000, exempt_sales: 300000,
-  tax_collected: 87000, tax_remitted: 60000, due: 27000, due_on: '2026-10-31'}]};
+  tax_collected: 87000, tax_remitted: 60000, due_at: 27000, due_on: '2026-10-31'}]};
 const F1099 = {year: 2026, currency: 'USD', threshold: 60000, due_on: '2027-01-31', rows: [{vendor_id: 'v-northwind', vendor: 'Northwind Design', tin_on_file: false,
   cash_paid: 610000, card_paid_excluded: 0, threshold: 60000, reportable: true}]};
 const TX = [
@@ -205,7 +215,7 @@ const BILLS = [
     payment: {id: 'pay-3', status: 'awaiting_bank_approval', amount: 124000, on: '2026-11-11', error: null}}),
   // Its last payment was rejected in Mercury: the bill is open again and says so.
   doc('bill', 'bill-4', 'DD-8812', {id: 'v-datadog', name: 'Datadog'}, 'open', 139000, '2026-10-15', {aging: '1_30', days_late: 16,
-    payment: {id: 'pay-4', status: 'cancelled', amount: 139000, on: '2026-10-14', error: 'rejected in Mercury'}}),
+    payment: {id: 'pay-4', status: 'canceled', amount: 139000, on: '2026-10-14', error: 'rejected in Mercury'}}),
   // Its scheduled payment's approval was declined before any payment existed: open, and says so.
   doc('bill', 'bill-5', 'GH-77', {id: 'v-github', name: 'GitHub'}, 'open', 21000, '2026-10-20', {
     payment: {id: null, status: 'denied', amount: 21000, on: '2026-10-15', error: 'declined by human:ana'}}),
@@ -307,6 +317,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
         currency: 'USD', view_version: 'v1'}) : denied();
     // The bills address: only an Email & Phone inbox's address has an inbox; any other is kept with inbox_id null.
     if (p === '/api/v2/finance/bills-address' && method === 'PUT') {
+      if (body.address === 'nope@acme.example') return denied();
       billsEmail = body.address;
       return json({bills_email: billsEmail, inbox_id: billsEmail === 'bills@acme.example' ? 'ib-1' : null});
     }
@@ -391,11 +402,43 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       for (const want of ['Gross profit', 'Gross margin', 'Total operating expenses', 'Net income']) assert.ok(firsts.includes(want), `${tag}: the statement has ${want}`);
       assert.equal(await page.locator('.fin-pl thead th.fin-p').count() > 0, true, tag + ': projected columns are shaded');
       assert.equal(await page.locator('.fin-pl thead .fin-tag').first().textContent(), 'Imported', tag + ': an imported month says so');
-      // The budget column is the current month's: not editable, and a double-click does nothing.
-      assert.equal(await page.locator('td[data-fin-budget]').count(), 0, tag + ': the current month\'s budgets are not editable');
-      const softwareBudget = page.locator('.fin-ln:has(a[href$="/line/a-6100"]) td.fin-b').last();
+      // The current month's budget to date sits next to the full month's.
+      const softwareRow = page.locator('tr.fin-ln').filter({has: page.locator('td[data-fin-budget="a-6100"]')});
+      const headCells = await page.locator('.fin-pl thead tr').first().locator('th').allInnerTexts();
+      assert.equal(headCells.at(-2).toLowerCase(), 'to date', tag + ': a To date column before vs budget');
+      assert.equal((await softwareRow.locator('td').nth(headCells.length - 2).innerText()).trim() !== '', true, tag + ': the line shows its budget to date');
+      // The budget column is the current month's: a line with a budget takes an edit, a line without one nothing.
+      assert.equal(await page.locator('td[data-fin-budget="a-5200"]').count(), 0, tag + ': this month has no new budgets');
+      const softwareBudget = page.locator('td[data-fin-budget="a-6100"]');
+      const nowCols = await page.evaluate(() => FIN.pnl.data.columns), now = nowCols.find(c => c.state === 'current');
+      let wrote = actions(writes).length;
       await softwareBudget.dblclick();
-      assert.equal(await page.locator('.fin-cell-in').count(), 0, tag + ': no editor on a current month');
+      await page.locator('.fin-cell-in').fill('1');
+      await page.locator('.fin-cell-in').press('Enter');
+      await page.waitForFunction(() => !document.querySelector('.fin-cell-in'));
+      assert.equal(actions(writes).at(-1).dry_run === undefined && actions(writes).length > wrote, true, tag + ': lowering this month goes by the server');
+      assert.equal(actions(writes).at(-1).payload.amount, 100, tag + ': the lowering is sent');
+      // A raise the rules send for approval says so first, and Cancel sends nothing.
+      const sentBefore = sent(writes).length;
+      hub.ask = 'human:ana';
+      await softwareBudget.dblclick();
+      await page.locator('.fin-cell-in').fill('9000');
+      await page.locator('.fin-cell-in').press('Enter');
+      await page.locator('dialog.fin-dlg .fin-ask').waitFor();
+      assert.match(await page.locator('dialog.fin-dlg .fin-ask').innerText(), /^Approval from /, tag + ': names the approver');
+      assert.match(await page.locator('dialog.fin-dlg .fin-kv').first().innerText(), /\$9,000/, tag + ': shows the change');
+      assert.equal(sent(writes).length, sentBefore, tag + ': nothing sent yet');
+      assert.equal(actions(writes).at(-1).dry_run, true, tag + ': the dry run came first');
+      await page.locator('dialog.fin-dlg .fin-foot [data-close]').click();
+      assert.equal(sent(writes).length, sentBefore, tag + ': Cancel sends nothing');
+      await softwareBudget.dblclick();
+      await page.locator('.fin-cell-in').fill('9000');
+      await page.locator('.fin-cell-in').press('Enter');
+      await page.locator('dialog.fin-dlg .fin-ask').waitFor();
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.locator('dialog.fin-dlg').waitFor({state: 'detached'});
+      assert.deepEqual(actions(writes).at(-1), {kind: 'budget_update', payload: {budget_id: 'b-software', amount: 900000, effective_from: now.start}}, tag + ': Send sends the raise');
+      hub.ask = '';
       // A past month's cell moves the budget column there; still not editable.
       const cols = await page.evaluate(() => FIN.pnl.data.columns);
       const past = cols.findIndex(c => c.state === 'past'), future = cols.findIndex(c => c.state === 'future');
@@ -461,7 +504,8 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.equal(await projSum(), 3100, tag + ': by teammate too');
       await page.locator('[data-fin-by]').selectOption('vendor');
       await page.locator('[data-fin-key="GitHub"]').waitFor();
-      assert.equal(await page.locator('input[data-fin-vb]').count(), 0, tag + ': this month\'s vendor budgets are read only');
+      assert.equal(await page.locator('input[data-fin-vb="GitHub"]').count(), 1, tag + ': this month\'s vendor budget takes an edit');
+      assert.equal(await page.locator('input[data-fin-vb="Notion"]').count(), 0, tag + ': this month takes no new vendor budget');
       const next = cols[future].start.slice(0, 7);
       await page.locator('[data-fin-month]').fill(next);
       await page.locator('input[data-fin-vb="GitHub"]').waitFor();
@@ -558,6 +602,10 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await go(page, '#/finance/transactions', READY.transactions);
       await page.waitForTimeout(100);
       assert.ok(!txRead().includes('teams=') && !(await page.locator('[data-fin-org-clear]').count()), tag + ': the bare tab is unfiltered');
+      // A tab Finance does not have goes to the P&L, not a page that never draws.
+      await page.evaluate(() => { location.hash = '#/finance/balance-sheet'; });
+      await page.waitForFunction(() => location.hash.startsWith('#/finance/pnl'));
+      await page.locator(READY.pnl).first().waitFor();
       // Balance sheet, cards (freeze), transactions, sources, access.
       await go(page, '#/finance/balance', READY.balance);
       const bsFirst = await page.locator('.fin-bs tbody td:first-child').allInnerTexts();
@@ -832,6 +880,11 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.ok(reads.filter(r => r === '/api/v2/finance/balance-sheet').length >= 2, tag + ': Access reads the balance sheet lines itself');
       await page.locator('#fin-rail select[name="what"]').selectOption('expenses');
       await shot(page, 'access-desktop');
+      // The owner names the finance approver.
+      await page.locator('[data-fin-approver]').selectOption('human:cara');
+      await page.waitForFunction(() => !document.querySelector('[data-fin-approver]').disabled);
+      assert.deepEqual(actions(writes).at(-1), {kind: 'finance_approver_set', payload: {approver: 'human:cara'}}, tag + ': names one person');
+      assert.equal(await page.locator('[data-fin-approver] option[value="bot:bookkeeper"]').count(), 0, tag + ': never a bot');
       await page.locator('[data-fin-defaults]').click();
       await page.locator('dialog.fin-dlg[open]').waitFor();
       await shot(page, 'access-defaults-desktop');
@@ -847,7 +900,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
     // (one the rules send for approval names the approver first); the Balance sheet's "+ Add" posts a journal entry.
     {
       const tag = 'payables';
-      const {page, errors, writes, reads} = await open(browser, {hash: '#/finance/payables'});
+      const {page, errors, writes, reads, hub} = await open(browser, {hash: '#/finance/payables'});
       const today = await page.evaluate(() => finToday());
       const heads = async () => (await page.locator('.fin-doc-t').first().locator('thead th').allInnerTexts()).map(t => t.toUpperCase());
       await page.locator(READY.payables).waitFor();
@@ -861,7 +914,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
         tag + ': Recently paid asks for the last five paid, by payment date');
       const statusOf = async id => (await page.locator(`tr[data-fin-doc="${id}"] td:nth-child(7)`).innerText()).replace(/\s+/g, ' ').trim();
       assert.equal(await statusOf('bill-3'), 'Approve in Mercury pays Nov 11', tag + ': a bill paying now shows its payment\'s state and day');
-      assert.equal(await statusOf('bill-4'), 'Open Pay cancelled 1–30 late', tag + ': a rejected payment shows beside Open, with its aging');
+      assert.equal(await statusOf('bill-4'), 'Open Pay canceled 1–30 late', tag + ': a rejected payment shows beside Open, with its aging');
       assert.equal(await statusOf('bill-5'), 'Open Pay denied', tag + ': a declined approval shows beside Open');
       assert.ok(!(await page.locator('#fin-body').innerText()).includes('5,130'), tag + ': the open total is not drawn');
       assert.match(await page.locator('[data-fin-email-set]').innerText(), /bills@acme\.example$/, tag + ': the owner\'s bills address control');
@@ -871,6 +924,10 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
         await page.locator('dialog.fin-dlg[open] input[name="address"]').fill(value);
         await page.locator('dialog.fin-dlg[open] [type=submit]').click();
       };
+      await setEmail('nope@acme.example');
+      await page.locator('dialog.fin-dlg[open] [data-error]:not([hidden])').waitFor();
+      assert.equal(await page.locator('dialog.fin-dlg [data-error]').innerText(), 'Only a finance admin sets the bills address', tag + ': the denied copy');
+      await page.locator('dialog.fin-dlg[open] .fin-foot [data-close]').click();
       await setEmail('ap@acme.example');
       await page.locator('dialog.fin-dlg[open] [data-error]:not([hidden])').waitFor();
       assert.equal(await page.locator('dialog.fin-dlg [data-error]').innerText(), 'Not an inbox address', tag + ': an address no inbox has is named');
@@ -911,7 +968,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.equal(actions(writes).filter(a => a.kind === 'bill_schedule' && a.dry_run).length, 1, tag + ': one dry run');
       await page.locator('tr[data-fin-doc="bill-4"]').click();
       await page.locator('#fin-rail [data-fin-do="paid"]').waitFor();
-      assert.match(await page.locator('#fin-rail').innerText(), /Payment\s+Pay cancelled rejected in Mercury/, tag + ': the rail says why it was not paid');
+      assert.match(await page.locator('#fin-rail').innerText(), /Payment\s+Pay canceled rejected in Mercury/, tag + ': the rail says why it was not paid');
       await page.locator('#fin-rail [data-fin-do="paid"]').click();
       assert.equal(await page.locator('dialog.fin-dlg input[name="amount"]').inputValue(), '1390', tag + ': Mark paid starts at what is left');
       await page.locator('dialog.fin-dlg[open] select[name="from"] option[value="m1"]').waitFor({state: 'attached'});
@@ -961,7 +1018,9 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.deepEqual(sent(writes).slice(-2), [{kind: 'contact_create', payload: {name: 'Acme Paper', kind: 'vendor'}},
         {kind: 'bill_create', payload: {vendor_id: 'v-new', bill_date: today, lines: [{account_id: 'a-6100', amount: 4550}], number: 'AP-1', origin: 'manual'}}],
         tag + ': contact_create, then bill_create');
-      await page.waitForFunction(() => FIN.doc.sel === 'bill-2' && document.querySelector('tr.fin-on[data-fin-doc="bill-2"]'));
+      // The new draft shows: the list turns to Draft and asks for it.
+      await page.waitForFunction(() => document.querySelector('[data-fin-seg="status"] button[data-v="draft"]').getAttribute('aria-checked') === 'true');
+      assert.ok(reads.some(r => r.startsWith('/api/v2/finance/bills?') && r.includes('status=draft')), tag + ': the list reads drafts after a new bill');
       // Receivables.
       await go(page, '#/finance/receivables', READY.receivables);
       assert.deepEqual(await heads(), ['CUSTOMER', 'INVOICE', 'SENT', 'DUE', 'AMOUNT', 'STATUS'], tag + ': the invoice columns');
@@ -994,6 +1053,23 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.deepEqual(await page.locator('#fin-add [role=menuitem]').allInnerTexts(), ['Bank account', 'Card account', 'Payments', 'Invoice', 'Bill', 'Loan or credit line', 'Asset', 'Journal entry', 'Import history'],
         tag + ': what the owner may add');
       await shot(page, 'balance-add-desktop');
+      // Import history: while the dry run runs the button says Preview… (disabled, aria-busy); after it, Import stays.
+      await page.locator('[data-fin-add-item="import"]').click();
+      await page.locator('dialog.fin-dlg input[name="file"]').setInputFiles({name: 'acme.csv', mimeType: 'text/csv',
+        buffer: Buffer.from('month,line,amount\n2026-01,Software,1200\n')});
+      await page.locator('dialog.fin-dlg select[data-fin-sheet-line]').first().selectOption('a-6100');
+      let unhold = () => {};
+      hub.hold = new Promise(r => { unhold = r; });
+      const go2 = page.locator('dialog.fin-dlg [type=submit]');
+      await go2.click();
+      await page.waitForFunction(() => document.querySelector('dialog.fin-dlg [type=submit]')?.getAttribute('aria-busy') === 'true');
+      assert.deepEqual([await go2.innerText(), await go2.isDisabled()], ['Preview…', true], tag + ': the button shows the save running');
+      unhold(); hub.hold = null;
+      await page.waitForFunction(() => document.querySelector('dialog.fin-dlg [type=submit]')?.getAttribute('aria-busy') === 'false');
+      assert.deepEqual([await go2.innerText(), await go2.isDisabled()], ['Import', false], tag + ': the preview relabels the button and keeps it');
+      await page.locator('dialog.fin-dlg [data-close]').first().click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      await page.locator('[data-fin-add]').click();
       await page.locator('[data-fin-add-item="journal"]').click();
       const jl = page.locator('dialog.fin-dlg [data-fin-jl] .fin-jl');
       await jl.nth(0).locator('select').selectOption('a-6100');
@@ -1027,6 +1103,17 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await go(page, '#/finance/balance', '.fin-pl');
       assert.ok(!reads.some(r => r.startsWith('/api/v2/finance/invoices')), tag + ': invoices never read');
       assert.equal(writes.length, 0, tag + ': nothing written');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // finance.admin adds no view: Access opens, with no private lines and nothing of the owner's.
+    {
+      const tag = 'finance admin';
+      const {page, errors} = await open(browser, {viewer: 'cara', apGrant: true, apRights: ['finance.admin'], hash: '#/finance/access'});
+      await page.locator('[data-fin-mate="human:cara"]').waitFor();
+      assert.equal(await page.locator('[data-fin-tab="access"]').count(), 1, tag + ': the Access tab');
+      assert.equal(await page.locator('#fin-private .fin-chip').count(), 0, tag + ': no private lines');
+      assert.equal(await page.locator('[data-fin-approver], [data-fin-defaults], [data-fin-viewas]').count(), 0, tag + ': nothing of the owner\'s');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
@@ -1168,7 +1255,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.equal(await priv.locator('a').count(), 0, tag + ': a private line does not drill down');
       assert.deepEqual((await priv.locator('td[data-fin-cell]').allInnerTexts()).filter(t => t !== '—'), [], tag + ': a private line shows no figures');
       const firsts = await page.locator('.fin-pl tbody td:first-child').allInnerTexts();
-      assert.ok(firsts.includes('Total expenses excl. payroll'), tag + ': totals without payroll say so');
+      assert.ok(firsts.includes('Total expenses excl. payroll · Your view'), tag + ': totals without payroll say so');
       for (const hidden of ['balance', 'sources', 'payables', 'receivables']) {
         await page.evaluate(h => { location.hash = h; }, '#/finance/' + hidden);
         await page.waitForFunction(() => location.hash.startsWith('#/finance/pnl'));
@@ -1184,7 +1271,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('#fin-rail .fin-rail-title').waitFor();
       assert.equal(await page.locator('#fin-rail [data-fin-cat], #fin-rail [data-fin-tag]').count(), 0, tag + ': no line picker without finance.book');
       await go(page, '#/finance/access', READY.access);
-      assert.equal(await page.locator('[data-fin-defaults], [data-fin-viewas]').count(), 0, tag + ': no defaults or View as');
+      assert.equal(await page.locator('[data-fin-defaults], [data-fin-viewas], [data-fin-approver]').count(), 0, tag + ': no defaults, View as or approver');
       await page.locator('[data-fin-mate="bot:eng-lead"]').click();
       await page.waitForFunction(() => FIN_ACC.sel === 'bot:eng-lead' && document.querySelector('#fin-rail h2'));
       assert.equal(await page.locator('#fin-rail [data-fin-grant]').count(), 0, tag + ': no Grant more where the server would refuse');
@@ -1222,6 +1309,62 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('.fin-as button').click();
       await page.waitForFunction(() => !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 9);
       assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // A chosen range stays through Day and Week: the columns are that range, the label says so, and a table wider than
+    // the page opens on the newest actual with the line names held at the left.
+    {
+      const {page, errors} = await open(browser, {viewport: PHONE});
+      await page.locator('.fin-pl').waitFor();
+      const now = new Date(), a = iso(new Date(now.getFullYear(), now.getMonth() - 1, 3)), z = iso(now);
+      const short = v => `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][day(v).getMonth()]} ${day(v).getDate()}`;
+      await page.locator('[data-fin-range]').click();
+      await page.fill('#fin-range input[name=start]', a); await page.fill('#fin-range input[name=end]', z);
+      await page.locator('#fin-range [type=submit]').click();
+      await page.waitForFunction(s => FIN.pnl.data?.start === s, a);
+      const span = () => page.evaluate(() => {
+        const box = document.querySelector('#fin-pl'), ths = [...box.querySelectorAll('thead tr:first-child th')], cols = FIN.pnl.data.columns;
+        const at = ths[cols.filter(c => c.state !== 'future').length].getBoundingClientRect(), r = box.getBoundingClientRect();
+        return {n: cols.length, first: ths[1].textContent, label: document.querySelector('[data-fin-range]').textContent.trim(), left: box.scrollLeft,
+          inView: at.left >= ths[0].getBoundingClientRect().right - 1 && at.right <= r.right + 1, names: ths[0].getBoundingClientRect().left - r.left};
+      });
+      for (const period of ['day', 'week']) {
+        await page.locator(`[data-fin-seg=period] button[data-v=${period}]`).click();
+        await page.waitForFunction(p => FIN_PNL.period === p && FIN.pnl.data && !FIN.pnl.busy && FIN.pnl.data.columns.length > 2, period);
+        const v = await span();
+        assert.ok(v.first.startsWith(short(a)), `${period}: the first column is the range's first day (${v.first})`);
+        assert.ok(v.label.startsWith(short(a) + ' – ' + short(z)), `${period}: the label says the range (${v.label})`);
+        assert.ok(v.left > 0 && v.inView, period + ': opens on the newest actual');
+        assert.ok(Math.abs(v.names) < 1, period + ': line names stay at the left');
+      }
+      await page.evaluate(() => { document.querySelector('#fin-pl').scrollLeft = 30; });
+      await page.locator('td[data-fin-cell]').nth(3).dispatchEvent('click');
+      assert.equal(await page.evaluate(() => document.querySelector('#fin-pl').scrollLeft), 30, 'a redraw keeps the scroll');
+      assert.deepEqual(errors, [], 'range: no page errors');
+      await page.close();
+    }
+    // Save on a row's tags: a rail drawn while a line save is out gets its Save back when that save fails, and a pick
+    // turns it on. Once a save is reloading, the rail takes no picks (the reload would drop them).
+    {
+      const {page, errors} = await open(browser, {hash: '#/finance/transactions'});
+      await page.locator(READY.transactions).first().waitFor();
+      await page.waitForFunction(() => Array.isArray(FIN.tx.chart) && document.querySelector('select[data-fin-tx-line="feed:f1"]'));
+      const save = '#fin-rail [data-fin-tag] [type=submit]';
+      await page.evaluate(() => { const f = window.fetch; window.__fetch = f; window.fetch = (u, o) => String(u).endsWith('/finance/actions')
+        ? new Promise(r => setTimeout(r, 300)).then(() => new Response('{"detail":"no"}', {status: 400, headers: {'content-type': 'application/json'}})) : f(u, o); });
+      await page.locator('select[data-fin-tx-line="feed:f1"]').selectOption('a-5100');
+      await page.locator('[data-fin-tx="entry:l9"] td').first().click();
+      assert.equal(await page.locator(save).isDisabled(), true, 'tags: Save is off while a line save is out');
+      await page.waitForFunction(() => !FIN.tx.busy);
+      assert.equal(await page.locator(save).isDisabled(), false, 'tags: Save comes back when the line save fails');
+      await page.evaluate(() => { window.fetch = window.__fetch; FIN.tx.busy = true; finTxRail(); FIN.tx.busy = false; });
+      assert.equal(await page.locator(save).isDisabled(), true, 'tags: a rail drawn busy has Save off');
+      await page.locator('#fin-rail [data-fin-tag] select[name="teammate"]').selectOption('human:cara');
+      assert.equal(await page.locator(save).isDisabled(), false, 'tags: picking a teammate turns Save on');
+      await page.evaluate(() => { const f = window.fetch; window.fetch = (u, o) => String(u).includes('/finance/transactions?') ? new Promise(r => setTimeout(r, 500)).then(() => f(u, o)) : f(u, o); });
+      await page.locator(save).click();
+      await page.waitForFunction(() => document.querySelector('#fin-rail form')?.inert, null, {timeout: 3000});
+      assert.deepEqual(errors, [], 'tags: no page errors');
       await page.close();
     }
     console.log('finance: ok');

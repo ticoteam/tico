@@ -70,8 +70,9 @@ Always:
    could not read.
 
 ## Growth
-Work on an Idea subtask carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs.
-Report the numbers the idea needs on the idea task, each with its source and date. Before an outward draft leaves (an ad,
+Before you plan or write for customers, read How we sell in `hub strategy show`.
+Work on a Marketing task, or a subtask of one, carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs.
+Report the numbers the task needs on the task, each with its source and date. Before an outward draft leaves (an ad,
 email, post, page, listing or message), run `hub brand check -` on it and fix every hit, then check each claim against
 `hub brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or
 contact anyone for a channel, read `hub rules list --mine`; a rule that blocks the work stops it. Keep your

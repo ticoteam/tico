@@ -26,6 +26,7 @@ INVOICE_STAGES = (("overdue_1", 1), ("overdue_7", 7), ("overdue_30", 30), ("over
 # A vendor renewal: a month out, then a week out (the tightest stage reached is the one raised).
 RENEWAL_STAGES = (("renewal_in_30", 30), ("renewal_in_7", 7))
 MAX_TERMS = 365
+MAX_PREPAID_MONTHS = 120
 SHARE_WHOLE = 10_000          # posting-rule splits are in basis points
 DEFAULT_PRIORITY = 100
 
@@ -39,15 +40,16 @@ class DocLine:
     taxable: bool | None = None         # an invoice line only: whether sales tax applies to it (None: not said)
     item_id: str = ""                   # the shared item the line sells or buys, if any (backend/records)
     po_line_id: str = ""                # a bill line only: the purchase order line this bill line bills
+    prepaid: tuple[str, int] | None = None  # a bill line only: (first month YYYY-MM, months) it is expensed over
 
 
 def doc_lines(raw: object, *, invoice: bool = False) -> list[DocLine]:
     """A bill's or invoice's lines: each a positive amount with an account (a bill's may leave it out for the vendor's
     default or a posting rule to fill), a description and tags. An invoice line may also say whether it is taxable,
-    and a bill line may name the purchase order line it bills."""
+    and a bill line may name the purchase order line it bills, or a prepaid schedule instead."""
     out: list[DocLine] = []
     allowed = ("account_id", "item_id", "amount", "description", "tags",
-               *(("taxable",) if invoice else ("po_line_id",)))
+               *(("taxable",) if invoice else ("po_line_id", "prepaid")))
     for item in V.items(raw, "lines", L.MAX_LINES):
         q = V.obj(item, "a line")
         V.only(q, allowed)
@@ -55,10 +57,35 @@ def doc_lines(raw: object, *, invoice: bool = False) -> list[DocLine]:
         if amount <= 0:
             raise invalid("a document line's amount is more than 0")
         taxable = V.flag(q, "taxable") if "taxable" in q else None
+        po_line_id = V.opt_text(q, "po_line_id", 80) or ""
+        prepaid = _prepaid(q["prepaid"], amount) if "prepaid" in q else None
+        if prepaid and po_line_id:
+            raise invalid("a prepaid line does not bill a purchase order line")
         out.append(DocLine(V.opt_text(q, "account_id", 80) or "", amount, V.opt_text(q, "description") or "",
-                           L.tags(q.get("tags")), taxable, V.opt_text(q, "item_id", 80) or "",
-                           V.opt_text(q, "po_line_id", 80) or ""))
+                           L.tags(q.get("tags")), taxable, V.opt_text(q, "item_id", 80) or "", po_line_id, prepaid))
     return out
+
+
+def _prepaid(raw: object, amount: int) -> tuple[str, int]:
+    """A prepaid schedule: the month the expense starts (YYYY-MM) and how many months it is spread over, with at
+    least a cent for each."""
+    p = V.obj(raw, "prepaid")
+    V.only(p, ("start", "months"))
+    months = V.integer(p, "months", 1, MAX_PREPAID_MONTHS)
+    if amount < months:
+        raise invalid("a prepaid line's amount is at least a cent a month")
+    return V.month(p, "start"), months
+
+
+def prepaid_month(start: str, n: int) -> str:
+    """The month `n` months after a prepaid's start (0 is the start), as YYYY-MM."""
+    return dates.add_months(dates.month(start), n).isoformat()[:7]
+
+
+def prepaid_amounts(amount: int, months: int) -> list[int]:
+    """A prepaid's expense each month: the amount in equal parts, the cents left over going to the last month."""
+    per = amount // months
+    return [per] * (months - 1) + [amount - per * (months - 1)]
 
 
 def due_date(issued: str, due: str | None, terms_days: int | None) -> str | None:

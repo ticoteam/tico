@@ -18,9 +18,9 @@ const bots = (name, home, hidden, analyst) => [
   bot('goal-manager', name, 'p:ana', {reports_to: '', can_manage: true, ...(hidden ? {chart_hidden: true} : {})}),
   bot('cmo', 'Head of Marketing', hidden ? 'g:marketing' : 'b:goal-manager', {reports_to: '', team: 'marketing'}),
   bot('seo', 'SEO', 'b:cmo', {reports_to: 'cmo', team: 'marketing'}),
-  bot('scribe', 'Scribe', hidden ? '' : 'b:goal-manager', {reports_to: '', operator: 'ana', ...(home ? {team: 'home'} : {})}),
+  bot('scribe', 'Scribe', hidden ? '' : 'b:goal-manager', {reports_to: '', owner_id: 'ana', ...(home ? {team: 'home'} : {})}),
   // Reports to the Strategy Bot itself and runs on Bo's computer: it hangs from the next row up, the owner.
-  ...(analyst ? [bot('analyst', 'Analyst', 'b:goal-manager', {reports_to: 'goal-manager', operator: 'bo'})] : []),
+  ...(analyst ? [bot('analyst', 'Analyst', 'b:goal-manager', {reports_to: 'goal-manager', owner_id: 'bo'})] : []),
 ];
 // With `home`, the owner and Scribe are in a group of their own, which the server never hangs under the Strategy Bot.
 const groups = (home, hidden) => [{id: 'marketing', name: 'Marketing', reports_to: '', parent: '', org_parent: hidden ? '' : 'b:goal-manager', order: 0},
@@ -58,7 +58,7 @@ async function open(browser, server, width = 1440) {
   return {page, errors};
 }
 const goalLines = page => page.locator('#goal-tree > li').evaluateAll(els => els
-  .map(el => `${el.dataset.owner || (el.classList.contains('gt-group') ? 'group:' + el.textContent.trim() : '')}@${el.style.getPropertyValue('--d')}`)
+  .map(el => `${el.dataset.owner || (el.classList.contains('gt-group') ? 'group:' + (el.querySelector('.gt-name')?.textContent || '').trim() : '')}@${el.style.getPropertyValue('--d')}`)
   .filter(l => l.startsWith('bot:') || l.startsWith('group:')));
 // Every chart node above this one, nearest first.
 const above = (page, key) => page.locator(`#tree [data-org="${key}"]`).first().evaluate(el => {
@@ -109,7 +109,8 @@ async function check(page, name = 'Strategy Bot') {
       assert.deepEqual(await above(page, 'b:scribe'), ['p:ana', 'g:home'], `${width}: Scribe under the owner`);
       assert.deepEqual(await above(page, 'g:marketing'), ['p:ana', 'g:home'], `${width}: Marketing under the owner`);
       assert.deepEqual(await above(page, 'b:seo'), ['b:cmo', 'g:marketing', 'p:ana', 'g:home']);
-      assert.deepEqual(await goalLines(page), ['group:Home@0', 'bot:scribe@2', 'group:Marketing@2', 'bot:cmo@3', 'bot:seo@4']);
+      // Goals draws as the Org tab does: the owner on top, so their own group is not a line above them.
+      assert.deepEqual(await goalLines(page), ['bot:scribe@1', 'group:Marketing@1', 'bot:cmo@2', 'bot:seo@3']);
       assert.deepEqual(errors, []);
       await page.close();
     }

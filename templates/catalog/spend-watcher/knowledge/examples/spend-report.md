@@ -5,7 +5,7 @@ A sample of excellent output for a fictional team. Every name in it is a stand-i
 
 **Headline: software and cloud spend was 18,940 in September, up 1,420 (8 percent) on August; one anomaly, two renewals inside 60 days, one likely overlap.**
 
-Sample output for Acme, a fictional studio-software team. Nothing was cancelled, paid or sent.
+Sample output for Acme, a fictional studio-software team. Nothing was canceled, paid or sent.
 
 ## Anomaly (1)
 - **Cloud database**: 2026-09-14 to 2026-09-27 daily cost rose from about 38 to 121. Threshold: up 20 percent and 200 a month; this is +1,160 so far. Owner on record: Dana Ortiz (engineering). Cause unknown; a snapshot line appears on 2026-09-14 (`acme-cloud-2026-09.csv`, row 331). The question is on the task for you to pass to Dana; I have not contacted her.

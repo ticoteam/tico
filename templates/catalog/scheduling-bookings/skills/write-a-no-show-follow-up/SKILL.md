@@ -1,13 +1,13 @@
 ---
 name: write-a-no-show-follow-up
-description: Draft a short, kind follow-up to a customer who missed a booking or cancelled late, stating any fee exactly as the rules say and offering one way to rebook.
+description: Draft a short, kind follow-up to a customer who missed a booking or canceled late, stating any fee exactly as the rules say and offering one way to rebook.
 ---
 # Write a no-show follow-up
 
 When to use: after a no-show or a late cancellation appears in the weekly export, as a draft for a person to send.
 
 Steps:
-1. Confirm the event from the export: booking time, service, and whether it was a no-show (not attended, not cancelled before the window) or a late cancellation (cancelled inside the window). Check whether the customer rebooked since.
+1. Confirm the event from the export: booking time, service, and whether it was a no-show (not attended, not canceled before the window) or a late cancellation (canceled inside the window). Check whether the customer rebooked since.
 2. Check the rule for this event in `knowledge/booking-rules.md`. For a first no-show, a late cancellation and a repeat no-show, the rule may differ. Quote the rule as written. If there is no rule, the draft says nothing about a fee and the gap goes on the rule questions list.
 3. Check `knowledge/exceptions.md` for a precedent for this customer. Do not mention the precedent to the customer; it changes nothing about the draft unless a person has approved it.
 4. Write the draft in the team's voice. Open with the booking and the time. Say what happened once, without blame. State the fee line only if the rule applies to this event.

@@ -1,6 +1,7 @@
 """Spreadsheet history as raw totals (spec §4.1): each month posts balanced against Opening balance equity and the
 reads show it, the same file posts nothing twice, an unmapped line is refused and named, a closed month waits for the
 owner, a bot's import waits for the owner's approval, and reversed months post the file again once all are reversed."""
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -10,8 +11,14 @@ from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance.core import raw_totals as RT
 from backend.finance.core.errors import CONFLICT, DENIED, INVALID, PERIOD_CLOSED, FinanceError
+from backend.finance.core.ledger import name_key
 from backend.finance.raw_totals import OUTSIDE
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.finance.store import schema as SCH
+
+import importlib
+MIGRATION = importlib.import_module("backend.migrations.0037_finance_combined")
+from backend.tests.test_finance_fixtures import (  # noqa: F401
+    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
 
 CSV = (Path(__file__).parent / "fixtures" / "finance" / "raw_totals.csv").read_text()
 MAPPING = {"Software subscriptions": "6100", "Office rent": "6900", "Sales revenue": "4000", "Cash at bank": "1000"}
@@ -106,6 +113,61 @@ def test_reversed_months_post_the_file_again_once_all_are_reversed(books):
                                                                again.result["batch_id"]: True}
 
 
+def test_a_month_with_transactions_takes_no_raw_totals(books):
+    with books.transaction() as c:
+        spend(c, "6100", 5000, day="2026-02-10")
+        before = _count(c, "fin_entries")
+        dry = act(c, OWNER, "import_raw_totals", _body(), dry_run=True)
+        assert dry.status == "failed" and dry.code == CONFLICT and "2026-02" in dry.reason
+        real = act(c, OWNER, "import_raw_totals", _body())
+        assert real.status == "failed" and real.code == CONFLICT
+        assert _count(c, "fin_entries") == before and _count(c, "fin_raw_imports") == 0
+        # Once the transaction is reversed the month is empty again, and the file posts.
+        usage = c.execute("SELECT id FROM fin_entries WHERE source='usage'").fetchone()[0]
+        assert act(c, OWNER, "journal", {"reverses": usage}).status == "committed"
+        assert act(c, OWNER, "import_raw_totals", _body()).status == "committed"
+
+
+def test_a_month_with_a_posted_bank_row_takes_no_raw_totals_even_when_its_entry_rolled_forward(books):
+    """A bank row of a month that posted refuses that month's raw totals, though its entry is dated outside the month: a
+    row posted while February was closed lands in the open period (open_day), so no itemized entry is found in February."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "close_period", {"month": "2026-02"}).status == "committed"
+    fake.txns["txn-feb"] = _feed("txn-feb", -1_500, "2026-02-10")
+    sync_once(books, fake)
+    with books.transaction() as c:
+        fid = c.execute("SELECT id FROM fin_feed_txns WHERE provider_id='txn-feb'").fetchone()[0]
+        assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6900")}).status == "committed"
+        entry = c.execute("SELECT entry_id FROM fin_feed_txns WHERE id=?", (fid,)).fetchone()[0]
+        assert act(c, OWNER, "reopen_period", {"month": "2026-02"}).status == "committed"
+        refused = act(c, OWNER, "import_raw_totals", _body())
+        assert refused.status == "failed" and refused.code == CONFLICT, refused
+        assert "2026-02" in refused.reason and "bank or card" in refused.reason, refused.reason
+        # Reversing the row's entry clears the month, and the file posts.
+        assert act(c, OWNER, "journal", {"reverses": entry}).status == "committed"
+        again = act(c, OWNER, "import_raw_totals", _body())
+        assert again.status == "committed", again.reason
+
+
+def test_a_sheet_past_the_64_bit_range_is_refused_by_the_dry_run(books):
+    # Twelve 18-digit rows net past the ledger's 64-bit range, and twenty rows that net to zero still sum past it: each
+    # is refused at the dry run, and the commit refuses it too with nothing posted.
+    netting = [(f"Plus {k:02d}", "999999999999999999") for k in range(10)]
+    netting += [(f"Minus {k:02d}", "-999999999999999999") for k in range(10)]
+    for pairs in ([(f"Big {k:02d}", "999999999999999999") for k in range(12)], netting):
+        text = "month,line,amount\n" + "".join(f"2026-01,{name},{amount}\n" for name, amount in pairs)
+        mapping = {name: "6100" for name, _ in pairs}
+        with books.transaction() as c:
+            before = _count(c, "fin_entries")
+            dry = act(c, OWNER, "import_raw_totals", _body(mapping, csv=text), dry_run=True)
+            assert dry.status == "failed" and dry.code == INVALID and "out of range" in dry.reason
+            real = act(c, OWNER, "import_raw_totals", _body(mapping, csv=text))
+            assert real.status == "failed" and real.code == INVALID
+            assert _count(c, "fin_entries") == before and _count(c, "fin_raw_imports") == 0
+
+
 def test_a_bad_sheet_is_refused_and_the_same_rows_hash_the_same():
     bad = {"an unknown column": "month,line,amount,note\n2026-01,Rent,100,x\n",
            "a bad month": "month,line,amount\n2026-1,Rent,100\n",
@@ -119,6 +181,34 @@ def test_a_bad_sheet_is_refused_and_the_same_rows_hash_the_same():
     two = RT.parse("month,line,amount\n2026-02,Rent,200\n2026-01,Rent,100\n", "cash")
     assert one.digest == two.digest
     assert one.digest != RT.parse("month,line,amount\n2026-01,Rent,100\n2026-02,Rent,200\n", "accrual").digest
+
+
+def test_amounts_and_months_are_ascii_digits_only():
+    # Arabic-Indic and fullwidth digits are \d in Python's regex, so the sheet reader itself must refuse them.
+    for digits in ("١٢٣٤", "１２３４"):
+        with pytest.raises(FinanceError):
+            RT.parse(f"month,line,amount\n2026-01,Rent,{digits}\n", "cash")
+    with pytest.raises(FinanceError):
+        RT.parse("month,line,amount\n٢٠٢٦-01,Rent,100\n", "cash")
+
+
+def test_a_leading_byte_order_mark_is_stripped():
+    sheet = RT.parse("﻿month,line,amount\n2026-01,Rent,100\n", "cash")
+    assert [(r.month, r.line, r.amount) for r in sheet.rows] == [("2026-01", "Rent", 100)]
+    assert sheet.digest == RT.parse("month,line,amount\n2026-01,Rent,100\n", "cash").digest
+
+
+def test_internal_runs_of_spaces_collapse_in_line_names():
+    sheet = RT.parse("month,line,amount\n2026-01,Office  Rent,100\n2026-02,  Office \t Rent ,200\n", "cash")
+    assert {r.line for r in sheet.rows} == {"Office Rent"}
+    assert RT.unmapped(sheet, {name_key("Office Rent")}) == []
+
+
+def test_a_sheet_whose_amounts_all_end_in_00_gets_a_dry_run_warning_and_no_refusal():
+    dollars = RT.parse("month,line,amount\n2026-01,Rent,290000\n2026-02,Rent,300000\n", "cash")
+    assert RT.cents_warning(dollars) != ""
+    assert RT.cents_warning(RT.parse("month,line,amount\n2026-01,Rent,290000\n2026-02,Rent,300050\n", "cash")) == ""
+    assert RT.cents_warning(RT.parse("month,line,amount\n2026-01,Rent,300000\n", "cash")) == ""
 
 
 def test_a_scoped_replay_is_denied_the_same_as_a_fresh_import(books):
@@ -204,3 +294,315 @@ def test_a_grantee_without_payroll_detail_learns_nothing_from_an_import(books):
                                                    "full_detail": ["human:dan"]}).status == "committed"
         again = act(c, "human:dan", "import_raw_totals", jan, "dan-replay-detail")
         assert again.result["already_imported"] is True and again.result["batch_id"] == batch
+
+
+def test_a_posting_dated_in_a_raw_totals_month_is_refused_until_its_raw_entry_is_reversed(books):
+    """§4.1: a bill or journal dated in a month holding live raw totals is refused by the posting path itself. The raw
+    entry's reversal, the raw import and every other reversal still post, and the refused bill posts once it is undone."""
+    with books.transaction() as c:
+        r = act(c, OWNER, "import_raw_totals", _body())
+        assert r.status == "committed", r.reason
+        feb = next(m["entry_id"] for m in r.result["months"] if m["month"] == "2026-02")
+        vendor = str(act(c, OWNER, "contact_create", {"name": "Acme Supplies", "kind": "vendor"}).result["contact_id"])
+        bill = str(act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-02-10", "lines": [
+            {"account_id": account(c, "6100"), "amount": 5_000}]}).result["bill_id"])
+        before = _count(c, "fin_entries")
+        approved = act(c, OWNER, "bill_approve", {"bill_id": bill})
+        stray = act(c, OWNER, "journal", {"date": "2026-02-20", "memo": "stray", "lines": [
+            {"account_id": account(c, "6900"), "amount": 10_000}, {"account_id": account(c, "1000"), "amount": -10_000}]})
+        for refused in (approved, stray):
+            assert refused.status == "failed" and refused.code == CONFLICT and "raw totals" in refused.reason
+        assert _count(c, "fin_entries") == before
+        assert act(c, OWNER, "journal", {"reverses": feb}).status == "committed"
+        assert act(c, OWNER, "bill_approve", {"bill_id": bill}).status == "committed"
+
+
+def test_a_month_with_a_journal_takes_no_raw_totals(books):
+    """§4.1: a month is raw totals or transactions, and a hand journal is one of the postings that wait on raw totals. A
+    month holding one refuses its raw totals, as a month holding a bank row does; once the journal is reversed it takes them."""
+    sheet = "month,line,amount,team\n2026-09,Software subscriptions,10000,\n2026-09,Cash at bank,-10000,\n"
+    with books.transaction() as c:
+        journal = act(c, OWNER, "journal", {"date": "2026-09-05", "memo": "hand entry", "lines": [
+            {"account_id": account(c, "6100"), "amount": 10_000}, {"account_id": account(c, "1000"), "amount": -10_000}]})
+        assert journal.status == "committed", journal.reason
+        entry = c.execute("SELECT id FROM fin_entries WHERE source='manual'").fetchone()[0]
+        before = _count(c, "fin_entries")
+        dry = act(c, OWNER, "import_raw_totals", _body(csv=sheet), dry_run=True)
+        assert dry.status == "failed" and dry.code == CONFLICT and "2026-09" in dry.reason
+        real = act(c, OWNER, "import_raw_totals", _body(csv=sheet))
+        assert real.status == "failed" and real.code == CONFLICT
+        assert _count(c, "fin_entries") == before and _count(c, "fin_raw_imports") == 0
+        assert act(c, OWNER, "journal", {"reverses": entry}).status == "committed"
+        assert act(c, OWNER, "import_raw_totals", _body(csv=sheet)).status == "committed"
+
+
+def _feed(raw_id: str, amount: int, day: str) -> dict[str, object]:
+    return {**MERCURY["txn_bank_fee"], "id": raw_id, "amount": amount, "createdAt": f"{day}T10:00:00Z",
+            "postedAt": f"{day}T10:00:00Z"}
+
+
+def _feed_state(c):
+    return c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE provider_id='txn-feb'").fetchone()
+
+
+def test_a_feed_row_in_a_raw_totals_month_is_covered_history_and_posts_nowhere(books):
+    """§4.1: a settled feed row dated on or before the latest raw-totals month stays unposted as covered history, out
+    of the review queues, and still counts toward reconciling the bank. Categorize refuses it with the reason."""
+    fake = FakeMercury()
+    with books.transaction() as c:
+        assert act(c, OWNER, "import_raw_totals", _body()).status == "committed"
+    connect(books, fake)
+    fake.txns["txn-feb"] = _feed("txn-feb", -1_500, "2026-02-10")
+    sync_once(books, fake)
+    with books.transaction() as c:
+        status, entry = _feed_state(c)
+        assert status == "covered" and entry is None, (status, entry)
+        fid, money = c.execute("SELECT id, money_account_id FROM fin_feed_txns WHERE provider_id='txn-feb'").fetchone()
+        refused = act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6900")})
+        assert refused.status == "failed" and refused.code == CONFLICT and "covered" in refused.reason, refused
+        made = act(c, OWNER, "reconcile", {"money_account_id": money, "statement_end": "2026-02-28",
+                                           "statement_balance": -1_500})
+        assert made.result["cleared"] == 1 and made.result["outstanding"] == 0, made.result
+
+
+def test_reversing_the_months_a_covered_row_sits_behind_lets_it_post_once(books):
+    """§4.1: a reversal of a later month leaves a covered row covered; reversing back past it lets it settle, once, as
+    if it had just arrived."""
+    fake = FakeMercury()
+    with books.transaction() as c:
+        r = act(c, OWNER, "import_raw_totals", _body())
+        assert r.status == "committed", r.reason
+        months = {m["month"]: m["entry_id"] for m in r.result["months"]}
+    connect(books, fake)
+    fake.txns["txn-feb"] = _feed("txn-feb", -1_500, "2026-02-10")
+    sync_once(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "journal", {"reverses": months["2026-03"]}).status == "committed"
+        assert _feed_state(c)[0] == "covered"
+        assert act(c, OWNER, "journal", {"reverses": months["2026-02"]}).status == "committed"
+        status, entry = _feed_state(c)
+        assert status == "posted" and entry is not None, (status, entry)
+        assert c.execute("SELECT count(*) FROM fin_entries WHERE source='bank' AND status='posted'").fetchone()[0] == 1
+
+
+# The same history as a sheet with no cash line: its months post against Opening balance equity alone.
+PL_MAPPING = {"Software subscriptions": "6100", "Sales revenue": "4000"}
+PL_CSV = ("month,line,amount,team\n2026-01,Sales revenue,250000,sales\n2026-03,Software subscriptions,30000,web\n"
+          "2026-03,Sales revenue,40000,sales\n")
+SHEETS = {"cash": (MAPPING, CSV), "pl": (PL_MAPPING, PL_CSV)}
+
+
+def _bank_gl(c) -> tuple[int, int]:
+    """The checking account's GL line through the day, and the provider's balance the books hold for it."""
+    line = next(r["balance"] for r in FR.balance_sheet(c, OWNER, at=AT)["assets"] if r["code"] == "1000")
+    held = c.execute("SELECT balance FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0]
+    return int(line), int(held)
+
+
+@pytest.mark.parametrize("sheet", ["cash", "pl"])
+def test_the_bank_line_is_the_providers_balance_across_covered_history(books, sheet):
+    """§4.1 opening: a row before the first raw-totals month and one inside the sheet are covered history, an uncovered
+    row after it posts, and the opening balance makes the bank's GL line the provider's balance, with or without a cash
+    line in the sheet."""
+    mapping, csv = SHEETS[sheet]
+    fake = FakeMercury()
+    fake.txns["txn-dec"] = _feed("txn-dec", -1_000.0, "2025-12-15")
+    fake.txns["txn-feb"] = _feed("txn-feb", -1_500.0, "2026-02-10")
+    fake.txns["txn-apr"] = _feed("txn-apr", -400.0, "2026-04-05")
+    with books.transaction() as c:
+        assert act(c, OWNER, "import_raw_totals", _body(mapping, csv=csv)).status == "committed"
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        line, held = _bank_gl(c)
+        assert line == held, (line, held)
+        assert c.execute("SELECT count(*) FROM fin_feed_txns WHERE status='covered'").fetchone()[0] == 2
+
+
+@pytest.mark.parametrize("sheet", ["cash", "pl"])
+def test_a_backfill_that_starts_inside_the_sheet_still_ties_the_bank_line(books, sheet):
+    """§4.1 opening: the feed begins in the middle of the sheet, so the opening sits before the first raw-totals month,
+    not before the first row, and the bank line still equals the provider's balance."""
+    mapping, csv = SHEETS[sheet]
+    fake = FakeMercury()
+    fake.txns["txn-feb"] = _feed("txn-feb", -1_500.0, "2026-02-10")
+    fake.txns["txn-apr"] = _feed("txn-apr", -400.0, "2026-04-05")
+    with books.transaction() as c:
+        assert act(c, OWNER, "import_raw_totals", _body(mapping, csv=csv)).status == "committed"
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        line, held = _bank_gl(c)
+        assert line == held, (line, held)
+
+
+def test_reversing_sheet_months_moves_the_bank_line_and_lets_the_covered_row_post(books):
+    """§4.1 opening: reversing the latest month moves the raw movement out of the bank line and keeps it equal to the
+    provider's balance; reversing the month behind a covered row lets that row settle, and the line still ties."""
+    fake = FakeMercury()
+    fake.txns["txn-feb"] = _feed("txn-feb", -1_500.0, "2026-02-10")
+    fake.txns["txn-apr"] = _feed("txn-apr", -400.0, "2026-04-05")
+    with books.transaction() as c:
+        r = act(c, OWNER, "import_raw_totals", _body())
+        assert r.status == "committed", r.reason
+        months = {m["month"]: m["entry_id"] for m in r.result["months"]}
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "journal", {"reverses": months["2026-03"]}).status == "committed"
+        line, held = _bank_gl(c)
+        assert line == held, (line, held)
+        assert act(c, OWNER, "journal", {"reverses": months["2026-02"]}).status == "committed"
+        assert _feed_state(c)[0] == "posted"
+        line, held = _bank_gl(c)
+        assert line == held, (line, held)
+
+
+def test_the_first_reconcile_to_the_latest_raw_month_end_is_done_with_no_difference(books):
+    """§4.1 opening: the first reconciliation starts from the bank's own balance before its first row, covered history
+    included, so reconciling to the sheet's last month-end (before the uncovered row) is done with no difference, and
+    the books agree with the statement."""
+    fake = FakeMercury()
+    fake.txns["txn-dec"] = _feed("txn-dec", -1_000.0, "2025-12-15")
+    fake.txns["txn-feb"] = _feed("txn-feb", -1_500.0, "2026-02-10")
+    fake.txns["txn-apr"] = _feed("txn-apr", -400.0, "2026-04-05")
+    with books.transaction() as c:
+        assert act(c, OWNER, "import_raw_totals", _body()).status == "committed"
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        line, held = _bank_gl(c)
+        bank = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
+        # The bank's balance on 31 March: today's less the 5 April row (-400.00, 40,000 in cents).
+        done = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-03-31",
+                                           "statement_balance": held + 40_000})
+        assert (done.result["status"], done.result["difference"], done.result["book_difference"]) == ("done", 0, 0)
+        assert line == held, (line, held)
+
+
+def test_a_reconcile_to_a_month_end_counts_no_raw_totals_from_after_it(books):
+    """§4.1: the first reconciliation to a month end counts the raw totals through that day only, so a later month's
+    entry does not move the statement at an earlier day. The next reconciliation counts the raw totals posted since the
+    last one's end, so it ties too."""
+    fake = FakeMercury()
+    fake.txns["txn-jul"] = _feed("txn-jul", -5.0, "2026-07-31")
+    fake.balances["acct-chk"] = 700.0
+    sheet = "month,line,amount,team\n2026-08,Cash at bank,-10000,\n2026-09,Cash at bank,-20000,\n"
+    with books.transaction() as c:
+        assert act(c, OWNER, "import_raw_totals", _body({"Cash at bank": "1000"}, csv=sheet)).status == "committed"
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        line, held = _bank_gl(c)
+        assert line == held, (line, held)
+        bank = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
+        # The bank's balance on 31 August: today's, plus the September sheet line (-200.00, so 20,000 in cents).
+        aug = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-08-31",
+                                          "statement_balance": held + 20_000})
+        assert (aug.result["status"], aug.result["difference"], aug.result["book_difference"]) == ("done", 0, 0), aug.result
+        sep = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-09-30",
+                                          "statement_balance": held})
+        assert (sep.result["status"], sep.result["difference"], sep.result["book_difference"]) == ("done", 0, 0), sep.result
+
+
+def test_migration_0037_widens_the_feed_status_keeps_its_rows_and_runs_twice(books):
+    """Migration 0037 on an install whose fin_feed_txns predates the covered status (its CHECK has no 'covered'): the
+    rebuild keeps every row and its entry_line_id, the table's triggers come back, 'covered' is accepted afterwards, and
+    a second run changes nothing. Other statuses stay refused."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        money = c.execute("SELECT id FROM fin_money_accounts ORDER BY id LIMIT 1").fetchone()[0]
+
+        def triggers() -> list[str]:
+            return sorted(r[0] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='fin_feed_txns'"))
+
+        def sql() -> str:
+            return str(c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='fin_feed_txns'").fetchone()[0])
+
+        def state() -> list[tuple]:
+            return c.execute("SELECT id, status, amount, entry_line_id FROM fin_feed_txns ORDER BY id").fetchall()
+
+        before_triggers = triggers()
+        # The table as cloud step 77 left it: the same columns (refund_of comes later, in migration 0037), and a status
+        # CHECK without 'covered'.
+        current = sql()
+        c.execute("DROP TABLE fin_feed_txns")
+        c.execute(current.replace("'ignored','covered'", "'ignored'").replace(", refund_of TEXT", ""))
+        assert "'covered'" not in sql() and "entry_line_id" in sql() and "refund_of" not in sql()
+        c.executemany("INSERT INTO fin_feed_txns(id, money_account_id, provider_id, txn_date, amount, currency, status, "
+                      "created_at, created_by, entry_line_id) VALUES(?,?,?,?,?,?,?,'2026-02-10T00:00:00Z','bot',?)",
+                      [("f1", money, "p1", "2026-02-10", -1_500, "USD", "posted", "L1"),
+                       ("f2", money, "p2", "2026-02-11", 900, "USD", "new", None)])
+        rows = state()
+
+        MIGRATION.up(c)
+        assert state() == rows
+        assert "entry_line_id" in [r[1] for r in c.execute("PRAGMA table_info(fin_feed_txns)")]
+        assert triggers() == before_triggers
+        with pytest.raises(sqlite3.IntegrityError):
+            c.execute("UPDATE fin_feed_txns SET status='bogus' WHERE id='f2'")
+        c.execute("UPDATE fin_feed_txns SET status='covered' WHERE id='f2'")
+        rows = state()
+        table = sql()
+
+        MIGRATION.up(c)
+        assert state() == rows and sql() == table
+        assert triggers() == before_triggers
+
+
+def _opening_entry(c) -> tuple[str, str, int]:
+    """The live opening balance entry on the checking line: (entry id, day, amount on that line)."""
+    row = c.execute("SELECT e.id, e.entry_date, l.amount FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id "
+                    "JOIN fin_accounts a ON a.id=l.account_id WHERE e.source='sync' AND e.source_id LIKE 'opening:%' "
+                    "AND e.status='posted' AND e.reverses_id IS NULL AND a.code='1000'").fetchone()
+    return str(row[0]), str(row[1]), int(row[2])
+
+
+PASSES = [f"2026-10-15T{h:02d}:30:00.000000Z" for h in (13, 14, 15)]
+
+
+def test_a_row_the_feed_never_sees_is_a_difference_the_opening_does_not_absorb(books):
+    """Phase 2 #1 (§4.1 opening): once the backfill has finished the opening moves only by what changed in the books,
+    never by a fresh balance read. The bank holds a row the feed never sends: later passes leave the opening where it
+    was, the bank line stays short of the statement, and reconciliation reports that difference."""
+    fake = FakeMercury()
+    fake.txns["txn-feb"] = _feed("txn-feb", -1_500, "2026-02-10")
+    fake.balances["acct-chk"] = -500
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        opening = _opening_entry(c)
+        assert opening[1:] == ("2026-02-09", 100_000), opening
+        assert _bank_gl(c) == (-50_000, -50_000)
+    fake.balances["acct-chk"] = -800                    # 300.00 the bank holds that the feed never sends
+    for at in PASSES:
+        sync_once(books, fake, at)
+    with books.transaction() as c:
+        assert _opening_entry(c) == opening
+        assert _bank_gl(c) == (-50_000, -80_000)
+        bank = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
+        made = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-10-14",
+                                           "statement_balance": -80_000})
+        assert made.status == "committed", made.reason
+        assert made.result["book_difference"] == -30_000, made.result     # 300.00 short of the statement
+        assert made.result["status"] == "open"
+
+
+def test_an_opening_does_not_block_a_sheet_that_reaches_back_past_it(books):
+    """Phase 2 #3 (§4.1 opening): connect first, so the opening exists before any import. The sheet's first month is
+    before the opening's day, so the import moves the opening back before that month instead of being blocked by it,
+    and the bank line still equals the provider's balance."""
+    fake = FakeMercury()
+    fake.txns["txn-feb"] = _feed("txn-feb", -1_500, "2026-02-10")
+    fake.balances["acct-chk"] = -500
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        assert _opening_entry(c)[1] == "2026-02-09"
+    with books.transaction() as c:
+        r = act(c, OWNER, "import_raw_totals", _body(PL_MAPPING, csv=PL_CSV))
+        assert r.status == "committed", r.reason
+        assert _bank_gl(c) == (-50_000, -50_000)
+        assert _opening_entry(c)[1] == "2025-12-31"

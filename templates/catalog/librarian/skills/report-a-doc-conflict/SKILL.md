@@ -8,7 +8,7 @@ When to use: two sources disagree on a figure, a date, a name, a step or a rule.
 
 Steps:
 1. Supersession first. If one source says it replaces the other ("replaces the 2025 version"), or a newer doc says so, this is not a conflict. Follow `skills/check-a-doc-before-you-cite-it/SKILL.md` step 6: name the replacement, quote and cite the line that says so, and list the old doc under "Out of date" in `_librarian/missing.md`. Answer with the replacement's value, dated and cited. The steps below are for a real conflict only.
-2. Put the two claims side by side: the fact, each value quoted in its source's own words, each citation, and each source's date (a doc's `updated` date, or the walk date of a linked page) and owner.
+2. Put the two claims side by side: the fact, each value quoted in its source's own words, each citation, and each source's date (a doc's `updated_at` date, or the walk date of a linked page) and owner.
 3. Say what each source is, in one clause: a policy, a process, a web page, or a file a bot or person made. A file is evidence of what was made, not a decision. Do not rank the sources to choose a winner.
 4. Answer with both values, dated and both cited. Begin by saying the docs disagree. Do not give either value as the answer.
 5. Record it once under **Docs that disagree** in `_librarian/missing.md`: both links, both values and both dates, in the shape `playbooks/faq-and-gaps.md` gives. If the line is already there, leave it.

@@ -6,7 +6,7 @@
 //!
 //! In memory: this runner starts every turn on this computer, and a turn that ends, fails, runs out of time or
 //! panics drops what it holds. That frees the login at once, unless the process of the host the turn started is still
-//! running (a panic or a cancelled turn skips or cuts off its stop, or the host stopped answering but lives on): then
+//! running (a panic or a canceled turn skips or cuts off its stop, or the host stopped answering but lives on): then
 //! the login is kept until that process has been stopped and reaped. A restarted runner holds nothing.
 //!
 //! A login is never copied into another bot's home to get round this: a copy of a ChatGPT auth.json rotates apart
@@ -455,7 +455,7 @@ pub async fn take(key: &str, turn: &Turn) -> Held {
 
 /// The login for a turn that may wait for it: at once when it is free, else in its place in the queue. `over` says
 /// why the turn should not run any more (its lease, a Stop, the computer stopping); it is asked before taking the
-/// login, every `tick` while waiting and once more when the login is granted, so a cancelled turn never starts on it
+/// login, every `tick` while waiting and once more when the login is granted, so a canceled turn never starts on it
 /// (dropping it passes the login to the next turn in the queue). `waiting` hears who holds the login and the turn's
 /// place when it starts to wait and whenever either changes.
 pub async fn wait_for(key: &str, turn: &Turn, over: impl Fn() -> Option<String>, mut waiting: impl FnMut(&Waiting), tick: Duration) -> Result<Held, String> {

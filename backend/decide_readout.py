@@ -33,9 +33,7 @@ RUN = {"learnings-route": "run"}     # backend/learnings.py audits a night's run
 def _inline_sets():
     """The sets the code asks without a questions/ file: {set id: {question id: fixed options or None}}."""
     from clients.hubtools import CLASSIFY_OPTIONS
-    from .assistant import INTENT_CHOICES
-    return {"support-text": {"verdict": tuple(CLASSIFY_OPTIONS)}, "assistant-intent": {"intent": tuple(INTENT_CHOICES)},
-            "live-meeting-route": {}}
+    return {"support-text": {"verdict": tuple(CLASSIFY_OPTIONS)}, "live-meeting-route": {}}
 
 
 def known_sets(registry_dir=None):
@@ -139,7 +137,7 @@ def readout(c, settings, days=7, at=None):
     stamp = lambda t: t.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"     # noqa: E731 hubdb.now()'s format
     sets, versions = known_sets(getattr(settings, "registry_dir", None))
     by = {}
-    rows = c.execute("SELECT action, target, detail_json FROM events WHERE ts>=? AND ts<? "
+    rows = c.execute("SELECT action, target, detail FROM events WHERE created_at>=? AND created_at<? "
                      "AND action IN ('judge.call','judge.spend')", (stamp(start), stamp(end))).fetchall()
     for action, target, raw in rows:
         try:

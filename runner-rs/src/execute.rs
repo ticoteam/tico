@@ -197,13 +197,35 @@ pub fn session_key(attempt: &Value) -> String {
         _ if bot == "botops" => "task".into(),
         _ => String::new(),
     };
-    // A stateless bot's task keeps its own session even on `session: bot` (crate::continuity::stateless): the bot's shared
-    // thread is never one a task continues.
-    if mode == "bot" && !crate::continuity::stateless(config) {
-        return "bot".into();
-    }
     let task = &attempt["task"];
     let task_id = [&task["session_task_id"], &task["id"]].into_iter().map(text_of).find(|t| !t.is_empty());
+    let on_bot = mode == "bot" && !crate::continuity::stateless(config);
+    let root = text_of(&attempt["conversation"]["root_id"]);
+    let private = text_of(&attempt["conversation"]["audience_class"]) == "private";
+    // On `session: bot` a private task, or a task turn in a private thread, keeps its own session: the shared thread
+    // serves the Home and public turns, so private work never enters it (clients/sessions.py session_key).
+    if let (true, Some(t)) = (on_bot, &task_id) {
+        if task_private(task) || (!root.is_empty() && private) {
+            return format!("task:{t}");
+        }
+    }
+    // A Hub with native threads names the turn's thread root and audience class (docs/dev/threads-contract.md section
+    // 8): a turn with no task continues its thread tree's session, and a private thread's session never serves a
+    // public turn. On `session: bot` the public turns share one thread, "public", which never takes over "bot".
+    if !root.is_empty() {
+        let class = if private { "private" } else { "public" };
+        return match (on_bot, task_id) {
+            (true, Some(_)) => "bot".into(),
+            (true, None) if !private => "public".into(),
+            (false, Some(t)) => format!("task:{t}"),
+            _ => format!("root:{root}:{class}"),
+        };
+    }
+    // A stateless bot's task keeps its own session even on `session: bot` (crate::continuity::stateless): the bot's shared
+    // thread is never one a task continues.
+    if on_bot {
+        return "bot".into();
+    }
     if let Some(t) = task_id {
         return format!("task:{t}");
     }
@@ -212,6 +234,12 @@ pub fn session_key(attempt: &Value) -> String {
         return format!("conversation:{conv}");
     }
     "bot".into()
+}
+
+/// Whether the turn's task is private: the Hub hands out the task's row, whose `private` is 1 or 0 (tasks are private
+/// by default, backend/hubdb.py). A task without the flag, or no task, is not.
+fn task_private(task: &Value) -> bool {
+    task["private"].as_bool().unwrap_or(false) || task["private"].as_i64().is_some_and(|p| p != 0)
 }
 
 /// A stateless bot's message with no task behind it (crate::continuity::stateless): a new session each time, none saved,
@@ -223,15 +251,43 @@ pub fn stateless_chat(attempt: &Value) -> bool {
 /// The epoch that moves when this turn's thread is cleared, and the conversation it is recorded for: the bot's shared
 /// thread moves with any of its direct chats' Clear (`bot_session_epoch`, recorded bot-wide as ""), every other thread
 /// with its own conversation's (`session_epoch`). None from a Hub that sends neither.
+/// The key whose saved thread a native-threads root key takes over the first time it runs: the conversation-keyed
+/// session the same root had before threads (clients/sessions.py adopted_key). "bot" is never adopted into "public".
+pub fn adopted_key(key: &str) -> Option<String> {
+    let mut parts = key.split(':');
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some("root"), Some(root), Some(_), None) if !root.is_empty() => Some(format!("conversation:{root}")),
+        _ => None,
+    }
+}
+
+/// A key that replaced the old shared thread for chat: its first turn is given the conversation's latest messages.
+pub fn first_turn_key(key: &str) -> bool {
+    key == "public" || key.starts_with("root:")
+}
+
 pub fn clear_epoch(attempt: &Value, key: &str) -> Option<(String, i64)> {
-    if key == "bot" {
+    if key == "bot" || key == "public" {
         if let Some(epoch) = attempt.get("bot_session_epoch").and_then(Value::as_i64) {
             return Some((String::new(), epoch));
         }
     }
-    let conversation_id = text_of(&attempt["conversation"]["id"]);
+    // A Hub with native threads sends the epoch of the turn's thread root, whose session its sub-threads continue: the
+    // epoch is recorded for the root, so a sub-thread's turn and the root's agree on it. An older Hub names no root.
+    let root = text_of(&attempt["conversation"]["root_id"]);
+    let conversation_id = if root.is_empty() { text_of(&attempt["conversation"]["id"]) } else { root };
     let epoch = attempt.get("session_epoch").and_then(Value::as_i64)?;
     (!conversation_id.is_empty()).then_some((conversation_id, epoch))
+}
+
+/// The message a reply goes under when the message it answers sits in a sub-thread: that sub-thread's parent message,
+/// which the Hub sends with the claim (the claim's message, and its conversation). None for a main-thread message, or
+/// from a Hub that sends no parent (docs/threads.md). Only ever echoed from the claim, never taken from the turn's own
+/// output (contracts/runner/wire.json `complete.request.parent_message_id`): an older Hub's claim has none, so the
+/// runner never sends the field there.
+pub fn reply_parent(attempt: &Value) -> Option<String> {
+    [&attempt["message"]["parent_message_id"], &attempt["conversation"]["parent_message_id"]]
+        .into_iter().map(text_of).find(|p| !p.is_empty())
 }
 
 pub fn input_text(message: &Value, late: bool) -> String {
@@ -1140,7 +1196,7 @@ impl Runner {
     /// `login` for this turn: at once when it is free, else once the turns that asked first are done with it. While
     /// it waits the turn says so, "Waiting for <login> to be free (busy with <bot>)", in a `status` event the chat and
     /// the task's Runs show (a wait, not a failure), renamed when the holder changes and cleared once the wait is
-    /// over. A lost lease, a person's Stop or the computer stopping ends the wait, and a turn cancelled just as the
+    /// over. A lost lease, a person's Stop or the computer stopping ends the wait, and a turn canceled just as the
     /// login came free never starts on it (crate::login_turns::wait_for).
     async fn take_login(&self, aid: &str, turn: &crate::login_turns::Turn, login: &crate::login_turns::Login, flags: &Flags, wake: &Notify) -> Result<crate::login_turns::Held, Fail> {
         let mut waited = false;
@@ -1264,6 +1320,8 @@ impl Runner {
         let mut capture: Option<Arc<crate::capture::Capture>> = None;
         let mut started_at = String::new();
         let mut memory_before = String::new();
+        let mut tidy_packet: Option<crate::memory_tidy::Packet> = None;
+        let packet_only = truthy(config.get("memory_tidy_packet"));
         let mut segments: Vec<Segment> = vec![];
         let mut carried: BTreeMap<String, Value> = BTreeMap::new();
         let mut auth_rejected: Option<(String, String)> = None;
@@ -1458,9 +1516,18 @@ impl Runner {
             mark("placed", &aid);
             execution_path = p.execution_path.clone();
             memory_before = redact::head(&execution_path);
+            if packet_only {
+                if !crate::harness_tools::caps_of(&config).packet_only {
+                    return Err(Fail::runtime("Nightly memory tidy: named harness cannot run a packet-only pass"));
+                }
+                tidy_packet = Some(crate::memory_tidy::Packet::prepare(&self.client, &p.main_path,
+                    &execution_path, &aid, turn_identity).await?);
+                // The model receives only its packet, never its Hub credentials or MCP tools.
+                crate::memory_tidy::scrub_environment(&mut env);
+            }
             // What the bot kept in its AI tool's own memory moves into its repository, in whichever checkout the
             // turn runs: the bot's own or a task's worktree (crate::harness_memory). A stateless bot keeps none.
-            if crate::harness_memory::copies_into(p.private, stateless, &execution_path) {
+            if !packet_only && crate::harness_memory::copies_into(p.private, stateless, &execution_path) {
                 // A Gateway turn's HOME is its own empty one (turn_users::Lease::private_home); the tools' memory is in the real one.
                 let own = env.get("HOME").filter(|h| !h.is_empty() && turn_identity.is_none()).cloned();
                 let home = own.or_else(|| std::env::var("HOME").ok()).unwrap_or_default();
@@ -1477,11 +1544,13 @@ impl Runner {
             if redactor.is_some() {
                 started_at = memory_before.clone();
             }
+            let mut cleared = false;
             if let Some((conversation_id, epoch)) = clear_epoch(&attempt, &key) {
-                // A person cleared a chat (or a settings change reset the bot's sessions): a new provider thread,
-                // started from the Hub's recovery pack. A Hub that sends no epoch keeps today's resume.
+                // A person cleared a chat (or a settings change reset the bot's sessions): a new provider thread, told
+                // only what came after the clear. A Hub that sends no epoch keeps today's resume.
                 if self.state.epoch_moved(&bot, &conversation_id, &conv, epoch)? {
                     log(&format!("Tico runner: {bot}: session cleared in Tico; starting a new {session_runtime} thread"));
+                    cleared = true;
                 }
             }
             // Task-model turns on another runtime are absent from the bot runtime's older thread. A server-marked
@@ -1490,7 +1559,16 @@ impl Runner {
             side_run = key.starts_with("task:") && truthy(config.get("task_model_fallback"));
             let binding_changed = source_resume.as_ref().is_some_and(|s|
                 s.profile != selected.as_ref().map_or("", |p| p.name.as_str()) || s.epoch != clear_epoch(&attempt, &key));
-            let previous = if side_run || binding_changed || fresh_chat { None } else { self.state.session(&bot, &conv, &session_runtime)? };
+            let mut previous = if packet_only || side_run || binding_changed || fresh_chat { None } else { self.state.session(&bot, &conv, &session_runtime)? };
+            if previous.is_none() && !(packet_only || side_run || binding_changed || fresh_chat) && conv == key {
+                // The first native-threads turn of a root resumes the thread its conversation had (adopted_key).
+                if let Some(old) = adopted_key(&key) {
+                    previous = self.state.session(&bot, &old, &session_runtime)?;
+                    if let Some(thread) = previous.as_ref() {
+                        self.state.save_session(&bot, &key, &session_runtime, thread)?;
+                    }
+                }
+            }
             let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
             prepared = true;
             if busy.is_some() || held.is_some() {
@@ -1512,7 +1590,9 @@ impl Runner {
             let gids = crate::checkout_groups::gate(paths.clone()).await;
             if let Some((uid, _)) = turn_identity {
                 crate::checkout_groups::grant(uid, &gids);
-                self.turn_git(&mut vault, &mut env, &paths)?;
+                if !packet_only {
+                    self.turn_git(&mut vault, &mut env, &paths)?;
+                }
                 crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
             }
             let made = if session_runtime != runtime {
@@ -1539,18 +1619,19 @@ impl Runner {
             mark("harness_started", &aid);
             let settings = Settings {
                 identity: turn_identity,
-                cwd: execution_path.display().to_string(),
+                cwd: tidy_packet.as_ref().map_or_else(|| execution_path.display().to_string(), |p| p.workspace.display().to_string()),
                 model: model.clone(),
                 effort: effort.clone(),
                 env: env.clone(),
                 slug: bot.clone(),
                 compact_at: config.get("compact_at").cloned().unwrap_or(Value::Null),
                 gateway_inputs: config.get("gateway_inputs").cloned().unwrap_or(Value::Null),
-                add_dirs: p.add_dirs.clone(),
-                shared: crate::sessions::is_shared(&config),
-                mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault.names, &runtime, &config),
+                add_dirs: if packet_only { vec![] } else { p.add_dirs.clone() },
+                shared: packet_only || crate::sessions::is_shared(&config),
+                mcp_servers: if packet_only { vec![] } else { self.mcp_servers(&aid, &execution_path, &env, &vault.names, &runtime, &config) },
                 background_wait: hosts::background_wait(&config),
                 require_existing_session: !continuing.is_empty(),
+                packet_only,
             };
             let mut resumed = false;
             if side_run {
@@ -1693,10 +1774,15 @@ impl Runner {
             // What the standing lines tell the bot to read, and who reads them: a change to either sends them again.
             let agent = std::fs::read(execution_path.join("AGENT.md")).map(|b| crate::gitrun::sha256_hex(&b)).unwrap_or_default();
             let context = format!("{runtime} {} {agent}", text_of(&config["model"]));
-            let mut built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, "", &seen, &context);
+            // The first turn under a native-threads key (none saved, nothing to adopt, not a Clear): the old `bot` thread
+            // is not carried into it, so it is given the conversation's latest messages instead.
+            let first_turn = previous.is_none() && !cleared && !binding_changed && !side_run && !fresh_chat && continuing.is_empty()
+                && first_turn_key(&key);
+            let replay = if first_turn { crate::fallback::first_turn_pack(&attempt, crate::fallback::REPLAY_TOKENS) } else { String::new() };
+            let mut built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, &replay, &seen, &context);
             if built.text != built.full && !crate::continuity::headroom(last_context, built.full.len(), config.get("compact_at").unwrap_or(&Value::Null)) {
                 // Sized by the whole prompt: a compaction during the turn gives it the rest too.
-                built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, "", &crate::prompt::Seen::default(), &context);
+                built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, &replay, &crate::prompt::Seen::default(), &context);
             }
             let mut tail = String::new();
             if let Some(note) = session.as_ref().and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])), stateless)) {
@@ -1711,17 +1797,17 @@ impl Runner {
             if let Some(line) = crate::afterwatch::still_running(&bot, &key) {
                 tail = format!("{tail}\n\n{line}");
             }
-            let prompt = format!("{}{tail}", built.text);
+            let prompt = tidy_packet.as_ref().map_or_else(|| format!("{}{tail}", built.text), |p| p.prompt.clone());
             // A resumed session that turns out to be missing restarts as a new one under its id (hosts::Host::full_prompt),
             // given what a new session that replaces it is given: the repo rules, the checkpoint, the room since its
             // last turn with its own replies, and the new-session note.
-            h.full_prompt(&th, resumed.then(|| {
+            h.full_prompt(&th, (resumed && !packet_only).then(|| {
                 let mut replacing = attempt.clone();
                 replacing["_replaced"] = json!(true);
                 replacing["_side_ran"] = json!(false);
                 replacement_prompt(&replacing, &names, after.as_deref(), &bot, &key)
             }));
-            h.compaction_refresh(&th, Some(built.restore.clone()).filter(|r| prompt_turn && !r.is_empty()));
+            h.compaction_refresh(&th, Some(built.restore.clone()).filter(|r| !packet_only && prompt_turn && !r.is_empty()));
             // A compaction before this prompt (compact_first's own) is already accounted for above.
             let _ = h.compacted(&th);
             let t = if let Some(_one) = cold_guard {
@@ -1750,6 +1836,25 @@ impl Runner {
             let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, login: yields(&attempt, &login_held), fresh: fresh.as_ref() };
             drove = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
             turn = Some(drove.turn.clone());
+            if let Some(packet) = tidy_packet.as_ref().filter(|_| drove.outcome == "completed" && !drove.limited) {
+                let edits = std::mem::replace(&mut drove.reply, "Nightly memory tidy: result received.".into());
+                if let Some(prompt) = packet.propose(&self.client, &aid, &edits).await? {
+                    // A new provider thread cannot see the editing model's reasoning or self-attestation.
+                    let verifier = h.start_thread(&bot, &settings).await?;
+                    let t = h.start_turn(&verifier, &prompt, Some("low")).await?;
+                    let verification = Drive { thread: &verifier, fresh: None, ..d };
+                    let checked = self.during_drain(&aid, self.drive(&verification, rx, t,
+                        segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
+                    if checked.outcome == "completed" && !checked.limited {
+                        packet.verify(&self.client, &aid, &checked.reply).await?;
+                    } else {
+                        drove = checked;
+                        drove.reply = "Nightly memory tidy: verification unavailable.".into();
+                    }
+                } else {
+                    packet.verify(&self.client, &aid, "").await?;
+                }
+            }
             h.compaction_refresh(&th, None);
             // The harness compacted the session during the turn, or began a new one in place of a missing one, or the
             // turn did not complete: the next turn is given everything again, the repo rules included.
@@ -1782,7 +1887,7 @@ impl Runner {
             }
             let persisted = async {
                 if let Some(f) = fresh.as_ref().filter(|f| f.confirmed.lock().unwrap().is_none()) {
-                    // The host can confirm while the drive is blocked or being cancelled for a drain.
+                    // The host can confirm while the drive is blocked or being canceled for a drain.
                     if let Some(session) = h.confirmed(th) {
                         self.confirm_thread(f, &session).await?;
                     }
@@ -1980,6 +2085,7 @@ impl Runner {
                     mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault.names, &hop.runtime, &hop_config),
                     background_wait: hosts::background_wait(&config),
                     require_existing_session: false,
+                    packet_only: false,
                 };
                 let th = h.start_thread(&bot, &settings).await?;
                 thread = Some(th.clone());
@@ -2171,7 +2277,7 @@ impl Runner {
             while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
                 if ev["kind"] == "_diagnostics_drained" { break; }
                 if ev["process_exit"] == true {
-                    let clean = redactor.as_ref().map(|r| r.scrub_json(&ev)).unwrap_or(ev);
+                    let clean = redactor.as_ref().map(|r| r.scrub_json(&ev).into_owned()).unwrap_or(ev);
                     let _ = self.state.append(&aid, "error", &clean);
                 }
             }
@@ -2243,7 +2349,7 @@ impl Runner {
         let mut reply = std::mem::take(&mut drove.reply);
         let mut committed_secret = false;
         if let Some(r) = &redactor {
-            reply = r.scrub_text(&reply);
+            reply = r.scrub_text(&reply).into_owned();
             if host.is_some() {
                 let tree = scrub_changes(r, &execution_path, &started_at).await;
                 mark("scrubbed", &aid);
@@ -2302,6 +2408,10 @@ impl Runner {
         // events but does not become the task's checkpoint (backend/execution.py complete).
         let unsafe_yield = drove.yielded && drove.outcome != "completed";
         completion.insert("text".into(), json!(if unsafe_yield { "" } else { reply.as_str() }));
+        // A reply to a message in a sub-thread goes under that message, so the Hub keeps it in the sub-thread.
+        if let Some(parent) = reply_parent(&attempt) {
+            completion.insert("parent_message_id".into(), json!(parent));
+        }
         completion.insert("tokens_in".into(), drove.tokens.get("input").cloned().unwrap_or(Value::Null));
         completion.insert("tokens_out".into(), drove.tokens.get("output").cloned().unwrap_or(Value::Null));
         if !carried.is_empty() {
@@ -2711,6 +2821,58 @@ mod tests {
     }
 
     #[test]
+    fn a_reply_to_a_sub_thread_message_goes_under_that_message() {
+        // A conversation that is a sub-thread names the message it sits under; the main thread names none.
+        let sub = json!({"conversation": {"id": "c2", "parent_message_id": "m1"}, "message": {"id": "m2"}});
+        assert_eq!(reply_parent(&sub), Some("m1".into()));
+        assert_eq!(reply_parent(&json!({"conversation": {"id": "c1", "parent_message_id": ""}})), None);
+        // A Hub from before sub-threads sends no field at all: the reply stays in the main thread, as it always did.
+        assert_eq!(reply_parent(&json!({"conversation": {"id": "c1"}})), None);
+    }
+
+    #[test]
+    fn a_completions_parent_is_only_ever_echoed_from_the_claim() {
+        // The claim's message names the parent (contracts/runner/wire.json): that is what goes back.
+        let claimed = json!({"message": {"id": "m2", "parent_message_id": "m1"}, "conversation": {"id": "c2"}});
+        assert_eq!(reply_parent(&claimed), Some("m1".into()));
+        // Nothing the turn produced can name one: a parent in the message's refs, the body or a reply-like field is
+        // not the claim's, and an older Hub's claim (no parent anywhere) never sends the field.
+        let crafted = json!({"message": {"id": "m2", "body": "parent_message_id: m9", "refs": {"parent_message_id": "m9"}},
+                             "conversation": {"id": "c1"}, "reply": {"parent_message_id": "m9"}});
+        assert_eq!(reply_parent(&crafted), None);
+    }
+
+    #[test]
+    fn a_chat_clear_resets_its_root_session_and_its_sub_threads_and_not_the_bots_shared_thread() {
+        // A Clear moves the chat's own epoch (session_epoch), not the bot's (bot_session_epoch stays 0).
+        let turn = |conversation: Value| json!({"bot": "ops", "config": {}, "conversation": conversation,
+                                                 "session_epoch": 1, "bot_session_epoch": 0});
+        let root = turn(json!({"id": "r1", "root_id": "r1", "audience_class": "private"}));
+        let key = session_key(&root);
+        assert_eq!(key, "root:r1:private");
+        assert_eq!(clear_epoch(&root, &key), Some(("r1".into(), 1)), "the root key resets on the chat's own epoch");
+        // A sub-thread's turn continues the root's session and is recorded against the root, with the root's epoch.
+        let sub = turn(json!({"id": "s1", "root_id": "r1", "parent_message_id": "m1", "audience_class": "private"}));
+        assert_eq!(session_key(&sub), key);
+        assert_eq!(clear_epoch(&sub, &session_key(&sub)), Some(("r1".into(), 1)));
+        // The bot-wide epoch still governs only the shared threads.
+        assert_eq!(clear_epoch(&root, "public"), Some((String::new(), 0)));
+
+        // Through the runner's own state: a moved chat epoch drops the root session's saved thread, and only it.
+        let dir = std::env::temp_dir().join(format!("tico-root-clear-{}", uuid::Uuid::new_v4().simple()));
+        let state = crate::state::State::open(&dir.join("state")).unwrap();
+        state.save_session("ops", "root:r1:private", "claude", "old-thread").unwrap();
+        state.save_session("ops", "root:r2:private", "claude", "other-thread").unwrap();
+        state.save_session("ops", "public", "claude", "public-thread").unwrap();
+        assert!(!state.epoch_moved("ops", "r1", "root:r1:private", 0).unwrap(), "first seen at 0: resumes");
+        assert!(state.epoch_moved("ops", "r1", "root:r1:private", 1).unwrap(), "the Clear moved it");
+        assert_eq!(state.session("ops", "root:r1:private", "claude").unwrap(), None);
+        assert_eq!(state.session("ops", "root:r2:private", "claude").unwrap().as_deref(), Some("other-thread"));
+        assert_eq!(state.session("ops", "public", "claude").unwrap().as_deref(), Some("public-thread"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn session_keys_follow_clients_sessions() {
         let a = |config: Value, task: Value| json!({"bot": "ops", "config": config, "task": task, "conversation": {"id": "c1"}});
         assert_eq!(session_key(&a(json!({}), Value::Null)), "bot");
@@ -2726,6 +2888,54 @@ mod tests {
         };
         assert_eq!(session_key(&strategy_turn(json!({"session": "bot"}), "c-goals")), "bot");
         assert_eq!(session_key(&strategy_turn(json!({"session": "task"}), "c-owner")), "conversation:c-owner");
+    }
+
+    #[test]
+    fn a_private_tasks_turns_on_session_bot_never_share_the_bots_shared_thread() {
+        let turn = |task: Value, conversation: Value| json!({"bot": "ops", "config": {"session": "bot"}, "task": task,
+            "conversation": conversation, "session_epoch": 2, "bot_session_epoch": 7});
+        let public = json!({"id": "c-pub", "root_id": "r1", "audience_class": "public"});
+        let private_room = json!({"id": "c-task", "root_id": "c-task", "audience_class": "private"});
+        // A private task keeps its own session wherever its turn comes from, on a Hub with threads or an older one.
+        for private in [json!(1), json!(true)] {
+            assert_eq!(session_key(&turn(json!({"id": "t1", "private": private}), public.clone())), "task:t1");
+            assert_eq!(session_key(&turn(json!({"id": "t1", "private": private}), json!({"id": "c1"}))), "task:t1");
+        }
+        // A subtask worked in its root's session keys on the root, like any task session.
+        assert_eq!(session_key(&turn(json!({"id": "t2", "session_task_id": "t1", "private": 1}), public.clone())), "task:t1");
+        // A non-private task's turn in a private thread keeps its own session too; in a public one it shares the bot's.
+        assert_eq!(session_key(&turn(json!({"id": "t3", "private": 0}), private_room)), "task:t3");
+        assert_eq!(session_key(&turn(json!({"id": "t3", "private": 0}), public.clone())), "bot");
+        assert_eq!(session_key(&turn(json!({"id": "t3", "private": false}), json!({"id": "c1"}))), "bot");
+        // Home and public chat stay on the shared threads.
+        assert_eq!(session_key(&turn(Value::Null, public.clone())), "public");
+        assert_eq!(session_key(&turn(Value::Null, json!({"id": "c1"}))), "bot");
+        // The private task's session clears with its own thread, never with the bot-wide epoch.
+        assert_eq!(clear_epoch(&turn(json!({"id": "t1", "private": 1}), public), "task:t1"), Some(("r1".into(), 2)));
+        // A stateless bot already keys its tasks on themselves.
+        let stateless = json!({"bot": "ops", "config": {"session": "bot", "stateless": true}, "task": {"id": "t4", "private": 0},
+            "conversation": {"id": "c1"}});
+        assert_eq!(session_key(&stateless), "task:t4");
+    }
+
+    #[test]
+    fn native_thread_turns_key_on_their_root_and_never_cross_audience_classes() {
+        let turn = |config: Value, task: Value, class: &str| json!({"bot": "ops", "config": config, "task": task,
+            "conversation": {"id": "sub", "root_id": "r1", "audience_class": class}});
+        assert_eq!(session_key(&turn(json!({}), Value::Null, "public")), "root:r1:public");
+        assert_eq!(session_key(&turn(json!({}), Value::Null, "private")), "root:r1:private");
+        assert_eq!(session_key(&turn(json!({}), json!({"id": "t1"}), "private")), "task:t1");
+        assert_eq!(session_key(&turn(json!({"session": "task"}), Value::Null, "public")), "root:r1:public");
+        // `session: bot`: one public thread, never the old "bot" one; each private thread keeps its own.
+        assert_eq!(session_key(&turn(json!({"session": "bot"}), Value::Null, "public")), "public");
+        assert_eq!(session_key(&turn(json!({"session": "bot"}), Value::Null, "private")), "root:r1:private");
+        assert_eq!(session_key(&turn(json!({"session": "bot"}), json!({"id": "t1"}), "public")), "bot");
+        assert_eq!(session_key(&turn(json!({"session": "bot"}), json!({"id": "t1", "private": 0}), "public")), "bot");
+        assert_eq!(adopted_key("root:r1:private"), Some("conversation:r1".into()));
+        assert_eq!((adopted_key("public"), adopted_key("bot"), adopted_key("task:t1")), (None, None, None));
+        let epochs = json!({"conversation": {"id": "c"}, "session_epoch": 0, "bot_session_epoch": 4});
+        assert_eq!(clear_epoch(&epochs, "public"), Some((String::new(), 4)));
+        assert_eq!(crate::sessions::turn_lane(&turn(json!({}), Value::Null, "public")), "main");
     }
 
     #[test]
@@ -2851,15 +3061,18 @@ mod tests {
         let (url, seen) = crate::client::tests::serve(vec![]).await;
         let (runner, dir) = lease_runner(&url, "kept-pool");
         let relay = crate::gateway_relay::start("http://127.0.0.1:9/v1/gateway", "tgw-synthetic".into(), None).await.unwrap();
-        let address = relay.url.trim_start_matches("http://").split('/').next().unwrap().to_string();
-        crate::hosts::pi::testing::kept(runner.pi.clone(), &dir, "acme\nchat:c1", crate::hosts::pi::Held { user: None, relay: Some(relay) }).await;
+        let owner = "acme\nchat:c1";
+        crate::hosts::pi::testing::kept(runner.pi.clone(), &dir, owner, crate::hosts::pi::Held { user: None, relay: Some(relay) }).await;
+        assert!(crate::hosts::pi::testing::has_held(&runner.pi, owner));
         let turn = json!({"id": "a1", "start_reservation_seconds": 180});
         runner.state.record(&turn).unwrap();
-        // Busy while the kept pi holds its user (here, its relay listens).
+        // Observe the held resource itself: a closed ephemeral port can be reused
+        // by another parallel fixture before a TCP probe gets to it.
         let user = runner.take_turn_user(&turn, &lease_flags(), || {
-            if std::net::TcpStream::connect(&address).is_ok() { Err(crate::turn_users::BUSY.to_string()) } else { Ok(10100) }
+            if crate::hosts::pi::testing::has_held(&runner.pi, owner) { Err(crate::turn_users::BUSY.to_string()) } else { Ok(10100) }
         }).await.unwrap();
         assert_eq!(user, 10100);
+        assert!(!crate::hosts::pi::testing::has_held(&runner.pi, owner));
         assert!(seen.lock().unwrap().is_empty(), "the turn never gave its place back to wait");
         assert!(std::fs::read_to_string(dir.join("exits.log")).unwrap().lines().count() == 1, "the kept pi was stopped");
         std::fs::remove_dir_all(dir).unwrap();
@@ -4824,7 +5037,7 @@ for line in sys.stdin:
         assert_drain_settled(&runner, "a-wait");
         assert_eq!(posted(&seen, "/attempts/a-wait/started"), 0);
         assert_eq!(posted(&seen, "/attempts/a-wait/complete"), 1);
-        assert!(runner.lanes.lane("ops", "main").try_lock_owned().is_ok(), "cancelled preparation retained its lane");
+        assert!(runner.lanes.lane("ops", "main").try_lock_owned().is_ok(), "canceled preparation retained its lane");
         drop(checkout);
         let place = tokio::time::timeout(Duration::from_secs(1), runner.enter_lanes(&attempt, &AtomicBool::new(false))).await.unwrap().unwrap();
         drop(place);
@@ -4832,7 +5045,7 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
-    async fn drain_keeps_returning_a_task_claim_cancelled_at_its_worktree_git_lock() {
+    async fn drain_keeps_returning_a_task_claim_canceled_at_its_worktree_git_lock() {
         let _controls = RunControls;
         let (url, seen, server) = recording_server().await;
         let (runner, dir) = drain_runner_on(&url, 300).await;
@@ -4855,7 +5068,7 @@ for line in sys.stdin:
         };
         let result = tokio::time::timeout(Duration::from_secs(5), async { let (result, ()) = tokio::join!(work, drain); result }).await;
         server.abort();
-        result.expect("a cancelled git-lock wait became a worktree wait that the drain no longer cancels").unwrap();
+        result.expect("a canceled git-lock wait became a worktree wait that the drain no longer cancels").unwrap();
         assert_drain_settled(&runner, "a-git");
         assert_eq!(posted(&seen, "/attempts/a-git/started"), 0, "a returned claim acknowledged its start");
         drop((git, checkout));

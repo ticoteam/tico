@@ -164,7 +164,7 @@ def facts(**kw):
 
 def machine_row(**kw):
     return {"bot": "ops", "mode": "cloud", "size": "default", "always_on": 0, "machine_id": "m1", "runner_id": "r1",
-            "state": "stopped", "machine_size": "default", "active_at": None, "heartbeat_at": None, "next_try": None,
+            "state": "stopped", "machine_size": "default", "active_at": None, "heartbeat_at": None, "next_try_at": None,
             "failures": 0, "problem": "", "problem_at": None, "wake_key": None, "woke_at": None, "enroll_by": 0,
             "enroll_fails": 0, **kw}
 
@@ -198,7 +198,7 @@ def test_decide_idle_stop_at_break_even_heartbeat_and_always_on():
 def test_decide_frozen_backoff_and_the_stuck_guard():
     assert CM.decide(machine_row(), facts(want="job:a", frozen=True), 1000, 300) == (None, "out_of_credit")
     assert CM.decide(machine_row(state="running"), facts(frozen=True), 1000, 300) == ("stop", "out_of_credit")
-    waiting = machine_row(next_try=1100, problem="out_of_credit")
+    waiting = machine_row(next_try_at=1100, problem="out_of_credit")
     assert CM.decide(waiting, facts(want="job:a"), 1050, 300) == (None, None)
     assert CM.decide(waiting, facts(want="job:a", retry_now=True), 1050, 300) == ("start", None)
     assert CM.decide(waiting, facts(want="job:a"), 1100, 300) == ("start", None)
@@ -230,7 +230,7 @@ def test_decide_gives_a_machine_being_made_until_its_code_expires_then_makes_it_
     # Enrolled (0) or never made (None): no deadline.
     assert CM.decide({**booting, "enroll_by": 0}, facts(), 1960, 300) == ("stop", None)
     # A refusal's wait holds the delete too; out of credit stops it first.
-    assert CM.decide({**booting, "next_try": 2000}, facts(), 1960, 300) == (None, None)
+    assert CM.decide({**booting, "next_try_at": 2000}, facts(), 1960, 300) == (None, None)
     assert CM.decide(booting, facts(frozen=True), 1960, 300) == ("stop", "out_of_credit")
     # Machines made in a row that never enrolled: nothing more is made until a person looks.
     gone = machine_row(machine_id=None, runner_id=None, state="deleted", enroll_by=None)
@@ -338,7 +338,7 @@ def test_heartbeat_then_idle_stop_at_break_even_then_wake_with_a_resize(cloud):
     assert cloud.tick(60) == ["heartbeat"]
     assert cloud.tick(10) == ["heartbeat"]                      # once a minute, not every look
     with cloud.store.transaction() as c:                        # the queued chat is not why it stays on
-        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
     cloud.hq.calls.clear()
     cloud.at[0] = cloud.row()["active_at"] + 299
     cloud.tick()
@@ -370,13 +370,13 @@ def test_work_its_machine_never_takes_does_not_start_it_again_but_new_work_does(
 def test_work_queued_as_it_goes_quiet_keeps_it_on_for_the_runner_to_take(cloud):
     enrolled(cloud)
     with cloud.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
     start = cloud.row()["active_at"]
     cloud.at[0] = start + 290
     work(cloud, text="Another thing")                           # queued (real clock) just before the idle stop
     queued = cloud.at[0]
     with cloud.store.transaction() as c:                        # the hub's clock is the fake one's
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued'", (stamp(cloud),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (stamp(cloud),))
     cloud.hq.calls.clear()
     cloud.at[0] = start + 300
     cloud.tick()
@@ -606,7 +606,7 @@ def test_a_create_hq_answers_as_failed_counts_too(cloud):
 def test_always_on_starts_with_no_work_and_never_idles(cloud):
     enrolled(cloud)
     with cloud.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
     cloud.tick(400)
     assert cloud.row()["state"] == "stopped"
     post(cloud.api, "bots/ops/cloud-machine", {"always_on": True})
@@ -620,13 +620,13 @@ def test_always_on_starts_with_no_work_and_never_idles(cloud):
 def test_a_frequent_watcher_keeps_it_on_and_a_due_one_wakes_it(cloud):
     r = enrolled(cloud)
     with cloud.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
 
     def ran(seconds_ago, every):
         when = H.shift(H.now(), seconds=-seconds_ago + (cloud.at[0] - time.time()))
         with cloud.store.transaction() as c:
-            c.execute("INSERT INTO watcher_runs(bot,name,runner_id,started,finished,exit_code,every) "
-                      "VALUES('ops','mail',?,?,?,0,?) ON CONFLICT(bot,name) DO UPDATE SET finished=excluded.finished",
+            c.execute("INSERT INTO watcher_runs(bot,name,runner_id,started_at,finished_at,exit_code,every) "
+                      "VALUES('ops','mail',?,?,?,0,?) ON CONFLICT(bot,name) DO UPDATE SET finished_at=excluded.finished_at",
                       (r["runner_id"], when, when, every))
     for _ in range(4):                                          # every two minutes: never idle for 300 s
         cloud.at[0] += 120
@@ -715,7 +715,7 @@ def test_moving_to_another_computer_stops_it_and_the_machine_can_then_be_deleted
     enrolled(cloud)
     other = runner(cloud.api, label="Office Mac")
     with cloud.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
         generation = c.execute("SELECT generation FROM assignments WHERE bot='ops'").fetchone()["generation"]
     post(cloud.api, "bots/ops/cloud-machine", {"size": "small"}, expected=200)
     delete = cloud.api.delete("/api/v2/bots/ops/cloud-machine", headers=headers())
@@ -806,17 +806,17 @@ def shared_enrolled(cloud, *bots):
 
 def idle(cloud):
     with cloud.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled'")
+        c.execute("UPDATE jobs SET state='canceled'")
 
 
 def test_placement_defaults_by_role_and_a_person_switches_it(cloud):
     execution = cloud.api.app.state.execution
     with cloud.store.transaction() as c:
         # coo is in Engineering on the team chart; finance was made from the video producer's template.
-        c.execute("UPDATE registry_metadata SET value_json=json_set(value_json,'$.org_groups',json(?)) WHERE key='people'",
+        c.execute("UPDATE registry_metadata SET value=json_set(value,'$.org_groups',json(?)) WHERE key='people'",
                   (json.dumps({"engineering": {"name": "Engineering", "parent": ""}}),))
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.team','engineering') WHERE bot='coo'")
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','video-producer') "
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.team','engineering') WHERE bot='coo'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','video-producer') "
                   "WHERE bot='finance'")
         for bot in ("ops", "coo", "finance"):
             assert placement.auto_place(c, execution, bot) is None
@@ -845,7 +845,7 @@ def test_one_shared_machine_wakes_for_any_member_and_hosts_them_all(cloud):
     with cloud.store.read() as c:
         computer = dict(c.execute("SELECT * FROM runners WHERE id=?", (rid,)).fetchone())
         offered = {r["id"] for r in placement.candidates(c, cloud.api.app.state.auth, "cpo")}
-    assert computer["label"] == "Shared cloud machine" and computer["accepts_member_bots"] and computer["operator"] == "ana"
+    assert computer["label"] == "Shared cloud machine" and computer["accepts_member_bots"] and computer["owner_id"] == "ana"
     assert placed(cloud) == {"ops": rid, "finance": rid} and rid not in offered
     assert {m["id"]: m for m in get(cloud.api, "operations")["computers"]}[rid]["cloud_machine"] == {
         "bot": None, "shared": True, "size": "default", "state": "starting"}
@@ -873,7 +873,7 @@ def test_the_shared_machine_idles_only_once_every_member_is_idle(cloud):
     start = cloud.row(CM.SHARED)["active_at"]
     cloud.at[0] = start + 200
     with cloud.store.transaction() as c:                        # finance's watcher ran there; ops did nothing
-        c.execute("INSERT INTO watcher_runs(bot,name,runner_id,started,finished,exit_code,every) "
+        c.execute("INSERT INTO watcher_runs(bot,name,runner_id,started_at,finished_at,exit_code,every) "
                   "VALUES('finance','mail',?,?,?,0,3600)", (rid, stamp(cloud), stamp(cloud)))
     cloud.hq.calls.clear()
     cloud.at[0] = start + 300
@@ -972,7 +972,7 @@ def test_a_turn_still_out_on_the_old_computer_is_asked_again_at_a_look(cloud):
     assert out.status_code == 200, out.text
     assert cloud.row()["placement"] == "shared" and placed(cloud)["ops"] == own["runner_id"]
     with cloud.store.transaction() as c:                        # its turn ends; the next look moves it
-        c.execute("UPDATE attempts SET lease_until=0 WHERE bot='ops'")
+        c.execute("UPDATE attempts SET lease_until=0 WHERE bot_id='ops'")
     cloud.tick()
     assert placed(cloud)["ops"] == shared
 
@@ -1107,9 +1107,9 @@ def shared_for(cloud, bot, token="ana-test"):
 def task_on(api, bot, model, harness):
     """The bot's task model: a model on `harness` (its runtime), beside its own model."""
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
         config["task_model"] = {"model": model, "harness": harness, "runtime": harness}
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (json.dumps(config), bot))
+        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(config), bot))
 
 
 def given(cloud, runner_id):
@@ -1194,7 +1194,7 @@ def test_a_member_moving_a_bot_gets_no_plan_on_a_computer_it_moves_to(cloud):
     shared = shared_for(cloud, "cpo")["runner_id"]           # the owner's shared machine, with no plan yet
     add(cloud.api)
     with cloud.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
     change_as(cloud, "ops", "cara-test", mode="cloud", placement="shared")
     assert placed(cloud)["ops"] == shared and given(cloud, shared) == {}
     change_as(cloud, "ops", "cara-test", mode="cloud", placement="own")  # a new machine, made and enrolled for her move
@@ -1249,7 +1249,7 @@ def test_a_same_computer_reassignment_by_a_member_or_support_after_a_plan_is_rem
     assert given(cloud, computer["runner_id"]) == {"claude": sid}
     give(cloud.api, computer, "claude", None)
     with cloud.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
     idle(cloud)
     assign(cloud.api, computer, "ops", generation(cloud, "ops"), operator="cara-test")
     assert given(cloud, computer["runner_id"]) == {}
@@ -1269,7 +1269,7 @@ def test_a_member_moving_its_bot_off_and_back_through_the_assignment_route_gives
     give(cloud.api, own, "claude", None)
     other = runner(cloud.api, label="Office Mac")
     with cloud.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
         c.execute("UPDATE runners SET accepts_member_bots=1 WHERE id=?", (other["runner_id"],))
     idle(cloud)
     assign(cloud.api, other, "ops", generation(cloud, "ops"), operator="cara-test")
@@ -1325,7 +1325,7 @@ def test_a_setup_finished_before_hq_listed_sizes_goes_on_cloud_machines_when_it_
     monkeypatch.setattr(manager, "client", fake)
     with store.transaction() as c:                              # a bootstrap bot setup left planned, with no computer
         c.execute("UPDATE bots SET state='planned' WHERE slug='coo'")
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.materialize',json('true')) "
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.materialize',json('true')) "
                   "WHERE bot='coo'")
         c.execute("UPDATE bots SET state='archived' WHERE slug='doc-updater'")
     manager.tick()
@@ -1395,7 +1395,7 @@ def test_the_client_speaks_the_contract(monkeypatch):
 # ----------------------------------------------------------------------------- the stop's fence against the claim
 def leased(cloud, rid):
     with cloud.store.read() as c:
-        return [r["bot"] for r in c.execute("SELECT bot FROM attempts WHERE runner_id=? AND state IN "
+        return [r["bot_id"] for r in c.execute("SELECT bot_id FROM attempts WHERE runner_id=? AND state IN "
                                             "('leased','running')", (rid,))]
 
 
@@ -1484,7 +1484,7 @@ def test_hq_refusing_the_stop_lets_the_claim_go_on_at_once_and_backs_off(cloud):
     cloud.hq.fail["stop"] = CM.Refused("forbidden", 403)       # HQ said it did not stop it
     cloud.tick()
     assert cloud.hq.actions() == ["stop"] and cloud.row()["stop_until"] is None
-    assert cloud.row()["failures"] == 1 and cloud.row()["next_try"] == cloud.at[0] + CM.BACKOFF
+    assert cloud.row()["failures"] == 1 and cloud.row()["next_try_at"] == cloud.at[0] + CM.BACKOFF
     work(cloud)
     assert claim_on(cloud, computer, "ops")["attempt"]["bot"] == "ops"
 
@@ -1782,3 +1782,83 @@ def test_decide_stops_a_paused_machine_out_of_credit_whatever_its_runner_does():
     for busy in ({"updating": True}, {"turns": True}, {}):
         assert CM.decide(on, facts(active=False, frozen=True, **busy), 1100, 300) == ("stop", "out_of_credit")
     assert CM.decide(machine_row(), facts(active=False, frozen=True), 1100, 300) == (None, "out_of_credit")
+
+
+
+def codex_heartbeat(cloud, computer):
+    """The computer reports Claude and Codex installed and neither signed in: a throwaway machine nobody signs in to."""
+    post(cloud.api, "runners/heartbeat", {
+        "version": "test", "platform": "linux", "capabilities": [MS.CAPABILITY],
+        "readiness": {"schema_version": 1, "runtimes": {
+            "claude": {"installed": True, "authenticated": "missing"},
+            "codex": {"installed": True, "authenticated": "missing"}}, "bots": {}}}, token=computer["token"])
+
+
+def test_a_codex_bot_moved_onto_a_running_shared_machine_takes_the_chatgpt_plan(cloud):
+    plan_company(cloud, "cpo")
+    shared = shared_for(cloud, "cpo", token="ben-test")
+    codex_heartbeat(cloud, shared)
+    csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    on(cloud.api, "ops", "codex", "gpt-6.1-sol")
+    box = runner(cloud.api, label="Box")
+    assign(cloud.api, box, "ops")
+    idle(cloud)
+    change_as(cloud, "ops", "ben-test", mode="cloud", placement="shared")
+    assert placed(cloud)["ops"] == shared["runner_id"]
+    assert given(cloud, shared["runner_id"]) == {"claude": given(cloud, shared["runner_id"])["claude"], "codex": csid}
+
+
+def health_of(cloud):
+    body = cloud.api.get("/api/v2/health", headers=headers("ana-test")).json()
+    return {check["id"]: check for check in body["checks"]}
+
+
+def issue_kinds(cloud):
+    return {i["kind"] for i in cloud.api.get("/api/v2/health/issues", headers=headers("ana-test")).json()["issues"]}
+
+
+def test_a_plan_on_the_computer_is_not_a_missing_sign_in_on_health(cloud):
+    plan_company(cloud, "cpo")
+    shared = shared_for(cloud, "cpo")
+    codex_heartbeat(cloud, shared)
+    on(cloud.api, "ops", "codex", "gpt-6.1-sol")
+    change_as(cloud, "ops", mode="cloud", placement="shared")
+    checks = health_of(cloud)
+    assert "Codex" in checks["computer_signin"]["summary"] and "Claude" not in checks["computer_signin"]["summary"]
+    assert checks["models"]["status"] == "ok"                # Claude signs in with the plan: the model is signed in
+    shared_row = next(x for x in cloud.api.get("/api/v2/health", headers=headers("ana-test")).json()["computers"]
+                      if x["id"] == shared["runner_id"])
+    claude = next(r for r in shared_row["runtimes"] if r["name"] == "claude")
+    assert claude["plan"] == "subscription" and claude["ready"] and not claude["signable"]
+    from backend import getting_started
+    with cloud.store.read() as c:
+        online = getting_started._online_runners(c)
+        assert getting_started._signed_in_runtime(online, {"claude"}, c) == "claude"
+        assert getting_started._login_target(online, {"claude"}, c) is None
+    add(cloud.api, "codex_login", codex_file(), name="ChatGPT")
+    with cloud.store.transaction() as c:
+        sid = c.execute("SELECT id FROM model_subscriptions WHERE kind='codex_login'").fetchone()[0]
+    give(cloud.api, shared, "codex", sid)
+    checks = health_of(cloud)
+    assert "computer_signin" not in checks and "computer_logins" not in checks
+
+
+def test_a_cloud_machine_stopped_when_idle_is_not_offline_on_health(cloud):
+    plan_company(cloud, "cpo")
+    shared = shared_for(cloud, "cpo")
+    hour_ago = H.shift(H.now(), hours=-1)
+    with cloud.store.transaction() as c:
+        CM.save(c, CM.SHARED, state="stopped")
+        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (hour_ago, shared["runner_id"]))
+    work(cloud, "cpo")                                       # work waits for it: it starts for that, it is not silent
+    checks = health_of(cloud)
+    assert checks["computers"]["status"] == "ok" and "stopped until work comes" in checks["computers"]["summary"]
+    assert not [k for k in checks if k.startswith("runner_load:")]
+    assert "computer_offline" not in issue_kinds(cloud)
+    with cloud.store.read() as c:
+        from backend import health
+        assert health.silent_computers(c) == []
+    with cloud.store.transaction() as c:                     # a machine with a problem is offline as before
+        CM.save(c, CM.SHARED, problem="out_of_credit")
+    assert health_of(cloud)["computers"]["summary"] == "Every computer is offline."
+    assert "computer_offline" in issue_kinds(cloud)

@@ -53,7 +53,7 @@ APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support", "task_cap", "s
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # what a person or bot sets by hand
 GOAL_FILTERS = GOAL_STATUSES + ("gray",)                        # gray is the automatic "no data"
 PROPOSAL_KINDS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why", "recovery",
-                  "strategy_draft", "brand_draft", "gtm_draft")
+                  "strategy_draft", "brand_draft")
 
 # What an agent reads on connect: the hub in one line, then the skill a person's own agent
 # follows to work their bots (clients/agent_skill.py). Bots ignore the skill; it is for people.
@@ -143,7 +143,7 @@ def _key(args, suffix=""):
 # ----------------------------------------------------------------------------- identity, messages
 from clients.tico import APIError  # noqa: E402
 
-@tool("hub_whoami", "Who you are to Tico: actor, role, Computer and attempt, or the External "
+@tool("hub_whoami", "Who you are to Tico: actor, role, Computer and run, or the External "
       "agent harness (a Hermes profile) when that is what runs you.", {})
 def whoami(api, args):
     return api.get("me")
@@ -267,6 +267,17 @@ def chat_goal(api, args):
                     key=_key(args))
 
 
+@tool("hub_thread_catchup", "Catch up on a thread: what is new in it (and its sub-threads, with scope subtree) that you "
+      "may read, summarized and posted to your Assistant DM. The newest 40 messages at most. Nothing new posts nothing.",
+      {"thread_id": _s("Thread id"),
+       "scope": {"type": "string", "enum": ["subtree", "thread"], "default": "subtree",
+                 "description": "subtree: the thread and its sub-threads; thread: this thread only"}},
+      required=("thread_id",), writes=True)
+def thread_catchup(api, args):
+    return api.post("threads/" + quote(args["thread_id"], safe="") + "/catch-up",
+                    {"scope": args.get("scope") or "subtree"}, key=_key(args))
+
+
 @tool("hub_chat_send", "Send a message or a headless slash command to a bot.",
       {"to": _s("The bot"), "text": _s("The message or command"),
        "conversation_id": _s("Continue this conversation"),
@@ -341,6 +352,67 @@ def notes(api, args):
       {"id": _s("The note id")}, required=("id",), writes=True)
 def unnote(api, args):
     return api.post(f"notes/{args['id']}/cancel", {}, key=_key(args))["note"]
+
+
+FEEDBACK_SUBJECT = _s("What was rated", enum=["message", "task", "approval"])
+
+
+@tool("hub_feedback_give", "Rate a message, task or approval a bot made, 👍 (up) or 👎 (down), with an optional reason. "
+      "Rating again replaces your earlier one. tell_bot (a 👎 only) leaves the bot a note for its next run in that "
+      "conversation. People only.",
+      {"subject_type": FEEDBACK_SUBJECT, "subject_id": _s("Its id"), "rating": _s("up or down", enum=["up", "down"]),
+       "reason": _s("Why, in a few words (at most 1000 characters)"), "tell_bot": {"type": "boolean", "default": False}},
+      required=("subject_type", "subject_id", "rating"), writes=True)
+def feedback_give(api, args):
+    body = {k: args[k] for k in ("subject_type", "subject_id", "rating", "reason", "tell_bot") if args.get(k) is not None}
+    return api.post("feedback", body, key=_key(args))
+
+
+@tool("hub_feedback_remove", "Remove your feedback; a note it left that no run carried yet is taken back.",
+      {"id": _s("The feedback id")}, required=("id",), writes=True)
+def feedback_remove(api, args):
+    return api.call("DELETE", "feedback/" + quote(args["id"], safe=""), None, key=_key(args))
+
+
+@tool("hub_feedback_markers", "Your own feedback on these subjects (at most 200 ids) and everyone's up/down counts, "
+      "for the ones you may read.",
+      {"subject_type": FEEDBACK_SUBJECT, "subject_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 200,
+                                                          "description": "Their ids"}},
+      required=("subject_type", "subject_ids"))
+def feedback_markers(api, args):
+    ids = args["subject_ids"]
+    return api.get("feedback", subject_type=args["subject_type"],
+                   subject_ids=ids if isinstance(ids, str) else ",".join(ids))
+
+
+@tool("hub_feedback_list", "Feedback newest first, a page at a time, on what you may read. next_cursor reads the next page.",
+      {"bot_id": _s("Only feedback on this bot's work (`bot:<slug>`)"), "rating": _s("up or down", enum=["up", "down"]),
+       "since": _s("An ISO time, or 24h / 7d"), "cursor": _s("next_cursor of the page before"),
+       "limit": {"type": "integer", "minimum": 1, "maximum": 100}})
+def feedback_list(api, args):
+    return api.get("feedback/list", **{k: args.get(k) for k in ("bot_id", "rating", "since", "cursor", "limit")})
+
+
+@tool("hub_feedback_reasons", "Your five latest distinct feedback reasons, each with how often you used it.", {})
+def feedback_reasons(api, args):
+    return api.get("feedback/recent-reasons")
+
+
+@tool("hub_feedback_rule_draft", "A one-sentence org rule drafted from your 👎's reason and the rated work. Stores "
+      "nothing; drafted is false when no model drafted it and the reason came back as it is.",
+      {"id": _s("Your feedback id")}, required=("id",))
+def feedback_rule_draft(api, args):
+    return api.post("feedback/" + quote(args["id"], safe="") + "/rule-draft", {})
+
+
+@tool("hub_feedback_rule", "Make your 👎 an internal org rule for the bot, or every bot: active when you manage that "
+      "Who, otherwise a suggestion.",
+      {"id": _s("Your feedback id"), "text": _s("The rule, one sentence"),
+       "all_bots": {"type": "boolean", "default": False, "description": "Every bot, not only the one rated"}},
+      required=("id", "text"), writes=True)
+def feedback_rule(api, args):
+    body = {"text": args["text"], **({"all_bots": True} if args.get("all_bots") else {})}
+    return api.post("feedback/" + quote(args["id"], safe="") + "/rule", body, key=_key(args))
 
 
 @tool("hub_question_ask", "Ask one or more bots a question and wait for their answers. Returns one entry "
@@ -585,6 +657,8 @@ def tag_update(api, args):
                         "it creates the task, then requests a publication", enum=["public", "private"]),
        "public_title": _s("People only (a bot is refused): public title; the internal title is never published"),
        "public_summary": _s("People only (a bot is refused): public summary; the internal body is never published"),
+       "check_back_at": _s("When to inspect progress: ISO timestamp or duration such as 45m; defaults automatically"),
+       "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
        "due": _s("ISO-8601 date-time with timezone"),
        "private": {"type": "boolean", "description": "Only requester and assignee may read; bot defaults also apply"},
        "from_private": {"type": "boolean", "default": False,
@@ -640,7 +714,7 @@ def task_create(api, args):
         body["relations"] = [{"task": args["parent"], "kind": "parent"}]
     for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model",
                   "check_role", "visibility", "public_title", "public_summary", "from_private", "model", "effort",
-                  "harness"):
+                  "harness", "check_back_at", "check_back_note"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
     for field in ("qa", "change_paths", "qa_not_checkable_live", "blocker"):
@@ -714,6 +788,15 @@ def task_show_many(api, args):
       "For a person, the task's requester, or BotOps's sweep.", {"id": TASK_ID}, required=("id",))
 def task_run(api, args):
     return api.post(f"tasks/{args['id']}/run-now", {}, key=_key(args))
+
+
+@tool("hub_task_check_back", "Set when to follow up unfinished bot-owned or bot-requested work. "
+      "Use a time conservatively longer than the expected work. Inspect the actual result or handoff when woken; "
+      "repair missing assignments before waiting again. Human-only tasks are excluded. A human snooze takes precedence.",
+      {"id": TASK_ID, "at": _s("ISO date-time with timezone or duration such as 45m or 2h"),
+       "note": _s("The result or handoff to inspect, at most 500 characters")}, required=("id", "at"), writes=True)
+def task_check_back(api, args):
+    return api.post(f"tasks/{args['id']}/check-back", {"at": args["at"], "note": args.get("note")}, key=_key(args))
 
 
 @tool("hub_task_snooze", "Set a task aside until a date: it leaves the board, task lists and Needs you, and nothing "
@@ -955,6 +1038,8 @@ BRIEF_OLD = {"type": "boolean", "description": "Older name for brief"}
        "note": _s("What changed, or the result"),
        "brief": BRIEF, "quiet": BRIEF_OLD,
        "owner": _s("Hand the task to this bot or person"),
+       "check_back_at": _s("When to inspect progress: ISO timestamp or duration such as 45m; defaults automatically"),
+       "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
        "due": _s("ISO-8601 date-time with timezone"),
        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
        "waiting_on": _s("With status waiting: the person you need (their id). The note is your ask to them: one or two "
@@ -983,7 +1068,7 @@ def task_update(api, args):
     if args.get("labels") is not None:
         body["labels"] = args["labels"]
     for field in ("title", "type", "step", "step_rank", "number", "visibility", "public_title", "public_summary", "approval_id", "size",
-                  "verdict", "verdict_head"):
+                  "verdict", "verdict_head", "check_back_at", "check_back_note"):
         if args.get(field) is not None:
             body[field] = args[field]
     if args.get("private") is not None:
@@ -1299,26 +1384,29 @@ GOAL_YES = _s("The owner's plain yes to a goal read-back: turn or its message id
 
 @tool("hub_goal_read_back", "Tico writes and stores the read-back in the owner's Strategy Bot chat. "
                             "Saves nothing without a plain yes. "
-      "Returns message_id, text and exact method/path/body_json steps; save agreed steps with hub_goal_save. "
+      "Returns message_id, text and exact method/path/body steps; save agreed steps with hub_goal_save. "
       "Kinds: goal_create, goal_update, measure_add, target_set, measure_remove, suggestion.",
       {"changes": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 20}},
       required=("changes",), writes=True)
 def goal_read_back(api, args):
     changes = args["changes"]
     if isinstance(changes, str):
-        changes = json.loads(changes)
+        try:
+            changes = json.loads(changes)
+        except ValueError:
+            raise ValueError("changes must be a JSON array of 1 to 20 change objects") from None
     if not isinstance(changes, list) or not 1 <= len(changes) <= 20 or any(not isinstance(c, dict) for c in changes):
         raise ValueError("changes must be a JSON array of 1 to 20 change objects")
     return api.post("goals/read-back", {"changes": changes}, key=_key(args))
 
 
-@tool("hub_goal_save", "Save one exact method/path/body_json step returned by hub_goal_read_back after the owner's plain yes. "
+@tool("hub_goal_save", "Save one exact method/path/body step returned by hub_goal_read_back after the owner's plain yes. "
       "For later steps of a new goal, created_goal is the id from its first save. On not_agreed read back again; do not retry. "
       "Also records the owner's \"no\" to a suggestion you made in chat: path /api/v2/goal-proposals/turned-down, with the "
       "suggestion's kind, goal_id, kpi_id, payload and reason as the body; the owner's words become its reason.",
       {"method": {"type": "string", "enum": ["POST"]}, "path": _s("The step's /api/v2 path"),
-       "body_json": _s("The exact body_json string, unchanged"), "created_goal": _s("First save's goal id for {new}"),
-       "on_behalf_of": GOAL_YES}, required=("method", "path", "body_json", "on_behalf_of"), writes=True)
+       "body": _s("The step's exact body string, unchanged"), "created_goal": _s("First save's goal id for {new}"),
+       "on_behalf_of": GOAL_YES}, required=("method", "path", "body", "on_behalf_of"), writes=True)
 def goal_save(api, args):
     path = args["path"]
     if "{new}" in path:
@@ -1333,9 +1421,12 @@ def goal_save(api, args):
         raise ValueError("path must be a goal read-back save step")
     if not args.get("on_behalf_of"):
         raise ValueError("cite the owner's plain yes with on_behalf_of")
-    body = json.loads(args["body_json"])
+    try:
+        body = json.loads(args["body"])
+    except ValueError:
+        raise ValueError("body must be a JSON object") from None
     if not isinstance(body, dict):
-        raise ValueError("body_json must be a JSON object")
+        raise ValueError("body must be a JSON object")
     return _asked(api, args).post(path.removeprefix("/api/v2/"), body, key=_key(args))
 
 
@@ -1681,10 +1772,10 @@ def kpi_log(api, args):
       "from the Strategy Bot at level 2 or 3, a red or "
       "stalled goal's recovery (recovery: payload evidence, options [{label, actions}], pick; actions create, "
       "reorder or settle), or, from any bot at any level, a change to the strategy draft (strategy_draft: payload "
-      "summary, vision, sections {serve, sell, know, not, extra: {key: {title, body}}}, bets [{id?, statement, why, "
-      "rules_out, wrong_if, cites, status, ideas}], each optional; a bet with an id changes only the fields sent, one "
+      "summary, vision, sections {serve, sell, proof, now, know, how, not, extra: {key: {title, body}}}, bets [{id?, "
+      "statement, why, rules_out, wrong_if, cites, status}], each optional; a bet with an id changes only the fields sent, one "
       "without is new; source bet_tripped when a tripped bet prompted it; confirmed, the owner's draft and bets "
-      "change, nothing is published), or a change to the brand or go-to-market draft (brand_draft, gtm_draft: payload "
+      "change, nothing is published), or a change to the brand draft (brand_draft: payload "
       "{sections: {name: value or null}}; confirmed by an admin, merged into the draft, never published). "
       "goal_wording may be only {bet_id} to link a goal to a bet. The Strategy Bot "
       "cannot change a definition or a target it is judged against without one.",
@@ -1749,6 +1840,9 @@ def _draft_revision(api, args):
     return draft["revision"]
 
 
+# The fixed sections, in the page's order (backend/strategy.py FIXED_KEYS); any other key is an extra section.
+STRATEGY_SECTIONS = ("serve", "sell", "proof", "now", "know", "how", "not")
+
 BET_PROPS = {
     "why": _s("The reasoning, one or two sentences"),
     "rules_out": _s("What the bet refuses; an active bet needs one"),
@@ -1774,8 +1868,9 @@ def _bet_body(args):
     return body
 
 
-@tool("hub_strategy_show", "The team's published strategy: summary, vision, the four sections, the bets with their "
-      "wrong-ifs, each bet's goals and colour, and the team's website. The owner also gets the draft.", {})
+@tool("hub_strategy_show", "The team's published strategy: summary, vision, the seven sections, the bets with their "
+      "wrong-ifs, each bet's goals and colour, the team's website, and proof_since (when How we know they want it "
+      "last changed). The owner also gets the draft.", {})
 def strategy_show(api, args):
     return _as_person(api).get("strategy")
 
@@ -1789,7 +1884,7 @@ def strategy_summary(api, args):
 @tool("hub_strategy_draft", "Owner only: change the strategy draft, only the fields sent (\"\" clears one). A bot "
       "proposes instead: hub_proposal_create, kind strategy_draft.",
       {"summary": _s("At most 400 characters: what every bot reads"), "vision": _s("One or two sentences"),
-       "sections": {"type": "object", "description": "{serve, sell, know, not, extra: {key: {title, body}}}, any of them"},
+       "sections": {"type": "object", "description": "{serve, sell, proof, now, know, how, not, extra: {key: {title, body}}}, any of them"},
        "section": {"type": "array", "items": {"type": "string"}, "description": "KEY=TEXT, instead of sections"},
        "revision": {"type": "integer", "description": "The draft's revision you read; default the current one"}},
       writes=True)
@@ -1797,7 +1892,7 @@ def strategy_draft(api, args):
     sections = dict(args.get("sections") or {})
     for item in args.get("section") or []:
         key, _, text = str(item).partition("=")
-        if key.strip() in ("serve", "sell", "know", "not"):
+        if key.strip() in STRATEGY_SECTIONS:
             sections[key.strip()] = text
         else:
             sections.setdefault("extra", {})[key.strip()] = {"title": key.strip().replace("-", " ").capitalize(),
@@ -1860,19 +1955,20 @@ def strategy_bet_retire(api, args):
     return _as_person(api).post("strategy/bets/" + args["id"], {"status": "retired"}, key=_key(args))
 
 
-# ----------------------------------------------------------------------------- brand, go-to-market, growth
-PAGE_TITLES = {"brand": "brand", "gtm": "go-to-market"}
+# ----------------------------------------------------------------------------- brand, growth
 BRAND_SECTIONS = ("name", "positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples")
-GTM_SECTIONS = ("motion", "buyer", "playbooks")
 
 
-def _page_show(api, kind, args):
-    """The page, or one version, or one section of either: what a bot needs without the rest."""
+@tool("hub_brand_show", "The brand page: the published version, the version list, and for the owner and admins the "
+      "draft. With section, only that section's value.",
+      {"section": {"type": "string", "enum": list(BRAND_SECTIONS), "description": "Only this section"},
+       "version": {"type": "integer", "description": "A published version's number; default the latest"}})
+def brand_show(api, args):
     if args.get("version"):
-        page = _as_person(api).get(f"{kind}/versions/{int(args['version'])}")
+        page = _as_person(api).get(f"brand/versions/{int(args['version'])}")
         body = page.get("body") or {}
     else:
-        page = _as_person(api).get(kind)
+        page = _as_person(api).get("brand")
         body = ((page.get("published") or {}).get("body")) or {}
     if args.get("section"):
         return {"section": args["section"], "n": page.get("n") or (page.get("published") or {}).get("n"),
@@ -1880,7 +1976,12 @@ def _page_show(api, kind, args):
     return page
 
 
-def _page_sections(args):
+@tool("hub_brand_summary", "The published brand page as the short text a growth-facing bot's turn carries.", {})
+def brand_summary(api, args):
+    return api.get("brand/summary")
+
+
+def _brand_sections(args):
     """`sections` as an object, or one `section` with its `body` as JSON text (the CLI's --section/--body)."""
     sections = dict(args.get("sections") or {})
     if args.get("section"):
@@ -1892,46 +1993,25 @@ def _page_sections(args):
     return sections
 
 
-def _page_draft(api, kind, args):
-    body = {"sections": _page_sections(args)}
+@tool("hub_brand_draft", "Owner or admin only: change sections of the brand draft (a section set to null is removed); "
+      "publish makes it a version. A bot proposes instead: hub_proposal_create, kind brand_draft, payload "
+      "{sections: {...}}.",
+      {"sections": {"type": "object", "description": "{section: value or null}: " + ", ".join(BRAND_SECTIONS)},
+       "section": {"type": "string", "enum": list(BRAND_SECTIONS), "description": "One section, with body"},
+       "body": _s("That section's value as JSON text"),
+       "revision": {"type": "integer", "description": "The draft's revision you read; stale is refused"}},
+      writes=True)
+def brand_draft(api, args):
+    body = {"sections": _brand_sections(args)}
     if args.get("revision") is not None:
         body["revision"] = int(args["revision"])
-    return _as_person(api).call("PUT", f"{kind}/draft", body, _key(args))
+    return _as_person(api).call("PUT", "brand/draft", body, _key(args))
 
 
-def _page_tools(kind, sections):
-    title = PAGE_TITLES[kind]
-    show_props = {"section": {"type": "string", "enum": list(sections), "description": "Only this section"},
-                  "version": {"type": "integer", "description": "A published version's number; default the latest"}}
-
-    @tool(f"hub_{kind}_show", f"The {title} page: the published version, the version list, and for the owner and "
-          f"admins the draft. With section, only that section's value.", show_props)
-    def show(api, args):
-        return _page_show(api, kind, args)
-
-    @tool(f"hub_{kind}_summary", f"The published {title} page as the short text a growth-facing bot's turn carries.", {})
-    def summary(api, args):
-        return api.get(f"{kind}/summary")
-
-    @tool(f"hub_{kind}_draft", f"Owner or admin only: change sections of the {title} draft (a section set to null is "
-          f"removed); publish makes it a version. A bot proposes instead: hub_proposal_create, kind {kind}_draft, "
-          "payload {sections: {...}}.",
-          {"sections": {"type": "object", "description": "{section: value or null}: " + ", ".join(sections)},
-           "section": {"type": "string", "enum": list(sections), "description": "One section, with body"},
-           "body": _s("That section's value as JSON text"),
-           "revision": {"type": "integer", "description": "The draft's revision you read; stale is refused"}},
-          writes=True)
-    def draft(api, args):
-        return _page_draft(api, kind, args)
-
-    @tool(f"hub_{kind}_publish", f"Owner or admin only: the {title} draft becomes the next numbered version.",
-          {"note": _s("What this version changes, in a line", default="")}, writes=True)
-    def publish(api, args):
-        return _as_person(api).post(f"{kind}/publish", {"note": args.get("note") or ""}, key=_key(args))
-
-
-_page_tools("brand", BRAND_SECTIONS)
-_page_tools("gtm", GTM_SECTIONS)
+@tool("hub_brand_publish", "Owner or admin only: the brand draft becomes the next numbered version.",
+      {"note": _s("What this version changes, in a line", default="")}, writes=True)
+def brand_publish(api, args):
+    return _as_person(api).post("brand/publish", {"note": args.get("note") or ""}, key=_key(args))
 
 
 @tool("hub_brand_check", "Check a draft (a post, an email, an ad) against the published brand: words to avoid, "
@@ -1940,22 +2020,6 @@ _page_tools("gtm", GTM_SECTIONS)
       {"text": _s("The draft, whole")}, required=("text",))
 def brand_check(api, args):
     return api.post("brand/check", {"text": args["text"]})
-
-
-@tool("hub_gtm_sources", "Which system holds the truth for each number (bookings, spend, sign-ups), how a bot "
-      "reaches it and what it may do there, and any number two sources both claim.",
-      {"include_retired": {"type": "boolean", "default": False}})
-def gtm_sources(api, args):
-    return api.get("growth/sources", include_retired="true" if args.get("include_retired") else None)
-
-
-_SEGMENTS = {"type": "array", "items": {"type": "string"},
-             "description": "Growth segment ids or market segment ids (hub growth segment list); [] clears"}
-
-
-def _segment_refs(values):
-    """Segment refs as sent; an empty string (`--segment ""`) clears."""
-    return [v for v in values if v] if values is not None else None
 
 
 CHANNEL_PROPS = {
@@ -1968,16 +2032,13 @@ CHANNEL_PROPS = {
     "why": _s("Why we use it, in a line"),
     "guardrail_kpi_id": _s("A KPI that must stay under guardrail_max"),
     "guardrail_max": {"type": "number"},
-    "sort": {"type": "integer"},
-    "segments": _SEGMENTS}
+    "sort": {"type": "integer"}}
 
 
 def _channel_body(api, args, keys):
     body = {k: args[k] for k in keys if k in CHANNEL_PROPS and k != "owner" and args.get(k) is not None}
     if args.get("owner") is not None:
         body["owner_ref"] = _target(api, args["owner"]) if args["owner"] else None
-    if "segments" in body:
-        body["segments"] = _segment_refs(body["segments"])
     return body
 
 
@@ -1987,7 +2048,8 @@ def growth_channel_list(api, args):
     return api.get("growth/channels", include_retired="true" if args.get("include_retired") else None)
 
 
-@tool("hub_growth_channel_show", "One channel by slug.", {"slug": _s("Channel slug")}, required=("slug",))
+@tool("hub_growth_channel_show", "One channel by slug, with its open marketing tasks (labelled channel:<slug>).",
+      {"slug": _s("Channel slug")}, required=("slug",))
 def growth_channel_show(api, args):
     return api.get("growth/channels/" + args["slug"])
 
@@ -2008,58 +2070,10 @@ def growth_channel_update(api, args):
                                  key=_key(args))
 
 
-@tool("hub_growth_channel_retire", "Owner or admin only: retire a channel. Its cohorts and ideas keep the link.",
+@tool("hub_growth_channel_retire", "Owner or admin only: retire a channel. Its cohorts keep the link.",
       {"slug": _s("Channel slug")}, required=("slug",), writes=True)
 def growth_channel_retire(api, args):
     return _as_person(api).post(f"growth/channels/{args['slug']}/retire", {}, key=_key(args))
-
-
-SEGMENT_STATUSES = ["serving", "testing", "next", "dropped"]
-MOTIONS = ["self_serve", "sales_led", "partner", "marketplace", "local", "community", "ecommerce"]
-SEGMENT_PROPS = {
-    "status": {"type": "string", "enum": SEGMENT_STATUSES,
-               "description": "serving (Us on the Strategy page), testing, next (Next there) or dropped"},
-    "motion": {"type": "string", "enum": MOTIONS, "description": "How this segment buys"},
-    "who_buys": _s("Who signs or pays in this segment"),
-    "deal_size": _s("A typical deal or monthly spend: $40/month"),
-    "why": _s("Why this segment, in a line"),
-    "owner": _s("Who answers for it: me, a bot slug or a person id; \"\" clears"),
-    "sort": {"type": "integer"}}
-
-
-def _segment_body(api, args):
-    body = {k: args[k] for k in ("name", *SEGMENT_PROPS) if k != "owner" and args.get(k) is not None}
-    if args.get("owner") is not None:
-        body["owner_ref"] = _target(api, args["owner"]) if args["owner"] else None
-    return body
-
-
-@tool("hub_growth_segment_list", "Who the company sells to: each segment's status (serving, testing, next, dropped), "
-      "motion, buyer, deal size, why, the channels that reach it, its idea count and last month's new customers.", {})
-def growth_segment_list(api, args):
-    return api.get("growth/segments")
-
-
-@tool("hub_growth_segment_create", "Add a customer segment by name (the market segment of that name or alias, else a "
-      "new one) or by market segment id. Owner or admin: any status; a bot adds one to test (status testing). Serving "
-      "and next show as Us and Next on the Strategy page.",
-      {"name": _s("The segment: Property managers"), "segment_id": _s("Or a market segment id: segment/..."),
-       **SEGMENT_PROPS}, writes=True)
-def growth_segment_create(api, args):
-    body = _segment_body(api, args)
-    if args.get("segment_id"):
-        body["segment_id"] = args["segment_id"]
-    body.setdefault("status", "testing")
-    return _as_person(api).post("growth/segments", body, key=_key(args))["segment"]
-
-
-@tool("hub_growth_segment_update", "Change a segment, only the fields sent. Owner or admin: any field, status "
-      "included; a bot: why, who_buys and deal_size.",
-      {"id": _s("The segment's id or its market segment id"), "name": _s("A new name for the market segment"),
-       **SEGMENT_PROPS}, required=("id",), writes=True)
-def growth_segment_update(api, args):
-    return _as_person(api).patch("growth/segments/" + quote(args["id"], safe="/"), _segment_body(api, args),
-                                 key=_key(args))["segment"]
 
 
 SOURCE_PROPS = {
@@ -2078,10 +2092,11 @@ def _source_body(api, args):
     return body
 
 
-@tool("hub_growth_source_list", "Same as hub_gtm_sources: the source of truth for each number, and conflicts.",
+@tool("hub_growth_source_list", "Which system holds the truth for each number (bookings, spend, sign-ups), how a bot "
+      "reaches it and what it may do there, and any number two sources both claim.",
       {"include_retired": {"type": "boolean", "default": False}})
 def growth_source_list(api, args):
-    return gtm_sources(api, args)
+    return api.get("growth/sources", include_retired="true" if args.get("include_retired") else None)
 
 
 @tool("hub_growth_source_add", "Owner or admin only: name the system that holds the truth for a number.",
@@ -2102,126 +2117,21 @@ def growth_source_retire(api, args):
     return _as_person(api).post(f"growth/sources/{args['id']}/retire", {}, key=_key(args))
 
 
-IDEA_SOURCES = ["strategy", "competitor", "listening", "peec", "lost_test", "person", "other"]
-ICE = {"type": "integer", "minimum": 1, "maximum": 10}
-IDEA_PROPS = {
-    "hypothesis": _s("We believe X because Y"),
-    "prediction": _s("What will move, by how much, by when"),
-    "bet_id": _s("The strategy bet it tests (hub strategy show lists them)"),
-    "kpi_id": _s("The KPI it should move"),
-    "channels": {"type": "array", "items": {"type": "string"}, "description": "Channel slugs"},
-    "segments": _SEGMENTS,
-    "source_kind": {"type": "string", "enum": IDEA_SOURCES, "description": "Where the idea came from"},
-    "source_ref": _s("A link or id for that source")}
-
-
-@tool("hub_growth_idea_create", "File a growth idea: an Idea task with its hypothesis, prediction, bet, KPI, channels "
-      "and ICE scores (impact, confidence, ease, 1-10 each). Any teammate may file one. A similar open idea is "
-      "refused; follow_up_of links a new idea to a finished test.",
-      {"title": _s("The change, in a line"), **IDEA_PROPS,
-       "ice_i": {**ICE, "description": "Impact, 1-10"}, "ice_c": {**ICE, "description": "Confidence, 1-10"},
-       "ice_e": {**ICE, "description": "Ease, 1-10"},
-       "follow_up_of": _s("The idea (task id) this follows up"),
-       "assignee": _s("Who runs it: me, a bot slug or a person id; default you"),
-       "body": _s("More detail for the task", default="")},
-      required=("title",), writes=True)
-def growth_idea_create(api, args):
-    keys = ("title", *IDEA_PROPS, "ice_i", "ice_c", "ice_e", "follow_up_of", "body")
-    body = {k: args[k] for k in keys if args.get(k) not in (None, [])}
-    if "segments" in body:
-        body["segments"] = _segment_refs(body["segments"])
-    if args.get("assignee"):
-        body["assignee"] = _target(api, args["assignee"])
-    return _as_person(api).post("growth/ideas", body, key=_key(args))["idea"]
-
-
-@tool("hub_growth_idea_list", "Growth ideas you may see, best ICE first, with status, bet, KPI, channels and verdict.",
-      {"status": {"type": "string", "enum": ["idea", "testing", "won", "lost", "inconclusive", "dropped", "paused"]},
-       "bet_id": _s("Only ideas testing this bet"), "channel": _s("Only ideas on this channel slug"),
-       "kpi_id": _s("Only ideas for this KPI"), "segment": _s("Only ideas that target this segment"),
-       "q": _s("Words in the title or hypothesis"), "limit": {"type": "integer", "default": 200, "maximum": 500}})
-def growth_idea_list(api, args):
-    return api.get("growth/ideas", **{k: args.get(k) for k in ("status", "bet_id", "channel", "kpi_id", "segment", "q",
-                                                               "limit")})
-
-
-@tool("hub_growth_idea_show", "One growth idea whole: its test plan, verdict, follow-ups and subtasks.",
-      {"id": _s("The idea's task id")}, required=("id",))
-def growth_idea_show(api, args):
-    return api.get("growth/ideas/" + args["id"])["idea"]
-
-
-@tool("hub_growth_idea_update", "Change a growth idea, only the fields sent. Its assignee, its creator or an admin.",
-      {"id": _s("The idea's task id"), "title": _s("The change, in a line"), **IDEA_PROPS,
-       "judged_kpi_id": _s("The KPI the verdict reads"),
-       "test_from": _s("YYYY-MM-DD"), "test_to": _s("YYYY-MM-DD"), "change": _s("What the test changes"),
-       "stop_if": _s("Stop early if this happens"), "min_events": {"type": "integer", "minimum": 0},
-       "audience": _s("Who sees the change"), "external_ref": _s("The experiment's id in another tool")},
-      required=("id",), writes=True)
-def growth_idea_update(api, args):
-    keys = ("title", *IDEA_PROPS, "judged_kpi_id", "test_from", "test_to", "change", "stop_if", "min_events",
-            "audience", "external_ref")
-    body = {k: args[k] for k in keys if args.get(k) is not None}
-    if "segments" in body:
-        body["segments"] = _segment_refs(body["segments"])
-    return _as_person(api).patch("growth/ideas/" + args["id"], body, key=_key(args))["idea"]
-
-
-@tool("hub_growth_idea_score", "Score a growth idea: impact, confidence and ease, 1-10 each. Its assignee, creator "
-      "or an admin.",
-      {"id": _s("The idea's task id"), "i": {**ICE, "description": "Impact"}, "c": {**ICE, "description": "Confidence"},
-       "e": {**ICE, "description": "Ease"}}, required=("id", "i", "c", "e"), writes=True)
-def growth_idea_score(api, args):
-    body = {k: int(args[k]) for k in ("i", "c", "e")}
-    return _as_person(api).post(f"growth/ideas/{args['id']}/score", body, key=_key(args))["idea"]
-
-
-@tool("hub_growth_idea_start", "Start an idea's test: the window, what changes, the stop rule, and the KPI the "
-      "verdict reads. Its assignee or an admin.",
-      {"id": _s("The idea's task id"), "test_from": _s("YYYY-MM-DD; default today"), "test_to": _s("YYYY-MM-DD"),
-       "change": _s("What the test changes"), "stop_if": _s("Stop early if this happens"),
-       "judged_kpi_id": _s("The KPI the verdict reads; default the idea's KPI"),
-       "min_events": {"type": "integer", "minimum": 0, "description": "Events needed before a won verdict"},
-       "audience": _s("Who sees the change")},
-      required=("id", "test_to", "change", "stop_if"), writes=True)
-def growth_idea_start(api, args):
-    keys = ("test_from", "test_to", "change", "stop_if", "judged_kpi_id", "min_events", "audience")
-    body = {k: args[k] for k in keys if args.get(k) is not None}
-    return _as_person(api).post(f"growth/ideas/{args['id']}/start", body, key=_key(args))["idea"]
-
-
-@tool("hub_growth_idea_verdict", "Give an idea's verdict; a final one closes its task. Judge in this order: a stop "
-      "rule hit or a missed baseline is lost, before counting events; then fewer than min_events is inconclusive; "
-      "then the prediction met is won. Its assignee or an admin.",
-      {"id": _s("The idea's task id"),
-       "status": {"type": "string", "enum": ["won", "lost", "inconclusive", "dropped", "paused"]},
-       "result": _s("What happened, with the numbers"), "learning": _s("What we now know"),
-       "bet_effect": {"type": "string", "enum": ["supports", "weakens", "none"], "description": "What it says about the bet"},
-       "confidence": {"type": "string", "enum": ["low", "medium", "high"]}},
-      required=("id", "status"), writes=True)
-def growth_idea_verdict(api, args):
-    keys = ("status", "result", "learning", "bet_effect", "confidence")
-    body = {k: args[k] for k in keys if args.get(k) is not None}
-    return _as_person(api).post(f"growth/ideas/{args['id']}/verdict", body, key=_key(args))["idea"]
-
-
 COHORT_FIELDS = ("spend", "bot_cost", "new_customers", "kept_d30", "kept_d90", "kept_d180", "revenue_month",
                  "margin_pct", "quality")
 
 
 @tool("hub_growth_cohort_list", "Monthly cohorts by channel: spend, bot cost, new customers, % kept at 30/90/180 "
       "days, revenue and margin.",
-      {"channel": _s("A channel slug, or unknown"), "month": _s("YYYY-MM"), "segment": _s("Only this segment's rows"),
+      {"channel": _s("A channel slug, or unknown"), "month": _s("YYYY-MM"),
        "limit": {"type": "integer", "default": 500, "maximum": 2000}})
 def growth_cohort_list(api, args):
-    return api.get("growth/cohorts", channel=args.get("channel"), month=args.get("month"), segment=args.get("segment"),
-                   limit=args.get("limit"))
+    return api.get("growth/cohorts", channel=args.get("channel"), month=args.get("month"), limit=args.get("limit"))
 
 
 @tool("hub_growth_cohort_set", "Set one channel's numbers for one month, only the fields sent (any bot or an admin). "
-      "Use channel unknown for customers no channel claims; segment_id records one segment's share of the month.",
+      "Use channel unknown for customers no channel claims.",
       {"channel": _s("A channel slug, or unknown"), "month": _s("YYYY-MM"),
-       "segment_id": _s("A segment id or market segment id; omit for the whole channel"),
        "spend": {"type": "number"}, "bot_cost": {"type": "number"},
        "new_customers": {"type": "integer", "minimum": 0},
        "kept_d30": {"type": "number", "description": "% kept after 30 days"},
@@ -2235,7 +2145,6 @@ def growth_cohort_list(api, args):
       required=("channel", "month"), writes=True)
 def growth_cohort_set(api, args):
     body = {"channel": args["channel"], "month": args["month"],
-            **({"segment_id": args["segment_id"]} if args.get("segment_id") else {}),
             **{k: args[k] for k in COHORT_FIELDS if args.get(k) is not None}}
     sources = dict(args.get("sources") or {})
     for pair in args.get("source") or []:
@@ -2249,27 +2158,18 @@ def growth_cohort_set(api, args):
 
 
 @tool("hub_growth_economics", "Unit economics by channel for a month: CAC (spend plus bot cost per new customer), "
-      "expected months kept, LTV and LTV:CAC, with the total and the Unknown row. segment: only that segment's "
-      "cohorts.",
-      {"month": _s("YYYY-MM; default the latest with numbers"), "segment": _s("A segment id or market segment id")})
+      "expected months kept, LTV and LTV:CAC, with the total and the Unknown row.",
+      {"month": _s("YYYY-MM; default the latest with numbers")})
 def growth_economics(api, args):
-    return api.get("growth/economics", month=args.get("month"), segment=args.get("segment"))
+    return api.get("growth/economics", month=args.get("month"))
 
 
-@tool("hub_growth_week", "The growth week: tests running and due, verdicts in the last week, guardrails over their "
-      "limit, and the North Star.", {})
-def growth_week(api, args):
-    return api.get("growth/week")
-
-
-@tool("hub_growth_evidence", "Each strategy bet with the verdicts that support or weaken it.", {})
-def growth_evidence(api, args):
-    return api.get("growth/evidence")
-
-
-@tool("hub_growth_working", "Work in progress: open tasks under an idea or labelled channel:<slug>, with their idea and channel.", {})
-def growth_working(api, args):
-    return api.get("growth/working")
+@tool("hub_growth_numbers", "The growth numbers over the last months: each month's total, each channel's economics, "
+      "the KPI tree with its series, and the markers.",
+      {"months": {"type": "integer", "minimum": 1, "maximum": 24, "description": "How many months back, ending now; "
+                                                                                 "default 12"}})
+def growth_numbers(api, args):
+    return api.get("growth/numbers", months=args.get("months"))
 
 
 @tool("hub_growth_kpis", "The KPI tree: the North Star, its inputs and guardrails, each KPI's funnel stage and loop.", {})
@@ -2277,9 +2177,9 @@ def growth_kpis(api, args):
     return api.get("growth/kpis")
 
 
-@tool("hub_growth_settings", "The growth settings (unit, revenue per customer per month, margin %, the win "
-      "threshold, framework). With values or set, owner or admin only: change them.",
-      {"values": {"type": "object", "description": "{unit, revenue_month, margin_pct, verdict_win_pct, framework}"},
+@tool("hub_growth_settings", "The growth settings (unit, revenue per customer per month, margin %). With values or set, "
+      "owner or admin only: change them.",
+      {"values": {"type": "object", "description": "{unit, revenue_month, margin_pct}"},
        "set": {"type": "array", "items": {"type": "string"}, "description": "KEY=VALUE, instead of values"}},
       writes=True)
 def growth_settings(api, args):
@@ -2288,7 +2188,7 @@ def growth_settings(api, args):
         k, sep, v = pair.partition("=")
         if not sep:
             raise APIError("set", "--set is KEY=VALUE")
-        if k in ("revenue_month", "margin_pct", "verdict_win_pct"):
+        if k in ("revenue_month", "margin_pct"):
             try:
                 v = float(v)
             except ValueError:
@@ -2900,12 +2800,20 @@ OLD_SERVER_MEDIA = ("This Tico server takes video and audio files up to 25 MB. A
 
 
 # ----------------------------------------------------------------------------- cards and pins (docs/overview.md)
-CARD_TEMPLATES = ("tasks_by_status", "done_per_week", "needs_you", "spend", "kpi", "automation_runs", "latest_pages")
-PLACE = _s("Where: dashboard, team:<group id>, bot:<slug> (a sidebar) or task:<id>")
+CARD_TEMPLATES = ("tasks_by_status", "done_per_week", "needs_you", "spend", "kpi", "automation_runs", "latest_pages",
+                  "needs_attention", "unread_threads", "my_tasks", "updates", "growth_number", "growth_funnel",
+                  "growth_channels", "growth_retention", "growth_board")
+PLACE = _s("Where: dashboard, growth (the Growth page), team:<group id>, bot:<slug> (a sidebar), task:<id>, or person:me "
+           "(My dashboard, the person's own landing page)")
 CARD_SETTINGS = {"team": _s("A group id; empty for the whole company"),
                  "weeks": {"type": "integer", "description": "Done per week: weeks shown, 4 to 26"},
-                 "count": {"type": "integer", "description": "Latest pages: how many, 1 to 10"},
-                 "kpi": _s("KPI: the KPI id")}
+                 "count": {"type": "integer", "description": "Latest pages, Unread threads, My tasks, Updates: how many, "
+                           "1 to 10; Growth channels 1 to 20; Growth board 1 to 5 per lane"},
+                 "kpi": _s("KPI: the KPI id"),
+                 "metric": _s("Growth number: new_customers, spend, bot_cost, cac, revenue_month, margin_pct, ltv, "
+                              "ltv_cac, payback_months, kept_d30, kept_d90 or kept_d180"),
+                 "channel": _s("Growth number: a channel slug; empty for all channels"),
+                 "months": {"type": "integer", "description": "Growth retention: cohort months shown, 3 to 12"}}
 SIZE = _s("small, medium or large", enum=["small", "medium", "large"])
 
 
@@ -2921,7 +2829,8 @@ def card_list(api, args):
 
 
 @tool("hub_card_add", "Add one of Tico's built-in cards, pinned at a place you may arrange. A bot pins to its own "
-      "sidebar or its task; the Dashboard and team pages are a person's (BotOps: the person who asked).",
+      "sidebar or its task; the Dashboard and team pages are a person's (BotOps: the person who asked). Growth cards go "
+      "on the Growth page only, which the owner, admins and bots arrange.",
       {"template": _s("The card", enum=list(CARD_TEMPLATES)), "title": _s("Its heading; empty uses the card's name"),
        "place": PLACE, "size": SIZE, **CARD_SETTINGS}, required=("template",), writes=True)
 def card_add(api, args):
@@ -3430,6 +3339,93 @@ def trigger_list(api, args):
             for t in api.get("triggers")["triggers"]]
 
 
+# ----------------------------------------------------------------------------- federation: peers and shared threads
+PEERING = {"peering": _s("The peering's id from hub_peer_list")}
+PEER_INSTALL = {"install": _s("The other install's id: gi_ and 24 hex digits")}
+PEER_THREAD = {"thread": _s("The thread's id: a thread this install owns")}
+
+
+@tool("hub_peer_list", "This install's federation with other Tico installs: its key id (no key material), the Gateway it goes "
+      "through, its peerings (newest first) and the threads you may read that it shares or was given (members listed for the "
+      "ones it owns, with how many messages each company has not taken). Owner or admin.", {})
+def peer_list(api, args):
+    return _as_person(api).get("federation")
+
+
+@tool("hub_peer_key", "Make this install's federation key and register it with Tico HQ. Does nothing when the install has "
+      "one. Owner or admin.", {}, writes=True)
+def peer_key(api, args):
+    return _as_person(api).post("federation/keys", {}, key=_key(args))
+
+
+@tool("hub_peer_rotate_key", "Give this install a new federation key and retire the old one. Every peering needs approving "
+      "again, on both sides. Owner or admin.", {}, writes=True)
+def peer_rotate_key(api, args):
+    return _as_person(api).post("federation/keys/rotate", {}, key=_key(args))
+
+
+@tool("hub_peer_request", "Ask another install to peer with this one. It approves on its side; then you approve here. "
+      "Owner or admin.", PEER_INSTALL, required=("install",), writes=True)
+def peer_request(api, args):
+    return _as_person(api).post("federation/peerings", {"peer": args["install"]}, key=_key(args))
+
+
+@tool("hub_peer_approve", "Approve a peering, having checked the other install's key: from now on its envelopes must be signed "
+      "with that key. The peering is active once both installs approve. Owner or admin.", PEERING, required=("peering",), writes=True)
+def peer_approve(api, args):
+    return _as_person(api).post(f"federation/peerings/{args['peering']}/approve", {}, key=_key(args))
+
+
+@tool("hub_peer_pause", "The kill switch: pause a peering. While it is paused nothing crosses it, in either direction. "
+      "Owner or admin.", PEERING, required=("peering",), writes=True)
+def peer_pause(api, args):
+    return _as_person(api).post(f"federation/peerings/{args['peering']}/pause", {"paused": True}, key=_key(args))
+
+
+@tool("hub_peer_resume", "Resume a paused peering. What was missed while it was paused is caught up. Owner or admin.",
+      PEERING, required=("peering",), writes=True)
+def peer_resume(api, args):
+    return _as_person(api).post(f"federation/peerings/{args['peering']}/pause", {"paused": False}, key=_key(args))
+
+
+@tool("hub_peer_revoke", "End a peering. Nothing more crosses it; a new request starts over and needs both approvals again. "
+      "Owner or admin.", PEERING, required=("peering",), writes=True)
+def peer_revoke(api, args):
+    return _as_person(api).post(f"federation/peerings/{args['peering']}/revoke", {}, key=_key(args))
+
+
+@tool("hub_peer_share", "Share a thread this install owns with an install it has an active peering with. That install gets "
+      "the thread from now on, not its history. You must read and manage the thread. Owner or admin.",
+      {**PEER_THREAD, **PEER_INSTALL}, required=("thread", "install"), writes=True)
+def peer_share(api, args):
+    return _as_person(api).post(f"federation/threads/{quote(str(args['thread']), safe='')}/installs",
+                                {"install": args["install"]}, key=_key(args))
+
+
+@tool("hub_peer_unshare", "Take an install out of a thread this install owns. It gets the removal and nothing after. You must "
+      "read and manage the thread. Owner or admin.", {**PEER_THREAD, **PEER_INSTALL}, required=("thread", "install"), writes=True)
+def peer_unshare(api, args):
+    return _as_person(api).call("DELETE", f"federation/threads/{quote(str(args['thread']), safe='')}/installs/"
+                                          f"{quote(str(args['install']), safe='')}", None, _key(args))
+
+
+@tool("hub_peer_retry", "Send again now what another install has not taken from a shared thread (Needs you lists it). "
+      "Whoever manages the thread.", {"thread": _s("The thread's id on this install"), **PEER_INSTALL},
+      required=("thread", "install"), writes=True)
+def peer_retry(api, args):
+    return _as_person(api).post(f"federation/threads/{quote(str(args['thread']), safe='')}/installs/"
+                                f"{quote(str(args['install']), safe='')}/retry", {}, key=_key(args))
+
+
+@tool("hub_peer_add_reader", "Let a person on this install read a shared copy of a thread. Until an admin who reads it adds "
+      "them, only the accepting admin reads a copy. Owner or admin.",
+      {"thread": _s("The thread's id on this install (a shared copy)"), "actor": _s("The person, as human:<name>")},
+      required=("thread", "actor"), writes=True)
+def peer_add_reader(api, args):
+    return _as_person(api).post(f"federation/threads/{quote(str(args['thread']), safe='')}/readers", {"actor": args["actor"]},
+                                key=_key(args))
+
+
 TRIGGER = {"id": _s("The trigger's id from hub_trigger_list")}
 
 
@@ -3790,7 +3786,8 @@ def inbox_send(api, args):
       "BotOps acts as the person who asked, citing their message. "
       "A manager bot changes only its direct reports: their model, task model, name and description. Creating, archiving "
       "or restoring a report goes through BotOps the same way, within the weekly limit.",
-      {"slug": _s("The bot to change"), "on_behalf_of": _s("Id of the person's message to BotOps asking for it (default: the message that started this turn)"),
+      {"slug": _s("The bot to change (its slug or id)"), "on_behalf_of": _s("Id of the person's message to BotOps asking for it (default: the message that started this turn)"),
+       "new_slug": _s("Rename its slug (a label: its id, history and folder stay); not a built-in bot's"),
        "reports_to": _s("A bot slug, or human:<id>"), "display_name": _s("New display name"),
        "description": _s("New description"), "template": _s("Correct the template metadata; use hub_template_list"), "repo": _s("Its GitHub repository: <org>/bot-<slug>"),
        "shared": {"type": "boolean", "description": "Allow branches"},
@@ -3815,12 +3812,14 @@ def bot_set(api, args):
     delegated = _for_person(api)
     on_behalf = args.get("on_behalf_of") or "turn" if delegated else None
     # The bot's own revision, read as the person: BotOps may not see a bot they own but it does not.
-    row = next((b for b in api.get("bots") if (b.get("slug") or b.get("name")) == args["slug"]), None)
+    row = next((b for b in api.get("bots") if args["slug"] in (b.get("id"), b.get("slug") or b.get("name"))), None)
     if not row or row.get("revision") is None:
         row = api.get(f"bots/{args['slug']}", **({"on_behalf_of": on_behalf} if delegated else {}))
         if not row:
             raise ValueError("No bot " + args["slug"])
     change = {k: args[k] for k in ("reports_to", "display_name", "description", "template", "repo", "status", "shared", "session", "subtask_session", "task_goal", "review_model", "capture_stream", "update_subscriptions") if args.get(k) is not None}
+    if args.get("new_slug"):
+        change["slug"] = args["new_slug"]
     if args.get("app_delivery"):
         change["app_delivery"] = None if args["app_delivery"] == "off" else {"computer": args["app_delivery"], "app": "grok"}
     return api.post(f"bots/{args['slug']}/definition",
@@ -3883,14 +3882,40 @@ def bot_register(api, args):
        "write": _s("Who may send it messages and tasks")},
       required=("slug",), writes=True)
 def bot_access(api, args):
+    return _teammate_access(api, f"bots/{args['slug']}", args)
+
+
+def _teammate_access(api, path, args):
+    """Show, or set, a bot's, person's or group's See, Read and Write: levels left out stay as they are."""
     on_behalf = _for_person(api)
-    current = api.get(f"bots/{args['slug']}/access", **on_behalf)
+    current = api.get(f"{path}/access", **on_behalf)
     wanted = {level: args[level] for level in ("see", "read", "write") if args.get(level)}
     if not wanted:
         return current
     body = {level: audience(wanted[level]) if level in wanted else {k: current[level][k] for k in ("everyone", "people", "teams", "bots")}
             for level in ("see", "read", "write")}
-    return api.post(f"bots/{args['slug']}/access", {**body, "revision": current["revision"], **on_behalf}, key=_key(args))
+    return api.post(f"{path}/access", {**body, "revision": current["revision"], **on_behalf}, key=_key(args))
+
+
+@tool("hub_human_access", "Show, or set, who may see, read and write to a person, as the person who asked you (it must be "
+      "them, someone they report up to, or an admin). See: on the chart and lists; Read: their Home; Write: DM them or add "
+      "them to a thread. Each is `everyone`, or a comma list of person ids, `group:<id>` and `bot:<slug>`; a group names "
+      "the people and bots in it and the groups under it. Levels you leave out stay as they are.",
+      {"human": _s("The person's id"), "see": _s("everyone, or ben,group:legal,bot:analyst"),
+       "read": _s("Who may read their Home"), "write": _s("Who may DM them or add them to a thread")},
+      required=("human",), writes=True)
+def human_access(api, args):
+    return _teammate_access(api, f"humans/{quote(str(args['human']), safe='')}", args)
+
+
+@tool("hub_group_access", "Show, or set, who may see, read and write to a group, as the person who asked you (a lead of "
+      "the group or one above it, or an admin). By default everyone sees and reads it and its members write to it. Each "
+      "level is `everyone`, or a comma list of person ids, `group:<id>` and `bot:<slug>`. Levels left out stay as they are.",
+      {"group": _s("The group's id"), "see": _s("everyone, or ben,group:legal,bot:analyst"),
+       "read": _s("Who may read its Home"), "write": _s("Who may post to it or add it to a thread")},
+      required=("group",), writes=True)
+def group_access(api, args):
+    return _teammate_access(api, f"groups/{quote(str(args['group']), safe='')}", args)
 
 
 @tool("hub_bot_mail", "Show, or set, whether a bot sends mail without a per-message approval and its forward targets. "
@@ -4050,7 +4075,7 @@ def org_reports_to(api, args):
         return who.post(f"humans/{quote(ref, safe='')}", {"reports_to": boss.removeprefix("human:")}, key=_key(args))
     if kind != "bot" or not ref:
         raise ValueError("Name the teammate as bot:<slug> or human:<id>")
-    row = next((b for b in api.get("bots") if (b.get("slug") or b.get("name")) == ref), None)
+    row = next((b for b in api.get("bots") if ref in (b.get("id"), b.get("slug") or b.get("name"))), None)
     if not row:
         raise ValueError("No bot " + ref)
     return who.post(f"bots/{quote(ref, safe='')}/definition",
@@ -4199,6 +4224,22 @@ def settings_set(api, args):
             "value": shown["value"] if "value" in shown else planned["value"]}
 
 
+@tool("hub_settings_ask", "Ask someone who can: for a setting the person may not change (`hub_settings_set` "
+      "refused it, naming who may), on their yes to \"Shall I ask an admin?\". One person who may (`to`, else an "
+      "admin, or the owner for the owner's settings) gets the setting's Confirm card in their BotOps chat and a "
+      "request on their list; only their tap changes it, with their rights. The person is told in the chat they asked "
+      "from when it is confirmed or declined. The Assistant cites the person's words (`on_behalf_of`). Refused when "
+      "they may change it themselves, or for a person-only one.",
+      {"key": _s("The setting's key"), "value": {"description": "The new value, as for `hub_settings_set`"},
+       **SETTING_TARGET, "to": _s("The person's id to ask; leave out for an admin who may (the owner for the owner's)"),
+       "note": _s("A line for them from the asker, shown on the request"), "on_behalf_of": ASKED},
+      required=("key", "value"), writes=True)
+def settings_ask(api, args):
+    who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
+    body = {"value": args["value"], **_setting_query(args), **{k: args[k] for k in ("to", "note") if args.get(k)}}
+    return who.post("settings/catalog/" + quote(args["key"], safe="") + "/ask", body, key=_key(args))
+
+
 @tool("hub_bot_place", "Put a bot on a computer, as the person who asked you: the one named (label or id), or the best one that "
       "takes it (the only computer, else the least busy that accepts it). Safe to repeat. A computer that does not take "
       "members' bots is a Confirm card for an admin.",
@@ -4317,7 +4358,7 @@ def agent_pair_decline(api, args):
       {"bot": _s("Bot slug"), "limit": {"type": ["integer", "null"], "minimum": 1, "maximum": 256,
        "description": "Omit to read, null for no limit, N for a cap"}}, ("bot",), writes=True)
 def bot_turns_at_once(api, args):
-    who = api.on_behalf_of_requester()
+    who = _as_person(api)
     bot = who.get(f"bots/{args['bot']}")
     if 'limit' not in args:
         return {"bot": args['bot'], "turns_at_once": bot.get('turns_at_once')}
@@ -4331,7 +4372,7 @@ def bot_turns_at_once(api, args):
       {"computer": _s("Computer id"), "limit": {"type": ["integer", "null"], "minimum": 1, "maximum": 256,
        "description": "Null for automatic, N for a count of turns at once"}}, ("computer", "limit"), writes=True)
 def computer_turns_at_once(api, args):
-    who = api.on_behalf_of_requester()
+    who = _as_person(api)
     return who.post(f"computers/{args['computer']}/turns-at-once", {"turns_at_once": args['limit']}, key=_key(args))
 
 
@@ -4344,7 +4385,7 @@ def computer_turns_at_once(api, args):
        "usage": {"type": "boolean", "description": "Also read the last 7 days of what went through it"}},
       ("computer",), writes=True)
 def computer_browser_exit(api, args):
-    who = api.on_behalf_of_requester()
+    who = _as_person(api)
     path = f"computers/{quote(str(args['computer']), safe='')}/browser-exit"
     if "sharing" in args:
         body = {"sharing": bool(args["sharing"])}
@@ -4365,7 +4406,7 @@ def computer_browser_exit(api, args):
       {"bot": _s("Bot slug"), "computer": {"type": ["string", "null"], "description": "Omit to read, a computer id "
        "from `choices`, or null for the bot's own internet"}}, ("bot",), writes=True)
 def bot_browser_exit(api, args):
-    who = api.on_behalf_of_requester()
+    who = _as_person(api)
     if "computer" in args:
         who.post(f"bots/{args['bot']}/browser-exit", {"runner_id": args["computer"]}, key=_key(args))
     return who.get(f"bots/{args['bot']}/browser-exit")
@@ -4376,7 +4417,7 @@ def bot_browser_exit(api, args):
       {"bot": _s("Bot slug"), "limit": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000,
        "description": "Omit to read, null for unlimited, 0 for off, N for an active-task cap"}}, ("bot",), writes=True)
 def bot_keep_tasks_going(api, args):
-    who = api.on_behalf_of_requester()
+    who = _as_person(api)
     bot = who.get(f"bots/{args['bot']}")
     if 'limit' not in args:
         return {"bot": args['bot'], "keep_tasks_going": bot.get('keep_tasks_going'), "task_flow": bot.get('task_flow')}
@@ -4586,9 +4627,9 @@ def webhook_send(api, args):
 
 
 @tool("hub_webhook_sends", "An endpoint's send log, newest first: type, subject, state (ready, sending, delivered, failed, "
-      "cancelled, withheld), attempts, last status and next attempt. Give `send` for one send with its attempts.",
+      "canceled, withheld), attempts, last status and next attempt. Give `send` for one send with its attempts.",
       {"id": _s("The endpoint id"), "send": _s("One send's id (wh_...)"),
-       "state": {"type": "string", "enum": ["ready", "sending", "delivered", "failed", "cancelled", "withheld"]},
+       "state": {"type": "string", "enum": ["ready", "sending", "delivered", "failed", "canceled", "withheld"]},
        "limit": {"type": "integer", "minimum": 1, "maximum": 100}, "offset": {"type": "integer", "minimum": 0},
        "on_behalf_of": ON_BEHALF_OF}, required=("id",))
 def webhook_sends(api, args):
@@ -4599,7 +4640,7 @@ def webhook_sends(api, args):
     return who.get(_hook_path(args, "sends"), state=args.get("state"), limit=args.get("limit"), offset=args.get("offset"))
 
 
-@tool("hub_webhook_retry", "Send a failed, cancelled or delivered send again now (a delivered one is a resend); it keeps its id, so a receiver that already got it drops the repeat.",
+@tool("hub_webhook_retry", "Send a failed, canceled or delivered send again now (a delivered one is a resend); it keeps its id, so a receiver that already got it drops the repeat.",
       {"id": _s("The endpoint id"), "send": _s("The send's id (wh_...)"), "on_behalf_of": ON_BEHALF_OF},
       required=("id", "send"), writes=True)
 def webhook_retry(api, args):
@@ -4811,7 +4852,7 @@ def computer_summary(row):
         update.get("state"), update.get("state") or "unknown")
     level = ("offline" if not row.get("online") else "not_ready" if errors else "warnings" if warnings else "ready")
     return {"id": row.get("id"), "label": row.get("label"), "online": bool(row.get("online")),
-            "last_seen": row.get("last_seen"), "operator": row.get("operator"), "platform": row.get("platform") or "",
+            "last_seen_at": row.get("last_seen_at"), "owner_id": row.get("owner_id"), "platform": row.get("platform") or "",
             "accepts_member_bots": bool(row.get("accepts_member_bots")), "release": row.get("release") or "",
             "version": row.get("version") or "", "wanted_release": update.get("wanted_release") or "",
             "update": state, "readiness": level, "bots": len(row.get("bots") or []),
@@ -4889,7 +4930,7 @@ def computer_detail(row, section=None, offset=0):
                     result["truncated"][name] = {"shown": len(page), "total": len(items), "more": more(name, after)}
         if fits(result):
             return result
-    keep = {k: _bounded(row.get(k), 1, 50) for k in ("id", "label", "online", "last_seen", "release", "version")}
+    keep = {k: _bounded(row.get(k), 1, 50) for k in ("id", "label", "online", "last_seen_at", "release", "version")}
     if section:
         items = _computer_section(row, section) or []
         return {**keep, "section": section, "offset": offset, "total": len(items), "items": [],
@@ -4921,7 +4962,7 @@ def computers(api, args):
         if args.get("section"):
             raise ValueError("Name the computer whose section you want: `computer`")
         return {"computers": [computer_summary(r) for r in rows],
-                "services": [{"name": s.get("name"), "ok": not s.get("last_error"), "last_success": s.get("last_success")}
+                "services": [{"name": s.get("name"), "ok": not s.get("last_error"), "last_succeeded_at": s.get("last_succeeded_at")}
                              for s in listing.get("services") or []],
                 "detail": "One computer in full: hub_computer_list computer=<label or id>"}
     match = [r for r in rows if wanted == r.get("id")] or [
@@ -5007,6 +5048,38 @@ def slack_channel_remove(api, args):
       "person who asked you (an owner or an admin). The file is ignored afterwards.", {}, writes=True)
 def slack_channel_import(api, args):
     return _as_person(api).post("slack/channels/import", {}, key=_key(args))
+
+
+@tool("hub_thread_link_slack", "Link a thread to a Slack channel, list its Slack links, or take them away, as the person who "
+      "asked you (an owner or an admin). With a channel, asks for the link: Tico checks the channel and the thread, then "
+      "activates it or refuses it, and `state` says which (the thread alone shows it again). `history` with a channel also "
+      "brings in the channel's earlier messages. `off` takes the thread's Slack links away. With neither, lists them.",
+      {"thread": _s("The thread's id: the root of a company or members thread"),
+       "channel": _CHANNEL,
+       "history": {"type": "boolean", "default": False, "description": "With a channel: bring in its earlier messages too"},
+       "off": {"type": "boolean", "default": False, "description": "Take the thread's Slack link away"}},
+      required=("thread",), writes=True)
+def thread_link_slack(api, args):
+    """`hub thread link-slack` runs this same tool (clients/remotecli.py), so the CLI and MCP cannot differ."""
+    thread = str(args.get("thread") or "").strip()
+    channel = str(args.get("channel") or "").strip()
+    history, off = bool(args.get("history")), bool(args.get("off"))
+    if not thread:
+        raise APIError("usage", "Give the thread's id")
+    if off and (channel or history):
+        raise APIError("usage", "--off takes the thread's Slack link away: it takes no channel and no --history")
+    if history and not channel:
+        raise APIError("usage", "--history brings in a channel's earlier messages: name the channel too")
+    person = _as_person(api)
+    if channel:
+        return person.post("slack/links", {"thread_id": thread, "channel": channel, "history": history}, key=_key(args))
+    listing = person.get("slack/links", thread=thread, limit=100)
+    if not off:
+        return listing
+    if not listing["links"]:
+        raise APIError("not_found", "This thread has no Slack link to take away")
+    return {"links": [person.call("DELETE", "slack/links/" + quote(link["id"], safe=""), None, _key(args, ":" + link["id"]))
+                      for link in listing["links"]]}
 
 
 @tool("hub_credential_request", "Open a card in the conversation for the person to type a secret into: what it is for, the format, "
@@ -5567,7 +5640,7 @@ def status_history(api, args):
     return api.get(f"bots/{args['bot']}/history", since=args.get("since"))
 
 
-@tool("hub_run_list", "A bot's recent runs and failed or expired attempts, with end_reason, last_event_at, stalled, tokens and "
+@tool("hub_run_list", "A bot's recent runs, failed and expired ones included, each with its `state` (run.state), end_reason, last_event_at, stalled, tokens and "
       "estimated cost (`est_cost_usd`) and start/end load snapshots (`load_start`, `load_end`). Yours, and those of the bots that report to you.",
       {"bot": _s("Bot slug"), "since": _s("Window like `24h` or an ISO timestamp")}, required=("bot",))
 def turns(api, args):
@@ -5593,7 +5666,7 @@ def turns(api, args):
       "- queues.<bot>.held: jobs a wake preset holds until its release.\n"
       "- queues.<bot>.dead / dead_ids: queued jobs behind an interrupted run nobody reviewed; they never run until that run is resumed or dismissed. Never counted as queued.\n"
       "- queues.<bot>.uncertain: interrupted runs waiting for that review.\n"
-      "- queues.<bot>.decisions[]: stopped runs with a resume or dismiss decision, still held or decided since `since`, newest first (20 at most): job, attempt, current (false once the job has run a later try), state (held, cancelled, queued, completed...; null when not current), decision, by, by_kind (botops, person, tico, bot), at, note (null when you cannot open the run's conversation), label (\"Cancelled: dismissed by BotOps at 09:50Z, <note>\"; \"Resumed by ...\" when not current).\n"
+      "- queues.<bot>.decisions[]: stopped runs with a resume or dismiss decision, still held or decided since `since`, newest first (20 at most): job, run, current (false once the job has run a later try), state (held, canceled, queued, completed...; null when not current), decision, by, by_kind (botops, person, tico, bot), at, note (null when you cannot open the run's conversation), label (\"Canceled: dismissed by BotOps at 09:50Z, <note>\"; \"Resumed by ...\" when not current).\n"
       "- failures.total / by_cause / by_bot: failed, interrupted or expired runs since `since`; causes quota, capacity, restart, timeout, crash, stopped, each with n, first and last time.\n"
       "- failures.truncated / complete_after: true when the window held more failures than one read counts / counts are whole only for failures after this time (null when not truncated).\n"
       "- exceptions[] (the engineering type's manager only; absent for anyone else): key (subject:kind), kind (stuck, run, pool, slots, backlog, outage, refusal, merge), cause and since; ticket (id, number, title, step, owner) when it is about a ticket, check (id, title, owner) when the open check below it is what stands, bot, step or tickets for the others, pr and head on a failed merge. One row per subject and kind, oldest first.",
@@ -5610,23 +5683,23 @@ def pipeline(api, args):
 
 
 @tool("hub_run_export", "Owners and engineering bots: whether a run's raw provider stream was captured, and its size. "
-      "Write the replay fixture with `hub run export <attempt> --fixture`. A bounded stderr tail is available even without a stream; streams require capture_stream on, "
-      "kept a week.", {"attempt": _s("The attempt id, from hub_run_list")}, required=("attempt",))
+      "Write the replay fixture with `hub run export <run> --fixture`. A bounded stderr tail is available even without a stream; streams require capture_stream on, "
+      "kept a week.", {"run": _s("The run id, from hub_run_list")}, required=("run",))
 def run_export(api, args):
-    return api.get(f"attempts/{args['attempt']}/capture", full="false")
+    return api.get(f"attempts/{args['run']}/capture", full="false")
 
 
-def run_export_full(api, attempt):
+def run_export_full(api, run):
     """The whole export, for the CLI to write to files; never returned into a bot's context."""
-    return api.get(f"attempts/{attempt}/capture")
+    return api.get(f"attempts/{run}/capture")
 
 
 def write_fixture(found, parent):
     """A run export as a replay fixture folder: input.json, <provider>_transcript.ndjson and output.json."""
-    folder = Path(parent) / ("replay-" + re.sub(r"[^A-Za-z0-9_-]", "", str(found["attempt"]["id"])))
+    folder = Path(parent) / ("replay-" + re.sub(r"[^A-Za-z0-9_-]", "", str(found["run"]["id"])))
     folder.mkdir(parents=True, exist_ok=True)
     provider = re.sub(r"[^a-z0-9_-]", "", str(found.get("provider") or "provider").lower()) or "provider"
-    meta = {k: found.get(k) for k in ("attempt", "provider", "truncated", "dropped_bytes", "captured")}
+    meta = {k: found.get(k) for k in ("run", "provider", "truncated", "dropped_bytes", "captured")}
     files = {"input.json": json.dumps({**found["input"], "source": meta}, indent=2, ensure_ascii=False) + "\n",
              f"{provider}_transcript.ndjson": found["transcript"].rstrip("\n") + "\n",
              "output.json": json.dumps(found["output"], indent=2, ensure_ascii=False) + "\n"}
@@ -5648,6 +5721,277 @@ def inbox(api, args):
       {"message_id": _s("The message id from hub_message_list")}, required=("message_id",), writes=True)
 def ack(api, args):
     return api.post("messages/" + args["message_id"] + "/ack", {}, key=_key(args))
+
+
+# ----------------------------------------------------------------------------- threads (docs/threads.md)
+# A thread is any conversation: a root, a sub-thread (a side branch from one message), a DM or a Home. The routes are
+# /api/v2/threads (contract §10); the rules are the server's, and what a person or bot may read is decided there.
+THREAD_ID = _s("Thread id: from hub_thread_list or hub_thread_show")
+THREAD_CURSOR = _s("The page after this cursor: a page's next_cursor")
+THREAD_LIMIT = {"type": "integer", "minimum": 1, "maximum": 100, "description": "Items in this page (default 50)"}
+THREAD_ACTOR = _s("Who: human:<id>, bot:<slug> or group:<id>")
+
+
+def _thread_path(thread, *more):
+    return "/".join(["threads", quote(str(thread), safe="")] + list(more))
+
+
+def _reaction_path(args):
+    """The route of one reaction: the message's id, then the emoji (its shortcode's colons and plus sign stay as they are)."""
+    return "messages/" + quote(args["message_id"], safe="") + "/reactions/" + quote(args["emoji"], safe=":+")
+
+
+def _thread_message(args, **more):
+    """A message body for a thread post or reply: the text, its kind, who it is addressed to and its references."""
+    body = {"text": args["text"], "kind": args.get("kind") or "say", "to": args.get("to"), **more}
+    if args.get("refs"):
+        body["refs"] = _refs(args["refs"])
+    return {key: value for key, value in body.items() if value is not None}
+
+
+@tool("hub_thread_list", "Your threads: Needs attention first, then unread, then recent; direct messages are listed "
+      "apart. With with, only the threads shared with that person, bot or group. Paged: next_cursor says whether more "
+      "follow.",
+      {"with": _s("Only the threads shared with this person, bot or group: human:<id>, bot:<slug> or group:<id>"),
+       "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT})
+def thread_list(api, args):
+    return api.get("threads", **{"with": args.get("with")}, cursor=args.get("cursor"), limit=args.get("limit"))
+
+
+@tool("hub_thread_show", "One thread in tree order: each message is followed by the sub-thread that branched from it, "
+      "with its depth. A long sub-thread shows its latest messages under a collapsed row: hub_thread_show on that thread "
+      "with the row's cursor reads the rest. Also its title and breadcrumb. Paged over the thread's own messages; "
+      "next_cursor reads on.",
+      {"thread": THREAD_ID, "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT}, required=("thread",))
+def thread_show(api, args):
+    return api.get(_thread_path(args["thread"], "timeline"), cursor=args.get("cursor"), limit=args.get("limit"))
+
+
+@tool("hub_thread_create", "Start a thread. Its audience decides who reads it: members (the people and bots you add; "
+      "the default and private), team (the members of a group) or company (everyone). personal starts a direct message "
+      "with the members, and reuses an open one with exactly those members. `body` is the first message. A side topic "
+      "under a message is hub_thread_reply, not a new thread.",
+      {"title": _s("The title"),
+       "audience": {"type": "string", "enum": ["members", "team", "company", "personal"], "default": "members"},
+       "audience_group_id": _s("For audience team: the group's id"),
+       "members": {"type": "array", "items": {"type": "string"},
+                   "description": "The people, bots and groups to add, as human:<id>, bot:<slug> or group:<id>"},
+       "body": _s("The first message")}, writes=True)
+def thread_create(api, args):
+    body = {key: args[key] for key in ("title", "audience", "audience_group_id", "members", "body")
+            if args.get(key) not in (None, "", [])}
+    return api.post("threads", body, key=_key(args))
+
+
+@tool("hub_thread_post", "Post a message to a thread. kind ask asks the person or bot in `to` for an answer. A name in "
+      "the text does not add anyone: someone outside the thread gets a warning and nothing else, until you add them "
+      "with hub_thread_members_add.",
+      {"thread": THREAD_ID, "text": _s("The message"),
+       "kind": {"type": "string", "enum": ["say", "ask"], "default": "say"},
+       "to": THREAD_ACTOR,
+       "refs": {"type": "array", "items": {"type": "string"}, "description": "References like task:<id>"}},
+      required=("thread", "text"), writes=True)
+def thread_post(api, args):
+    return api.post(_thread_path(args["thread"], "messages"), _thread_message(args), key=_key(args))
+
+
+@tool("hub_thread_reply", "Reply in a message's sub-thread: a side branch under that message, made on its first reply. "
+      "Use it for a side topic; the main discussion stays in the thread.",
+      {"thread": THREAD_ID, "message": _s("The message the reply branches from"), "text": _s("The reply"),
+       "refs": {"type": "array", "items": {"type": "string"}, "description": "References like task:<id>"}},
+      required=("thread", "message", "text"), writes=True)
+def thread_reply(api, args):
+    return api.post(_thread_path(args["thread"], "messages"),
+                    _thread_message(args, parent_message_id=args["message"]), key=_key(args))
+
+
+@tool("hub_thread_edit", "Edit a message you wrote: its text becomes a new revision, shown as edited. Asks, answers and "
+      "notices cannot be edited. A progress message is one edited message per task, not a line per step.",
+      {"message": _s("The message's id"), "text": _s("The new text")}, required=("message", "text"), writes=True)
+def thread_edit(api, args):
+    return api.patch("messages/" + quote(args["message"], safe=""), {"text": args["text"]}, key=_key(args))
+
+
+@tool("hub_thread_sub", "Open a message's sub-thread without posting: it is made if it does not exist yet, and the "
+      "thread is returned either way.",
+      {"message": _s("The message whose sub-thread to open")}, required=("message",), writes=True)
+def thread_sub(api, args):
+    return api.post("threads", {"parent_message_id": args["message"]}, key=_key(args))
+
+
+@tool("hub_thread_react", "Add your reaction to a message, such as :+1:. The answer is the message's reactions: each "
+      "emoji, its count and who reacted with it.",
+      {"message_id": _s("The message's id"),
+       "emoji": _s("The reaction: an emoji, or its shortcode such as :+1:")},
+      required=("message_id", "emoji"), writes=True)
+def thread_react(api, args):
+    return api.call("PUT", _reaction_path(args), None, key=_key(args))
+
+
+@tool("hub_thread_unreact", "Remove your reaction from a message. The answer is the message's reactions, as "
+      "hub_thread_react gives them.",
+      {"message_id": _s("The message's id"),
+       "emoji": _s("The reaction to remove: the emoji, or its shortcode such as :+1:")},
+      required=("message_id", "emoji"), writes=True)
+def thread_unreact(api, args):
+    return api.call("DELETE", _reaction_path(args), None, key=_key(args))
+
+
+@tool("hub_thread_follow", "Follow a thread, so its activity reaches you at the level you choose. Following never gives "
+      "access: a thread you cannot read stays hidden whatever you follow.",
+      {"thread": THREAD_ID,
+       "notify": {"type": "string", "enum": ["live", "mentions", "digest", "muted"], "default": "live",
+                  "description": "live: every new message; mentions: only what names you; digest: in a batch; "
+                                 "muted: unread counts stay, nothing is sent"}},
+      required=("thread",), writes=True)
+def thread_follow(api, args):
+    return api.call("PUT", _thread_path(args["thread"], "follow"), {"notify": args.get("notify") or "live"},
+                    key=_key(args))
+
+
+@tool("hub_thread_unfollow", "Stop following a thread. You keep whatever you can read.",
+      {"thread": THREAD_ID}, required=("thread",), writes=True)
+def thread_unfollow(api, args):
+    return api.call("DELETE", _thread_path(args["thread"], "follow"), None, key=_key(args))
+
+
+@tool("hub_thread_read", "Mark a thread read up to a message's seq (from hub_thread_show), or all of it with all. "
+      "A sub-thread's read state is its own: reading the thread does not clear its side branches.",
+      {"thread": THREAD_ID,
+       "seq": {"type": "integer", "minimum": 0, "description": "The seq of the last message you read"},
+       "all": {"type": "boolean", "default": False, "description": "Read the thread and every sub-thread under it"}},
+      required=("thread",), writes=True)
+def thread_read(api, args):
+    if args.get("all"):
+        return api.post(_thread_path(args["thread"], "read-all"), {}, key=_key(args))
+    if args.get("seq") is None:
+        raise APIError("invalid", "Give seq, the seq of the last message read, or all")
+    return api.post(_thread_path(args["thread"], "read"), {"seq": args["seq"]}, key=_key(args))
+
+
+@tool("hub_thread_search", "Search the threads you can read, message by message. Only messages you may see are found, "
+      "and a thread you cannot read is not named.",
+      {"q": _s("The words to find"), "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT}, required=("q",))
+def thread_search(api, args):
+    return api.get("threads/search", q=args["q"], cursor=args.get("cursor"), limit=args.get("limit"))
+
+
+@tool("hub_thread_home", "A teammate's Home: their thread for what comes to them, made on first use. You need Read on "
+      "them; without it the answer is the same as for someone who does not exist.",
+      {"actor": _s("Whose Home: bot:<slug>, human:<id> or group:<id>")}, required=("actor",))
+def thread_home(api, args):
+    return api.get("threads/home/" + quote(args["actor"], safe=":"))
+
+
+@tool("hub_thread_dm", "Your direct message with one person or bot: the open one with exactly you two, or a new one. "
+      "You need Write on them, since the reply-back rule applies. A person you cannot see is not found.",
+      {"actor": _s("Who: human:<id> or bot:<slug>")}, required=("actor",))
+def thread_dm(api, args):
+    return api.get("threads/dm", **{"with": args["actor"]})
+
+
+@tool("hub_thread_dm_group", "A group direct message: you and the people or bots in members, with an optional first "
+      "message in body. The answer is the thread, with the message when a body was given.",
+      {"members": {"type": "array", "items": {"type": "string"}, "minItems": 1,
+                   "description": "The people or bots, as human:<id> or bot:<slug>: at least one"},
+       "body": _s("The first message, optional")},
+      required=("members",), writes=True)
+def thread_dm_group(api, args):
+    members = args.get("members") or []
+    if not members:
+        raise APIError("invalid", "Give at least one member: human:<id> or bot:<slug>", 422)
+    return api.post("threads/dm", {"members": members, "body": args.get("body")}, key=_key(args))
+
+
+@tool("hub_thread_members_list", "Who can read a thread: its people, bots and groups, with each one's role. Paged.",
+      {"thread": THREAD_ID, "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT}, required=("thread",))
+def thread_members_list(api, args):
+    return api.get(_thread_path(args["thread"], "members"), cursor=args.get("cursor"), limit=args.get("limit"))
+
+
+@tool("hub_thread_members_add", "Add a person, bot or group to a thread, so it can read it. You need Write on them. A "
+      "group's members are resolved live, so leaving the group takes the access away. A company or team thread adds "
+      "only bots: everyone else already reads it.",
+      {"thread": THREAD_ID, "actor": THREAD_ACTOR,
+       "role": {"type": "string", "enum": ["member", "owner"], "default": "member"}},
+      required=("thread", "actor"), writes=True)
+def thread_members_add(api, args):
+    return api.post(_thread_path(args["thread"], "members"),
+                    {"actor": args["actor"], "role": args.get("role") or "member"}, key=_key(args))
+
+
+@tool("hub_thread_members_remove", "Remove a person, bot or group from a thread: they stop reading it. The thread's "
+      "owner or an admin only. A company or team thread removes only bots.",
+      {"thread": THREAD_ID, "actor": THREAD_ACTOR}, required=("thread", "actor"), writes=True)
+def thread_members_remove(api, args):
+    return api.call("DELETE", _thread_path(args["thread"], "members", quote(args["actor"], safe=":")), None,
+                    key=_key(args))
+
+
+@tool("hub_thread_update", "Rename a thread, archive or unarchive it, change who may read it: members, team (a group) "
+      "or company, or set how long it keeps its messages. Only its starter or an admin can make a thread public.",
+      {"thread": THREAD_ID, "title": _s("The new title"), "archived": {"type": "boolean"},
+       "audience": {"type": "string", "enum": ["members", "team", "company"]},
+       "audience_group_id": _s("For audience team: the group's id"),
+       "retention_days": {"type": ["integer", "null"], "description": "On a root thread: delete its messages and its "
+                          "sub-threads' after this many days; null keeps them for good"}},
+      required=("thread",), writes=True)
+def thread_update(api, args):
+    body = {key: args[key] for key in ("title", "archived", "audience", "audience_group_id") if args.get(key) is not None}
+    if "retention_days" in args:
+        body["retention_days"] = args["retention_days"]
+    return api.patch(_thread_path(args["thread"]), body, key=_key(args))
+
+
+@tool("hub_thread_open_earlier", "Open a bot's earlier messages to the people who read its Home. Only a manager of the "
+      "bot may. The answer is its Home and the messages.",
+      {"thread_id": THREAD_ID}, required=("thread_id",), writes=True)
+def thread_open_earlier(api, args):
+    return api.post(_thread_path(args["thread_id"], "open-earlier"), {}, key=_key(args))
+
+
+@tool("hub_thread_delete", "Delete a message you wrote. It leaves a marker with no text, its sub-thread stays, and the asks "
+      "it answered reopen. Asks, answers and notices cannot be deleted by their writers this way.",
+      {"message_id": _s("The message's id")}, required=("message_id",), writes=True)
+def thread_delete(api, args):
+    return api.call("DELETE", "messages/" + quote(args["message_id"], safe=""), None, key=_key(args))
+
+
+@tool("hub_thread_upload", "Post a message with a local file to a thread: the file is streamed to Tico, and `text` is the "
+      "message's words (optional). `under` posts it in that message's sub-thread. Needs a Computer to stream from.",
+      {"thread": THREAD_ID, "path": _s("A local file on this computer"), "text": _s("The message's text, optional"),
+       "kind": {"type": "string", "enum": ["say", "ask"], "default": "say", "description": "say, or ask for an answer"},
+       "to": _s("The person or bot an ask is for"),
+       "under": _s("The message whose sub-thread the file goes under (optional)")},
+      required=("thread", "path"), writes=True)
+def thread_upload(api, args):
+    if not hasattr(api, "post_multipart"):
+        raise ValueError("Stream local files with hub thread upload on your Computer")
+    from . import bot_files as BF
+    path, _ = BF.local_file(BF.checkout_root(), args["path"])
+    fields = {"text": args.get("text"), "kind": args.get("kind"), "to": args.get("to"),
+              "parent_message_id": args.get("under")}
+    fields = {name: value for name, value in fields.items() if value is not None}
+    return api.post_multipart("uploads/threads/" + quote(str(args["thread"]), safe="") + "/messages", {"file": path},
+                              fields, key=_key(args))
+
+
+@tool("hub_thread_slack_resume", "Check a suspended or refused Slack link again, as the person who asked (an owner or an "
+      "admin): Tico looks at the channel and the thread once more, then activates the link or refuses it. The link's id is "
+      "in hub_thread_link_slack's listing.",
+      {"link_id": _s("The Slack link's id")}, required=("link_id",), writes=True)
+def thread_slack_resume(api, args):
+    return _as_person(api).post("slack/links/" + quote(str(args["link_id"]), safe="") + "/resume", {}, key=_key(args))
+
+
+@tool("hub_thread_task", "Make a task from a thread message you can read. The server copies the message and a link "
+      "back, and the task is private unless the thread is company-wide.",
+      {"message_id": _s("The message id from hub_thread_show"), "title": _s("Task title"),
+       "owner": _s("Who does it: a bot slug, a person id, or `me`")},
+      required=("message_id", "title", "owner"), writes=True)
+def thread_task(api, args):
+    return api.post("threads/messages/" + quote(args["message_id"], safe="") + "/task",
+                    {"title": args["title"], "owner": _target(api, args["owner"])}, key=_key(args))
 
 
 # ----------------------------------------------------------------------------- the Assistant
@@ -5673,6 +6017,27 @@ def ack(api, args):
 def assistant_propose(api, args):
     return api.post("assistant/actions", {"summary": args["summary"], "method": args.get("method") or "POST",
                                           "path": args["path"], "body": args.get("body") or {}}, key=_key(args))
+
+
+@tool("hub_assistant_withdraw", "Take back a Confirm card that still waits for the person (its id from "
+      "hub_assistant_proposals): it is marked withdrawn and never runs, and the card owner's chat says who withdrew it, "
+      "with the reason if you give one. Any teammate may withdraw; only the card's owner can confirm it.",
+      {"id": _s("The proposal's id"),
+       "reason": _s("Why, in one short sentence (optional; the person reads it in their chat)")},
+      required=("id",), writes=True)
+def assistant_withdraw(api, args):
+    return api.post(f"assistant/actions/{args['id']}/withdraw", {"reason": args.get("reason") or ""}, key=_key(args))
+
+
+@tool("hub_assistant_proposals", "The Confirm cards still waiting for their owner: id, owner, proposer, summary and what "
+      "confirming does. Filter by proposer (botops, assistant) and/or owner (a person's id). Use it to find a card's id "
+      "to withdraw it.",
+      {"proposer": _s("botops or assistant (optional)"), "owner": _s("The card owner's id, e.g. human:ana (optional)")})
+def assistant_proposals(api, args):
+    query = {k: args[k] for k in ("proposer", "owner") if args.get(k)}
+    return api.get("assistant/proposals", **query)
+
+
 
 
 @tool("hub_assistant_learn", "In a person's own chat: save one thing they taught you about how they like things ranked "
@@ -6134,7 +6499,7 @@ def spoken(view):
         return view
     item = view.get("item")
     if isinstance(item, dict):
-        item = {k: v for k, v in item.items() if k not in ("rank", "created")}
+        item = {k: v for k, v in item.items() if k not in ("rank", "created_at")}
         clipped = False
         for field, n in SPOKEN_CLIP.items():
             if isinstance(item.get(field), str) and len(item[field]) > n:
@@ -6276,7 +6641,8 @@ def replay_show(api, args):
 # has neither the credential nor any business connecting to a team database. A person makes and
 # revokes service keys in their own shell: a new key is shown to them, never to an agent's context.
 # `hub_team_icon` streams a local image file; the JSON tool transport cannot open that path.
-SHELL_ONLY = {"hub_task_worktree_setup", "hub_bot_check", "hub_db", "hub_service_key_create",
+# `hub_bot_check_names` scans a bot's checkout on this computer (`clients/bot_names.py`): no hub, no credential.
+SHELL_ONLY = {"hub_task_worktree_setup", "hub_bot_check", "hub_bot_check_names", "hub_db", "hub_service_key_create",
               "hub_service_key_list", "hub_service_key_revoke", "hub_team_icon"}
 
 @tool("hub_task_requesters", "Internal requester contacts and counts, paged. Tokens are never listed.",
@@ -6366,6 +6732,15 @@ def inbound_inboxes(api,args):
     return api.get('inbound/inboxes',**{k:args[k] for k in ('after','limit') if args.get(k) is not None})
 
 
+@tool('hub_inbound_audience','Who reads an inbox: company (everyone), or team with group (that group and the groups '
+      'under it). The owner and admins always read it. Owner or admin only (BotOps: the person who asked).',
+      {'inbox_id':_s('Inbox id'),'audience':_s('company or team',enum=['company','team']),
+       'group':_s('Group id, for team')},required=('inbox_id','audience'),writes=True)
+def inbound_audience(api,args):
+    body = {'audience':args['audience'],'group_id':args.get('group') or None}
+    return _as_person(api).call('PUT','inbound/inboxes/'+quote(args['inbox_id'],safe='')+'/audience',body,_key(args))
+
+
 @tool('hub_inbound_create_email','Create a free inbound-only @tico.team inbox for company agents. Usage is recorded, not billed.',
       {'name':_s('Inbox name')},writes=True)
 def inbound_create_email(api,args):
@@ -6410,6 +6785,16 @@ def inbound_code(api,args):
 def inbound_wait(api,args):
     body = {k:v for k,v in args.items() if k in ('inbox_ids','kind','sender','has_code','after','timeout','limit') and v is not None}
     return api.post('inbound/wait',body)
+
+
+# ----------------------------------------------------------------------------- connections (backend/connections.py)
+@tool('hub_connections_list','Every connection you may see: Slack, GitHub, mail bots, Email & Phone inboxes, meeting '
+      'importers, incoming and outgoing webhooks, physical mail and Listening. Each row: name, status, scope, who reads '
+      'it, its bots and where to configure it. Follow next with cursor.',
+      {'cursor':_s('The previous page\'s next'),'limit':{'type':'integer','minimum':1,'maximum':100}})
+def connections_list(api,args):
+    page = dict(limit=args.get('limit'), cursor=args.get('cursor'))
+    return _as_person(api).get('connections', **{k: v for k, v in page.items() if v is not None})
 
 
 # ----------------------------------------------------------------------------- physical mail (backend/postal_mail.py)
@@ -6471,12 +6856,14 @@ FINANCE_CHARS = 16000            # about 4k tokens
 FIN_OTHER = " other"             # an "Other · n" row's key, as backend/finance/reads.py OTHER: no real key starts
                                  # with a space, so a vendor named Other stays its own row
 FINANCE_MAX_CHARS = 64000        # about 16k tokens
-FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by", "close"]
+FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by", "close",
+                   "sales_tax", "1099"]
+TAX_WORKPAPERS = {"sales_tax": "finance/tax/sales-tax", "1099": "finance/tax/1099"}   # spec 11: whole, full view only
 FINANCE_METRICS = ["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
-                   "ar_overdue", "uncategorized_count", "unreconciled_days"]
-FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card"]
+                   "ar_overdue", "uncategorized_count", "unreconciled_days", "duplicate_charges", "price_increases"]
+FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card", "account"]
 FINANCE_INBOX = ["uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
-                 "budget_near_limit", "sync_failed", "period_ready"]
+                 "budget_near_limit", "sync_failed", "period_ready", "unreconciled", "bill_email"]
 FIN_DAY = {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "YYYY-MM-DD"}
 # Whole-number fields an "Other · n" row does not add up: they describe one row, not an amount.
 _FIN_NOT_ADDED = {"pct", "days_late", "priority", "depth", "level", "version", "revision", "view_version"}
@@ -6628,6 +7015,17 @@ def _fin_guard(result, budget, key=None):
     return marker
 
 
+def _fin_whole(result, budget):
+    """A tax workpaper goes whole or not at all (spec 11): a cut-down one would be partial totals, so it is never shrunk.
+    Over `budget` it is not read here; a person exports it from Finance -> Tax."""
+    size = _fin_size(result)
+    if size <= budget:
+        return result
+    return {"error": "too_big", "chars": size, "cap": budget,
+            "message": "This tax workpaper is too long to read whole here, and a part of it would be a partial total. "
+                       "A person can export it from Finance -> Tax."}
+
+
 def _fin_query(args, names):
     return {k: args[k] for k in names if args.get(k) is not None and args.get(k) != ""}
 
@@ -6649,8 +7047,9 @@ def _fin_paged(api, path, query, key, budget):
 
 
 @tool("hub_finance_search", "Search the books you may see: entries, bank and card rows, bills, invoices, contacts, "
-      "rules and cards (each card with the vendor accounts it is saved on). Name a kind to page with cursor; without "
-      "one you get the first few of each kind.",
+      "rules and cards (each card with the vendor accounts it is saved on). account finds the chart's lines by code or "
+      "name, with their ids, for categorize, bill_create and rule_create. Name a kind to page with cursor; without "
+      "one you get the first few of each kind (not accounts: name that kind).",
       {"kind": _s("What to search", enum=FINANCE_SEARCH), "q": _s("Words to match"),
        "status": _s("Row, document or card status"), "contact_id": _s("Bills/invoices: this vendor or customer"),
        "vendor": _s("Cards: saved on this vendor (a contact's id or name): which of your cards works there"),
@@ -6685,20 +7084,28 @@ def finance_search(api, args):
 
 
 @tool("hub_finance_report", "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, "
-      "ar_aging, spend_by, or close (a month's close checklist). Rows past top_n fold into \"Other · n\".",
+      "ar_aging, spend_by, or close (a month's close checklist). Rows past top_n fold into \"Other · n\". sales_tax and "
+      "1099 are the tax workpapers for a year: whole or not at all, and only for someone who sees everything.",
       {"kind": _s("The report", enum=FINANCE_REPORTS), "start": FIN_DAY, "end": FIN_DAY,
        "period": _s("Column size", enum=["day", "week", "month", "quarter", "year"]),
        "basis": _s("cash or accrual (default: the company's)", enum=["cash", "accrual"]),
        "compare": _s("prior adds the window before", enum=["prior"]),
        "top_n": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows before Other (default 20)"},
-       "by": _s("spend_by: group by", enum=["department", "team", "teammate", "bot", "person", "vendor", "account"]),
-       "month": _s("close: the month, YYYY-MM")},
+       "by": _s("spend_by: group by", enum=["department", "team", "teammate", "bot", "person", "vendor", "account",
+                                             "location", "class", "project", "location_class", "location_project",
+                                             "class_project"]),
+       "month": _s("close: the month, YYYY-MM"),
+       "year": {"type": "integer", "minimum": 2000, "maximum": 2100,
+                "description": "sales_tax, 1099: the calendar year (this year when omitted)"}},
       ("kind",))
 def finance_report(api, args):
     if args["kind"] == "close":
         if not args.get("month"):
             raise APIError("validation", "close needs month (YYYY-MM)")
-        return _fin_guard(api.get("finance/close/" + quote(str(args["month"]), safe="")), FINANCE_CHARS)
+        query = _fin_query(args, ("top_n",))
+        return _fin_guard(api.get("finance/close/" + quote(str(args["month"]), safe=""), **query), FINANCE_CHARS)
+    if args["kind"] in TAX_WORKPAPERS:
+        return _fin_whole(api.get(TAX_WORKPAPERS[args["kind"]], **_fin_query(args, ("year",))), FINANCE_CHARS)
     query = _fin_query(args, ("start", "end", "period", "basis", "compare", "top_n", "by"))
     result = api.get("finance/reports/" + quote(str(args["kind"]), safe=""), **query)
     budget = _fin_budget(args.get("top_n"), 20)
@@ -6741,7 +7148,8 @@ def finance_action(api, args):
 
 
 @tool("hub_finance_inbox", "Your Finance work queue: uncategorized rows, bills to enter, receipts, bills due, overdue "
-      "invoices, budgets near limit, failed syncs, months ready to close; with counts per kind. Name a kind to page "
+      "invoices, budgets near limit, failed syncs, months ready to close, books not reconciled for over a month "
+      "(unreconciled), emailed bills Finance did not take (bill_email); with counts per kind. Name a kind to page "
       "through that kind alone, past its first 200.",
       {"kind": _s("Only this kind of work, paged on with cursor", enum=FINANCE_INBOX),
        "cursor": _s("next_cursor from the last page (same kind)"),
@@ -6773,6 +7181,9 @@ def _present(values):
 
 
 RULE_VERSION = {"type": "integer", "minimum": 1, "description": "The rule's version as you read it"}
+RULE_WHERE = {"type": "array", "maxItems": 20, "items": {"type": "string"}, "description": "Where it applies, any of: "
+              "thread:<id> (a conversation), team:<group>, kind:dm (a direct chat), has_outside_members. Empty or left "
+              "out: everywhere"}
 
 
 @tool("hub_rules_list", "The org rules in force, newest first, paged: internal (between teammates) and external "
@@ -6846,11 +7257,11 @@ def rules_ask(api, args):
                                "section": _s("The section it is in"), "quote": _s("The exact words")},
                 "required": ["file_id", "quote"]},
        "if_broken": {"type": "string", "enum": ["block", "escalate", "warn"]},
-       "reviewer": _s("A person who reviews outputs under it"), "on_behalf_of": ASKED},
+       "where": RULE_WHERE, "reviewer": _s("A person who reviews outputs under it"), "on_behalf_of": ASKED},
       required=("kind", "text"), writes=True)
 def rules_add(api, args):
-    body = _present({k: args.get(k) for k in ("kind", "text", "description", "who", "with", "source_id", "cite",
-                                              "if_broken", "reviewer")})
+    body = _present({k: args.get(k) for k in ("kind", "text", "description", "who", "with", "where", "source_id",
+                                              "cite", "if_broken", "reviewer")})
     who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
     return who.post("rules", body, key=_key(args))
 
@@ -6858,11 +7269,11 @@ def rules_add(api, args):
 @tool("hub_rules_edit", "Edit an org rule: only the fields sent, against the version you read. A bot cannot edit.",
       {"id": _s("The rule's id"), "version": RULE_VERSION, "text": _s("The rule in one sentence"),
        "description": _s("Longer text"), "who": _rule_scope("Who follows it"), "with": _rule_scope("Internal: with whom"),
-       "source_id": _s("External: the From, by name or id"),
+       "source_id": _s("External: the From, by name or id"), "where": RULE_WHERE,
        "if_broken": {"type": "string", "enum": ["block", "escalate", "warn"]}, "reviewer": _s("A reviewer")},
       required=("id", "version"), writes=True)
 def rules_edit(api, args):
-    body = _present({k: args.get(k) for k in ("version", "text", "description", "who", "with", "source_id",
+    body = _present({k: args.get(k) for k in ("version", "text", "description", "who", "with", "where", "source_id",
                                               "if_broken", "reviewer")})
     return _as_person(api).post(f"rules/{args['id']}", body, key=_key(args))
 
@@ -6959,6 +7370,101 @@ def rules_appeal(api, args):
     return api.post(f"rule-holds/{args['id']}/appeal", {"why": args.get("why") or ""}, key=_key(args))
 
 
+@tool("hub_rules_withdraw", "Take back your held write so you can edit it and send it again: the hold is kept and "
+      "nothing is sent. Only the author of the held write may withdraw it.",
+      {"id": _s("The hold's id, from the held answer")}, required=("id",), writes=True)
+def rules_withdraw(api, args):
+    return api.post(f"rule-holds/{args['id']}/withdraw", {}, key=_key(args))
+
+
+# ----------------------------------------------------------------------------- calls (Tico Meet: docs/meet.md)
+# A call belongs to a thread. Starting, joining, ending and attaching bots are people's acts; BotOps acts as the person it
+# works for, and the server refuses a bot on each of them. Every read checks the caller's access to the thread.
+CALL_TOOLS = ("hub_call_list", "hub_call_show", "hub_call_start", "hub_call_join", "hub_call_token", "hub_call_leave",
+              "hub_call_end", "hub_call_retry", "hub_call_bot_add", "hub_call_bot_remove")
+
+
+@tool("hub_call_list", "The calls in a thread, newest first: id, title, state (`live` or `ended`), connector, and how each "
+      "ended. `next_before` reads older ones.",
+      {"thread_id": _s("The thread's id"),
+       "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+       "before": _s("The `next_before` of the page you read, from that page's answer")}, required=("thread_id",))
+def call_list(api, args):
+    query = {key: args[key] for key in ("limit", "before") if args.get(key) not in (None, "")}
+    return _as_person(api).get(f"threads/{args['thread_id']}/calls", **query)
+
+
+@tool("hub_call_show", "A call: its state, title, connector, who joined (and when they left or were removed), the bots "
+      "listening, and how it ended. Only people who can read its thread see it.", {"call_id": _s("The call's id")},
+      required=("call_id",))
+def call_show(api, args):
+    return _as_person(api).get(f"calls/{args['call_id']}")
+
+
+@tool("hub_call_start", "Start a call in a thread you can write to. Its audio and screen share reach the people in the "
+      "thread, and a live transcript is kept while it runs and posted to the thread when it ends. You are its connector. "
+      "Refused while another call runs in the thread, and while Tico Meet is not set up on this server.",
+      {"thread_id": _s("The thread's id"), "title": _s("What the call is called, up to 200 characters"),
+       "speak_replies": {"type": "boolean", "description": "Bots speak their replies on this call. Off unless asked; "
+                         "spoken replies are refused until the Gateway has text-to-speech, so leave it out"}},
+      required=("thread_id",), writes=True)
+def call_start(api, args):
+    body = {"title": str(args["title"])} if args.get("title") else {}
+    if args.get("speak_replies"):
+        body["speak_replies"] = True
+    return _as_person(api).post(f"threads/{args['thread_id']}/calls", body, key=_key(args))
+
+
+@tool("hub_call_join", "Join a call you can read. The answer has `url` and `token`: connect a LiveKit client to them to speak "
+      "and share your screen (never a camera). The token lasts 5 minutes; get a fresh one with hub_call_token while you stay.",
+      {"call_id": _s("The call's id")}, required=("call_id",), writes=True)
+def call_join(api, args):
+    return _as_person(api).post(f"calls/{args['call_id']}/join", {}, key=_key(args))
+
+
+@tool("hub_call_token", "A fresh token for a call you have joined, good for 5 minutes. Refused once you were removed from the "
+      "call (you lost access to its thread), and once you have left it or it has ended.",
+      {"call_id": _s("The call's id")}, required=("call_id",))
+def call_token(api, args):
+    return _as_person(api).post(f"calls/{args['call_id']}/token", {})
+
+
+@tool("hub_call_leave", "Leave a call you joined. The others stay in it.", {"call_id": _s("The call's id")},
+      required=("call_id",), writes=True)
+def call_leave(api, args):
+    return _as_person(api).post(f"calls/{args['call_id']}/leave", {}, key=_key(args))
+
+
+@tool("hub_call_end", "End a call you started. The speech so far is transcribed and the transcript is posted to the thread. "
+      "Tasks are made by hand.", {"call_id": _s("The call's id")}, required=("call_id",), writes=True)
+def call_end(api, args):
+    return _as_person(api).post(f"calls/{args['call_id']}/end", {}, key=_key(args))
+
+
+@tool("hub_call_retry", "Ask again for a call's action items when the Gateway could not make them. Only the person who "
+      "started the call may ask, and only after it ended. The sweep makes them again shortly.",
+      {"call_id": _s("The call's id")}, required=("call_id",), writes=True)
+def call_retry(api, args):
+    return _as_person(api).post(f"calls/{args['call_id']}/action-items/retry", {}, key=_key(args))
+
+
+@tool("hub_call_bot_add", "Let bots listen to a call you have joined and reply in its thread. You must be able to write to "
+      "each bot; up to 10 at once.",
+      {"call_id": _s("The call's id"),
+       "bots": {"type": "array", "items": _s("A bot's slug"), "minItems": 1, "maxItems": 10}},
+      required=("call_id", "bots"), writes=True)
+def call_bot_add(api, args):
+    return _as_person(api).post(f"calls/{args['call_id']}/bots", {"bots": [str(bot) for bot in args["bots"]]},
+                                key=_key(args))
+
+
+@tool("hub_call_bot_remove", "Take a bot out of a call. Its replies already in the thread stay.",
+      {"call_id": _s("The call's id"), "bot": _s("The bot's slug")}, required=("call_id", "bot"), writes=True)
+def call_bot_remove(api, args):
+    return _as_person(api).call("DELETE", f"calls/{args['call_id']}/bots/{quote(str(args['bot']), safe='')}", {},
+                                key=_key(args))
+
+
 BY_NAME = {t["name"]: t for t in TOOLS}
 
 
@@ -6990,6 +7496,7 @@ ASSISTANT_WRITES = {"hub_goal_read_back", "hub_goal_save", "hub_goal_create", "h
                     "hub_task_close", "hub_task_link", "hub_approval_decline", "hub_approval_approve", "hub_approval_read_back",
                     "hub_question_answer",
                     "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn",
+                    "hub_assistant_withdraw",
                     "hub_settings_set", "hub_rules_read", "hub_rules_ask"}
 AUDIENCE = {
     # Task caps (CONTRACT §1): people read and set them; a bot's own change is a proposal a person decides.
@@ -7017,7 +7524,8 @@ AUDIENCE = {
                                     "hub_bot_keep_tasks_going", "hub_stall_triage", "hub_bot_budget",
                                     "hub_bot_profile", "hub_bot_release", "hub_bot_pause",
                                     "hub_bot_scope",
-                                    "hub_bot_resume", "hub_bot_access", "hub_bot_owners", "hub_human_add",
+                                    "hub_bot_resume", "hub_bot_access", "hub_human_access", "hub_group_access",
+                                    "hub_bot_owners", "hub_human_add",
                                     "hub_tool_add", "hub_tool_update", "hub_tool_remove",
                                     "hub_bot_copy", "hub_bot_update_from_original", "hub_bot_suggest_to_original", "hub_skill_copy")},
     **{name: REQUESTER_READ for name in ("hub_credential_list", "hub_health_check")},
@@ -7025,12 +7533,15 @@ AUDIENCE = {
     "hub_health_metrics": REQUESTER,
     **{name: REQUESTER for name in ("hub_bot_archive", "hub_doc_archive", "hub_file_archive", "hub_meeting_delete", "hub_meeting_granola_status", "hub_meeting_granola_sync",
                                    "hub_meeting_pending", "hub_meeting_approve", "hub_meeting_dismiss", "hub_meeting_restore")},
+    **{name: REQUESTER for name in CALL_TOOLS},     # a person's act; BotOps acts as the person it works for
     # The Assistant only.
     "hub_assistant_propose": ("assistant",), "hub_approval_read_back": ("assistant",),
+    # Any teammate may withdraw a waiting card or find one (backend/assistant.py teammate); confirming stays the owner's.
+    "hub_assistant_withdraw": KINDS, "hub_assistant_proposals": KINDS,
     # A bot's add is a suggestion; the Assistant's is an org rule the person asked for in their own chat, citing their words.
     "hub_rules_add": KINDS,
     # A bot checks its own drafts and appeals its own holds; a person's writes are never checked.
-    "hub_rules_check": BOTS, "hub_rules_appeal": BOTS,
+    "hub_rules_check": BOTS, "hub_rules_appeal": BOTS, "hub_rules_withdraw": PEOPLE + BOTS,
     "hub_approval_decline": HUMANS_AND_ASSISTANT,         # only a person decides an approval
     "hub_approval_approve": HUMANS_AND_ASSISTANT,         # ... or their own Assistant, when they let it
     "hub_assistant_read": PEOPLE, "hub_assistant_send": PEOPLE,
@@ -7043,6 +7554,9 @@ AUDIENCE = {
     "hub_changelog_list": HUMANS_AND_ASSISTANT, "hub_changelog_mark_read": HUMANS_AND_ASSISTANT,
     "hub_proposal_decide": HUMANS_AND_ASSISTANT,
     "hub_bot_mail": PEOPLE,                         # backend/mail_settings.py: a person only
+    # Feedback is a person's own (backend/feedback.py refuses a bot); a rule draft spends on a model, so no bot asks.
+    **{name: PEOPLE for name in ("hub_feedback_give", "hub_feedback_remove", "hub_feedback_rule_draft",
+                                 "hub_feedback_rule")},
     **{f"hub_needs_you_{step}": PEOPLE for step in ("start", "next", "respond", "commit", "abandon")},
     "hub_tool_report": ("agent",),
     "hub_update_create": BOTS,                      # only a bot posts an update

@@ -5,6 +5,8 @@
 // ----------------------------------------------------------------- sidebar + heartbeat
 const NAV_COLLAPSED_KEY = 'hub.nav.collapsed';
 let navCollapsed = new Set(); try { navCollapsed = new Set(JSON.parse(localStorage.getItem(NAV_COLLAPSED_KEY) || '[]')); } catch {}
+// Inbox no longer folds: one folded before is open (and forgotten with the next fold kept).
+navCollapsed.delete('inbox');
 function renderNavSections() {
   document.querySelectorAll('[data-section-toggle]').forEach(button => {
     const key = button.dataset.sectionToggle, isCollapsed = navCollapsed.has(key);
@@ -23,19 +25,19 @@ renderNavSections();
 // The built-ins stay out of the team chart. Each person's one chat is their Assistant (Ask, and its own page,
 // ui/app/assistant-page.js); BotOps, the Strategy Bot, the Librarian and Counsel are its helpers (state.js ASSISTANT_HELPERS),
 // which nobody chats with. Search, bot pickers and a person's page list none of the four; Settings > Bots manages them,
-// and #/bot/<slug> opens each for its settings, runs and logs.
+// and #/bot/<id> opens each for its settings, runs and logs.
 const isHiddenBot = slug => slug === assistantBot() || isAssistantHelper(slug);
-const shownEmps = () => (S.emps || []).filter(e => !isHiddenBot(e.name));
+const shownEmps = () => (S.emps || []).filter(e => !isHiddenBot(e.id));
 // Groups first: a human or a bot hangs in the group its `team` names (backend/groups.py); groups nest by `parent`. Inside
 // a group a teammate hangs under whoever it reports to when that one is in the same group, else at the top of the group.
 // Outside groups it hangs under whoever it reports to, when that one is outside groups too. `reports_to` itself is not
 // touched by any of this.
 // Branches are personal workspaces, not additional teammates. Admin access still belongs in the branch picker.
-const orgBranchVisible = e => !(e.shared_from || e.is_branch) || (!!S.me?.id && e.operator === S.me.id);
+const orgBranchVisible = e => !(e.shared_from || e.is_branch) || (!!S.me?.id && e.owner_id === S.me.id);
 const orgBranchMark = e => (e.shared_from || e.is_branch) ? '<span class="org-branch">Your branch</span>' : '';
 const orgGroupIds = () => new Set((S.orgGroups || []).map(g => g.id));
 const orgCanGroups = () => S.me?.role === 'owner' || !!S.me?.bot_admin;
-// Who a human or bot reports to, as a key (`p:<id>` or `b:<slug>`); '' when nobody is on the chart above it.
+// Who a human or bot reports to, as a key (`p:<id>` or `b:<bot id>`); '' when nobody is on the chart above it.
 function orgBossKey(n) {
   const parent = (n.kind === 'person' ? n.person?.org_parent : n.org_parent) || '';
   if (!parent.startsWith('g:')) return parent;
@@ -60,15 +62,77 @@ function orgGroupUnderStrategyBot(id) {
   for (let hops = 0; g?.parent && byId.has(g.parent) && hops < 20; hops++) g = byId.get(g.parent);
   return g?.org_parent === 'b:goal-manager';
 }
+// Who a group answers to, as a key (`p:<id>` or `b:<bot id>`): whoever its lead (`bot:<id>` or `person:<id>`) reports
+// to, else whoever most of the teammates at its top report to; up the reporting lines (`org_parent`) past anyone inside
+// the group or the groups in it, and past helpers. '' when nobody is above it. Reporting lines, not groups.
+function orgGroupHead(gid, lead = '') {
+  const groups = S.orgGroups || [], within = new Set([gid]);
+  for (let grew = true, hops = 0; grew && hops < 20; hops++) {
+    grew = false;
+    for (const g of groups) if (g.parent && within.has(g.parent) && !within.has(g.id)) { within.add(g.id); grew = true; }
+  }
+  const people = new Map((S.people || []).filter(p => !p.hidden).map(p => ['p:' + p.id, p]));
+  const bots = (S.emps || []).filter(e => !isHelperBot(e) && !['archived', 'retired'].includes(e.status));
+  const inside = new Set([...[...people].filter(([, p]) => within.has(p.team)).map(([k]) => k), ...bots.filter(e => within.has(e.team)).map(e => 'b:' + e.id)]);
+  const boss = key => key.startsWith('p:') ? orgBossKey({kind: 'person', person: people.get(key) || {}}) : orgBossKey({kind: 'bot', ...(botRow(key.slice(2)) || {})});
+  const helper = key => { if (!key.startsWith('b:')) return false; const e = botRow(key.slice(2)); return !e || isHelperBot(e); };
+  const headOf = key => {
+    let up = boss(key);
+    for (let hops = 0; up && (inside.has(up) || helper(up)) && hops < 20; hops++) up = boss(up);
+    return up && !inside.has(up) && !helper(up) ? up : '';
+  };
+  const ref = String(lead || ''), leadKey = ref.startsWith('person:') ? 'p:' + ref.slice(7) : ref.startsWith('bot:') ? 'b:' + ref.slice(4) : '';
+  if (leadKey && inside.has(leadKey)) return headOf(leadKey);
+  const top = [...[...people].filter(([, p]) => p.team === gid).map(([k]) => k), ...bots.filter(e => e.team === gid).map(e => 'b:' + e.id)]
+    .filter(k => !inside.has(boss(k)));
+  const votes = new Map();
+  for (const k of top) { const up = headOf(k); if (up) votes.set(up, (votes.get(up) || 0) + 1); }
+  return [...votes].sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+}
 // Where a group hangs: in its parent group, else at the top. The server hangs the top-level group of a Head it puts under
 // the Strategy Bot there too (`org_parent`, backend/strategy_bot.py), and the chart lifts it to the owner with the
 // Head.
 const orgGroupParent = (g, keys) => g.parent && keys.has('g:' + g.parent) ? 'g:' + g.parent
   : g.org_parent === 'b:goal-manager' && keys.has('b:goal-manager') ? 'b:goal-manager' : '';
+// The org chart's shape over a tree of nodes by parent key (`by`, changed in place): the top person (orgChartTop) at the
+// root, their own group dissolved into them, and every top-level group under the one it answers to (orgGroupHead), so
+// a department sits under the person who runs it. Org (redesign-org.js rdoTree) and Goals (goals-kpis.js) both draw it.
+function orgChartShape(by, keyOf, leadOf) {
+  const nodes = new Map(), parentOf = new Map();
+  for (const [k, kids] of Object.entries(by)) for (const n of kids) { nodes.set(keyOf(n), n); parentOf.set(keyOf(n), k); }
+  const take = key => { const p = parentOf.get(key); by[p] = (by[p] || []).filter(n => keyOf(n) !== key); parentOf.delete(key); };
+  const put = (parent, n) => { (by[parent] ||= []).push(n); parentOf.set(keyOf(n), parent); };
+  const person = orgChartTop(), topKey = person && nodes.has('p:' + person.id) ? 'p:' + person.id : '';
+  const home = topKey ? parentOf.get(topKey) : '';
+  if (topKey && home) {
+    take(topKey); put('', nodes.get(topKey));
+    if (home.startsWith('g:') && parentOf.get(home) === '') {
+      for (const n of by[home] || []) put(topKey, n);
+      delete by[home]; take(home); nodes.delete(home);
+    }
+  }
+  // Under its head unless the head sits inside it (a loop); else it stays at the top, under the top person.
+  const reaches = (from, to) => {
+    const seen = new Set(), walk = k => (by[k] || []).some(n => { const key = keyOf(n); if (key === to) return true; if (seen.has(key) || seen.size > 4000) return false; seen.add(key); return walk(key); });
+    return walk(from);
+  };
+  for (const g of (by[''] || []).filter(n => n.kind === 'group')) {
+    const head = orgGroupHead(g.id, leadOf(g.id)), key = 'g:' + g.id;
+    if (!head || head === topKey || !nodes.has(head) || reaches(key, head)) continue;
+    take(key); put(head, g);
+  }
+  return by;
+}
+// The owner when nobody is above them, else the one person nobody is above; with neither, the first person at the top.
+function orgChartTop() {
+  const tops = (S.people || []).filter(p => !p.hidden && !orgBossKey({kind: 'person', person: p}));
+  const owners = tops.filter(p => p.role === 'owner');
+  return tops.find(p => S.me?.owner_id && p.id === S.me.owner_id) || (owners.length === 1 ? owners[0] : null) || (tops.length === 1 ? tops[0] : null);
+}
 function orgGroupOf(people, bots, seats = []) {
   const groups = orgGroupIds(), out = {};
   for (const p of people) if (groups.has(p.team)) out['p:' + p.id] = p.team;
-  for (const e of bots) if (groups.has(e.team) && !isHelperBot(e)) out['b:' + e.name] = e.team;
+  for (const e of bots) if (groups.has(e.team) && !isHelperBot(e)) out['b:' + e.id] = e.team;
   for (const seat of seats) if (groups.has(seat.team)) out['s:' + seat.id] = seat.team;
   return out;
 }
@@ -79,10 +143,10 @@ function orgTreeByParent() {
   // bots under it hang from the next thing that is left.
   // Built-in and message bots sit apart, as on Goals; a bot that reports to one hangs where it would have.
   const bots = (S.emps || []).filter(e => orgBranchVisible(e) && orgMineKeep(e));
-  const empIds = new Set(bots.map(e => e.name));
+  const empIds = new Set(bots.map(e => e.id));
   const seats = S.seats || [];
   const groupOf = orgGroupOf(people, bots, seats);
-  const keys = new Set([...[...groups].map(id => 'g:' + id), ...bots.map(e => 'b:' + e.name)]);
+  const keys = new Set([...[...groups].map(id => 'g:' + id), ...bots.map(e => 'b:' + e.id)]);
   for (const g of (S.orgGroups || [])) {
     (byParent[orgGroupParent(g, keys)] ||= []).push({kind: 'group', id: g.id, name: g.name, order: g.order || 0});
   }
@@ -92,10 +156,10 @@ function orgTreeByParent() {
   for (const e of bots) {
     let boss = orgBossKey({kind: 'bot', ...e});
     if (boss.startsWith('b:') && !empIds.has(boss.slice(2))) {
-      const owner = e.operator || e.users?.[0]?.id;
+      const owner = e.owner_id || e.users?.[0]?.id;
       boss = owner ? 'p:' + owner : '';
     }
-    (byParent[orgHang('b:' + e.name, boss, groupOf)] ||= []).push({kind: 'bot', ...e});
+    (byParent[orgHang('b:' + e.id, boss, groupOf)] ||= []).push({kind: 'bot', ...e});
   }
   // Recruiting seats (backend/lifecycle.py): a role with no bot yet, where a bot in that place would hang, or under the
   // seat it reports to. Under a bot this view leaves out, it hangs from the next thing up that is left; with nothing
@@ -106,7 +170,7 @@ function orgTreeByParent() {
     let boss = seat.org_parent || (to.startsWith('seat:') ? 's:' + to.slice(5)
       : to.startsWith('human:') ? 'p:' + to.slice(6) : empIds.has(to) ? 'b:' + to : '');
     for (let hops = 0; boss.startsWith('b:') && !empIds.has(boss.slice(2)) && hops < 20; hops++)
-      boss = orgBossKey({kind: 'bot', ...((S.emps || []).find(e => e.name === boss.slice(2)) || {})});
+      boss = orgBossKey({kind: 'bot', ...(botRow(boss.slice(2)) || {})});
     if (boss.startsWith('b:') && !empIds.has(boss.slice(2))) continue;
     if (boss.startsWith('s:') && !seatIds.has(boss.slice(2))) continue;
     if (boss.startsWith('p:') && !personIds.has(boss.slice(2))) continue;
@@ -120,7 +184,7 @@ function mePerson() {
          (S.people || []).find(p => (p.email || '').toLowerCase() === email) || null;
 }
 function inboxNavPeople() {
-  const bots = new Set((S.emps || []).map(e => e.name));
+  const bots = new Set((S.emps || []).map(e => e.id));
   return (S.people || []).filter(p => p.email && p.inbox_bot && !p.hidden && bots.has(p.inbox_bot))
     .filter(p => S.me?.role === 'owner' || mailPersonVisible(p))
     .sort((a, b) => String(a.email).localeCompare(String(b.email)));
@@ -137,8 +201,8 @@ function inboxNavRows() {
     for (const source of bot.sources || []) {
       if (source.kind !== 'slack') continue;
       // A chart bot's channels are one of its Tools (its page lists them); only a message bot's channels are its inboxes.
-      const shown = S.emps.find(e => e.name === bot.bot);
-      if (shown && !(isHelperBot(shown) && !isBuiltInBot(shown.name))) continue;
+      const shown = botRow(bot.bot);
+      if (shown && !(isHelperBot(shown) && !isBuiltInBot(shown.id))) continue;
       slack.push({kind: 'slack', label: source.name, title: `${bot.name} · ${source.name}`,
                   bot: bot.bot, source: source.id});
     }
@@ -171,7 +235,7 @@ function renderInboxNav() {
 // Which row is the page you are on is marked in place: the list's markup never depends on the route, so a page change
 // replaces no row (patchHTML keeps them all), and a whole group never redraws because one of its rows became current.
 function navCurSync(root) {
-  const bot = S.route.startsWith('#/bot/') ? S.route.slice(6).split('/')[0] : null;
+  const bot = S.route.startsWith('#/bot/') ? decodeURIComponent(S.route.slice(6).split('/')[0]) : null;
   const person = S.route.startsWith('#/person/') ? decodeURIComponent(S.route.slice(9).split('/')[0]) : null;
   const seat = S.route.startsWith('#/seat/') ? decodeURIComponent(S.route.slice(7).split(/[/?]/)[0]) : null;
   const here = S.route.startsWith(MESSAGING) ? messagingParams() : null;
@@ -190,7 +254,7 @@ function navCurSync(root) {
 }
 function mailPersonVisible(person) {
   if (!S.me?.mail_access || !person?.email || !person.inbox_bot ||
-      !(S.emps || []).some(e => e.name === person.inbox_bot)) return false;
+      !botRow(person.inbox_bot)) return false;
   if (S.me.role === 'owner') return true;
   const me = mePerson();
   if (!me) return (person.email || '').toLowerCase() === (S.me.email || '').toLowerCase();
@@ -255,7 +319,7 @@ function orgMine() {
   const under = {};                                              // who reports to each one, whatever group they are in
   const add = (key, n) => { const boss = orgBossKey(n); if (boss) (under[boss] ||= []).push(key); };
   for (const p of S.people || []) add('p:' + p.id, {kind: 'person', person: p});
-  for (const e of S.emps || []) add('b:' + e.name, {kind: 'bot', ...e});
+  for (const e of S.emps || []) add('b:' + e.id, {kind: 'bot', ...e});
   const walk = key => { for (const k of under[key] || []) if (!mine.has(k)) { mine.add(k); walk(k); } };
   mine.add('p:' + me); walk('p:' + me);
   return mine;
@@ -267,11 +331,11 @@ const orgMayDrag = key => key.startsWith('g:') ? orgCanGroups() : orgMayMove(key
 // A manager's reports keep the order they are put in (backend/report_order.py). Whoever may put reports under that
 // manager orders them: the owner, the manager or someone it reports up to, and the person who runs a bot manager.
 const orgMeId = () => mePerson()?.id || S.me?.id || '';
-const orgBot = key => key.startsWith('b:') ? (S.emps || []).find(e => e.name === key.slice(2)) : null;
+const orgBot = key => key.startsWith('b:') ? botRow(key.slice(2)) : null;
 const orgName = key => key.startsWith('p:') ? ((S.people || []).find(p => p.id === key.slice(2))?.name || key.slice(2))
   : (orgBot(key)?.display_name || key.slice(2));
 const orgMayOrder = manager => /^[pb]:/.test(manager) &&
-  (S.me?.role === 'owner' || orgMayMove(manager) || (!!orgMeId() && orgBot(manager)?.operator === orgMeId()));
+  (S.me?.role === 'owner' || orgMayMove(manager) || (!!orgMeId() && orgBot(manager)?.owner_id === orgMeId()));
 // Dropping onto another human or bot changes whom it reports to, under the reports_to rules (app.person_update,
 // SettingsAdmin.update_bot): a human is moved by someone they report up to, and only under that person or their
 // reports; a bot by whoever may manage it, under any human, or a bot they manage or run. The reason when not.
@@ -280,7 +344,7 @@ function orgMoveRefusal(from, to) {
   const mayChange = from.startsWith('p:') ? orgMayMove(from) : S.me?.role === 'owner' || !!orgBot(from)?.can_manage || orgMayMove(from);
   if (!mayChange) return `You can't change who ${orgName(from)} reports to.`;
   const mayPut = S.me?.role === 'owner' || (to.startsWith('p:') ? from.startsWith('b:') || orgMayMove(to)
-    : orgMayMove(to) || (!!orgMeId() && orgBot(to)?.operator === orgMeId()));
+    : orgMayMove(to) || (!!orgMeId() && orgBot(to)?.owner_id === orgMeId()));
   return mayPut ? '' : `You can't put ${orgName(from)} under ${orgName(to)}: only under yourself or someone who reports up to you.`;
 }
 const orgOrderId = key => (key.startsWith('p:') ? 'human:' : 'bot:') + key.slice(2);
@@ -292,7 +356,7 @@ const orgOrderKeys = parent => [...$('#tree').querySelectorAll('[data-org-place]
 // keyboard, a teammate is moved with the Org chart's "Move to…" sheet (ui/strategy-page.js), which stays as it is.
 let ORG_PENDING = null;        // {from, to, where, parent, keys, text, anchor, set, was, saving, sent}
 const orgObj = (kind, id) => kind === 'p' ? (S.people || []).find(p => p.id === id)
-  : kind === 'b' ? (S.emps || []).find(e => e.name === id) : (S.orgGroups || []).find(g => g.id === id);
+  : kind === 'b' ? botRow(id) : (S.orgGroups || []).find(g => g.id === id);
 const orgGroupName = id => (S.orgGroups || []).find(g => g.id === id)?.name || id;
 const orgTeamOf = key => orgObj(key[0], key.slice(2))?.team || '';
 // What a drop would change, as field writes on the chart's own rows (S.people, S.emps, S.orgGroups), and the sentence
@@ -423,14 +487,14 @@ async function orgDrop(from, to) {
     await patch(`/v2/groups/${encodeURIComponent(from.slice(2))}`, {parent: to.slice(2)});
   } else if (isGroup) {
     const kind = from.startsWith('p:') ? 'people' : 'bots', id = from.slice(2), group = to.slice(2);
-    const at = kind === 'people' ? (S.people || []).find(p => p.id === id)?.team : (S.emps || []).find(e => e.name === id)?.team;
+    const at = kind === 'people' ? (S.people || []).find(p => p.id === id)?.team : botRow(id)?.team;
     if (group) await patch(`/v2/groups/${encodeURIComponent(group)}`, {add: {[kind]: [id]}});
     else if (at) await patch(`/v2/groups/${encodeURIComponent(at)}`, {remove: {[kind]: [id]}});
   } else if (from.startsWith('p:')) {
     if (!to.startsWith('p:')) return;
     await post(`/v2/humans/${encodeURIComponent(from.slice(2))}`, {reports_to: to.slice(2)});
   } else {
-    const slug = from.slice(2), e = S.emps.find(x => x.name === slug);
+    const slug = from.slice(2), e = botRow(slug);
     if (!e) return;
     const reports_to = to.startsWith('p:') ? 'human:' + to.slice(2) : to.slice(2);
     await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {reports_to, expected_revision: e.revision});
@@ -579,6 +643,13 @@ function treeLimitMark(slug) {
   const word = esc(overLimitWord(limit));
   return `<span class="tree-limit" role="img" aria-label="${word}" title="${word}">!</span>`;
 }
+// The unread in the viewer's DM with this bot (threads.js THREADS.botDms): that DM is on the bot's page, not in Inbox.
+function treeDmBadge(slug) {
+  const n = Number((typeof THREADS !== 'undefined' && THREADS.botDms?.['bot:' + slug]) || 0);
+  if (!n) return '';
+  const words = `${n} unread from ${esc(empName(slug))}`;
+  return `<span class="cnt tree-dm" role="img" aria-label="${words}" title="${words}">${n > 99 ? '99+' : n}</span>`;
+}
 function treeBadge(n, st, slug) {
   const working = st === 'running';
   if (n) return `<span class="cnt needs${working ? ' working' : ''}" role="img" aria-label="${n} things ${esc(empName(slug))} needs from you" title="${n} things ${esc(empName(slug))} needs from you">${n}</span>`;
@@ -663,14 +734,14 @@ $('#org-history').onclick = () => {
 };
 // Helpers (built-ins and message bots) are off the Team list; they have their own entry points. `reports_to` is untouched,
 // and a bot that reports to one hangs where it would have. The Strategy Bot is one too: the Assistant asks it.
-const isHelperBot = e => isBuiltInBot(e.name) || !!e.helper
-  || (S.people || []).some(p => p.inbox_bot === e.name);
+const isHelperBot = e => isBuiltInBot(e.id) || !!e.helper
+  || (S.people || []).some(p => p.inbox_bot === e.id);
 // The order here and on Goals: the Assistant, then the other built-ins, then message bots.
 const HELPER_ORDER = ['botops', 'librarian', 'goal-manager', 'task-manager', 'bookkeeper', COUNSEL_BOT, 'inbox'];
-const helperRank = e => e.name === assistantBot() ? -1 : HELPER_ORDER.includes(e.name) ? HELPER_ORDER.indexOf(e.name) : 99;
+const helperRank = e => e.id === assistantBot() ? -1 : HELPER_ORDER.includes(e.id) ? HELPER_ORDER.indexOf(e.id) : 99;
 function orgTreeWithHelpers(byParent) {
   const out = {}, bot = {}, parentOf = {};
-  for (const [parent, kids] of Object.entries(byParent)) for (const n of kids) if (n.kind === 'bot') { bot['b:' + n.name] = n; parentOf['b:' + n.name] = parent; }
+  for (const [parent, kids] of Object.entries(byParent)) for (const n of kids) if (n.kind === 'bot') { bot['b:' + n.id] = n; parentOf['b:' + n.id] = parent; }
   const lift = parent => {
     for (let hops = 0; bot[parent] && isHelperBot(bot[parent]) && hops < 5; hops++) parent = parentOf[parent] || '';
     return parent;
@@ -711,7 +782,7 @@ function renderTree() {
   const needN = slug => (needCounts ||= needsMeCounts()).get('bot:' + slug) || 0;
   // only "needs you" surfaces through a collapsed parent; running is not something to chase
   const subtreeNeeds = key => (byParent[key] || []).some(c =>
-    (c.kind === 'bot' && (stateOf(c.name) === 'needs' || needN(c.name) || subtreeNeeds('b:' + c.name))) ||
+    (c.kind === 'bot' && (stateOf(c.id) === 'needs' || needN(c.id) || subtreeNeeds('b:' + c.id))) ||
     (c.kind === 'person' && subtreeNeeds('p:' + c.id)) ||
     (c.kind === 'seat' && subtreeNeeds('s:' + c.id)) ||
     (c.kind === 'group' && subtreeNeeds('g:' + c.id)));
@@ -729,7 +800,7 @@ function renderTree() {
       if (n.kind !== 'person' && (n.kind !== 'bot' || isHelperBot(n))) continue;
       const manager = orgReportsTo(n);
       if (manager && (manager === parent || parent.startsWith('g:')) && orgMayOrder(manager))
-        (lists[manager] ||= []).push(n.kind === 'person' ? 'p:' + n.id : 'b:' + n.name);
+        (lists[manager] ||= []).push(n.kind === 'person' ? 'p:' + n.id : 'b:' + n.id);
     }
     const at = n => { const manager = orgReportsTo(n), list = lists[manager] || []; return {parent: manager, order: list.length > 1 ? list : []}; };
     return sorted.map(node => row(node, depth, false, at(node))).join('');
@@ -790,23 +861,23 @@ function renderTree() {
         ${mailPersonVisible(p) ? `<a class="person-mail-link" href="${MESSAGING}?bot=${encodeURIComponent(p.inbox_bot)}&source=${encodeURIComponent('email:' + p.email)}" title="${esc(p.name || p.id)} has a message bot" aria-label="Open ${esc(p.name || p.id)}'s message bot">forum</a>` : ''}</div>${orgConfirmHTML(key)}
         ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
     }
-    const e = node, key = 'b:' + e.name, st = stateOf(e.name), n = needN(e.name), kids = !flat && byParent[key], isCol = kids && collapsed.has(key);
+    const e = node, key = 'b:' + e.id, st = stateOf(e.id), n = needN(e.id), kids = !flat && byParent[key], isCol = kids && collapsed.has(key);
     const helper = isHelperBot(e);                 // not on the chart: nothing is dragged onto or out of it
-    const own = !flat && sources[e.name];
-    if (own) INBOX_PLACED.add(e.name);
+    const own = !flat && sources[e.id];
+    if (own) INBOX_PLACED.add(e.id);
     return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
       ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(e.display_name)}">›</button>` : ''}
-      <a class="node ${e.status} ${st}" href="#/bot/${e.name}" title="${esc(e.display_name || e.name)}" data-org="b:${esc(e.name)}"${helper ? ' data-helper' : placeAttrs(key, at)}${!flat && !helper && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
-        ${avatar(e.name, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
+      <a class="node ${e.status} ${st}" href="#/bot/${encodeURIComponent(e.id)}" title="${esc(e.display_name || e.slug)}" data-org="b:${esc(e.id)}"${helper ? ' data-helper' : placeAttrs(key, at)}${!flat && !helper && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
+        ${avatar(e.id, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
         ${e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
-        ${botPausedBadge(e.name)}${treeLimitMark(e.name)}${treeBadge(n, st, e.name)}</a></div>${orgConfirmHTML(key)}
-      ${own ? `<ul class="inbox-list node-sources" aria-label="${esc(e.display_name || e.name)}: mailboxes and channels">${own.map(inboxNavLink).join('')}</ul>` : ''}
+        ${botPausedBadge(e.id)}${treeLimitMark(e.id)}${treeDmBadge(e.id)}${treeBadge(n, st, e.id)}</a></div>${orgConfirmHTML(key)}
+      ${own ? `<ul class="inbox-list node-sources" aria-label="${esc(e.display_name || e.slug)}: mailboxes and channels">${own.map(inboxNavLink).join('')}</ul>` : ''}
       ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
   };
   // Every bot and person, the one you opened last on top; ones you never opened follow by name.
   const history = () => {
-    const seen = orgHistory(), at = n => { const i = seen.indexOf(n.kind === 'person' ? 'p:' + n.id : 'b:' + n.name); return i < 0 ? Infinity : i; };
+    const seen = orgHistory(), at = n => { const i = seen.indexOf(n.kind === 'person' ? 'p:' + n.id : 'b:' + n.id); return i < 0 ? Infinity : i; };
     return Object.values(byParent).flat().filter(n => n.kind !== 'group' && n.kind !== 'seat')
       .sort((a, b) => (at(a) - at(b)) || nameOf(a).localeCompare(nameOf(b)))
       .map(node => row(node, 0, true)).join('');
@@ -856,8 +927,9 @@ function renderTree() {
   };
   document.querySelectorAll('[data-nav]').forEach(a => {
     // More is current only for pages the bottom bar does not have its own button for.
-    const inOverview = S.route === OVERVIEW || S.route === OVERVIEW_CAMPUS || S.route === OVERVIEW_COMPANY || rdUnder(S.route, CP_ROUTE);
-    const mobilePrimary = inOverview || S.route === UPDATES || S.route.startsWith(UPDATES + '?') || isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap';
+    const inOverview = S.route === HOME || S.route === OVERVIEW || S.route === OVERVIEW_CAMPUS || S.route === OVERVIEW_COMPANY || rdUnder(S.route, CP_ROUTE);
+    const mobilePrimary = inOverview || S.route === UPDATES || S.route.startsWith(UPDATES + '?') || isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap'
+      || S.route.startsWith(THREADS_ROUTE) || S.route.startsWith(THREAD_ROUTE);
     const isCurrent = (a.dataset.nav === 'overview' && inOverview) ||
       (a.dataset.nav === 'welcome' && S.route === WELCOME) ||
       (a.dataset.nav === 'meetings' && (S.route === MEETINGS || S.route.startsWith(MEETINGS + '?'))) ||
@@ -873,6 +945,8 @@ function renderTree() {
       (a.dataset.nav === 'usage' && S.route === '#/usage') ||
       (a.dataset.nav === 'replay' && S.route.startsWith('#/replay')) ||
       (a.dataset.nav === 'updates' && (S.route === UPDATES || S.route.startsWith(UPDATES + '?'))) ||
+      (a.dataset.nav === 'threads' && (S.route.startsWith(THREADS_ROUTE) || S.route.startsWith(THREAD_ROUTE))) ||
+      (a.dataset.nav === 'inbox' && (S.route === INBOX_ROUTE || S.route.startsWith(INBOX_ROUTE + '&'))) ||
       (a.dataset.nav === 'more' && !mobilePrimary) ||
       redesignNavCurrent(a.dataset.nav);
     a.classList.toggle('cur', isCurrent);

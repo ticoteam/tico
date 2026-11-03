@@ -31,7 +31,7 @@ one PostHog project between several apps by filtering on the `app` property (Tic
    for the existing static-file deployment. To regenerate it: `npm ci` then
    `npm run build:observability`. Commit the generated bundle with source/dependency changes.
 4. In a staging deployment, sign in, navigate, create a test task,
-   send a test chat, and exercise a safe rejected submission. Inspect `app=tico`, environment,
+   send a test message, and exercise a safe rejected submission. Inspect `app=tico`, environment,
    outcomes and duration fields in PostHog. Inspect one controlled frontend error and API
    failure in Sentry. Confirm network payloads contain no content or raw URLs. Test logout
    and a different account; check that identities change and prior events do not follow it.
@@ -60,7 +60,7 @@ and a fixed `route` template. It never invents a team field.
 | `workflow_completed` | Its API operation returned success after the existing retry cycle |
 | `workflow_failed` | The API operation rejected or exhausted retries; no error text or request content accompanies it |
 
-Instrumented submissions: chat sends (including task/conversation and page chat), task
+Instrumented submissions: message sends (including task/thread and page thread sends), task
 creation/update, approval decisions, note saves, meeting import/edit/delete/send,
 bot definition changes, and settings transition requests. JSON and supported multipart
 submissions use the same wrapper; individual network retry attempts do not duplicate events.
@@ -117,7 +117,7 @@ If the project is shared, always filter by `app` and `environment` first. Sugges
 
 Sentry receives frontend uncaught errors/unhandled rejections, relevant API 5xx/unhandled
 exceptions, scheduler failures and runner panics (see [Server and runner errors](#server-and-runner-errors)).
-Bot chat sends also report `source=chat_send` when they cross five seconds while still pending,
+Bot message sends also report `source=chat_send` when they cross five seconds while still pending,
 then report their outcome when a slow send finishes or any send fails. The only send fields are
 `outcome` (a fixed label), `duration_ms`, `retries`, and `status` (the last HTTP status, or zero
 when no response arrived). No message text, bot name, attachment names, raw URL or error text is
@@ -237,7 +237,7 @@ the same rows to a local file that can be read without the server (below).
 Times are Unix seconds. A `modified` or `mismatch` start shows as **Release image** on the Health page. The integrity of the
 database is checked by the daily verified backup (`PRAGMA integrity_check`), not here.
 
-The `flight_db` columns remain `ts`, `bytes`, `wal_bytes`, `free_bytes` and `detail_json`. Within the detail,
+The `flight_db` columns remain `ts`, `bytes`, `wal_bytes`, `free_bytes` and `detail`. Within the detail,
 `objects_at` dates the table/index sizes, while `seconds` measures the current hourly sampling pass.
 Metrics expose `db.objects_at` beside `db.objects`; these sizes can be older than the hourly `db.at`.
 Older records without `objects_at` use their snapshot timestamp. The sizes are estimates: a table is its row count
@@ -261,12 +261,12 @@ window's CPU and event-loop lag before attributing the remaining request time to
 ```sql
 -- Where the last hour went, by route
 SELECT route, sum(n) AS calls, round(sum(total_ms) / 1000) AS seconds, max(p95) AS worst_p95
-FROM flight_requests WHERE ts > strftime('%s','now') - 3600 GROUP BY route ORDER BY seconds DESC LIMIT 10;
+FROM flight_requests WHERE created_at > strftime('%s','now') - 3600 GROUP BY route ORDER BY seconds DESC LIMIT 10;
 -- CPU and loop lag around an incident
-SELECT datetime(ts,'unixepoch') AS minute, cpu, lag_max, wait_max, hold_max, locked FROM flight_process
-WHERE ts > strftime('%s','now') - 3 * 3600 ORDER BY ts;
+SELECT datetime(created_at,'unixepoch') AS minute, cpu, lag_max, wait_max, hold_max, locked FROM flight_process
+WHERE created_at > strftime('%s','now') - 3 * 3600 ORDER BY created_at;
 -- Stalls and what the event loop was doing
-SELECT datetime(ts,'unixepoch'), detail_json FROM flight_events WHERE kind='stall' ORDER BY id DESC LIMIT 5;
+SELECT datetime(created_at,'unixepoch'), detail FROM flight_events WHERE kind='stall' ORDER BY id DESC LIMIT 5;
 ```
 
 Runner polls and writer admission use the same lock accounting: `wait_ms` includes the FIFO queue for
@@ -324,7 +324,7 @@ memory` sends SIGUSR2, which starts tracemalloc, and the next one writes the top
 | `stall_end` | `id` (the `stall`'s), `seconds` (between the loop's two wakes), `class`, `usage` over the whole stall |
 | `long_hold` | `route`, `site`, `hold_s`, `wait_s`, `open`: as the `long_hold` event above |
 | `drops` | `n`: records the queue had no room for |
-| `memory` | `state`: `started`, or `dumped` with `traced`, `peak` (bytes) and `top` (`where`, `bytes`, `count`) |
+| `memory` | `state`: `started_at`, or `dumped` with `traced`, `peak` (bytes) and `top` (`where`, `bytes`, `count`) |
 
 `usage` holds `window_ms`, `cpu_s`, `majflt`, `minflt`, `nivcsw`, `inblock`, `oublock`, `io_mb` (null without
 `/proc`), `rss_mb` (growth) and `lock_ms`. Readers skip unknown kinds and fields, and a line cut short by a crash.
@@ -337,7 +337,7 @@ files (`.1` to `.4`), in the server's record format (version 1): one JSON object
 seconds, milliseconds as decimals) and `kind`, here always `runner.*`: `runner.start` (version, build,
 pid), `runner.turn` (attempt, bot, runtime, outcome, `total_ms`, and `phases`: milliseconds since the turn was claimed
 for `placed`, `harness_started`, `harness_spawned`, `first_output`, `first_delta_posted`, then the hand-in's
-`model_done`, `scrubbed` (the secret scrub of the changed files), `finished`, `saved` (the result in runner.sqlite),
+`model_done`, `scrubbed` (the secret scrub of the changed files), `finished_at`, `saved` (the result in runner.sqlite),
 `flushed` (the last events sent), `complete_posted` and `done`), `runner.heartbeat` (round trips of a second or more, and every failure), `runner.git` (git commands of two
 seconds or more and every timeout, the scrub's included: verb, checkout folder name, milliseconds, exit code; never arguments) and
 `runner.process` once a minute (resident memory, CPU time, finished children's CPU, open turns, and `dropped`: records
