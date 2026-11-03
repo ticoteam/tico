@@ -58,7 +58,8 @@ def repo_bot(api, bot="ops"):
     row = {"ready": True, "runtime": "codex", "model": "gpt-6-luna", "repository_present": True,
            "configuration_valid": True, "problems": []}
     post(api, "runners/heartbeat", {"version": "test", "platform": "test",
-                                    "readiness": {"schema_version": 1, "bots": {bot: row}}}, token=machine["token"])
+                                    "readiness": {"schema_version": 1, "runtimes": {"codex": {"installed": True, "authenticated": "ready"}},
+                                                  "bots": {bot: row}}}, token=machine["token"])
 
 
 def ana_task(api, owner="bot:ops", title="Send the invoice"):
@@ -104,6 +105,7 @@ def test_a_turn_approves_after_a_read_back_and_a_plain_yes_with_the_setting_on(a
     runner, first = assistant_turn(api, "ana-test", "Go ahead with the ads")
     call(api, first["token"], "POST", "assistant/read-back", {"approvals": [approval]})
     # The first run ends, then the next turn is the same runner's: its yes is a new message and the next job.
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "first-run"}, token=runner["token"])
     post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0}, token=runner["token"])
     say(api, "Yes", "ana-test")
     yes = post(api, "jobs/claim", {}, token=runner["token"])["attempt"]["token"]
