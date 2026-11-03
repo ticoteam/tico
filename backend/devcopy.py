@@ -98,11 +98,6 @@ EMPTY = (
     # Calls: a live call's room and recorder are on the source's LiveKit, so the copy holds no live call. Its
     # transcripts and action items are thread messages, kept with the history.
     "calls", "call_participants", "call_holds",
-    # Federation: the install's keys, its peerings and what it sends or received from other installs; a copy never
-    # speaks for the source to another company (the shared threads' messages are kept with the history).
-    "federation_keys", "federation_peerings", "federation_outbox_items", "federation_receipts", "federation_states",
-    "federation_directory_entries", "federation_threads", "federation_members", "federation_items", "federation_messages",
-    "federation_deferrals",
     # Slack links: an active link posts to Slack both ways; its queue and message map only serve that link.
     "slack_thread_links", "slack_link_members", "slack_message_links", "slack_inbound_events",
     # The Company page: the readers (their addresses, sessions and invite hashes, the messages they wrote, what they read,
@@ -381,7 +376,7 @@ def prune(c, days, keep_automations=False):
                 delete(table, "message_id NOT IN (SELECT id FROM messages)")
     if "message_deliveries" in present:
         c.execute("UPDATE message_deliveries SET state='moot' WHERE state IN ('pending','capped','held') "
-                  "AND (recipient LIKE 'slack:%' OR recipient LIKE 'peer:%')")
+                  "AND recipient LIKE 'slack:%'")
     return {t: n for t, n in removed.items() if n}
 
 
