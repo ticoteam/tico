@@ -1781,7 +1781,7 @@ def install(app, store, auth, mutate):
     @app.post("/api/v2/market/ask")
     def market_ask(request: Request, body: M.MarketAsk):
         # Each model call spends the enabled server provider's key: a `market.ask` event, counted per person per day
-        # under the decision caps (backend/judge.py). Rehearsal sends nothing out and answers from the rows.
+        # under the decision caps (backend/judge.py). Rehearsal and the demo send nothing out and answer from the rows.
         from .judge import daily_cap, used_today
         who = request.state.identity
         auth.domain(who)
@@ -1793,10 +1793,10 @@ def install(app, store, auth, mutate):
                               "until midnight UTC", 429)
             try:
                 from .updates import writer_for
-                # The demo calls no model: with no writer the librarian answers from the rows, as the demo always has.
-                writer = None if store.settings.demo else writer_for(
-                    c, store.settings, store=store, vault=getattr(app.state, "vault", None))
-                result, call = ask(c, body.question, use_model=not store.settings.rehearsal, writer=writer)
+                use_model = not (store.settings.rehearsal or store.settings.demo)
+                vault = getattr(app.state, "vault", None)
+                writer = writer_for(c, store.settings, store=store, vault=vault) if use_model else None
+                result, call = ask(c, body.question, use_model=use_model, writer=writer)
             except Exception as exc:
                 raise Problem("market_ask", f"The market model call failed: {exc}", 503, True) from exc
         if call is not None:
