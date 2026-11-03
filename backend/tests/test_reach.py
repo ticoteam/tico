@@ -7,6 +7,13 @@ import json
 
 from backend.store import encode
 from backend.tests.test_api import api, get, headers  # noqa: F401  (the api fixture)
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def nearby_default(monkeypatch):
+    """conftest.py starts other tests' bots open; these test the shipped default."""
+    monkeypatch.delenv("TICO_REACH_DEFAULT", raising=False)
 
 
 def org(api):

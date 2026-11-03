@@ -38,6 +38,13 @@ FIELDS = ("mode", "chats_per_day", "tasks_per_day")
 # With no mode set anywhere in its chain a bot (and so a team and Everyone, which bots inherit from) reaches only its
 # org-chart neighbors. A person reads open: nothing a person does is limited.
 DEFAULTS = {"mode": "nearby", "chats_per_day": 999, "tasks_per_day": 999}
+
+
+def bot_mode():
+    """A bot's default mode: `nearby`, unless TICO_REACH_DEFAULT names another mode (conftest.py starts tests about
+    something else `open`, since most test companies put their bots on no chart)."""
+    mode = os.environ.get("TICO_REACH_DEFAULT", "")
+    return mode if mode in ("open", "nearby", "closed") else DEFAULTS["mode"]
 PERSON_MODE = "open"
 MODES = ("open", "nearby", "closed")
 LINES_MAX = 2000            # the lines one company keeps; the map answers them all at once
@@ -99,7 +106,8 @@ def effective(ctx, party):
                 out[field], came[field] = row[field], at
                 break
         else:
-            default = PERSON_MODE if field == "mode" and party.startswith("human:") else DEFAULTS[field]
+            default = PERSON_MODE if field == "mode" and party.startswith("human:") else (
+                bot_mode() if field == "mode" else DEFAULTS[field])
             out[field], came[field] = default, None
     return {**out, "from": came}
 
