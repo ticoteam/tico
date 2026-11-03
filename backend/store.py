@@ -384,13 +384,13 @@ CREATE INDEX IF NOT EXISTS slack_digests_reader ON slack_digests(reader, created
 CREATE TABLE IF NOT EXISTS slack_threads(
  channel TEXT NOT NULL, thread_ts TEXT NOT NULL, bot TEXT NOT NULL,
  conversation_id TEXT NOT NULL REFERENCES conversations(id), created_at TEXT NOT NULL,
- last_routed_at TEXT, PRIMARY KEY(channel, thread_ts, bot));
+ last_routed_at TEXT, recipient_actor TEXT, PRIMARY KEY(channel, thread_ts, bot));
 CREATE INDEX IF NOT EXISTS slack_threads_conversation ON slack_threads(conversation_id);
 CREATE TABLE IF NOT EXISTS slack_posts(
  message_id TEXT PRIMARY KEY REFERENCES messages(id), channel TEXT NOT NULL,
  thread_ts TEXT NOT NULL, bot TEXT NOT NULL, text TEXT NOT NULL,
  state TEXT NOT NULL DEFAULT 'ready', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT,
- slack_ts TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+ slack_ts TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, recipient_actor TEXT);
 CREATE INDEX IF NOT EXISTS slack_posts_state ON slack_posts(state, next_attempt_at);
 CREATE INDEX IF NOT EXISTS slack_task_completion_notices ON messages(
  json_extract(refs,'$.task'), json_extract(refs,'$.task_completion.status'), created_at)
@@ -1147,14 +1147,12 @@ class Store:
             from . import system_routines as _system_routines
             c.executescript(_system_routines.SCHEMA)
             _system_routines.ensure(c)
-            from . import thread_followups as _thread_followups
-            _thread_followups.ensure(c)
-            from . import thread_digest as _thread_digest
-            _thread_digest.ensure(c)
             from . import task_rules as _task_rules
             c.executescript(_task_rules.SCHEMA)
             from . import teammate_access as _teammate_access
             _teammate_access.ensure(c)              # people's and groups' See/Read/Write (docs/permissions.md)
+            from . import federation_schema as _federation_schema
+            _federation_schema.seed(c)              # the relay's one state row; a devcopy empties it
             from . import rules as _rules
             c.executescript(_rules.SCHEMA)
             _rules.ensure_schema(c)
@@ -1188,7 +1186,6 @@ class Store:
             c.executescript(_support.SCHEMA)
             from . import inbound as _inbound
             c.executescript(_inbound.SCHEMA)
-            _inbound.ensure(c)
             from . import bills_address as _bills_address
             c.executescript(_bills_address.SCHEMA)
             from . import support_access as _support_access
@@ -1229,8 +1226,6 @@ class Store:
             c.executescript(_invariants.SCHEMA)
             from . import slack_channels as _slack_channels
             c.executescript(_slack_channels.SCHEMA)
-            from . import slack_threads as _slack_threads
-            _slack_threads.ensure(c)
             from . import flight as _flight
             c.executescript(_flight.SCHEMA)
             for column, kind in (("sql_ms", "REAL"), ("wait_ms", "REAL"), ("queries", "INTEGER")):
@@ -1245,9 +1240,6 @@ class Store:
             # Destinations saved in Settings > Listening (backend/listening.py).
             from . import listening as _listening
             _listening.ensure(c)
-            # Tico Meet calls and their people (backend/calls.py): a call belongs to a thread.
-            from . import calls as _calls
-            _calls.ensure(c)
             # Each credential's newest use per (actor, bot) (credentials.last_used): credentials.record_use keeps it.
             H.backfill_credential_uses(c)
             c.execute("BEGIN IMMEDIATE")
@@ -1293,8 +1285,6 @@ class Store:
                 # column arrives. It gives no rights: those come from `member_stored` (backend/credentials.py `owned`).
                 # The person a Slack DM mapping was opened for, and the person a queued copy is for. A DM with no verified
                 # inbound message yet has none: its copies fail closed. A backfill reads each DM's verified history once.
-                H.add_column(c, "slack_threads", "recipient_actor", "TEXT")
-                H.add_column(c, "slack_posts", "recipient_actor", "TEXT")
                 for (channel,) in c.execute("SELECT DISTINCT channel FROM slack_threads WHERE channel LIKE 'D%' "
                                             "AND recipient_actor IS NULL").fetchall():
                     actors = {r[0] for r in c.execute(
@@ -2159,9 +2149,6 @@ class Store:
             # What each message's and run's readability depends on (backend/read_deps.py); settled beside the server.
             from . import read_deps
             read_deps.ensure(c)
-            # Federation between installs (backend/federation_schema.py): its own tables, kept beside the threads.
-            from . import federation_schema
-            federation_schema.ensure(c)
             # Every start, in short batches of their own: rows written since the last pass, including any an
             # older server wrote after a rollback, get their task links (backend/message_links.py).
             message_links.backfill(c)
