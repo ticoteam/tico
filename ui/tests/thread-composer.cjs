@@ -3,7 +3,10 @@
 // Goal mode is back where the bot takes goals: the target toggles it (saved per bot), Send sets the text as the
 // thread's goal through the goal route (POST /api/v2/conversations/<thread>/goal, never a message), the pinned goal
 // shows in its bar with Edit, Pause and Clear, and the refusals are the old chat's. An empty DM's first goal makes the
-// DM first, as its first message would. The /goal messages are not shown; a met goal is its one line. Fixtures only.
+// DM first, as its first message would. The /goal messages are not shown; a met goal is its one line. The old bar's
+// other pieces are back too: on a phone the bot's avatar at the left edge opens the bot switcher (ui/app/org-fan.js);
+// Stop takes Send's place while the bot runs (read from the thread's conversation snapshot) and posts the stop; "/"
+// opens the commands menu, and a command does what it did in the old chat (ui/app/slash-commands.js). Fixtures only.
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -16,13 +19,24 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const BOT = 'engineering-manager', HOME = `t-home-${BOT}`, DM = `t-dm-${BOT}`;
 
-async function open(browser, {width = 390, theme = 'dark', tab = 'home', supported = true, goalMode = false, dmMade = true, home = [], refuse = false} = {}) {
+const COMMANDS = [
+  {name: 'goal', args: '<objective>', help: 'Pin a goal the bot works toward', kind: 'tico', sub: ['pause', 'resume', 'clear', 'edit']},
+  {name: 'new', args: '', help: 'New chat', kind: 'tico'}, {name: 'task', args: '<title>', help: 'Make a task for this bot', kind: 'tico'},
+  {name: 'branch', args: '', help: 'Make my branch', kind: 'tico'}, {name: 'help', args: '', help: 'Show commands', kind: 'tico'},
+  {name: 'compact', args: '', help: 'Compact this conversation', kind: 'harness'}];
+
+async function open(browser, {width = 390, theme = 'dark', tab = 'home', supported = true, goalMode = false, dmMade = true, home = [], refuse = false,
+                              execution = null, commands = [], role = 'owner', recent = []} = {}) {
   const phone = width < 761;
   const page = await browser.newPage({viewport: {width, height: 844}, ...(phone ? {isMobile: true, hasTouch: true} : {}), serviceWorkers: 'block', reducedMotion: 'reduce'});
-  await page.addInitScript(([t, slug, on]) => {
-    try { localStorage.setItem('tico.theme', t); if (on) localStorage.setItem('hub.chat.goal-mode', JSON.stringify({[slug]: true})); } catch {}
-  }, [theme, BOT, goalMode]);
-  const api = {errors: [], sent: [], goalPosts: [], goalReads: [], dmMade: [], goals: {}, page, dm: dmMade};
+  await page.addInitScript(([t, slug, on, recent]) => {
+    try {
+      localStorage.setItem('tico.theme', t); if (on) localStorage.setItem('hub.chat.goal-mode', JSON.stringify({[slug]: true}));
+      localStorage.setItem('tico.org.recent', JSON.stringify(recent));
+    } catch {}
+  }, [theme, BOT, goalMode, recent]);
+  const api = {errors: [], sent: [], goalPosts: [], goalReads: [], dmMade: [], goals: {}, page, dm: dmMade, execution,
+               stops: [], commands: [], tasks: [], patches: [], snapshots: []};
   page.on('pageerror', e => api.errors.push(e.message));
   const fake = threadsFake({bot: BOT, home, sent: api.sent});
   const now = () => new Date().toISOString();
@@ -35,9 +49,17 @@ async function open(browser, {width = 390, theme = 'dark', tab = 'home', support
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-    if (p === '/api/employees') return json([{name: BOT, display_name: 'Engineering Manager', host: 'keeper', status: 'active', can_chat: true, schedules: [],
-      resolved_runtime: 'codex', machine: {runner_id: 'r1'}, readiness: {ready: true, goals: supported}, my_access: {see: true, read: true, write: true}}]);
+    if (p === '/api/me') return json({id: 'ana', name: 'Ana', role, cloud: true});
+    const bot = (name, display_name) => ({name, display_name, host: 'keeper', status: 'active', can_chat: true, schedules: [],
+      resolved_runtime: 'codex', machine: {runner_id: 'r1'}, readiness: {ready: true, goals: supported}, my_access: {see: true, read: true, write: true}});
+    if (p === '/api/employees') return json([bot(BOT, 'Engineering Manager'), bot('designer', 'Designer'), bot('sales-lead', 'Sales Lead')]);
+    // The thread's newest run (Stop), the stop itself, a harness command, a task and an archived DM (/new).
+    const snap = p.match(/^\/api\/v2\/conversations\/([^/]+)\/snapshot$/);
+    if (snap) { api.snapshots.push(snap[1]); return json({messages: [], next_before: null, execution: api.execution, goal: null}); }
+    if (p === `/api/v2/bots/${BOT}/stop`) { api.stops.push(req.postDataJSON()); return json({attempt_id: 'a1', stopping: true}); }
+    if (p === '/api/v2/messages' && method === 'POST') { api.commands.push(req.postDataJSON()); return json({id: 'cmd-1', conversation_id: req.postDataJSON().conversation_id}); }
+    if (p === '/api/v2/tasks' && method === 'POST') { api.tasks.push(req.postDataJSON()); return json({task: {id: 'task-1', title: req.postDataJSON().title}}); }
+    if (method === 'PATCH' && p.startsWith('/api/v2/threads/')) { api.patches.push({p, ...req.postDataJSON()}); api.dm = false; return json({id: p.split('/')[4], archived_at: now()}); }
     if (p === '/api/issues') return json([]);
     if (p === '/api/v2/events' || p.endsWith('/watch')) return route.abort();
     // An empty DM: none until the first message or goal makes it (POST /v2/threads/dm with no body).
@@ -46,7 +68,7 @@ async function open(browser, {width = 390, theme = 'dark', tab = 'home', support
     const goal = p.match(/^\/api\/v2\/conversations\/([^/]+)\/goal$/);
     if (goal) {
       const tid = goal[1];
-      if (method === 'GET') { api.goalReads.push(tid); return json({goal: api.goals[tid] || null, supported: supported && !refuse, commands: []}); }
+      if (method === 'GET') { api.goalReads.push(tid); return json({goal: api.goals[tid] || null, supported: supported && !refuse, commands}); }
       const body = req.postDataJSON();
       api.goalPosts.push({tid, ...body});
       if (!supported || refuse) return json({error: {code: 'goal_unsupported', detail: "This bot's harness doesn't support goals"}}, 409);
@@ -229,6 +251,145 @@ async function lines(browser) {
   await page.close();
 }
 
+// The bot's avatar: on a phone, at the bar's left edge before Attach, opening the switcher over the bar (recent bots,
+// the menu, Search) with aria-expanded in step; on a computer there is none.
+async function botSwitch(browser) {
+  let api = await open(browser, {width: 390, recent: ['designer', 'sales-lead']}), {page} = api;
+  const avatar = page.locator('#bot-thread .p-bot'), fan = page.locator('#org-fan');
+  await avatar.waitFor();
+  const at = await page.locator('#bot-thread .thv-composer').evaluate(host => {
+    const x = s => host.querySelector(s).getBoundingClientRect();
+    return {bot: x('.p-bot'), attach: x('.p-attach'), text: x('.p-text'), pill: x('.p-pill')};
+  });
+  assert.ok(at.bot.right <= at.attach.left && at.attach.right <= at.text.left, `avatar, then Attach, then the words (${JSON.stringify(at)})`);
+  assert.ok(Math.abs((at.bot.top + at.bot.bottom) - (at.text.top + at.text.bottom)) <= 6 && at.pill.height < 60, 'one line');
+  assert.equal(await avatar.getAttribute('aria-expanded'), 'false');
+  await avatar.tap();
+  await fan.locator('[data-org-bot="designer"]').waitFor();
+  assert.equal(await avatar.getAttribute('aria-expanded'), 'true');
+  assert.deepEqual(await fan.locator('[data-org-bot]').evaluateAll(els => els.map(e => e.dataset.orgBot)), ['designer', 'sales-lead'], 'the recent bots, not this one');
+  assert.equal(await fan.locator('[data-org-search]').count(), 1);
+  // It rises from the bar: the lowest bot sits above the avatar.
+  const [low, bar] = [await fan.locator('[data-org-bot="designer"]').boundingBox(), await avatar.boundingBox()];
+  assert.ok(low.y + low.height <= bar.y, 'above the bar');
+  await shot(page, 'fan-phone-dark');
+  await page.keyboard.press('Escape');
+  await fan.waitFor({state: 'hidden'});
+  assert.equal(await avatar.getAttribute('aria-expanded'), 'false');
+  // A pick goes to that bot's page.
+  await avatar.tap();
+  await fan.locator('[data-org-bot="designer"]').tap();
+  await page.waitForFunction(() => location.hash.startsWith('#/bot/designer'));
+  assert.equal(await avatar.getAttribute('aria-expanded').catch(() => 'false'), 'false');
+  assert.deepEqual(api.errors, []);
+  await page.close();
+
+  ({page} = api = await open(browser, {width: 1280}));
+  await page.locator('#bot-thread .p-goal:not([hidden])').waitFor();
+  assert.equal(await page.locator('#bot-thread .p-bot').isHidden(), true, 'no avatar in the bar on a computer');
+  await page.close();
+}
+
+// Stop: while the thread's run goes, Stop takes Send's place until something is typed, and posts the stop for that run;
+// it stays pressed until the run ends, then Send is back. Someone who does not manage the bot has no Stop.
+async function stop(browser) {
+  let api = await open(browser, {width: 390, execution: {state: 'running', run_id: 'a1', label: 'Working'}}), {page} = api;
+  const stopBtn = page.locator('#bot-thread .p-stop'), send = page.locator('#bot-thread .p-send'), box = page.locator('#bot-thread .p-text');
+  await stopBtn.waitFor();
+  assert.ok(api.snapshots.includes(HOME), 'the Home reads its own run');
+  assert.equal(await send.isHidden(), true, 'Stop in place of Send');
+  const l = await layout(page);
+  const mid = await stopBtn.evaluate(b => { const r = b.getBoundingClientRect(); return Math.round(r.top + r.height / 2); });
+  assert.ok(Math.abs(mid - l.text) <= 3 && l.pill < 60, 'on the one line');
+  await shot(page, 'running-phone-dark');
+  await box.fill('One more thing');
+  assert.equal(await stopBtn.isHidden(), true, 'typing brings Send back');
+  assert.equal(await send.isHidden(), false);
+  await box.fill('');
+  await stopBtn.waitFor();
+  await stopBtn.tap();
+  await page.waitForFunction(() => document.querySelector('#bot-thread .p-stop')?.disabled);
+  assert.deepEqual(api.stops, [{run_id: 'a1'}]);
+  assert.equal(await stopBtn.getAttribute('title'), 'Stopping…');
+  // The run ends: the thread's run event reads the snapshot again, and Send is back.
+  api.execution = {state: 'canceled', run_id: 'a1', label: 'Stopped'};
+  await page.evaluate(tid => liveEmit('runs', {conversation_id: tid, run_id: 'a1', state: 'canceled'}), HOME);
+  await stopBtn.waitFor({state: 'hidden'});
+  assert.equal(await send.isHidden(), false);
+  // A run starting later (a message just sent) shows Stop again; its output steps do not read anything.
+  const reads = api.snapshots.length;
+  await page.evaluate(tid => liveEmit('runs', {conversation_id: tid, run_id: 'a2', output: {kind: 'delta'}}), HOME);
+  await page.waitForTimeout(250);
+  assert.equal(api.snapshots.length, reads, 'output steps read nothing');
+  api.execution = {state: 'running', run_id: 'a2', label: 'Working'};
+  await page.evaluate(tid => liveEmit('runs', {conversation_id: tid, run_id: 'a2', state: 'running'}), HOME);
+  await stopBtn.waitFor();
+  assert.deepEqual(api.errors, []);
+  await page.close();
+
+  ({page} = api = await open(browser, {width: 1280, role: 'member', execution: {state: 'running', run_id: 'a1'}}));
+  await page.waitForFunction(() => BOT?.thread?.view?.execution);
+  assert.equal(await page.locator('#bot-thread .p-stop').isHidden(), true, 'no Stop for someone who does not manage the bot');
+  assert.equal(await page.locator('#bot-thread .p-send').isHidden(), false);
+  await page.close();
+}
+
+// "/" opens the old chat's command menu; a command does what it did there.
+async function slash(browser) {
+  let api = await open(browser, {width: 390, commands: COMMANDS}), {page} = api;
+  const box = page.locator('#bot-thread .p-text'), menu = page.locator('#bot-thread .slash-menu'), out = page.locator('#bot-thread .p-cmd');
+  await page.locator('#bot-thread .p-goal:not([hidden])').waitFor();
+  await box.fill('/');
+  await menu.waitFor();
+  assert.deepEqual(await menu.locator('.slash-name').allInnerTexts(), ['/goal', '/task', '/help', '/compact'], "the bot's commands; a Home has no /new");
+  await shot(page, 'slash-phone-dark');
+  // It narrows as you type; Return picks the row, and Return again runs it.
+  await box.fill('/he');
+  assert.deepEqual(await menu.locator('.slash-name').allInnerTexts(), ['/help']);
+  await box.press('Enter');
+  assert.equal(await box.inputValue(), '/help');
+  await menu.waitFor({state: 'hidden'});
+  await page.locator('#bot-thread .p-send').click();
+  await out.locator('.slash-help-out').waitFor();
+  assert.match(await out.innerText(), /\/compact/);
+  assert.equal(await box.inputValue(), '');
+  // A harness's command goes to the bot, marked as a command, in this thread; never as a thread message.
+  await box.fill('/compact');
+  await page.locator('#bot-thread .p-send').click();
+  await page.waitForFunction(() => !document.querySelector('#bot-thread .p-text').value);
+  assert.deepEqual(api.commands, [{to: `bot:${BOT}`, text: '/compact', conversation_id: HOME, command: true}]);
+  // /task makes a task for this bot; /goal sets the thread's goal; /clear asks first; anything else is a message.
+  await box.fill('/task Write the pricing brief');
+  await page.locator('#bot-thread .p-send').click();
+  await page.locator('.toast').filter({hasText: 'Task for'}).waitFor();
+  assert.deepEqual(api.tasks, [{title: 'Write the pricing brief', body: 'Write the pricing brief', owner: BOT}]);
+  await box.fill('/goal Ship the Acme pricing page');
+  await page.locator('#bot-thread .p-send').click();
+  await page.locator('#bot-thread .thv-goal .cg-text').waitFor();
+  assert.deepEqual(api.goalPosts, [{tid: HOME, action: 'set', objective: 'Ship the Acme pricing page'}]);
+  await box.fill('/clear');
+  await page.locator('#bot-thread .p-send').click();
+  await out.getByRole('button', {name: 'Clear session'}).waitFor();
+  await box.fill('/unknown words');
+  await page.locator('#bot-thread .p-send').click();
+  await page.waitForFunction(() => !document.querySelector('#bot-thread .th-pending'));
+  assert.deepEqual(api.sent.map(b => b.text), ['/unknown words'], 'a word the bot does not list goes as a message');
+  assert.deepEqual(api.errors, []);
+  await page.close();
+
+  // A DM starts over with /new: it is archived, and the next message makes a fresh one.
+  ({page} = api = await open(browser, {width: 1280, tab: 'dm', commands: COMMANDS}));
+  await page.locator('#bot-thread .p-goal:not([hidden])').waitFor();
+  await page.locator('#bot-thread .p-text').fill('/n');
+  assert.deepEqual(await page.locator('#bot-thread .slash-menu .slash-name').allInnerTexts(), ['/new']);
+  await page.locator('#bot-thread .p-text').fill('/new');
+  await page.locator('#bot-thread .p-send').click();
+  await page.waitForFunction(() => BOT?.thread?.view?.state === 'empty' && !BOT.thread.view.id);
+  assert.deepEqual(api.patches, [{p: `/api/v2/threads/${DM}`, archived: true}]);
+  assert.deepEqual(api.errors, []);
+  await page.close();
+}
+
 (async () => {
   const browser = await launch();
   try {
@@ -237,6 +398,9 @@ async function lines(browser) {
     await emptyDm(browser);
     await refusals(browser);
     await lines(browser);
-    console.log('thread composer: one line, one frame, goal mode on Home and DM, refusals, goal lines: ok');
+    await botSwitch(browser);
+    await stop(browser);
+    await slash(browser);
+    console.log('thread composer: one line, one frame, goal mode on Home and DM, refusals, goal lines, bot switcher, Stop, "/" commands: ok');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
