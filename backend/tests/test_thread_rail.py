@@ -366,13 +366,14 @@ def test_an_activity_event_says_whether_its_message_is_unread_for_each_viewer(ap
     assert [d["unread"] for d in activity("cara-test")] == [False]
 
 
-def test_a_hundred_long_pins_page_through_the_cursor_and_none_is_lost(api):
+def test_a_hundred_long_pins_page_through_the_cursor_and_none_is_lost(api, monkeypatch):
     with api.app.state.store.transaction() as c:
         made = [threads.create(c, "human:ana", title=f"Pinned {n:03d} " + "x" * 1500, audience="company")["id"]
                 for n in range(100)]
         c.executemany("INSERT INTO thread_pins(id,thread_id,actor,pinned,created_at,updated_at) "
                       "VALUES(?,?,'human:ben',1,'2026-11-03','2026-11-03')", [("pin-" + t, t) for t in made])
     joined = new_thread(api, title="Joined")
+    monkeypatch.setattr(threads, "MAX_PAGE_BYTES", 60000)     # a quarter of it holds about ten of these rows
     pinned, rest, page, pages = [], [], listed(api, "rail", "ben-test"), 1
     while True:
         pinned += ids(page["pinned"])
@@ -380,7 +381,8 @@ def test_a_hundred_long_pins_page_through_the_cursor_and_none_is_lost(api):
         if not page["next_cursor"]:
             break
         page, pages = listed(api, "rail", "ben-test", cursor=page["next_cursor"]), pages + 1
-    assert pages > 1 and pinned == made and rest == [joined["id"]]
+    assert pages > 1, len(pinned)
+    assert pinned == made and rest == [joined["id"]]
 
 
 def test_catch_up_previews_in_tree_order_and_counts_every_other_new_message(api):
