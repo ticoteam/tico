@@ -1998,14 +1998,24 @@ APPROVAL_SUMMARY = 200      # one line of a row's summary at most
 APPROVAL_LIST_BYTES = 64 * 1024   # a page stops here, as the other lists do (automations.page); `next` picks it up
 
 
-def approval_rows(c, auth, who, task_view, status):
-    """The approvals addressed to the caller in `status`, newest first, as list rows. Pending is the Needs you set itself
-    (`needs_items`, the read its count takes), so the list and that count never disagree. Every row passes the checks
-    GET /api/v2/approvals/{aid} makes: the caller may open the message and the payload may be shown to them."""
-    if status == "pending":
-        ids = [x["id"] for x in needs_items(c, auth, who, task_view, count_only=True) if x.get("kind") == "approval"]
+def _list_row(aid, status, from_actor, kind, payload, task_id, task_title, readable, message_id, conversation_id, created):
+    """One list row. Its link is the task it came with when the caller may see that task, else the thread of the message
+    it came in, else null. `task_title` is passed only for a readable task."""
+    if readable and task_id:
+        link = "#/task/" + quote(task_id, safe="")
+    elif conversation_id:
+        link = "#/thread/%s?m=%s" % (quote(conversation_id, safe=""), quote(message_id, safe=""))
     else:
-        ids = [r["id"] for r in c.execute("SELECT id FROM approvals WHERE decision=?", (status,))]
+        link = None
+    return {"id": aid, "status": status, "from_actor": from_actor,
+            "summary": approval_title(kind, payload, task_title)[:APPROVAL_SUMMARY],
+            "message_id": message_id, "task_id": task_id, "created": created, "link": link}
+
+
+def pending_rows(c, auth, who, task_view):
+    """The approvals in Needs you's approval set, newest first: `needs_items`, the same read its count takes, so the
+    list and that count cannot disagree. Each row passes the checks GET /api/v2/approvals/{aid} makes."""
+    ids = [x["id"] for x in needs_items(c, auth, who, task_view, count_only=True) if x.get("kind") == "approval"]
     rows = []
     for aid in ids:
         row = H.approval(c, aid)
@@ -2018,20 +2028,74 @@ def approval_rows(c, auth, who, task_view, status):
         except Problem:
             continue
         task_id = row.get("task_id")
-        task = H.task(c, task_id) if task_id and _readable_task_ids(c, auth.task_sql(c, who), [task_id]) else None
-        conversation = msg.get("conversation_id")
-        if task:
-            link = "#/task/" + quote(task_id, safe="")
-        elif conversation:
-            link = "#/thread/%s?m=%s" % (quote(conversation, safe=""), quote(msg["id"], safe=""))
-        else:
-            link = None
-        rows.append({"id": row["id"], "status": row["decision"] or "pending", "from_actor": row["requested_by_id"],
-                     "summary": approval_title(row["kind"], row["payload"], (task or {}).get("title"))[:APPROVAL_SUMMARY],
-                     "message_id": row["message_id"], "task_id": task_id, "created": row["created_at"],
-                     "link": link})
+        readable = bool(task_id) and bool(_readable_task_ids(c, auth.task_sql(c, who), [task_id]))
+        task = H.task(c, task_id) if readable else None
+        rows.append(_list_row(row["id"], "pending", row["requested_by_id"], row["kind"], row["payload"], task_id,
+                              (task or {}).get("title"), readable, msg["id"], msg.get("conversation_id"),
+                              row["created_at"]))
     return sorted(rows, key=lambda r: (r["created"], r["id"]), reverse=True)
 
+
+def history_rows(c, auth, who, status, from_actor, before, since, need):
+    """The approvals addressed to the caller in a decided `status`, newest first, until `need` of them pass the checks
+    (or the history ends). One SQL read per window: the caller's messages joined to their approvals (approvals_message
+    serves the join), the filters in the WHERE, keyset-paged on (created_at, id), so the rows read are the window's and
+    never the company's history. Returns (rows, total) where total counts the rows the SQL filters match, before the
+    checks; the checks are per row of the window."""
+    clauses, args = ["m.recipient_id = ?", "a.decision = ?"], [who.actor, status]
+    if from_actor:
+        clauses.append("a.requested_by_id = ?")
+        args.append(from_actor)
+    if before:
+        clauses.append("a.created_at < ?")
+        args.append(before)
+    if since:
+        clauses.append("a.created_at >= ?")
+        args.append(since)
+    where = " AND ".join(clauses)
+    total = c.execute("SELECT COUNT(*) FROM approvals a JOIN messages m ON m.id=a.message_id WHERE " + where,
+                      args).fetchone()[0]
+    message_cols = [r[1] for r in c.execute("PRAGMA table_info(messages)")]
+    select = ", ".join(["a.id", "a.kind", "a.task_id", "a.message_id", "a.payload", "a.requested_by_id", "a.created_at",
+                        "a.decision", "t.title AS task_title"]
+                       + [f'm."{k}" AS "m_{k}"' for k in message_cols])
+    sql = (f"SELECT {select} FROM approvals a JOIN messages m ON m.id=a.message_id "
+           f"LEFT JOIN tasks t ON t.id=a.task_id WHERE {where}")
+    visible_task = auth.task_sql(c, who)
+    visible, cursor, window = [], None, max(2 * need, 40)
+    while len(visible) < need:
+        cut, cut_args = ("", []) if cursor is None else (
+            " AND (a.created_at < ? OR (a.created_at = ? AND a.id < ?))", [cursor[0], cursor[0], cursor[1]])
+        cur = c.execute(sql + cut + " ORDER BY a.created_at DESC, a.id DESC LIMIT ?", [*args, *cut_args, window])
+        names = [d[0] for d in cur.description]
+        found = [dict(zip(names, r, strict=True)) for r in cur.fetchall()]
+        if not found:
+            break
+        cursor = (found[-1]["created_at"], found[-1]["id"])
+        readable = _readable_task_ids(c, visible_task, [r["task_id"] for r in found if r["task_id"]])
+        for r in found:
+            if len(visible) >= need:
+                break
+            msg = {k[2:]: v for k, v in r.items() if k.startswith("m_")}
+            msg["refs"] = H._json(msg.get("refs"), {}) or {}
+            payload = H._json(r["payload"], {}) or {}
+            row = {"id": r["id"], "kind": r["kind"], "task_id": r["task_id"], "message_id": r["message_id"],
+                   "payload": payload, "requested_by_id": r["requested_by_id"], "decision": r["decision"],
+                   "created_at": r["created_at"], "decision_owner": msg["recipient_id"]}
+            try:
+                if not privacy.message_readable(c, privacy.actor(who), msg, current=True):
+                    continue
+                privacy.require_payload(c, who, row)
+            except Problem:
+                continue
+            task_id = r["task_id"]
+            ok = bool(task_id) and task_id in readable
+            visible.append(_list_row(r["id"], r["decision"], r["requested_by_id"], r["kind"], payload, task_id,
+                                     r["task_title"] if ok else None, ok, r["message_id"], msg.get("conversation_id"),
+                                     r["created_at"]))
+        if len(found) < window:
+            break
+    return visible[:need], total
 
 def install_views(app, store, auth, mutate, task_view):
     def visible_turns(c, who, bot=None, limit=200):
@@ -2808,17 +2872,22 @@ def install_views(app, store, auth, mutate, task_view):
         if status not in APPROVAL_STATUSES:
             raise Problem("validation", "status is pending, approved or declined", 422)
         limit, offset = max(1, min(int(limit), APPROVALS_PAGE_MAX)), max(0, int(offset))
+        need = offset + limit + 1          # one row past the page says whether there is a next page
         with store.read_transaction() as c:
-            rows = approval_rows(c, auth, who, task_view, status)
-            if from_actor:
-                rows = [r for r in rows if r["from_actor"] == from_actor]
-            if before:
-                rows = [r for r in rows if r["created"] < before]
-            if since:
-                rows = [r for r in rows if r["created"] >= since]
+            if status == "pending":
+                rows = pending_rows(c, auth, who, task_view)
+                if from_actor:
+                    rows = [r for r in rows if r["from_actor"] == from_actor]
+                if before:
+                    rows = [r for r in rows if r["created"] < before]
+                if since:
+                    rows = [r for r in rows if r["created"] >= since]
+                total, rows = len(rows), rows[:need]
+            else:
+                rows, total = history_rows(c, auth, who, status, from_actor, before, since, need)
             from .automations import page      # local: automations imports this module
             shown, more = page(rows[offset:], limit, offset, APPROVAL_LIST_BYTES)
-            return {"actor": who.actor, "status": status, "total": len(rows), "approvals": shown, "next": more}
+            return {"actor": who.actor, "status": status, "total": total, "approvals": shown, "next": more}
 
     @app.get("/api/v2/needs-you")
     def needs(request: Request, count: bool = False, ids: str | None = None, version: str | None = None,
