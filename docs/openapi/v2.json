@@ -24302,7 +24302,7 @@
         ]
       },
       "post": {
-        "summary": "Add a subscription: a kind, a name and the pasted value (owners and admins)",
+        "summary": "Add a subscription: a kind, a name, the pasted value and, for a plan, optionally its owner, a person (default: you; an API key has none; owners and admins)",
         "operationId": "addModelSubscription",
         "requestBody": {
           "content": {
@@ -24364,7 +24364,7 @@
     },
     "/api/v2/model-subscriptions/{sid}": {
       "post": {
-        "summary": "Rename a subscription and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true",
+        "summary": "Rename a subscription, change a plan owner and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true",
         "operationId": "changeModelSubscription",
         "parameters": [
           {
@@ -57586,6 +57586,12 @@
           "added_by_name": {
             "type": "string"
           },
+          "owner_id": {
+            "type": "string"
+          },
+          "owner_name": {
+            "type": "string"
+          },
           "created_at": {
             "type": "string"
           },
@@ -57602,6 +57608,8 @@
           "kind",
           "label",
           "name",
+          "owner_id",
+          "owner_name",
           "preview",
           "revision",
           "runtime",
@@ -57677,12 +57685,20 @@
                 },
                 "help": {
                   "type": "string"
+                },
+                "connect": {
+                  "type": "boolean"
+                },
+                "owned": {
+                  "type": "boolean"
                 }
               },
               "required": [
+                "connect",
                 "help",
                 "kind",
                 "label",
+                "owned",
                 "runtime",
                 "secret_label"
               ],
@@ -64145,6 +64161,18 @@
             ],
             "title": "Name"
           },
+          "owner_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Id"
+          },
           "kind": {
             "anyOf": [
               {
@@ -64180,7 +64208,7 @@
         "additionalProperties": false,
         "type": "object",
         "title": "SubscriptionWrite",
-        "description": "A new subscription, or a saved one's reconnect (a new `secret`) or rename. `confirm` accepts that a reconnect\nstops and restarts the live runs on every computer given it."
+        "description": "A new subscription, or a saved one's reconnect (a new `secret`), rename or new owner (`owner_id`, a person; a new\nplan defaults to whoever adds it; an API key has none). `confirm` accepts that a reconnect stops and restarts the\nlive runs on every computer given it."
       },
       "Suggestion": {
         "properties": {
