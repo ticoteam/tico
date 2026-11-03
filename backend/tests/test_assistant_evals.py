@@ -7,6 +7,7 @@ A command is read from the start of a must or must_not regex: `^task (bulk close
 unknown word or flag, which is how the real CLI rejects a command that does not exist.
 """
 import contextlib
+import importlib.util
 import io
 import json
 import os
@@ -20,8 +21,10 @@ import pytest
 from clients import hubcli, hubtools
 
 EVALS = Path(__file__).resolve().parents[2] / "evals" / "assistant"
-sys.path.insert(0, str(EVALS))
-import run as live  # noqa: E402
+# Loaded by file path under a unique name: test_botops_evals.py has its own `run` module.
+_spec = importlib.util.spec_from_file_location("assistant_evals_run", EVALS / "run.py")
+live = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(live)
 
 # The Assistant's new commands land on the chris/assistant-tools branch, not on main. A case may expect them; on main the
 # parser must still reject them. Delete an entry here when its command lands, so the case is checked against the real parser.
