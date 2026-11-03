@@ -98,9 +98,10 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     const seo = page.locator('#upd-feed [data-upd="u-seo"]');
     await seo.waitFor();
     assert.equal(await seo.locator('[data-upd-kids]').count(), 0, 'a card with no reports has no count');
-    assert.equal(await seo.locator('.upd-actions .upd-act').count(), 1, 'the bottom row has just Reply');
-    assert.deepEqual(await seo.locator('.upd-corner .upd-act').evaluateAll(els => els.map(b => b.getAttribute('aria-label'))), ['Mark read', 'Archive'],
-      'Mark read and Archive at the top right');
+    assert.equal(await seo.locator('.upd-actions').evaluate(r => r.children.length === 0 && getComputedStyle(r).display), 'none',
+      'no row under the update: nothing is left in it');
+    assert.deepEqual(await seo.locator('.upd-corner .upd-act').evaluateAll(els => els.map(b => b.getAttribute('aria-label'))), ['Reply', 'Mark read', 'Archive'],
+      'Reply, Mark read and Archive at the top right');
     assert.equal(await seo.locator('.upd-dot').count(), 0, 'one level down only: no dot two levels down');
     // Seen, the deeper card is marked read, and the badge (direct reports only) does not move.
     const read = id => posted.some(x => x.path === '/api/v2/updates/read' && x.body.ids?.includes(id));
@@ -194,6 +195,34 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       assert.ok(rows.length > 0);
       rows.forEach((r, i) => assert.deepEqual(r, {line: true, overlap: false, inside: true, wrapped: false}, `${label}: row ${i} on one line, nothing overlapping`));
     };
+    // Dense cards (Chris, Nov 2): the avatar is the name line's height, at its start; the update runs the card's full
+    // width under it; Reply sits on the name line, just left of Mark read and Archive. A "No update yet" row has the
+    // same avatar at the same inset, so a thread's avatars line up.
+    const dense = async (p, label) => {
+      const cards = await p.locator('#upd-feed .upd-card:not(.upd-edit), #upd-feed .upd-none').evaluateAll(els => els.map(card => {
+        const r = card.getBoundingClientRect(), cs = getComputedStyle(card);
+        const inL = r.left + card.clientLeft + parseFloat(cs.paddingLeft), inR = r.right - card.clientLeft - parseFloat(cs.paddingRight);
+        const box = sel => card.querySelector(sel)?.getBoundingClientRect();
+        const av = box('.upd-av .av'), name = box('.upd-name'), body = box(':scope .upd-body, :scope .upd-deck');
+        const meta = box('.upd-meta'), corner = [...card.querySelectorAll('.upd-corner .upd-act')].map(b => [b.getAttribute('aria-label'), b.getBoundingClientRect()]);
+        const reply = corner.findIndex(([l]) => l.startsWith('Reply')), mid = b => (b.top + b.bottom) / 2;
+        return {id: card.dataset.upd || card.dataset.updNode, none: card.classList.contains('upd-none'),
+          avH: av.height, nameH: name.height, avIn: Math.abs(av.left - inL), avMid: Math.abs(mid(av) - mid(name)),
+          bodyL: body ? Math.abs(body.left - inL) : 0, bodyR: body ? Math.abs(body.right - inR) : 0, bodyBelow: body ? body.top >= av.bottom : true,
+          reply: reply < 0 ? null : {next: corner.slice(reply + 1).map(([l]) => l), onLine: Math.abs(mid(corner[reply][1]) - mid(meta)) <= 1,
+            leftOf: corner[reply][1].right <= corner[reply + 1][1].left + 0.5}};
+      }));
+      assert.ok(cards.some(c => !c.none) && cards.some(c => c.none), `${label}: cards and a "No update yet" row`);
+      for (const c of cards) {
+        assert.ok(Math.abs(c.avH - c.nameH) <= 2, `${label}: ${c.id}'s avatar is the name's height (${c.avH} vs ${c.nameH})`);
+        assert.ok(c.avIn <= 1 && c.avMid <= 1, `${label}: ${c.id}'s avatar starts the name line, at the card's inner edge (${c.avIn}, ${c.avMid})`);
+        assert.ok(c.bodyL <= 1 && c.bodyR <= 1 && c.bodyBelow, `${label}: ${c.id}'s update runs the card's full width under the avatar (${c.bodyL}, ${c.bodyR})`);
+        if (c.none) continue;
+        assert.ok(c.reply, `${label}: ${c.id} has Reply on its name line`);
+        assert.deepEqual(c.reply.next.length, 2, `${label}: ${c.id}'s Reply comes just before Mark read and Archive (${c.reply.next})`);
+        assert.ok(c.reply.onLine && c.reply.leftOf, `${label}: ${c.id}'s Reply sits on the name line, left of the others`);
+      }
+    };
     const tree8 = async (viewport, label) => {
       const {page: p, errors: errs} = await open(viewport);
       await p.goto('http://tico-ui.test/#/updates');
@@ -201,9 +230,9 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       await boss.waitFor();
       const toggle = boss.locator('[data-upd-kids="b:cmo"]');
       assert.deepEqual(await boss.locator('.upd-actions .upd-act').evaluateAll(els => els.map(b => b.getAttribute('aria-label'))),
-        ['Reply', 'Show 8 reports'], `${label}: comment, then the count`);
+        ['Show 8 reports'], `${label}: the count alone under the update`);
       assert.deepEqual(await boss.locator('.upd-corner .upd-act').evaluateAll(els => els.map(b => b.getAttribute('aria-label'))),
-        ['Mark unread', 'Archive'], `${label}: unread and archive at the top right`);
+        ['Reply', 'Mark unread', 'Archive'], `${label}: comment, unread and archive at the top right`);
       assert.equal(await toggle.evaluate(b => [...b.childNodes].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()), '8');
       assert.equal(await toggle.locator('.nav-icon').textContent(), 'chevron_right');
       const [row, main] = [await boss.locator('.upd-actions').boundingBox(), await toggle.boundingBox()];
@@ -262,6 +291,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       for (const g of await glyphs()) assert.ok(icons.has(g), `${label}: icon "${g}" open is in the shipped font`);
       await drawn();
       await fitsRow(p, label);
+      await dense(p, label);
       assert.ok(await p.evaluate(() => document.documentElement.scrollWidth) <= viewport.width, `${label}: no sideways scroll`);
       if (shots) await p.screenshot({path: `${shots}/updates-tree-8-open-${label}.png`, fullPage: true});
       await p.locator('#upd-feed [data-upd-kids="b:seo"]').click();
@@ -298,7 +328,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     await fitsRow(phone.page, 'phone 360');
     if (shots) await phone.page.screenshot({path: `${shots}/updates-tree-phone.png`});
     assert.deepEqual(phone.errors, []);
-    console.log('PASS: Updates nested by the org chart: your card on top, direct reports open and alerting, "8" and a chevron at the right of a card open deeper cards that never alert, hung from it on one line with an elbow each, icon-only actions named by label, title and long press, Whole org from the top of the chart (kept), the badge from direct reports only, writing your own update from your card (as a daily), Mark all read for a badge from another day (gone once read), the week in review on Friday (written and edited as slides), and a phone that fits.');
+    console.log('PASS: Updates nested by the org chart: your card on top, direct reports open and alerting, "8" and a chevron at the right of a card open deeper cards that never alert, hung from it on one line with an elbow each, icon-only actions named by label, title and long press, dense cards (a name-high avatar, the update full width, Reply beside Mark read and Archive), Whole org from the top of the chart (kept), the badge from direct reports only, writing your own update from your card (as a daily), Mark all read for a badge from another day (gone once read), the week in review on Friday (written and edited as slides), and a phone that fits.');
   } finally {
     await browser.close();
   }
