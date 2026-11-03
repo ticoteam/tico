@@ -99,3 +99,38 @@ def test_free_turn_says_no_place_when_its_starts_or_its_claims_are_full(api):
     park(api, machine, fourth)
     assert free_here(api, machine) == 'Test Mac'      # four claims are held: nothing more can be claimed
     assert claim(api, machine) is None
+
+
+def running_turns(api, machine):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT count(*) FROM attempts WHERE runner_id=? AND state='running'",
+                         (machine['runner_id'],)).fetchone()[0]
+
+
+def test_a_claim_leased_after_the_limit_drops_starts_nothing_until_a_place_frees(api):
+    """"Turns at once" lowered from 4 to 1 before the runner hears of it. The next claim is leased (two turns are under
+    twice the new limit) but reserves no place while the first turn runs: its start is refused and one turn runs. Once the
+    first turn ends, the same claim takes the place and starts."""
+    machine = task_bot(api, lanes=True, capacity=4)
+    for title in ("first", "second"):
+        new_task(api, title)
+    first = claim(api, machine)
+    assert post(api, f"attempts/{first['id']}/start-place", {}, machine["token"])["reserved"] is True
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "first-run"}, machine["token"])
+    assert set_computer(api, machine, 1)["turn_limit"] == 1
+    second = claim(api, machine)
+    assert second is not None
+    post(api, f"attempts/{second['id']}/started", {"thread_id": "second-run"}, machine["token"], expected=409)
+    assert running_turns(api, machine) == 1
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "interrupted", "text": "", "last_seq": 0}, machine["token"])
+    assert post(api, f"attempts/{second['id']}/start-place", {}, machine["token"])["reserved"] is True
+    post(api, f"attempts/{second['id']}/started", {"thread_id": "second-run"}, machine["token"])
+    assert running_turns(api, machine) == 1
+
+
+def test_the_live_count_searches_the_runner_state_index(api):
+    """The live count's explicit state IN lets SQLite search attempts_runner_state,
+    not scan every attempt on the computer."""
+    with api.app.state.store.read() as c:
+        plan = [r[3] for r in c.execute("EXPLAIN QUERY PLAN " + start_places.LIVE_SQL, ("runner", H.now()))]
+    assert any("attempts_runner_state" in line for line in plan), plan

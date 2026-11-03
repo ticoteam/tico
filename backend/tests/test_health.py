@@ -887,9 +887,8 @@ def test_an_interrupted_run_fence_explains_a_busy_bot_queue(environment, monkeyp
         assert without_override["reason"] == "busy"
         monkeypatch.setattr(health, "_fenced_queue_reason", original)
 
-        # With every slot occupied, no_slot is the truthful immediate wait reason, while dead stays explicit. One
-        # running turn is then the whole claim bound (LIVE_CAP_FACTOR 1), so the computer is full.
-        monkeypatch.setattr(start_places, "LIVE_CAP_FACTOR", 1)
+        # With every slot occupied, no_slot is the truthful immediate wait reason, while dead stays explicit. One running
+        # turn fills the computer's only place, so it is full at the default claim bound (2 x the limit, not reached).
         c.execute("UPDATE runners SET capacity=1 WHERE id=?", (runner,))
         [full] = health._waiting(c, online)[1]
         assert (full["reason"], full["wait_reason"]) == ("busy", "no_slot") and full["dead"] >= 1
