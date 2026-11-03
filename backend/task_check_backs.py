@@ -408,11 +408,23 @@ def _unchanged_wakes(c, row):
     return count
 
 
+def explicit(c, row):
+    """Whether a person or bot set the current due time itself; the keeper's defaults, repairs and re-parks are not."""
+    last = c.execute("SELECT actor FROM task_events WHERE task_id=? AND field='check_back_at' "
+                     "ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
+    return bool(last) and last["actor"] != _H().KEEPER
+
+
 def changed(c, row):
-    """Whether anyone but the bot moved the task since its last check-back wake; no recorded wake counts as changed."""
+    """Whether anyone but the bot moved the task since its last delivered check-back wake. No recorded wake counts as
+    changed, and so does a notice a moved due time canceled before delivery: the bot never received it."""
     seen = c.execute("SELECT created_at,new FROM task_events WHERE task_id=? AND field='check_back_wake' "
                      "ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
     if not seen or seen["new"] != stand(c, row):
+        return True
+    last = c.execute("SELECT j.state FROM task_check_back_wakes w JOIN jobs j ON j.message_id=w.message_id "
+                     "WHERE w.task_id=? ORDER BY w.sent_at DESC LIMIT 1", (row["id"],)).fetchone()
+    if last and last["state"] == "canceled":
         return True
     return bool(c.execute("SELECT 1 FROM task_events WHERE task_id=? AND created_at>=? AND field NOT LIKE 'check_back%' "
                           "AND actor IS NOT ? LIMIT 1", (row["id"], seen["created_at"], actor_for(row))).fetchone())
@@ -545,7 +557,8 @@ def sweep(c, at=None, failures=None, task_ids=None):
                 result["blocked"].append(row["id"])
                 continue
             count, _ = _repairs(c, row)
-            if max(count, _unchanged_wakes(c, row)) >= H.STALL_WAKES_PER_DAY and not external_wait(c, row):
+            # A bot's own appointment always wakes it: what it waits on is usually outside Tico, so no change here is expected.
+            if not explicit(c, row) and max(count, _unchanged_wakes(c, row)) >= H.STALL_WAKES_PER_DAY and not external_wait(c, row):
                 repair(c, row, at)
                 result["blocked"].append(row["id"])
                 continue
@@ -560,8 +573,8 @@ def sweep(c, at=None, failures=None, task_ids=None):
                 result["blocked"].append(row["id"])
                 continue
             first = not c.execute("SELECT 1 FROM task_check_back_wakes WHERE task_id=? LIMIT 1", (row["id"],)).fetchone()
-            if not first and not changed(c, row):
-                repair(c, row, at, note=None)  # nothing moved: check later, keeping the expected note
+            if not first and not explicit(c, row) and not changed(c, row):
+                repair(c, row, at, note=None)  # keeper-set and nothing moved: check later, keeping the expected note
                 continue
             if first:
                 firsts = c.execute("SELECT count(*) FROM task_check_back_wakes w JOIN messages m ON m.id=w.message_id "

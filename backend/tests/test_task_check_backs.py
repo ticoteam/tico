@@ -381,7 +381,7 @@ def test_old_results_cannot_starve_current_inspections(followups, monkeypatch):
         assert CB.coverage(c)["results"] == 1000
 
 
-def test_explicit_reparking_without_progress_reaches_one_diagnostic(followups, monkeypatch):
+def test_unchanged_keeper_repairs_reach_one_diagnostic(followups, monkeypatch):
     routed = []
     def escalate(c, row, count):
         routed.append(row["id"])
@@ -392,24 +392,32 @@ def test_explicit_reparking_without_progress_reaches_one_diagnostic(followups, m
     monkeypatch.setattr(H, "_escalate_stuck", escalate)
     with followups.app.state.store.transaction() as c:
         row = due(c, task(c))
-        assert CB.sweep(c)["woke"] == [row["id"]]  # the first inspection still goes out
-        for _ in range(3):  # re-parking with nothing new backs off instead of waking the bot again
-            handled(c, row["id"])  # the bot's turn ran and ended before the next explicit re-park
-            CB.set_time(c, H.task(c, row["id"]), "5m", actor="bot:ops")
-            due(c, H.task(c, row["id"]))
-            assert CB.sweep(c)["woke"] == [] and routed == []
+        assert CB.sweep(c)["woke"] == [row["id"]]
         handled(c, row["id"])
-        CB.set_time(c, H.task(c, row["id"]), "5m", actor="bot:ops")
+        for _ in range(3):  # nothing moves; each keeper repair records one more unchanged pass
+            CB.repair(c, H.task(c, row["id"]), H.now())
+        assert routed == []
+        CB.repair(c, H.task(c, row["id"]), H.now())
+        assert routed == [row["id"]]
+        CB.repair(c, H.task(c, row["id"]), H.now())
+        assert routed == [row["id"]]  # one diagnostic per unchanged stand, not one per repair
+
+
+def test_bot_set_appointment_wakes_with_no_new_activity_and_never_routes_a_diagnostic(followups, monkeypatch):
+    routed = []
+    monkeypatch.setattr(H, "_no_diagnosis", lambda *a: None)
+    monkeypatch.setattr(H, "_escalate_stuck", lambda c, row, count: routed.append(row["id"]))
+    with followups.app.state.store.transaction() as c:
+        row = task(c)
+        for _ in range(4):  # the bot waits on something outside Tico (CI, a deploy, a reply) and nothing in Tico moves
+            due(c, H.task(c, row["id"]))
+            assert CB.sweep(c)["woke"] == [row["id"]]
+            handled(c, row["id"])  # the bot's turn ran and ended before its next appointment
+            CB.set_time(c, H.task(c, row["id"]), "5m", "Check the CI run.", actor="bot:ops")
+        assert routed == []
         due(c, H.task(c, row["id"]))
-        assert CB.sweep(c)["woke"] == [] and routed == [row["id"]]
-        diagnostic = CB._recovery(c, H.task(c, row["id"]))
-        H.task_update(c, "bot:finance", diagnostic["id"], status="done")
-        due(c, H.task(c, row["id"]))
-        assert CB.sweep(c)["woke"] == [] and routed == [row["id"]]
-        assert CB.view(H.task(c, row["id"]), c)["delivery"] == "recovery_blocked"
-        CB.set_time(c, H.task(c, row["id"]), "2h", actor="human:ana")
-        due(c, H.task(c, row["id"]))
-        assert CB.sweep(c)["woke"] == [row["id"]]  # an explicit person's retry is meaningful intervention
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        assert len(wakes(c, row["id"])) == 5
 
 
 def test_result_consumer_must_record_disposition_instead_of_reparking(followups):
@@ -484,12 +492,13 @@ def test_due_passes_while_a_notice_is_queued_leave_exactly_one_job(followups):
     with followups.app.state.store.transaction() as c:
         row = due(c, task(c))
         assert CB.sweep(c)["woke"] == [row["id"]]
-        # The due time moves again while the first notice still waits (a snooze end, a deferral, a repair).
+        # The due time moves again while the first notice still waits (a snooze end, a deferral, a repair). That notice is
+        # obsolete: it is canceled and one current notice replaces it; the next pass finds that one in flight.
         c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (H.shift(H.now(), seconds=-2), row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]
         assert CB.sweep(c)["woke"] == []
-        assert CB.sweep(c)["woke"] == []
-        assert c.execute("SELECT count(*) FROM task_check_back_wakes WHERE task_id=?", (row["id"],)).fetchone()[0] == 1
-        assert [w["job_state"] for w in wakes(c, row["id"])] == ["queued"]
+        assert c.execute("SELECT count(*) FROM task_check_back_wakes WHERE task_id=?", (row["id"],)).fetchone()[0] == 2
+        assert sorted(w["job_state"] for w in wakes(c, row["id"])) == ["canceled", "queued"]
 
 
 def test_later_due_time_wakes_again_once_the_first_notice_is_handled(followups):
@@ -667,7 +676,7 @@ def test_repeat_wake_with_nothing_new_backs_off_and_keeps_its_note(followups):
         row = due(c, task(c))
         assert CB.sweep(c)["woke"] == [row["id"]]  # the first inspection goes out whatever has changed
         handled(c, row["id"])
-        CB.set_time(c, H.task(c, row["id"]), "45m", "Inspect the review.", actor="bot:ops")  # the bot's own re-park
+        CB.set_time(c, H.task(c, row["id"]), "45m", "Inspect the review.", system=True)  # a keeper-set re-park
         due(c, H.task(c, row["id"]))
         assert CB.sweep(c)["woke"] == []
         after = H.task(c, row["id"])
@@ -681,7 +690,7 @@ def test_repeat_wake_goes_out_once_a_person_adds_a_message_or_event(followups, c
         row = due(c, task(c))
         assert CB.sweep(c)["woke"] == [row["id"]]
         handled(c, row["id"])
-        CB.set_time(c, H.task(c, row["id"]), "45m", actor="bot:ops")
+        CB.set_time(c, H.task(c, row["id"]), "45m", system=True)  # a keeper-set re-park
         due(c, H.task(c, row["id"]))
         assert CB.sweep(c)["woke"] == []
         if change == "message":
