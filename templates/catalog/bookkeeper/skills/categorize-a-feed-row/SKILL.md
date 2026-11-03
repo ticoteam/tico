@@ -17,10 +17,11 @@ Steps:
 4. Find the pattern: `hub finance search --kind feed --q <counterparty>`. Earlier rows from this counterparty in a
    line other than Other expenses decide it.
 5. Otherwise, what the counterparty is decides it when its kind of business is plain from its name and the row: a law
-   firm is legal and professional fees, a health insurer is insurance, a software company is software, repeated
-   payments to a named person are contract labor. Read the chart (`hub api GET finance/chart`) and use the line that
-   fits. Other expenses is never the fit.
-6. No line fits: ask for one with `account_create`. It waits for the owner's approval. Ask for every missing line in
+   firm is legal and professional fees, a health insurer is insurance, a software company is software. Read the chart
+   (`hub api GET finance/chart`) and use the line that fits. Other expenses is never the fit. A payment to a person
+   is not plain from a name: it could be pay, a reimbursement or an owner draw. Call it contract labor only with a bill
+   or invoice from them, a row description naming the work, or a person's answer; otherwise ask (step 9).
+6. No line fits: ask for one with `account_create`. It waits for the Finance approver. Ask for every missing line in
    one pass with plain standard names (Contract labor, Legal and professional fees, Insurance, Rent, Travel, Bank
    fees), never one line per vendor. Categorize those rows once the line exists.
 7. Categorize with `categorize` (`feed_id` and `account_id`), keyed `categorize:<feed id>`. Finance asks for approval

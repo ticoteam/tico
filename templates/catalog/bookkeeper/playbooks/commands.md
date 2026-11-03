@@ -28,8 +28,8 @@ approver. Use it when unsure, then send the same command without it. A kind's fi
 ## Posting, attaching, rules
 - `hub finance act categorize --payload '{"feed_id":"<feed id>","account_id":"<account id>"}' --operation-id categorize:<feed id>` — posts a bank or card row to a line.
 - `hub finance act attach --payload '{"subject_kind":"<bill|feed|entry|invoice>","subject_id":"<id>","file_ids":["<file id>"]}' --operation-id attach:<file id>` — adds a file to an existing document. For a receipt with no match, `subject_kind` is `unmatched` and there is no `subject_id`.
-- `hub api GET finance/chart` — the chart of accounts: each line's id, code, name and type.
-- `hub finance act account_create --payload '{"code":"<unused code>","name":"Legal and professional fees","type":"expense"}' --operation-id account:<name>` — asks for a new chart line; the owner approves it.
+- `hub api GET finance/chart` — the chart of accounts: each line's id, number (its code), name and type.
+- `hub finance act account_create --payload '{"code":"<a number no line has>","name":"Legal and professional fees","type":"expense"}' --operation-id account:<name>` — asks for a new chart line; the Finance approver approves it.
 - `hub finance act rule_create --payload '<JSON with the fields from help>' --operation-id rule:<counterparty>` — proposes a posting rule; the owner approves it.
 - `hub finance act contact_create --payload '<JSON with the fields from help>' --operation-id contact:<name>` — a new vendor, only when no search finds one.
 - `hub finance act reconcile --payload '<JSON with the fields from help>' --operation-id reconcile:<money account id>:<statement end>` — matches a statement to the feed.
