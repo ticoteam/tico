@@ -717,6 +717,25 @@ def test_a_person_reply_on_a_bot_requested_task_wakes_the_bot_at_the_keepers_rep
         assert len(wakes(c, row["id"])) == 2
 
 
+def test_quiet_repeats_never_feed_the_stall_gate_so_a_later_reply_still_wakes(followups, monkeypatch):
+    routed = []
+    monkeypatch.setattr(H, "_no_diagnosis", lambda *a: None)
+    monkeypatch.setattr(H, "_escalate_stuck", lambda c, row, count: routed.append(row["id"]))
+    with followups.app.state.store.transaction() as c:
+        row = due(c, H.task_create(c, "bot:ops", "Ask Ana about the rename", "Ask before renaming.", "human:ana", lint=False))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        handled(c, row["id"])
+        for _ in range(3):  # nothing new: the keeper's repeats back off without waking the bot or counting as repairs
+            due(c, H.task(c, row["id"]))
+            assert CB.sweep(c)["woke"] == []
+        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='check_back_repair'",
+                         (row["id"],)).fetchone()[0] == 0
+        H.task_comment(c, "human:ana", row["id"], "Use the new name.", wake=False)
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        assert routed == [] and len(wakes(c, row["id"])) == 2
+
+
 def test_hourly_cap_counts_repeat_wakes_as_well_as_first_ones(followups, monkeypatch):
     monkeypatch.setattr(CB, "WAKES_PER_BOT_HOUR", 1)
     with followups.app.state.store.transaction() as c:

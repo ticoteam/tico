@@ -435,7 +435,22 @@ def changed(c, row):
                           "AND actor IS NOT ? LIMIT 1", (row["id"], seen["created_at"], actor_for(row))).fetchone())
 
 
-def repair(c, row, at, note="Recovery follow-up: inspect the unresolved work and its handoff."):
+def quiet(c, row, at):
+    """A keeper-set repeat with nothing new: check later on a doubling back-off from 30 minutes, capped at the 8h repair
+    cap, keeping the expected note. It is not a repair, so it never feeds the stall count that escalates work nothing moves."""
+    H = _H()
+    state = stand(c, row)
+    count = 0
+    for r in c.execute("SELECT field,new FROM task_events WHERE task_id=? AND field IN ('check_back_quiet','check_back_wake') "
+                       "ORDER BY created_at DESC,rowid DESC LIMIT 12", (row["id"],)):
+        if r["field"] == "check_back_wake" or r["new"] != state:
+            break
+        count += 1
+    set_time(c, row, H.shift(at, minutes=min(30 * 2 ** min(count, 4), 480)), system=True, at=at)
+    _event(c, row["id"], H.KEEPER, "check_back_quiet", None, state, "Nothing moved since the last check-back")
+
+
+def repair(c, row, at):
     H = _H()
     count, state = _repairs(c, row)
     delay = min(30 * 2 ** min(count, 4), 480)
@@ -453,7 +468,7 @@ def repair(c, row, at, note="Recovery follow-up: inspect the unresolved work and
     if recovery:
         ensure(c, recovery, at)
         until = H.task(c, recovery["id"]).get("check_back_at") or until
-    after = set_time(c, row, until, note, system=True, at=at)
+    after = set_time(c, row, until, "Recovery follow-up: inspect the unresolved work and its handoff.", system=True, at=at)
     _event(c, row["id"], H.KEEPER, "check_back_repair", None,
                   json.dumps({"stand": state, "count": count + 1, "recovery_task": recovery["id"] if recovery else None}), "")
     return after
@@ -578,7 +593,7 @@ def sweep(c, at=None, failures=None, task_ids=None):
                 continue
             first = not c.execute("SELECT 1 FROM task_check_back_wakes WHERE task_id=? LIMIT 1", (row["id"],)).fetchone()
             if not first and not explicit(c, row) and not changed(c, row):
-                repair(c, row, at, note=None)  # keeper-set and nothing moved: check later, keeping the expected note
+                quiet(c, row, at)  # keeper-set and nothing moved: back off, without counting as a repair
                 continue
             if first:
                 firsts = c.execute("SELECT count(*) FROM task_check_back_wakes w JOIN messages m ON m.id=w.message_id "
