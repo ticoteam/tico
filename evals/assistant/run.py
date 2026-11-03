@@ -172,6 +172,12 @@ def write_answer(words, state, mutate, argv, ids):
         if mutate:
             record(state, "bot", tid, {"status": status})
         return {"ok": True, "bot": {"id": tid, "status": status}}
+    if noun == "settings" and verb == "set" and len(words) > 3 and words[2] == "bot.compact_at" and words[3].isdigit():
+        bot = argv_flag(argv or [], "--bot")
+        if bot:
+            if mutate:
+                record(state, "bot", bot[-1], {"compact_at": int(words[3])})
+            return {"ok": True, "key": "bot.compact_at", "bot": bot[-1], "value": int(words[3])}
     if noun == "bot" and verb == "model" and tid and len(words) > 3 and not words[3].startswith("-"):
         fields = {"model": words[3], **({"effort": e[-1]} if (e := argv_flag(argv or [], "--effort")) else {})}
         if mutate:
@@ -380,6 +386,11 @@ def answer(argv, via, tool=None):
         key = lookup(bot_models, words[2])
         if key is not None and "model" in bot_models[key] and isinstance(out, dict):
             out = {**out, "model": bot_models[key]["model"]}
+    if (after_out is None and isinstance(out, dict) and words[:3] == ["settings", "show", "bot.compact_at"]
+            and (b := argv_flag(argv, "--bot"))):
+        key = lookup(bot_models, b[-1])
+        if key is not None and "compact_at" in bot_models[key]:
+            out = {**out, "bot": b[-1], "value": bot_models[key]["compact_at"]}
     if after_out is None and out is not None and not isinstance(out, str):
         if words[:2] == ["task", "list"]:
             keep = ("--all" in words or "closed" in flag_values(words, "--where-status")
