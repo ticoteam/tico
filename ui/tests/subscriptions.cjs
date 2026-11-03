@@ -358,6 +358,24 @@ async function connectPlan(browser) {
   await dialog.locator('[data-paste] button').click();
   await until(page, () => writes.at(-1).p.endsWith('/code'), 'the pasted code');
   assert.deepEqual(writes.at(-1).body, {code: 'pasted-code'});
+  // A code rejected by the CLI ends the attempt even while that command would otherwise wait for Enter.
+  // Try again starts a fresh login and offers its code field, rather than leaving the old code marked sent.
+  const rejectedId = data.login.id;
+  Object.assign(data.login, {state: 'failed', url: '', accepts_code: false,
+    message: 'The sign-in could not finish. Choose Try again and use the code from the new sign-in page.',
+    lines: ['sk-ant-oat01-not-for-the-page']});
+  await dialog.locator('[data-retry]').waitFor();
+  assert.match(await dialog.locator('[data-status]').innerText(), /sign-in could not finish/);
+  assert.doesNotMatch(await dialog.innerText(), /sk-ant-oat|Code sent/);
+  await dialog.locator('[data-retry]').click();
+  await dialog.locator('[name=code]').waitFor();
+  assert.notEqual(data.login.id, rejectedId);
+  assert.deepEqual(writes.at(-1), {p: '/api/v2/model-subscriptions/connect', method: 'POST', body: {kind: 'claude_token', name: 'Company Max'}});
+  await dialog.locator('[name=code]').fill('fresh-code');
+  await dialog.locator('[data-paste] button').click();
+  await until(page, () => writes.at(-1).p.endsWith('/code'), 'the fresh code');
+  assert.equal(writes.at(-1).p, `/api/v2/computers/r1/logins/${data.login.id}/code`);
+  assert.deepEqual(writes.at(-1).body, {code: 'fresh-code'});
   // Done when the server says so: the row appears, and the dialog goes by itself.
   data.subs.push({id: 's8', name: 'Company Max', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'new', status_detail: '', computers: [], usage: null, added_by: 'ana'});
   Object.assign(data.login, {state: 'done', url: ''});
