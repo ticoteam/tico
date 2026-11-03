@@ -169,6 +169,25 @@ def test_admits_on_turn_refuses_what_the_person_alone_decides():
     assert not admits_on_turn("POST", "/api/v2/tasks/t1", {"status": "done", "api_key": "x"})
 
 
+def test_an_outward_step_is_a_card_on_create_and_on_change_but_a_name_is_not(api):
+    """A webhook, reply or forward in an automation's steps is a card whether a turn creates the automation or adds the
+    step to one that exists. The name of an automation sends nothing, so a rename to "Forward ..." is not a card."""
+    hook = {"id": "hook", "type": "action", "do": "call_webhook", "args": {"webhook": "wh1"}}
+    store = api.app.state.store
+    assert assistant.automation_sends_outside(store, "POST", "/api/v2/automations", {"name": "Hook", "steps": [hook]})
+    aid = post(api, "automations", flow(owner="person:ana"))["id"]
+    assert assistant.automation_sends_outside(store, "PATCH", f"/api/v2/automations/{aid}", {"steps": [hook]})
+    assert not assistant.automation_sends_outside(store, "PATCH", f"/api/v2/automations/{aid}",
+                                                  {"name": "Forward invoices"})
+    assert not assistant.automation_sends_outside(store, "POST", "/api/v2/automations",
+                                                  {**flow(owner="person:ana"), "name": "Forward invoices"})
+    token = assistant_turn(api, "ana-test")[1]["token"]
+    created = api.post("/api/v2/automations", json=flow(owner="person:ana", steps=[hook]), headers=headers(token))
+    assert created.status_code == 403 and created.json()["error"]["code"] == "confirm_required", created.text
+    changed = api.patch(f"/api/v2/automations/{aid}", json={"steps": [hook]}, headers=headers(token))
+    assert changed.status_code == 403 and changed.json()["error"]["code"] == "confirm_required", changed.text
+
+
 def api_room(api, token):
     return get(api, "assistant", token)["room_id"]
 

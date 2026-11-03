@@ -302,20 +302,26 @@ OUTSIDE_ACTIONS = ("call_webhook", "send_reply", "forward")
 
 
 def _sends(flow):
-    """Whether a flow (stored text, or the parsed JSON of a request's `flow`) holds an outside action."""
+    """Whether a flow (stored text, or the parsed JSON of a request's `flow` or `steps`) holds an outside action."""
     text = flow if isinstance(flow, str) else json.dumps(flow or "")
     return any(action in text for action in OUTSIDE_ACTIONS)
 
 
+def _body_sends(fields):
+    """Whether a write's body holds an outside action in the fields that become its steps. The name, trigger and batch
+    send nothing, and checking the whole body would make a rename to "Forward the invoices" a card."""
+    return any(_sends(fields.get(key)) for key in ("flow", "steps"))
+
+
 def automation_sends_outside(store, method, path, body=None):
-    """Whether this write makes or changes an automation that sends something outside (its flow holds one of
-    `OUTSIDE_ACTIONS`): a create whose body holds one, a change to a stored one (its stored flow, or the body's flow), a
+    """Whether this write makes or changes an automation that sends something outside (its steps hold one of
+    `OUTSIDE_ACTIONS`): a create whose body holds one, a change to a stored one (its stored flow, or the body's steps), a
     run of one, and a restore of a version that holds one. Only the person's own tap does those, so a turn's change is a
     card (`confirm_required`)."""
     p = canonical(path) or ""
     fields = _fields(body)
     if p == "/api/v2/automations":
-        return method == "POST" and _sends(fields.get("flow"))
+        return method == "POST" and _body_sends(fields)
     if method not in ("PATCH", "PUT", "DELETE", "POST"):
         return False
     restore = re.fullmatch(r"/api/v2/automations/([^/]+)/versions/(\d+)/restore", p)
@@ -330,7 +336,7 @@ def automation_sends_outside(store, method, path, body=None):
     with store.read() as c:
         row = c.execute("SELECT flow FROM automations WHERE id=?", (m.group(1),)).fetchone()
     stored = str(row["flow"] or "") if row else ""
-    return _sends(stored) or ("flow" in fields and _sends(fields["flow"]))
+    return _sends(stored) or _body_sends(fields)
 
 
 def settings_route_unmatched(method, path, body=None):
