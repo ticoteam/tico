@@ -309,6 +309,8 @@ REVIEWED = {
     "POST /api/v2/judge": "asks the LLM judge; 'provider' is the model provider",
     "POST /api/v2/rules/read": "reads a rules document with the company's model provider; writes nothing",
     "POST /api/v2/bots/{bot}/tools": "registers a bot's tool manifest; clients/access_entry refuses any credential in it",
+    "POST /api/v2/bots/{bot}/copy": "copies a bot the person may copy; no secret is shown in the chat, and the route checks the person's right",
+    "PUT /api/v2/usage/limits": "a spend cap, not a credential; the person sets it on their own word",
     "POST /api/v2/assistant/actions": "the Assistant's own card route: a proposal the person confirms",
 }
 

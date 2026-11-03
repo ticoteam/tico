@@ -267,11 +267,8 @@ NEVER = [(m, re.compile(p)) for m, p in (
     (None, r"/api/v2/mail/google/connect"), (None, r"/api/v2/finance/(connections|books/connect)(/.*)?"),
     ("POST", r"/api/v2/live-meetings"), ("POST", r"/api/v2/meeting-importers/[^/]+"), (None, r"/api/v2/postal/intake"),
     (None, r"/api/v2/federation(/.*)?"),
-    # Subscriptions and the company's spending limits: the owner's own tap.
+    # Subscriptions: the owner's own tap.
     (None, r"/api/v2/subscriptions(/.*)?"), (None, r"/api/v2/runner-subscription-refreshes(/.*)?"),
-    (None, r"/api/v2/usage/limits"),
-    # A copy of a bot grants the copy the original's credentials (backend/bot_copy.py `credentials_for`).
-    (None, r"/api/v2/bots/[^/]+/copy"),
     # Single sign-on, the directory and its SCIM token, and the OAuth sign-in of an agent.
     (None, r"/api/v2/directory(/.*)?"), (None, r"/api/v2/oauth(/.*)?"),
     # Handing the company to another owner.
