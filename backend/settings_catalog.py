@@ -369,6 +369,12 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None, card_direct
         kind = e.when_held if tried[0] else "direct"
     # The plan is never what a card runs (the card runs the route itself), so BotOps acting for a person always gets
     # the card here, and with no way to make one it gets nothing it could run.
+    # A turn's direct change runs only where the gate would admit the run itself (the Assistant's own switches, a credential,
+    # SQL, token or support grant, a sign-in or a removal are the person's own tap): those stay Confirm cards.
+    if direct_ok:
+        from .assistant import admits_on_turn
+        direct_ok = admits_on_turn(e.method, "/api/v2/" + request["path"], body)
+        card_direct = not direct_ok
     needs_card = kind == "confirm" or (kind == "direct" and card_direct)
     if direct_ok and not (tried and tried[0]):
         needs_card = False
@@ -536,11 +542,6 @@ def install(app, store, auth, settings):
                 except Problem:
                     cited = False
                 direct_ok = cited and bool(team_rules.load(c)["assistant_direct"])
-                # The rules the gate refuses on a turn (a credential, SQL, token or support grant, and the Assistant's own
-                # switches) stay a Confirm card: the person's own tap, as before.
-                rule = e.key[len("team.rules."):] if e.key.startswith("team.rules.") else ""
-                if rule in team_rules.CREDENTIAL_RULES or rule in ("assistant_direct", "assistant_approvals"):
-                    direct_ok = False
                 card_direct = not direct_ok
 
             return plan(c, auth, who, e, body.value, target, settings.public_url, propose=propose,

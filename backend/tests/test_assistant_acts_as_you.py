@@ -310,6 +310,7 @@ REVIEWED = {
     "POST /api/v2/rules/read": "reads a rules document with the company's model provider; writes nothing",
     "POST /api/v2/bots/{bot}/tools": "registers a bot's tool manifest; clients/access_entry refuses any credential in it",
     "POST /api/v2/bots/{bot}/copy": "copies a bot the person may copy; no secret is shown in the chat, and the route checks the person's right",
+    "POST /api/v2/settings/catalog/{key}/plan": "plans a setting and names the run it would make; the run is checked by the gate when it is made",
     "PUT /api/v2/access/rules": "refused by the keys on its body (credential and Assistant rules, in admits_on_turn); the walk sends no body",
     "PUT /api/v2/usage/limits": "a spend cap, not a credential; the person sets it on their own word",
     "POST /api/v2/assistant/actions": "the Assistant's own card route: a proposal the person confirms",

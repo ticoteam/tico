@@ -81,7 +81,7 @@ def test_a_turn_closes_tasks_in_bulk(api):
     done = call(api, token, "POST", "task-bulk", {"filter": {"ids": ids}, "action": "close"})
     assert done["changed"] == 2, done
     with api.app.state.store.read() as c:
-        assert [H.task(c, t)["status"] for t in ids] == ["done", "done"]
+        assert [H.task(c, t)["status"] for t in ids] == ["closed", "closed"]
         assert H.task(c, outside)["status"] == "open"
 
 
@@ -103,7 +103,8 @@ def test_a_turn_approves_after_a_read_back_and_a_plain_yes_with_the_setting_on(a
     post(api, "assistant/settings", {"decides_approvals": True}, token="ana-test")
     runner, first = assistant_turn(api, "ana-test", "Go ahead with the ads")
     call(api, first["token"], "POST", "assistant/read-back", {"approvals": [approval]})
-    # The next turn is the same runner's: its yes is a new message, and the runner claims the next job.
+    # The first run ends, then the next turn is the same runner's: its yes is a new message and the next job.
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0}, token=runner["token"])
     say(api, "Yes", "ana-test")
     yes = post(api, "jobs/claim", {}, token=runner["token"])["attempt"]["token"]
     call(api, yes, "POST", f"approvals/{approval}", {"decision": "approved", "note": ""})
@@ -149,7 +150,7 @@ def test_a_turn_pauses_and_resumes_a_bot(api):
 def test_a_turn_sets_a_bot_model(api):
     repo_bot(api)
     catalog = get(api, "models")
-    model = next(m["id"] for m in catalog["models"] if not m.get("deprecated"))
+    model = next(m["id"] for m in catalog["models"] if m.get("runtime") == "codex" and not m.get("deprecated"))
     token = turn(api, "Use the cheaper model for Ops")
     revision = call(api, token, "GET", "bots/ops")["revision"]
     call(api, token, "POST", "bots/ops/model", {"model": model, "expected_revision": revision})
