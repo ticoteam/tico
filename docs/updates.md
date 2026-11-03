@@ -288,8 +288,8 @@ Every computer runs the Rust runner (`tico-runner`, from `runner-rs/`). The laun
   before the runner restarts (`python -m runner.engine prepare`); an update that cannot get it backs out and the
   runner keeps running the old release.
 - **A Mac checkout's wait for its binary:** when a release changed the runner's sources, the Mac binaries are added to
-  the release a few minutes after the other assets. A Mac with no `cargo` on PATH does not try for them until they
-  are listed: its update waits and says why, and the runner keeps running the old release meanwhile. After an hour
+  the release after the other assets. A Mac with no `cargo` on PATH does not try for them until they are listed: its
+  update waits and says why. The runner keeps the old release and takes no new work while it waits. After an hour
   without them the update fails with that reason and is tried again later. Mac builds never block the release itself.
 
 A binary is only run when it was built from this checkout's `runner-rs` sources. When there is none and none can be
