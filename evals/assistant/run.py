@@ -45,6 +45,7 @@ sys.path.insert(0, os.environ["EVAL_REPO"] + "/clients")
 argv = sys.argv[1:]
 line = " ".join(argv)
 canon = re.sub(r" --on-behalf-of \S+", "", line)
+words = canon.split()
 log = open(os.environ["EVAL_LOG"], "a")
 err, out = io.StringIO(), io.StringIO()
 code = 0
@@ -71,21 +72,103 @@ for i, a in enumerate(argv[:-1]):
             files[argv[i + 1]] = open(argv[i + 1]).read()[:1500]
         except Exception:
             pass
+
+# State: what the writes in this run changed, so later reads show it (the real hub does the same).
+state_path = os.environ["EVAL_STATE"]
+try:
+    state = json.load(open(state_path))
+except Exception:
+    state = {}
+state.setdefault("tasks", {})        # task id -> status
+state.setdefault("automations", {})  # automation id -> enabled
+WRITE_VERBS = {"update", "delete", "archive", "restore", "label", "withdraw", "answer", "approve", "decline", "done",
+               "close", "cancel", "set", "remove", "add", "bulk"}
+
+
+def flag_values(name):
+    return [words[i + 1] for i, w in enumerate(words[:-1]) if w == name]
+
+
+def write_answer(mutate):
+    """The answer the real hub gives a write: the changed object. Records the change in the state when `mutate`."""
+    noun, verb = words[0], (words[1] if len(words) > 1 else "")
+    tid = words[2] if len(words) > 2 and not words[2].startswith("-") else None
+    if noun == "task" and verb == "close" and tid:
+        if mutate:
+            state["tasks"][tid] = "closed"
+        return {"ok": True, "task": {"id": tid, "status": "closed"}}
+    if noun == "task" and verb == "update" and tid:
+        status = (flag_values("--status") or [None])[-1]
+        if mutate and status:
+            state["tasks"][tid] = status
+        return {"ok": True, "task": {"id": tid, **({"status": status} if status else {})}}
+    if noun == "task" and verb == "bulk" and len(words) > 2:
+        action = words[2]
+        ids = flag_values("--where-id")
+        dry = "--dry-run" in words
+        n = len(ids) if ids else 3
+        new_status = "closed" if action == "close" else (words[3] if action == "status" and len(words) > 3 else None)
+        if mutate and not dry and ids and new_status:
+            for i in ids:
+                state["tasks"][i] = new_status
+        key = "closed" if action == "close" else "changed"
+        return {"ok": True, "dry_run": dry, "matched": n, key: 0 if dry else n, "ids": ids}
+    if noun == "automation" and verb == "update" and tid:
+        enabled = False if "--disable" in words else True if "--enable" in words else None
+        if mutate and enabled is not None:
+            state["automations"][tid] = enabled
+        return {"ok": True, "automation": {"id": tid, **({"enabled": enabled} if enabled is not None else {})}}
+    if noun == "approval" and verb == "decline" and tid:
+        return {"ok": True, "approval": {"id": tid, "status": "declined"}}
+    if noun == "rules" and verb == "add":
+        return {"ok": True, "rule": {"id": "rule_1", "status": "active"}}
+    return None
+
+
+def apply_state(obj, table, field, drop=None):
+    """Set `field` on each dict in obj whose id is in table; with `drop`, leave out the list items whose table value is drop."""
+    if isinstance(obj, list):
+        kept = []
+        for item in obj:
+            if isinstance(item, dict) and item.get("id") in table and drop is not None and table[item["id"]] == drop:
+                continue
+            kept.append(apply_state(item, table, field, drop))
+        return kept
+    if isinstance(obj, dict):
+        obj = {k: apply_state(v, table, field, drop) for k, v in obj.items()}
+        if obj.get("id") in table:
+            obj[field] = table[obj["id"]]
+    return obj
+
+
 canned = json.load(open(os.environ["EVAL_CANNED"]))
-for row in canned:
-    if re.search(row["match"], canon):
-        log.write(json.dumps({"argv": line, "matched": row["match"], "files": files}) + "\n")
-        out = row.get("out", "")
-        print(out if isinstance(out, str) else json.dumps(out, indent=1))
-        sys.exit(int(row.get("exit", 0)))
-log.write(json.dumps({"argv": line, "files": files}) + "\n")
-verb = argv[1] if len(argv) > 1 else ""
-if verb in ("list", "search", "recent-runs", "runs", "held"):
-    print(json.dumps({"items": [], "next_offset": None}))
-elif verb in ("create", "comment", "ask", "send"):
-    print(json.dumps({"ok": True, "id": "t_" + str(abs(hash(canon)) % 100000)}))
+row = next((r for r in canned if re.search(r["match"], canon)), None)
+# A canned row that fails (exit non-zero) changes nothing in the state.
+resp = write_answer(mutate=not (row and int(row.get("exit", 0))))
+log.write(json.dumps({"argv": line, "matched": row["match"] if row else None, "files": files}) + "\n")
+if row:
+    out = row.get("out", "")
+    if words[:2] == ["task", "list"] and not isinstance(out, str):
+        keep = "--all" in words or "closed" in flag_values("--where-status") or "closed" in flag_values("--status")
+        out = apply_state(out, state["tasks"], "status", None if keep else "closed")
+    if words[:2] == ["automation", "show"] and not isinstance(out, str):
+        out = apply_state(out, state["automations"], "enabled")
+    print(out if isinstance(out, str) else json.dumps(out, indent=1))
+elif resp is not None:
+    print(json.dumps(resp))
 else:
-    print(json.dumps({"ok": True}))
+    verb = words[1] if len(words) > 1 else ""
+    if verb in ("list", "search", "recent-runs", "runs", "held"):
+        print(json.dumps({"items": [], "next_offset": None}))
+    elif verb in ("create", "comment", "ask", "send"):
+        print(json.dumps({"ok": True, "id": "t_" + str(abs(hash(canon)) % 100000)}))
+    else:
+        reply = {"ok": True}
+        if verb in WRITE_VERBS and len(words) > 2 and not words[2].startswith("-"):
+            reply["id"] = words[2]
+        print(json.dumps(reply))
+json.dump(state, open(state_path, "w"))
+sys.exit(int(row.get("exit", 0)) if row else 0)
 '''
 
 
@@ -176,7 +259,7 @@ def run_sample(case, sample, args, outdir):
     mail.write_text("#!/bin/sh\necho '[]'\n")
     mail.chmod(0o755)
     env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "EVAL_REPO": args.repo, "EVAL_LOG": str(logf),
-           "EVAL_CANNED": str(work / "canned.json"), "HUB_DIR": str(work / "hubdir"), "TICO_BOT": "coo"}
+           "EVAL_CANNED": str(work / "canned.json"), "EVAL_STATE": str(work / "state.json"), "HUB_DIR": str(work / "hubdir"), "TICO_BOT": "coo"}
     cmd = ["claude", "-p", turn_text(case), "--model", args.model, "--effort", effort, "--setting-sources", "project",
            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--no-session-persistence",
            "--permission-mode", "bypassPermissions", "--output-format", "json", "--max-turns", str(args.max_turns)]
