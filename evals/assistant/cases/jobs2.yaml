@@ -458,7 +458,7 @@
     - '^question answer 3f0e9a52\S*'
     - '^message send(?! -h\b| --help)'
     - '^approval (approve|decline)(?! -h\b| --help)'
-    - '^task create .*--owner botops'
+    - '^task create .*--owner (bot:)?botops'
   reply: |
     Answers BotOps's question about the support inbox bot with Dana's words (yes, go ahead), and says in one line that it is
     answered. It does not answer the Health Monitor question, which Dana did not mention, and does not message BotOps separately.
@@ -500,15 +500,15 @@
         tasks:
           - {id: a13f9e20-71cd-4b8e-a0f3-2c9d5e6b7a10, title: "Spring launch: launch email", status: doing, owner: "bot:copywriter", requester: "human:dana", note: "Draft 2 is in review.", created: "2026-10-14T15:20:00Z", updated: "2026-10-31T11:40:00Z"}
         next_offset: null
-    - match: '^message send (--fyi )?copywriter'
+    - match: '^message send (--fyi )?(bot:)?copywriter'
       out:
         ok: true
         to: "bot:copywriter"
         delivered: true
   must:
-    - '^message send (--fyi )?copywriter\b'
+    - '^message send (--fyi )?(bot:)?copywriter\b'
   must_not:
-    - '^message send (?!(--fyi )?copywriter\b)'
+    - '^message send (?!(--fyi )?(bot:)?copywriter\b)'
     - '^task (close|bulk close|update)(?! -h\b| --help)'
     - '^approval (approve|decline)(?! -h\b| --help)'
   reply: |
@@ -653,6 +653,11 @@
   group: jobs2
   prompt: "Undo the last change to the release-notes automation."
   hub:
+    - match: '^automation list'
+      out:
+        automations:
+          - {id: auto_docs_release, name: "Docs and release notes for each release", owner: "bot:technical-writer", trigger: "release published", enabled: false, runs_7d: 0, creates: "one task per release, owner human:dana"}
+        next: null
     - match: '^automation versions auto_docs_release'
       out:
         versions:
@@ -744,7 +749,7 @@
   must_not:
     - '^support (file|report|send)(?! -h\b| --help)'
     - '^message send(?! -h\b| --help)'
-    - '^task create .*--owner botops'
+    - '^task create .*--owner (bot:)?botops'
   reply: |
     Points Dana to the Tico team for this bug: a link [Message the Tico team](#/support). It does not file a support report
     itself, does not promise a fix or a date, and does not claim it can fix the panel. One or two short lines, perhaps asking
