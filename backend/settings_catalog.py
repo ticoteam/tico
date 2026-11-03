@@ -380,9 +380,13 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None, card_direct
     if direct_ok and not (tried and tried[0]):
         needs_card = False
     if acting_for and needs_card:
-        if propose is None or (can_card and not can_card(e.method, "/api/v2/" + request["path"])):
+        if propose is None:
             raise Problem("unavailable", f"{e.name} needs your yes on a Confirm card, which can't be made here: open "
                           + link, 503, extra={"link": link})
+        if can_card and not can_card(e.method, "/api/v2/" + request["path"]):
+            # A route no card can carry (a NEVER route for the Assistant): refused plainly, not an outage.
+            raise Problem("forbidden", f"{e.name} can't be changed through a chat: open " + link, 403,
+                          extra={"link": link})
         words = tried and tried[1]
         if words:
             return propose(c, who, e.method, "/api/v2/" + request["path"], body, words[:300], what=words)

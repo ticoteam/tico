@@ -257,7 +257,7 @@ def test_botops_and_the_assistant_give_every_setting_the_same_class_and_who_may(
             # Cards for a direct entry (the owner's rule off): a card wherever BotOps can make one, else the link.
             if got == "run" and settings_catalog.kind_for(e, {}) == "direct":
                 carded = outcome(c, auth, assistant, e, card_direct=True)
-                assert carded == "card" or carded[0] == "unavailable", (e.key, carded)
+                assert carded == "card" or carded[0] in ("unavailable", "forbidden"), (e.key, carded)
     assert {"run", "card", "person_only"} <= seen or role == "human", seen
 
 
@@ -272,6 +272,9 @@ def test_the_assistant_may_card_every_catalogue_route_botops_may():
             assert path[len("/api/v2/"):].count("/") == e.route.count("/") + 1 and valid_operation(e.method, path, None, "botops"), e.key
 
 
+ASSISTANT_REFUSED = {"mail.intake"}
+
+
 @pytest.mark.parametrize("role", ["owner", "admin", "member"])
 def test_every_setting_does_for_the_assistant_what_it_does_for_botops(api, role):
     """Stage 1's sweep (test_settings_parity) asked of the person's Assistant on their cited words: every entry ran, was
@@ -282,10 +285,18 @@ def test_every_setting_does_for_the_assistant_what_it_does_for_botops(api, role)
     objects = parity._objects(api, runner(api))
     r, attempt = assistant_turn(api, token, "Change my settings")
     wrong, unproven = [], {}
-    for e in ENTRIES:
+    # bot.archive goes last: it archives the bot the other entries act on.
+    for e in sorted(ENTRIES, key=lambda e: e.key == "bot.archive"):
         with api.app.state.store.read() as c:
             want = parity.KNOWN_GAPS.get((e.key, role)) or parity.expected(c, e, role, person)
         got = parity.ask(api, attempt, e, objects, person, token)
+        if e.key in ASSISTANT_REFUSED:
+            # Assistant-only divergence: postal intake is a NEVER route (it takes mail from outside, backend/assistant.py),
+            # so no card can carry it on a cited turn and the planner refuses it as forbidden (403). BotOps runs it
+            # directly as an admin.
+            assert got == "refused" and parity.LAST[e.key].startswith("403") and '"forbidden"' in parity.LAST[e.key], \
+                (e.key, got, parity.LAST.get(e.key))
+            continue
         if got in ("ran", "card", "refused", "card, then refused"):
             # On the person's own cited turn the Assistant applies a confirm-class setting at once (the person's rights are
             # the ceiling; BotOps still cards it): the one divergence the Assistant is meant to have.
