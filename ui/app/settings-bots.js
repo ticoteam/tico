@@ -514,11 +514,16 @@ const settingsBotSearchModels = e => {
   return {bot, task: e.agent ? null : e.task_model?.model ? e.task_model : bot};
 };
 const settingsSearchModelWords = model => model ? [model.model, settingsModelName(model.model)] : [];
-// Every word can occur in the name, slug, role, description, team, bot model or effective task model.
+// A bot's owners as the Owners column shows them.
+const settingsBotOwners = e => (e.bot_owners || []).length ? e.bot_owners : (e.users || []);
+// Every word can occur in the name, slug, role, description, team, bot model or effective task model, the label and
+// owner's name of the bot's computer (as the Computer column shows them), its cloud machine's name, or an owner's name.
 const settingsBotMatches = (e, q) => {
   const {bot, task} = settingsBotSearchModels(e);
   return !q.trim() || searchIncludes([e.display_name, botDisplayName(e.id), e.slug, e.role,
-    e.description, e.team && teamLabel(e.team), ...settingsSearchModelWords(bot), ...settingsSearchModelWords(task)], q);
+    e.description, e.team && teamLabel(e.team), ...settingsSearchModelWords(bot), ...settingsSearchModelWords(task),
+    e.machine?.label, e.machine && settingsPersonName(e.machine.owner_id), cloudMachineLabel(e),
+    ...settingsBotOwners(e).map(o => o.name || o.id)], q);
 };
 function settingsBotSearchMatch(e) {
   const words = SETTINGS_BOTS_VIEW.q.trim().split(/\s+/).filter(Boolean);
@@ -535,7 +540,7 @@ function settingsBotsSearchHTML(shown, total) {
   const view = SETTINGS_BOTS_VIEW, picking = view.picking || view.selected.size > 0;
   return `<div class="settings-bots-filters">
     <span class="sb-search"><input class="settings-filter-search" type="search" autocomplete="off" spellcheck="false" enterkeyhint="search" data-bots-search
-      value="${esc(view.q)}" placeholder="Search bots or models" aria-label="Search bots" aria-controls="settings-bots-list">
+      value="${esc(view.q)}" placeholder="Search bots, models or computers" aria-label="Search bots, models or computers" aria-controls="settings-bots-list">
       <button type="button" class="sb-search-clear" data-bots-search-clear aria-label="Clear search" ${view.q ? '' : 'hidden'}>×</button></span>
     <span class="settings-bots-count" data-bots-count role="status">${shown === total ? '' : `${shown} of `}${total} bot${total === 1 ? '' : 's'}</span>
     <span class="sb-pick-tools"><button type="button" class="linkish" data-bots-pick-all ${picking ? '' : 'hidden'}>Select all</button>
@@ -714,7 +719,7 @@ function renderSettingsBots() {
     ? `<input type="checkbox" data-bot-pick="${esc(e.id)}" aria-label="Select ${esc(e.display_name)}" ${SETTINGS_BOTS_VIEW.selected.has(e.id) ? 'checked' : ''}>`
     : `<input type="checkbox" disabled aria-label="${esc(e.display_name)} cannot be changed here" title="${e.agent ? 'An external agent uses its own model' : 'You do not own this bot'}">`;
   const stack = e => {
-    const owners = (e.bot_owners || []).length ? e.bot_owners : (e.users || []);
+    const owners = settingsBotOwners(e);
     const names = owners.map(o => o.name || o.id);
     return `<span class="sb-stack" title="${esc(names.join(', ') || 'No owner')}">${owners.slice(0, 3).map(o => personCircle(o.name || o.id, 22)).join('')}${owners.length > 3 ? `<span class="more">+${owners.length - 3}</span>` : ''}${owners.length ? '' : '<span class="muted">None</span>'}</span>`;
   };
