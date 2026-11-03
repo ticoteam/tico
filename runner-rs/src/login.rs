@@ -233,6 +233,8 @@ struct Inner {
     /// A Connect's result, until the server has taken it (`Logins::flush`).
     captured: Option<String>,
     save_retry_logged: bool,
+    /// Every byte the command has printed, so the part after a typed code can be found once `raw` is trimmed.
+    seen: usize,
 }
 
 /// One login command, from start to a verdict.
@@ -400,6 +402,60 @@ fn sign_in_status(runtime: &str, exe: &str, env: &Env) -> Option<(bool, String)>
         // No status command: the login file in this sign-in's config folder is the sign-in, as readiness checks it.
         "file" => crate::hosts::file_signed_in(runtime, env).map(|on| (on, if on { crate::hosts::file_sign_in_detail(runtime, env).map(String::from).unwrap_or(status.ready_detail) } else { String::new() })),
         _ => None,
+    }
+}
+
+/// A Connect's screen after the code went in, as one line for the runner's log: links, the typed code and anything
+/// token-shaped taken out (`redact`), the last 240 characters. A code that the CLI accepted but then stops on (a
+/// question, a choice, an error with no retry) shows here; before, the log went quiet between code_written and cancel.
+fn screen_digest(raw: &str, typed: &str) -> String {
+    let mut text = plain(raw);
+    if !typed.is_empty() {
+        text = text.replace(typed, "");
+    }
+    let text = squash(&redact(&patterns().link.replace_all(&text, "[link]")));
+    let skip = text.chars().count().saturating_sub(240);
+    text.chars().skip(skip).collect()
+}
+
+struct AfterCode {
+    seen_at: usize,
+    checked: Instant,
+    logged: Instant,
+    last: String,
+}
+
+impl AfterCode {
+    fn new(seen_at: usize) -> AfterCode {
+        let now = Instant::now();
+        AfterCode { seen_at, checked: now, logged: now, last: String::new() }
+    }
+
+    /// Every 2 s: a changed screen is logged; an unchanged one says it is still waiting every 20 s.
+    fn check(&mut self, s: &Session) {
+        if self.checked.elapsed() < Duration::from_secs(2) {
+            return;
+        }
+        self.checked = Instant::now();
+        let (since, digest) = {
+            let i = s.inner.lock().unwrap();
+            let since = i.seen.saturating_sub(self.seen_at);
+            let mut from = i.raw.len().saturating_sub(since);
+            while !i.raw.is_char_boundary(from) {
+                from += 1;
+            }
+            (since, screen_digest(&i.raw[from..], i.typed.as_deref().unwrap_or("")))
+        };
+        if digest != self.last {
+            log(&format!("Tico runner: model sign-in {}", json!({"login_id": s.id, "runtime": s.runtime,
+                "phase": "after_code_screen", "elapsed_ms": s.started.elapsed().as_millis(), "bytes": since, "screen": digest})));
+            self.last = digest;
+            self.logged = Instant::now();
+        } else if self.logged.elapsed() >= Duration::from_secs(20) {
+            log(&format!("Tico runner: model sign-in {}", json!({"login_id": s.id, "runtime": s.runtime,
+                "phase": "waiting_after_code", "elapsed_ms": s.started.elapsed().as_millis(), "bytes": since})));
+            self.logged = Instant::now();
+        }
     }
 }
 
@@ -733,6 +789,7 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
                 let (raw, hide) = {
                     let mut i = s.inner.lock().unwrap();
                     i.raw.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    i.seen += n;
                     if i.raw.len() > KEEP_RAW {
                         let mut cut = i.raw.len() - KEEP_RAW;
                         while !i.raw.is_char_boundary(cut) {
@@ -771,6 +828,8 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
     // A Connect's command that printed its token and then would not end: its token still counts.
     let mut token_at = None;
     let mut stopped_after_token = false;
+    // After a Connect's code is typed: what the command shows, as a scrubbed line, when it changes (`after_code`).
+    let mut watch: Option<AfterCode> = None;
     let verdict: Option<(String, String)> = loop {
         match child.try_wait() {
             Ok(Some(_)) | Err(_) => break None,
@@ -809,12 +868,16 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
                     i.taken = true;
                     i.dirty = true;
                     s.trace("code_written", None);
+                    watch = connect.then(|| AfterCode::new(i.seen));
                 } else {
                     s.trace("code_delivery_failed", None);
                     kill(&mut child);
                     break Some(("failed".into(), "The code could not reach the sign-in command. Choose Try again.".into()));
                 }
             }
+        }
+        if let Some(w) = watch.as_mut() {
+            w.check(&s);
         }
         std::thread::sleep(Duration::from_millis(100));
     };
@@ -1648,6 +1711,20 @@ impl Logins {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_screen_after_a_code_is_logged_without_its_link_code_or_token() {
+        let raw = "\x1b[2GSelect\x1b[9Gan\x1b[12Gorganization\r\n\x1b]8;;https://claude.com/cai/oauth/authorize?code=true\x07link\x1b]8;;\x07 \
+                   https://claude.com/x?state=abc \r\nsecretcode12345\r\nsk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789\r\n> Acme\r\n";
+        let digest = screen_digest(raw, "secretcode12345");
+        assert!(digest.contains("Select an organization"), "{digest}");
+        assert!(digest.contains("> Acme"), "{digest}");
+        for leak in ["secretcode12345", "sk-ant-oat01", "abcdefghijklmnop", "https://", "state=abc"] {
+            assert!(!digest.contains(leak), "{leak} in {digest}");
+        }
+        let long = "word ".repeat(200);
+        assert!(screen_digest(&long, "").chars().count() <= 240);
+    }
 
     #[test]
     fn connect_takes_a_printed_token_only_once_it_has_all_arrived() {
