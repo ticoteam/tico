@@ -559,9 +559,9 @@ async function computersTable(browser) {
   assert.doesNotMatch(await table.innerText(), /0 starting/, 'the long queue line is on the computer page');
   // The picker offers the subscriptions for that tool; with none, the computer's own login, else the Gateway.
   const claude = row('r2').locator('[data-subs-pick=claude]');
-  assert.deepEqual(await claude.locator('option').allInnerTexts(), ['Gateway', 'Claude Max (Ana)', 'Claude Max (Sam)']);
+  assert.deepEqual(await claude.locator('option').allInnerTexts(), ['Gateway', 'Claude Max (Ana)', 'Claude Max (Sam)', 'Claude Max (Dee)']);
   assert.equal(await claude.inputValue(), 's1');
-  assert.deepEqual(await row('r1').locator('[data-subs-pick=codex] option').allInnerTexts(), ['Signed in here', 'ChatGPT Pro (Ana)', 'OpenAI key (company)']);
+  assert.deepEqual(await row('r1').locator('[data-subs-pick=codex] option').allInnerTexts(), ['Signed in here', 'ChatGPT Pro (Ana)', 'OpenAI key (company)', 'ChatGPT Team (Cy)']);
   assert.equal(await row('r4').locator('[data-subs-needs-update]').count(), 2, 'an older computer says Needs update');
   assert.equal(await row('r1').locator('.machine-chip').count(), 1, 'Muse Code shows its login as before');
   // Under its own column a tool's chip says its state, not the tool's name again.
