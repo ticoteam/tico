@@ -1442,8 +1442,17 @@ impl ClaudeHost {
             return;
         }
         let mut rest = Vec::with_capacity((len - offset) as usize);
-        if file.take(len - offset).read_to_end(&mut rest).is_err() {
+        if (&mut file).take(len - offset).read_to_end(&mut rest).is_err() {
             return;
+        }
+        if (rest.len() as u64) < len - offset {
+            // Cut while it was read: start again from its end now, as a whole read would have.
+            if let Ok(now) = file.metadata().map(|m| m.len()) {
+                if now < offset {
+                    self.inner().goal_offsets.insert(thread_id.into(), now);
+                    return;
+                }
+            }
         }
         let complete = rest.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
         for line in rest[..complete].split(|b| *b == b'\n') {
