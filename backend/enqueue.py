@@ -14,7 +14,7 @@ A hub database without Store's job queue (no `jobs` table) queues nothing.
 
 Every writer that inserts into `messages` calls `enqueue` right after its INSERT, in the same transaction: hubdb._write_message
 (every say, ask, answer, notice, feed and comment), threads._carrier (a thread member's wake) and
-external_sync.import_messages (always quiet). Until migration 0051 this rule was the `queue_bot_message` trigger, and the
+external_sync.import_messages (always quiet). Until migration 0052 this rule was the `queue_bot_message` trigger, and the
 trigger's SQL and this module agree row for row (tests/test_enqueue.py).
 """
 import json

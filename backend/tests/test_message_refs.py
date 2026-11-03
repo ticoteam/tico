@@ -1,4 +1,4 @@
-"""The typed refs keys a message is routed, queued and fenced by (`message_refs`, migration 0050)."""
+"""The typed refs keys a message is routed, queued and fenced by (`message_refs`, migration 0051)."""
 import pytest
 
 from backend.enqueue import _sql_zero

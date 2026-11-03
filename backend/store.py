@@ -1422,7 +1422,7 @@ class Store:
                     c.execute("INSERT INTO cloud_migrations VALUES(10,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=11").fetchone():
                     # Native live transcripts are written into the room without queueing a
-                    # runner turn. The queue rule is backend/enqueue.py (migration 0051 dropped the trigger).
+                    # runner turn. The queue rule is backend/enqueue.py (migration 0052 dropped the trigger).
                     c.execute("INSERT INTO cloud_migrations VALUES(11,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=12").fetchone():
                     # Spoken decisions and live tool lines join transcripts as room history

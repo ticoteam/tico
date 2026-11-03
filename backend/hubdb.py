@@ -7650,7 +7650,7 @@ def message_task_id(message, conversation=None):
 
 def _task_ref_sql(path):
     """The SQL twin of `_task_ref` for one `$.key` of `m.refs`: an array yields its first element. A query that reads
-    the message alone reads `message_refs.ref_task_id` (migration 0050), the same value for `$.task`; this stays for
+    the message alone reads `message_refs.ref_task_id` (migration 0051), the same value for `$.task`; this stays for
     MESSAGE_TASK_SQL, which callers splice under other aliases."""
     return (f"CASE WHEN json_type(m.refs,'{path}')='array' THEN json_extract(m.refs,'{path}[0]') "
             f"ELSE json_extract(m.refs,'{path}') END")

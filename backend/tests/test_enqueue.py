@@ -196,7 +196,7 @@ def test_a_bot_hand_off_held_as_a_note_queues_nothing(api):
     assert sent == [(ops, coo, "say", False)] and refs.get("quiet")
 
 
-# The trigger as the last release that had it defined it (backend/store.py before migration 0051), kept here as the
+# The trigger as the last release that had it defined it (backend/store.py before migration 0052), kept here as the
 # oracle `enqueue` is checked against row for row on the odd inputs the product's writers never produce.
 _HARNESSES = "'hermes','openclaw','grokbot','dots','muse'"
 _LEGACY_TRIGGER = (

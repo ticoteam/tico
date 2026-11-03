@@ -168,7 +168,7 @@ def test_secret_tables_and_columns_are_denied_for_everyone(api, world):
 
 
 def test_the_message_refs_view_is_denied_to_everyone(api, world):
-    """`message_refs` (migration 0050) reads `messages` without the per-caller rows a `messages` query sees, so SQL
+    """`message_refs` (migration 0051) reads `messages` without the per-caller rows a `messages` query sees, so SQL
     never reads it: the typed refs keys are read as json_extract over the caller's own `messages`."""
     for token in ("ana-test", "cara-test", world["attempt"]["token"]):
         for sql in ("SELECT * FROM message_refs", "SELECT ref_task_id FROM message_refs",

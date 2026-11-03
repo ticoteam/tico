@@ -17,8 +17,8 @@ def test_store_drops_legacy_queue_trigger_and_drains_queued_self_messages(tmp_pa
         H.sync_registry(c, {"coo": {"name": "coo", "status": "active"}},
                         {"people": []})
         c.execute("DELETE FROM cloud_migrations WHERE version=8")
-        # A database as an older release left it: it never recorded migration 0051, and still has the trigger.
-        c.execute("DELETE FROM schema_migrations WHERE version='0051_drop_queue_bot_message'")
+        # A database as an older release left it: it never recorded migration 0052, and still has the trigger.
+        c.execute("DELETE FROM schema_migrations WHERE version='0052_drop_queue_bot_message'")
         c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
         c.execute("CREATE TRIGGER queue_bot_message AFTER INSERT ON messages "
                   "WHEN NEW.recipient_id LIKE 'bot:%' BEGIN "
@@ -31,7 +31,7 @@ def test_store_drops_legacy_queue_trigger_and_drains_queued_self_messages(tmp_pa
                          (self_message["id"],)).fetchone()[0] == "queued"
     store.initialize()
     with store.transaction() as c:
-        # The start ran 0051 again (it was not recorded): the trigger is gone, and cloud step 8 drained the self message.
+        # The start ran 0052 again (it was not recorded): the trigger is gone, and cloud step 8 drained the self message.
         assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='queue_bot_message'").fetchone()
         assert c.execute("SELECT state FROM jobs WHERE message_id=?",
                          (self_message["id"],)).fetchone()[0] == "completed"

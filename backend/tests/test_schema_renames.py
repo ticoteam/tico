@@ -72,7 +72,7 @@ def restore(path):
 # Dropped as redundant by backend/migrations/0042_drop_unused_indexes.sql, and kpis_goal by
 # backend/migrations/0044_drop_kpi_goal_columns.py with kpis.goal_id, the column it indexes.
 DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals", "tasks_private_parties", "kpis_goal"}
-# Dropped by backend/migrations/0051_drop_queue_bot_message.sql: backend/enqueue.py queues the job in Python now.
+# Dropped by backend/migrations/0052_drop_queue_bot_message.sql: backend/enqueue.py queues the job in Python now.
 DROPPED_TRIGGERS = {"queue_bot_message"}
 # Dropped by backend/migrations/0035_growth_rethink.py after the renames ran on them.
 RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments", "growth_idea_segments",
