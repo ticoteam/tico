@@ -354,6 +354,66 @@ def unnote(api, args):
     return api.post(f"notes/{args['id']}/cancel", {}, key=_key(args))["note"]
 
 
+FEEDBACK_SUBJECT = _s("What was rated", enum=["message", "task", "approval"])
+
+
+@tool("hub_feedback_give", "Rate a message, task or approval a bot made, 👍 (up) or 👎 (down), with an optional reason. "
+      "Rating again replaces your earlier one. tell_bot (a 👎 only) leaves the bot a note for its next run in that "
+      "conversation. People only.",
+      {"subject_type": FEEDBACK_SUBJECT, "subject_id": _s("Its id"), "rating": _s("up or down", enum=["up", "down"]),
+       "reason": _s("Why, in a few words (at most 1000 characters)"), "tell_bot": {"type": "boolean", "default": False}},
+      required=("subject_type", "subject_id", "rating"), writes=True)
+def feedback_give(api, args):
+    body = {k: args[k] for k in ("subject_type", "subject_id", "rating", "reason", "tell_bot") if args.get(k) is not None}
+    return api.post("feedback", body, key=_key(args))
+
+
+@tool("hub_feedback_remove", "Remove your feedback; a note it left that no run carried yet is taken back.",
+      {"id": _s("The feedback id")}, required=("id",), writes=True)
+def feedback_remove(api, args):
+    return api.call("DELETE", "feedback/" + quote(args["id"], safe=""), None, key=_key(args))
+
+
+@tool("hub_feedback_markers", "Everyone's feedback on these subjects (at most 200 ids), for the ones you may read.",
+      {"subject_type": FEEDBACK_SUBJECT, "subject_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 200,
+                                                          "description": "Their ids"}},
+      required=("subject_type", "subject_ids"))
+def feedback_markers(api, args):
+    ids = args["subject_ids"]
+    return api.get("feedback", subject_type=args["subject_type"],
+                   subject_ids=ids if isinstance(ids, str) else ",".join(ids))
+
+
+@tool("hub_feedback_list", "Feedback newest first, a page at a time, on what you may read. next_cursor reads the next page.",
+      {"bot_id": _s("Only feedback on this bot's work (`bot:<slug>`)"), "rating": _s("up or down", enum=["up", "down"]),
+       "since": _s("An ISO time, or 24h / 7d"), "cursor": _s("next_cursor of the page before"),
+       "limit": {"type": "integer", "minimum": 1, "maximum": 100}})
+def feedback_list(api, args):
+    return api.get("feedback/list", **{k: args.get(k) for k in ("bot_id", "rating", "since", "cursor", "limit")})
+
+
+@tool("hub_feedback_reasons", "Your five latest distinct feedback reasons, each with how often you used it.", {})
+def feedback_reasons(api, args):
+    return api.get("feedback/recent-reasons")
+
+
+@tool("hub_feedback_rule_draft", "A one-sentence org rule drafted from your 👎's reason and the rated work. Stores "
+      "nothing; drafted is false when no model drafted it and the reason came back as it is.",
+      {"id": _s("Your feedback id")}, required=("id",))
+def feedback_rule_draft(api, args):
+    return api.post("feedback/" + quote(args["id"], safe="") + "/rule-draft", {})
+
+
+@tool("hub_feedback_rule", "Make your 👎 an internal org rule for the bot, or every bot: active when you manage that "
+      "Who, otherwise a suggestion.",
+      {"id": _s("Your feedback id"), "text": _s("The rule, one sentence"),
+       "all_bots": {"type": "boolean", "default": False, "description": "Every bot, not only the one rated"}},
+      required=("id", "text"), writes=True)
+def feedback_rule(api, args):
+    body = {"text": args["text"], **({"all_bots": True} if args.get("all_bots") else {})}
+    return api.post("feedback/" + quote(args["id"], safe="") + "/rule", body, key=_key(args))
+
+
 @tool("hub_question_ask", "Ask one or more bots a question and wait for their answers. Returns one entry "
       "per bot: `answer`, `unknown`, `timeout`, `warning` (delivered to a bot over its spend limit; not waited for) or `error`, "
       "each with the ask's `message_id` once it was delivered. "
@@ -7480,6 +7540,9 @@ AUDIENCE = {
     "hub_changelog_list": HUMANS_AND_ASSISTANT, "hub_changelog_mark_read": HUMANS_AND_ASSISTANT,
     "hub_proposal_decide": HUMANS_AND_ASSISTANT,
     "hub_bot_mail": PEOPLE,                         # backend/mail_settings.py: a person only
+    # Feedback is a person's own (backend/feedback.py refuses a bot); a rule draft spends on a model, so no bot asks.
+    **{name: PEOPLE for name in ("hub_feedback_give", "hub_feedback_remove", "hub_feedback_rule_draft",
+                                 "hub_feedback_rule")},
     **{f"hub_needs_you_{step}": PEOPLE for step in ("start", "next", "respond", "commit", "abandon")},
     "hub_tool_report": ("agent",),
     "hub_update_create": BOTS,                      # only a bot posts an update

@@ -2663,6 +2663,46 @@ SCHEMAS.update({
 })
 
 
+# Feedback on bot work (backend/feedback.py): 👍/👎 with a reason on a message, task or approval a bot made.
+TAGS["Feedback"] = ("A person's 👍 or 👎 on a message, task or approval a bot made, with an optional reason: a 👎 can tell "
+                    "the bot (a note for its next run in that conversation) or become an org rule. Every answer leaves "
+                    "out feedback on what the caller cannot read.")
+STABLE.extend([
+    ("/api/v2/feedback", "post", "Feedback", "giveFeedback",
+     "Rate a message, task or approval a bot made; rating again replaces it. tell_bot (a 👎 only) leaves the bot a note",
+     "Feedback"),
+    ("/api/v2/feedback", "get", "Feedback", "listFeedbackMarkers",
+     "Everyone's feedback on these subjects (subject_ids, comma-separated, at most 200) that the caller reads",
+     "FeedbackMarkers"),
+    ("/api/v2/feedback/list", "get", "Feedback", "listFeedback",
+     "Feedback newest first, paged and byte-capped, by bot, rating and since, on subjects the caller reads", "FeedbackPage"),
+    ("/api/v2/feedback/recent-reasons", "get", "Feedback", "listRecentFeedbackReasons",
+     "The caller's five latest distinct reasons, each with how often they used it", "FeedbackReasons"),
+    ("/api/v2/feedback/{feedback_id}", "delete", "Feedback", "removeFeedback",
+     "Remove my feedback; a note it left that no run carried yet is taken back", "FeedbackRemoved"),
+    ("/api/v2/feedback/{feedback_id}/rule-draft", "post", "Feedback", "draftFeedbackRule",
+     "A one-sentence rule drafted from my 👎; stores nothing. With no model the reason comes back, drafted false",
+     "FeedbackRuleDraft"),
+    ("/api/v2/feedback/{feedback_id}/rule", "post", "Feedback", "makeFeedbackRule",
+     "Make my 👎 an internal org rule for the bot or all bots: active when I manage its Who, else suggested",
+     "FeedbackRuleMade"),
+])
+SCHEMAS.update({
+    "Feedback": obj({"id": "s", "person_id": "s", "subject_type": {"enum": ["message", "task", "approval"]},
+                     "subject_id": "s", "bot_id": "s", "rating": {"enum": ["up", "down"]}, "reason": "s",
+                     "outcome": {"enum": ["none", "told_bot", "rule"]}, "note_id": "n",
+                     "note_status": {"enum": ["waiting", "carried", "settled", "canceled", None]}, "org_rule_id": "n",
+                     "rule_status": {"enum": ["suggested", "active", "retired", None]}, "created_at": "s",
+                     "updated_at": "s"}),
+    "FeedbackMarkers": obj({"items": items(ref("Feedback"))}),
+    "FeedbackPage": obj({"items": items(ref("Feedback")), "next_cursor": "n"}),
+    "FeedbackReasons": obj({"reasons": items(obj({"text": "s", "count": "i"}))}),
+    "FeedbackRemoved": obj({"ok": "b", "id": "s"}),
+    "FeedbackRuleDraft": obj({"text": "s", "drafted": "b"}),
+    "FeedbackRuleMade": obj({"feedback": ref("Feedback"), "rule": "o"}),
+})
+
+
 def spec(app):
     """The v2 document for this app: the stable operations of `app.openapi()`, described."""
     full = copy.deepcopy(app.openapi())
