@@ -1995,3 +1995,48 @@ def test_a_zero_total_void_read_twice_gives_the_order_line_back_once(books, monk
     assert _drain(books, fake, cid, now="2026-10-15T16:00:00.000000Z") == []
     assert _order_line_state(books, line) == first
     assert len(restores) == 1
+
+
+def test_a_provider_deletion_of_a_bill_whose_entry_is_already_reversed_gives_the_order_line_nothing_back(
+        books, monkeypatch):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": _local(c, "Account:2", "fin_accounts"),
+                                               "amount": 10_000, "at_limit": "decline", "parent_id": None})
+        assert made.status == "committed", made
+    _, line = _approved_order(books, fake, cid, 10_000)
+    _post_bill_on_order(books, fake, cid, line, 4_000)
+    with books.transaction() as c:
+        # The bill's spend is already out of the books (its entry reversed) while the bill itself still stands.
+        c.execute("UPDATE fin_entries SET status='reversed' WHERE id=(SELECT entry_id FROM fin_bills WHERE number='B-111')")
+    restores = _count_give_backs(monkeypatch)
+    fake.changes = [M.Ext("Bill", "111", "2", True)]
+    assert _drain(books, fake, cid, now=LATER3) == []
+    assert restores == []                                          # its spend is not in the books: no room back
+    assert _order_line_state(books, line)[0] == 10_000             # the order's room is its whole amount, held
+
+
+def test_a_provider_deletion_of_a_posted_bill_gives_its_order_line_back_once(books, monkeypatch):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": _local(c, "Account:2", "fin_accounts"),
+                                               "amount": 10_000, "at_limit": "decline", "parent_id": None})
+        assert made.status == "committed", made
+    _, line = _approved_order(books, fake, cid, 10_000)
+    _post_bill_on_order(books, fake, cid, line, 4_000)
+    restores = _count_give_backs(monkeypatch)
+    fake.changes = [M.Ext("Bill", "111", "2", True)]
+    assert _drain(books, fake, cid, now=LATER3) == []
+    assert restores == [4_000]
+    assert _order_line_state(books, line)[0] == 10_000
+    fake.changes = [M.Ext("Bill", "111", "3", True)]
+    assert _drain(books, fake, cid, now="2026-10-15T16:00:00.000000Z") == []
+    assert restores == [4_000]
