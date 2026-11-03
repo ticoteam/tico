@@ -130,6 +130,13 @@ a.th-who:hover{text-decoration:underline}
 .thv-ask{position:relative}
 .thv-attach-wrap{position:relative;display:inline-flex}
 .thv-attach-menu{position:absolute;top:auto;bottom:calc(100% + 6px);right:0;z-index:5;min-width:140px}
+/* the bot chat's pill (meetings.css .p-pill): one frame, no margin under it; the goal's bar sits above the thread */
+.thv-composer .ask{margin:0}
+.thv-composer .p-chips:empty{display:none}
+.thv-goal{flex:none}
+.th-main .chat-goal-line{margin:2px 0}
+/* a phone's bot page has the composer on the bottom edge (ui/styles/chat.css): a little room under it */
+@media (max-width:760px){.thv-attach-menu{right:auto;left:0}#bot-thread .thv-composer{padding-bottom:max(6px,env(safe-area-inset-bottom))}}
 .thv-mentions{position:absolute;top:auto;left:0;bottom:calc(100% + 6px);z-index:5;min-width:220px;max-height:240px;overflow-y:auto}
 .thv-mentions [aria-selected="true"]{background:var(--surface2)}
 .thv-lib{position:absolute;top:auto;left:0;right:0;bottom:calc(100% + 6px);z-index:5;max-height:300px;display:flex;flex-direction:column;padding:8px;border:1px solid var(--line);border-radius:var(--radius);background:var(--raised,var(--surface));box-shadow:0 8px 24px rgba(0,0,0,.12)}
