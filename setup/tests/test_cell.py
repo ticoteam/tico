@@ -2459,6 +2459,22 @@ def test_set_page_host_again_is_a_no_op_and_an_empty_host_clears_it(ready):
     assert "/pages/" not in caddyfile(ready) and (ready.root / "pages" / "acme").exists()
 
 
+def test_set_page_host_that_failed_to_start_is_redone_in_full_when_given_again(ready, monkeypatch):
+    ready(*add_args(ready, "acme"))
+    real_up = cell.Cell.up
+
+    def broken(self, *a, **k):
+        raise cell.CellError("compose_failed", "up failed")
+    monkeypatch.setattr(cell.Cell, "up", broken)
+    assert ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")["ok"] is False
+    assert record(ready, "acme")["page_pending"] is True
+    monkeypatch.setattr(cell.Cell, "up", real_up)
+    again = ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")
+    assert again["ok"] and again["changed"]
+    assert "page_pending" not in record(ready, "acme")
+    assert "acme.tico.page" in caddyfile(ready)
+
+
 def test_set_page_host_refuses_a_host_that_is_taken_or_the_companys_own(ready):
     ready(*add_args(ready, "alpha", "--page-host", "alpha.tico.page"))
     ready(*add_args(ready, "bravo"))

@@ -1676,7 +1676,9 @@ class Cell:
     def set_page_host(self, args) -> dict:
         """A running company's page host (docs/company-page.md), or "" to clear it: what `add --page-host` sets, without
         add's sign-in settings, so staff can turn on the page for a company that already runs. Its settings are
-        rewritten, its server restarts and the host is routed; a cleared host keeps the folder. A no-op changes nothing."""
+        rewritten, its server restarts and the host is routed; a cleared host keeps the folder. The record carries
+        `page_pending` until the restarted server answers, so a run that failed is redone in full when given again; a
+        settled one only re-writes its routes."""
         started = self.system.monotonic()
         slug = check_slug(args.company)
         cell = self.load_cell()
@@ -1687,31 +1689,37 @@ class Cell:
                 raise CellError("not_running", f"{slug} is {c.get('state')}; start it before giving it a page host")
             if host and host in {c["domain"], *c.get("aliases", [])}:
                 raise CellError("bad_domain", f"--host {host} is one of the company's own hosts")
-            if host == c.get("page_host", ""):
-                return {"ok": True, "company": slug, "page_host": host or None, "changed": False}
-            with self.lock("cell"):
-                self.refuse_taken(slug, {host} if host else set())
+            if host == c.get("page_host", "") and not c.get("page_pending"):
+                with self.lock("cell"):
+                    routed = [self.write_router(), self.write_tunnel()]
+                return {"ok": True, "company": slug, "page_host": host or None, "changed": any(routed)}
             d = self.dir(slug)
             env = envfile.parse(_read(d / ".env"))
-            if host:
-                pages = self.pages_dir(slug)
-                pages.mkdir(parents=True, exist_ok=True)
-                os.chmod(pages, 0o755)
-                self.system.chown(pages, SERVER_UID, SERVER_UID)
-                c["page_host"] = host
-                env.update(TICO_READER_ORIGIN=f"https://{host}", TICO_COMPANY_PAGE_DIR=PAGE_MOUNT)
-            else:
-                c.pop("page_host", None)
-                env.pop("TICO_READER_ORIGIN", None)
-                env.pop("TICO_COMPANY_PAGE_DIR", None)
-            self.write_company(c, envfile.render(env), "")
-            self.save(c)
+            self.secrets += [v for k, v in env.items() if k in contract.SECRET_KEYS and v and v not in self.secrets]
+            with self.lock("cell"):     # the host's owner is checked and recorded under one lock, as add does
+                self.refuse_taken(slug, {host} if host else set())
+                if host:
+                    pages = self.pages_dir(slug)
+                    pages.mkdir(parents=True, exist_ok=True)
+                    os.chmod(pages, 0o755)
+                    self.system.chown(pages, SERVER_UID, SERVER_UID)
+                    c["page_host"] = host
+                    env.update(TICO_READER_ORIGIN=f"https://{host}", TICO_COMPANY_PAGE_DIR=PAGE_MOUNT)
+                else:
+                    c.pop("page_host", None)
+                    env.pop("TICO_READER_ORIGIN", None)
+                    env.pop("TICO_COMPANY_PAGE_DIR", None)
+                c["page_pending"] = True
+                self.write_company(c, envfile.render(env), "")
+                self.save(c)
 
             def route():
                 with self.lock("cell"):
                     self.write_router()
                     self.write_tunnel()
             ready = self.launch(c, started, args.timeout, route)
+            c.pop("page_pending", None)
+            self.save(c)
             return {**self.answer(c, ready, True), "page_host": host or None}
 
     def set_sleep(self, args) -> dict:
