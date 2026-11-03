@@ -245,6 +245,19 @@ def test_tico_cheap_1_1_bills_a_prompt_over_100k_whole_at_its_long_rate():
         (100_001 * 0.15 + 1_000 * 0.75) / 1e6)
 
 
+def test_gpt_6_1_terra_is_priced_at_tico_s_approved_rate_for_a_run_and_its_estimate(api):
+    """Synthetic run only: no provider or billing call. The rate is Tico's (Chris, 2026-10-28), not OpenAI's list price."""
+    expected = (1_000 * 1.25 + 2_000 * 0.0625 + 500 * 6.25) / 1e6                  # 0.0045
+    assert providers.estimate_cost("gpt-6.1-terra", 1_000, 2_000, 500) == pytest.approx(expected)
+    assert providers.estimate("gpt-6.1-terra", 1_000, 2_000, 500) == (pytest.approx(expected), False)
+    r, _, attempt = setup_attempt(api)
+    complete(api, r, attempt, {"input_tokens": 1_000, "cached_tokens": 2_000, "output_tokens": 500,
+                               "model": "gpt-6.1-terra", "runtime": "codex", "billing": "api"})
+    row = turn(api, attempt["id"])
+    assert (row["model"], row["billing"]) == ("gpt-6.1-terra", "api")
+    assert row["est_cost_usd"] == pytest.approx(expected)
+
+
 @pytest.mark.parametrize("model", ["tico-cheap-1.1", "tico-mid-1.0"])
 def test_a_tico_run_prices_each_request_on_its_own_tier_and_other_tico_models_keep_their_totals(api, model):
     r, _, attempt = setup_attempt(api)

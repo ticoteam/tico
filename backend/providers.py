@@ -254,6 +254,7 @@ PRICES = _Priced({
     "gpt-6-sol": (2.0, 0.20, 10.0),
     "gpt-6-luna": (0.10, 0.01, 0.50),
     "gpt-6.1-sol": (2.0, 0.10, 10.0),
+    "gpt-6.1-terra": (1.25, 0.0625, 6.25),   # Tico's approved rate (Chris, 2026-10-28): OpenAI standard +25%, not OpenAI's list price; no customer model row
     "gpt-5.6-sol": (4.0, 0.40, 20.0),
     "gpt-5.6-terra": (2.0, 0.20, 12.0),
     "gpt-5.6-luna": (0.20, 0.02, 1.20),

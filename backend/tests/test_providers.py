@@ -87,6 +87,15 @@ def test_the_bot_list_says_the_effort_a_bot_runs_at_and_nothing_when_it_has_none
     assert (rows["cpo"]["resolved_runtime"], rows["cpo"]["resolved_effort"], rows["inbox"]["resolved_effort"]) == ("", "", "")
 
 
+def test_gpt_6_1_terra_has_tico_s_approved_price_and_no_customer_choice():
+    """Availability stays gated: the price is set, but no catalog row, Gateway pick or provider list offers it."""
+    assert P.price_of("gpt-6.1-terra") == (1.25, 0.0625, 6.25)
+    assert "gpt-6.1-terra" not in P.MODEL_BY_ID
+    assert "gpt-6.1-terra" not in [row["id"] for row in P.MODEL_CATALOG]
+    for provider in {row.get("provider") for row in P.MODEL_CATALOG if row.get("provider")}:
+        assert "gpt-6.1-terra" not in [row["id"] for row in P.provider_models(provider)]
+
+
 def test_mercury_on_openrouter_is_offered_only_as_a_meeting_model_and_priced():
     from clients import openrouter
     assert P.OPENROUTER_MEETING_MODEL == "mercury-3"
