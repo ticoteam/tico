@@ -430,9 +430,8 @@ STABLE = [
      "and what waits for their OK",
      "Assistant"),
     ("/api/v2/assistant/messages", "post", "Assistant", "sendAssistantMessage",
-     "Say something to the Assistant. A lookup is answered at once (fast: true, with the reply); anything else "
-     "is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. `place: updates` (the Updates "
-     "chat) always takes a turn, handed the recent updates the caller may read", "AssistantSent"),
+     "Say something to the Assistant. It is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. "
+     "`place: updates` (the Updates chat) is handed the recent updates the caller may read", "AssistantSent"),
     ("/api/v2/assistant/turn-on", "post", "Assistant", "turnOnAssistant",
      "Owner only: restore the archived assistant, or add it from the catalog, and activate it", None),
     ("/api/v2/assistant/actions", "post", "Assistant", "proposeAssistantAction",
@@ -1157,8 +1156,7 @@ SCHEMAS = {
     "LibrarianSetup": obj({"available": "b",
                            "docs": obj({"show": "b", "empty": "b", "skipped": "b", "task": {"type": ["object", "null"]}}),
                            "market": ref("LibrarianMarketSetup")}),
-    "AssistantSent": obj({"message": ref("Message"), "reply": {"type": ["object", "null"]}, "fast": "b", "intent": "n"},
-                         required=["message", "fast"]),
+    "AssistantSent": obj({"message": ref("Message")}, required=["message"]),
     "AssistantActionResult": obj({"action": {"type": "object", "description": "id, summary, method, path, body, status "
                                             "(pending, running, done, failed, canceled, expired), result"}, "message_id": "s",
                                   "shown_once": {"type": "object", "description": "Confirm only, on a card that makes a "

@@ -92,10 +92,7 @@ export type AssistantReadBack = {
 };
 
 export type AssistantSent = {
-  fast: boolean;
-  intent?: string | null;
   message: Message;
-  reply?: Record<string, unknown> | null;
 };
 
 export type AssistantSettings = {

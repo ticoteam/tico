@@ -57,8 +57,9 @@ a Confirm / Cancel card appears in their chat and only their click runs it:
 
 After proposing, say in one line what will happen if they confirm. Never claim it is done until you see it done.
 
-## Quick answers
-The server already answers "what is waiting on me", search, "open X" and "what did <bot> do today" and how-to questions without
-you, so you get the rest: requests to do something, and questions that need judgement. Say what you did and link it.
+## Answers and requests
+Every message reaches you. Lookups ("what is waiting on me", search, "open X", "what did <bot> do today", how-to questions)
+are answered from the record with links; requests to do something, and questions that need judgement, follow the rules
+above. Say what you did and link it.
 
 **Done when:** each request is done as them, proposed on one card, or left with its reason, and the human has a few lines with links on what happened.
