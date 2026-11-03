@@ -109,7 +109,7 @@ async fn details(root: &Path, sha: &str, with_diff: bool) -> (Vec<String>, Strin
 /// The complete bounded range on the pushed branch, including previously sent
 /// commits. Missing/truncated messages cannot establish a zero revert count.
 async fn tidy_history(root: &Path) -> Option<(Vec<Value>, String)> {
-    let out = git_out(root, &["log", "-n40", "--format=%H%x1f%cI%x1f%B%x1e", "@{u}", "--", "memory", "knowledge"]).await?;
+    let out = git_out(root, &["log", "-n40", "--format=%H%x1f%ct%x1f%B%x1e", "@{u}", "--", "memory", "knowledge"]).await?;
     parse_tidy_history(&out)
 }
 
@@ -120,8 +120,11 @@ fn parse_tidy_history(out: &str) -> Option<(Vec<Value>, String)> {
         let parts: Vec<&str> = record.trim_start_matches('\n').splitn(3, '\x1f').collect();
         if parts.len() != 3 || parts[0].len() != 40 || !parts[0].bytes().all(|b| b.is_ascii_hexdigit())
             || parts[2].chars().count() > 16_000 { return None; }
-        let instant = chrono::DateTime::parse_from_rfc3339(parts[1]).ok()?;
-        let stamp = instant.with_timezone(&chrono::Utc).to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+        let seconds = parts[1].parse::<i64>().ok()?;
+        // Git supplies integer commit seconds; reuse the runner's UTC formatter.
+        // Out-of-range dates cannot establish report coverage.
+        if !(0..=253_402_300_799).contains(&seconds) { return None; }
+        let stamp = crate::util::text_of(&crate::util::iso(&json!(seconds))).replace("+00:00", ".000000Z");
         if oldest.is_empty() || stamp < oldest { oldest = stamp.clone(); }
         rows.push(json!({"sha": parts[0], "committed": stamp, "message": parts[2]}));
     }
@@ -309,12 +312,14 @@ mod tests {
     #[test]
     fn tidy_history_keeps_revert_body_and_refuses_incomplete_ranges() {
         let sha = "a".repeat(40);
-        let body = format!("{sha}\x1f2026-11-03T01:00:00+00:00\x1fRevert\n\nThis reverts commit {}.\nReason: lost a rule\nLost-rule: keep sources\nEvidence: https://acme.example/task/1\n\x1e\n", "b".repeat(40));
+        let body = format!("{sha}\x1f1793667600\x1fRevert\n\nThis reverts commit {}.\nReason: lost a rule\nLost-rule: keep sources\nEvidence: https://acme.example/task/1\n\x1e\n", "b".repeat(40));
         let (rows, since) = parse_tidy_history(&body).unwrap();
         assert_eq!(since, "2026-11-03T01:00:00.000000Z");
         assert!(rows[0]["message"].as_str().unwrap().contains("Lost-rule: keep sources"));
         assert!(parse_tidy_history("broken\x1e").is_none());
-        assert!(parse_tidy_history(&format!("{sha}\x1f2026-11-03T01:00:00Z\x1f{}\x1e", "x".repeat(16_001))).is_none());
+        assert!(parse_tidy_history(&format!("{sha}\x1fnot-a-time\x1fbody\x1e")).is_none());
+        assert!(parse_tidy_history(&format!("{sha}\x1f253402300800\x1fbody\x1e")).is_none());
+        assert!(parse_tidy_history(&format!("{sha}\x1f1793667600\x1f{}\x1e", "x".repeat(16_001))).is_none());
     }
 
     fn sh(dir: &Path, script: &str) {
