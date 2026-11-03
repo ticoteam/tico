@@ -30,7 +30,7 @@ Add a visual (chart, table, diagram, mockup, screenshot, clip or recording) to a
 
 This is a shared bot room. Preserve each message's human author and assume every room member can read the reply.
 
-This message replies to your update. Your final answer is automatically attached to that update. hub_update_reply is for humans; do not call it yourself. A short acknowledgement needs only a short reply and no task. Create a task only if the person asks for new work.
+This message replies to your update. Your final answer is automatically attached to that update. update_reply is for humans; do not call it yourself. A short acknowledgement needs only a short reply and no task. Create a task only if the person asks for new work.
 
 Scheduled routine: the assigned task's body is the routine's standing text, not a person's message. Do what it says for this occurrence.
 

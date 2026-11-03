@@ -1565,12 +1565,12 @@ mod tests {
         let config: Value = serde_json::from_str(&written).unwrap();
         let servers = &config["mcpServers"];
         assert_eq!(servers["linear"], json!({"url": "https://mcp.linear.app/mcp", "exposure": "direct", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}}));
-        assert_eq!(servers["repo"], json!({"command": "npx", "args": ["x"], "exposure": "direct", "env": {"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICOAI_GATEWAY_KEY": ""}}));
+        assert_eq!(servers["repo"], json!({"command": "npx", "args": ["x"], "exposure": "direct", "env": {"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICO_TOKEN": "", "TICOAI_GATEWAY_KEY": ""}}));
         assert!(servers.get("legacy").is_none(), "an SSE server of the repository is left out");
-        assert_eq!(servers["hub"]["command"], crate::hosts::hub_mcp_server(&s.env).unwrap()["command"]);
-        assert_eq!((&servers["hub"]["env"]["HUB_TOKEN"], &servers["hub"]["exposure"]), (&json!("${HUB_TOKEN}"), &json!("direct")));
+        assert_eq!(servers["tico"]["command"], crate::hosts::hub_mcp_server(&s.env).unwrap()["command"]);
+        assert_eq!((&servers["tico"]["env"]["HUB_TOKEN"], &servers["tico"]["exposure"]), (&json!("${HUB_TOKEN}"), &json!("direct")));
         // Every stdio server's environment names the Gateway key empty, so pi's inherited copy never reaches it.
-        for stdio in ["repo", "hub"] {
+        for stdio in ["repo", "tico"] {
             assert_eq!(servers[stdio]["env"][GATEWAY_KEY_ENV], json!(""), "{stdio}");
         }
         // The turn's `--tools` names no `mcp__` entry, so pi keeps every MCP tool declared to the model.
@@ -1593,12 +1593,12 @@ mod tests {
         let config = mcp_json(&s, &env);
         let servers = &config["mcpServers"];
         // A repository server that names nothing gets every blanked variable empty, the Gateway key included.
-        assert_eq!(servers["repo"]["env"], json!({"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICOAI_GATEWAY_KEY": ""}));
+        assert_eq!(servers["repo"]["env"], json!({"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICO_TOKEN": "", "TICOAI_GATEWAY_KEY": ""}));
         // Its own env keeps the one it names, but never the Gateway key.
-        assert_eq!(servers["tool"]["env"], json!({"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "anthropic-synthetic", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICOAI_GATEWAY_KEY": ""}));
+        assert_eq!(servers["tool"]["env"], json!({"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "anthropic-synthetic", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICO_TOKEN": "", "TICOAI_GATEWAY_KEY": ""}));
         // The hub keeps its token through `${HUB_TOKEN}`, and the model keys stay blank for it too.
-        assert_eq!(servers["hub"]["env"]["HUB_TOKEN"], json!("${HUB_TOKEN}"));
-        assert_eq!(servers["hub"]["env"]["OPENROUTER_API_KEY"], json!(""));
+        assert_eq!(servers["tico"]["env"]["HUB_TOKEN"], json!("${HUB_TOKEN}"));
+        assert_eq!(servers["tico"]["env"]["OPENROUTER_API_KEY"], json!(""));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
