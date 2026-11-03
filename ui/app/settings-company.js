@@ -24,7 +24,7 @@ async function renderSettingsCompany() {
       <p class="settings-cell-note" role="status" data-company-status></p>`;
     const status = host.querySelector('[data-company-status]'), button = host.querySelector('[data-company-disconnect]');
     button.onclick = async () => {
-      if (!window.confirm(`Disconnect from ${v.company.name}?`)) return;
+      if (!await settingsConfirm({title: `Disconnect from ${v.company.name}?`, ok: 'Disconnect', text: 'This server stops being linked to its company on app.tico.dev until it is connected again.'})) return;
       button.disabled = true; status.textContent = 'Disconnecting…';
       try { await writeRequest('DELETE', '/v2/company/server-connection'); await renderSettingsCompany(); }
       catch (e) { status.textContent = e.message; button.disabled = false; }

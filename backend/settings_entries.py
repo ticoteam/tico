@@ -21,14 +21,29 @@ SETTINGS_FILES = sorted(
 
 
 def _card(tab, card=""):
+    # Saved names remain aliases; catalogue links name the group that now holds the card.
+    if tab == "general":
+        tab = "you" if card == "settings-assistant-pane" else "policies"
+    elif tab == "people":
+        tab = "people"
+    elif tab == "devices":
+        tab = "connections" if card == "settings-tokens" else "computers"
+    elif tab == "models" and card in ("set-turn-levels", "settings-limits"):
+        tab, card = "limits", "settings-limits"
+    elif tab == "bots" and card == "settings-turn-budgets":
+        tab = "limits"
+    else:
+        tab = {"repos": "connections", "inbound": "connections", "webhooks": "connections",
+               "mail": "connections", "system": "automation", "billing": "limits",
+               "gateway": "models", "inbox": "you", "history": "health"}.get(tab, tab)
     return "#/settings/" + tab + ("/" + card if card else "")
 
 
-GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > General", "Settings > Humans", "Settings > Computers", "Settings > Bots"
-RULES, HOOKS, TASKS, REPOS = "Settings > System", "Settings > Webhooks", "Settings > Tasks", "Settings > Repositories"
-INBOUND, STRATEGY = "Settings > Email & Phone", "Settings > System > Strategy bot"
-MAIL = "Settings > Mail"
-MODELS = "Settings > Models"
+GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > Company & policies", "Settings > People", "Settings > Computers", "Settings > Bots"
+RULES, HOOKS, TASKS, REPOS = "Settings > Automation", "Settings > Connections > Webhooks", "Settings > Tasks", "Settings > Connections > Repositories"
+INBOUND, STRATEGY = "Settings > Connections > Email & Phone", "Settings > Automation > Strategy bot"
+MAIL = "Settings > Connections > Mail"
+MODELS = "Settings > AI models"
 
 _RULE_NAMES = {
     "assistant_direct": ("Assistant acts without asking", "confirm", ""),
@@ -55,18 +70,18 @@ _RULE_WHERE = {"health_monitor_reports": ("Settings > Health > Health monitor", 
 _ADMIN_RULES = ("stale_review", "topic_fresh", "stall_triage", "org_rule_checks")
 
 TEAM_RULES = [
-    S("team.rules." + key, name, _RULE_WHERE.get(key, (PEOPLE + " > Team rules",))[0],
+    S("team.rules." + key, name, _RULE_WHERE.get(key, (GENERAL + " > Team policies",))[0],
       "admin" if key in _ADMIN_RULES else "owner", kind, "PUT", "access/rules", key,
-      card=_RULE_WHERE.get(key, ("", _card("people")))[1], read="access#rules." + key, words="team rule", why=why)
+      card=_RULE_WHERE.get(key, ("", _card("policies", "settings-policies")))[1], read="access#rules." + key, words="team rule", why=why)
     for key, (name, kind, why) in _RULE_NAMES.items()
-] + [S("team.rules.go_ahead_days", "Days a bot waits before it goes ahead", PEOPLE + " > Team rules", "owner",
-       "confirm", "PUT", "access/rules", "go_ahead_days", "int", _card("people"), "access#rules.go_ahead_days",
+] + [S("team.rules.go_ahead_days", "Days a bot waits before it goes ahead", GENERAL + " > Team policies", "owner",
+       "confirm", "PUT", "access/rules", "go_ahead_days", "int", _card("policies", "settings-policies"), "access#rules.go_ahead_days",
        words="wait days go ahead"),
-    S("team.rules.report_creates_per_week", "Reports a manager may create a week", PEOPLE + " > Team rules", "owner",
-      "confirm", "PUT", "access/rules", "report_creates_per_week", "int", _card("people"), "access#rules.report_creates_per_week",
+    S("team.rules.report_creates_per_week", "Reports a manager may create a week", GENERAL + " > Team policies", "owner",
+      "confirm", "PUT", "access/rules", "report_creates_per_week", "int", _card("policies", "settings-policies"), "access#rules.report_creates_per_week",
       words="report create limit week"),
-    S("team.rules.report_archives_per_week", "Reports a manager may archive or restore a week", PEOPLE + " > Team rules", "owner",
-      "confirm", "PUT", "access/rules", "report_archives_per_week", "int", _card("people"), "access#rules.report_archives_per_week",
+    S("team.rules.report_archives_per_week", "Reports a manager may archive or restore a week", GENERAL + " > Team policies", "owner",
+      "confirm", "PUT", "access/rules", "report_archives_per_week", "int", _card("policies", "settings-policies"), "access#rules.report_archives_per_week",
       words="report archive limit week")]
 
 _USD = "hourly_usd, daily_usd, weekly_usd, monthly_usd"
@@ -105,8 +120,8 @@ ENTRIES = TEAM_RULES + [
       "directory/scim-token", value="json", card=_card("people"), why="A new token is shown once, to the owner"),
     S("people.add", "Add a human", PEOPLE + " > Add a human", "anyone", "confirm", "POST", "access/humans",
       value="json", card=_card("people"), words="invite person"),
-    S("people.member_bot_limit", "Member bot limit", PEOPLE + " > Team rules", "admin", "confirm", "PUT",
-      "access/limits", "member_bot_limit", "int", _card("people"), "access#limits.member_bot_limit"),
+    S("people.member_bot_limit", "Member bot limit", GENERAL + " > Team policies", "admin", "confirm", "PUT",
+      "access/limits", "member_bot_limit", "int", _card("policies", "settings-policies"), "access#limits.member_bot_limit"),
     S("people.person.role", "A person's role", PEOPLE, "owner", "confirm", "POST", "access/humans/{person}", "role",
       "choice:member|admin", _card("people"), words="admin member role"),
     S("people.person.sign_in", "A person may sign in", PEOPLE, "admin", "confirm", "POST", "access/humans/{person}",
@@ -124,7 +139,7 @@ ENTRIES = TEAM_RULES + [
     S("owner.transfer", "Transfer ownership", PEOPLE + " > Owner", "owner", "confirm", "POST", "access/owner",
       value="json", card=_card("people")),
     # Computers
-    S("team.turn_levels", "Company turn levels", MODELS + " > Limits", "admin", "confirm", "POST",
+    S("team.turn_levels", "Company turn levels", "Settings > Limits & billing > Company turn levels", "admin", "confirm", "POST",
       "settings/turn-levels", value="json", card=_card("models", "settings-limits"), words="warning stop per person"),
     S("bot.agent_credential", "Agent credential", COMPUTERS + " > Connect an agent", "bot", "person", "POST",
       "bots/{bot}/agent-credential", value="json", card=_card("devices"),
@@ -195,9 +210,9 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("bots"), read="bots/{bot}/browser-exit", words="residential proxy exit internet"),
     S("bot.restore", "Restore an archived bot", BOTS, "bot", "direct", "POST", "bots/{bot}/restore", value="json",
       card=_card("bots")),
-    S("bot.limit.usd", "Bot spend limit", BOTS + " > Spend limit", "bot", "confirm", "PUT", "usage/limits/{bot}",
-      value="json", card=_card("bots"), read="usage/limits#bots.{bot}", words="usd dollars spend budget " + _USD),
-    S("team.budget", "Run budget", BOTS + " > Run budget", "admin", "confirm", "POST", "settings/turn-budgets",
+    S("bot.limit.usd", "Bot spend limit", "Settings > Limits & billing > Bot spend limits", "bot", "confirm", "PUT", "usage/limits/{bot}",
+      value="json", card=_card("limits", "settings-spend-limits"), read="usage/limits#bots.{bot}", words="usd dollars spend budget " + _USD),
+    S("team.budget", "Run budget", "Settings > Limits & billing > Run budget", "admin", "confirm", "POST", "settings/turn-budgets",
       value="json", card=_card("bots", "settings-turn-budgets"), words="turns per hour day"),
     S("bots.create", "New bot", BOTS + " > New bot", "anyone", "direct", "POST", "bots", value="json",
       card=_card("bots"), words="create hire"),

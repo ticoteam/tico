@@ -254,6 +254,7 @@ function pageSettings() {
     ${pane('bots', `<section class="card settings-bots-card" id="settings-bots-card"><header><h2>Bots</h2>${settingsCanCreateBots() ? '<div class="row"><button class="primary" type="button" id="settings-add-bot" disabled>Add bot</button><button class="ghost" type="button" id="settings-add-catalog" disabled><span class="sb-wide">Add from template</span><span class="sb-narrow">From template</span></button></div>' : ''}</header><div id="set-bots">${skelRows(3, {card: true, dot: false})}</div></section>`)}
     ${pane('models', `<section class="card" id="settings-subs"><header><h2>Subscriptions</h2><button class="primary settings-head-act" type="button" id="subs-add" hidden>Add subscription</button></header><div id="set-subs">${skelRows(2, {card: true, dot: false})}</div></section>
       <section class="card" id="settings-gateway-card"><header><h2>Tico Gateway</h2></header><div id="set-gateway-card">${skelRows(1, {card: true, dot: false})}</div></section>
+      ${settingsIsAdmin() ? '<div id="settings-gateway"><div id="set-gateway-page"></div></div>' : ''}
       <section class="card" id="settings-defaults"><header><h2>Defaults</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section>
 `)}
     ${pane('computers', `
@@ -409,7 +410,10 @@ function settingsShow(tab, {group: picked = false} = {}) {
   }
   if (on('people') && $('#settings-people') && !formBusy($('#settings-people'))) load(renderSettingsPeople());
   // Before the first load the form has no models or computers to show; loadSettings draws it then.
-  if (on('models') && SETTINGS_DATA.loaded) settingsModelsRender();
+  if (on('models')) {
+    if (SETTINGS_DATA.loaded) settingsModelsRender();
+    if ($('#settings-gateway')) load(renderSettingsGateway());
+  }
   settingsMachinesWatch();
   if (settingsMachinesVisible() && SETTINGS_DATA.loaded) void settingsMachinesRefresh();
   if (on('limits')) load(SETTINGS_DATA.loaded && renderSettingsSpendLimits(), renderTeamBudgets(), SETTINGS_DATA.loaded && renderSettingsTurnLevels(), $('#settings-billing') && renderSettingsBilling());

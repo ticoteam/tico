@@ -99,14 +99,14 @@ window.mountDirectorySync = async function (host, onChange) {
       try { await put('/v2/directory', body()); }
       catch (error) {
         // github-app.key is lost with no backup copy: only an explicit confirm drops what it sealed (docs/install.md).
-        if (error.body?.error?.code !== 'github_key_missing' || !confirm('The key for the saved GitHub App and directory sync secrets is lost, so they cannot be opened. Replace them? Any saved GitHub App and all directory sync credentials are removed, and you enter them again.')) throw error;
+        if (error.body?.error?.code !== 'github_key_missing' || !await settingsConfirm({title: 'Replace the lost key?', ok: 'Replace', text: 'The key for the saved GitHub App and directory sync secrets is lost, so they cannot be opened. Any saved GitHub App and all directory sync credentials are removed, and you enter them again.'})) throw error;
         await put('/v2/directory', {...body(), replace_lost_key: true});
       }
       toast?.('Directory saved'); onChange ? onChange() : window.mountDirectorySync(host);
     } catch (error) { status.textContent = error.message; }
   };
   $in('[data-ds-token]').onclick = async () => {
-    if (view.scim.enabled && !confirm('Replace the SCIM token? The identity provider stops working until you give it the new one.')) return;
+    if (view.scim.enabled && !await settingsConfirm({title: 'Replace the SCIM token?', ok: 'Replace token', text: 'The identity provider stops working until you give it the new one.'})) return;
     try {
       const {token} = await post('/v2/directory/scim-token', {});
       $in('[data-ds-token-out]').innerHTML = `Token (copy it now): <code data-ds-token-value>${text(token)}</code>`;

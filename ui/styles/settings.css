@@ -4,23 +4,27 @@
 .pchip{display:inline-flex;align-items:center;gap:5px;margin-left:6px;padding:1px 8px 1px 2px;border-radius:11px;background:var(--surface2);color:var(--ink);font-size:var(--t-sm);white-space:nowrap;vertical-align:middle}
 
 .tree a.node:hover .ub,.tree a.node.cur .ub{opacity:.9;filter:none}
-.settings-tabs{margin-bottom:16px}
-/* A phone: the tabs are one row that scrolls sideways (as the task list's and meetings' filter rows do), More's
-   tabs open inline at its end, and settingsTabIntoView() keeps the current tab in view. The rule under the row is
-   an inset shadow, so the scrolling box does not clip the current tab's underline. */
+/* The groups (settings stage 2): a list down the left on desktop, one picker on a phone, the shown group beside it. */
+.settings-layout{display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px;align-items:start}
+.settings-groups{position:sticky;top:0}
+.settings-group-list{display:flex;flex-direction:column;gap:2px}
+.settings-group-list button{display:flex;align-items:center;gap:6px;background:none;border:0;text-align:left;padding:7px 10px;border-radius:6px;color:var(--muted);cursor:pointer;font:inherit}
+.settings-group-list button:hover{background:var(--surface2);color:var(--ink)}
+.settings-group-list button.cur{background:var(--surface2);color:var(--ink);font-weight:600}
+.settings-group-divider{border:0;border-top:1px solid var(--line);margin:6px 0}
+.settings-group-pick{display:none}
+.settings-group-line{margin:0 0 12px;color:var(--muted)}
+/* A card's first line: what it controls, in plain words. */
+.settings-card-line{margin:0 0 12px;color:var(--muted)}
+/* Ask BotOps: a small link at the end of each card's heading row. */
+section.card>header>.settings-ask{margin-left:auto;font-size:var(--t-sm)}
+/* Commands, permission names and JSON wait behind Details. */
+.settings-details{margin:4px 0 8px}.settings-details>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm)}
 @media (max-width:760px){
-  .tabs.settings-tabs{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;overscroll-behavior-x:contain;gap:0;border-bottom:0;box-shadow:inset 0 -1px 0 var(--line);margin-left:-4px;margin-right:-4px;padding:0 4px}
-  .tabs.settings-tabs::-webkit-scrollbar{display:none}
-  .tabs.settings-tabs button{flex:none;display:inline-flex;align-items:center;white-space:nowrap;margin-bottom:0;min-height:40px;padding:0 11px}
-  .tabs.settings-tabs .settings-more{flex:none;display:flex;white-space:nowrap}
-  .tabs.settings-tabs .settings-more::details-content{display:contents}
-  .tabs.settings-tabs .settings-more[open]{flex-basis:auto}
-  .tabs.settings-tabs .settings-more summary{display:inline-flex;align-items:center;min-height:40px;padding:0 11px;list-style:none;vertical-align:top}
-  .tabs.settings-tabs .settings-more summary::-webkit-details-marker{display:none}
-  .tabs.settings-tabs .settings-more summary::before{display:none}   /* a phone scrolls the tabs; its › says more */
-  .tabs.settings-tabs .settings-more summary::after{content:"›";margin-left:5px}
-  .tabs.settings-tabs .settings-more[open] summary::after{content:"‹"}
-  .tabs.settings-tabs .settings-more>div{display:inline-flex;flex-wrap:nowrap;gap:0;vertical-align:top}
+  .settings-layout{grid-template-columns:minmax(0,1fr);gap:12px}
+  .settings-groups{position:static}
+  .settings-group-list{display:none}
+  .settings-group-pick{display:block;width:100%;min-height:40px}
 }
 .settings-pane[hidden]{display:none}
 .settings-table{width:100%;border-collapse:collapse;font-size:var(--t-base)}
@@ -75,9 +79,12 @@ input.people-switch:disabled{opacity:.45;cursor:not-allowed}
 .people-left{margin-top:var(--s2);padding-top:var(--s2);border-top:1px solid var(--line)}
 .people-left summary{padding:4px 0;color:var(--muted);font-size:var(--t-base);cursor:pointer}
 .people-row.is-left{grid-template-columns:minmax(0,1fr) auto}.people-row.is-left .people-who{opacity:.6}
-.people-limit{margin-top:var(--s2);padding-top:var(--s3);border-top:1px solid var(--line)}
-.people-limit input{width:76px}
-.people-rules{display:grid;gap:var(--s2);margin-top:var(--s2);padding-top:var(--s3);border-top:1px solid var(--line)}
+.policy-group{display:grid;gap:var(--s2)}
+.policy-group+.policy-group{margin-top:var(--s3);padding-top:var(--s3);border-top:1px solid var(--line)}
+.policy-group>h3{margin:0}
+.policy-line{align-items:flex-start}
+.policy-line>span{display:grid;gap:2px}
+.policy-number input{width:76px}
 button.people-danger{background:var(--fail);color:var(--surface)}
 /* Sync with directory (ui/directory-sync.js) */
 .ds-form{display:grid;gap:10px;max-width:560px}.ds-form [hidden]{display:none!important}
