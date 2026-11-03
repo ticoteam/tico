@@ -135,18 +135,29 @@ def home_for_chat(c, person, bot_ref, *, create=True):
     move leaves the chat as it is: the Assistant and the Strategy Bot, a bot synced from an outside app, a Home linked to
     another install, a person who may not read the Home, and a bot with no Home when `create` is False."""
     from . import threads
-    if not _covered(c, str(bot_ref or "").strip().removeprefix("bot:")):
+    bot = _covered_bot(c, str(bot_ref or "").strip().removeprefix("bot:"))
+    if bot is None or {bot["id"], bot["slug"]} & _excluded_bots() or _synced(c, bot):
         return None
-    bot = H.resolve_bot(c, bot_ref)
-    if not bot or {bot["id"], bot["slug"]} & _excluded_bots() or _synced(c, bot):
-        return None
-    home = threads.home(c, "bot:" + bot["id"], create=create)
-    if home is None:
-        return None
+    owner = "bot:" + bot["id"]
+    from . import read_cache
+    found = read_cache.rows(c, "SELECT id FROM conversations WHERE audience='home' AND owner_id=? AND closed_at IS NULL "
+                               "AND archived_at IS NULL LIMIT 1", (owner,))
+    home_id = found[0][0] if found else None
+    if home_id is None:
+        home = threads.home(c, owner, create=create)     # a bot's shared room, or a new Home when `create`
+        if home is None:
+            return None
+        home_id = home["id"]
     v = threads.actor_viewer(c, person)
-    if v is None or _federated(c, home["id"]) or not threads.readable(c, v, home["id"]):
+    if v is None or _federated(c, home_id) or not threads.readable(c, v, home_id):
         return None
-    return home["id"]
+    return home_id
+
+
+def home_missing(c, conversation_id):
+    """Whether a moved room has no open Home to write to: its Home is archived, and the next write makes the bot's Home
+    again (`home_for` with create). False for a room that did not move."""
+    return _moved(c, conversation_id) is not None and home_for(c, conversation_id, create=False) is None
 
 
 def history_ids(c, conversation_id):
@@ -172,13 +183,14 @@ def _bot_homes(c, bot_id, recorded):
         (*owners, bot_id, recorded)).fetchall()]
 
 
-def _covered(c, ref):
-    """Whether the move took the rooms of the bot this id or slug names: its chats are its Home's now. One lookup."""
+def _covered_bot(c, ref):
+    """The bot this id or slug names, when the move took its rooms (home_merges has rows for it), else None: one lookup."""
     try:
-        return c.execute("SELECT 1 FROM home_merges WHERE bot_id IN (SELECT id FROM bots WHERE id=? OR slug=?) LIMIT 1",
-                         (ref, ref)).fetchone() is not None
+        bot = H._one(c, "SELECT b.id, b.slug, EXISTS(SELECT 1 FROM home_merges m WHERE m.bot_id=b.id) AS covered "
+                        "FROM bots b WHERE b.id=? OR b.slug=? LIMIT 1", (ref, ref))
     except sqlite3.OperationalError:      # a database from before migration 0060
-        return False
+        return None
+    return bot if bot and bot.get("covered") else None
 
 
 def _moved(c, conversation_id):
@@ -231,7 +243,9 @@ def _eligible(c, excluded):
 
 def _synced(c, bot):
     """A bot synced from an outside app (Grok Bot, Dots, Muse): its sync reads and writes the person's own room."""
-    row = c.execute("SELECT config FROM bot_config WHERE bot IN (?,?) LIMIT 1", (bot["id"], bot["slug"])).fetchone()
+    from . import read_cache
+    found = read_cache.rows(c, "SELECT config FROM bot_config WHERE bot IN (?,?) LIMIT 1", (bot["id"], bot["slug"]))
+    row = found[0] if found else None
     config = H._json(row[0], {}) if row else {}
     if not isinstance(config, dict):
         return False

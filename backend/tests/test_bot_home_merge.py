@@ -443,3 +443,38 @@ def test_a_chat_with_a_bot_the_move_never_reached_costs_one_lookup(api):
         recorded = Recorded(c)
         assert bot_home_merge.home_for_chat(recorded, "human:ben", "finance") is None
     assert len(recorded.statements) == 1, recorded.statements
+
+
+def test_an_explicit_reply_to_a_moved_room_with_an_archived_home_is_checked_in_the_new_home(api, ops_rooms):
+    """A reply that names a moved room whose Home is archived makes the bot's Home before the checks (as the implicit
+    path does), so a private run's reply is refused in that Home and a person's reply lands in the new one."""
+    merge(api)
+    with store(api).transaction() as c:
+        c.execute("UPDATE conversations SET archived_at=? WHERE id=?", (H.now(), ops_rooms["home"]))
+    _row, attempt = private_run(api, "ops")
+    refused = api.post("/api/v2/messages", json={"to": "human:ana", "text": "Confidential after the archive",
+                                                 "conversation_id": ops_rooms["ana"]},
+                       headers=headers(attempt["token"]))
+    assert refused.status_code == 403, refused.text
+    sent = api.post("/api/v2/messages", json={"to": "bot:ops", "text": "Ana, after the archive",
+                                              "conversation_id": ops_rooms["ana"]},
+                    headers=headers("ana-test"))
+    assert sent.status_code == 200, sent.text
+    with store(api).read() as c:
+        assert not c.execute("SELECT 1 FROM messages WHERE body LIKE 'Confidential after the archive%'").fetchone()
+        landed = c.execute("SELECT conversation_id FROM messages WHERE id=?", (sent.json()["id"],)).fetchone()[0]
+        new_home = threads.home(c, "bot:ops", create=False)
+        assert new_home is not None and landed == new_home["id"] and landed != ops_rooms["home"]
+
+
+def test_a_covered_bots_chat_resolves_its_home_in_few_statements(api, ops_rooms):
+    """Finding 4: a person's chat with a covered bot resolves its Home with a bounded number of statements. The first
+    resolution in a transaction reads the bot, its config, the Home and the person's rights; a second one in the same
+    transaction reuses what the read cache holds (backend/read_cache.py), so it costs only what is not cached."""
+    merge(api)
+    with store(api).transaction() as c:
+        first, second = Recorded(c), Recorded(c)
+        assert bot_home_merge.home_for_chat(first, "human:ben", "ops") == ops_rooms["home"]
+        assert bot_home_merge.home_for_chat(second, "human:ben", "ops") == ops_rooms["home"]
+    assert len(first.statements) <= 12, first.statements
+    assert len(second.statements) <= 3, second.statements

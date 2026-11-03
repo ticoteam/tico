@@ -3239,9 +3239,15 @@ def create_app(settings=None):
         the route does not name a conversation (`rule_message_place`)."""
         if body.conversation_id:
             # A reply to a room that moved names its Home for every check below (backend/bot_home_merge.py); the sender's
-            # attempt, a private run's, still decides what the Home allows.
+            # attempt, a private run's, still decides what the Home allows. A room whose Home is archived gets the bot's
+            # Home made here, before the checks, as the implicit path does, so the checks see where the words would land.
             with store.read() as c:
-                body.conversation_id = named_destination(c, who, body, create=False)
+                make = bot_home_merge.home_missing(c, body.conversation_id)
+                if not make:
+                    body.conversation_id = named_destination(c, who, body, create=False)
+            if make:
+                with store.transaction() as c:
+                    body.conversation_id = named_destination(c, who, body)
         elif not H.is_human(who.actor):
             # A bot's message to a person that names no room goes to the person's chat Home (hubdb.chat_home). The checks
             # must see that Home: it is made here if the bot has none open (an archived one), so a private run's words
