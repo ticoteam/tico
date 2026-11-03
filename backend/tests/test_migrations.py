@@ -308,7 +308,7 @@ def _shape(path):
 
 
 def test_an_older_threads_shape_gets_the_missing_columns_tables_triggers_and_search_index_once(tmp_path):
-    """Migration 0046: the threads schema the modules used to make on every start. A file missing some of it (columns
+    """Migration 0047: the threads schema the modules used to make on every start. A file missing some of it (columns
     added later, a helper table, an older trigger, the search index) ends with the shape a new file has, the new search
     index holds the messages already there, and a second boot changes nothing."""
     path = fresh(tmp_path)
@@ -330,7 +330,7 @@ def test_an_older_threads_shape_gets_the_missing_columns_tables_triggers_and_sea
         c.execute("INSERT INTO conversations(id,kind,created_at) VALUES('c-acme','direct','2026-01-01T00:00:00Z')")
         c.execute("INSERT INTO messages(id,conversation_id,sender_id,kind,body,created_at) "
                   "VALUES('m-acme','c-acme','human:ana','say','Acme quarterly memo','2026-01-01T00:00:00Z')")
-    _back_to_before(path, "0046")
+    _back_to_before(path, "0047")
     boot(path)
     once = snapshot(path)
     assert _shape(path) == new
@@ -342,7 +342,7 @@ def test_an_older_threads_shape_gets_the_missing_columns_tables_triggers_and_sea
 
 
 def test_a_start_puts_back_the_federation_state_row_a_devcopy_emptied(tmp_path):
-    """federation_states holds one row that Relay.status reads unguarded; migration 0046 makes it once, and every start
+    """federation_states holds one row that Relay.status reads unguarded; migration 0047 makes it once, and every start
     puts it back when a devcopy emptied the table."""
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
@@ -468,7 +468,7 @@ def test_a_standalone_kpi_keeps_its_target_and_the_migration_runs(tmp_path):
 
 
 def test_the_threads_delivery_trigger_follows_hubdbs_task_news_rule():
-    """Migration 0046 makes threads_primary_delivery from literal SQL; the condition must stay hubdb's
+    """Migration 0047 makes threads_primary_delivery from literal SQL; the condition must stay hubdb's
     delivery_counts_sql, which every read side uses, or task news would wake people again on a new install."""
-    module = importlib.import_module("backend.migrations.0046_native_threads_schema")
+    module = importlib.import_module("backend.migrations.0047_native_threads_schema")
     assert H.delivery_counts_sql("NEW", "NEW.recipient_id") in module.THREAD_TRIGGERS["threads_primary_delivery"]

@@ -56,7 +56,7 @@ FULL = {"see": True, "read": True, "write": True, "manage": True}
 NONE = {"see": False, "read": False, "write": False, "manage": False}
 
 def ensure(c):
-    """Every start: the one data step. The table is migration 0046."""
+    """Every start: the one data step. The table is migration 0047."""
     migrate_team_pages(c)
 
 

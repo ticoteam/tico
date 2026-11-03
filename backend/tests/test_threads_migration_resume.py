@@ -13,7 +13,7 @@ import pytest
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import hubdb, threads
 
-SCHEMA = importlib.import_module("backend.migrations.0046_native_threads_schema")
+SCHEMA = importlib.import_module("backend.migrations.0047_native_threads_schema")
 
 
 def raw(path):
@@ -112,7 +112,7 @@ def test_an_interrupted_migration_resumes_to_the_same_rows(tmp_path, small_chunk
 
 
 def test_message_indexes_wait_for_the_backfill(tmp_path, small_chunks):
-    """The schema migration (0046) runs before threads.migrate; on a file not yet backfilled it leaves the message
+    """The schema migration (0047) runs before threads.migrate; on a file not yet backfilled it leaves the message
     indexes to migrate, which builds them after the backfill."""
     conn = pre_threads_hub(tmp_path / "c.db")
     conn.execute("DROP INDEX IF EXISTS messages_seq")

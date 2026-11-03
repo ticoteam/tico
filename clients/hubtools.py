@@ -657,6 +657,8 @@ def tag_update(api, args):
                         "it creates the task, then requests a publication", enum=["public", "private"]),
        "public_title": _s("People only (a bot is refused): public title; the internal title is never published"),
        "public_summary": _s("People only (a bot is refused): public summary; the internal body is never published"),
+       "check_back_at": _s("When to inspect progress: ISO timestamp or duration such as 45m; defaults automatically"),
+       "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
        "due": _s("ISO-8601 date-time with timezone"),
        "private": {"type": "boolean", "description": "Only requester and assignee may read; bot defaults also apply"},
        "from_private": {"type": "boolean", "default": False,
@@ -712,7 +714,7 @@ def task_create(api, args):
         body["relations"] = [{"task": args["parent"], "kind": "parent"}]
     for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model",
                   "check_role", "visibility", "public_title", "public_summary", "from_private", "model", "effort",
-                  "harness"):
+                  "harness", "check_back_at", "check_back_note"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
     for field in ("qa", "change_paths", "qa_not_checkable_live", "blocker"):
@@ -786,6 +788,15 @@ def task_show_many(api, args):
       "For a person, the task's requester, or BotOps's sweep.", {"id": TASK_ID}, required=("id",))
 def task_run(api, args):
     return api.post(f"tasks/{args['id']}/run-now", {}, key=_key(args))
+
+
+@tool("hub_task_check_back", "Set when to follow up unfinished bot-owned or bot-requested work. "
+      "Use a time conservatively longer than the expected work. Inspect the actual result or handoff when woken; "
+      "repair missing assignments before waiting again. Human-only tasks are excluded. A human snooze takes precedence.",
+      {"id": TASK_ID, "at": _s("ISO date-time with timezone or duration such as 45m or 2h"),
+       "note": _s("The result or handoff to inspect, at most 500 characters")}, required=("id", "at"), writes=True)
+def task_check_back(api, args):
+    return api.post(f"tasks/{args['id']}/check-back", {"at": args["at"], "note": args.get("note")}, key=_key(args))
 
 
 @tool("hub_task_snooze", "Set a task aside until a date: it leaves the board, task lists and Needs you, and nothing "
@@ -1027,6 +1038,8 @@ BRIEF_OLD = {"type": "boolean", "description": "Older name for brief"}
        "note": _s("What changed, or the result"),
        "brief": BRIEF, "quiet": BRIEF_OLD,
        "owner": _s("Hand the task to this bot or person"),
+       "check_back_at": _s("When to inspect progress: ISO timestamp or duration such as 45m; defaults automatically"),
+       "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
        "due": _s("ISO-8601 date-time with timezone"),
        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
        "waiting_on": _s("With status waiting: the person you need (their id). The note is your ask to them: one or two "
@@ -1055,7 +1068,7 @@ def task_update(api, args):
     if args.get("labels") is not None:
         body["labels"] = args["labels"]
     for field in ("title", "type", "step", "step_rank", "number", "visibility", "public_title", "public_summary", "approval_id", "size",
-                  "verdict", "verdict_head"):
+                  "verdict", "verdict_head", "check_back_at", "check_back_note"):
         if args.get(field) is not None:
             body[field] = args[field]
     if args.get("private") is not None:

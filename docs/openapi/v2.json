@@ -34558,6 +34558,77 @@
         ]
       }
     },
+    "/api/v2/tasks/{tid}/check-back": {
+      "post": {
+        "summary": "Set a future follow-up appointment on bot work. Accepts an offset timestamp or duration such as 45m; human snoozes take precedence and human-only work is excluded",
+        "operationId": "setTaskCheckBack",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskCheckBack"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      }
+    },
     "/api/v2/tasks/{tid}/comments": {
       "get": {
         "summary": "Comments and questions with their answers",
@@ -43955,6 +44026,13 @@
                       "null"
                     ]
                   },
+                  "doing": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "While dreaming: the bot's one line on what it is doing now (the task note)"
+                  },
                   "closed_at": {
                     "type": [
                       "string",
@@ -43967,6 +44045,7 @@
                 },
                 "required": [
                   "closed_at",
+                  "doing",
                   "questions",
                   "started_at",
                   "state",
@@ -64748,6 +64827,62 @@
               "null"
             ]
           },
+          "check_back_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "check_back_note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "check_back": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "at": {
+                    "type": "string"
+                  },
+                  "note": {
+                    "type": "string"
+                  },
+                  "by": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "due": {
+                    "type": "boolean"
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "Whether follow-up delivery is enabled for this install"
+                  },
+                  "delivery": {
+                    "type": "string",
+                    "description": "Due delivery state from the existing queue, or pending, disabled, bot_unavailable"
+                  }
+                },
+                "required": [
+                  "at",
+                  "by",
+                  "delivery",
+                  "due",
+                  "enabled",
+                  "note"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "version": {
             "type": "integer"
           },
@@ -65501,6 +65636,34 @@
         ],
         "additionalProperties": true
       },
+      "TaskCheckBack": {
+        "properties": {
+          "at": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 2,
+            "title": "At"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "at"
+        ],
+        "title": "TaskCheckBack"
+      },
       "TaskComment": {
         "properties": {
           "public": {
@@ -65679,6 +65842,30 @@
             "maxLength": 200,
             "minLength": 1,
             "title": "Owner"
+          },
+          "check_back_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Back At"
+          },
+          "check_back_note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Back Note"
           },
           "due": {
             "anyOf": [
@@ -67371,6 +67558,30 @@
               }
             ],
             "title": "Owner"
+          },
+          "check_back_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Back At"
+          },
+          "check_back_note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Back Note"
           },
           "due": {
             "anyOf": [

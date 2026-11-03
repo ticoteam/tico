@@ -1458,6 +1458,8 @@ def parser():
     s.add_argument("--body", default="")
     s.add_argument("--body-file", dest="body_file")
     s.add_argument("--due")
+    s.add_argument("--check-back-at", help="ISO timestamp or duration such as 45m")
+    s.add_argument("--check-back-note", help="what result to inspect")
     s.add_argument("--parent", help="file it as a subtask of this task")
     s.add_argument("--label", action="append", help="a label (repeat, or comma-separate); a project is a label")
     s.add_argument("--change-path", dest="change_paths", action="append", help="changed path for automatic QA classification")
@@ -1787,6 +1789,13 @@ def parser():
     s.add_argument("--clear", action="store_true",
                    help="clear the task's own model: its runs use the bot's task model again")
     s.set_defaults(fn="task model")
+    s = task.add_parser("check-back", help="schedule the next follow-up on bot work")
+    s.add_argument("id")
+    timing = s.add_mutually_exclusive_group(required=True)
+    timing.add_argument("--at", help="ISO date-time with timezone")
+    timing.add_argument("--in", dest="in_duration", help="duration such as 45m or 2h")
+    s.add_argument("--for", dest="check_back_note", help="the result or handoff to inspect")
+    s.set_defaults(fn="task check-back")
     s = task.add_parser("snooze", help="set a task aside until a date: off the lists, Needs you and stall wakes "
                         "until then, when its owner bot is woken once")
     s.add_argument("id")

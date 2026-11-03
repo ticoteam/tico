@@ -450,6 +450,7 @@ export type BotDetail = {
 export type BotDreamView = {
   dream: {
   closed_at: string | null;
+  doing: string | null;
   questions: {
   message_id: string;
   mine: boolean;
@@ -4611,6 +4612,16 @@ export type TakeRecommendation = {
 export type Task = {
   acceptance_criteria?: Array<string>;
   body?: string;
+  check_back?: {
+  at: string;
+  by: string | null;
+  delivery: string;
+  due: boolean;
+  enabled: boolean;
+  note: string;
+} | null;
+  check_back_at?: string | null;
+  check_back_note?: string | null;
   cover?: {
   height: number | null;
   url: string;
@@ -4765,6 +4776,11 @@ export type TaskCaps = {
   proposals: Array<TaskCapProposal>;
 };
 
+export type TaskCheckBack = {
+  at: string;
+  note?: string | null;
+};
+
 export type TaskComment = {
   approval_id?: string | null;
   ask?: ReviewAsk | null;
@@ -4785,6 +4801,8 @@ export type TaskCreate = {
   blocker?: TaskBlocker | null;
   body: string;
   change_paths?: Array<string>;
+  check_back_at?: string | null;
+  check_back_note?: string | null;
   check_model?: string | null;
   check_role?: "review" | "check" | null;
   defer_for?: string | null;
@@ -5034,6 +5052,8 @@ export type TaskTypeUpdate = {
 export type TaskUpdate = {
   approval_id?: string | null;
   body?: string | null;
+  check_back_at?: string | null;
+  check_back_note?: string | null;
   close?: boolean;
   due?: string | null;
   goal_id?: string | null;
@@ -9867,6 +9887,14 @@ export type SetStrategyBotLevelResponse = StrategyBotView;
 export type SetTaskCapParams = Record<string, never>;
 export type SetTaskCapBody = TaskCap;
 export type SetTaskCapResponse = TaskCapWrite;
+
+/** POST /api/v2/tasks/{tid}/check-back */
+export type SetTaskCheckBackParams = {
+  "Idempotency-Key": string;
+  tid: string;
+};
+export type SetTaskCheckBackBody = TaskCheckBack;
+export type SetTaskCheckBackResponse = TaskResult;
 
 /** POST /api/v2/tasks/{tid}/model */
 export type SetTaskModelParams = {

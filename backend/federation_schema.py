@@ -1,5 +1,5 @@
 """The tables behind peering between Tico installs (backend/federation*.py). They are made by migration
-backend/migrations/0046_native_threads_schema.py; this module only describes them.
+backend/migrations/0047_native_threads_schema.py; this module only describes them.
 
 - `federation_keys`: this install's Ed25519 keys, the private half sealed by the vault. One is current (`retired_at`
   NULL); registering a new one with HQ resets every peering (HQ side and here).
@@ -34,6 +34,6 @@ backend/migrations/0046_native_threads_schema.py; this module only describes the
 
 
 def seed(c):
-    """Every start: the relay's one state row (`federation_states`, singleton 1). Migration 0046 makes the table and the
+    """Every start: the relay's one state row (`federation_states`, singleton 1). Migration 0047 makes the table and the
     row; a devcopy empties the table and keeps the migration record, and Relay.status reads the row unguarded."""
     c.execute("INSERT OR IGNORE INTO federation_states(singleton) VALUES (1)")

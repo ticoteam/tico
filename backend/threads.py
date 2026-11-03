@@ -110,9 +110,9 @@ def _now():
 
 
 # ----------------------------------------------------------------------------- schema
-# The tables, columns, triggers and other indexes are migration backend/migrations/0046_native_threads_schema.py. The
+# The tables, columns, triggers and other indexes are migration backend/migrations/0047_native_threads_schema.py. The
 # message indexes are built here, by migrate, after its one-time backfill (building them over unstamped rows first is
-# slow, and it stalls); 0046 makes them only on a file whose backfill already ran.
+# slow, and it stalls); 0047 makes them only on a file whose backfill already ran.
 _MESSAGE_INDEXES = (
     # Not unique: an insert copying another row's seq or origin must not fail before the stamp trigger replaces them.
     # The sequence makes seqs unique; message_revisions makes (origin_id, revision) unique.
@@ -160,7 +160,7 @@ def _backfill_sql(r):
 
 def ensure(c):
     """Every start (hubdb.migrate): the one data step a file migrated before it existed still needs. The schema is
-    migration 0046."""
+    migration 0047."""
     _neutral_titles_once(c)
 
 
@@ -3758,7 +3758,7 @@ def migrate(c):
     Resumable. The per-message backfill runs in chunks of MIGRATION_CHUNK rows, each a transaction of its own that
     also records how far it got (`threads-migration-progress`), so a crash or a restart resumes there and the write
     lock is held for one chunk at a time. Each step is idempotent per row, so a chunk that ran before a crash runs
-    again harmlessly. The message indexes are built after the backfill (migration 0046 skips them until then).
+    again harmlessly. The message indexes are built after the backfill (migration 0047 skips them until then).
     Inside a caller's transaction the chunks join it, and the whole migration is one transaction, as before."""
     if migrated(c):
         return False

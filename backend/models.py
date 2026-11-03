@@ -200,6 +200,8 @@ class TaskCreate(Contract):
     title: str = Field(min_length=1, max_length=300)
     body: Text
     owner: ID
+    check_back_at: str | None = Field(default=None, max_length=80)
+    check_back_note: str | None = Field(default=None, max_length=500)
     due: str | None = None
     relations: list[TaskRelationRef] = Field(default_factory=list, max_length=20)
     goal_id: ID | None = None
@@ -265,6 +267,8 @@ class TaskUpdate(Contract):
     note: str | None = Field(default=None, max_length=200_000)
     quiet: bool = False
     owner: ID | None = None
+    check_back_at: str | None = Field(default=None, max_length=80)
+    check_back_note: str | None = Field(default=None, max_length=500)
     due: str | None = None
     body: Text | None = None
     goal_id: str | None = Field(default=None, max_length=200)   # "" takes the goal off
@@ -2498,6 +2502,11 @@ class BotGoLive(Contract):
     """Place it if it has no computer, activate it, and start its setup with the person."""
     computer: str = Field(default="", max_length=200)
     setup: bool = True
+
+
+class TaskCheckBack(Contract):
+    at: str = Field(min_length=2, max_length=80)
+    note: str | None = Field(default=None, max_length=500)
 
 
 class TaskSnooze(Contract):

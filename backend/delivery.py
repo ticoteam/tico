@@ -101,6 +101,12 @@ def defer(conn, bot, kind, item, *, conversation_id="", task_id=None, defer_for=
     due = until(defer_for or (TASK_DEFAULT if kind in ("comment", "task") else CHAT_DEFAULT), created)
     conn.execute("INSERT INTO deferrals(id,bot,kind,item,conversation_id,task_id,due_at,created_at) VALUES(?,?,?,?,?,?,?,?)",
                  (H.new_id(), H.actor_id(bot), kind, item, conversation_id or "", task_id, due, created))
+    if kind == "task" and task_id and due:
+        from . import task_check_backs
+        row = H.task(conn, task_id)
+        explicit = conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='check_back_explicit' LIMIT 1", (task_id,)).fetchone()
+        if row and task_check_backs.involved(row) and not explicit:
+            task_check_backs.set_time(conn, row, due, "Inspect the deferred assignment at its delivery deadline.", system=True)
     return due
 
 
@@ -232,6 +238,16 @@ def _fire(conn, H, bot, conversation_id, at, external):
         conn.execute(f"UPDATE deferrals SET settled_at=?,how='moot' WHERE id IN ({','.join('?' * len(part))})",
                      (at, *part))
     if not live:
+        return None
+    # A task's own due inspection already carries the assignment. Do not bind its deferred item to that job:
+    # a reschedule can obsolete the inspection, while the original delivery deadline still has to be honored.
+    from . import task_check_backs
+    if task_check_backs.enabled(conn) and all(r["kind"] == "task" and conn.execute(
+            "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
+            "AND j.state IN ('queued','leased','running') AND json_extract(m.refs,'$.wake')='check_back' "
+            "AND json_extract(m.refs,'$.task')=? AND EXISTS (SELECT 1 FROM tasks t WHERE t.id=? "
+            "AND t.check_back_at=json_extract(m.refs,'$.check_back_at') AND t.owner_id=m.recipient_id) LIMIT 1",
+            (bot, r["item"], r["item"])).fetchone() for r in live):
         return None
     # A deadline run already queued in this session takes these too: one run, not one per deadline.
     pending = conn.execute("SELECT d.fired_job FROM deferrals d JOIN jobs j ON j.id=d.fired_job WHERE d.bot=? AND "

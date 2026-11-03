@@ -18,7 +18,7 @@ from backend import hubdb as H
 from backend.config import Settings
 
 BOT_IDS = importlib.import_module("backend.migrations.0012_bot_ids")
-THREADS_SCHEMA = importlib.import_module("backend.migrations.0046_native_threads_schema")
+THREADS_SCHEMA = importlib.import_module("backend.migrations.0047_native_threads_schema")
 
 EMPLOYEES = {
     "coo": {"display_name": "COO", "status": "active", "host": "keeper", "runtime": "codex"},
@@ -59,7 +59,7 @@ def _old_shape_database(path):
     old_first = H.SCHEMA.replace(NEW_BOTS_DDL, OLD_BOTS_DDL)
     assert old_first != H.SCHEMA
     # v0.5 had no migration files: hubdb.migrate, which now runs them after its numbered steps, leaves them out here.
-    # Its start did make the threads schema (now migration 0046's, unrecorded here so the real start still runs it),
+    # Its start did make the threads schema (now migration 0047's, unrecorded here so the real start still runs it),
     # which threads.migrate, at the end of hubdb.migrate, reads.
     with unittest.mock.patch.object(H, "MIGRATIONS", [old_first, *H.MIGRATIONS[1:]]), \
             unittest.mock.patch.object(migrations, "apply", lambda conn, directory=None: THREADS_SCHEMA.up(conn)):

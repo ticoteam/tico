@@ -7,8 +7,8 @@ import sqlite3
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import thread_search as search
 
-# The index, its key table and triggers are made by this migration (backend/migrations/0046_native_threads_schema.py).
-SCHEMA = importlib.import_module("backend.migrations.0046_native_threads_schema")
+# The index, its key table and triggers are made by this migration (backend/migrations/0047_native_threads_schema.py).
+SCHEMA = importlib.import_module("backend.migrations.0047_native_threads_schema")
 
 # The visibility a viewer gets in these tests: company threads only, and never a message from one actor.
 THREADS = "cv.audience='company'"

@@ -166,14 +166,14 @@ class GrowthRethink(unittest.TestCase):
     def before_rethink(self):
         """The file as the release before the rethink left it: every migration before it (not the ones after, which
         would then sort after an applied one), the threads schema that release's modules made after the migrations
-        (0046 makes it now, unrecorded here so the full migrate still runs it), and the strategy tables store.py makes
+        (0047 makes it now, unrecorded here so the full migrate still runs it), and the strategy tables store.py makes
         at startup."""
         conn = sqlite3.connect(self.path, isolation_level=None)
         conn.row_factory = sqlite3.Row
         self.addCleanup(conn.close)
         every = migrations.files()
         apply = migrations.apply
-        threads = importlib.import_module("backend.migrations.0046_native_threads_schema")
+        threads = importlib.import_module("backend.migrations.0047_native_threads_schema")
 
         def apply_then_threads(conn, directory=None):
             apply(conn, directory)
