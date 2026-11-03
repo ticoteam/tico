@@ -22,7 +22,10 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
     const visit = async ({enabled = true, seed = [], native = false, feedback = null, viewport = {width: 1440, height: 900}, access = null, hash = '#/tasks', theme = 'light', keyboard = false, userAgent} = {}) => {
-      const ctx = await browser.newContext({viewport, serviceWorkers: 'block', userAgent});
+      // The fixtures are minutes and days before now; a browser whose local time is near midnight would put 'an hour
+      // ago' on yesterday. A fixed-offset zone where it is about noon keeps every day line where the test expects it.
+      const noon = `Etc/GMT${(h => (h > 0 ? '+' : '-') + Math.abs(h))(new Date().getUTCHours() - 12)}`.replace('-0', '+0');
+      const ctx = await browser.newContext({viewport, serviceWorkers: 'block', userAgent, timezoneId: noon});
       await ctx.addInitScript(v => localStorage.setItem('tico.theme', v), theme);   // ui/theme.js
       // A phone keyboard, as iOS Safari reports it: the layout viewport keeps its size while window.visualViewport
       // shrinks to what is left above the keyboard and pans (offsetTop); pinch zoom divides its height by the scale.
