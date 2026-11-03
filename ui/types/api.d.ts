@@ -1047,6 +1047,8 @@ export type ConversationList = {
 
 export type DmCreate = {
   body?: string | null;
+  defer_for?: string | null;
+  delivery?: "steer" | "queue" | "defer" | null;
   members: Array<string>;
   title?: string;
 };
@@ -5228,6 +5230,8 @@ export type ThreadPatch = {
 };
 
 export type ThreadPost = {
+  defer_for?: string | null;
+  delivery?: "steer" | "queue" | "defer" | null;
   kind?: string;
   parent_message_id?: string | null;
   refs?: Record<string, unknown>;
@@ -10416,6 +10420,8 @@ export type UploadThreadMessageParams = {
   thread_id: string;
 };
 export type UploadThreadMessageBody = {
+  defer_for?: string | null;
+  delivery?: "steer" | "queue" | "defer" | null;
   kind?: string;
   parent_message_id?: string | null;
   text?: string;

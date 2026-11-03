@@ -227,19 +227,26 @@ def overdue(c):
         "AND a.state IN ('leased','running') AND p.start_until<=?", (H.now(),))]
 
 
+# A person's own message, or the keeper carrier of one (threads._carrier): a keeper notice naming the message
+# (refs.carries) and its sender (refs.from). Other keeper notices (a routine, a sweep) carry none.
+PERSON_SQL = (f"(m.sender_id LIKE 'human:%' OR (m.sender_id='{H.KEEPER}' "
+              "AND json_extract(m.refs,'$.carries') IS NOT NULL AND json_extract(m.refs,'$.from') LIKE 'human:%'))")
+
+
 def from_person(c, job_id):
-    """Whether a job answers a person's own message to the bot: a chat, a message in its task, an answer to its ask.
-    Such a turn starts on an overloaded computer and ahead of the turns waiting there: the load is the bots' own work,
-    and holding it left a person's message waiting behind a hundred bot turns. A keeper notice (a routine, a sweep,
+    """Whether a job answers a person's own message to the bot: a chat, a message in its task, an answer to its ask, or
+    a person's message in a thread with it (its keeper carrier, PERSON_SQL). Such a turn starts on an overloaded
+    computer and ahead of the turns waiting there: the load is the bots' own work, and holding it left a person's
+    message waiting behind a hundred bot turns. A keeper notice that carries no person's message (a routine, a sweep,
     a rule's wake), or a bot's message, is not one, even when a person's act caused it. Two primary-key reads."""
     return bool(c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
-                          "WHERE j.id=? AND m.sender_id LIKE 'human:%'", (job_id,)).fetchone())
+                          f"WHERE j.id=? AND {PERSON_SQL}", (job_id,)).fetchone())
 
 
 def person_queued(c, runner_id):
     """Whether a person's message waits in this computer's queue: only then does a held claim look for a job."""
     return bool(c.execute("SELECT 1 FROM assignments x JOIN jobs j ON j.bot_id=x.bot AND j.state='queued' AND j.held=0 "
-                          "JOIN messages m ON m.id=j.message_id WHERE x.runner_id=? AND m.sender_id LIKE 'human:%' "
+                          f"JOIN messages m ON m.id=j.message_id WHERE x.runner_id=? AND {PERSON_SQL} "
                           "LIMIT 1", (runner_id,)).fetchone())
 
 
