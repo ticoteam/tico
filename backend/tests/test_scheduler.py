@@ -252,6 +252,13 @@ def _ops_runner(api):
     return Identity('runner:' + r['runner_id'], 'runner', runner_id=r['runner_id'])
 
 
+def _wake_by_hand(c, message_id, bot):
+    """H.say marks a keeper notice quiet, so it queues no job. This queues it as a notice that wakes the bot: the job
+    enqueue writes for a notice that is not quiet."""
+    c.execute("INSERT INTO jobs(id,message_id,bot_id,created_at) VALUES(?,?,?,?)", (message_id, message_id, bot, H.now()))
+    return message_id
+
+
 def _carrier_job(c, message_id):
     """The queued job of the keeper carrier a thread wrote for this message (threads._carrier)."""
     return c.execute("SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE m.sender_id='keeper' "
@@ -265,10 +272,10 @@ def test_a_persons_home_message_carried_by_a_notice_is_claimed_before_an_older_n
     execution, store = api.app.state.execution, api.app.state.store
     with store.transaction() as c:
         older = H.say(c, H.KEEPER, 'bot:ops', 'Older keeper notice', kind='notice')
+        older_job = _wake_by_hand(c, older['id'], 'ops')
         home = threads.home(c, 'bot:ops', create=True)
         mine = threads.post(c, 'human:ana', home['id'], 'Stop the April numbers')
         carrier = _carrier_job(c, mine['id'])
-        older_job = c.execute("SELECT id FROM jobs WHERE message_id=?", (older['id'],)).fetchone()[0]
         c.execute("UPDATE jobs SET created_at=? WHERE id=?", ('2026-09-01T00:00:00Z', older_job))
         c.execute("UPDATE jobs SET created_at=? WHERE id=?", ('2026-09-02T00:00:00Z', carrier))
         claimed = execution.candidate(c, who, Claim(), execution.runner(c, who))
@@ -284,8 +291,8 @@ def test_a_bots_message_carried_by_a_notice_keeps_its_place_behind_an_older_noti
         said = H.say(c, 'bot:finance', 'human:ana', 'Finance has the numbers')
         carrier = H.say(c, H.KEEPER, 'bot:ops', 'bot:finance: Finance has the numbers', kind='notice',
                         refs={'carries': said['id'], 'from': 'bot:finance', 'wake': 'thread'})
-        older_job = c.execute("SELECT id FROM jobs WHERE message_id=?", (older['id'],)).fetchone()[0]
-        carrier_job = c.execute("SELECT id FROM jobs WHERE message_id=?", (carrier['id'],)).fetchone()[0]
+        older_job = _wake_by_hand(c, older['id'], 'ops')
+        carrier_job = _wake_by_hand(c, carrier['id'], 'ops')
         c.execute("UPDATE jobs SET created_at=? WHERE id=?", ('2026-09-01T00:00:00Z', older_job))
         c.execute("UPDATE jobs SET created_at=? WHERE id=?", ('2026-09-02T00:00:00Z', carrier_job))
         claimed = execution.candidate(c, who, Claim(), execution.runner(c, who))

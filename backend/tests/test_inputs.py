@@ -313,10 +313,17 @@ def test_a_message_says_whether_it_steers_the_running_turn_and_stop_and_redirect
 
 def test_a_persons_home_message_carried_by_its_notice_is_redirected_by_that_person_only(api):
     from backend import threads
-    r, _, active = setup_attempt(api)
-    post(api, f"attempts/{active['id']}/started", {"thread_id": "thread"}, r["token"])
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
     with api.app.state.store.transaction() as c:
         home = threads.home(c, "bot:ops", create=True)["id"]
+    # The turn runs in Home, so its first message is a carrier too and the redirect shares its conversation.
+    first = api.post(f"/api/v2/threads/{home}/messages", json={"text": "Count the April numbers"},
+                     headers=headers("ana-test"))
+    assert first.status_code == 200, first.text
+    active = claim(api, r)
+    post(api, f"attempts/{active['id']}/started", {"thread_id": "thread"}, r["token"])
     response = api.post(f"/api/v2/threads/{home}/messages", json={"text": "Stop that; do the April numbers instead"},
                         headers=headers("ana-test"))
     assert response.status_code == 200, response.text
