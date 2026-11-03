@@ -4217,7 +4217,7 @@ def bot_branch(api, args):
       "list; one fresh commit, not its history). Its notes and memory are left out unless `with_memory`. No credential, .env or secret is "
       "ever copied: the credentials the original's tools need are granted to the copy when the person is a credential administrator, and "
       "the rest come back as `needs credential X` for you to ask for. Nothing stays linked. Runs on this computer, in its workspace.",
-      {"bot": _s("The bot to copy"), "slug": _s("The copy's slug; <bot>-copy by default"), "name": _s("What people call the copy"),
+      {"bot": _s("The bot to copy"), "slug": _s("The copy's slug; the original's with the next free number (builder-2) by default"), "name": _s("What people call the copy"),
        "with_memory": {"type": "boolean", "default": False, "description": "Also copy the original's memory, notes and state"},
        "computer": _s("A computer's label or id to put the copy on; leave out to place it later")},
       required=("bot",), writes=True, local=True)
