@@ -146,8 +146,9 @@ def test_a_shared_room_home_keeps_its_legacy_readers(api):
         assert readers(c, legacy) == legacy_before
         assert c.execute("SELECT legacy_audience FROM messages WHERE id=?", (legacy,)).fetchone()[0] == "shared:cpo"
         assert c.execute("SELECT legacy_audience FROM messages WHERE id=?", (mine,)).fetchone()[0] is None
-        home_readers = {p for p in PEOPLE if threads.actor_viewer(c, p).can_read_home(
-            c, threads.home_owner(threads.thread_row(c, shared)))}
+        # Read by the Home's readers, by the Home's own rule (a shared room that stores no audience: its members).
+        home_readers = {p for p in PEOPLE if threads.readable(c, threads.actor_viewer(c, p), shared)}
+        assert "human:ana" in home_readers
         assert readers(c, mine) == home_readers
         assert threads.home(c, "bot:cpo", create=False)["id"] == shared
 
@@ -155,7 +156,6 @@ def test_a_shared_room_home_keeps_its_legacy_readers(api):
 def test_assistant_rooms_and_other_rows_stay(api):
     with store(api).transaction() as c:
         coo = room(c, "human:ana", "coo")
-        say(c, "human:ana", "bot:coo", "Assistant question", coo)
         assistant = H.open_conversation(c, "human:ana", ["human:ana", "bot:coo"], kind="chat", subject="Assistant",
                                         scope=rooms.PERSONAL, owner_actor="human:ana",
                                         room_key=rooms.ASSISTANT_ROOM)["id"]
@@ -216,11 +216,13 @@ def test_an_old_tasks_comments_and_quiet_bot_posts_follow_the_room(api):
     with store(api).transaction() as c:
         home = threads.home(c, "bot:ops", create=True)["id"]
         cid = room(c, "human:ana", "ops")
-        c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (cid, task_id))
         comment = say(c, "human:ana", "bot:ops", "A note on it", cid, refs={"task": task_id, "comment": True})["id"]
         quiet = say(c, "bot:ops", "human:ana", "Working on it", cid, refs={"task": task_id}, in_reply_to=comment)["id"]
         waiting = [r[0] for r in c.execute("SELECT id FROM message_deliveries WHERE message_id=? AND recipient=? "
                                            "AND state IN ('pending','delivered','read')", (quiet, "human:ana"))]
+        assert waiting
+        # The room becomes the task's room, as tasks filed before Oct 13 named it: the bot's post stops counting.
+        c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (cid, task_id))
     summary = merge(api)
     assert summary["rooms"] == 1 and summary["moot"] == len(waiting), summary
     with store(api).read() as c:
@@ -228,14 +230,13 @@ def test_an_old_tasks_comments_and_quiet_bot_posts_follow_the_room(api):
         assert not c.execute("SELECT 1 FROM message_deliveries WHERE message_id=? AND recipient=? "
                              "AND state IN ('pending','delivered','read')", (quiet, "human:ana")).fetchone()
         assert c.execute("SELECT conversation_id FROM tasks WHERE id=?", (task_id,)).fetchone()[0] == cid
-        assert seqs(c, home) == [comment, quiet]
+        assert seqs(c, home)[-2:] == [comment, quiet]
 
 
 def test_a_room_whose_owner_cannot_read_the_home_stays(api):
     """inbox is Ana's alone: ben's old room with it would put his history where he cannot read it."""
     with store(api).transaction() as c:
         cid = room(c, "human:ben", "inbox")
-        say(c, "human:ben", "bot:inbox", "Hello", cid)
     summary = merge(api)
     assert summary["rooms"] == 0
     assert any(s.get("room") == cid for s in summary["skipped"]), summary

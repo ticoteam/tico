@@ -195,11 +195,12 @@ def _merge_bot(c, bot_id, excluded, summary):
     home = _home(c, bot, summary)
     if _federated(c, home["id"]):
         raise Skip("its Home is linked to another install")
-    owner = threads.home_owner(home)
     moved = 0
     for room in rooms:
         v = threads.actor_viewer(c, room["owner_id"])
-        if v is not None and not v.can_read_home(c, owner):
+        # Who reads the Home is its own rule: Read on the bot for a stored Home, the live shared-room rule for a
+        # shared room that stores no audience (docs/dev/threads-contract.md section 7).
+        if v is not None and not threads.readable(c, v, home["id"]):
             summary["skipped"].append({"bot": bot_id, "room": room["id"], "reason": "its owner may not read the Home"})
             continue
         _move(c, room, threads.thread_row(c, home["id"]), bot, summary)
