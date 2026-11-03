@@ -31,3 +31,9 @@ backend/migrations/0045_native_threads_schema.py; this module only describes the
   a paused peering, or an envelope behind one of those in its own root). Kept per peer and root in arrival order; a
   lane waits for its first one, and other roots and peers are applied as they arrive.
 """
+
+
+def seed(c):
+    """Every start: the relay's one state row (`federation_states`, singleton 1). Migration 0045 makes the table and the
+    row; a devcopy empties the table and keeps the migration record, and Relay.status reads the row unguarded."""
+    c.execute("INSERT OR IGNORE INTO federation_states(singleton) VALUES (1)")

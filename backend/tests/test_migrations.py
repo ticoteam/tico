@@ -337,3 +337,14 @@ def test_an_older_threads_shape_gets_the_missing_columns_tables_triggers_and_sea
                          "WHERE message_search MATCH 'quarterly'").fetchall() == [("m-acme",)]
     boot(path)
     assert snapshot(path) == once
+
+
+def test_a_start_puts_back_the_federation_state_row_a_devcopy_emptied(tmp_path):
+    """federation_states holds one row that Relay.status reads unguarded; migration 0045 makes it once, and every start
+    puts it back when a devcopy emptied the table."""
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("DELETE FROM federation_states")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT singleton FROM federation_states").fetchall() == [(1,)]
