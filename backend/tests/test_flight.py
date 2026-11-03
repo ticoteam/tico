@@ -71,7 +71,7 @@ def test_a_slow_request_names_its_costliest_statements_and_keeps_no_values(store
     with store.read() as c:                         # a pooled connection, opened before the request
         cost, token = flight.request_started("GET", None)
         try:
-            c.execute(many, (300_000,)).fetchone()
+            c.execute(many, (3_000_000,)).fetchone()
             for task in ("secret-a", "secret-b", "secret-c", "secret-d"):
                 c.execute(f"SELECT * FROM tasks WHERE id='{task}'").fetchall()
         finally:
