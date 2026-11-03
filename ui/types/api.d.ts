@@ -450,6 +450,7 @@ export type BotDetail = {
 export type BotDreamView = {
   dream: {
   closed_at: string | null;
+  doing: string | null;
   questions: {
   message_id: string;
   mine: boolean;
@@ -4138,6 +4139,10 @@ export type SeatDetail = {
   description_by?: "chart" | "person";
   id: string;
   kind: "seat";
+  reports_now?: {
+  name: string;
+  until: string;
+};
   reports_to: string;
   stage: "recruiting";
   team?: string;

@@ -52,73 +52,8 @@ ACTION_ITEMS_RETRY_MAX_SECONDS = 3600
 ACTION_ITEMS_GIVE_UP_SECONDS = 24 * 3600
 HOLDS_LIMIT = 20          # a call's holds, as its connector sees them: a page, not an archive
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS calls(
- id TEXT PRIMARY KEY,
- thread_id TEXT NOT NULL,
- live_meeting_id TEXT NOT NULL UNIQUE REFERENCES live_meetings(id) ON DELETE CASCADE,
- connector_actor TEXT NOT NULL,
- title TEXT NOT NULL,
- state TEXT NOT NULL CHECK (state IN ('live','ended')),
- room_name TEXT NOT NULL UNIQUE,
- end_reason TEXT,
- started_at TEXT NOT NULL,
- ended_at TEXT,
- media_seen_at TEXT,
- transcript_posted_at TEXT,
- action_items_posted_at TEXT,
- finalized_at TEXT,
- wrapped_up_at TEXT,
- action_items_failed_at TEXT,
- action_items_attempts INTEGER NOT NULL DEFAULT 0,
- action_items_retry_at TEXT,
- action_items_given_up_at TEXT,
- speak_replies INTEGER NOT NULL DEFAULT 0,
- created_at TEXT NOT NULL,
- updated_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS calls_thread ON calls(thread_id, started_at);
-CREATE INDEX IF NOT EXISTS calls_state ON calls(state);
-CREATE TABLE IF NOT EXISTS call_holds(
- id TEXT PRIMARY KEY,
- call_id TEXT NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
- kind TEXT NOT NULL CHECK (kind IN ('transcript','action_items')),
- reason TEXT NOT NULL,
- detail TEXT NOT NULL,
- created_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS call_holds_call ON call_holds(call_id);
-CREATE TABLE IF NOT EXISTS call_participants(
- call_id TEXT NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
- actor TEXT NOT NULL,
- joined_at TEXT NOT NULL,
- left_at TEXT,
- removed_at TEXT,
- media_removed_at TEXT,
- PRIMARY KEY(call_id, actor));
-"""
-
 # The auth module, set by install_calls: an actor becomes the identity that the thread rules read.
 AUTH = None
-
-
-def ensure(c):
-    for statement in SCHEMA.split(";"):
-        if statement.strip():
-            c.execute(statement)
-    # Columns added after a database first had these tables. The thread that governs a call's live meeting is read from
-    # the meeting row the privacy checks already have: they run inside the SQL endpoint, which may not read this table.
-    _column(c, "live_meetings", "thread_id", "TEXT")
-    _column(c, "calls", "finalized_at", "TEXT")
-    _column(c, "calls", "wrapped_up_at", "TEXT")
-    _column(c, "calls", "action_items_failed_at", "TEXT")
-    _column(c, "calls", "action_items_attempts", "INTEGER NOT NULL DEFAULT 0")
-    _column(c, "calls", "action_items_retry_at", "TEXT")
-    _column(c, "calls", "action_items_given_up_at", "TEXT")
-    _column(c, "call_participants", "media_removed_at", "TEXT")
-
-
-def _column(c, table, column, definition):
-    if not any(row[1] == column for row in c.execute(f"PRAGMA table_info({table})")):
-        c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def readable(c, actor, thread_id):

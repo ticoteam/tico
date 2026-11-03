@@ -94,7 +94,6 @@ BRANCH_CHECKS = 200               # restricted rows a branch count checks one by
 # teammates wake them and the loop guard count it. A legacy writer (hubdb.say from an older route) keeps its own rules.
 POSTING = contextvars.ContextVar("threads_posting", default=None)
 
-_NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%fZ','now')"
 _MEETING_PREFIX = "live-meeting:"   # live_privacy.ROOM_PREFIX (test_threads_privacy checks they agree)
 
 
@@ -111,81 +110,10 @@ def _now():
 
 
 # ----------------------------------------------------------------------------- schema
-CONVERSATION_COLUMNS = (
-    ("audience", "TEXT"), ("audience_group_id", "TEXT"), ("parent_id", "TEXT"), ("parent_message_id", "TEXT"),
-    ("root_id", "TEXT"), ("path", "TEXT"), ("last_seq", "INTEGER NOT NULL DEFAULT 0"),
-    ("last_unread_seq", "INTEGER NOT NULL DEFAULT 0"), ("archived_at", "TEXT"), ("updated_at", "TEXT"),
-    ("scope", "TEXT"), ("owner_id", "TEXT"), ("room_key", "TEXT"), ("retention_days", "INTEGER"))
-MESSAGE_COLUMNS = (
-    ("seq", "INTEGER"), ("origin_id", "TEXT"), ("revision", "INTEGER NOT NULL DEFAULT 0"),
-    ("restricted", "INTEGER NOT NULL DEFAULT 0"), ("legacy_audience", "TEXT"), ("edited_at", "TEXT"),
-    ("deleted_at", "TEXT"))
-DELIVERY_COLUMNS = (("unsolicited", "INTEGER NOT NULL DEFAULT 0"),)
-
-TABLES = (
-    "CREATE TABLE IF NOT EXISTS thread_members (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, actor TEXT NOT NULL, "
-    "role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner','member')), added_by TEXT NOT NULL, "
-    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (thread_id, actor))",
-    "CREATE INDEX IF NOT EXISTS thread_members_actor ON thread_members(actor, thread_id)",
-    "CREATE TABLE IF NOT EXISTS thread_followers (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, actor TEXT NOT NULL, "
-    "following INTEGER NOT NULL DEFAULT 1 CHECK (following IN (0,1)), notify TEXT NOT NULL DEFAULT 'live' "
-    "CHECK (notify IN ('live','mentions','digest','muted')), reason TEXT NOT NULL DEFAULT 'manual', "
-    "last_read_seq INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
-    "UNIQUE (thread_id, actor))",
-    "CREATE INDEX IF NOT EXISTS thread_followers_actor ON thread_followers(actor, following, thread_id)",
-    "CREATE TABLE IF NOT EXISTS message_deliveries (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, "
-    "recipient TEXT NOT NULL, thread_id TEXT, root_id TEXT, "
-    "mode TEXT NOT NULL CHECK (mode IN ('steer','queue','defer','digest','none')), reason TEXT NOT NULL, "
-    "cause TEXT NOT NULL DEFAULT 'human', state TEXT NOT NULL DEFAULT 'pending' "
-    "CHECK (state IN ('pending','delivered','read','capped','held','failed','moot')), "
-    "revision INTEGER NOT NULL DEFAULT 0, carrier_id TEXT, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT, "
-    "error TEXT, delivered_at TEXT, read_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
-    "UNIQUE (message_id, recipient))",
-    "CREATE INDEX IF NOT EXISTS message_deliveries_waiting ON message_deliveries(recipient, created_at) "
-    "WHERE state IN ('pending','delivered','capped','held')",
-    "CREATE INDEX IF NOT EXISTS message_deliveries_capped ON message_deliveries(root_id, created_at) "
-    "WHERE state='capped'",
-    "CREATE INDEX IF NOT EXISTS message_deliveries_loop ON message_deliveries(root_id, created_at) "
-    "WHERE cause='bot' AND recipient LIKE 'bot:%' AND mode IN ('steer','queue')",
-    "CREATE INDEX IF NOT EXISTS message_deliveries_outside ON message_deliveries(state, next_attempt_at) "
-    "WHERE recipient LIKE 'slack:%' OR recipient LIKE 'peer:%'",
-    "CREATE INDEX IF NOT EXISTS message_deliveries_carrier ON message_deliveries(carrier_id) "
-    "WHERE carrier_id IS NOT NULL",
-    "CREATE INDEX IF NOT EXISTS message_deliveries_thread ON message_deliveries(thread_id, recipient)",
-    # Outside messages not sent (backend/federation_threads.py UNSENT_WHERE, word for word, or SQLite does not use it).
-    "CREATE INDEX IF NOT EXISTS message_deliveries_unsent ON message_deliveries(root_id, recipient) "
-    "WHERE (state='failed' OR (state='pending' AND attempts>=8))",
-    "CREATE TABLE IF NOT EXISTS message_mentions (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, actor TEXT NOT NULL, "
-    "kind TEXT NOT NULL CHECK (kind IN ('mention','ask','assign')), in_audience INTEGER NOT NULL DEFAULT 1, "
-    "created_at TEXT NOT NULL, UNIQUE (message_id, actor))",
-    "CREATE INDEX IF NOT EXISTS message_mentions_actor ON message_mentions(actor, created_at)",
-    "CREATE TABLE IF NOT EXISTS message_reactions (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, actor TEXT NOT NULL, "
-    "emoji TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE (message_id, actor, emoji))",
-    "CREATE INDEX IF NOT EXISTS message_reactions_actor ON message_reactions(actor, created_at)",
-    "CREATE TABLE IF NOT EXISTS message_revisions (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, "
-    "origin_id TEXT NOT NULL, revision INTEGER NOT NULL, body TEXT, deleted INTEGER NOT NULL DEFAULT 0, "
-    "actor TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE (origin_id, revision))",
-    "CREATE INDEX IF NOT EXISTS message_revisions_message ON message_revisions(message_id, revision)",
-    "CREATE TABLE IF NOT EXISTS sequences (name TEXT PRIMARY KEY, value INTEGER NOT NULL)",
-    # Messages waiting to be routed (backend/thread_routing.py), written in the post and read by its worker.
-    "CREATE TABLE IF NOT EXISTS thread_routings (message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, "
-    "attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL, created_at TEXT NOT NULL, "
-    "updated_at TEXT NOT NULL)",
-)
-
-INDEXES = (
-    "CREATE INDEX IF NOT EXISTS message_deliveries_unsolicited ON message_deliveries(recipient, created_at) "
-    "WHERE unsolicited=1",
-    "CREATE INDEX IF NOT EXISTS message_deliveries_digest ON message_deliveries(recipient, created_at) "
-    "WHERE mode='digest' AND state='pending'",
-    "CREATE INDEX IF NOT EXISTS threads_retention ON conversations(id) WHERE retention_days IS NOT NULL",
-    "CREATE UNIQUE INDEX IF NOT EXISTS threads_parent_message ON conversations(parent_message_id) "
-    "WHERE parent_message_id IS NOT NULL",
-    "CREATE UNIQUE INDEX IF NOT EXISTS threads_one_home ON conversations(owner_id) "
-    "WHERE audience='home' AND closed_at IS NULL AND archived_at IS NULL",
-    "CREATE INDEX IF NOT EXISTS threads_root ON conversations(root_id)",
-    "CREATE INDEX IF NOT EXISTS threads_path ON conversations(path)",
-    "CREATE INDEX IF NOT EXISTS threads_recent ON conversations(root_id, last_seq) WHERE archived_at IS NULL",
+# The tables, columns, triggers and other indexes are migration backend/migrations/0047_native_threads_schema.py. The
+# message indexes are built here, by migrate, after its one-time backfill (building them over unstamped rows first is
+# slow, and it stalls); 0047 makes them only on a file whose backfill already ran.
+_MESSAGE_INDEXES = (
     # Not unique: an insert copying another row's seq or origin must not fail before the stamp trigger replaces them.
     # The sequence makes seqs unique; message_revisions makes (origin_id, revision) unique.
     "CREATE INDEX IF NOT EXISTS messages_seq ON messages(seq) WHERE seq IS NOT NULL",
@@ -224,116 +152,15 @@ def _derived_owner(r):
             f"WHEN {r}.scope='personal' THEN {_FIRST_HUMAN.format(r=r)} END")
 
 
-def _carrier_sql(r):
-    return f"COALESCE(json_extract(CASE WHEN json_valid({r}.refs) THEN {r}.refs END,'$.carries'),'')<>''"
-
-
 def _backfill_sql(r):
     """SQL: a message written as history (`refs.import`, `refs.replay`), which is never unread."""
     refs = f"CASE WHEN json_valid({r}.refs) THEN {r}.refs END"
     return f"(json_extract({refs},'$.import') IS NOT NULL OR json_extract({refs},'$.replay') IS NOT NULL)"
 
 
-def _triggers():
-    # The primary delivery's reason here is 'ask' or 'addressed', never 'mention' (deliver writes mentions): a task
-    # thread's bot post gets no row from this trigger, and the mention, if any, makes its row in deliver.
-    not_mention = "'addressed'"
-    install = ("COALESCE((SELECT json_extract(value,'$.install_id') FROM registry_metadata "
-               "WHERE key='usage-count'),'local')")
-    # No writer vouched for this row's origin: none given, or one copied from another row.
-    fresh = ("(NEW.origin_id IS NULL OR EXISTS (SELECT 1 FROM messages o WHERE o.origin_id=NEW.origin_id "
-             "AND o.id<>NEW.id))")
-    state = ("CASE WHEN NEW.delivered_at IS NOT NULL AND NEW.read_at IS NOT NULL THEN 'read' "
-             "WHEN NEW.delivered_at IS NOT NULL THEN 'delivered' ELSE 'pending' END")
-    return {
-        # A conversation written by any other writer is a root. Its audience stays unset and is derived live from
-        # its legacy columns (audience_of, _derived_audience), since those writers set kind, task_id, scope and
-        # room_key after the insert.
-        "threads_conversations_stamp": (
-            "AFTER INSERT ON conversations WHEN NEW.root_id IS NULL",
-            "UPDATE conversations SET root_id=NEW.id, path='/'||NEW.id||'/', "
-            "updated_at=COALESCE(NEW.updated_at,NEW.created_at) WHERE id=NEW.id;"),
-        # Every message but a carrier takes the next seq (a seq copied with a row is replaced), and its thread's
-        # counters follow. A message no writer stamped is marked restricted: nothing vouched that its refs are
-        # harmless.
-        "threads_messages_stamp": (
-            f"AFTER INSERT ON messages WHEN NOT {_carrier_sql('NEW')}",
-            "INSERT OR IGNORE INTO sequences(name,value) VALUES('messages',0);"
-            "UPDATE sequences SET value=value+1 WHERE name='messages';"
-            "UPDATE messages SET seq=(SELECT value FROM sequences WHERE name='messages'), "
-            f"origin_id=CASE WHEN {fresh} THEN lower(hex(randomblob(16)))||'@'||{install} ELSE NEW.origin_id END, "
-            f"restricted=CASE WHEN {fresh} THEN 1 ELSE NEW.restricted END WHERE id=NEW.id;"
-            "UPDATE conversations SET last_seq=(SELECT value FROM sequences WHERE name='messages'), "
-            f"last_unread_seq=CASE WHEN (NEW.sender_id LIKE 'human:%' OR COALESCE(NEW.recipient_id,'')<>'') "
-            f"AND NOT {_backfill_sql('NEW')} "
-            "THEN (SELECT value FROM sequences WHERE name='messages') ELSE last_unread_seq END "
-            "WHERE id=NEW.conversation_id;"),
-        # The primary recipient's delivery: one row per message addressed to someone, in every writer's transaction.
-        "threads_primary_delivery": (
-            f"AFTER INSERT ON messages WHEN COALESCE(NEW.recipient_id,'')<>'' AND NOT {_carrier_sql('NEW')} "
-            f"AND {H.delivery_counts_sql('NEW', 'NEW.recipient_id', not_mention)}",
-            "INSERT OR IGNORE INTO message_deliveries(id,message_id,recipient,thread_id,root_id,mode,reason,cause,"
-            "state,revision,delivered_at,read_at,created_at,updated_at,unsolicited) VALUES(lower(hex(randomblob(16))),NEW.id,"
-            "NEW.recipient_id,NEW.conversation_id,(SELECT COALESCE(root_id,id) FROM conversations "
-            "WHERE id=NEW.conversation_id),"
-            "CASE WHEN NEW.recipient_id LIKE 'slack:%' OR NEW.recipient_id LIKE 'peer:%' THEN 'none' "
-            "WHEN COALESCE(json_extract(CASE WHEN json_valid(NEW.refs) THEN NEW.refs END,'$.quiet'),0) "
-            "THEN 'defer' ELSE 'queue' END,"
-            "CASE WHEN NEW.recipient_id LIKE 'slack:%' OR NEW.recipient_id LIKE 'peer:%' THEN 'outside' "
-            "WHEN NEW.kind='ask' THEN 'ask' ELSE 'addressed' END,"
-            "CASE WHEN NEW.sender_id LIKE 'bot:%' THEN 'bot' WHEN NEW.sender_id LIKE 'human:%' THEN 'human' "
-            "WHEN NEW.sender_id LIKE 'slack:%' OR NEW.sender_id LIKE 'peer:%' THEN 'outside' ELSE 'keeper' END,"
-            f"{state},COALESCE(NEW.revision,0),NEW.delivered_at,NEW.read_at,NEW.created_at,NEW.created_at,"
-            "COALESCE(json_extract(CASE WHEN json_valid(NEW.refs) THEN NEW.refs END,'$.unsolicited'),0));"),
-        # Its state follows the message row's receipts (hubdb.mark_delivered, mark_read and every direct UPDATE).
-        "threads_delivery_receipts": (
-            "AFTER UPDATE OF delivered_at, read_at ON messages",
-            "UPDATE message_deliveries SET delivered_at=NEW.delivered_at, read_at=NEW.read_at, "
-            f"state=CASE WHEN state IN ('capped','held','failed','moot') THEN state ELSE {state} END, "
-            f"updated_at={_NOW_SQL} WHERE message_id=NEW.id AND recipient=NEW.recipient_id;"
-            # A carrier's run took the message it carries.
-            "UPDATE message_deliveries SET delivered_at=NEW.delivered_at, "
-            "state=CASE WHEN state='pending' AND NEW.delivered_at IS NOT NULL THEN 'delivered' ELSE state END, "
-            f"updated_at={_NOW_SQL} WHERE carrier_id=NEW.id;"),
-        # A deleted message keeps no words anywhere: every writer that deletes (a thread delete, a task comment taken
-        # back, a hidden roadmap comment) empties its revision history too.
-        "threads_revisions_deleted": (
-            "AFTER UPDATE OF deleted_at ON messages WHEN NEW.deleted_at IS NOT NULL AND OLD.deleted_at IS NULL",
-            "UPDATE message_revisions SET body='' WHERE message_id=NEW.id;"),
-    }
-
-
 def ensure(c):
-    """Idempotent: the columns, tables, indexes and triggers. Called on every start (hubdb.migrate and the cloud
-    store's boot list), so no migration number can collide with another branch's."""
-    for column, declaration in CONVERSATION_COLUMNS:
-        H.add_column(c, "conversations", column, declaration)
-    for column, declaration in MESSAGE_COLUMNS:
-        H.add_column(c, "messages", column, declaration)
-    for statement in TABLES:
-        c.execute(statement)
-    for column, declaration in DELIVERY_COLUMNS:
-        H.add_column(c, "message_deliveries", column, declaration)
-    c.execute("CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-    c.execute("INSERT OR IGNORE INTO sequences(name,value) SELECT 'messages', COALESCE(MAX(rowid),0) FROM messages")
-    installed = {r[0]: r[1] for r in c.execute("SELECT name, sql FROM sqlite_master WHERE type='trigger' "
-                                               "AND name LIKE 'threads\\_%' ESCAPE '\\'")}
-    for name, (head, body) in _triggers().items():
-        sql = f"CREATE TRIGGER {name} {head} BEGIN {body} END"
-        if installed.get(name) == sql:
-            continue
-        c.execute(f"DROP TRIGGER IF EXISTS {name}")
-        c.execute(sql)
-    c.execute("DROP INDEX IF EXISTS message_deliveries_inbox")     # replaced by message_deliveries_waiting
-    for name in ("messages_seq", "messages_origin"):    # unique in an early build of this branch
-        found = c.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (name,)).fetchone()
-        if found and "UNIQUE" in str(found[0]).upper():
-            c.execute(f"DROP INDEX {name}")
-    done = migrated(c)
-    for statement in INDEXES:
-        if not done and statement in _MESSAGE_INDEXES:
-            continue            # built by migrate, after the backfill (building them first is slow, and it stalls)
-        c.execute(statement)
+    """Every start (hubdb.migrate): the one data step a file migrated before it existed still needs. The schema is
+    migration 0047."""
     _neutral_titles_once(c)
 
 
@@ -3941,7 +3768,7 @@ def migrate(c):
     Resumable. The per-message backfill runs in chunks of MIGRATION_CHUNK rows, each a transaction of its own that
     also records how far it got (`threads-migration-progress`), so a crash or a restart resumes there and the write
     lock is held for one chunk at a time. Each step is idempotent per row, so a chunk that ran before a crash runs
-    again harmlessly. The message indexes are built after the backfill (they are skipped by ensure until then).
+    again harmlessly. The message indexes are built after the backfill (migration 0047 skips them until then).
     Inside a caller's transaction the chunks join it, and the whole migration is one transaction, as before."""
     if migrated(c):
         return False
@@ -4096,7 +3923,6 @@ _STEP_SQL = {
     "legacy": _LEGACY_SQL,
     "deliveries": _DELIVERIES_SQL,
 }
-_MESSAGE_INDEXES = tuple(s for s in INDEXES if " ON messages(" in s)
 
 
 def _store_shared_homes(c, slug=None):
