@@ -74,7 +74,7 @@ async function openReach(browser, {viewport = DESKTOP, hash = '#/rules', viewer 
     let m = p.match(/^\/api\/v2\/rules\/([^/]+)$/);
     if (m && RULES.some(r => r.id === m[1])) return json(RULES.find(r => r.id === m[1]));
     // Reach (docs/reach.md).
-    if (p === '/api/v2/reach') return json({defaults: {mode: 'open', chats_per_day: 999, tasks_per_day: 999}, settings: reach.settings,
+    if (p === '/api/v2/reach') return json({defaults: {mode: 'nearby', chats_per_day: 999, tasks_per_day: 999, person_mode: 'open'}, settings: reach.settings,
       lines: reach.lines.map(l => ({...l, may_edit: may.has(l.sender)})), may_edit: [...may]});
     m = p.match(/^\/api\/v2\/reach\/settings\/(.+)$/);
     if (m && method === 'PUT') {
@@ -234,8 +234,13 @@ async function until(fn, what) {
       assert.equal(await page.locator('.rr-map [data-rr-party="group:sales"]').getAttribute('data-rr-tone'), null);
 
       // Who it can reach and how much: one PUT per field; an empty cap is taken from above.
+      assert.deepEqual(await panel(page).locator('[data-ru-seg="rr-mode"] button').allInnerTexts(),
+        ['Can reach anyone', 'Nearby', "Only who's listed"]);
+      await panel(page).locator('[data-ru-seg="rr-mode"] [data-v="nearby"]').click();
+      await until(async () => lastWrite(writes, 'PUT')?.body?.mode === 'nearby', 'nearby saved');
+      assert.equal(lastWrite(writes, 'PUT').path, '/api/v2/reach/settings/bot%3Abuilder');
       await panel(page).locator('[data-ru-seg="rr-mode"] [data-v="closed"]').click();
-      await until(async () => lastWrite(writes, 'PUT'), 'mode saved');
+      await until(async () => lastWrite(writes, 'PUT')?.body?.mode === 'closed', 'closed saved');
       assert.deepEqual(lastWrite(writes, 'PUT'), {method: 'PUT', path: '/api/v2/reach/settings/bot%3Abuilder', body: {mode: 'closed'}});
       await until(async () => (await panel(page).locator('[data-ru-seg="rr-mode"] [data-v="closed"]').getAttribute('aria-pressed')) === 'true', 'closed shown');
       const chats = panel(page).locator('[data-rr-cap="chats_per_day"]');

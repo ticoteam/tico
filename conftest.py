@@ -10,6 +10,9 @@ os.environ["TICO_UPDATE_CHECK"] = "off"
 os.environ["TICO_RUNNER_CONTAINER_PROBE"] = "off"
 # Every test's database is thrown away, so no commit waits for the disk (hubdb.synchronous).
 os.environ["TICO_SQLITE_SYNC"] = "off"
+# Bots start `nearby` (backend/reach.py), and most test companies put their bots on no chart, so tests about
+# something else start them open. The reach tests (backend/tests/test_reach*.py) clear this and test the default.
+os.environ["TICO_REACH_DEFAULT"] = "open"
 # A test that misses a stub must fail, not act in whoever's AWS account runs the suite: one already
 # created a real bucket. Fake keys and no profile or config files make any real AWS call unauthorized.
 for _name in ("AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_SESSION_TOKEN", "AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"):
