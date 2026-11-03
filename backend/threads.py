@@ -301,6 +301,7 @@ class Viewer:
         self._threads = {}
         self._legacy = {}
         self._members = None      # {thread id: whether a member}, while a sidebar page reads (`_prefetch_members`)
+        self._member_rows = {}    # {thread id: its member actors}, read once a request (`_member_rows`)
 
     @property
     def is_bot(self):
@@ -3137,11 +3138,7 @@ def dm_with(c, v, rows):
     from here, for someone their people list leaves out."""
     roots = [thread_row(c, r) for r in rows]
     roots = [r for r in roots if audience_of(r) in ("personal", "participants") and not r.get("parent_id")]
-    stored = {r["id"]: [] for r in roots}
-    for part in H.chunks(list(stored)):
-        for r in c.execute("SELECT thread_id, actor FROM thread_members WHERE thread_id IN (%s)"
-                           % ",".join("?" * len(part)), part):
-            stored[r["thread_id"]].append(r["actor"])
+    stored = _member_rows(c, v, [r["id"] for r in roots])
     known, mine, others = v.known(c), set(v.member_names(c)), {}
     for root in roots:
         people = _dm_members(c, root, stored[root["id"]])
@@ -3537,6 +3534,20 @@ def prime_members(c, who, conversation_ids):
     read_cache.prime(c, _member_sql(names), {(tid, *names): (1,) if yes else None for tid, yes in member.items()})
 
 
+def _member_rows(c, v, ids):
+    """{thread id: its member actors} for `ids`, one query a chunk for those this request has not read yet: the sidebar's
+    DM checks (read_threads) and its DM titles (dm_with) share one read. Kept on the Viewer, which lives one request."""
+    memo = v._member_rows if isinstance(v, Viewer) else {}
+    missing = [i for i in dict.fromkeys(ids) if i not in memo]
+    for i in missing:
+        memo[i] = []
+    for part in H.chunks(missing):
+        for r in c.execute("SELECT thread_id, actor FROM thread_members WHERE thread_id IN (%s)"
+                           % ",".join("?" * len(part)), part):
+            memo[r["thread_id"]].append(r["actor"])
+    return {i: list(memo[i]) for i in ids}
+
+
 def read_threads(c, who, ids):
     """({conversation id: row}, {conversation id: its member actors}) for these conversations, each read in one query a
     chunk: the rows as `thread_row` reads them, and the member rows `_dm_members` takes. A caller that checks each of
@@ -3547,10 +3558,7 @@ def read_threads(c, who, ids):
     for part in H.chunks(ids):
         for r in c.execute("SELECT * FROM conversations WHERE id IN (%s)" % ",".join("?" * len(part)), part):
             rows[r["id"]] = thread_row(c, dict(r))
-    for part in H.chunks(list(rows)):
-        for r in c.execute("SELECT thread_id, actor FROM thread_members WHERE thread_id IN (%s)"
-                           % ",".join("?" * len(part)), part):
-            members[r["thread_id"]].append(r["actor"])
+    members.update(_member_rows(c, who, list(rows)))
     prime_members(c, who, list(rows))
     return rows, members
 
