@@ -37,9 +37,9 @@ def stall(api, count, prefix, blocked=0):
                               (frm, to, kind, OLD))
 
 
-def loop(api, count):
+def loop(api, count, start=0):
     with api.app.state.store.transaction() as c:
-        for n in range(count):
+        for n in range(start, start + count):
             tid = f"loop{n}"
             c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,created_at,updated_at,private) "
                       "VALUES(?,?,?,?,?,?,?,0)", (tid, "Looping " + tid, "human:ana", "bot:few-00", "open", OLD, OLD))
@@ -71,7 +71,7 @@ def test_health_statements_do_not_grow_with_looping_tasks(api):
     loop(api, 3)
     health(api)
     body, small = health(api)
-    loop(api, 20)
+    loop(api, 20, start=3)
     _, large = health(api)
     assert check(body, "task_loops")
     assert large <= small + 4, (small, large)
