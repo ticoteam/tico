@@ -27,8 +27,9 @@ Don't edit these except where your brief says so; ask core in your report.
 
 The columns, tables, triggers and indexes below are migration `backend/migrations/0047_native_threads_schema.py`, which
 also makes the search index and the tables of the thread helpers, the Slack bridge, Tico Meet calls and federation. It
-runs once; a change to any of that SQL is a new migration. The five message indexes are built by `threads.migrate` after
-its backfill. The one-time data migration (§7) is recorded under `registry_metadata` key `threads-migration` and runs
+runs once; a change to any of that SQL is a new migration. `threads_primary_delivery` is made again by
+`backend/migrations/0048_tasks_conversation.sql` with hubdb's `delivery_counts_sql` (the task-thread mention rule). The
+five message indexes are built by `threads.migrate` after its backfill. The one-time data migration (§7) is recorded under `registry_metadata` key `threads-migration` and runs
 in chunks that each commit with their progress.
 
 ### 1.1 `conversations` (a thread)
@@ -485,9 +486,15 @@ threads.unread(c, viewer, thread_id) -> {"unread": n, "activity": bool}
   (`threads.task_opened`). Task news (a keeper message with `refs.task`, `hubdb.task_news`) is the task's own history:
   it is written to the task's conversation and no person gets a delivery for it, so the requester who did not make the
   task hears nothing in the thread (no unread, Inbox row, digest or push). Bots still get it as a delivery.
+  A bot's say, notice or ask in a task's own thread (`hubdb.task_post_sql`, the thread is some task's
+  `conversation_id`) is the same: the message is written and shown on the task, and a person gets a delivery for it only
+  when its body @-mentions them (`threads.mentions`, reason `mention`). Without the mention no person is unread for it,
+  it is in no Inbox row, digest or push, and an ask still lists its task in Needs you (that reads messages, not
+  deliveries). Old deliveries of such posts stop counting by the same rule (`hubdb.delivery_counts_sql`), with no
+  migration.
 - Unread count for a viewer = messages in the thread with `seq > last_read_seq` that are human-authored or
-  addressed to that viewer (a delivery row for them, except task news, which no person has a delivery for), excluding
-  their own. Other bot posts are **activity** (a dot, never a count).
+  addressed to that viewer (a delivery row for them, except task news, and a task thread's bot post with no @mention of
+  them, which no person has a delivery for), excluding their own. Other bot posts are **activity** (a dot, never a count).
 
 Retention: a root may set `conversations.retention_days` (1 to `RETENTION_MAX_DAYS`; null keeps messages for good;
 never on a task or meeting thread). `backend/thread_retention.py` deletes what is past it in the root and its sub-threads,
