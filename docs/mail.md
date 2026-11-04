@@ -435,7 +435,8 @@ below.
 Organize mail and Send mail both need Google's `gmail.modify`, so Tico holds each box itself too: the mail connector
 refuses a label, archive or draft with Organize mail off, a send with Send mail off, and a calendar write with Change
 calendar off, whichever credential it holds (a server token, a computer's own service-account key, or a standalone
-grant). A draft is the first step of a send, so Send mail on allows one. With Send mail off no bot sends mail, whatever
+grant). A draft is the first step of a send, so Send mail on allows one, and Tico's own markers on the thread
+(`hub/drafted`, `hub/handled/<bot>`) go with the draft or send they record. With Send mail off no bot sends mail, whatever
 its own **Mail sending** switch says (and no approval lifts it), and an automation's send becomes a draft. With it on,
 each bot still needs its own switch (Settings > Bots > Edit > Mail sending; see [Turning sending on](#turning-sending-on)).
 A bot always acts as itself: `--as <owner handle>` from a bot's run is refused. Change calendar needs `calendar.events`.

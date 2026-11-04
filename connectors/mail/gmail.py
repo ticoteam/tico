@@ -11,7 +11,7 @@ text/plain, or HTML stripped), attachments listed but not downloaded, and whethe
 carries an unsubscribe link.
 """
 
-import base64, binascii, html, re, time
+import base64, binascii, contextlib, html, re, time
 from datetime import datetime, timezone
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 
@@ -64,7 +64,18 @@ class Gmail:
         self.service, self.mailbox, self.sleep = service, mailbox, sleep
         self.granted = getattr(service, "_tico_granted", None)   # a connected account's scopes; None: service account
         self.company = None          # the company's What Tico may do for this run (oauth.company_allows); None: unset
+        self._part_of = None         # the draft or send Tico's own markers belong to (marking); None: Organize mail
         self._labels = None
+
+    @contextlib.contextmanager
+    def marking(self, capability):
+        """Tico's own markers on a draft or send it just made (hub/drafted, hub/handled/<bot>) are part of that write, so
+        the company's box for it holds them, not Organize mail: Send mail on with Organize mail off still sends."""
+        was, self._part_of = self._part_of, capability
+        try:
+            yield self
+        finally:
+            self._part_of = was
 
     # -- plumbing ---------------------------------------------------
     def _exec(self, request, what):
@@ -109,7 +120,7 @@ class Gmail:
 
     def create_label(self, name):
         oauth.require(self.granted, "labels", self.mailbox, "create labels")
-        oauth.company_allows(self.company, "labels", self.mailbox, "create labels")
+        oauth.company_allows(self.company, self._part_of or "labels", self.mailbox, "create labels")
         body = {"name": name, "labelListVisibility": "labelShow",
                 "messageListVisibility": "show"}
         lab = self._exec(self.service.users().labels().create(userId="me", body=body),
@@ -179,7 +190,7 @@ class Gmail:
     # -- state changes ----------------------------------------------
     def modify(self, msg_id, add=(), remove=()):
         oauth.require(self.granted, "labels", self.mailbox, "label, archive or mark mail read")
-        oauth.company_allows(self.company, "labels", self.mailbox, "label, archive or mark mail read")
+        oauth.company_allows(self.company, self._part_of or "labels", self.mailbox, "label, archive or mark mail read")
         body = {"addLabelIds": list(add), "removeLabelIds": list(remove)}
         return self._exec(
             self.service.users().messages().modify(userId="me", id=msg_id, body=body),

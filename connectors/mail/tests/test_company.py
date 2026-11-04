@@ -90,10 +90,11 @@ class CompanyGates(Base):
         self.assertTrue(self.in_inbox())
         rc, out, _ = self.run_cli("label", "--as", "inbox", "--mailbox", BOX, "--json", "add", "m-ava", "hub/billing")
         self.assertEqual(rc, 2, out)
-        # A draft is the first step of every send, so Send mail on allows the reply's.
+        # A draft is the first step of every send, so Send mail on allows the reply's, and Tico's own markers on it.
         rc, out, err = self.reply()
         self.assertEqual(rc, 0, out + err)
         self.assertEqual(len(self.service.sent), 1)
+        self.assertIn("hub/handled/inbox", self.service.labels_by_id.values())
         self.company()
         self.assertEqual(self.archive()[0], 0)
         self.assertFalse(self.in_inbox())

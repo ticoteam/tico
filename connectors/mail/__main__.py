@@ -1627,10 +1627,15 @@ def lint_line(res):
     return "; ".join(f"{x['id']} {x['message']}" for x in res["errors"])
 
 
-def label_thread(ctx, name, msgs, fallback_ids=()):
+def label_thread(ctx, name, msgs, fallback_ids=(), part_of=None):
+    """`part_of` is the draft or send this marker records (Gmail.marking): the company's box for that write holds it."""
     ids = [m["id"] for m in msgs or []] or [i for i in fallback_ids if i]
     if ids:
-        modify(ctx, ids, add=[name], action="label-add", detail={"label": name})
+        if part_of and not ctx.dry:
+            with ctx.gmail.marking(part_of):
+                modify(ctx, ids, add=[name], action="label-add", detail={"label": name})
+        else:
+            modify(ctx, ids, add=[name], action="label-add", detail={"label": name})
     return ids
 
 
@@ -1727,9 +1732,9 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
         thread_id = (d.get("message") or {}).get("threadId") or thread_id
         db.put_draft(ctx.conn, key, ctx.slug, ctx.mailbox, ctx.issue, to, subject,
                      thread_id, draft_id, message_id, review_id)
-        label_thread(ctx, lb.DRAFTED, msgs, [message_id])
+        label_thread(ctx, lb.DRAFTED, msgs, [message_id], part_of="drafts")
         if review_no:
-            label_thread(ctx, lb.NEEDS_OWNER, msgs, [message_id])
+            label_thread(ctx, lb.NEEDS_OWNER, msgs, [message_id], part_of="drafts")
     ctx.audit("draft", draft_id or key[:12],
               {"to": to, "cc": cc, "subject": subject, "thread": thread_id, "key": key,
                "created": created, "reply": bool(reply_to), "chars": len(body),
@@ -1928,7 +1933,7 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
     db.finish_send(ctx.conn, key, message_id, "sent",
                    miss=(ctx.slug, check_id) if ruled and ruled.get("failed") else None)
     handled = lb.handled(ctx.slug)
-    label_thread(ctx, handled, msgs, [message_id])
+    label_thread(ctx, handled, msgs, [message_id], part_of="send")
     ctx.audit("send", message_id or draft_id,
               {"to": to, "cc": cc, "subject": subject, "thread": thread_id, "key": key,
                "draft": draft_id, "attachments": names, "review": verdict.get("backend")})
@@ -2049,8 +2054,9 @@ def cmd_discard(args):
         if thread_id and thread_id not in db.draft_thread_ids(ctx.conn, ctx.mailbox):
             try:                                        # no hub draft left on the thread
                 ids = [m["id"] for m in ctx.gmail.thread(thread_id) or []]
-                modify(ctx, ids, remove=[lb.DRAFTED], action="label-remove",
-                       detail={"label": lb.DRAFTED})
+                with ctx.gmail.marking("drafts"):
+                    modify(ctx, ids, remove=[lb.DRAFTED], action="label-remove",
+                           detail={"label": lb.DRAFTED})
             except (Failure, Refused):
                 pass
     ctx.audit("discard", did, {"key": row["key"], "to": row["recipients"].split(","),
