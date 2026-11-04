@@ -70,8 +70,8 @@ def test_booting_again_changes_nothing(tmp_path):
 
 def test_meeting_links_upgrade_a_database_at_main_history_indexes(tmp_path, monkeypatch):
     known = migrations.files()
-    # Boot the real schema through main's last migration, without the new link table.
-    main = [m for m in known if not m.version.endswith('_meeting_task_links')]
+    # Freeze the upgrade's starting point so later migrations do not move this regression's baseline.
+    main = [m for m in known if m.version <= '0091_history_log_indexes' and not m.version.endswith('_meeting_task_links')]
     assert main[-1].version == '0091_history_log_indexes'
     path = tmp_path / 'main.sqlite'
     with monkeypatch.context() as patch:
@@ -86,7 +86,8 @@ def test_meeting_links_upgrade_a_database_at_main_history_indexes(tmp_path, monk
         assert '0092_meeting_task_links' in _versions(c)
         assert 'meeting_task_links' in _tables(c)
         assert c.execute('PRAGMA foreign_key_check').fetchall() == []
-        assert c.execute("SELECT * FROM schema_migrations WHERE version!='0092_meeting_task_links' ORDER BY version").fetchall() == before
+        after = c.execute('SELECT * FROM schema_migrations').fetchall()
+        assert all(row in after for row in before)
     first = snapshot(path)
     boot(path)
     assert snapshot(path) == first
