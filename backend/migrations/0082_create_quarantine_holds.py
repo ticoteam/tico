@@ -15,4 +15,6 @@ def up(conn):
                  "WHERE released_at IS NULL AND task_id IS NOT NULL")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS quarantine_holds_chat ON quarantine_holds(bot_id,conversation_id) "
                  "WHERE released_at IS NULL AND conversation_id IS NOT NULL")
+    conn.execute("CREATE INDEX IF NOT EXISTS quarantine_holds_released ON quarantine_holds(bot_id,released_at) "
+                 "WHERE released_at IS NOT NULL")
 

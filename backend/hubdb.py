@@ -2549,7 +2549,7 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     from . import task_quarantine
     released = {}
     for hold in conn.execute("SELECT task_id,conversation_id,max(released_at) AS released_at FROM quarantine_holds "
-                             "WHERE bot_id=? AND released_at IS NOT NULL GROUP BY task_id,conversation_id", (slug,)):
+                             "WHERE bot_id=? AND released_at>=? GROUP BY task_id,conversation_id", (slug, since)):
         scope = "task:" + hold["task_id"] if hold["task_id"] else "chat:" + hold["conversation_id"]
         released[scope] = hold["released_at"]
     counted, last, total, calls, again, scopes = [], {}, 0, set(), False, set()
@@ -8773,7 +8773,7 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
     if quarantined and state == "active":
         event(conn, actor, "quarantine.lifted", bot_actor(slug), {"reason": reason})
         quarantine_lifted_note(conn, slug)
-    if state == "active" and (quarantined or is_human(actor)):
+    if state == "active" and (quarantined or is_human(actor) or lifting and actor != bot_actor(slug)):
         from . import task_quarantine
         task_quarantine.release(conn, actor, bot=slug)
     if quarantined and state not in ("active", "quarantined"):

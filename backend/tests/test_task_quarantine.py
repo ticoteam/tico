@@ -41,7 +41,7 @@ def test_one_tasks_refusals_stop_only_its_turn_and_other_work_claims_and_runs(ap
     assert hold["task_id"] == task["id"] and hold["conversation_id"] is None
     with api.app.state.store.read() as c:
         assert H.bot(c, "ops")["state"] == "active"
-        assert H.task(c, task["id"])["status"] == "open"
+        assert H.task(c, task["id"])["status"] == bad["task"]["status"]
         assert c.execute("SELECT owner_id FROM tasks WHERE title=?", ("Review ops's refused writes",)).fetchone()[0] == H.bot_actor(H.FLEET_MAINTAINER)
     stopped = post(api, f"attempts/{bad['id']}/renew", {}, machine["token"])
     assert stopped["stop"] and stopped["stop_reason"].startswith("Quarantined: 10 repeated refusals today")
@@ -58,7 +58,7 @@ def test_one_tasks_refusals_stop_only_its_turn_and_other_work_claims_and_runs(ap
     assert other["id"] != task["id"]
 
 
-@pytest.mark.parametrize("lift", ["cooldown", "clear", "person"])
+@pytest.mark.parametrize("lift", ["cooldown", "clear", "person", "botops"])
 def test_task_hold_lifts_and_its_count_restarts(api, time_machine, lift):
     time_machine.move_to("2026-11-04T12:00:00Z", tick=False)
     machine = task_bot(api, lanes=True)
@@ -81,8 +81,10 @@ def test_task_hold_lifts_and_its_count_restarts(api, time_machine, lift):
         post(api, "bots/ops/quarantine/clear", {})
     else:
         time_machine.shift(1)
+        botops(api)
         with api.app.state.store.transaction() as c:
-            H.status_set(c, "human:ana", "ops", state="active", reason="Reviewed")
+            actor = H.bot_actor(H.FLEET_MAINTAINER) if lift == "botops" else "human:ana"
+            H.status_set(c, actor, "ops", state="active", reason="Reviewed")
     assert holds(api) == []
     ready(api, machine, ["ops"])
     resumed = started(api, machine)
@@ -153,6 +155,19 @@ def test_unattributed_refusals_keep_the_bot_wide_stop(api):
         for _ in range(H.QUARANTINE_AT + 1):
             with pytest.raises(H.Refused):
                 H.refuse(c, "bot:ops", "identity", "Only a person may do this")
+        assert H.bot(c, "ops")["state"] == "quarantined"
+    assert holds(api) == []
+
+
+def test_one_unattributed_refusal_keeps_a_later_task_loop_bot_wide(api):
+    machine = task_bot(api, lanes=True)
+    task = new_task(api, "Check the export")
+    attempt = started(api, machine)
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(H.Refused):
+            H.refuse(c, "bot:ops", "reach", "No source for this refused write")
+    refusals(api, attempt, task)
+    with api.app.state.store.read() as c:
         assert H.bot(c, "ops")["state"] == "quarantined"
     assert holds(api) == []
 
