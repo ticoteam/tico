@@ -11,6 +11,7 @@ from backend import assistant, support
 from backend.tests.test_api import api, as_member, assign, claim, get, headers, post, put, ready, runner  # noqa: F401
 from backend.tests.test_support import FakeHQ
 from backend.store import H
+from backend import bot_settings as BS
 
 
 def room(api, token="ana-test"):
@@ -180,7 +181,8 @@ def test_an_assistant_message_never_lends_the_persons_authority_to_botops(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
                   "VALUES('botops','botops','BotOps','','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('botops','{\"runtime\":\"fake\",\"host\":\"keeper\"}',NULL,'ana')")
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('botops',NULL,'ana')")
+        BS.write(c, 'botops', {"runtime": "fake", "host": "keeper"})
         H.VIA.set("assistant")
         via = H.say(c, "human:ana", "bot:botops", "Rename the Ops bot to Operations", kind="say")
         H.VIA.set("")

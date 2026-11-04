@@ -21,6 +21,7 @@ from backend.tests.test_goal_manager import BASE
 from backend.tests.test_onboarding import as_person, draft, environment, machine, signed_in  # noqa: F401
 from backend.tests.test_support import FakeHQ
 from backend.enqueue import enqueue_stored
+from backend import bot_settings as BS
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "health-monitor"
 SECRET_TASK = "Acme payroll for March"
@@ -470,8 +471,8 @@ def limited(api, bot=SECRET_BOT, config=None):
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, {bot: {"name": bot, "status": "active"}}, None)
         if config is not None:
-            c.execute("INSERT OR REPLACE INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')",
-                      (bot, json.dumps(config)))
+            c.execute("INSERT OR REPLACE INTO bot_config(bot,owner_id) VALUES(?,'ana')", (bot,))
+            BS.write(c, bot, config)
         H.event(c, H.KEEPER, "attempt.limited", "a-" + bot, {"bot": bot})
 
 
@@ -595,8 +596,8 @@ def test_a_bots_own_key_is_not_the_computers_login(environment):
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, {b: {"name": b, "status": "active"} for b in ("gem-a", "gem-b", "pi-a")}, None)
         for bot, harness in (("gem-a", "gemini-cli"), ("gem-b", "gemini-cli"), ("pi-a", "pi")):
-            c.execute("INSERT OR REPLACE INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')",
-                      (bot, json.dumps({"harness": harness})))
+            c.execute("INSERT OR REPLACE INTO bot_config(bot,owner_id) VALUES(?,'ana')", (bot,))
+            BS.write(c, bot, {'harness': harness})
     # The Gemini CLI and pi sign in with each bot's own key (`api_keys = "bot"`): gem-a out of quota on its key, as a
     # turn of its own, a check and a fallback, says nothing about the computer, and gem-b working there clears nothing.
     turn(api, rid, {**QUOTA}, 50, bot="gem-a")

@@ -13,6 +13,7 @@ from backend.auth import Identity
 from backend.store import H, Problem, encode
 from backend.tests.test_api import api, assign, claim, get, headers, post, put, runner  # noqa: F401
 from backend.tests.test_credentials import setup
+from backend import bot_settings as BS
 
 TOKEN = "sk-ant-oat01-" + "a" * 24
 OTHER = "sk-ant-oat01-" + "b" * 24
@@ -41,9 +42,9 @@ def company(api, enabled=("anthropic", "openai")):
 
 def on(api, bot, runtime, model):
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config = BS.read(c, bot)
         config.update(runtime=runtime, harness=runtime, model=model)
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(config), bot))
+        BS.write(c, bot, config)
 
 
 def add(api, kind="claude_token", secret=TOKEN, name="Company Max", token="ana-test", expected=200):
@@ -772,9 +773,9 @@ def test_a_switch_re_judges_a_bot_whose_named_fallback_runs_the_runtime_and_keep
     company(api)
     on(api, "ops", "codex", "gpt-6.1-sol")
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config["fallback"] = {"harness": "claude", "model": "claude-sonnet-5-5"}
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     plan_a, plan_b = add(api, name="Plan A")["id"], add(api, secret=OTHER, name="Plan B")["id"]
     m = machine(api, signed_in=True)                  # Claude is ready on its own login
     give(api, m, "claude", plan_a)
@@ -827,9 +828,8 @@ def test_a_branch_runs_its_originals_runtime_now_not_the_runtime_it_stored(api):
     m = machine(api, signed_in=True)
     assign(api, m, "cpo")
     with api.app.state.store.transaction() as c:      # made a branch of cpo once it is on this computer
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
-                  (json.dumps({**config, "shared_from": "cpo"}),))
+        config = BS.read(c, 'ops')
+        BS.write(c, 'ops', {**config, 'shared_from': 'cpo'})
     give(api, m, "claude", plan_a)
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     hold_queued(api)
@@ -848,9 +848,8 @@ def test_try_now_on_an_idle_branch_ends_the_hold_on_the_login_its_original_runs_
     m = machine(api, signed_in=True)
     assign(api, m, "cpo")
     with api.app.state.store.transaction() as c:      # made a branch of cpo once it is on this computer
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
-                  (json.dumps({**config, "shared_from": "cpo"}),))
+        config = BS.read(c, 'ops')
+        BS.write(c, 'ops', {**config, 'shared_from': 'cpo'})
         login_holds._save(c, {"runner_id": m["runner_id"], "profile": "", "runtime": "codex",
                               "until": "2999-01-01T00:00:00.000000Z", "since": H.now(), "error": CLAUDE_LIMIT})
     with api.app.state.store.transaction() as c:
@@ -875,14 +874,14 @@ def test_automatic_fallback_uses_company_codex_without_a_local_login(api, mode):
             record["auto_fallback"] = False
             c.execute("UPDATE registry_metadata SET value=? WHERE key='providers'", (encode(record),))
         if mode == "bot_off":
-            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+            config = BS.read(c, 'ops')
             config["fallback"] = {"off": True}
-            c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (encode(config),))
+            BS.write(c, 'ops', config)
         if mode in ("named", "same_runtime"):
-            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+            config = BS.read(c, 'ops')
             config["fallback"] = {"harness": "codex" if mode == "named" else "claude",
                                   "model": "gpt-6.1-sol" if mode == "named" else "claude-sonnet-5-5"}
-            c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (encode(config),))
+            BS.write(c, 'ops', config)
         if mode in ("absent", "uninstalled"):
             ready = json.loads(c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (m["runner_id"],)).fetchone()[0])
             if mode == "absent":
@@ -891,9 +890,9 @@ def test_automatic_fallback_uses_company_codex_without_a_local_login(api, mode):
                 ready["runtimes"]["codex"]["installed"] = False
             c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?", (encode(ready), m["runner_id"]))
         if mode == "incomplete_named":
-            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+            config = BS.read(c, 'ops')
             config["fallback"] = {"harness": "claude"}
-            c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (encode(config),))
+            BS.write(c, 'ops', config)
         if mode == "held":
             login_holds._save(c, {"runner_id": "", "profile": login_holds.subscription_login(sid), "runtime": "codex",
                                   "until": "2999-01-01T00:00:00.000000Z", "since": H.now(), "error": "Usage limit"})
@@ -905,7 +904,7 @@ def test_automatic_fallback_uses_company_codex_without_a_local_login(api, mode):
     assert [s["id"] for s in turn.get("subscriptions", [])] == ([sid] if eligible else [])
     with api.app.state.store.read() as c:
         config = providers.fill(providers.load(c), json.loads(c.execute(
-            "SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0]))
+            f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='ops'").fetchone()[0]))
         choice = execution.fallback_choice(c, api.app.state.store.settings, m["runner_id"], "ops", config)
         assert choice == ((login_holds.subscription_login(sid), "codex") if eligible else None)
     values = get(api, "credential-runtime", turn["token"]).get("subscriptions", [])
@@ -1066,9 +1065,9 @@ def test_upfront_values_keep_restart_fence_for_legacy_automatic_and_new_named_fa
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE runner_states SET capabilities=? WHERE runner_id=?",
                       (encode([MS.CAPABILITY, MS.ACTIVATION_CAPABILITY]), m["runner_id"]))
-            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+            config = BS.read(c, 'ops')
             config["fallback"] = {"harness": "codex", "model": "gpt-6.1-sol"}
-            c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (encode(config),))
+            BS.write(c, 'ops', config)
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
     assert "activate" not in turn["subscriptions"][0]

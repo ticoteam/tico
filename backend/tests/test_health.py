@@ -11,6 +11,7 @@ from backend.tests.test_getting_started import SIGNED_IN, add_bot, enrolled, hea
 from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
 from backend.enqueue import enqueue_stored
 from backend.tests.usage_rows import segment
+from backend import bot_settings as BS
 
 
 @pytest.fixture(autouse=True)
@@ -69,9 +70,8 @@ def test_an_escalated_task_waiting_on_its_own_quiet_hold_is_not_progressing(envi
         elif hidden == 'activity':
             from backend import bot_access as A
             only_ana = A.audience({'people': ['ana']})
-            c.execute("INSERT INTO bot_config(bot,config,owner_id,access) VALUES('holder','{}','ana',?) "
-                      "ON CONFLICT(bot) DO UPDATE SET access=excluded.access",
-                      (A.stored({'see': A.OPEN_LEVEL, 'read': only_ana, 'write': only_ana}),))
+            c.execute("INSERT INTO bot_config(bot,owner_id,access) VALUES('holder','ana',?) ON CONFLICT(bot) DO UPDATE SET access=excluded.access", (A.stored({'see': A.OPEN_LEVEL, 'read': only_ana, 'write': only_ana}),))
+            BS.write(c, 'holder', {})
     for status in ('open', 'review'):
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE tasks SET status=? WHERE id=?", (status, hold['id']))
@@ -392,7 +392,8 @@ def test_a_chat_waiting_on_its_own_model_sign_in_says_so_and_other_waits_keep_th
     report("missing")
     chats = {}
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('coder',?,'ana')", (json.dumps({"runtime": "codex"}),))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('coder','ana')")
+        BS.write(c, 'coder', {'runtime': 'codex'})
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
         for bot in ("writer", "coder"):
             c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
@@ -426,8 +427,8 @@ def test_an_antigravity_bot_is_not_told_to_sign_in_to_gemini_cli(environment):
                 "gemini": {"installed": True, "authenticated": "missing", "detail": "Gemini login required"}},
             "bots": {"scout": {"ready": False, "runtime": "gemini", "problems": ["Missing bot repository or AGENT.md"]}}}),
             runner))
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('scout',?,'ana')",
-                  (json.dumps({"runtime": "gemini", "harness": "antigravity"}),))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('scout','ana')")
+        BS.write(c, 'scout', {"runtime": "gemini", "harness": "antigravity"})
         c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('scout',?,1,?,'t')",
                   (runner, H.now()))
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
@@ -455,7 +456,8 @@ def test_computer_sign_in_names_only_a_model_its_bots_run_on(environment):
     runner = enrolled(api)
     add_bot(api, "writer")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('writer',?,'ana')", (json.dumps({"runtime": "claude"}),))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('writer','ana')")
+        BS.write(c, 'writer', {'runtime': 'claude'})
         c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('writer',?,1,?,'t')",
                   (runner, H.now()))
     heartbeat(api, runner, runtimes={"codex": {"installed": True, "authenticated": "missing"},
@@ -465,7 +467,8 @@ def test_computer_sign_in_names_only_a_model_its_bots_run_on(environment):
     assert next(r for r in body["computers"][0]["runtimes"] if r["name"] == "codex")["signable"]
     add_bot(api, "coder")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('coder',?,'ana')", (json.dumps({"runtime": "codex"}),))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('coder','ana')")
+        BS.write(c, 'coder', {'runtime': 'codex'})
         c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('coder',?,1,?,'t')",
                   (runner, H.now()))
     assert "sign in to Codex" in health_of(api)[1]["computer_signin"]["summary"]
@@ -511,8 +514,8 @@ def test_a_bot_that_has_not_finished_setup_warns_once_its_held_work_is_old(envir
     add_bot(api, "support")
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, H.KEEPER, "Ticket 42", "", "bot:support")    # from before an upgrade
-        c.execute("INSERT INTO bot_config(bot,config,owner_id,onboarding_state) VALUES('support','{}','ana','needs_setup') "
-                  "ON CONFLICT(bot) DO UPDATE SET onboarding_state='needs_setup'")
+        c.execute("INSERT INTO bot_config(bot,owner_id,onboarding_state) VALUES('support','ana','needs_setup') ON CONFLICT(bot) DO UPDATE SET onboarding_state='needs_setup'")
+        BS.write(c, 'support', {})
     assert "setup:support" not in health_of(api)[1]                 # just filed: setup may be under way
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET created_at='2026-01-02T03:04:05Z' WHERE id=?", (task["id"],))
@@ -526,9 +529,8 @@ def test_a_bot_that_has_not_finished_setup_warns_once_its_held_work_is_old(envir
 def _parked(api, slug, days_ago, created_by="", operator="morgan"):
     add_bot(api, slug)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot,config,owner_id,onboarding_state,created_by) VALUES(?,'{}',?,'needs_setup',?) "
-                  "ON CONFLICT(bot) DO UPDATE SET onboarding_state='needs_setup',owner_id=excluded.owner_id,"
-                  "created_by=excluded.created_by", (slug, operator, created_by))
+        c.execute("INSERT INTO bot_config(bot,owner_id,onboarding_state,created_by) VALUES(?,?,'needs_setup',?) ON CONFLICT(bot) DO UPDATE SET onboarding_state='needs_setup', owner_id=excluded.owner_id, created_by=excluded.created_by", (slug, operator, created_by))
+        BS.write(c, slug, {})
         c.execute("UPDATE bots SET created_at=? WHERE slug=?", (H.shift(H.now(), days=-days_ago), slug))
 
 
@@ -633,8 +635,8 @@ def test_a_read_only_reviewer_given_every_repository_keeps_its_denies(environmen
     add_bot(api, "reviewer")
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO repositories(full_name,enabled,bot_repo) VALUES('acme/product',1,0)")
-        c.execute("INSERT INTO bot_config(bot,config,repo,owner_id) VALUES('reviewer',?,'bot-reviewer','ana') ON CONFLICT(bot) DO "
-                  "UPDATE SET config=excluded.config,repo=excluded.repo", ('{"repo_access_mode": "all"}',))
+        c.execute("INSERT INTO bot_config(bot,repo,owner_id) VALUES('reviewer','bot-reviewer','ana') ON CONFLICT(bot) DO UPDATE SET repo=excluded.repo")
+        BS.write(c, 'reviewer', {'repo_access_mode': 'all'})
     read = {"service": "github", "identity": "acme/docs", "can": ["read"], "scope": {"repo": "acme/docs"}}
     deny = "Claude Code settings deny: gh pr comment, gh pr create, gh pr review"
     _hosted(api, runner, "reviewer", {"ready": True, "runtime": "claude", "warnings": [deny], "tools": [read]})
@@ -643,7 +645,7 @@ def test_a_read_only_reviewer_given_every_repository_keeps_its_denies(environmen
         assert any(t["identity"] == "acme/product" and "write" in t["can"] for t in listing(c, settings, "reviewer")["tools"])
     assert "harness_denies" not in health_of(api)[1]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=? WHERE bot='reviewer'", ('{"repo_access_mode": "chosen"}',))
+        BS.write(c, 'reviewer', {'repo_access_mode': 'chosen'})
         c.execute("INSERT INTO bot_repo_access VALUES('reviewer','acme/product','write')")
     summary = health_of(api)[1]["harness_denies"]["summary"]
     assert "reviewer may write to acme/product" in summary and "gh pr create, gh pr comment" in summary
@@ -674,7 +676,8 @@ def test_harness_denies_answers_each_bot_as_a_bot_by_bot_pass_does(environment, 
         readiness[slug] = {"ready": True, "runtime": "claude", "warnings": [deny], "tools": tools}
         with api.app.state.store.transaction() as c:
             if config:
-                c.execute("INSERT INTO bot_config(bot,config,repo,owner_id) VALUES(?,?,?,'ana')", (slug, config, "bot-" + slug))
+                c.execute("INSERT INTO bot_config(bot,repo,owner_id) VALUES(?,?,'ana')", (slug, 'bot-' + slug))
+                BS.write(c, slug, json.loads(config))
             c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')", (slug, runner, H.now()))
             if slug == "chosen":
                 c.execute("INSERT INTO bot_repo_access VALUES('chosen','acme/app','write')")
@@ -780,7 +783,8 @@ def claimable(c, runner, *bots):
     claim holds the work (execution.claim_refusal), which Health names instead of "slow"."""
     import json
     for bot in bots:
-        c.execute("INSERT OR IGNORE INTO bot_config(bot,config,owner_id) VALUES(?,'{}','ana')", (bot,))
+        if c.execute("INSERT OR IGNORE INTO bot_config(bot,owner_id) VALUES(?,'ana')", (bot,)).rowcount:
+            BS.write(c, bot, {})
     document = json.loads(c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (runner,)).fetchone()[0] or "{}")
     document.setdefault("bots", {}).update({bot: {"ready": True} for bot in bots})
     c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?", (json.dumps(document), runner))
@@ -1114,8 +1118,8 @@ def test_roadmap_suggestions_warn_from_the_routing_rule_and_only_to_administrato
 
     def health(chosen=None, labels=("roadmap",), headers=None, **states):
         with api.app.state.store.transaction() as c:
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('pm',?,'morgan') ON CONFLICT(bot) "
-                      "DO UPDATE SET config=excluded.config", ('{"template": "product-manager"}',))
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('pm','morgan') ON CONFLICT(bot) DO NOTHING")
+            BS.write(c, 'pm', {'template': 'product-manager'})
             c.execute("UPDATE bots SET state='active', display_name=upper(slug) WHERE slug IN ('pm','ops')")
             for bot, state in states.items():
                 c.execute("UPDATE bots SET state=? WHERE slug=?", (state, bot))

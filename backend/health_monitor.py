@@ -35,6 +35,7 @@ from . import diagnostics, login_holds, models_preset, providers, runner_version
 from .auth import Identity
 from .models import Contract
 from .store import H, Problem
+from . import bot_settings as BS
 
 log = logging.getLogger("tico.health_monitor")
 
@@ -270,7 +271,7 @@ def _login(c, settings, bot, result, configs):
     if usage.get("runtime"):
         return str(usage["runtime"]), str(usage.get("harness") or "")
     if bot not in configs:
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
         configs[bot] = json.loads(row[0] or "{}") if row else {}
     return providers.bot_choice(c, settings, configs[bot])[0], resolve_harness(configs[bot])
 
@@ -486,7 +487,7 @@ def _bot_checks(c, settings=None):
     company = providers.default_fallbacks(record)
     for bot, n in sorted(limited.items()):
         label = (H.bot(c, bot) or {}).get("slug", bot)
-        config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
         declared = json.loads(config["config"] or "{}") if config and config["config"] else {}
         # The Gateway row counts only where the bot's computer can run it (a Mac skips it: runner-rs/src/fallback.rs).
         computer = models_preset.computer_of(c, bot)

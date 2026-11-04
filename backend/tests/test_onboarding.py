@@ -17,6 +17,7 @@ from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
 from backend.store import H, encode
+from backend import bot_settings as BS
 
 COMPANY = {"environment_id": "acme-7", "company_name": "Acme", "app_name": "Atlas",
            "assistant_name": "Morgan", "assistant_bot": "coo", "github_owner": "AcmeCorp"}
@@ -99,8 +100,8 @@ def environment(tmp_path):
             H.sync_registry(c, seed, PEOPLE)
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode(PEOPLE),))
             for slug, config in seed.items():
-                c.execute("INSERT INTO bot_config(bot,config,owner_id,repo) VALUES(?,?,?,?)",
-                          (slug, encode(config), "morgan", "emp-" + slug))
+                c.execute('INSERT INTO bot_config(bot,owner_id,repo) VALUES(?,?,?)', (slug, 'morgan', 'emp-' + slug))
+                BS.write(c, slug, config)
         return client
 
     yield build
@@ -236,7 +237,7 @@ def test_the_inbox_manager_turned_on_in_setup_is_a_message_bot_linked_to_the_own
         assert c.execute("SELECT c.reports_to FROM bot_config c JOIN bots b ON b.id=c.bot WHERE b.slug='inbox'"
                          ).fetchone()[0] == "human:morgan"
         owner = next(p for p in views.roster(c)["people"] if p["id"] == "morgan")
-        config = json.loads(c.execute("SELECT config FROM bot_config c JOIN bots b ON b.id=c.bot WHERE b.slug='inbox'").fetchone()[0])
+        config = BS.read(c, H.resolve_bot(c, "inbox")["id"])
         inbox_id = c.execute("SELECT id FROM bots WHERE slug='inbox'").fetchone()[0]
     assert owner["inbox_bot"] == inbox_id and routines.declared_mailbox(config) == OWNER_EMAIL
 
@@ -358,7 +359,7 @@ def test_the_team_is_created_with_no_provider_and_no_computer_and_starts_once_th
     done = build_team(api)
     assert {"botops", "support"} <= {row["slug"] for row in done["bots"]}
     with api.app.state.store.read() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='support'").fetchone()[0])
+        config = BS.read(c, 'support')
         assert not c.execute("SELECT 1 FROM assignments").fetchone()
     assert not {"model", "runtime"} & set(config)                # it follows the company default, once there is one
     assert _states(api)["botops"] == "planned"                   # nothing is placed or running yet
@@ -490,7 +491,7 @@ def test_a_companys_own_bot_named_counsel_is_never_taken_for_the_built_in_counse
     def theirs():
         with api.app.state.store.read() as c:
             return (dict(c.execute("SELECT * FROM bots WHERE slug='counsel'").fetchone()),
-                    dict(c.execute("SELECT * FROM bot_config WHERE bot='counsel'").fetchone()),
+                    dict(c.execute(BS.ROW_SQL + " WHERE bc.bot='counsel'").fetchone()),
                     c.execute("SELECT COUNT(*) FROM assignments WHERE bot='counsel'").fetchone()[0])
     before = theirs()
     machine(api)

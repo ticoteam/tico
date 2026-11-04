@@ -17,6 +17,7 @@ from backend.config import Settings
 from backend.store import H, encode
 from backend.tests.test_api import headers
 from backend.tests.test_oidc import provider, signin  # noqa: F401  (fixtures)
+from backend import bot_settings as BS
 
 APP = "http://localhost:5173"
 PROD = "https://app.acme.example"
@@ -39,8 +40,8 @@ def api(tmp_path):
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": [
                 {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
                 {"id": "ben", "email": "ben@acme.example"}]}),))
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('ops',?,'ana')",
-                      (encode({"name": "ops", "runtime": "fake", "status": "active"}),))
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('ops','ana')")
+            BS.write(c, 'ops', {'name': 'ops', 'runtime': 'fake', 'status': 'active'})
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
         yield client
 

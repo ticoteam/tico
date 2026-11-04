@@ -6,6 +6,7 @@ the bot is made, and once at start for bots made before that when there is no do
 from backend import message_bots, routines
 from backend.store import H, encode
 from backend.tests.test_api import api, post  # noqa: F401  (fixture)
+from backend import bot_settings as BS
 
 MODEL = {"model": "gpt-6.1-sol", "effort": "high", "harness": None, "runner_id": None}
 
@@ -44,7 +45,8 @@ def old_message_bot(api, slug, instructions="", tools=None, template="inbox"):
         config["tools"] = tools
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES(?,?,?,'active')", (slug, slug, slug))
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')", (slug, encode(config)))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (slug,))
+        BS.write(c, slug, config)
 
 
 def backfill(api):

@@ -72,6 +72,7 @@ import json
 
 from pydantic import Field, SecretStr
 
+from . import bot_settings as BS
 from . import hubdb as H
 from .models import Contract, ID
 from .store import Problem, readiness_document
@@ -472,7 +473,7 @@ def _bots(c, settings, runner_id, runtime):
     from .shared_bots import follow
     record = providers.load(c, settings)
     out = []
-    for r in c.execute("SELECT a.bot,b.config FROM assignments a JOIN bot_config b ON b.bot=a.bot "
+    for r in c.execute(f"SELECT a.bot,{BS.CONFIG} AS config FROM assignments a JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} "
                        "WHERE a.runner_id=? ORDER BY a.bot", (runner_id,)).fetchall():
         config = providers.fill(record, follow(c, r["bot"], json.loads(r["config"] or "{}")))
         # Automatic candidates must not reset unrelated primary conversations; their session keys bind the login.
@@ -697,7 +698,7 @@ def bot_runtimes(c, settings, bot):
     Each goes through `turn_runtimes`, so a Tico model and a desktop-app bot count for none."""
     from . import providers, task_models
     from .shared_bots import follow
-    found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    found = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     config = json.loads(found["config"] or "{}") if found else {}
     filled = providers.fill(providers.load(c, settings), follow(c, bot, config))
     out = turn_runtimes(filled)

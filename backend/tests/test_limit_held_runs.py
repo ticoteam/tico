@@ -9,6 +9,7 @@ from backend.tests.test_api import claim, get, post
 from backend.tests.test_api import api  # noqa: F401
 from backend.tests.test_execution_review import job_state, sweep
 from backend.tests.test_login_holds import at, signed_in, two_bots
+from backend import bot_settings as BS
 
 WEEKLY = "You've hit your weekly limit · resets Oct 26, 8pm (UTC)"
 LOCK = ("--session-id requires session logging: failed to create session lock directory for session x: "
@@ -55,8 +56,7 @@ def test_a_limit_whose_fallback_fails_at_start_waits_for_the_reset_not_for_a_per
     assert claim(api, machine, bot="ops") is None
     # A fallback the bot names now is another one: the next turn goes there.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.fallback',json(?)) WHERE bot='ops'",
-                  (json.dumps({"harness": "codex", "model": "gpt-5.5"}),))
+        BS.update(c, 'ops', {'fallback': {'harness': 'codex', 'model': 'gpt-5.5'}})
     moved = claim(api, machine, bot="ops")
     assert moved["job_id"] == first["job_id"] and moved["config"]["primary_held"]
 

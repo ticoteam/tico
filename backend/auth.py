@@ -21,6 +21,7 @@ from . import team_rules
 from . import read_cache
 from . import report_managers
 from .store import H, Problem, digest
+from . import bot_settings as BS
 
 # Loopback sign-in for an environment with no identity proxy in front of it.
 # Cookies are shared across ports on one host, so each install names its own; the bare name is
@@ -620,7 +621,7 @@ class Auth:
                 or not str(who.actor).startswith("bot:") or self.system_bot(slug)):
             return False
         me = H.actor_id(who.actor)
-        row = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute(f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)).fetchone()
         if not row or me == slug:
             return False
         declared = json.loads(row["config"]) if row["config"] else {}
@@ -641,7 +642,7 @@ class Auth:
             if H.actor_id(parent) != me:
                 return False
         else:
-            row = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+            row = c.execute(f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)).fetchone()
             if not row:
                 return False
             declared = json.loads(row["config"]) if row["config"] else {}
@@ -834,7 +835,7 @@ class Auth:
         all (`hubdb.answer` checks only that the ask was addressed to you), so refusing contact
         cannot strand a bot that is blocking on a reply.
         """
-        row = c.execute("SELECT config,reports_to FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute(f"SELECT {BS.CONFIG} AS config,bc.reports_to FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)).fetchone()
         if who.role != "bot":
             return True
         sender = who.actor
@@ -880,7 +881,7 @@ class Auth:
         slug = H.actor_id(actor)
         if self.bot_contact(c, who, slug, conversation_id, task_id, kind):
             return
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
         declared = json.loads(row["config"]) if row and row["config"] else {}
         if declared.get("bot_contact") == "tasks":
             raise Problem("bot_contact", f"{slug} takes work as a task and nothing else (notes only from its manager "

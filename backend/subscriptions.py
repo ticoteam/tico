@@ -9,6 +9,7 @@ from . import hubdb as H, models as M
 from .execution import readiness_document
 from .subscription_identity import identity
 from .store import Problem, encode
+from . import bot_settings as BS
 
 COMPUTER_LOGIN_CAPABILITY = 'computer_logins_v1'
 
@@ -264,7 +265,7 @@ def _bot_line(c, bot, ctx):
     computer = {'runner_id': runner['id'], 'label': runner['label']} if runner else None
     from . import providers
     from .shared_bots import follow
-    row = c.execute('SELECT config FROM bot_config WHERE bot=?', (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     config = providers.fill(ctx['providers'], follow(c, bot, json.loads(row[0] or '{}') if row else {}))
     line = {'profile': None, 'source': 'computer', 'computer': computer}
     if not runner:

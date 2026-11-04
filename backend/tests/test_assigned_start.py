@@ -10,6 +10,7 @@ from backend.tests.test_auto_tasks import deck, finish, set_cap, take
 from backend.tests.test_profiles import put
 from backend.tests.test_task_lanes import new_task, task_bot
 from backend.enqueue import enqueue_stored
+from backend import bot_settings as BS
 
 
 @pytest.fixture
@@ -650,7 +651,8 @@ def fleet(store, bots, tasks, attempts, *, days=30):
         for slug in slugs:
             c.execute("INSERT INTO bots(id,slug,display_name,state,created_at) VALUES(?,?,?,'active',?)",
                       (slug, slug, slug, now))
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,'{\"runtime\":\"fake\"}','ana')", (slug,))
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (slug,))
+            BS.write(c, slug, {"runtime": "fake"})
         for k in range(tasks):
             c.execute("INSERT INTO tasks(id,title,body,requester_id,owner_id,status,rank,created_at,updated_at,conversation_id) "
                       "VALUES(?,?,'','human:ana',?,'open',?,?,?,'fleet-conv')",

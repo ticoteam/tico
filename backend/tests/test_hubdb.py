@@ -20,6 +20,7 @@ from backend import marketing_tasks as MT
 from backend import strategy as S
 from backend import task_relations as TR
 from backend import wake_presets as WP
+from backend import bot_settings as BS
 
 EMPLOYEES = {
     "coo": {"display_name": "COO", "status": "active", "host": "keeper", "runtime": "codex",
@@ -452,10 +453,11 @@ class Rule5Tasks(HubCase):
         # Superseding its ask card exercises the server's versioned unblock path.
         self.conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
         self.conn.execute(re.search(r"CREATE TABLE IF NOT EXISTS bot_config\(.*?\);", SCHEMA, re.S).group(0))
+        self.conn.execute(BS.TABLE)
         self.conn.execute("ALTER TABLE bot_config ADD COLUMN access TEXT")
         self.conn.execute("ALTER TABLE bot_config ADD COLUMN onboarding_state TEXT")
-        self.conn.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('cmo',?, 'ana')",
-                          (json.dumps({"bot_contact": "tasks"}),))
+        self.conn.execute("INSERT INTO bot_config(bot,owner_id) VALUES('cmo','ana')")
+        BS.write(self.conn, 'cmo', {'bot_contact': 'tasks'})
         parent = H.task_create(self.conn, CMO, "Plan the launch week", "All of it.", ANALYTICS)
         row = H.task_create(self.conn, CMO, "Pick the hero image", "Two drafts.", SEO, parent_id=parent["id"])
         H.task_update(self.conn, SEO, row["id"], status="waiting", waiting_on="ana", note="Pick one image.")

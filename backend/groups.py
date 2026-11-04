@@ -24,6 +24,7 @@ from . import models as M
 from . import people as P
 from . import task_caps
 from .store import Problem, encode
+from . import bot_settings as BS
 
 SYSTEM_BOTS = ("assistant", "botops", "librarian", "goal-manager", "health-monitor", "task-manager", "bookkeeper", H.COUNSEL)
 
@@ -36,7 +37,7 @@ def _roster(c):
 def _configs(c):
     """{slug: config with its `reports_to`}: what `team_of` reads."""
     out = {}
-    for row in c.execute("SELECT bot,config,reports_to FROM bot_config"):
+    for row in c.execute(f"SELECT bot,{BS.CONFIG} AS config,reports_to FROM bot_config bc {BS.JOIN}"):
         config = json.loads(row["config"] or "{}")
         config["reports_to"] = row["reports_to"]
         out[row["bot"]] = config
@@ -119,11 +120,11 @@ def _save(c, roster, people=None):
 
 
 def _set_bot(c, slug, gid):
-    declared = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0] or "{}")
+    declared = json.loads(c.execute(BS.ONE_SQL, (slug,)).fetchone()[0] or "{}")
     if declared.get("team") and declared["team"] != gid:
         task_caps.forget(c, "bot:" + slug)      # its caps were its old group's (CONTRACT §3)
     was, declared["team"] = declared.get("team") or "", gid
-    c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), slug))
+    BS.write(c, slug, declared)
     _follow(c, "bot:" + slug, was, gid)
     if was != gid:
         from .finance import actions as FA

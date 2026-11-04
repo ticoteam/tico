@@ -17,6 +17,7 @@ from backend.tests.test_credential_sharing import jira, local
 from backend.tests.test_member_bots import botops, call, turn  # noqa: F401  (fixture)
 from clients import botcopy, hubtools
 from clients.tico import APIError
+from backend import bot_settings as BS
 
 SHA = "a" * 40
 
@@ -37,7 +38,7 @@ def copy(api, body=None, token="cara-test", bot="scribe", expected=200):
 def config_of(api, slug):
     bot = bot_id(api, slug)
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT * FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        row = c.execute(BS.ROW_SQL + " WHERE bc.bot=?", (bot,)).fetchone()
         return dict(row), json.loads(row["config"])
 
 

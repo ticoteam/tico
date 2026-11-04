@@ -4,6 +4,7 @@ import json
 from backend.store import encode
 
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
+from backend import bot_settings as BS
 
 
 def _report(api, machine, bots):
@@ -25,7 +26,7 @@ def _company_default(api, bot, model="gpt-6-sol"):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO registry_metadata VALUES('providers',?)", (encode({
             "enabled": ["openai"], "runtime": "codex", "model": model, "revision": 1}),))
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode({"name": bot}), bot))
+        BS.write(c, bot, {'name': bot})
 
 
 def test_move_refuses_a_destination_that_is_not_ready_for_the_bot(api):
@@ -68,7 +69,7 @@ def test_resume_and_restore_check_the_repository_before_activating(api):
     assert post(api, "bots/ops/restore", {})["status"] == "active"
     # Built-in repositories are built by their assigned computer, even on older configs without materialize.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=? WHERE bot='coo'", (encode({"template": "assistant"}),))
+        BS.write(c, 'coo', {'template': 'assistant'})
         c.execute("UPDATE bots SET state='paused' WHERE slug='coo'")
     ready(api, r, [])
     pending = post(api, "bots/coo/go-live", {"setup": False})
@@ -266,7 +267,7 @@ def test_compact_at_saves_without_a_fresh_session(api):
     post(api, "bots/cpo/compact-at", {"compact_at": 400_000, "expected_revision": revision})
     assert get(api, "bots/cpo")["compact_at"] == 400_000
     with api.app.state.store.read() as c:
-        assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='cpo'").fetchone()[0])["compact_at"] == 400_000
+        assert BS.read(c, 'cpo')["compact_at"] == 400_000
         assert not c.execute("SELECT 1 FROM session_epochs").fetchone()
 
 
