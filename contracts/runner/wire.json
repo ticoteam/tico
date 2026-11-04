@@ -54,6 +54,7 @@
         "start_places": {"type": "boolean", "x-note": "The server takes start_places on claims (Claim.start_places)."},
         "runtime_credential_source": {"type": "boolean"},
         "subscription_accounts": {"type": "boolean"},
+        "subscription_usage_sources": {"type": "boolean", "x-note": "The server reads a usage window's origin and subscription_id (backend/model_subscriptions.py provenance); absent from older servers, so the runner sends neither (runner-rs profiles.rs for_server)."},
         "worktree_record_stamp": {"type": "boolean"},
         "worktree_actions": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "worktree_actions_skipped": {"type": "integer", "minimum": 1},
