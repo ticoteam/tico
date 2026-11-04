@@ -41,7 +41,7 @@ def test_a_task_an_automation_makes_starts_no_task_event_automation(api):
     assert len(runs(api, heard)["runs"]) == 1          # the human's task, not the one the maker made
     follow = sql(api, "SELECT id FROM tasks WHERE title='Follow up'")
     assert len(follow) == 1
-    why = sql(api, "SELECT note FROM task_events WHERE task_id=? AND note LIKE '%did not run%'", (follow[0]["id"],))
+    why = sql(api, "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND note LIKE '%did not run%'", (follow[0]["id"],))
     assert len(why) == 1 and "automation" in why[0]["note"]
 
 
