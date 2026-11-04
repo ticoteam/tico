@@ -39,12 +39,13 @@ from typing import Literal
 
 from . import models as M
 from . import routines
+from .google_workspace import oauth_client
 from .store import H, P, Problem
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS google_connects(
  person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, oauth_state TEXT, verifier TEXT, code TEXT,
- kind TEXT, message TEXT, hint TEXT, can TEXT, runner_id TEXT, holder TEXT, started_at REAL, created_at TEXT NOT NULL,
+ kind TEXT, message TEXT, hint TEXT, can TEXT, runner_id TEXT, holder TEXT, client_id TEXT, started_at REAL, created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS google_connects_oauth_state ON google_connects(oauth_state) WHERE oauth_state IS NOT NULL;
 CREATE TABLE IF NOT EXISTS google_mail_holders(runner_id TEXT PRIMARY KEY, holds INTEGER NOT NULL, seen_at REAL NOT NULL);
@@ -116,6 +117,8 @@ MESSAGES = {
                  "Try again in a few minutes. You can also remove Tico at myaccount.google.com/permissions."),
     "unknown": ("The computer that syncs your mail did not say whether the connection finished.",
                 "Connect again. If it keeps happening, check that computer is online."),
+    "reconnect": ("Tico's Google app was changed on this server, so this connection has to be made again.",
+                  "Connect again."),
 }
 
 
@@ -138,8 +141,9 @@ class TokenRequest(M.Contract):
     scopes: list[str] = Field(min_length=1, max_length=4)
 
 
-def configured(settings):
-    return bool(settings.google_oauth_client_id and settings.google_oauth_client_secret)
+def configured(c, settings):
+    """Whether Connect Google has an OAuth client: the server's environment, else the one an admin set."""
+    return oauth_client(c, settings) is not None
 
 
 def redirect_uri(settings):
@@ -155,11 +159,10 @@ def post_token(fields):
         return json.loads(answer.read().decode() or "{}")
 
 
-def google_token(settings, fields):
+def google_token(client, fields):
     """Google's answer to a code exchange or a refresh with this server's client added. A refusal is a Problem
     naming only Google's reason as a kind (TOKEN_ERRORS); Google's body and the request never reach a log."""
-    fields = dict(fields, client_id=settings.google_oauth_client_id,
-                  client_secret=settings.google_oauth_client_secret)
+    fields = dict(fields, client_id=client[0], client_secret=client[1])
     try:
         answer = post_token(fields)
     except urllib.error.HTTPError as e:
@@ -213,9 +216,9 @@ def expire(c):
               "updated_at=? WHERE status IN ('finishing','revoking') AND started_at<?", (H.now(), now - CLAIM_SECONDS))
 
 
-def view(row, settings, mailbox, syncing):
+def view(row, mailbox, syncing, configured_now):
     status = row["status"] if row else "none"
-    out = {"configured": configured(settings), "mailbox": mailbox, "syncing": syncing, "status": status,
+    out = {"configured": configured_now, "mailbox": mailbox, "syncing": syncing, "status": status,
            "scopes": READ_SCOPES, "can": [], "updated_at": row["updated_at"] if row else None,
            "kind": None, "message": None, "hint": None}
     if row and status == "connected":
@@ -269,7 +272,7 @@ def install(app, store, publisher, mutate):
         row = c.execute("SELECT * FROM google_connects WHERE person_id=?", (pid,)).fetchone()
         if row and row["mailbox"] != mailbox:
             row = None                  # their mailbox changed since: the old connection says nothing about this one
-        return view(row, settings, mailbox, syncing)
+        return view(row, mailbox, syncing, configured(c, settings))
 
     @app.get("/api/v2/mail/google")
     def google_status(request: Request):
@@ -286,7 +289,8 @@ def install(app, store, publisher, mutate):
         def work(c):
             who = request.state.identity
             pid = require_self(who)
-            if not configured(settings):
+            client = oauth_client(c, settings)
+            if client is None:
                 raise Problem("google_app", "This Tico server has no Google app set up, so Connect Google is not "
                                             "available yet. Whoever runs the server sets TICO_GOOGLE_OAUTH_CLIENT_ID "
                                             "and TICO_GOOGLE_OAUTH_CLIENT_SECRET (docs/mail.md).", 409)
@@ -294,7 +298,7 @@ def install(app, store, publisher, mutate):
             state = secrets.token_urlsafe(24)
             verifier = secrets.token_urlsafe(64)
             challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
-            query = {"client_id": settings.google_oauth_client_id, "redirect_uri": redirect_uri(settings),
+            query = {"client_id": client[0], "redirect_uri": redirect_uri(settings),
                      "response_type": "code", "scope": " ".join(READ_SCOPES), "access_type": "offline",
                      "prompt": "consent", "login_hint": mailbox, "state": state, "code_challenge": challenge,
                      "code_challenge_method": "S256"}
@@ -365,7 +369,8 @@ def install(app, store, publisher, mutate):
             if not row:
                 return {"connect": None}
             action = "connect" if row["status"] == "ready" else "disconnect"
-            if action == "connect" and not configured(settings):
+            client = oauth_client(c, settings) if action == "connect" else None
+            if action == "connect" and client is None:
                 c.execute("UPDATE google_connects SET status='failed',kind='app_config',code=NULL,verifier=NULL,"
                           "updated_at=? WHERE person_id=?", (H.now(), row["person_id"]))
                 return {"connect": None}
@@ -374,7 +379,7 @@ def install(app, store, publisher, mutate):
                        row["person_id"]))
             out = {"id": row["person_id"], "action": action, "mailbox": row["mailbox"]}
             if action == "connect":
-                out.update(client_id=settings.google_oauth_client_id, broker="server")
+                out.update(client_id=client[0], broker="server")
             return {"connect": out}
 
     @app.post("/api/v2/connectors/mail/google/{person_id}/exchange")
@@ -390,11 +395,13 @@ def install(app, store, publisher, mutate):
             code, verifier = row["code"], row["verifier"]
             c.execute("UPDATE google_connects SET code=NULL,verifier=NULL,updated_at=? WHERE person_id=?",
                       (H.now(), person_id))
-        if not configured(settings):
+        with store.read() as c:
+            client = oauth_client(c, settings)
+        if client is None:
             raise Problem("google_refused", "This Tico server has no Google app set up", 409,
                           extra={"kind": "app_config"})
-        answer = google_token(settings, {"grant_type": "authorization_code", "code": code, "code_verifier": verifier,
-                                         "redirect_uri": redirect_uri(settings)})
+        answer = google_token(client, {"grant_type": "authorization_code", "code": code, "code_verifier": verifier,
+                                       "redirect_uri": redirect_uri(settings)})
         if answer.get("refresh_token"):
             with store.transaction() as c:
                 c.execute("UPDATE google_connects SET pending_hash=? WHERE person_id=? AND runner_id=? AND "
@@ -418,11 +425,13 @@ def install(app, store, publisher, mutate):
                 # Also a grant whose connected result never reached the server: the computer reconnects.
                 raise Problem("not_this_grant", "This computer holds no Connect Google grant from this server for that "
                                                 "mailbox", 403)
-        if not configured(settings):
+        with store.read() as c:
+            client = oauth_client(c, settings)
+        if client is None:
             raise Problem("google_refused", "This Tico server has no Google app set up", 409,
                           extra={"kind": "app_config"})
-        answer = google_token(settings, {"grant_type": "refresh_token", "refresh_token": body.refresh_token,
-                                         "scope": " ".join(sorted(wanted))})
+        answer = google_token(client, {"grant_type": "refresh_token", "refresh_token": body.refresh_token,
+                                       "scope": " ".join(sorted(wanted))})
         returned = set(str(answer.get("scope") or "").split())
         if returned - wanted:
             raise Problem("google_refused", "Google answered with more access than was asked for", 409,
@@ -450,12 +459,17 @@ def install(app, store, publisher, mutate):
             holder = {"connected": runner["id"], "disconnected": None}.get(body.status, row["holder"])
             # Likewise the grant the server will refresh: the new one once connected, none once revoked.
             grant_hash = {"connected": row["pending_hash"], "disconnected": None}.get(body.status, row["grant_hash"])
+            # The client it is recorded with: this server's now, for a connect that succeeded. A failed reconnect keeps
+            # the earlier grant's client, and a revoked grant has none to keep.
+            client = oauth_client(c, settings) if body.status == "connected" else None
+            client_id = client[0] if client else row["client_id"]
             c.execute("UPDATE google_connects SET status=?,kind=?,message=?,hint=?,can=?,holder=?,grant_hash=?,"
-                      "pending_hash=NULL,oauth_state=NULL,verifier=NULL,code=NULL,updated_at=? WHERE person_id=?",
+                      "client_id=?,pending_hash=NULL,oauth_state=NULL,verifier=NULL,code=NULL,updated_at=? "
+                      "WHERE person_id=?",
                       (body.status, kind if failed else None, body.message if failed else None,
                        body.hint if failed else None,
                        json.dumps(sorted(set(body.can))) if body.status == "connected" else None, holder, grant_hash,
-                       H.now(), person_id))
+                       client_id, H.now(), person_id))
             H.event(c, "human:" + person_id, "mail.google." + body.status, row["mailbox"],
                     {"kind": kind} if body.status == "failed" else {})
             if body.status == "connected" and row["mailbox"]:

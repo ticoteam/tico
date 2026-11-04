@@ -13,20 +13,28 @@ bot, a personal one to the computer that holds its grant.
 Nothing here logs a token or a key. Google's refusals reach a caller as a kind, never as Google's text.
 """
 
+import asyncio
 import collections
+import hashlib
 import json
 import re
+import secrets
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
 
 import jwt
+from fastapi import Request
+from fastapi.responses import Response
+from pydantic import Field
 
+from . import models as M
 from . import routines
-from .store import Problem
+from .store import H, Problem
 
 WORKSPACE_SCOPES = {"gmail": ["https://www.googleapis.com/auth/gmail.modify"],
                     "calendar": ["https://www.googleapis.com/auth/calendar"]}
@@ -291,4 +299,525 @@ def validate_key(key):
         jwt.encode({"iss": key["client_email"], "aud": TOKEN_URI}, key["private_key"], algorithm="RS256")
     except Exception:
         raise Problem("key", "The key's private_key is not a usable RSA key", 422) from None
-    return {field: key[field].strip() for field in KEY_FIELDS}
+    fields = {field: key[field].strip() for field in KEY_FIELDS}
+    fields["project_id"] = str(key.get("project_id") or "").strip()[:200]
+    return fields
+
+
+# ----------------------------------------------------------------------------- setup codes and the upload
+
+CODE_SECONDS = 1800             # a setup command's code lasts thirty minutes
+USED_CODE_SECONDS = 600         # key/keep still answers for a code used this recently
+BAD_CODES = 20                  # this many wrong codes in BAD_WINDOW seconds, server-wide, ...
+BAD_WINDOW = 60
+LOCKOUT_SECONDS = 60            # ... answer 429 for this long
+KEY_BYTES = 16 * 1024           # the largest body a setup upload or key/keep may send (enforced by app.py's guard)
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "google-setup.sh"
+GOOGLE_PATH = "/api/v2/google"
+SETUP_PATH = "/api/v2/google/setup.sh"
+CODE_PATH = "/api/v2/google/workspace/setup-code"
+KEY_PATH = "/api/v2/google/workspace/key"
+KEEP_PATH = "/api/v2/google/workspace/key/keep"
+CHECK_PATH = "/api/v2/google/workspace/check"
+WORKSPACE_PATH = "/api/v2/google/workspace"
+OAUTH_PATH = "/api/v2/google/oauth-client"
+KEY_KINDS = ("unauthorized_client", "other")   # a refusal about the key itself, not about one mailbox
+_BAD = []                       # epoch seconds of recent wrong codes
+_LOCKOUT = {"until": 0.0}
+
+
+def code_hash(code):
+    return hashlib.sha256(code.encode()).hexdigest()
+
+
+def setup_code(request):
+    """The setup code a request carries as `Authorization: Setup <code>`, or None for any other request."""
+    header = request.headers.get("authorization", "")
+    return header[len("Setup "):].strip() if header.startswith("Setup ") else None
+
+
+def exempt(request):
+    """The only requests that pass the sign-in guard without a session: the setup script, and the key upload and its
+    keep check when they carry a setup code. Exact method and path, nothing broader (backend/app.py)."""
+    path, method = request.url.path, request.method
+    if path == SETUP_PATH:
+        return method == "GET"
+    if path in (KEY_PATH, KEEP_PATH):
+        return method == "POST" and setup_code(request) is not None
+    return False
+
+
+def _check_locked(now):
+    with _LOCK:
+        locked = now < _LOCKOUT["until"]
+    if locked:
+        raise Problem("slow_down", "Too many wrong setup codes. Wait a minute, then run the setup command again.", 429,
+                      retryable=True)
+
+
+def _bad_code(now):
+    """Count a wrong code (unknown, used or expired). In memory, so a rolled-back transaction cannot reset it."""
+    with _LOCK:
+        _BAD.append(now)
+        while _BAD and now - _BAD[0] > BAD_WINDOW:
+            _BAD.pop(0)
+        if len(_BAD) >= BAD_CODES:
+            _LOCKOUT["until"] = now + LOCKOUT_SECONDS
+            _BAD.clear()
+
+
+def _newest(c):
+    """The newest generation issued. Setup codes and uploaded keys share one order, so an older code can never upload
+    over a newer key. Codes are never deleted, so this only goes up (a deleted key does not lower it)."""
+    found = c.execute("SELECT MAX(g) FROM (SELECT generation AS g FROM google_setup_codes UNION ALL "
+                      "SELECT generation AS g FROM google_workspaces)").fetchone()
+    return int(found[0] or 0)
+
+
+def _code_row(c, code):
+    """The setup code's row, found by its hash and compared with compare_digest, or None."""
+    if not code:
+        return None
+    digest = code_hash(code)
+    found = c.execute("SELECT * FROM google_setup_codes WHERE code_hash=?", (digest,)).fetchone()
+    if found is None or not secrets.compare_digest(found["code_hash"], digest):
+        return None
+    return dict(found)
+
+
+def _admin_of(c, actor, admins):
+    """Whether the person who made a setup command is still a credential administrator."""
+    from .credentials import administrator
+    return administrator(c, SimpleNamespace(role="human", actor=str(actor or "")), admins)
+
+
+def _consume_code(c, digest, now):
+    """Mark an unused, unexpired code used. True only for the one caller that wins: the update is atomic."""
+    cursor = c.execute("UPDATE google_setup_codes SET used_at=? WHERE code_hash=? AND used_at IS NULL AND expires_at>?",
+                       (now, digest, now))
+    return cursor.rowcount == 1
+
+
+def _epoch(stamp):
+    parsed = H.parse_ts(stamp)
+    return parsed.timestamp() if parsed else None
+
+
+def _parse_upload(raw):
+    """The upload's JSON object. Never echoes what was sent."""
+    try:
+        payload = json.loads(raw.decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError):
+        raise Problem("key", "The upload is not JSON", 422) from None
+    if not isinstance(payload, dict):
+        raise Problem("key", "The upload is not a JSON object", 422)
+    return payload
+
+
+def command(settings, code):
+    return f"curl -fsSL {settings.runner_url}/api/v2/google/setup.sh | bash -s -- {code}"
+
+
+def _keep_ids(c):
+    """The key ids the server still holds: the active key and any pending one. The setup script deletes the service
+    account's other keys (scripts/google-setup.sh), so a key Tico was never given does not outlive the upload."""
+    ids = [row[0] for row in c.execute("SELECT key_id FROM google_workspaces WHERE status IN "
+                                       "('connected','failing','pending') ORDER BY created_at")]
+    return list(dict.fromkeys(ids))
+
+
+def _store_pending(c, fields, domain, generation, actor):
+    """Make this key the pending one. A pending key it replaces is deleted; the active key keeps working until this
+    one's check passes (`_settle` promotes it). Returns what the upload is answered with."""
+    now = H.now()
+    replaced = pending(c)
+    if replaced:
+        c.execute("DELETE FROM google_workspaces WHERE id=? AND status='pending'", (replaced["id"],))
+    active_row = active(c)
+    row_id = H.new_id()
+    sealed = _cipher().seal(c, _context(row_id), json.dumps(fields, sort_keys=True))
+    c.execute("INSERT INTO google_workspaces(id,domain,project_id,client_email,client_id,key_id,key_sealed,revision,"
+              "status,checked_at,connected_at,last_error,probe_mailbox,created_by,created_at,updated_at,replaces_id,"
+              "generation,mint_failing_since) VALUES(?,?,?,?,?,?,?,1,'pending',NULL,NULL,NULL,NULL,?,?,?,?,?,NULL)",
+              (row_id, domain, fields["project_id"], fields["client_email"], fields["client_id"],
+               fields["private_key_id"], sealed, actor, now, now, active_row["id"] if active_row else None, generation))
+    H.event(c, actor, "google.workspace.key", domain, {"generation": generation, "replaced_pending": bool(replaced)})
+    return {"client_id": fields["client_id"], "delegation_url": delegation_url(fields["client_id"]),
+            "keep_key_ids": _keep_ids(c)}
+
+
+# ----------------------------------------------------------------------------- checks
+
+def _mailboxes_on(c, domain):
+    return sorted({str(box["address"]).lower() for box in routines.message_bot_mailboxes(c)
+                   if _domain(box["address"]) == domain})
+
+
+def _probe_mailbox(c, who, row, requested):
+    """The mailbox a check asks Google about: the admin's pick (validated: a message bot mailbox on the domain), else
+    the one the last check used, the admin's own when it is covered, else the first covered one."""
+    covered = _mailboxes_on(c, row["domain"])
+    if requested:
+        box = _address(requested)
+        if box not in covered:
+            raise Problem("mailbox", "Pick a message bot mailbox on " + row["domain"], 422)
+        return box
+    if row.get("probe_mailbox") in covered:
+        return row["probe_mailbox"]
+    own = ""
+    if who is not None:
+        from .google_connect import mailbox_for, require_self
+        try:
+            own = str(mailbox_for(c, require_self(who))[0]).lower()
+        except Problem:
+            own = ""
+    if own in covered:
+        return own
+    if covered:
+        return covered[0]
+    raise Problem("mailbox", "No message bot mailbox is on " + row["domain"] + " yet", 422)
+
+
+MESSAGES = {"unauthorized_client": "Google has not accepted the authorization yet. Check that it was granted for this "
+                                   "key's client ID and the scopes, then check again. Google can take a few minutes.",
+            "not_found": "Google has no such mailbox on this domain.",
+            "other": "Google could not finish the check. Try again in a few minutes."}
+
+
+def _probe(store, row, mailbox):
+    """Gmail's profile and Calendar's calendar list, read only, with a token minted for `row`. (ok, kind, message)."""
+    for service, url in PROBES:
+        with store.read() as c:
+            try:
+                token = mint(c, mailbox, service, row=row)["access_token"]
+            except Problem as refused:
+                kind = refused.extra.get("kind", "other")
+                return False, kind, MESSAGES.get(kind, MESSAGES["other"])
+        status, _ = google_call(url, token=token)
+        if status != 200:
+            kind = "not_found" if status == 404 else "other"
+            return False, kind, MESSAGES[kind]
+    return True, None, ""
+
+
+def _settle(c, row, mailbox, ok, kind, message, actor):
+    """Record a check's result for the revision it started on. A result for a revision that has since changed (the key
+    was replaced, promoted or removed) is dropped: returns False. A passing pending key becomes the active one, and the
+    active key it replaces is deleted first (promotion)."""
+    current = c.execute("SELECT * FROM google_workspaces WHERE id=? AND revision=?",
+                        (row["id"], row["revision"])).fetchone()
+    if current is None:
+        return False
+    now = H.now()
+    was_pending = current["status"] == "pending"
+    if ok and was_pending:
+        c.execute("DELETE FROM google_workspaces WHERE status IN ('connected','failing') AND id<>?", (row["id"],))
+        c.execute("UPDATE google_workspaces SET status='connected',connected_at=?,checked_at=?,last_error=NULL,"
+                  "probe_mailbox=?,mint_failing_since=NULL,replaces_id=NULL,revision=revision+1,updated_at=? "
+                  "WHERE id=? AND revision=?", (now, now, mailbox, now, row["id"], row["revision"]))
+        forget_tokens()
+    elif ok:
+        c.execute("UPDATE google_workspaces SET status='connected',checked_at=?,last_error=NULL,probe_mailbox=?,"
+                  "mint_failing_since=NULL,revision=revision+1,updated_at=? WHERE id=? AND revision=?",
+                  (now, mailbox, now, row["id"], row["revision"]))
+    elif was_pending:
+        # A pending key that fails its check stays pending: the active key keeps working meanwhile.
+        c.execute("UPDATE google_workspaces SET last_error=?,checked_at=?,probe_mailbox=?,revision=revision+1,"
+                  "updated_at=? WHERE id=? AND revision=?", (message, now, mailbox, now, row["id"], row["revision"]))
+    else:
+        c.execute("UPDATE google_workspaces SET status='failing',last_error=?,checked_at=?,probe_mailbox=?,"
+                  "mint_failing_since=COALESCE(mint_failing_since,?),revision=revision+1,updated_at=? "
+                  "WHERE id=? AND revision=?", (message, now, mailbox, now, now, row["id"], row["revision"]))
+    H.event(c, actor, "google.workspace.check", mailbox, {"ok": bool(ok), "kind": kind or ""})
+    return True
+
+
+def run_check(store, row, mailbox, actor):
+    """Probe `row` for `mailbox`, then settle the result under the revision it started on. Google is asked outside any
+    write transaction. Returns (settled, ok, kind, message)."""
+    ok, kind, message = _probe(store, row, mailbox)
+    with store.transaction() as c:
+        settled = _settle(c, row, mailbox, ok, kind, message, actor)
+    return settled, ok, kind, message
+
+
+def tick(store, now=None):
+    """Checks a pending key, and a failing one, again every RECHECK_SECONDS for RECHECK_WINDOW after it started (the
+    scheduler loop calls this). A key past its window waits for Check."""
+    now = time.time() if now is None else now
+    plan = []
+    with store.read() as c:
+        for row in [dict(found) for found in c.execute(
+                "SELECT * FROM google_workspaces WHERE status IN ('pending','failing')")]:
+            started = _epoch(row["mint_failing_since"] or row["created_at"] if row["status"] == "failing"
+                             else row["created_at"])
+            last = _epoch(row["checked_at"])
+            if started is None or now - started > RECHECK_WINDOW or (last is not None and now - last < RECHECK_SECONDS):
+                continue
+            try:
+                plan.append((row, _probe_mailbox(c, None, row, None)))
+            except Problem:
+                continue
+    for row, mailbox in plan:
+        run_check(store, row, mailbox, "system:google")
+
+
+# ----------------------------------------------------------------------------- what a computer's token leaves behind
+
+def record_mint(c, row, mailbox, service, runner, ok, kind=""):
+    """The outcome of a token a computer asked for (`mint`), recorded in a write transaction for the revision it was
+    minted with. A success clears a failure clock; a refusal about the key itself starts one, and FAILING_SECONDS of
+    them turn a connected key failing. One audit row per (mailbox, service, computer) per hour."""
+    box = _address(mailbox)
+    now = H.now()
+    current = c.execute("SELECT * FROM google_workspaces WHERE id=? AND revision=?",
+                        (row["id"], row["revision"])).fetchone()
+    if current is not None and current["status"] in ACTIVE:
+        if ok and (current["mint_failing_since"] is not None or current["status"] != "connected"):
+            c.execute("UPDATE google_workspaces SET status='connected',mint_failing_since=NULL,last_error=NULL,"
+                      "updated_at=? WHERE id=? AND revision=?", (now, row["id"], row["revision"]))
+        elif not ok and kind in KEY_KINDS:
+            since = current["mint_failing_since"] or now
+            failing = now >= H.shift(since, seconds=FAILING_SECONDS)
+            c.execute("UPDATE google_workspaces SET status=?,mint_failing_since=?,last_error=?,updated_at=? "
+                      "WHERE id=? AND revision=?",
+                      ("failing" if failing else current["status"], since, MESSAGES.get(kind, MESSAGES["other"]),
+                       now, row["id"], row["revision"]))
+    actor = "runner:" + runner if runner else "system:google"
+    stamp = time.time()
+    with _LOCK:
+        last = _AUDITED.get((box, service, runner or ""))
+        if last is not None and stamp - last < AUDIT_SECONDS:
+            return
+        _AUDITED[(box, service, runner or "")] = stamp
+    H.event(c, actor, "google.workspace.mint", box, {"service": service, "runner": runner or "", "ok": bool(ok),
+                                                     "kind": kind or ""})
+
+
+# ----------------------------------------------------------------------------- the routes
+
+class DomainBody(M.Contract):
+    domain: str = Field(default="", max_length=253)
+
+
+class CheckBody(M.Contract):
+    mailbox: str = Field(default="", max_length=320)
+
+
+class OAuthClientBody(M.Contract):
+    client_id: str = Field(min_length=1, max_length=300)
+    client_secret: str = Field(min_length=1, max_length=300)
+
+
+def _view(row):
+    """A key row as Settings > Google shows it: never the key, its sealed text or its key id."""
+    if row is None:
+        return None
+    return {"status": row["status"], "domain": row["domain"], "project_id": row["project_id"],
+            "client_id": row["client_id"], "scopes": scope_urls(), "delegation_url": delegation_url(row["client_id"]),
+            "connected_at": row["connected_at"], "checked_at": row["checked_at"], "last_error": row["last_error"],
+            "probe": {"mailbox": row["probe_mailbox"]} if row["probe_mailbox"] else None}
+
+
+def _pair(c):
+    """(workspace, pending): the active key, or the pending one when none is active; and the replacement waiting while
+    an active key keeps working."""
+    row, waiting = active(c), pending(c)
+    if row is None:
+        return _view(waiting), None
+    return _view(row), _view(waiting)
+
+
+def _oauth_view(c, settings):
+    """The OAuth client's state without its secret, and without unsealing it: the server's environment wins."""
+    from .google_connect import redirect_uri
+    if settings.google_oauth_client_id and settings.google_oauth_client_secret:
+        source, client_id = "env", settings.google_oauth_client_id
+    else:
+        found = c.execute("SELECT client_id FROM google_oauth_clients WHERE singleton=1").fetchone()
+        source, client_id = ("settings", found[0]) if found else (None, None)
+    return {"configured": source is not None, "source": source, "redirect_uri": redirect_uri(settings),
+            "client_id": client_id}
+
+
+def _reachable(settings):
+    from .config import LOOPBACK
+    return (urllib.parse.urlsplit(settings.runner_url).hostname or "") not in LOOPBACK
+
+
+def install(app, store):
+    """Settings > Google's Workspace routes. Installed after install_credentials, so the vault is there to seal with.
+    None of them goes through `mutate`: each one checks its own rights (an admin, or a setup code)."""
+    from .credentials import administrator, require_admin
+    use_vault(app.state.vault)
+    settings = store.settings
+
+    def _upload(raw, code, who):
+        """The key upload, from a setup command (`code`) or an admin session (`who`). Synchronous: runs in a thread."""
+        if code is None:
+            with store.transaction() as c:
+                require_admin(c, who, settings.credential_admins)
+                payload = _parse_upload(raw)
+                domain = clean_domain(payload.get("domain"))
+                fields = validate_key(payload.get("key"))
+                return _store_pending(c, fields, domain, _newest(c) + 1, who.actor)
+        now = time.time()
+        _check_locked(now)
+        with store.transaction() as c:
+            row = _code_row(c, code)
+            stamp = H.now()
+            # The code is read before the body is looked at, so a bad body cannot dodge the bad-code count.
+            if row is None or row["used_at"] is not None or row["expires_at"] <= stamp:
+                _bad_code(now)
+                raise Problem("setup_code", "That setup code is not valid. Run the setup command again from "
+                                            "Settings > Google.", 401)
+            payload = _parse_upload(raw)
+            fields = validate_key(payload.get("key"))
+            if not _admin_of(c, row["created_by"], settings.credential_admins):
+                raise Problem("forbidden", "The person who made this setup command is no longer a credential "
+                                           "administrator", 403)
+            if row["generation"] < _newest(c):
+                raise Problem("superseded", "A newer setup command was made. Run the newest one from Settings > Google.",
+                              409)
+            if not _consume_code(c, row["code_hash"], stamp):
+                _bad_code(now)
+                raise Problem("setup_code", "That setup code was just used. Run the setup command again.", 401)
+            return _store_pending(c, fields, row["domain"], row["generation"], row["created_by"])
+
+    @app.get(GOOGLE_PATH)
+    def workspace_status(request: Request):
+        """Settings > Google for whoever is signed in: the Workspace key, a replacement waiting, the OAuth client, and
+        whether this person's own mailbox is covered by the key (`me` is null for anyone who is not a person here)."""
+        from .google_connect import mailbox_for, require_self
+        who = request.state.identity
+        with store.read() as c:
+            workspace, waiting = _pair(c)
+            try:
+                mailbox = str(mailbox_for(c, require_self(who))[0]).lower()
+                me = {"mailbox": mailbox, "covered_by_workspace": covers(c, mailbox)}
+            except Problem:
+                me = None
+            return {"can_admin": administrator(c, who, settings.credential_admins), "workspace": workspace,
+                    "pending": waiting, "oauth": _oauth_view(c, settings), "me": me,
+                    "setup": {"base": settings.runner_url, "reachable": _reachable(settings)}}
+
+    @app.post(CODE_PATH)
+    def make_setup_code(request: Request, body: DomainBody):
+        """A setup command for one Workspace domain: its code lasts thirty minutes and works once."""
+        who = request.state.identity
+        with store.transaction() as c:
+            require_admin(c, who, settings.credential_admins)
+            domain = clean_domain(body.domain)
+            code = secrets.token_urlsafe(32)
+            now = H.now()
+            expires = H.shift(now, seconds=CODE_SECONDS)
+            generation = _newest(c) + 1
+            c.execute("INSERT INTO google_setup_codes(code_hash,domain,created_by,created_at,expires_at,used_at,generation) "
+                      "VALUES(?,?,?,?,?,NULL,?)", (code_hash(code), domain, who.actor, now, expires, generation))
+            H.event(c, who.actor, "google.workspace.setup_code", domain, {"generation": generation})
+        return {"code": code, "command": command(settings, code), "expires_at": expires}
+
+    @app.get(SETUP_PATH, include_in_schema=False)
+    def setup_script():
+        """scripts/google-setup.sh with this server's address and the install's label filled in. Public: it carries
+        nothing secret, and the code is typed in the command, not in the script."""
+        try:
+            text = SCRIPT.read_text()
+        except OSError:
+            raise Problem("not_built", "The setup script is not built on this server yet", 503) from None
+        from . import census
+        with store.transaction() as c:
+            install_id = census.install_id_in(c)
+        label = hashlib.sha256(install_id.encode()).hexdigest()[:12]
+        text = text.replace("__TICO_BASE__", settings.runner_url).replace("__TICO_INSTALL__", label)
+        return Response(content=text, media_type="text/x-shellscript")
+
+    @app.post(KEY_PATH)
+    async def upload_key(request: Request):
+        """The Workspace's service-account key: from a setup command (`Authorization: Setup <code>`), or an admin's
+        session with a `domain`. The key is validated, sealed, and kept pending until its check passes."""
+        raw = await request.body()
+        code = setup_code(request)
+        who = getattr(request.state, "identity", None)
+        return await asyncio.to_thread(_upload, raw, code, who)
+
+    @app.post(KEEP_PATH, include_in_schema=False)
+    def keep_key(request: Request):
+        """After an upload, the setup script asks which key ids to keep. Only for the code that made the upload, within
+        USED_CODE_SECONDS of it. `latest` is false once a newer setup command exists: the script then deletes nothing."""
+        code = setup_code(request)
+        now = time.time()
+        _check_locked(now)
+        with store.read() as c:
+            row = _code_row(c, code)
+            if row is None:
+                _bad_code(now)
+                raise Problem("setup_code", "That setup code is not valid. Run the setup command again from "
+                                            "Settings > Google.", 401)
+            used = _epoch(row["used_at"]) if row["used_at"] else None
+            if used is None or now - used > USED_CODE_SECONDS:
+                raise Problem("forbidden", "This setup command has no upload to keep keys for, or its window has passed",
+                              403)
+            return {"latest": row["generation"] >= _newest(c), "keep_key_ids": _keep_ids(c)}
+
+    @app.post(CHECK_PATH)
+    def check_key(request: Request, body: CheckBody | None = None):
+        """Asks Google whether the pending key (or the active one) works for one message bot mailbox: Gmail's profile
+        and Calendar's list, read only. A passing pending key becomes the active one."""
+        who = request.state.identity
+        requested = body.mailbox if body and body.mailbox else None
+        with store.read() as c:
+            require_admin(c, who, settings.credential_admins)
+            row = pending(c) or active(c)
+            if row is None:
+                raise Problem("not_connected", "No Google Workspace key is set up yet", 409)
+            mailbox = _probe_mailbox(c, who, row, requested)
+        settled, ok, kind, message = run_check(store, row, mailbox, who.actor)
+        if not settled:
+            raise Problem("changed", "The Workspace key changed while it was checked. Check again.", 409)
+        with store.read() as c:
+            workspace, _ = _pair(c)
+        return {"ok": bool(ok), "mailbox": mailbox, "error_kind": kind or None,
+                "message": message or "Google accepts this key for this mailbox.", "workspace": workspace}
+
+    @app.delete(WORKSPACE_PATH)
+    def disconnect_workspace(request: Request):
+        """Removes the Workspace key, active and pending. Personal grants (Connect Google) are not touched."""
+        who = request.state.identity
+        with store.transaction() as c:
+            require_admin(c, who, settings.credential_admins)
+            removed = c.execute("DELETE FROM google_workspaces").rowcount
+            H.event(c, who.actor, "google.workspace.disconnect", "", {"rows": removed})
+        forget_tokens()
+        return {"ok": True}
+
+    @app.put(OAUTH_PATH)
+    def set_oauth_client(request: Request, body: OAuthClientBody):
+        """The OAuth client for Connect Google, when the server's environment has none. A replaced client marks the
+        grants made with another client as needing a new sign-in (`reconnect`); rows with no recorded client are left."""
+        who = request.state.identity
+        if settings.google_oauth_client_id and settings.google_oauth_client_secret:
+            raise Problem("env_client", "This server's environment sets the Google app, so it cannot be changed here", 409)
+        with store.transaction() as c:
+            require_admin(c, who, settings.credential_admins)
+            sealed = _cipher().seal(c, OAUTH_CONTEXT, body.client_secret)
+            now = H.now()
+            c.execute("INSERT INTO google_oauth_clients(singleton,client_id,secret_sealed,revision,updated_by,updated_at) "
+                      "VALUES(1,?,?,1,?,?) ON CONFLICT(singleton) DO UPDATE SET client_id=excluded.client_id,"
+                      "secret_sealed=excluded.secret_sealed,revision=google_oauth_clients.revision+1,"
+                      "updated_by=excluded.updated_by,updated_at=excluded.updated_at",
+                      (body.client_id, sealed, who.actor, now))
+            marked = c.execute("UPDATE google_connects SET status='failed',kind='reconnect',message=NULL,hint=NULL,"
+                               "updated_at=? WHERE status IN ('connected','failed') AND grant_hash IS NOT NULL AND "
+                               "client_id IS NOT NULL AND client_id<>?", (now, body.client_id)).rowcount
+            H.event(c, who.actor, "google.oauth_client.set", body.client_id, {"reconnect": marked})
+            return {"oauth": _oauth_view(c, settings)}
+
+    @app.delete(OAUTH_PATH)
+    def remove_oauth_client(request: Request):
+        who = request.state.identity
+        with store.transaction() as c:
+            require_admin(c, who, settings.credential_admins)
+            c.execute("DELETE FROM google_oauth_clients WHERE singleton=1")
+            H.event(c, who.actor, "google.oauth_client.remove", "", {})
+            return {"oauth": _oauth_view(c, settings)}
