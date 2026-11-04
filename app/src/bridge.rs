@@ -445,7 +445,7 @@ mod visual_bridge_tests {
     const LABEL: &str = "org-o_7f3a0001";
 
     fn org(id: &str, url: &str, name: &str, email: &str) -> Org {
-        Org { id: id.into(), url: url.into(), store: None, name: name.into(), email: email.into(), added_at: String::new(), sign_in: false }
+        Org { id: id.into(), url: url.into(), store: None, name: name.into(), email: email.into(), added_at: String::new(), sign_in: false, last_url: None }
     }
 
     /// One org, open, on its own page's label.

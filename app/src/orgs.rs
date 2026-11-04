@@ -38,6 +38,10 @@ pub struct Org {
     /// the session copied into its store carries straight through. Cleared once that page opens.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sign_in: bool,
+    /// Where its page last was in the web app (the hub's address and a route, `windows::place_of`), so its next page,
+    /// after this run too, opens there. None opens it on its usual first page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_url: Option<String>,
 }
 
 impl Org {
@@ -93,6 +97,7 @@ fn new_org(hub: &Url, store: Option<Uuid>, sign_in: bool, taken: &HashSet<String
         email: String::new(),
         added_at: now(),
         sign_in,
+        last_url: None,
     }
 }
 
@@ -306,6 +311,16 @@ impl Orgs {
         let _ = self.write_to(&self.doc);
     }
 
+    /// Keeps where the org's page last was in the web app (None: its usual first page). Written only when it changed.
+    pub fn set_last_url(&mut self, id: &str, place: Option<String>) {
+        let Some(org) = self.doc.orgs.iter_mut().find(|org| org.id == id) else { return };
+        if org.last_url == place {
+            return;
+        }
+        org.last_url = place;
+        let _ = self.write_to(&self.doc);
+    }
+
     /// Keeps the name and email an org's page reported, trimmed and capped.
     pub fn set_details(&mut self, id: &str, name: &str, email: &str) {
         let (name, email) = (clip(name), clip(email));
@@ -363,6 +378,7 @@ mod tests {
             email: format!("{id}@acme.example"),
             added_at: "2026-11-03T18:00:00Z".into(),
             sign_in: false,
+            last_url: None,
         }
     }
 
@@ -392,6 +408,32 @@ mod tests {
         };
         let text = serde_json::to_string(&doc).unwrap();
         assert_eq!(parse(&text), Some(doc));
+    }
+
+    #[test]
+    fn an_orgs_last_place_is_saved_read_back_and_goes_with_the_org() {
+        let path = folder("last-place");
+        let doc = Document {
+            version: VERSION,
+            active: Some("o_aaaaaaaa".into()),
+            orgs: vec![sample("o_aaaaaaaa", "https://acme.example.com"), sample("o_bbbbbbbb", "https://tidy.example.com")],
+        };
+        let mut orgs = Orgs::new(doc, Some(path.clone()));
+        orgs.set_last_url("o_bbbbbbbb", Some("https://tidy.example.com/#/threads/t_1".into()));
+        let saved = std::fs::read_to_string(&path).unwrap();
+        let read = parse(&saved).unwrap();
+        assert_eq!(read.orgs[1].last_url.as_deref(), Some("https://tidy.example.com/#/threads/t_1"));
+        assert_eq!(read.orgs[0].last_url, None);
+        assert_eq!(saved.matches("last_url").count(), 1, "an org with no last place writes no field");
+        // A list written before the field existed still reads, with no last place.
+        let older = r#"{"version": 1, "active": "o_aaaaaaaa", "orgs": [{"id": "o_aaaaaaaa", "url": "https://acme.example.com/"}]}"#;
+        assert_eq!(parse(older).unwrap().orgs[0].last_url, None);
+        // Removing the org drops its last place with it.
+        orgs.remove("o_bbbbbbbb");
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("tidy.example.com"));
+        orgs.set_last_url("o_bbbbbbbb", Some("https://tidy.example.com/#/x".into()));
+        assert!(orgs.get("o_bbbbbbbb").is_none(), "a removed org gets no place back");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]

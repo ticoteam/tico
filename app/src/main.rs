@@ -25,7 +25,6 @@ use std::time::Duration;
 use serde_json::Value;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, State, WindowEvent};
-#[cfg(target_os = "macos")]
 use tauri::RunEvent;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
@@ -191,6 +190,8 @@ fn main() {
                 #[cfg(target_os = "macos")]
                 WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
+                    // The open org's next page, after a quit too, opens where this one is.
+                    windows::remember_open_place(window.app_handle());
                     let _ = window.hide();
                 }
                 // A meeting window left open must not keep the app running with no main window.
@@ -205,13 +206,15 @@ fn main() {
         .build(context)
         .expect("the app could not start")
         .run(|app, event| {
+            // Quitting: the open org's next page, at the next launch, opens where this one is.
+            if let RunEvent::Exit = event {
+                windows::remember_open_place(app);
+            }
             // A click on the Dock icon while the main window is hidden.
             #[cfg(target_os = "macos")]
             if let RunEvent::Reopen { .. } = event {
                 if !main_window(app).and_then(|w| w.is_visible().ok()).unwrap_or(false) { show_window(app); }
             }
-            #[cfg(not(target_os = "macos"))]
-            let _ = (app, event);
         });
 }
 
