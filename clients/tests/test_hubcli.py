@@ -26,7 +26,7 @@ ALIASES = {"approvals", "automations", "bots", "rule", "tasks"}
 SUBCOMMANDS = ["whoami", "inbound", "connections", "mail", "company-page", "audiences", "editions", "readers", "meeting", "message", "conversation", "thread", "question", "note", "feedback", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
                "proposal", "rules", "strategy", "brand", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "call", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "origin", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
-               "credential", "slack", "support", "health-monitor", "finance", "task-manager", "stall-triage", "roadmap", "service-key"]
+               "credential", "slack", "support", "health-monitor", "finance", "task-manager", "maintenance", "roadmap", "service-key"]
 
 
 def run_hub(*args, env=None):
@@ -945,7 +945,7 @@ class _Recorder:
         self.__dict__["_tico_is_botops"] = True
 
     def get(self, path, **query):
-        return {"actor": "bot:botops", "kind": "botops", "jobs": [{"key": "stall_triage", "on": True}]}
+        return {"actor": "bot:botops", "kind": "botops", "jobs": []}
 
     def call(self, method, path, body=None, key=None, query=None, delegate=False):
         if method != "GET":
@@ -972,7 +972,7 @@ def test_botops_settings_commands_run_as_the_person_who_asked(monkeypatch):
         ["task", "types", "--name", "Legacy"],
         ["release", "schedule", "--off"], ["release", "now", "--note", "hotfix"],
         ["task-manager", "on"], ["task-manager", "schedule", "daily", "--at", "09:00"], ["task-manager", "run"],
-        ["task-manager", "bot", "off"], ["stall-triage", "--off"],
+        ["task-manager", "bot", "off"], ["maintenance", "set", "--step", "learn", "--off"],
         ["team", "budget", "--hour", "5"],
         ["trigger", "create", "Orders"], ["trigger", "update", "orders", "--name", "Shop"], ["trigger", "rotate", "orders"],
         ["trigger", "sign", "orders", "--off"], ["trigger", "recover", "orders"], ["trigger", "replay", "orders", "d1"],
@@ -1402,3 +1402,23 @@ def test_an_alias_runs_the_same_calls_as_the_command_it_names(alias, canonical, 
         remotecli.run(hubcli.parser().parse_args(words))
         made.append(client.mock_calls)
     assert made[0] == made[1] and made[0]
+
+
+def test_maintenance_status_reads_the_one_maintenance_tool(monkeypatch):
+    """`hub maintenance status` has no tool of its own: its command name is hub_maintenance_status only in the parser's
+    listing (CLI_TOOL_ALIASES), so the dispatch must name the tool that exists, hub_maintenance."""
+    from clients import remotecli
+    reads = []
+
+    class Api:
+        def __init__(self, *args, **kw):
+            self.__dict__["_tico_is_botops"] = False
+
+        def get(self, path, **query):
+            reads.append((path, query))
+            return {}
+
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    remotecli.run(hubcli.parser().parse_args(["maintenance", "status"]))
+    assert reads == [("maintenance", {})]

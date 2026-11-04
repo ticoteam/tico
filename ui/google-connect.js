@@ -513,7 +513,8 @@
     } else {
       clearTimeout(watch?.timer);
       const mailbox = (host.querySelector('[data-ws-probe]')?.value || '').trim();
-      watch = host._googleWatch = {until: Date.now() + CHECK_FOR_MS, mailbox, timer: null, ended: false};
+      watch = host._googleWatch = {until: Date.now() + CHECK_FOR_MS, mailbox, timer: null, ended: false,
+        generation: newestGeneration(host._googleState?.g || {})};
       host._googleCheck = {html: '<p class="muted">Checking…</p>'};
       paintCheck(host);
     }
@@ -538,7 +539,16 @@
       host._googleCheck = {html: causesHtml(going)};
       if (going) {
         clearTimeout(watch.timer);
-        watch.timer = setTimeout(() => { if (watchable(host) && host._googleWatch === watch) void check(host, true); }, CHECK_EVERY_MS);
+        watch.timer = setTimeout(() => {
+          watch.timer = null;
+          if (host._googleWatch !== watch) return;
+          if (watchable(host)) void check(host, true);
+          else {
+            watch.paused = true;
+            host._googleCheck = {html: causesHtml(false)};
+            paintCheck(host);
+          }
+        }, CHECK_EVERY_MS);
       }
       return paintCheck(host);
     }
@@ -753,6 +763,29 @@
       paint(host);
     }
     bind(host);
+    // Returning to a paused check keeps its original deadline, including the time spent away. A key replaced or
+    // disconnected meanwhile (another tab or admin) ends it instead: its mailbox and deadline were for the old key.
+    const watch = host._googleWatch;
+    if (watch && !watch.ended && watchable(host) && (watch.paused || watch.until <= Date.now())
+        && (replacing || newestGeneration(g) !== watch.generation)) {
+      clearTimeout(watch.timer);
+      host._googleWatch = null;
+      host._googleCheck = null;
+      paintCheck(host);
+    } else if (watch && !watch.ended && watchable(host) && (watch.paused || watch.until <= Date.now())) {
+      clearTimeout(watch.timer);
+      watch.timer = null;
+      watch.paused = false;
+      watch.ended = watch.until <= Date.now();
+      if (watch.ended) {
+        host._googleCheck = {html: causesHtml(false)};
+        paintCheck(host);
+      } else {
+        host._googleCheck = {html: '<p class="muted">Checking…</p>'};
+        paintCheck(host);
+        void check(host, true);
+      }
+    }
     const personalBusy = !!personal && !personal.error && ['ready', 'finishing', 'disconnecting', 'revoking'].includes(personal.status);
     // Polls for the whole replacement, and while a live command waits for a first key.
     const waitingForKey = !!g.can_admin && (replacing || (isLive && !active));
