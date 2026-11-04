@@ -1,8 +1,8 @@
 """Clear queued automatic wakes and waits without touching tasks or work already running.
 
-A person's message stays queued, including a keeper notice of that person's own act
-(`refs.caused_by`). A job already leased or running finishes. Cancelling the job leaves
-the task on its current step.
+A person's message stays queued, including a keeper carrier of it or a notice of that
+person's own act (`refs.caused_by`). A job already leased or running finishes. Cancelling
+the job leaves the task on its current step.
 """
 
 from . import usage_limits, wake_rules

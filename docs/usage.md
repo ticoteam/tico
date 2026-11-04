@@ -66,7 +66,7 @@ Each amount is stored as a budget node (`budget_nodes`): an amount in nanodollar
 group, or `company`; a `company` node with `per_bot` set is the default for each bot). Hand-off caps, run budgets and loop
 guards are separate safety controls and stay where they are.
 
-**Clear automatic queue** (Usage, owner and administrators) cancels queued automatic wakes and waits for the whole team or one group. Tasks stay on their current step. Messages from people stay queued, including a notice of a person's own act. A run that has already started finishes. `POST /api/v2/usage/queues/purge` with `{"scope": "company"}` or `{"scope": "group:<id>"}`.
+**Clear automatic queue** (Usage, owner and administrators) cancels queued automatic wakes and waits for the whole team or one group and its subgroups. Tasks stay on their current step. Messages from people stay queued, including keeper notices carrying their messages or reporting their own acts. A run that has already started finishes. `POST /api/v2/usage/queues/purge` with `{"scope": "company"}` or `{"scope": "group:<id>"}`.
 
 ## API
 
