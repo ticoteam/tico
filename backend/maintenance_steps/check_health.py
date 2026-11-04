@@ -16,8 +16,8 @@ Lifecycle, per finding (its local key) and per signature (what it is, never wher
     on. A task BotOps has closed is opened again the next time the problem shows. A task a person was given since is not
     BotOps's any more: nothing is written to it, and a new BotOps task opens when the problem shows;
   - BotOps is woken once per run, not once per task: a new task, a back, or a cleared one adds to the run's wake, and the
-    wake is one comment, on one of those tasks, that lists them (`_wake`). The gate `_wake_allowed` may refuse it: the tasks
-    then wait in the marker `health-wake:pending` for the next run that is allowed. Every other comment is quiet;
+    wake is one comment, on one of those tasks, that lists them (`_wake`). The gate `_wake_allowed` may refuse it, or
+    only a task at its daily cap: refused tasks wait in the marker `health-wake:pending` for the next allowed run. Every other comment is quiet;
   - a mail ask also gets an approval, raised by BotOps on its task, that turns mail sending on when a person approves it;
   - a Tico bug is not a task: it goes through the report path (backend/maintenance_health.py `report`). `run` calls it after
     its write transaction, for the signatures in `details.reports_due`, and the answers go to `details.reports`;
@@ -33,7 +33,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from .. import health, hosted_updates, invariants, mail_settings, proposals, replication
+from .. import health, hosted_updates, invariants, mail_settings, maintenance_limits, proposals, replication
 from .. import maintenance_health as MH
 from .. import run_triggers as RT
 from ..store import H
@@ -106,6 +106,9 @@ def run(c, ctx):
     that transaction, outside any write lock, for the signatures it named (`details.reports_due`); their answers go to
     `details.reports`. The engine needs to know none of this."""
     store = ctx["store"]
+    if store.settings.rehearsal or store.settings.demo:
+        return {"status": "skipped", "reason": "rehearsal or demo copy", "checked": 0, "found": 0, "woke": 0,
+                "cost_usd": 0.0, "details": {}}
     ctx = dict(ctx, settings=store.settings)     # the app's settings: the engine's ctx["settings"] is the step's own row
     checked, found, notes = gather(c, ctx)
     with store.transaction() as w:
@@ -118,9 +121,8 @@ def run(c, ctx):
 
 
 def run_once(store, auth, settings):
-    """The step on its own, for the scheduler's timer until the Maintenance run replaces it: the readers in one read
-    snapshot (no write lock while the page and the checks read), then the lifecycle in one short write transaction. The
-    Tico bug reports are filed by the caller (MH.check), as before."""
+    """An explicit diagnostic pass: the readers in one read snapshot (no write lock while the page and the checks read),
+    then the lifecycle in one short write transaction. The caller (MH.check) files the Tico bug reports."""
     ctx = context(auth, settings, store)
     with store.read_transaction() as r:
         checked, found, notes = gather(r, ctx)
@@ -130,9 +132,9 @@ def run_once(store, auth, settings):
 
 def context(auth, settings, store=None):
     """The run context: the same shape the Maintenance run gives a step (with `store`, the write transaction and the
-    report path go through it); with no store, the timer's context reads and writes through the caller."""
+    report path go through it); with no store, the caller handles reads and writes."""
     now = H.now()
-    return {"run_id": "timer", "window_start": None, "window_end": now, "settings": settings, "now": now, "cap": None,
+    return {"run_id": "diagnostic", "window_start": None, "window_end": now, "settings": settings, "now": now, "cap": None,
             "auth": auth, "store": store}
 
 
@@ -521,10 +523,16 @@ def _wake(c, wakes, details):
         if waiting:
             c.execute("DELETE FROM registry_metadata WHERE key=?", (WAKE_KEY,))
         return 0
-    if _wake_allowed(c, ids) and _comment(c, ids[0], _wake_text(c, ids), wake=True):
-        if waiting:
+    allowed = _wake_allowed(c, ids)
+    held = [task_id for task_id in ids if task_id not in allowed]
+    if allowed and _comment(c, allowed[0], _wake_text(c, allowed), wake=True):
+        maintenance_limits.record(c, BOTOPS, allowed)
+        if held:
+            _reg_set(c, WAKE_KEY, held)
+            details["wake_waiting"] = held
+        elif waiting:
             c.execute("DELETE FROM registry_metadata WHERE key=?", (WAKE_KEY,))
-        details["woke_tasks"] = ids
+        details["woke_tasks"] = allowed
         return 1
     _reg_set(c, WAKE_KEY, ids)
     details["wake_waiting"] = ids
@@ -532,10 +540,9 @@ def _wake(c, wakes, details):
 
 
 def _wake_allowed(c, ids):
-    """Whether this run may wake BotOps for these tasks. The Maintenance run's wake limiter (the per-task and fleet caps of
-    backend/maintenance_limits.py, PR1) is the gate once it is on main: allow() here, record() after the wake. Until then
-    every run may wake once, which is the coalescing `_wake` does on its own."""
-    return True
+    """The tasks this run may wake BotOps for: the bot and fleet caps gate the whole wake, each task's daily cap only
+    itself, so one capped task waits alone and never holds the rest of the group."""
+    return [task_id for task_id in ids if maintenance_limits.allow(c, BOTOPS, task_id)]
 
 
 def _wake_waiting(c):

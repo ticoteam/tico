@@ -22,7 +22,8 @@ import httpx
 import pytest
 
 from backend import (bot_settings as BS, diagnostics, health, hosted_updates, invariants, mail_settings,
-                     maintenance_health as MH, providers, replication, routines, support)
+                     maintenance as M, maintenance_health as MH, maintenance_limits as L,
+                     providers, replication, routines, support)
 from backend.enqueue import enqueue_stored
 from backend.maintenance_steps import check_health
 from backend.store import H, Problem
@@ -71,19 +72,25 @@ def item(check_id, key=None, title=None, kind=MH.SETUP, severity=MH.WARN, subjec
 
 
 def run(api, when=None, settings=None):
-    """One Check health run, as the Maintenance run calls the step. `when` (a timezone-aware datetime) stands for now."""
+    """One lifecycle pass inside a claimed Maintenance run. `when` overrides the readers' and lifecycle's time."""
     store, auth = api.app.state.store, api.app.state.auth
     ctx = check_health.context(auth, settings or store.settings, store)
     if when is not None:
         ctx["now"] = when
-    with store.read_transaction() as r:
-        checked, found, notes = check_health.gather(r, ctx)
     with store.transaction() as c:
-        return check_health.apply(c, ctx, checked, found, notes)
+        ctx["run_id"] = M._insert(c, "run_now:" + H.new_id(), "run_now", "check_health", H.now())
+    try:
+        with store.read_transaction() as r:
+            checked, found, notes = check_health.gather(r, ctx)
+        with store.transaction() as c:
+            return check_health.apply(c, ctx, checked, found, notes)
+    finally:
+        with store.transaction() as c:
+            c.execute("UPDATE maintenance_runs SET finished_at=? WHERE id=?", (H.now(), ctx["run_id"]))
 
 
 def file_due(api, result):
-    """The Tico bug reports a run asked for, filed the way the scheduler files them: outside the run's transaction."""
+    """The Tico bug reports a run asked for, filed outside the lifecycle's transaction."""
     app, store = api.app, api.app.state.store
     return MH.file_reports(store, app.state.auth, store.settings, app.state.support, result["details"]["reports_due"])
 
@@ -1223,6 +1230,62 @@ def test_the_step_reads_the_apps_settings_not_the_step_row(environment, readers,
     assert "code" not in result["details"]["notes"] and "page" not in result["details"]["notes"]
 
 
+@pytest.mark.parametrize("trigger", ["run_now", "schedule"])
+def test_maintenance_runs_health_and_files_reports_after_the_write_transaction(environment, readers, monkeypatch, trigger):
+    api, _ = built(environment)
+    store, auth = api.app.state.store, api.app.state.auth
+    reports = []
+
+    def findings(c, settings):
+        assert settings is store.settings and not store.writer.queue
+        return [item("worktree_error"), item("push_stuck", kind=MH.BUG)]
+
+    def file_reports(store_, auth_, settings, support_, due):
+        assert store_ is store and auth_ is auth and settings is store.settings
+        assert not store.writer.queue
+        reports.append(due)
+        return {MH.signature("push_stuck"): {"ticket": "synthetic"}}
+
+    monkeypatch.setattr(MH, "findings", findings)
+    monkeypatch.setattr(MH, "file_reports", file_reports)
+    if trigger == "run_now":
+        record, started = M.run_now(store, auth, "human:test", step="check_health", wait=True)
+        assert started
+    else:
+        monkeypatch.setattr(M, "_start", lambda store, auth, run_id, only, wait: M._execute(store, auth, run_id, only))
+        run_id = M.tick(store, auth, datetime.now(timezone.utc))
+        record = M.get_run(store, run_id)
+    step = next(s for s in record["steps"] if s["step"] == "check_health")
+    assert record["ok"] == 1 and step["status"] == "ran" and step["found"] == 2 and step["woke"] == 1
+    assert step["details"]["reports"][MH.signature("push_stuck")]["ticket"] == "synthetic"
+    assert reports == [[MH.signature("push_stuck")]]
+    with store.read() as c:
+        assert c.execute("SELECT cursor_at FROM maintenance_steps WHERE key='check_health'").fetchone()[0] == \
+            step["details"]["window_end"]
+    with store.transaction() as c:
+        M.save_step(c, "human:test", {"key": "check_health", "enabled": False})
+    record, _ = M.run_now(store, auth, "human:test", step="check_health", wait=True)
+    assert record["steps"][0]["status"] == "off" and len(reports) == 1
+
+
+@pytest.mark.parametrize("mode", ["rehearsal", "demo"])
+def test_the_live_health_step_skips_rehearsal_and_demo_copies(environment, readers, monkeypatch, mode):
+    api, _ = built(environment)
+    store = api.app.state.store
+    monkeypatch.setattr(store.settings, mode, True)
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("A rehearsal or demo copy must not scan or send health reports")
+
+    monkeypatch.setattr(check_health, "gather", unexpected)
+    monkeypatch.setattr(MH, "file_reports", unexpected)
+    record, _ = M.run_now(store, api.app.state.auth, "human:test", step="check_health", wait=True)
+    (step,) = record["steps"]
+    assert step["status"] == "skipped" and step["reason"] == "rehearsal or demo copy"
+    with store.read() as c:
+        assert c.execute("SELECT cursor_at FROM maintenance_steps WHERE key='check_health'").fetchone()[0] is None
+
+
 def test_with_support_off_a_tico_bug_leaves_for_no_one_and_asks_nothing(environment, readers, code_findings, hq, monkeypatch):
     api, _ = built(environment)
     store = api.app.state.store
@@ -1371,6 +1434,12 @@ def test_three_new_problems_in_one_run_wake_botops_once(environment, readers, co
     assert task_id in [t["id"] for t in botops_tasks(api)]
     assert all(f"(task {t['id']})" in text for t in botops_tasks(api))
     assert [job["task"] for job in wake_jobs(api)] == [task_id]
+    ids = {t["id"] for t in botops_tasks(api)}
+    with api.app.state.store.read() as c:
+        (wake,) = c.execute("SELECT target,detail FROM events WHERE action=?", (L.BOT_ACTION,)).fetchall()
+        assert wake["target"] == MH.BOTOPS
+        assert set(json.loads(wake["detail"])["task_ids"]) == ids
+        assert {r[0] for r in c.execute("SELECT target FROM events WHERE action=?", (L.TASK_ACTION,))} == ids
 
 
 def test_a_grouped_wake_held_by_a_rule_waits_until_a_job_is_queued(environment, readers, code_findings, monkeypatch):
@@ -1387,22 +1456,71 @@ def test_a_grouped_wake_held_by_a_rule_waits_until_a_job_is_queued(environment, 
     monkeypatch.setattr(rules, "judge", held)
     assert run(api)["woke"] == 0 and wake_jobs(api) == []
     assert len(wake_marker(api)) == 3
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE action IN (?,?)", (L.BOT_ACTION, L.TASK_ACTION)).fetchone()[0] == 0
     monkeypatch.setattr(rules, "judge", real)
     assert run(api)["woke"] == 1 and len(wake_jobs(api)) == 1
     assert wake_marker(api) is None
 
 
+def test_a_capped_task_waits_alone_and_the_rest_of_the_group_wakes(environment, readers, code_findings,
+                                                                    monkeypatch, clock):
+    api, _ = built(environment)
+    three_new_problems(code_findings)
+    gate = check_health._wake_allowed
+    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: [])
+    run(api)
+    ids = wake_marker(api)
+    monkeypatch.setattr(check_health, "_wake_allowed", gate)
+    with api.app.state.store.transaction() as c:
+        for n in range(L.WAKES_PER_TASK_DAY):
+            L.record(c, f"other_{n}", [ids[-1]])          # the last task in the group is at its daily cap
+    assert run(api)["woke"] == 1 and wake_marker(api) == [ids[-1]] and len(wake_jobs(api)) == 1
+    clock.at += timedelta(hours=25)
+    assert run(api)["woke"] == 1 and wake_marker(api) is None
+    assert len(wake_jobs(api)) == 2
+
+
+def test_the_fleet_cap_keeps_health_tasks_pending_until_the_hour_reopens(environment, readers, code_findings, clock):
+    api, _ = built(environment)
+    three_new_problems(code_findings)
+    with api.app.state.store.transaction() as c:
+        for n in range(L.WAKES_PER_HOUR):
+            L.record(c, f"fleet_{n}")
+    assert run(api)["woke"] == 0 and len(wake_marker(api)) == 3 and wake_jobs(api) == []
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE action=?", (L.BOT_ACTION,)).fetchone()[0] == L.WAKES_PER_HOUR
+        assert c.execute("SELECT count(*) FROM events WHERE action=?", (L.TASK_ACTION,)).fetchone()[0] == 0
+    clock.at += timedelta(hours=1, seconds=1)
+    assert run(api)["woke"] == 1 and wake_marker(api) is None
+
+
+def test_another_maintenance_wake_for_botops_in_the_same_run_holds_health(environment, readers, code_findings):
+    api, _ = built(environment)
+    store, auth = api.app.state.store, api.app.state.auth
+    three_new_problems(code_findings)
+    with store.transaction() as c:
+        run_id = M._insert(c, "run_now:" + H.new_id(), "run_now", None, H.now())
+        L.record(c, MH.BOTOPS)
+    with store.read() as c:
+        result = check_health.run(c, {"store": store, "auth": auth, "now": H.now(), "run_id": run_id})
+    assert result["woke"] == 0 and len(wake_marker(api)) == 3 and wake_jobs(api) == []
+    with store.transaction() as c:
+        c.execute("UPDATE maintenance_runs SET finished_at=? WHERE id=?", (H.now(), run_id))
+    assert run(api)["woke"] == 1 and wake_marker(api) is None
+
+
 def test_a_grouped_wake_on_a_shared_task_hides_a_private_tasks_title_and_id(environment, readers, code_findings, monkeypatch):
     api, _ = built(environment)
     code_findings[:] = [item("push_stuck", key="push_stuck:A"), item("worktree_error", key="worktree_error:A")]
-    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: False)
+    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: [])
     run(api)
     shared, private = wake_marker(api)
     secret = "Confidential merger terms"
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=0 WHERE id=?", (shared,))
         c.execute("UPDATE tasks SET private=1,title=? WHERE id=?", (secret, private))
-    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: True)
+    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: ids)
     assert run(api)["woke"] == 1
     (text,) = said(api, shared, "Health wake: ")
     assert f"(task {shared})" in text and "a private health task" in text
@@ -1413,11 +1531,11 @@ def test_a_wake_the_gate_refuses_waits_in_the_marker_and_the_next_allowed_run_wa
                                                                                          comments, monkeypatch):
     api, _ = built(environment)
     three_new_problems(code_findings)
-    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: False)
+    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: [])
     refused = run(api)
     assert refused["woke"] == 0 and [row for row in comments if row[1]] == []
     assert len(wake_marker(api)) == 3
-    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: True)
+    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: ids)
     allowed = run(api)
     assert allowed["woke"] == 1 and len([row for row in comments if row[1]]) == 1
     assert wake_marker(api) is None

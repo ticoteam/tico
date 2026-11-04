@@ -197,9 +197,6 @@ JOBS = [
     Job("kpi_asks", "KPI stale asks",
         "Asks a KPI's keeper for a reading when it goes out of date, and a goal's owner when a KPI goes off track.",
         CHECKS, "Hourly", 3600, control=True, then=("ask_kpi_keeper", "ask_goal_owner")),
-    Job("health_scan", "Check health",
-        "Checks Tico's health with no bot: each problem it finds is one BotOps task, and a Tico bug goes to the Tico team.",
-        CHECKS, "Hourly", 3600, control=True, then=("check_health",)),
     Job("task_manager_report", "Task Manager report",
         "Lists each department's quiet tasks, overdue asks, review tickets without a pull request, merged work that did "
         "not move and held bots in plain code, and opens one task for the Task Manager per department that has something.",
@@ -350,7 +347,6 @@ class Control:
 CONTROLS = {
     "stale_review": Control(rule="stale_review", presets=AI_PRESETS, preset=HOURLY, at="09:00"),
     "kpi_asks": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
-    "health_scan": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     # One run a night reads the day before (backend/learnings.py claims one per night): the choice is its time.
     "learnings": Control(presets=(DAILY,), preset=DAILY, at="03:00"),
     "memory_tidy": Control(on=False, presets=(DAILY,), preset=DAILY, at="03:30"),
@@ -363,7 +359,7 @@ CONTROLS = {
 
 
 # Last runs read by backend/scheduler.py (QUICK and FIXED).
-QUICK_KEYS = ("kpi_asks", "health_scan", "ask_deadlines", "task_manager_report",
+QUICK_KEYS = ("kpi_asks", "ask_deadlines", "task_manager_report",
               "bookkeeper_check", "bookkeeper_watch",
               "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention")
 
@@ -874,8 +870,8 @@ def install(app, store, auth, mutate):
 
     @app.put("/api/v2/system-routines/{key}")
     def system_routine_save(key: str, request: Request, body: M.SystemRoutineUpdate):
-        """Switch a job on or off, or pick its schedule preset and daily time. An owner or an admin; Health scan only the
-        owner. Stale ticket review's and Topic changed's switch is their team rule (backend/team_rules.py)."""
+        """Switch a job on or off, or pick its schedule preset and daily time. An owner or an admin.
+        Stale ticket review's and Topic changed's switch is their team rule (backend/team_rules.py)."""
         who = request.state.identity
         may_change(auth, who, key)
         if body.pilots is not None and key != "memory_tidy":

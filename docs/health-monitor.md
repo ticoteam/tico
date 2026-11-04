@@ -1,7 +1,8 @@
 # Check health
 
 Check health keeps an install healthy without anyone having to look. It is a maintenance step: plain code, with no
-model and no bot. It runs hourly in company time. The step is not registered until PR1 (the Maintenance foundation) lands.
+model and no bot. It runs on each [Maintenance](maintenance.md) run, hourly by default in company time. Its switch and
+Run now are part of Maintenance; the separate Health scan system routine is removed.
 
 Settings > Health lists what it found.
 
@@ -59,6 +60,8 @@ that run turns are left out.
   second task.
 - When the problem clears, the task gets a "cleared" comment, and BotOps closes it.
 - A finding with no BotOps bot is logged on the step result. No person gets a task from a health check.
+- BotOps gets one grouped wake for changed health tasks, subject to Maintenance's shared wake limits. A refused wake
+  waits for the next allowed run.
 - A fix only a person can make (approving a mail-sending ask, restarting their own computer) reaches them only as a
   Needs you card that BotOps raises on its task. Check health never writes to a person.
 - A mail ask (the mail alerts setting, `mail_settings.alerts`) becomes a BotOps task. BotOps asks the owner through an

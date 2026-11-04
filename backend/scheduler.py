@@ -54,15 +54,6 @@ def run_kpi_asks(store, auth, at, failures=None):
                              "closed": (found or {}).get("closed") or []}, none="Nothing to ask"))
 
 
-def run_health_scan(store, auth, at, failures=None):
-    # Check health (backend/maintenance_steps/check_health.py): plain code, no bot. Its timer stays until the Maintenance
-    # run replaces it. Each problem is one BotOps task; a Tico bug goes to the Tico team through the report path.
-    with SR.recording(store, "health_scan", failures, "health_monitor") as run:
-        from . import maintenance_health
-        result = maintenance_health.check(store, auth, store.settings)
-        run.did(SR.words_of(result.get("woke", 0), "BotOps task", "No new BotOps tasks"))
-
-
 def run_ask_deadlines(store, auth, at, failures=None):
     # A bot's ask past its deadline goes ahead on its default, or expires (backend/ask_deadlines.py).
     with SR.recording(store, "ask_deadlines", failures) as run:
@@ -168,7 +159,7 @@ def run_thread_retention(store, auth, at, failures=None):
         run.did(SR.words_of(purged, "message", "Nothing past its time"), quiet=not purged)
 
 
-QUICK = {"kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
+QUICK = {"kpi_asks": run_kpi_asks,
          "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report,
          "bookkeeper_check": run_bookkeeper_check}
 
@@ -588,8 +579,7 @@ class Scheduler:
                     strategy_bot.reconcile(c)
             except Exception as exc:
                 failures.append({"strategy_bot": type(exc).__name__})
-        # The controlled jobs, each on its saved preset (Settings > Routines): KPI stale asks, the Health Monitor's scan
-        # (hourly by default) and ask go-ahead.
+        # The controlled jobs, each on its saved preset (Settings > Routines): KPI stale asks, ask go-ahead and reports.
         for key, run in QUICK.items():
             if cfgs and self.due(key, at, cfgs, last):
                 run(self.store, self.execution.auth, at, failures)

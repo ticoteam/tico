@@ -902,13 +902,13 @@ def _send_approved(store, support):
 
 
 def check(store, auth, settings, support=None):
-    """The scheduler's hourly pass until the Maintenance run replaces its timer: the check_health step's lifecycle in one
-    write transaction, then the Tico bug reports filed outside it. A rehearsal or demo copy checks nothing."""
+    """An explicit diagnostic pass through Check health, with reports filed outside its write transaction.
+    Scheduled checks run only through Maintenance. A rehearsal or demo copy checks nothing."""
     from .maintenance_steps import check_health
     if settings.rehearsal or settings.demo:
         return {"status": "skipped", "reason": "rehearsal or demo copy"}
     result = check_health.run_once(store, auth, settings)
-    support = support or getattr(store, "report_support", None)     # the scheduler's timer has no app: support.py sets it
+    support = support or getattr(store, "report_support", None)     # support.py sets it on the app's store
     file_reports(store, auth, settings, support, result["details"].get("reports_due", []))
     return result
 
