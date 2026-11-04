@@ -6,7 +6,6 @@ import sys
 import tempfile
 import threading
 import time
-import types
 import zipfile
 
 import pytest
@@ -105,7 +104,7 @@ def test_a_memory_error_in_the_worker_is_reported_as_memory(monkeypatch, tmp_pat
         raise MemoryError()
 
     monkeypatch.setattr(docs_import_worker, "_limit_memory", lambda limit: None)
-    monkeypatch.setitem(sys.modules, "docs_import", types.SimpleNamespace(to_markdown=out_of_memory))
+    monkeypatch.setattr(docs_import, "to_markdown", out_of_memory)
     (tmp_path / "request.json").write_text('{"filename": "a.md", "max_chars": 10, "memory_bytes": 1}')
     (tmp_path / "input").write_bytes(b"x")
     assert docs_import_worker.convert(tmp_path) == {"status": "memory"}

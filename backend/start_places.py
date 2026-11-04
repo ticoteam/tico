@@ -116,7 +116,7 @@ def memory_held(c, runner_id, now=None):
     90% also marks the computer overloaded, and computer_hold then names only the generic "computer busy": a caller that
     gates on memory asks here. Computers that are off, revoked, silent or never sampled are not memory-held."""
     from .performance import load_status
-    found = c.execute("SELECT memory_hold,performance,revoked_at FROM runners WHERE id=?", (runner_id,)).fetchone()
+    found = c.execute("SELECT memory_hold,performance,revoked_at FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
     if not found or found['revoked_at'] is not None or found['performance'] != 'on':
         return False
     latest = load_status(c, runner_id, now)['latest_sample']
