@@ -155,7 +155,7 @@
               - {id: engineering, name: Engineering, parent: null, humans: [], bots: [head-of-engineering, botops]}
               - {id: growth, name: Marketing, parent: null, humans: [dana], bots: [growth, copywriter, pricing]}
     - match: '^group update growth\b'
-      out: {group: {id: growth, name: Marketing, parent: null, bots: [growth, copywriter, pricing]}}
+      out: {group: {id: growth, name: Marketing, parent: null, humans: [dana], bots: [growth, copywriter, pricing]}}
   must:
     - '^group update growth\b.*--name\s+Marketing\b'
   must_not:
