@@ -708,10 +708,11 @@ def run_attempts(c, task_id):
 def delivery_attempts(c, delivery):
     if delivery["task_id"]:
         return run_attempts(c, delivery["task_id"])
+    # The receipt keeps its original message after an Update redo or queue cleanup.
     return [r[0] for r in c.execute(
-        "SELECT a.id FROM update_queue q JOIN jobs j ON j.message_id=q.message_id "
-        "JOIN attempts a ON a.job_id=j.id OR a.id=j.attempt_id WHERE q.id=? AND a.bot_id=?",
-        (delivery["update_batch_id"], delivery["recipient"]))]
+        "SELECT a.id FROM jobs j "
+        "JOIN attempts a ON a.job_id=j.id OR a.id=j.attempt_id WHERE j.message_id=? AND a.bot_id=?",
+        (delivery["message_id"], delivery["recipient"]))]
 
 
 def sources_of(diff):

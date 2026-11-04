@@ -11,7 +11,7 @@ from backend import judge, learnings, slack_gateway, updates
 from backend.maintenance_steps import learn as step
 from backend.maintenance_steps import update as update_step
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401
 from backend.tests.test_bot_contact import bot
 from backend.tests.test_mail_api import put_mail
 
@@ -270,7 +270,8 @@ def test_real_public_task_comment_passes_provenance_but_private_comment_does_not
     with api.app.state.store.transaction() as c:
         items = []
         for private in (False, True):
-            task = H.task_create(c, "human:ana", "Invoice rules", "Friday is the cutoff.", "bot:ops", lint=False, private=private)
+            title = "Private invoice rules" if private else "Public invoice rules"
+            task = H.task_create(c, "human:ana", title, "Friday is the cutoff.", "bot:ops", lint=False, private=private)
             comment = H.task_comment(c, "human:ana", task["id"], "Keep the Friday cutoff.", wake=False)
             assert H.message(c, comment["id"])["restricted"] == 1
             items.append({"key": "private" if private else "public", "source": "task",
@@ -341,7 +342,7 @@ def test_final_feedback_after_a_post_is_collected_by_the_next_queue_tick(api, mo
 
 
 @pytest.mark.parametrize("resend", [False, True])
-def test_redo_keeps_the_original_delivery_turn_for_feedback(api, monkeypatch, resend):
+def test_redo_keeps_the_original_delivery_turn_for_feedback_and_history(api, monkeypatch, resend):
     scoring(api, monkeypatch, count=2)
     run_step(api)
     store = api.app.state.store
@@ -363,6 +364,10 @@ def test_redo_keeps_the_original_delivery_turn_for_feedback(api, monkeypatch, re
         assert c.execute("SELECT learnings_saved FROM learning_deliveries").fetchone()[0] == 1
         run_id = c.execute("SELECT run_id FROM learning_deliveries").fetchone()[0]
         assert learnings.delivery_details(c, run_id)["saved"] == 1
+        delivery = c.execute("SELECT * FROM learning_deliveries").fetchone()
+        assert learnings.delivery_attempts(c, delivery) == [turn[1]["id"]]
+        c.execute("DELETE FROM update_queue WHERE id=?", (row["id"],))
+        assert learnings.delivery_attempts(c, delivery) == [turn[1]["id"]]
 
 
 def test_missing_or_out_of_range_feedback_is_unreported(api, monkeypatch):
@@ -438,14 +443,14 @@ def test_learnings_page_reads_pending_update_and_old_packet_receipts(api, monkey
         c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES('old','2026-09-01','done',?)", (H.now(),))
         c.execute("INSERT INTO learning_deliveries(run_id,recipient,task_id,item_keys,created_at) "
                   "VALUES('old','ops',?,'[]',?)", (task["id"], H.now()))
-    page = api.get(f"/api/v2/learnings/{ctx['run_id']}")
+    page = api.get(f"/api/v2/learnings/{ctx['run_id']}", headers=headers())
     assert page.status_code == 200 and page.json()["sections"]["bots"][0]["delivery_status"]
-    assert api.get("/api/v2/learnings/old/packets/ops").status_code == 200
+    assert api.get("/api/v2/learnings/old/packets/ops", headers=headers()).status_code == 200
     with store.transaction() as c:
         row = queue(c)
         updates.send_request(c, row, delivery=True)
         learnings.record_saved(c, "ops", row["id"], 1)
-    packet = api.get(f"/api/v2/learnings/{ctx['run_id']}/packets/ops")
+    packet = api.get(f"/api/v2/learnings/{ctx['run_id']}/packets/ops", headers=headers())
     assert packet.status_code == 200 and len(packet.json()["items"]) == 2
 
 
@@ -461,8 +466,12 @@ def test_same_day_runs_are_not_lost_between_pages_and_stats_cover_seven_days(api
         stats = learnings.beta_stats(c)
         assert stats["days"] == 7 and stats["runs"] == 2 and stats["items_read"] == 4
         assert stats["cost_usd"] == pytest.approx(0.008)
-    first = api.get("/api/v2/learnings", params={"limit": 1}).json()
-    second = api.get("/api/v2/learnings", params={"limit": 1, "before": first["next_before"]}).json()
+    first = api.get("/api/v2/learnings", params={"limit": 1}, headers=headers())
+    assert first.status_code == 200, first.text
+    first = first.json()
+    second = api.get("/api/v2/learnings", params={"limit": 1, "before": first["next_before"]}, headers=headers())
+    assert second.status_code == 200, second.text
+    second = second.json()
     assert first["nights"][0]["night"] == second["nights"][0]["night"]
     assert first["nights"][0]["id"] != second["nights"][0]["id"]
 
