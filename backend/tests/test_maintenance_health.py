@@ -73,7 +73,7 @@ def item(check_id, key=None, title=None, kind=MH.SETUP, severity=MH.WARN, subjec
 def run(api, when=None, settings=None):
     """One Check health run, as the Maintenance run calls the step. `when` (a timezone-aware datetime) stands for now."""
     store, auth = api.app.state.store, api.app.state.auth
-    ctx = check_health.context(auth, settings or store.settings)
+    ctx = check_health.context(auth, settings or store.settings, store)
     if when is not None:
         ctx["now"] = when
     with store.read_transaction() as r:
@@ -1322,9 +1322,10 @@ def test_a_task_given_to_a_person_gets_no_comment_and_a_new_botops_task_opens(en
         person = api.app.state.auth.owner_identity(c).actor
     with store.transaction() as c:
         c.execute("UPDATE tasks SET owner_id=? WHERE id=?", (person, first["id"]))
+    before = len(comments)                                      # the creation's wake is on the task already: count from here
     code_findings[:] = []
     cleared = run(api)
-    assert cleared["woke"] == 0 and [row for row in comments if row[0] == first["id"]] == []
+    assert cleared["woke"] == 0 and [row for row in comments[before:] if row[0] == first["id"]] == []
     code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
     back = run(api)
     assert back["woke"] == 1 and said(api, first["id"], "Back:") == []
