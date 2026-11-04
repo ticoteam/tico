@@ -45,8 +45,19 @@ def items(c, auth, who, skip=(), with_capped=True):
     me = viewer.actor
     known = viewer.known(c)
     seen, out = set(skip), []
-    for row in _addressed(c, me):
-        if row["id"] in seen or not threads.readable(c, viewer, row["id"]):
+    addressed = _addressed(c, me)
+    # Each message, its thread and the viewer's standing there are read together (a query a chunk), not once an item:
+    # a person named in a thousand open threads took ~2,300 statements here, on every Home and Needs you read.
+    from . import task_privacy
+    task_privacy.prime_messages(c, H.prime_messages(c, [row["id"] for row in addressed]).values())
+    found, _ = threads.read_threads(c, viewer, [row["conversation_id"] for row in addressed])
+    for thread in found.values():
+        threads.thread_readable(c, viewer, thread)
+    for row in addressed:
+        if row["id"] in seen:
+            continue
+        message = H.message(c, row["id"])
+        if not message or not threads.message_readable(c, viewer, message):
             continue
         seen.add(row["id"])
         kind = "thread_ask" if row["kind"] == "ask" else "thread_mention"

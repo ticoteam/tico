@@ -357,7 +357,8 @@ class Support:
         if browser:
             from pathlib import Path
             ui = Path(__file__).resolve().parent.parent / "ui"
-            files = {p.name for p in ui.glob("*.js")} | {p.name for p in (ui / "app").glob("*.js")} | {"app.bundle.js"}
+            files = {p.name for p in ui.glob("*.js")} | {p.name for p in (ui / "app").glob("*.js")} | {"app.bundle.js"} \
+                | {f"app.bundle.{n}.js" for n in range(2, 100)}
             bundle["browser"] = [{**event.model_dump(), "file": event.file if event.file in files else ""} for event in browser]
             bundle = diagnostics.fit(bundle)
         text = diagnostics.canonical(bundle)
