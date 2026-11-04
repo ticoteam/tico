@@ -17,7 +17,7 @@ from . import browser_exit, claim_holds, claim_loads, cloud_access, cloud_machin
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
-from .run_diagnostics import RESTART_TEXT, clean_stop_reported
+from .run_diagnostics import HANDED_BACK, RESTART_TEXT, clean_stop_reported
 from .statuses import PARKED_SQL
 from .verdict_moves import HANDOFF_FIRST_SQL
 from .store import H, P, Problem, bot_readiness, digest, encode, message_page, readiness_document
@@ -629,9 +629,6 @@ def last_stop(c, bot, status):
                 "text": "Last run stopped" + (f": {focus}." if focus else ".")
                 + " Ask a person who manages this bot to check its Computer before sending a new message."}
     return None
-
-
-HANDED_BACK = "Its computer handed the run back before starting it"
 
 
 def queued_task_sql():
