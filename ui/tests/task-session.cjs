@@ -279,7 +279,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       const pref = p.match(/^\/api\/v2\/preferences\/([^/]+)$/);
-      if (pref && req.method() === 'POST') { const v = JSON.parse(req.postData() || '{}').value; prefs[pref[1]] = v; prefPosts.push([pref[1], v]); return json({key: pref[1], value: v}); }
+      if (pref && req.method() === 'POST') { const v = JSON.parse(req.postData() || '{}').value; if (v === 'defer:4h') await new Promise(r => setTimeout(r, 400)); prefs[pref[1]] = v; prefPosts.push([pref[1], v]); return json({key: pref[1], value: v}); }
       if (pref) return json({key: pref[1], value: prefs[pref[1]] ?? null});
       if (p === '/api/v2/tasks') return json({tasks: [plan]});
       if (p === '/api/v2/tasks/t-plan/comments' && req.method() === 'POST') {
