@@ -218,14 +218,16 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     assert.equal(await page.evaluate(() => document.activeElement?.id), 'support-open');
     // A reply while the person is typing in another field: the ? gets its dot and the chat waits. It opens by itself once
     // the field is left (the unsent words are still in its box), and opening reads the reply. No notice, no toast.
-    await page.evaluate(() => { const i = Object.assign(document.createElement('input'), {id: 't-elsewhere'}); document.body.append(i); i.focus(); });
+    const focused = await page.evaluate(() => { const i = Object.assign(document.createElement('input'), {id: 't-elsewhere'}); document.body.append(i); i.focus(); return document.activeElement?.id; });
+    assert.equal(focused, 't-elsewhere', 'the field being typed in has focus');
     v.hq.reply = true;
     await page.evaluate(() => window.supportPoll());
     await page.locator('#support-open.has-unread').waitFor();
-    assert.equal(await page.evaluate(() => window.supportState().unread), 1, 'the ? counts the one reply');
-    assert.equal(await q.getAttribute('aria-label'), 'Tico team, 1 new');
+    const waiting = await page.evaluate(() => ({unread: window.supportState().unread, active: document.activeElement?.id,
+      open: document.getElementById('support-pop').open, label: document.getElementById('support-open').getAttribute('aria-label')}));
+    assert.deepEqual(waiting, {unread: 1, active: 't-elsewhere', open: false, label: 'Tico team, 1 new'},
+      `the reply waits while the field has focus; calls: ${v.calls.slice(-6).join(' | ')}`);
     assert.equal(await page.locator('#ask-row').evaluate(el => getComputedStyle(el, '::after').content), 'none', 'no count on Ask');
-    assert.equal(await page.locator('#support-pop').evaluate(el => el.open), false, 'not over the field being typed in');
     await page.evaluate(() => document.getElementById('t-elsewhere').blur());
     await pop.locator('.support-msg.them').waitFor();
     assert.equal(await box.inputValue(), 'half a thought', 'unsent words survive');
