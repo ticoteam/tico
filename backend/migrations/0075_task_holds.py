@@ -26,8 +26,14 @@ The steps, each one safe to run again:
 Run-record repair: migration 0072 moved a turn saved with no trigger onto its attempts row with a NULL trigger. A run
 record is told from a bare lease by its trigger (`job_id IS NULL OR trigger IS NOT NULL`, hubdb TURN_SELECT), so such a
 run that had a lease dropped out of the run list. turn_start always writes a trigger (its default, "message"), so a row
-that has a record (settled, an exit, a summary, an outcome or usage) and no trigger gets that default. A bare lease that
-failed before its record has none of those fields and stays NULL. 0072 itself is not edited: it has shipped.
+that 0072 moved, with a record (settled, an exit, a summary, an outcome or usage) and no trigger, gets that default.
+
+Only the rows 0072 moved are repaired: those settled before 0072's schema_migrations row was applied. A bare lease that
+expired after 0072 is closed by turn_finish with a record of zero usage (execution.expire), so it has every record field
+and no trigger, but it was settled later, and it stays NULL. A bare lease that failed before its record has none of the
+record fields and stays NULL too. A file with no 0072 row (one that never ran 0072 as a numbered migration) has no rows
+0072 moved, so nothing is repaired. settled_at and schema_migrations.applied_at are both written by hubdb.now() (ISO UTC,
+microseconds, a Z), so the bound compares as text. 0072 itself is not edited: it has shipped.
 """
 
 TABLE = """CREATE TABLE IF NOT EXISTS task_holds(
@@ -50,6 +56,8 @@ OLD_TRIGGERS = ("status_values_tasks_blocked_from_status_ins", "status_values_ta
 # (backend/migrations/0072_turns_into_attempts.py).
 RUN_TRIGGER = "message"
 RECORD_FIELDS = ("settled_at", "exit", "summary", "outcome", "input_tokens")
+# The version schema_migrations records 0072 under (the file's stem), and the time that row says it was applied.
+TURNS_MOVED = "0072_turns_into_attempts"
 
 
 def _columns(conn, table):
@@ -58,10 +66,16 @@ def _columns(conn, table):
 
 
 def _repair_run_records(conn):
-    if not {"trigger", *RECORD_FIELDS} <= _columns(conn, "attempts"):
+    """The rows 0072 moved with no trigger get the default: those settled before its schema_migrations row was applied.
+    With no such row there is nothing 0072 moved, and nothing is repaired."""
+    if not {"trigger", *RECORD_FIELDS} <= _columns(conn, "attempts") or not _columns(conn, "schema_migrations"):
+        return
+    moved = conn.execute("SELECT applied_at FROM schema_migrations WHERE version=?", (TURNS_MOVED,)).fetchone()
+    if not moved:
         return
     has_record = " OR ".join(f"{name} IS NOT NULL" for name in RECORD_FIELDS)
-    conn.execute(f"UPDATE attempts SET trigger=? WHERE trigger IS NULL AND ({has_record})", (RUN_TRIGGER,))
+    conn.execute(f"UPDATE attempts SET trigger=? WHERE trigger IS NULL AND settled_at < ? AND ({has_record})",
+                 (RUN_TRIGGER, moved[0]))
 
 
 def _copy(conn, have):

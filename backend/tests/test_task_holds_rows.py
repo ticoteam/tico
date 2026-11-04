@@ -137,20 +137,45 @@ def test_a_task_trashed_with_hold_columns_comes_back_with_its_holds(conn):
     assert "snoozed_until" in task_delete.HANDLED["tasks"]     # not refused as a value with no column
 
 
-def test_a_run_record_with_no_trigger_gets_the_default_and_a_bare_lease_stays_bare(conn):
-    # Migration 0072 left a run record whose turn had no trigger with a NULL trigger: 0075 gives it turn_start's
-    # default. A bare lease that never recorded anything has none, and stays NULL.
-    conn.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, job_id TEXT, bot_id TEXT, trigger TEXT, settled_at TEXT, "
-                 "exit TEXT, summary TEXT, outcome TEXT, input_tokens INTEGER)")
+ATTEMPTS = ("CREATE TABLE attempts(id TEXT PRIMARY KEY, job_id TEXT, bot_id TEXT, trigger TEXT, settled_at TEXT, "
+            "exit TEXT, summary TEXT, outcome TEXT, input_tokens INTEGER)")
+APPLIED = "2026-10-10T00:00:00.000000Z"    # 0072's applied_at, in the format hubdb.now() writes
+
+
+def applied_0072(conn, at=APPLIED):
+    conn.execute("CREATE TABLE schema_migrations(version TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TEXT NOT NULL)")
+    if at:
+        conn.execute("INSERT INTO schema_migrations VALUES('0072_turns_into_attempts','x',?)", (at,))
+
+
+def test_a_run_record_0072_moved_gets_the_default_and_a_bare_lease_settled_after_it_stays_bare(conn):
+    # 0072 moved the first turn with no trigger, and it finished before 0072 was applied: it gets turn_start's default.
+    # The expired lease was closed after 0072 by turn_finish (zero usage, a record) and has no trigger of its own. The
+    # bare lease never recorded anything. The usage row has no settle time. All three stay NULL.
+    applied_0072(conn)
+    conn.execute(ATTEMPTS)
     conn.executemany("INSERT INTO attempts VALUES(?,?,?,?,?,?,?,?,?)", [
-        ("record", None, "ops", None, "2026-10-02T00:00:00Z", "ok", None, None, None),
-        ("usage", None, "ops", None, None, None, None, None, 120),
+        ("moved", None, "ops", None, "2026-10-02T00:00:00.000000Z", "ok", None, None, None),
+        ("expired", "job-2", "ops", None, "2026-10-20T00:00:00.000000Z", "interrupted", None, None, 0),
         ("bare", "job-1", "ops", None, None, None, None, None, None),
-        ("kept", None, "ops", "task", "2026-10-02T00:00:00Z", "ok", None, None, None),
+        ("usage", None, "ops", None, None, None, None, None, 120),
+        ("kept", None, "ops", "task", "2026-10-02T00:00:00.000000Z", "ok", None, None, None),
     ])
     up(conn)
     assert dict(conn.execute("SELECT id, trigger FROM attempts").fetchall()) == {
-        "record": "message", "usage": "message", "bare": None, "kept": "task"}
+        "moved": "message", "expired": None, "bare": None, "usage": None, "kept": "task"}
+
+
+def test_with_no_0072_row_no_run_record_is_repaired(conn):
+    # A file that never ran 0072 as a numbered migration has no rows 0072 moved: nothing is repaired, with no
+    # schema_migrations table at all and with one that lacks the row.
+    conn.execute(ATTEMPTS)
+    conn.execute("INSERT INTO attempts VALUES('moved',NULL,'ops',NULL,'2026-10-02T00:00:00.000000Z','ok',NULL,NULL,NULL)")
+    up(conn)
+    assert conn.execute("SELECT trigger FROM attempts").fetchall() == [(None,)]
+    applied_0072(conn, at=None)
+    up(conn)
+    assert conn.execute("SELECT trigger FROM attempts").fetchall() == [(None,)]
 
 
 def test_a_copy_that_moves_fewer_holds_than_the_columns_hold_stops_the_migration(conn, monkeypatch):
