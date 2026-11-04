@@ -7,6 +7,8 @@
 const CALL_LIB = '/vendor/livekit-client.umd.min.js';
 // Tokens last five minutes; a fresh one a minute early keeps a slow answer from dropping the call.
 const CALL_REFRESH_MS = 4 * 60 * 1000;
+// A stalled leave must give up so a later Join can take its turn.
+const CALL_LEAVE_TIMEOUT_MS = 5000;
 // Per thread: {call} (the live call, or null), {off} when the server has calls switched off, {removed} after a removal,
 // {none} when the server has no calls at all.
 const CALL_THREADS = new Map();
@@ -36,7 +38,8 @@ function callSeatSettled(id) {
   if (CALL_JOINING.has(id)) CALL_SETTLED.add(id);
 }
 function callPostLeave(id, opts) {
-  const leave = post(callPath(id) + '/leave', {}, undefined, opts).catch(() => {});
+  const leave = post(callPath(id) + '/leave', {}, undefined,
+    {...opts, timeout: window.__callLeaveTimeoutMs ?? CALL_LEAVE_TIMEOUT_MS}).catch(() => {});
   const pending = Promise.all([CALL_LEAVING.get(id), leave]).then(() => {
     if (CALL_LEAVING.get(id) === pending) CALL_LEAVING.delete(id);
   });

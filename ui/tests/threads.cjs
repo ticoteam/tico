@@ -647,6 +647,28 @@ let browser = null;
     await page.locator('#call-bar [data-cb="leave"]').click();
     await page.waitForFunction(() => !document.querySelector('#call-bar'));
 
+    // The hidden page's leave never answers: returning and clicking Join waits only for its deadline, then joins.
+    callLive = {id: 'c12', state: 'live', connector: 'human:ana'};
+    await page.evaluate(() => { window.__rooms.length = 0; window.__callLeaveTimeoutMs = 250;
+      threadViewsLive('threads', {kind: 'call.started', thread_id: 't-plan'}); });
+    await page.locator('.thv-call[data-call="join"]').first().click();
+    await page.waitForFunction(() => CALL?.id === 'c12' && window.__rooms.some(r => r.mic));
+    leaveGate = [];       // Never released, including after the timeout.
+    const stalledLeave = page.waitForRequest(r => r.url().endsWith('/calls/c12/leave'));
+    assert.deepEqual(await page.evaluate(() => [window.ticoPageHidden(), CALL_LEAVING.has('c12')]), [{inCall: true}, true]);
+    await stalledLeave;
+    const rejoined = page.waitForRequest(r => r.url().endsWith('/calls/c12/join'), {timeout: 1500});
+    await page.locator('.thv-call[data-call="join"]').first().click();
+    await rejoined;
+    await page.waitForFunction(() => CALL?.id === 'c12' && CALL_JOINS === 0 && window.__rooms.some(r => r.mic && !r.gone), null, {timeout: 1500});
+    assert.equal(seen.calls.filter(c => c === 'join:c12').length, 2, 'Join proceeds after the stalled leave times out');
+    assert.deepEqual(await page.evaluate(() => [CALL_LEAVING.has('c12'), CALL_JOINING.has('c12'), window.__rooms.filter(r => r.mic && !r.gone).length]),
+      [false, false, 1], 'the timed-out leave and rejoin settle their tracking and leave one live call');
+    leaveGate = callLive = null;
+    await page.evaluate(() => { delete window.__callLeaveTimeoutMs; });
+    await page.locator('#call-bar [data-cb="leave"]').click();
+    await page.waitForFunction(() => !document.querySelector('#call-bar'));
+
     // An older sub-thread opened by its link keeps the way back, and reads flat too.
     await page.goto('https://tico-ui.test/#/thread/t-sub');
     await page.locator('.thv-crumbs a', {hasText: 'Launch plan'}).waitFor();
