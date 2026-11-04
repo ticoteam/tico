@@ -428,13 +428,19 @@ fn shell_script(command: &str) -> Option<String> {
     }
 }
 
-/// The program a text plainly starts with: its first word after plain assignments, when that word is a plain name or
+/// The program a text plainly starts with: its first word after plain or plainly quoted assignments, when that word is a plain name or
 /// path (`[A-Za-z0-9._+/-]`) ending at whitespace, a separator or the end. The result is its file name, checked by
 /// `program_name_ok`; None for any other text.
 fn plain_program(text: &str) -> Option<&str> {
     static START: OnceLock<Regex> = OnceLock::new();
     let start = START.get_or_init(|| {
-        Regex::new(r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9._/:@%+,-]*\s+)*([A-Za-z0-9._+/-]+)(?:[\s;|&]|$)").unwrap()
+        // An assignment's value is plain characters, '...' (anything but a quote) or "..." (no `$`, backtick or
+        // backslash), so where it ends is exact and nothing in it can run.
+        Regex::new(concat!(
+            r#"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"\\$`]*"|[A-Za-z0-9._/:@%+,-])*\s+)*"#,
+            r"([A-Za-z0-9._+/-]+)(?:[\s;|&]|$)"
+        ))
+        .unwrap()
     });
     let path = start.captures(text)?.get(1)?.as_str();
     let program = path.rsplit('/').next().unwrap_or(path);
