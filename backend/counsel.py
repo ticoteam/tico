@@ -316,6 +316,8 @@ def prepare(store, auth, who, blobs, body):
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (body.file_id,)).fetchone()
             if not row or not F.file_visible(c, auth, who, row, {}):
                 raise Problem("not_found", "That file is not one you can read", 404)
+            if not F.page_audience_visible(c, auth, Identity("bot:" + SLUG, "bot"), row, {}):
+                raise Problem("forbidden", "Counsel is outside this page's audience", 403)
             number = row["current_version"]
             text, cut = document(c, blobs, row["id"], number)
         if text is None:
@@ -367,6 +369,8 @@ def read(c, auth, who, files, blobs, body, found):
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (found["file_id"],)).fetchone()
         if not row or not F.file_visible(c, auth, who, row, {}):
             raise Problem("not_found", "That file is not one you can read", 404)
+        if not F.page_audience_visible(c, auth, Identity("bot:" + SLUG, "bot"), row, {}):
+            raise Problem("forbidden", "Counsel is outside this page's audience", 403)
         if row["current_version"] != found["number"]:
             raise Problem("conflict", "The document changed while it was added; add it again", 409)
         file_id, number, plan = found["file_id"], found["number"], None

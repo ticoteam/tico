@@ -1,5 +1,4 @@
 """The page audience editor has a restricted example in the existing Files demo."""
-from ..store import H
 
 
 def seed(builder):

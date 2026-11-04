@@ -25915,7 +25915,7 @@
         ]
       },
       "patch": {
-        "summary": "Change a page's cadence, data date or replacement, or archive or restore it (the bot, owner and bot managers)",
+        "summary": "Change a page's audience, cadence, data date or replacement, or archive or restore it (the bot, owner and bot managers)",
         "operationId": "editPage",
         "parameters": [
           {

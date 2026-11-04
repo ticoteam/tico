@@ -5,7 +5,6 @@ import pytest
 
 from backend import events, live_blocks, task_privacy, visuals
 from backend.auth import Identity
-from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
 from backend.tests.test_files import turn
@@ -30,8 +29,8 @@ def promoted(api):
 
 
 def finance_token(api):
-    api.app.state.store.settings.test_identities['finance-test'] = Identity('bot:finance', 'bot')
-    return 'finance-test'
+    _, attempt = turn(api, bot='finance')
+    return attempt['token']
 
 
 def sql(api, query, token):
@@ -199,3 +198,27 @@ def test_a_person_above_the_maintainer_can_see_and_change_the_audience(api):
     shown = read(api, fid, 'cara-test')
     assert shown.status_code == 200 and shown.json()['can_manage']
     edit(api, fid, None, token='cara-test')
+
+
+def test_counsel_cannot_copy_a_restricted_page_into_its_task_context(api, monkeypatch):
+    from backend import counsel
+    from backend.store import Problem
+    fid, _ = promoted(api)
+    edit(api, fid, {'people': ['ben']})
+    monkeypatch.setattr(counsel, 'available', lambda c: True)
+    with pytest.raises(Problem) as refused:
+        counsel.prepare(api.app.state.store, api.app.state.auth, Identity('human:ben', 'human', 'ben@acme.example'),
+                        api.app.state.blobs, counsel.RuleRead(file_id=fid, source_id='acme'))
+    assert refused.value.status == 403
+
+
+def test_page_audience_migration_keeps_existing_pages_unrestricted():
+    import importlib
+    import sqlite3
+    migration = importlib.import_module('backend.migrations.0091_page_audience')
+    with sqlite3.connect(':memory:') as c:
+        c.execute('CREATE TABLE pages(file_id TEXT PRIMARY KEY, cadence TEXT)')
+        c.execute("INSERT INTO pages VALUES('existing','weekly')")
+        migration.up(c)
+        migration.up(c)
+        assert c.execute('SELECT file_id,cadence,audience FROM pages').fetchall() == [('existing', 'weekly', None)]

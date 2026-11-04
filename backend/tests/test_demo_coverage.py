@@ -95,3 +95,10 @@ def test_page_has_demo_data(api, name):
     body = response.json()
     items = body if key is None else body.get(key)
     assert items, f"{name}: GET /api/v2/{path} has no {key or 'items'} in the demo"
+
+
+def test_full_page_audience_editor_has_a_restricted_example(api):
+    pages = api.get('/api/v2/pages').json()['pages']
+    assert pages
+    shown = api.get('/api/v2/pages/' + pages[0]['file_id']).json()
+    assert shown['can_manage'] and shown['page']['audience']['people'] == ['ana']
