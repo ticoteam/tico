@@ -18,7 +18,8 @@ The numbers are the batch window and scope, the sweep gap (least time between tw
 lead, the hour of the digest. They are the profile's own and a bot may carry its own values (`profile_options`): the
 one a former Token saver bot keeps is a 30-minute window. Every profile wakes on its task roundup, the one grouped wake per
 bot per run; `sweeps` says whether the roundup also lists it its late, exception, backlog, assigned, restate, missed and quiet
-tasks (a profile with sweeps off gets its questions and its own follow-ups on it). `pulls`, `sweeps` and `takes` are fixed by the profile
+tasks. Every profile also gets its unfinished successful task runs, unless a recorded wait or another job holds them;
+a profile with sweeps off otherwise gets only its questions and its own follow-ups. `pulls`, `sweeps` and `takes` are fixed by the profile
 except on `custom`, which reads them from its options. `pulls` limits only what Tico starts by itself when nothing woke
 the bot; a task a wake rule woke it for (a lead's assignment) always runs. Nothing here grants a right: a profile
 only decides what wakes a bot and which tasks it is given.

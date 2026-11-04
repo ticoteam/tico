@@ -383,15 +383,18 @@ that parks it warns the bot.
 The task roundup leaves a task off its bot's list while the bot has a run queued or running on it, or while the task
 waits on something recorded: a blocker, an open subtask, a pending approval, an unanswered question, a due date, a
 snooze, a stored resume, a pull request link armed with `--wake-once` or a milestone wait. A bot whose profile has its
-sweeps off (a reviewer, lead, responder or monitor) is listed only its unanswered questions and its own follow-up
-times. The Task Manager's stalled-task list does not use these skips, so a task no check lists
+sweeps off (a reviewer, lead, responder or monitor) is listed its unanswered questions, its own follow-up
+times, and successful runs that left their tasks in progress with no recorded wait. A finished run does not mean its
+task is done: the owner gets a line on its next roundup to continue it, finish it, or record what it waits on. That
+line is listed once after the run, then at most once a week until resolved. Failed, stopped and uncertain runs keep
+their recovery path. The Task Manager's stalled-task list does not use these skips, so a task no check lists
 still reaches its report.
 
 Tico does not wake a bot once for each stalled task, and does not escalate repeated stalls to BotOps. The task roundup
 is the one grouped wake for a bot's tasks: each bot gets at most one list in each run (three times a day by default,
 at 6am, noon and 6pm company time), with its lines (a follow-up time that came, an unanswered question, an assignment
 not started, a task to restate, a late Dev ticket,
-an engineering exception, a backlog, a missed update or a quiet task; see [System routines](system-routines.md)). The list goes only to the bot, in its own notice room with Tico, so the roundup
+an engineering exception, a backlog, an unfinished successful run, a missed update or a quiet task; see [System routines](system-routines.md)). The list goes only to the bot, in its own notice room with Tico, so the roundup
 never tells a person about a task. A private task is named by its id alone: who set its follow-up and its note, and what
 changed on it, stay out of the line.
 

@@ -88,6 +88,32 @@ def test_a_bot_task_in_progress_with_no_run_for_an_hour_fires_and_one_with_a_que
     assert stuck in examples(api, "task_stuck")
 
 
+def test_recorded_waits_do_not_fill_the_stuck_task_limit(api, monkeypatch):
+    from backend import milestone_waits, task_check_backs
+    from backend.tests.hold_rows import set_holds
+    monkeypatch.setattr(I, 'LIMIT', 1)
+    with api.app.state.store.transaction() as c:
+        def make(title):
+            t = H.task_create(c, 'human:ana', title, 'Synthetic wait', 'bot:ops')
+            c.execute("UPDATE tasks SET status='doing',updated_at=? WHERE id=?", (ago(hours=3), t['id']))
+            return H.task(c, t['id'])
+        snoozed = make('Snoozed work')
+        set_holds(c, snoozed['id'], snoozed_until=stamp(NOW + timedelta(days=1)), snoozed_by_id='human:ana')
+        person = make('Waiting for a person')
+        c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (person['id'],))
+        later = make('Follow up tomorrow')
+        task_check_backs.set_time(c, later, stamp(NOW + timedelta(days=1)), actor='bot:ops', at=stamp(NOW))
+        milestone = make('Wait for the merge')
+        milestone_waits.add(c, 'human:ana', milestone, 'pr:https://github.com/acme/product/pull/1')
+        parent = make('Wait for the budget task')
+        H.task_create(c, 'human:ana', 'Choose budget', 'A person decides', 'human:ana', parent_id=parent['id'])
+        stuck = make('Work that was abandoned')
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (ago(hours=2), stuck['id']))
+        c.execute("UPDATE jobs SET state='completed'")
+        ctx = I.Ctx(now=stamp(NOW), at=NOW)
+        assert I.task_stuck(c, ctx) == [stuck['id']], 'real waits must not hide a finding behind the limit'
+
+
 def test_a_question_to_a_person_who_has_since_left_fires_and_one_to_a_present_person_does_not(api):
     tid = post(api, "tasks", {"owner": "ops", "title": "Pick a vendor", "body": "x"})["id"]
     other = post(api, "tasks", {"owner": "ops", "title": "Set a budget", "body": "x"})["id"]

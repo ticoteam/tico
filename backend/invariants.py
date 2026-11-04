@@ -77,15 +77,22 @@ def lease_overdue(c, ctx):
 
 
 def task_stuck(c, ctx):
-    """A bot's task in progress (`doing`) with no job for it still owed work, and nothing changed on it for the hour.
-    The live-job test is in the query, ahead of LIMIT, so busy old tasks cannot hide a stuck newer one."""
-    rows = c.execute(f"SELECT t.id FROM tasks t WHERE t.status='doing' AND t.owner_id LIKE 'bot:%' AND t.updated_at<? "
+    """A task in progress with no job or recorded wait for an hour. The limit counts findings, so old busy or
+    deliberately waiting tasks cannot hide a stuck newer one."""
+    from .task_roundup import held
+    rows = c.execute(f"SELECT t.* FROM {H.TASKS} t WHERE t.status='doing' AND t.owner_id LIKE 'bot:%' AND t.updated_at<? "
                      f"AND NOT EXISTS (SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
                      f"JOIN conversations cv ON cv.id=m.conversation_id "
                      f"WHERE j.bot_id=substr(t.owner_id, 5) AND j.state IN ({','.join('?' * len(LIVE_JOBS))}) "
-                     f"AND {H.MESSAGE_TASK_SQL}=t.id) ORDER BY t.updated_at LIMIT ?",
-                     (_ago(ctx, minutes=TASK_QUIET_MINUTES), *LIVE_JOBS, LIMIT)).fetchall()
-    return [row["id"] for row in rows]
+                     f"AND {H.MESSAGE_TASK_SQL}=t.id) ORDER BY t.updated_at",
+                     (_ago(ctx, minutes=TASK_QUIET_MINUTES), *LIVE_JOBS))
+    found = []
+    for row in rows:
+        if not held(c, dict(row), ctx.now):
+            found.append(row["id"])
+            if len(found) >= LIMIT:
+                break
+    return found
 
 
 def _unreachable(actor, people, bots):
@@ -218,7 +225,7 @@ CHECKS = (
           "The runner that holds each run, and whether the server's lease sweep is running (Health > Runs).",
           "botops", lease_overdue),
     Check("task_stuck", "Tasks in progress with no run",
-          "Bot tasks marked in progress with no run queued or live for them, and nothing changed for an hour.",
+          "Bot tasks marked in progress with no run or recorded wait, and nothing changed for an hour.",
           "The task's owner bot: its last run, and whether it should be woken or the task moved on.",
           "botops", task_stuck),
     Check("owner_unreachable", "Waiting on someone who cannot be reached",

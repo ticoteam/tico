@@ -1048,3 +1048,82 @@ def test_a_reviewer_is_woken_once_by_its_roundup_and_listed_only_its_returned_qu
         body = only_list(c)
         assert "no answer in two business days" in body
         assert named_in(body) == 1 and "Quiet for" not in body, "a reviewer gets no idle or quiet line"
+
+
+@pytest.mark.parametrize("profile", ["lead", "reviewer"])
+def test_a_successful_run_left_doing_reaches_its_owner_even_with_sweeps_off(api, profile):
+    from backend.tests.test_api import assign, claim, post, ready, runner
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    mine = post(api, "tasks", {"owner": "ops", "title": "Prepare @ana's private report", "private": True})
+    turn = claim(api, r)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "report"}, r["token"])
+    post(api, f"attempts/{turn['id']}/complete",
+         {"outcome": "completed", "last_seq": 0, "text": "Draft saved; the last section still needs work."}, r["token"])
+    with api.app.state.store.transaction() as c:
+        BS.write(c, "ops", {"profile": profile})
+        assert H.task(c, mine["id"])["status"] == "doing"
+        assert not c.execute("SELECT 1 FROM jobs WHERE bot_id='ops' AND state='queued'").fetchone()
+        at = H.shift(H.now(), seconds=1)
+        assert "ops" in task_roundup.run(c, at)["woke"]
+        body = only_list(c, "ops")
+        assert mine["id"][:8] in body and "Run finished" in body
+        assert mine["title"] not in body
+        mid, cid = c.execute("SELECT id,conversation_id FROM messages WHERE recipient_id='bot:ops' "
+                             "AND refs LIKE '%task_roundup%'").fetchone()
+        assert not c.execute("SELECT 1 FROM message_deliveries WHERE message_id=? AND recipient LIKE 'human:%'",
+                             (mid,)).fetchone()
+        assert not c.execute("SELECT 1 FROM message_mentions WHERE message_id=?", (mid,)).fetchone()
+        assert not any(p.startswith('human:') for p in H.conversation(c, cid)['participants'])
+        assert "ops" not in task_roundup.run(c, H.shift(at, hours=6))["woke"]
+        assert "ops" in task_roundup.run(c, H.shift(at, days=8))["woke"]
+
+
+def unfinished(c, title):
+    mine = task(c, title)
+    c.execute("UPDATE tasks SET status='doing' WHERE id=?", (mine["id"],))
+    c.execute("INSERT INTO attempts(id,bot_id,task_id,state,created_at,finished_at) VALUES(?,?,?,'completed',?,?)",
+              (H.new_id(), "finance", mine["id"], ago(hours=2), ago(hours=1)))
+    complete_jobs(c)
+    return H.task(c, mine["id"])
+
+
+def test_unfinished_runs_keep_their_waits_and_do_not_bypass_recovery(api):
+    from backend import milestone_waits, worktree_waits
+    with api.app.state.store.transaction() as c:
+        snoozed = unfinished(c, "Wait until next week")
+        set_holds(c, snoozed['id'], snoozed_until=H.shift(DAY, days=7), snoozed_by_id='human:ana')
+        later = unfinished(c, "Read the next report")
+        task_check_backs.set_time(c, later, H.shift(DAY, hours=2), actor='bot:finance', at=DAY)
+        person = unfinished(c, "Wait for the approved budget")
+        c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (person['id'],))
+        external = unfinished(c, "Wait for publication")
+        milestone_waits.add(c, 'human:ana', external, 'pr:https://github.com/acme/product/pull/1')
+        checkout = unfinished(c, "Wait for a checkout")
+        worktree_waits.ensure(c)
+        c.execute("INSERT INTO worktree_waits(id,task_id,owner,repo,generation,state,reason,created_at,updated_at) "
+                  "VALUES('roundup-wait',?,'bot:finance','acme/product',1,'reserved','Preparing',?,?)",
+                  (checkout['id'], DAY, DAY))
+        recovering = unfinished(c, "Review the interrupted run first")
+        c.execute("UPDATE jobs SET state='uncertain' WHERE message_id IN "
+                  "(SELECT id FROM messages WHERE conversation_id=?)", (recovering['conversation_id'],))
+        BS.write(c, "finance", {"profile": "lead"})
+        assert task_roundup._list(c, 'finance', DAY, {})[0] is None
+        assert task_roundup.run(c, DAY)['woke'] == []
+        set_holds(c, snoozed['id'], snoozed_until=None)
+        assert 'finance' in task_roundup.run(c, DAY)['woke']
+        assert named_in(only_list(c)) == 1 and snoozed['id'][:8] in only_list(c)
+
+
+def test_a_newer_failed_or_stopped_run_is_not_successful_unfinished_work(api):
+    with api.app.state.store.transaction() as c:
+        failed = unfinished(c, "Later run failed")
+        stopped = unfinished(c, "Owner stopped the later run")
+        c.execute("INSERT INTO attempts(id,bot_id,task_id,state,created_at,finished_at) VALUES(?,?,?,'failed',?,?)",
+                  (H.new_id(), 'finance', failed['id'], ago(minutes=10), ago(minutes=5)))
+        c.execute("INSERT INTO attempts(id,bot_id,task_id,state,created_at,finished_at,stop_requested_at) "
+                  "VALUES(?,?,?,'completed',?,?,'human:ana')",
+                  (H.new_id(), 'finance', stopped['id'], ago(minutes=10), ago(minutes=5)))
+        BS.write(c, 'finance', {'profile': 'lead'})
+        assert task_roundup.run(c, DAY)['woke'] == []

@@ -19,6 +19,7 @@ A bot's list has these lines, in this order, MAX_LINES in all (the rest are coun
   after RELIST_DAYS;
 - a step's backlog over its limit (backend/step_backlog.py), on each bot it names, on the oldest ticket waiting there,
   relisted after the step's every_hours;
+- a successful run that left its task doing with no recorded wait, for every profile, once after that run;
 - a missed update, then a quiet task, on a task the bot owns (below).
 A task is named once on a list, whatever its reason.
 
@@ -42,11 +43,16 @@ time. When it has come, the task is listed first on its owner bot's list as "Fol
 task a person owns is on no bot's list. A date a snooze left behind is not a follow-up: it holds nothing, and a snooze in
 force hides the task (task_snooze.snoozed) until it ends.
 
+A finished run is not a finished task. Its owner decides whether to continue, finish, or record a wait on the next
+roundup; the completed attempt is the receipt, including for runs that ended before this rule existed. An unchanged
+task is relisted after RELIST_DAYS, not on every roundup. A stopped or failed run keeps its recovery path.
+
 A private task is listed as "a private task <id>", without its title, its follow-up's who and note, its step, or what changed:
 only that a follow-up time has come, that it has an update, that it has gone quiet, or the bare fact of a line. A bot whose
-profile has its sweeps off (rules.sweeps_on: a reviewer, lead, responder or monitor) is listed its unanswered questions and
-its own follow-up times only: never an idle, late, exception, backlog, assigned or restate line. A manager and a doer get all
-of them. A late ticket or an exception is listed only where its bot reads the task (H.bot_reads_task). Only bots are listed:
+profile has its sweeps off (rules.sweeps_on: a reviewer, lead, responder or monitor) is listed its unanswered questions,
+its own follow-up times and unfinished successful runs only: never an idle, late, exception, backlog, assigned or
+restate line. A manager and a doer get all of them. A late ticket or an exception is listed only where its bot reads
+the task (H.bot_reads_task). Only bots are listed:
 a person a line would name is never told by the roundup.
 
 A bot is sent at most one list per run: registry_metadata `task_roundup:<slug>` holds the run's time it was last sent a
@@ -80,7 +86,7 @@ ASK_CHARS = 120                        # a question's text on its line, trimmed 
 ASK_DAYS = 30                          # an unanswered question is looked for this far back
 CREATED_WITHIN = 1                     # seconds: a status or step row this close to its task's creation is the creation
 # The lines' order on a list (a group sorts its own lines; a missed update newest first).
-DUE, ASKS, ASSIGNED, RESTATE, LATE, EXCEPTIONS, BACKLOG, MISSED, QUIET = range(9)
+DUE, ASKS, ASSIGNED, RESTATE, LATE, EXCEPTIONS, BACKLOG, UNFINISHED, MISSED, QUIET = range(10)
 # The changes to a task itself. Anything else a history row records (check-backs, rank, checkpoints) is bookkeeping.
 TASK_KINDS = ("status", "owner", "step", "waiting_on", "due", "title", "body", "acceptance")
 _TASK_KINDS_SQL = ",".join(f"'{kind}'" for kind in TASK_KINDS)
@@ -263,6 +269,13 @@ def _list(c, slug, at, shared):
             groups[DUE].append((row["check_back_at"], _item(row["id"], _line(row, _due_reason(follow, private), private),
                                                            LISTED_KEY + row["id"], due=True)))
             continue
+        listed = _listed(c, row["id"])
+        ended = unfinished_run(c, row, slug)
+        if ended and not held(c, row, at) and (
+                listed is None or listed < ended or H.parse_ts(listed) <= relist):
+            reason = "Run finished; continue the task, finish it, or record what it waits on"
+            groups[UNFINISHED].append((ended, _item(row["id"], _line(row, reason, private), LISTED_KEY + row["id"])))
+            continue
         if not sweeping:
             continue
         person = _restate(c, row)
@@ -270,7 +283,6 @@ def _list(c, slug, at, shared):
             groups[RESTATE].append((row["created_at"] or "", _item(row["id"], _line(
                 row, _restate_reason(row, person, private), private), _key("restate", slug, row["id"]))))
         last_turn = _last_turn(c, row, slug, actor)
-        listed = _listed(c, row["id"])
         news = _news(c, row, actor, _later(last_turn, listed))
         if news:
             count, when, what = news
@@ -278,7 +290,7 @@ def _list(c, slug, at, shared):
                                                LISTED_KEY + row["id"])))
             continue
         quiet_since = _later(row["updated_at"], last_turn, _latest(c, row))
-        if H.parse_ts(quiet_since) <= cutoff and not _holds(c, row, at) and (listed is None or H.parse_ts(listed) <= relist):
+        if H.parse_ts(quiet_since) <= cutoff and not held(c, row, at) and (listed is None or H.parse_ts(listed) <= relist):
             span = _days(now - H.parse_ts(quiet_since))
             reason = (f"Waiting on nothing for {span}" if row["status"] == "waiting"
                       else f"Quiet for {span}, nothing waiting on anyone")
@@ -510,15 +522,26 @@ def _days(delta):
     return f"{days} day{'' if days == 1 else 's'}"
 
 
-def _holds(c, row, at):
-    """Whether something holds the task off the quiet list: a person it waits on, an explicit follow-up time still to come
-    (a date nobody set, or one a snooze left behind, holds nothing), a live blocker, or a wait recorded for it (an unanswered
-    ask included). A snooze in force is not here: _list skips the task while task_snooze.snoozed."""
+def held(c, row, at):
+    """Whether a recorded wait holds the task off the roundup and the stuck-task invariant: a person, an explicit
+    future follow-up, a blocker, a snooze, an unanswered ask or an external event. A follow-up nobody set holds nothing."""
     from . import task_relations as TR
     later = bool(follow_up(c, row) and H.parse_ts(row["check_back_at"]) > H.parse_ts(at))
     return (bool(row.get("waiting_on")) or later
             or TR.live_blocker(c, row["id"], H.ACTIVE_STATUSES) is not None
-            or H.recorded_wait(c, dict(row), at) is not None)
+            or H.recorded_wait(c, dict(row), at) is not None
+            or c.execute("SELECT 1 FROM worktree_waits WHERE task_id=? AND state IN ('waiting','reserved') LIMIT 1",
+                         (row["id"],)).fetchone() is not None)
+
+
+def unfinished_run(c, row, slug):
+    """When this owner's last run finished successfully but left the task doing. A later failed or stopped run
+    belongs to recovery, and another bot's work says nothing about this owner's disposition."""
+    if row["status"] != "doing":
+        return None
+    last = c.execute("SELECT state,finished_at,stop_requested_at FROM attempts WHERE task_id=? AND bot_id=? "
+                     "ORDER BY created_at DESC,id DESC LIMIT 1", (row["id"], slug)).fetchone()
+    return last["finished_at"] if last and last["state"] == "completed" and not last["stop_requested_at"] else None
 
 
 def _last_turn(c, row, slug, actor):
@@ -607,10 +630,10 @@ def _who(c, actor):
 
 
 def _running(c, slug, row):
-    """Whether a job for this bot in the task's conversation is queued, leased or running: it is being woken already."""
+    """Whether this bot still owes a job on the task, including a run held for recovery: no second wake beside it."""
     try:
         return c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
-                         "AND j.state IN ('queued','leased','running') AND m.conversation_id=? LIMIT 1",
+                         "AND j.state IN ('queued','leased','running','input','uncertain') AND m.conversation_id=? LIMIT 1",
                          (slug, row["conversation_id"])).fetchone() is not None
     except sqlite3.OperationalError:    # a local hub has no jobs table
         return False
