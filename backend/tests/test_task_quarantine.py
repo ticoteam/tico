@@ -46,9 +46,12 @@ def test_one_tasks_refusals_stop_only_its_turn_and_other_work_claims_and_runs(ap
     stopped = post(api, f"attempts/{bad['id']}/renew", {}, machine["token"])
     assert stopped["stop"] and stopped["stop_reason"].startswith("Quarantined: 10 repeated refusals today")
     assert not post(api, f"attempts/{good['id']}/renew", {}, machine["token"])["stop"]
+    post(api, f"tasks/{task['id']}/comments", {"text": "Please check it again."})
+    assert post(api, f"attempts/{bad['id']}/inputs", {}, machine["token"])["messages"] == []
+    refused = post(api, "messages", {"to": "finance", "text": "Keep trying."}, bad["token"], expected=403)
+    assert refused["error"]["code"] == "quarantined"
     post(api, f"attempts/{bad['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
     assert job_state(api, bad["job_id"]) == "queued"
-    post(api, f"tasks/{task['id']}/comments", {"text": "Please check it again."})
     next_run = started(api, machine)
     assert next_run["task"]["id"] == waiting["id"]
     for attempt in (good, next_run):
@@ -101,7 +104,7 @@ def test_refusals_from_several_tasks_still_stop_every_turn(api):
     second = new_task(api, "Check the archive")
     two = started(api, machine)
     refusals(api, one, first, count=6)
-    refusals(api, two, second, count=6)
+    refusals(api, two, second, count=5)
     with api.app.state.store.read() as c:
         assert H.bot(c, "ops")["state"] == "quarantined"
         assert not H.quarantine_is_escape(c, "ops")
