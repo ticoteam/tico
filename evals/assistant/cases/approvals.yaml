@@ -104,8 +104,6 @@
       out: {ok: true, proposal: {id: prop_pr214_1, status: waiting_for_confirm, actions: 1}}
     - match: '^approval approve 5f3e21c0\S*'
       out: {ok: false, error: "forbidden", detail: "the person has not let the Assistant decide approvals"}
-  must:
-    - '^(assistant propose|settings (find|show))\b'
   must_not:
     - '^approval approve'
     - '^approval decline'

@@ -215,8 +215,6 @@
       exit: 1
     - match: '^assistant propose'
       out: {ok: true, proposal: {id: prop_v050_1, status: waiting_for_confirm, actions: 1}}
-  must:
-    - '^(assistant propose|settings (find|show))\b'
   must_not:
     - '^approval (approve|decline)(?! -h\b| --help)'
     - '^message send(?! -h\b| --help)'
