@@ -7567,7 +7567,7 @@ def _finish_children(conn, actor, parent, mover=None, quiet=False, *, left_open=
             changed.setdefault("open", []).append(_child_name(conn, kid))
             _wake(conn, kid, kid["requester_id"],
                   f"Still open: {kid['title']}\nIts parent finished; please close this subtask when ready.",
-                  refs={"finish_left_open": parent["id"]})
+                  refs={"finish_left_open": parent["id"], "needs_action": True})
             continue
         task_close(conn, actor, kid["id"], note=_closed_with_note(parent), quiet=quiet,
                    mover=mover, with_parent=parent["id"])
