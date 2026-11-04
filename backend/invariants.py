@@ -306,7 +306,7 @@ def _close(c, task_id):
         return
     try:
         c.execute("SAVEPOINT invariant_close")
-        H.task_close(c, H.KEEPER, task_id, note="Cleared: the production check passes now.")
+        H.task_close(c, H.KEEPER, task_id, note="Cleared: the production check passes now.", strict=False)
         c.execute("RELEASE invariant_close")
     except Exception:  # noqa: BLE001 - a task that cannot be closed stays open for a person to close
         c.execute("ROLLBACK TO invariant_close")

@@ -1041,11 +1041,18 @@ Closing a task, or finishing it (status `done`, or a step whose status is done o
 closes every open descendant, including those below an already finished subtask. There is no prompt
 or detach choice. Each subtask keeps its parent link and records "Closed with #N" in its history,
 where N is the task that finished; an unnumbered parent is recorded as "Closed with its parent task".
-The usual close events, question cleanup and notifications run for each changed subtask. The parent's
+The usual close events and question cleanup run for each changed subtask. The parent's
 history and Finished or Closed notice list "Closed with it:" and the subtask titles, keeping private
-titles hidden. Already Done, Closed or Declined subtasks keep their status, notes and history.
-The actor must have the usual close permission on every open descendant; a refusal leaves the
-whole action unchanged, without detaching anything. Reopening the parent leaves its subtasks closed;
+titles hidden even when the parent is private. A closed subtask sends no separate notice to its parties,
+unless it has a leased or running turn: then its parties receive the usual direct-close notice so the
+bot stops working. Already Done, Closed or Declined subtasks keep their status, notes and history.
+An explicit close or finish through the API, CLI or MCP requires the actor's usual close permission
+on every open descendant; a refusal leaves the whole action unchanged, without detaching anything.
+An automatic finish, including a runner reporting its task goal met, closes every open descendant
+the actor may close and leaves the rest open. The parent's history and completion notice list
+"Still open:" with those titles (private subtasks are always "a private subtask"), and each left-open
+subtask's requester receives one notice asking them to close it when ready. Runner output and the
+final result are still saved. Reopening the parent leaves its subtasks closed;
 its history lists which ones to reopen by hand.
 Finishing or moving away the last open subtask wakes the
 immediate parent's owner with “All subtasks done”, unless its result already resumed that parent or

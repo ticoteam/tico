@@ -90,9 +90,10 @@ def test_a_bot_finishing_its_task_closes_a_persons_subtask_with_one_parent_notic
 
 
 @pytest.mark.parametrize("operation", ["close", "done"])
-def test_private_subtask_refuses_the_whole_finish_without_detaching_or_leaking_its_title(tmp_path, operation):
+@pytest.mark.parametrize("private", [False, True])
+def test_private_subtask_refuses_the_whole_finish_without_detaching_or_leaking_its_title(tmp_path, operation, private):
     c = hub(tmp_path / "hub.db")
-    parent = make(c, ANA, "Plan the offsite", CMO)
+    parent = H.task_create(c, ANA, "Plan the offsite", "", CMO, private=private, lint=False)
     visible = make(c, CMO, "Book the venue", SEO, parent)
     secret = H.task_create(c, CMO, "Compare confidential salaries", "", CMO,
                            parent_id=parent["id"], private=True, lint=False)
@@ -110,6 +111,200 @@ def test_private_subtask_refuses_the_whole_finish_without_detaching_or_leaking_i
     with pytest.raises(H.Refused):
         H.task_close(c, BEN, parent["id"], mover=False)
     c.close()
+
+
+@pytest.mark.parametrize("operation", ["close", "done"])
+def test_private_titles_never_enter_a_private_parents_records_or_notice(tmp_path, operation):
+    c = hub(tmp_path / "hub.db")
+    parent = H.task_create(c, CMO if operation == "close" else ANA, "Plan the offsite", "",
+                           ANA if operation == "close" else CMO, private=True, lint=False)
+    secret = H.task_create(c, CMO, "Compare confidential salaries", "", SEO,
+                           parent_id=parent["id"], private=True, lint=False)
+    assert not H.task_private_readable(c, ANA, secret)
+    before = c.execute("SELECT coalesce(max(rowid),0) FROM messages").fetchone()[0]
+    if operation == "close":
+        H.task_close(c, CMO, parent["id"])
+    else:
+        H.task_update(c, CMO, parent["id"], status="done")
+    assert H.task(c, secret["id"])["status"] == "closed"
+    records = json.dumps(history(c, parent))
+    notices = "\n".join(r[0] for r in c.execute("SELECT body FROM messages WHERE rowid>?", (before,)))
+    detail = c.execute("SELECT detail FROM events WHERE target=? AND action=? ORDER BY rowid DESC LIMIT 1",
+                       (parent["id"], "task.close" if operation == "close" else "task.update")).fetchone()[0]
+    for text in (records, notices, detail):
+        assert secret["title"] not in text
+        assert "a private subtask" in text
+    c.close()
+
+
+def test_a_refusal_names_a_private_descendant_only_to_its_reader(tmp_path):
+    c = hub(tmp_path / "hub.db")
+    parent = H.task_create(c, ANA, "Plan the offsite", "", CMO, private=True, lint=False)
+    secret = H.task_create(c, ANA, "Compare confidential salaries", "", CMO,
+                           parent_id=parent["id"], private=True, lint=False)
+    assert H.task_private_readable(c, CMO, secret)
+    with pytest.raises(H.Refused) as exc:
+        H.task_update(c, CMO, parent["id"], status="done")
+    assert secret["title"] in str(exc.value)
+    c.close()
+
+
+@pytest.mark.parametrize("operation", ["done", "Cancelled"])
+def test_refused_finish_is_atomic_on_a_direct_db_call(tmp_path, operation):
+    c = hub(tmp_path / "hub.db")
+    board = H.type_create(c, ANA, "Launch", [{"name": "Build", "status": "doing"},
+                          {"name": "Shipped", "status": "done"}, {"name": "Cancelled", "status": "closed"}],
+                          mover=True)
+    parent = H.task_create(c, ANA, "Plan the launch", "Original body", CMO,
+                           type=board["id"], step="Build", lint=False)
+    make(c, ANA, "Approve the launch", SEO, parent)
+    before, records = H.task(c, parent["id"]), history(c, parent)
+    assert before["number"] is None
+    with pytest.raises(H.Refused):
+        H.task_update(c, CMO, parent["id"], number=1234, mover=True, note="Shipped", body="Changed body",
+                      title="Launch the new page", labels=["launch"], verdict="approve", verdict_head="abc1234",
+                      **({"status": "done"} if operation == "done" else {"step": operation}))
+    assert H.task(c, parent["id"]) == before
+    assert history(c, parent) == records
+    assert not c.execute("SELECT 1 FROM task_tags WHERE task_id=?", (parent["id"],)).fetchone()
+    c.close()
+
+
+@pytest.mark.parametrize("operation", ["close", "done", "Cancelled"])
+def test_automatic_finishes_close_permitted_descendants_and_wake_left_open_requesters_once(tmp_path, operation):
+    c = hub(tmp_path / "hub.db")
+    board = H.type_create(c, ANA, "Launch", [{"name": "Build", "status": "doing"},
+                          {"name": "Cancelled", "status": "closed"}], mover=True)
+    parent = H.task_create(c, CMO, "Plan the launch", "", CMO, type=board["id"], step="Build", lint=False)
+    own = make(c, CMO, "Draft the launch copy", SEO, parent)
+    other = make(c, ANA, "Approve the launch copy", CMO, parent)
+    secret = H.task_create(c, ANA, "Compare confidential salaries", "", SEO,
+                           parent_id=parent["id"], private=True, lint=False)
+    # Traversal must continue below a descendant the actor cannot close.
+    deep = make(c, CMO, "Check the launch links", SEO, other)
+    skipped_before = [(H.task(c, t["id"]), history(c, t)) for t in (other, secret)]
+    refusals = c.execute("SELECT count(*) FROM refusals").fetchone()[0]
+    for _ in range(2):
+        if operation == "close":
+            H.task_close(c, CMO, parent["id"], strict=False)
+        else:
+            H.task_update(c, CMO, parent["id"], strict=False,
+                          **({"status": "done"} if operation == "done" else {"step": operation}))
+    assert H.task(c, parent["id"])["status"] == ("done" if operation == "done" else "closed")
+    assert all(H.task(c, t["id"])["status"] == "closed" for t in (own, deep))
+    assert [(H.task(c, t["id"]), history(c, t)) for t in (other, secret)] == skipped_before
+    assert c.execute("SELECT count(*) FROM refusals").fetchone()[0] == refusals
+    records = json.dumps(history(c, parent))
+    assert "Still open: " in records and other["title"] in records and "a private subtask" in records
+    assert secret["title"] not in records
+    for t in (other, secret):
+        notices = c.execute("SELECT id,recipient_id FROM messages WHERE json_extract(refs,'$.task')=? "
+                            "AND json_extract(refs,'$.finish_left_open')=?", (t["id"], parent["id"])).fetchall()
+        assert len(notices) == 1 and notices[0]["recipient_id"] == ANA
+    c.close()
+
+
+@pytest.mark.parametrize("status", ["open", "review", "waiting", "ready"])
+def test_idle_cascaded_children_send_no_notices_to_their_parties(tmp_path, status):
+    c = hub(tmp_path / "hub.db")
+    parent = make(c, ANA, "Plan the launch", CMO)
+    child = make(c, CMO, "Draft the launch copy", SEO, parent)
+    if status != "open":
+        H.task_update(c, SEO, child["id"], status=status, note="Ready for the next step")
+    before = c.execute("SELECT coalesce(max(rowid),0) FROM messages").fetchone()[0]
+    H.task_close(c, ANA, parent["id"])
+    assert H.task(c, child["id"])["status"] == "closed"
+    assert not c.execute("SELECT 1 FROM messages WHERE rowid>? AND json_extract(refs,'$.task')=?",
+                         (before, child["id"])).fetchone()
+    c.close()
+
+
+@pytest.mark.parametrize("operation", ["close", "done"])
+def test_cascade_bumps_child_version_and_rejects_a_prepared_update(api, operation):
+    parent = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "x"})
+    child = post(api, "tasks", {"owner": "cpo", "title": "Draft the launch copy", "body": "x",
+                                "relations": [{"task": parent["id"], "kind": "parent"}]})
+    post(api, "tasks/" + parent["id"], {"version": parent["version"],
+         **({"close": True} if operation == "close" else {"status": "done"})})
+    after = get(api, "tasks/" + child["id"])["task"]
+    assert after["status"] == "closed" and after["version"] == child["version"] + 1
+    stale = post(api, "tasks/" + child["id"], {"version": child["version"], "status": "doing"}, expected=409)
+    assert stale["error"]["code"] == "version_conflict"
+    assert get(api, "tasks/" + child["id"])["task"] == after
+
+
+@pytest.mark.parametrize("run_state", ["leased", "running", "input"])
+def test_a_cascaded_child_with_a_live_run_gets_the_direct_close_notice(api, run_state):
+    from backend.tests.test_api import assign, claim, ready, runner
+
+    machine = runner(api)
+    assign(api, machine, "cpo")
+    ready(api, machine, ["cpo"])
+    with api.app.state.store.transaction() as c:
+        # The owner is also on the parent: its live run must still hear the child close.
+        parent = H.task_create(c, "bot:cpo", "Plan the launch", "", "bot:ops", lint=False)
+        child = H.task_create(c, "bot:ops", "Draft the launch copy", "", "bot:cpo",
+                              parent_id=parent["id"], lint=False)
+    attempt = claim(api, machine, "cpo")
+    # Only the child belongs to this computer's bot.
+    assert attempt["task"]["id"] == child["id"]
+    if run_state != "leased":
+        post(api, f"attempts/{attempt['id']}/started", {"thread_id": "child-thread"}, machine["token"])
+    with api.app.state.store.transaction() as c:
+        if run_state == "input":
+            c.execute("UPDATE attempts SET state='input' WHERE id=?", (attempt["id"],))
+            c.execute("UPDATE jobs SET state='input' WHERE attempt_id=?", (attempt["id"],))
+        before = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
+        H.task_close(c, "human:ana", parent["id"], mover=True)
+        notices = [dict(r) for r in c.execute(
+            "SELECT * FROM messages WHERE rowid>? AND json_extract(refs,'$.task')=?", (before, child["id"]))]
+        if run_state == "input":
+            assert notices == []
+        else:
+            assert {m["recipient_id"] for m in notices} == {"bot:ops", "bot:cpo"}
+            assert len(notices) == 2
+            assert all(m["body"] == f"Closed: {child['title']}\nClosed with its parent task" for m in notices)
+            owner_notice = next(m for m in notices if m["recipient_id"] == "bot:cpo")
+            assert c.execute("SELECT 1 FROM jobs WHERE message_id=?", (owner_notice["id"],)).fetchone()
+
+
+def test_a_runner_goal_finish_keeps_its_event_batch_and_final_result_with_unclosable_children(api):
+    from backend.tests.test_api import claim
+    from backend.tests.test_chat_goals import task_goal_world
+
+    machine, parent = task_goal_world(api)
+    attempt = claim(api, machine)
+    with api.app.state.store.transaction() as c:
+        own = H.task_create(c, "bot:ops", "Draft the launch copy", "", "bot:cpo",
+                            parent_id=parent["id"], lint=False)
+        other = H.task_create(c, "human:ana", "Approve the launch copy", "", "bot:cpo",
+                              parent_id=parent["id"], lint=False)
+        secret = H.task_create(c, "bot:cpo", "Compare confidential salaries", "", "human:ana",
+                               parent_id=parent["id"], private=True, lint=False)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "goal-thread"}, machine["token"])
+    goal = attempt["chat_goal"]
+    events = {"events": [
+        {"seq": 1, "kind": "message", "payload": {"text": "Runner output", "final": True}},
+        {"seq": 2, "kind": "goal", "payload": {"goal_id": goal["id"], "revision": goal["updated_at"],
+                                               "status": "met", "note": "The summary is in Docs."}}]}
+    for _ in range(2):
+        assert post(api, f"attempts/{attempt['id']}/events", events, machine["token"])["ack_seq"] == 2
+    post(api, f"attempts/{attempt['id']}/complete",
+         {"outcome": "completed", "text": "Final runner result", "last_seq": 2}, machine["token"])
+    with api.app.state.store.read() as c:
+        assert H.task(c, parent["id"])["status"] == "done"
+        assert H.task(c, own["id"])["status"] == "closed"
+        assert H.task(c, other["id"])["status"] == H.task(c, secret["id"])["status"] == "open"
+        run = c.execute("SELECT state,final_text FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
+        assert tuple(run) == ("completed", "Final runner result")
+        assert c.execute("SELECT 1 FROM messages WHERE body='Final runner result'").fetchone()
+        notices = [dict(r) for r in c.execute("SELECT * FROM messages WHERE json_extract(refs,'$.finish_left_open')=?",
+                                             (parent["id"],))]
+        assert len(notices) == 2
+        bot_notice = next(m for m in notices if m["recipient_id"] == "bot:cpo")
+        assert c.execute("SELECT count(*) FROM jobs WHERE message_id=?", (bot_notice["id"],)).fetchone()[0] == 1
+        records = json.dumps(history(c, parent))
+        assert "Still open:" in records and secret["title"] not in records
 
 
 @pytest.mark.parametrize("operation", ["close", "done"])

@@ -5770,7 +5770,7 @@ class Execution:
                 if task['status'] not in ('open', 'doing', 'waiting', 'review', 'ready'):
                     continue
                 H.task_update(c, H.KEEPER, task['id'], status='done', quiet=True,
-                              note='Recovery decisions saved. Tico applies deferred choices when the lane frees.')
+                              note='Recovery decisions saved. Tico applies deferred choices when the lane frees.', strict=False)
 
     def _decide(self, c, row, attempt_id, decision, note, actor, *, action='job.reconcile', shown=None, deferred=False, saved=False,
                 cause=None):
