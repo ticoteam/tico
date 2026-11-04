@@ -399,16 +399,18 @@
         return `<div class="shared-item" data-shared-item="${esc(it.id)}"><label>Title<textarea data-defer data-shared-field="text" aria-label="Title">${esc(current.text)}</textarea></label>` + fields.map(key => {
           const label = ({body:'Details', owner:'Owner', due:'Due'})[key] || key;
           if (key === 'owner') return `<label>Owner<select data-defer data-shared-field="owner" aria-label="Owner"><option value="">Choose</option>${owners.map(o => `<option value="${esc(o.actor)}" ${o.actor === detail.owner ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>`;
-          return `<label>${label}<${key === 'body' ? 'textarea' : 'input'} data-defer data-shared-field="${key}" aria-label="${label}" ${key === 'body' ? '' : `value="${esc(detail[key] || '')}"`}>${key === 'body' ? esc(detail.body || '') + '</textarea>' : ''}</label>`;
+          const value = key === 'due' ? String(detail[key] || '').slice(0, 10) : detail[key] || '';
+          return `<label>${label}<${key === 'body' ? 'textarea' : 'input'} data-defer data-shared-field="${key}" aria-label="${label}" ${key === 'due' ? 'type="date"' : ''} ${key === 'body' ? '' : `value="${esc(value)}"`}>${key === 'body' ? esc(detail.body || '') + '</textarea>' : ''}</label>`;
         }).join('') + `<div class="aside">${it.updated_by ? esc((a.owners.find(o => o.actor === it.updated_by)?.name || it.updated_by) + ' edited · just now') : ''}</div>
           <span class="error" data-shared-error ${draft.error ? '' : 'hidden'}>Not saved · <button class="link" data-act="shared-retry" data-id="${esc(it.id)}">Retry</button></span>
           <div class="actions"><button class="btn small" data-act="shared-dismiss" data-id="${esc(it.id)}">Dismiss</button><button class="btn small primary" data-act="shared-send" data-id="${esc(it.id)}" ${draft.sending || !data.can_send ? 'disabled' : ''}>Send${detail.owner ? ' to ' + esc(owners.find(o => o.actor === detail.owner)?.name || detail.owner) : ''}</button></div></div>`;
       }).join('') + '</section>';
   }
+  const sharedFieldValue = field => field.dataset.sharedField === 'due' && field.value ? new Date(field.value + 'T12:00:00').toISOString() : field.value;
   function sharedChanged(field) {
     const id = field.closest('[data-shared-item]').dataset.sharedItem, draft = sharedDraft(id), key = field.dataset.sharedField;
     if (key === 'text') draft.patch.text = field.value;
-    else (draft.patch.detail ||= {})[key] = field.value;
+    else (draft.patch.detail ||= {})[key] = sharedFieldValue(field);
     clearTimeout(draft.timer);
     if (!draft.error) draft.timer = setTimeout(() => sharedSave(id), 700);
   }
@@ -435,7 +437,7 @@
     const body = {detail:{}};
     for (const f of node.querySelectorAll('[data-shared-field]')) {
       if (f.dataset.sharedField === 'text') body.text = f.value;
-      else body.detail[f.dataset.sharedField] = f.value;
+      else body.detail[f.dataset.sharedField] = sharedFieldValue(f);
     }
     try {
       if (draft.flight) { try { await draft.flight; } catch {} }
