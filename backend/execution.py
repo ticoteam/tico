@@ -2148,7 +2148,7 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
     return None
 
 
-def obsolete_notices_sql():
+def obsolete_notices_sql(c):
     """FROM and WHERE of the keeper notices a claim cancels, for one runner (?), the keeper (?) and now (?): any queued
     on a task already finished, unless a person's own act caused it (H._write_message: it still owes that person its
     answer), a status check of a quiet task that someone other than Tico has acted on since (it is no longer quiet), a step's
@@ -2165,6 +2165,8 @@ def obsolete_notices_sql():
     itself SQLite starts from every keeper notice ever sent, tens of milliseconds on each of a runner's claims."""
     # A held job waits: a wake preset's or a quota reset's until its release, a claim's until its wait ends. The pass
     # takes it once it is free, and the claim then closes the item its hold opened (claim_holds.clear).
+    from . import task_check_backs
+    check_backs_on = task_check_backs.enabled(c)
     return ("FROM assignments x CROSS JOIN jobs j CROSS JOIN message_refs m "
             f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
             f"WHERE x.runner_id=? AND j.bot_id=x.bot AND j.state='queued' AND {H.unheld_sql()} AND m.id=j.message_id "
@@ -2174,7 +2176,7 @@ def obsolete_notices_sql():
             "OR m.kind='notice' "
             "AND ((m.ref_wake='check_back' AND ("
             "t.check_back_at IS NOT json_extract(m.refs,'$.check_back_at') OR "
-            "1=1 OR "   # check-backs are off (task_check_backs.enabled): every queued check-back notice is obsolete
+            f"{'' if check_backs_on else '1=1 OR '}"   # check-backs off (task_check_backs.enabled): their notices are obsolete
             "(t.snoozed_until>?3 AND t.snoozed_by_id LIKE 'human:%') OR t.status='closed' OR "
             "(t.status IN ('done','declined') AND (t.requester_id NOT LIKE 'bot:%' OR t.requester_id=t.owner_id)) OR "
             "m.recipient_id<>CASE WHEN t.status IN ('done','declined') THEN t.requester_id "
@@ -3386,7 +3388,7 @@ class Execution:
         if (awake_since != runner["awake_since"] or not runner["last_seen_at"]
                 or runner["last_seen_at"] <= H.shift(now, seconds=-CONTACT_EVERY)):
             return None
-        if c.execute("SELECT 1 " + obsolete_notices_sql() + " LIMIT 1", (who.runner_id, H.KEEPER, now)).fetchone():
+        if c.execute("SELECT 1 " + obsolete_notices_sql(c) + " LIMIT 1", (who.runner_id, H.KEEPER, now)).fetchone():
             return None
         company = org_turns.admission(c)
         if org_turns.needs_observation(c, company):
@@ -3503,7 +3505,7 @@ class Execution:
         # wakes of every kind, while preserving people's messages and explicitly resumed jobs.
         # A keeper notice of a person's own act still owes that person its answer (H._write_message).
         # A self-filed task left parked when its filing turn ended waits for its actual trigger instead.
-        obsolete = c.execute("SELECT j.id,j.bot_id,j.attempt_id,j.message_id,t.id AS task_id " + obsolete_notices_sql() +
+        obsolete = c.execute("SELECT j.id,j.bot_id,j.attempt_id,j.message_id,t.id AS task_id " + obsolete_notices_sql(c) +
                              " ORDER BY j.created_at,j.id LIMIT ?", (who.runner_id, H.KEEPER, now, CLAIM_MAINTENANCE)).fetchall()
         for old in obsolete:
             if not prepared:
@@ -3977,7 +3979,7 @@ class Execution:
     def obsolete_notice(c, who, job_id, now):
         """Whether a queued job is an obsolete keeper notice (obsolete_notices_sql), which a claim cancels and never
         hands out."""
-        return c.execute("SELECT 1 FROM (SELECT j.id AS id " + obsolete_notices_sql() + ") o WHERE o.id=? LIMIT 1",
+        return c.execute("SELECT 1 FROM (SELECT j.id AS id " + obsolete_notices_sql(c) + ") o WHERE o.id=? LIMIT 1",
                          (who.runner_id, H.KEEPER, now, job_id)).fetchone() is not None
 
     def check_waiting(self, bot):
