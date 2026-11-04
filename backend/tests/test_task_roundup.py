@@ -6,13 +6,12 @@ bot with nothing to list gets no message, a private task is named without its ti
 bot alone, and a quiet task is listed again only after seven days. Synthetic fixtures only."""
 import importlib
 import json
-from datetime import datetime, timezone
 
 import pytest
 
 from backend import bot_settings as BS
 from backend.enqueue import enqueue_stored
-from backend import scheduler, still_needed, task_check_backs, task_roundup
+from backend import still_needed, task_check_backs, task_roundup
 from backend import step_backlog as SB
 from backend import task_holds as TH
 from backend import task_relations as TR
@@ -444,20 +443,18 @@ def test_a_private_task_is_listed_by_its_id_without_its_title(api):
         assert "Confidential merger plan" not in body
 
 
-def test_the_scheduler_reads_every_list_then_sends_each_bot_in_its_own_transaction_that_rechecks_the_run(api):
+def test_sending_each_bot_list_in_its_own_transaction_rechecks_the_run(api):
     store = api.app.state.store
     with store.transaction() as c:
         idle = task(c, "Renew the parking permit")
         settle(c, idle["id"], "finance", ago(days=2))
         complete_jobs(c)
-    at = datetime(2026, 11, 3, 14, 0, tzinfo=timezone.utc)      # 06:00 company time: the 6am run, DAY
     with store.transaction() as c:
         [plan] = [p for p in task_roundup.discover(c, DAY) if p["slug"] == "finance"]
     with store.transaction() as c:
         assert task_roundup.send(c, plan) == 1                   # the list names one task
     with store.transaction() as c:
         assert task_roundup.send(c, plan) == 0                   # the run was written by the first send: a stale plan sends nothing
-    scheduler.run_task_roundup(store, None, at)                  # the same run, through the scheduler: nothing again
     with store.read_transaction() as c:
         assert len(lists(c)) == 1
 

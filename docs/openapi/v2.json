@@ -32817,7 +32817,7 @@
     },
     "/api/v2/system-routines/{key}/run": {
       "post": {
-        "summary": "The owner or an admin: run one controlled system routine once, now; 409 while it is off or already running",
+        "summary": "The owner or an admin: run one controlled system routine once, now; 409 while it is off or already running. task_roundup runs Maintenance Find stuck and returns {run, started}.",
         "operationId": "runSystemRoutine",
         "parameters": [
           {

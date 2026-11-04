@@ -19,7 +19,7 @@ from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
 from backend.tests.test_stale_review import FakeDecide
 
 TIMED = {"stale_review", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
-         "bookkeeper_check", "memory_tidy", "task_roundup"}   # the jobs with a schedule preset
+         "bookkeeper_check", "memory_tidy"}   # the jobs with a schedule preset
 
 
 def rows(api, token="ana-test"):
@@ -47,7 +47,7 @@ def test_ai_jobs_are_never_offered_every_15_minutes_and_the_server_refuses_it(ap
     assert [p["key"] for p in jobs["kpi_asks"]["presets"]] == ["15m", "hourly", "4h", "daily"]
     put(api, "system-routines/stale_review", {"preset": "15m"}, expected=422)
     put(api, "system-routines/learnings", {"preset": "hourly"}, expected=422)
-    put(api, "system-routines/task_roundup", {"preset": "daily", "at": "25:00"}, expected=422)
+    put(api, "system-routines/kpi_asks", {"preset": "daily", "at": "25:00"}, expected=422)
     put(api, "system-routines/cleanup", {"on": False}, expected=404)        # housekeeping has no controls
 
 
@@ -147,8 +147,9 @@ def test_the_old_roundup_timer_stays_off_even_with_its_saved_switch_on(api, monk
     sent = []
     monkeypatch.setattr(task_roundup, "discover", lambda c, at: sent.append(at) or [])
     store = api.app.state.store
-    put(api, "system-routines/task_roundup", {"on": True, "preset": "three_daily"})
     with store.transaction() as c:
+        c.execute("INSERT INTO registry_metadata VALUES('system_routines',?) ON CONFLICT(key) DO UPDATE SET "
+                  "value=excluded.value", (json.dumps({"task_roundup": {"on": True, "preset": "three_daily"}}),))
         maintenance.save_settings(c, H.human_actor("ana"), paused=True)
     pt = SR.zone()
     scheduler = Scheduler(store, api.app.state.execution)
@@ -163,14 +164,27 @@ def test_the_old_roundup_timer_stays_off_even_with_its_saved_switch_on(api, monk
         assert c.execute("SELECT count(*) FROM system_runs WHERE job='task_roundup'").fetchone()[0] == 0
 
 
-def test_the_legacy_roundup_run_now_still_runs_when_explicitly_requested(api, monkeypatch):
-    from backend import task_roundup
-    sent = []
-    monkeypatch.setattr(task_roundup, "discover", lambda c, at: sent.append(at) or [])   # one call per run
-    post(api, "system-routines/task_roundup/run", {}, token="ben-test")
-    assert len(sent) == 1, "the legacy manual path remains available"
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM system_runs WHERE job='task_roundup'").fetchone()[0] == 1
+def test_the_retired_roundup_control_redirects_run_now_to_find_stuck_and_keeps_its_switch(api, monkeypatch):
+    from backend import maintenance
+    store = api.app.state.store
+    monkeypatch.setattr(maintenance, "_start", lambda s, a, run_id, only, wait: maintenance._execute(s, a, run_id, only))
+    assert "task_roundup" not in rows(api)
+    put(api, "system-routines/task_roundup", {"on": False}, expected=404)
+    put(api, "system-routines/task_roundup", {"preset": "daily"}, expected=404)
+    post(api, "system-routines/task_roundup/run", {}, token="cara-test", expected=403)
+    with store.transaction() as c:
+        maintenance.save_step(c, "human:ana", {"key": "find_stuck", "enabled": False})
+    reply = post(api, "system-routines/task_roundup/run", {}, token="ben-test")
+    assert reply["started"] and reply["run"]["step"] == "find_stuck"
+    [step] = reply["run"]["steps"]
+    assert step["step"] == "find_stuck" and step["status"] == "off"
+    with store.transaction() as c:
+        maintenance.save_step(c, "human:ana", {"key": "find_stuck", "enabled": True})
+    reply = post(api, "system-routines/task_roundup/run", {}, token="ben-test")
+    [step] = reply["run"]["steps"]
+    assert step["step"] == "find_stuck" and step["status"] == "ran"
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM system_runs WHERE job='task_roundup'").fetchone()[0] == 0
 
 
 def test_nightly_learnings_has_an_off_switch_on_by_default_and_off_means_no_run_that_night(api, monkeypatch):

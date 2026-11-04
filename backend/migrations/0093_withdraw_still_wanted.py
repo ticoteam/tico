@@ -7,17 +7,47 @@ here, the way an answered or withdrawn ask is: it leaves the Needs you list, and
 (backend/task_holds.py reads only asks not superseded). Only keeper messages marked still_wanted are touched; a person's own
 questions and a bot's asks are not. It writes no DDL, and running it again changes nothing.
 
+Find stuck also takes the latest Task roundup switch at cutover: people could still change it after 0090 seeded the
+step. The legacy setting is consumed so a replay cannot overwrite a later Maintenance choice. Its read-only Automations
+mirrors are retired; the legacy Run now endpoint runs Maintenance's Find stuck step.
+
 messages.superseded_at is added by the schema code after the migration files run (hubdb.migrate), so a new database has no
 such column yet, and it has no question to withdraw either: the step is skipped there.
 """
 
-from datetime import datetime, timezone
+import json
+
+from backend import hubdb as H
+
+
+def _cutover_roundup(conn):
+    if H._has_table(conn, "registry_metadata"):
+        row = conn.execute("SELECT value FROM registry_metadata WHERE key='system_routines'").fetchone()
+        try:
+            stored = json.loads(row[0]) if row else {}
+        except (TypeError, ValueError):
+            stored = {}
+        if isinstance(stored, dict) and "task_roundup" in stored:
+            saved = stored.pop("task_roundup")
+            on = saved.get("on") if isinstance(saved, dict) else None
+            if isinstance(on, bool):
+                conn.execute("UPDATE maintenance_steps SET enabled=?, updated_at=?, updated_by_id='migration' "
+                             "WHERE key='find_stuck'", (int(on), H.now()))
+            conn.execute("UPDATE registry_metadata SET value=? WHERE key='system_routines'",
+                         (json.dumps(stored, sort_keys=True),))
+    if H._has_table(conn, "automations"):
+        # Plain SQL, as 0091 retires health_scan's mirror: a migration never calls app code that may change later.
+        when = H.now()
+        conn.execute("UPDATE automations SET enabled=0, deleted_at=?, updated_at=? WHERE deleted_at IS NULL AND builtin=1 "
+                     "AND json_extract(flow,'$.readonly')=1 "
+                     "AND json_extract(flow,'$.trigger.name')='tico.builtin.job.task_roundup'", (when, when))
 
 
 def up(conn):
+    _cutover_roundup(conn)
     columns = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
     if "superseded_at" not in columns:
         return
-    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    stamp = H.now()
     conn.execute("UPDATE messages SET superseded_at=? WHERE sender_id='keeper' AND superseded_at IS NULL "
                  "AND answered_by_id IS NULL AND json_extract(refs,'$.still_wanted')=1", (stamp,))

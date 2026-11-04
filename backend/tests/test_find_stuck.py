@@ -1,10 +1,13 @@
 """Find stuck (backend/maintenance_steps/find_stuck.py): the Maintenance step that gives each bot its task roundup list. It
 reads the bots on the connection it is handed, sends each one through the store under the wake limiter, and records a
 delivered list once, with the tasks it named; a bot the limiter refuses is left unsent and nothing is recorded for it.
-Migration 0093 withdraws the open Still wanted questions to people, and only those. Synthetic fixtures only."""
+Migration 0093 withdraws the open Still wanted questions to people and cuts over the latest roundup switch. Synthetic fixtures only."""
 
 import importlib
+import json
 import sqlite3
+
+import pytest
 
 from backend import maintenance, maintenance_limits, task_check_backs, task_roundup
 from backend.store import H
@@ -234,4 +237,53 @@ def test_migration_0093_skips_a_database_with_no_superseded_column():
     mig = importlib.import_module("backend.migrations.0093_withdraw_still_wanted")
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE messages(id TEXT, sender_id TEXT, refs TEXT)")
+    conn.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT)")
+    conn.execute("CREATE TABLE maintenance_steps(key TEXT PRIMARY KEY, enabled INTEGER, updated_at TEXT, updated_by_id TEXT)")
+    conn.execute("INSERT INTO maintenance_steps(key,enabled) VALUES('find_stuck',1)")
+    conn.execute("INSERT INTO registry_metadata VALUES('system_routines',?)", ('{"task_roundup":{"on":false}}',))
     mig.up(conn)
+    assert conn.execute("SELECT enabled FROM maintenance_steps WHERE key='find_stuck'").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("on", [False, True])
+def test_cutover_takes_the_switch_changed_since_0090_and_a_replay_keeps_later_maintenance_choices(api, on):
+    foundation = importlib.import_module("backend.migrations.0090_maintenance")
+    cutover = importlib.import_module("backend.migrations.0093_withdraw_still_wanted")
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("DELETE FROM maintenance_steps WHERE key='find_stuck'")
+        c.execute("INSERT INTO registry_metadata VALUES('system_routines',?) ON CONFLICT(key) DO UPDATE SET "
+                  "value=excluded.value", (json.dumps({"task_roundup": {"on": not on}}),))
+        foundation.up(c)
+        assert c.execute("SELECT enabled FROM maintenance_steps WHERE key='find_stuck'").fetchone()[0] == int(not on)
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='system_routines'",
+                  (json.dumps({"task_roundup": {"on": on}, "kpi_asks": {"on": False}}),))
+        cutover.up(c)
+        assert c.execute("SELECT enabled FROM maintenance_steps WHERE key='find_stuck'").fetchone()[0] == int(on)
+        assert json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='system_routines'").fetchone()[0]) == {
+            "kpi_asks": {"on": False}}
+        maintenance.save_step(c, "human:ana", {"key": "find_stuck", "enabled": not on})
+        cutover.up(c)
+        assert c.execute("SELECT enabled FROM maintenance_steps WHERE key='find_stuck'").fetchone()[0] == int(not on)
+
+
+def test_cutover_retires_only_the_roundup_mirrors_and_never_recreates_them(api):
+    from backend import automation_flow, automations, redesign_migration
+    cutover = importlib.import_module("backend.migrations.0093_withdraw_still_wanted")
+    store = api.app.state.store
+    with store.transaction() as c:
+        mirror = redesign_migration._mirror("Task roundup", "person:ana", "job.task_roundup", {"on": True},
+                                            {"kind": "system_job", "id": "job:task_roundup"})
+        automations._save(c, H.KEEPER, "old_roundup", automation_flow.check(mirror), None)
+        personal = {**mirror, "builtin": False, "readonly": False, "name": "My reminder"}
+        automations._save(c, H.KEEPER, "personal", automation_flow.check(personal), None)
+        c.execute("INSERT INTO automation_runs(id,automation_id,version,started_at,status) "
+                  "VALUES('old_roundup_run','old_roundup',1,?,'queued')", (H.now(),))
+        cutover.up(c)
+        assert c.execute("SELECT enabled,deleted_at IS NOT NULL FROM automations WHERE id='old_roundup'").fetchone()[:] == (0, 1)
+        assert c.execute("SELECT status FROM automation_runs WHERE id='old_roundup_run'").fetchone()[0] == "skipped"
+        assert c.execute("SELECT deleted_at FROM automations WHERE id='personal'").fetchone()[0] is None
+        cutover.up(c)
+        assert not any(obj["id"] == "job:task_roundup" for obj in redesign_migration._builtins(c, set(), "person:ana"))
+        retired = [row for row in redesign_migration.inventory(c) if row["id"] == "job:task_roundup"]
+        assert len(retired) == 1 and retired[0]["now"] == "removed"
