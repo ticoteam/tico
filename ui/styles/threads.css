@@ -157,11 +157,10 @@ a.th-status-act:hover{text-decoration:none}
 .thv-lib-row{display:block;width:100%;padding:6px 8px;border:0;border-radius:6px;background:none;color:var(--ink);text-align:left;cursor:pointer}
 .thv-lib-row:hover{background:var(--surface2)}
 
-/* the menu on a message or a thread */
+/* the menu on a message, and a call's Add a bot */
 .thv-pop{position:fixed;z-index:60;min-width:160px;padding:4px;border:1px solid var(--line);border-radius:var(--radius);background:var(--raised,var(--surface));box-shadow:0 8px 24px rgba(0,0,0,.14)}
 .thv-pop button{display:block;width:100%;padding:7px 10px;border:0;border-radius:6px;background:none;color:var(--ink);text-align:left;font-size:var(--t-base);cursor:pointer}
 .thv-pop button:hover{background:var(--surface2)}
-.thv-pop button.danger{color:var(--fail)}
 
 /* the bot page: Home and DM fill the pane; the link to every thread with the bot sits quietly above */
 #main.bot-chat-layout #pane-chat>.bot-thread{display:flex;flex:1;flex-direction:column;min-height:0;width:100%;max-width:var(--read-width);margin:0 auto}
@@ -185,8 +184,6 @@ a.th-status-act:hover{text-decoration:none}
 .home-card-acts:empty{display:none}
 .thv-blank .thv-scroll{display:none}
 .th-earlier-open{margin-top:6px}
-.thv-pop [role="menuitemradio"][aria-checked="true"]{font-weight:600}
-.thv-pop [role="menuitemradio"][aria-checked="true"]::after{content:" ✓"}
 
 /* New thread and Members */
 .thd-members{display:flex;flex-direction:column;gap:6px}
@@ -215,6 +212,33 @@ a.th-status-act:hover{text-decoration:none}
 .thd-add>summary::-webkit-details-marker{display:none}
 .thd-add-body{margin-top:var(--s2)}
 
+/* Thread settings: one flat list, a label on the left and its control on the right, thin lines between */
+.ths-dialog.dash-dialog{width:min(520px,calc(100vw - 32px))}
+.ths-dialog>form{flex:1;min-height:0}
+.ths.dash-form{flex:1;min-height:0;gap:0;padding:4px 16px}
+.ths .ths-row{display:flex;flex-direction:row;align-items:center;gap:16px;min-height:52px;padding:10px 0;border:0;border-top:1px solid var(--line);color:var(--ink);font-size:var(--t-base)}
+.ths .ths-row:first-child{border-top:0}
+.ths .ths-row[hidden],.ths .tcn-host:not(:has(.tcn-sec:not([hidden]))){display:none}
+.ths .ths-lbl{flex:none;width:132px;color:var(--ink);font-size:var(--t-base);font-weight:500}
+.ths .ths-row>:not(.ths-lbl,.people-switch,.ths-val,button){flex:1;min-width:0}
+.ths .ths-wide{align-items:flex-start}
+.ths .ths-wide>.ths-lbl{padding-top:6px}
+.ths .thd-aud{gap:2px}
+.ths .thd-aud select{flex:1 1 0;min-width:0;width:auto}
+.ths .people-switch{margin-left:auto}
+label.ths-row{cursor:pointer}
+/* Slack's own section reads as a row: its name where the label goes */
+.ths .tcn-sec{display:flex;align-items:flex-start;gap:16px}
+.ths .tcn-sec>h3{flex:none;width:132px;margin:0;padding-top:6px;color:var(--ink);font-size:var(--t-base);font-weight:500}
+.ths .tcn-sec>.tcn-body{flex:1;min-width:0}
+button.ths-link{width:100%;background:none;text-align:left;cursor:pointer;font:inherit}
+button.ths-link:hover .ths-val{color:var(--ink)}
+.ths-val{display:inline-flex;align-items:center;gap:6px;margin-left:auto;color:var(--muted);font-variant-numeric:tabular-nums}
+.ths-val>span{font-size:18px;line-height:1}
+.ths-seg button{white-space:nowrap}
+.ths .ths-acts{flex-wrap:wrap;gap:8px}
+.ths-acts .spacer{flex:1}
+
 @media (max-width:760px){
   .thread-page{max-width:none}
   /* the title needs the room: the mark before it says private or public, and the phone icon says call */
@@ -228,6 +252,19 @@ a.th-status-act:hover{text-decoration:none}
   .th-react{height:36px;padding:0 10px}
   .th-status-act{min-height:44px;display:inline-flex;align-items:center}
   .thv-replying-x{width:44px;height:44px}
+  /* Thread settings takes the screen; each control its own line under its label, a finger's height */
+  .ths-dialog.dash-dialog[open]{width:100%;max-width:none;height:100%;max-height:none;margin:0;border-radius:0}
+  .ths-dialog .tmodal-head{padding-top:max(14px,env(safe-area-inset-top))}
+  .ths-dialog .tmodal-x{min-width:44px;height:44px}
+  .ths-dialog .dash-form-foot{padding-bottom:max(12px,env(safe-area-inset-bottom))}
+  .ths-dialog .dash-form-foot button{min-height:44px;min-width:88px}
+  .ths .ths-wide,.ths .tcn-sec{flex-direction:column;align-items:stretch;gap:8px}
+  .ths .ths-wide>.ths-lbl,.ths .tcn-sec>h3{width:auto;padding-top:0}
+  .ths .ths-row{min-height:56px}
+  .ths :is(input:not([type=checkbox],[type=radio]),select){min-height:44px}
+  .ths .thd-aud label.dash-pick-row{min-height:44px}
+  .ths .ths-seg button{height:44px}
+  .ths-acts button{min-height:44px}
 }
 
 /* calls: Start call / Join in the header, and the bar while in a call */
