@@ -148,6 +148,15 @@ def test_stale_card_does_not_approve_a_changed_flow(api):
     assert saved["enabled"] is False and saved["name"] == "Changed elsewhere"
 
 
+def test_a_reply_routine_can_be_stopped_on_a_card_after_send_permission_is_revoked(api):
+    saved = post(api, "automations", flow("reply"))
+    token = turn(api, "Stop the routine")
+    assert api.patch("/api/v2/inboxes/ana@acme.example", json={"send": False}, headers=headers()).status_code == 200
+    card = propose(api, token, {"enabled": False}, "/api/v2/automations/" + saved["id"], "PATCH")["action"]
+    assert confirm(api, card)["action"]["status"] == "done"
+    assert get(api, "automations/" + saved["id"])["enabled"] is False
+
+
 def test_proposal_checks_inbox_access_before_showing_a_plan(api):
     given = flow()
     given["trigger"]["inbox"] = "ben@acme.example"

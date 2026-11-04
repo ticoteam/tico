@@ -11,16 +11,29 @@ EDIT = re.compile(r"/api/v2/automations/([^/]+)")
 
 
 def message(flow):
-    return isinstance(flow, dict) and (flow.get("trigger") or {}).get("type") == "message"
+    trigger = flow.get("trigger") if isinstance(flow, dict) else None
+    return isinstance(trigger, dict) and trigger.get("type") == "message"
 
 
 def defaults(fields):
     """A new chooser without an explicit mode drafts; Sort flows need no chooser at all."""
-    from .automation_flow import choosing
     fields = copy.deepcopy(fields)
-    for step in choosing(fields.get("steps")):
-        if isinstance(step["choose"], dict):
-            step["choose"].setdefault("mode", "draft")
+
+    def visit(steps):
+        # The route has not validated the flow yet; leave malformed nodes for its normal 422.
+        for step in steps if isinstance(steps, list) else []:
+            if not isinstance(step, dict):
+                continue
+            if step.get("type") == "llm" and isinstance(step.get("choose"), dict):
+                step["choose"].setdefault("mode", "draft")
+            paths = step.get("paths")
+            for path in paths if isinstance(paths, list) else []:
+                if isinstance(path, dict):
+                    visit(path.get("steps"))
+            if isinstance(step.get("otherwise"), dict):
+                visit(step["otherwise"].get("steps"))
+
+    visit(fields.get("steps"))
     return fields
 
 
@@ -59,7 +72,7 @@ def require_send(c, flow):
     """A Reply card promises sending, so refuse it when the inbox or company does not allow that."""
     from .automation_actions import send_on
     from .google_workspace import permissions
-    if not message(flow) or mode(flow) != "Reply":
+    if not message(flow) or not flow.get("enabled") or mode(flow) != "Reply":
         return
     inbox = flow["trigger"]["inbox"]
     if not send_on(c, inbox) or (not inbox.startswith("slack:") and not permissions(c)["send_mail"]):
@@ -120,14 +133,17 @@ def prepare(c, settings, who, method, path, body):
         return body, None
     fields = defaults(body)
     fields.pop("summary", None)
+    stopping = method == "PATCH" and fields == {"enabled": False}
     if method == "POST":
         fields["enabled"] = True
-    flow = A._checked(c, {**before, **fields}, settings, saved=before or None,
+    flow = A._checked(c, {**before, **fields}, settings, access=not stopping, saved=before or None,
                       aid=row["id"] if row else None)
     A._require(c, who, flow)
     require_send(c, flow)
     if not message(flow):
         return body, None
+    if stopping:
+        return body, describe(c, flow, "Turn off", digest(row["flow"]))
     # A full snapshot prevents a pending enable from silently approving different steps edited in between.
     model = A.AutomationIn if method == "POST" else A.AutomationPatch
     sent = {k: v for k, v in flow.items() if k in model.model_fields}
