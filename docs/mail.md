@@ -468,7 +468,7 @@ a domain the key covers. The issue goes away on its own once the mailbox syncs.
 
 A person can connect their own Google account from Tico, with no service account, no domain-wide delegation, no
 Workspace admin console and no Google Cloud project of their own. It works for an ordinary mailbox user who can sign in.
-Tico supplies the Google app ("Tico") and the consent screen. Google itself enforces what Tico may do: the grant belongs to
+Tico supplies the Google app ("Tico") and the consent screen, unless the company sets its own Google app (below). Google itself enforces what Tico may do: the grant belongs to
 the account that signed in and cannot reach anyone else in the Workspace.
 
 ![Google tab showing the demo’s unconnected Google account card](images/settings-stage1/settings-my-google-account.png)
@@ -477,20 +477,28 @@ the account that signed in and cannot reach anyone else in the Workspace.
 
 1. In Tico, the person opens **Settings > Google** and chooses **Connect Google**. Tico names the mailbox it will connect:
    the one their message bot manages.
-2. Google asks them to sign in as that mailbox and to allow Tico to read their mail and calendar. Nothing that writes or
-   sends is asked for.
+2. Google asks them to sign in as that mailbox and to allow Tico to read their mail and calendar. With Tico's shared app,
+   nothing that writes or sends is asked for. With the company's own Google app, see below.
 3. Google returns them to Tico. The computer that runs the mail sync finishes the sign-in and keeps the grant. Settings
-   shows that it is connected, read only, and the sync starts on its next cycle. The server sees a one-time code for a few
+   shows what the grant allows, and the sync starts on its next cycle. The server sees a one-time code for a few
    minutes and never the grant itself.
 
 Tico refuses any other account: if Google says someone else signed in, nothing is stored and that grant is revoked at
 once. Only the person can connect their own mailbox; an owner cannot connect it for them.
 
-What it allows: Gmail `gmail.readonly`, and Calendar `calendar.events.readonly`, `calendar.freebusy` and
+What it allows with Tico's shared app: Gmail `gmail.readonly`, and Calendar `calendar.events.readonly`, `calendar.freebusy` and
 `calendar.calendarlist.readonly`. A bot's `read` verb in Tico also covers labelling, archiving and triage, but a
 read-only grant cannot do those at Google, so Tico refuses them before calling Google (exit 2, "connected to Tico
 read-only at Google"). Sending stays off ([Turning sending on](#turning-sending-on)). Tico never asks Google for more on
 its own.
+
+**With the company's own Google app.** An admin can set the company's own Google app in Settings > Google (its OAuth client
+ID and secret, with the redirect address Settings shows). Then Connect Google also asks Google for `gmail.modify`, which
+labels, archives and drafts mail, and for `calendar.events`, which adds calendar events. Google shows them on the same
+consent screen, and the grant keeps only what Google gave. A person whose grant is read only is offered the upgrade in
+Settings: **Connect Google** again adds the access, and nothing is forced. Tico's shared app stays read only, and so does
+a server whose environment sets its own client (`TICO_GOOGLE_OAUTH_CLIENT_ID`), because the environment's client wins over
+the one set in Settings. Sending stays off either way.
 
 When Google says no. A Workspace's admin can block apps for everyone in it. Tico cannot get around that and does not
 try. When Google answers `admin_policy_enforced`, Settings says so in those words: "The Google Workspace for
@@ -535,11 +543,13 @@ The app's client secret never leaves the Tico server, for either kind of app: on
 every team, so no computer holds it. Google refreshes a grant only with the client that issued it, so the server does
 it on the computers' behalf. The computer that holds the grant sends its refresh token to the server
 (`POST /api/v2/connectors/mail/google/token`, with its runner registration). The server adds the secret, asks Google
-for one service's read-only scopes and returns only an hour-long access token and its expiry. It keeps no token
+for one service's scopes, never more than the grant holds, and returns only an hour-long access token and its expiry. It keeps no token
 and logs none: only each grant's SHA-256 fingerprint, which can refresh nothing, so it refreshes only the grant it
 issued for that mailbox and that computer. The sign-in's one-time code is exchanged the same way (`/exchange`, once, by the computer that
 claimed it), so the grant on the computer has a client id and no secret. Only a computer that holds a Connect Google
-grant from this server may ask, and only for `gmail.readonly` or the calendar read scopes, one service at a time. The
+grant from this server may ask, one service at a time. A grant from Tico's shared app, or one made before scopes were
+recorded, holds only the read scopes (`gmail.readonly` and the calendar read scopes). A grant the company's own app made
+also holds `gmail.modify` and `calendar.events` if Google gave them. The
 computer's runner gives the mail CLI the server's address and its registration for this; a mail CLI run by hand, or
 a bot's turn on a Mac without the runner's credential socket, cannot refresh such a grant and says to use the runner.
 A grant made with `google connect --client-file` (a team's own Desktop client) keeps its own secret and refreshes on
