@@ -73,6 +73,9 @@ EMPTY = (
     "model_subscriptions", "computer_subscriptions", "attempt_subscriptions", "pending_subscription_fallbacks", "subscription_connects",
     # mail, Slack, GitHub, Granola, meeting bots, support
     "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
+    # Settings > Google: the Workspace key (sealed), setup codes and the OAuth client secret (sealed), and the health each
+    # computer reported. A copy holds none of them (google_connects.client_id goes with its table).
+    "google_workspaces", "google_setup_codes", "google_oauth_clients", "connector_reports",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
     "support_tickets", "support_access", "support_access_log",
     # Agent inbox bodies/codes and delivery cursors never enter a rehearsal copy.
@@ -168,6 +171,9 @@ KEEP = frozenset((
     "message_routes",
     "message_search_keys",    # the search index's keys (thread_search.py); its FTS table is copied whole too, and search joins messages
     "home_merges", "home_merge_messages",   # where each person's old chat with a bot went (backend/bot_home_merge.py)
+    # The Google Workspace generation counter (backend/google_workspace.py): no secrets, and kept so a copy never issues
+    # a number that an older setup code already holds.
+    "google_setup_generations",
 )) | frozenset(finance.DEV_COPY_KEPT)
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.

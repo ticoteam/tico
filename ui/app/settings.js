@@ -211,7 +211,7 @@ function pageSettings() {
       <button type="button" data-settings-tab="models" role="tab">Models</button>
       <button type="button" data-settings-tab="repos" role="tab">Repositories</button>
       <button type="button" data-settings-tab="tasks" role="tab">Tasks</button>
-      <button type="button" data-settings-tab="inbox" role="tab">My Google account</button>
+      <button type="button" data-settings-tab="inbox" role="tab">Google</button>
       <details class="settings-more" id="settings-more"><summary>More</summary><div>
         <button type="button" data-settings-tab="inbound" role="tab">Email &amp; Phone</button>
         <button type="button" data-settings-tab="mail" role="tab">Mail</button>
@@ -289,7 +289,7 @@ function pageSettings() {
     </div>
     <div class="settings-pane" id="settings-inbound" role="tabpanel" hidden><section class="card" id="set-inbound"></section></div>
     <div class="settings-pane" id="settings-mail" role="tabpanel" hidden><div id="set-mail">${skelRows(3, {card: true, dot: false})}</div></div>
-    <div class="settings-pane" id="settings-inbox" role="tabpanel" hidden><section class="card"><header><h2>Your Google account</h2></header><div id="set-google"></div></section></div>
+    <div class="settings-pane" id="settings-inbox" role="tabpanel" hidden><section class="card"><header><h2>Google</h2></header><div id="set-google"></div></section></div>
     <div class="settings-pane" id="settings-history" role="tabpanel" hidden><section class="card"><header><h2>History</h2>
       ${S.me?.role === 'owner' ? '<div class="theme-seg" id="settings-history-view" role="radiogroup" aria-label="History"><button type="button" role="radio" data-history-view="runs">Runs</button><button type="button" role="radio" data-history-view="changes">Changes</button></div>' : ''}</header>
       <div id="set-runs">${skelRows(3, {card: true, dot: false})}</div>

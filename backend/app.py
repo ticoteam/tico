@@ -368,6 +368,12 @@ def create_app(settings=None):
                 except Exception as exc:
                     telemetry.capture("calls_sweep", exc)
                 try:
+                    # Settings > Google's pending and failing Workspace key is checked again (backend/google_workspace.py).
+                    from . import google_workspace as workspace_checks
+                    await asyncio.to_thread(workspace_checks.tick, store)
+                except Exception as exc:
+                    telemetry.capture("google_workspace", exc)
+                try:
                     await asyncio.wait_for(stop.wait(), timeout=10)
                 except TimeoutError:
                     pass
@@ -725,6 +731,19 @@ def create_app(settings=None):
                 return await call_next(request)
             # A Hermes profile with no credential pairs itself (backend/agents.py): it asks for a code, polls with its own
             # secret, and fetches the source-available connector it runs. The person's approval is the authenticated step.
+            # Settings > Google's setup command (backend/google_workspace.py): the script, and the key upload and its keep
+            # check when they carry the command's code. Nothing else passes without a session. The body is read here,
+            # bounded, the way the relay's is, and the route reads it again from the buffer.
+            from . import google_workspace as workspace_setup
+            if workspace_setup.exempt(request):
+                chunks, total = [], 0
+                async for chunk in request.stream():
+                    total += len(chunk)
+                    if total > workspace_setup.KEY_BYTES:
+                        raise Problem("too_large", "The setup upload exceeds its limit", 413)
+                    chunks.append(chunk)
+                request._body = b"".join(chunks)
+                return await call_next(request)
             agent_door = (request.url.path == "/api/v2/agents/pairings" and request.method == "POST"
                           or request.url.path.startswith("/api/v2/agents/pairings/") and request.method == "GET"
                           or request.url.path in ("/api/v2/agents/setup-script", "/api/v2/agents/sync-skill")
@@ -8463,6 +8482,8 @@ def create_app(settings=None):
     install_credentials(app, store, delegate=delegated_identity, propose=propose_card)
     from .finance import actions as finance_vault
     finance_vault.use_vault(app.state.vault)      # never one an earlier app left behind (the scheduler may be off)
+    from .google_workspace import install as install_google_workspace
+    install_google_workspace(app, store)
     install_credential_cards(app, store, app.state.vault, auth, BOTOPS, delegated_identity, settings_admin._manager)
     from . import company_storage
     company_storage.install(app, store, auth)
