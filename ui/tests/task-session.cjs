@@ -302,6 +302,11 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
       await page.evaluate(t => taskModalShow(t), plan);
       await modal.locator('.task-comments', {hasText: 'What should launch first?'}).waitFor();
     };
+    // sendWayPick writes the kept way 600 ms after its last pick, and the server holds it only once that write arrives.
+    // The timer firing is not the write arriving: a check made right then can run before the stub has the write. So wait
+    // for the response to the write that carries this way.
+    const keptWrite = way => page.waitForResponse(r => r.request().method() === 'POST'
+      && new URL(r.url()).pathname === '/api/v2/preferences/compose.send_way' && JSON.parse(r.request().postData() || '{}').value === way);
     const ways = () => menu.locator('[data-deliver]').evaluateAll(xs => xs.map(x => x.dataset.deliver));
     const looks = async () => ({shows: await main.getAttribute('data-shows'), label: await main.getAttribute('aria-label'),
       badge: await main.locator('.p-way-badge').count() ? await main.locator('.p-way-badge').innerText() : ''});
@@ -345,14 +350,16 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-task-caret')), true, 'focus is back on the caret');
 
     // Queue: the icon changes, the comment names it, and it is kept on the server.
+    const queueKept = keptWrite('queue');
     await pick('queue');
     assert.deepEqual(await looks(), {shows: 'queue:', label: 'Send, queue', badge: ''});
     if (shot) await page.screenshot({path: shot.replace('.png', '-queue.png'), clip: await modal.locator('.task-pill').boundingBox()});
     assert.equal((await send('Billing first, then the docs.')).delivery, 'queue');
-    await page.waitForFunction(() => !SEND_WAY_TIMER);
+    await queueKept;
     assert.deepEqual(prefPosts.at(-1), ['compose.send_way', 'queue']);
 
     // Defer 4h: a clock with a 4h badge, and it stays after the send.
+    const deferKept = keptWrite('defer:4h');
     await pick('defer:4h');
     assert.deepEqual(await looks(), {shows: 'defer:4h', label: 'Send, defer 4h', badge: '4h'});
     if (shot) await page.screenshot({path: shot.replace('.png', '-defer.png'), clip: await modal.locator('.task-pill').boundingBox()});
@@ -368,7 +375,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     assert.deepEqual(await looks(), {shows: 'goal:', label: 'Set as goal', badge: ''});
     assert.equal((await send('Finish the billing migration.')).delivery, 'goal');
     assert.deepEqual(await looks(), {shows: 'defer:4h', label: 'Send, defer 4h', badge: '4h'}, 'back to the kept way');
-    await page.waitForFunction(() => !SEND_WAY_TIMER);
+    await deferKept;
     assert.deepEqual(prefPosts.map(([, v]) => v), ['queue', 'defer:4h'], 'goal is never written');
 
     // Send itself opens the ways: a right-click on a computer, a long press on a phone; neither sends.
@@ -406,6 +413,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     await page.keyboard.press('Escape');
     assert.deepEqual(await send('Deferred'), {text: 'Deferred', public: false, delivery: 'defer', defer_for: 'never'});
     // A kept deadline is not theirs to give either (the server 403s it), nor a server default with one: Defer with none.
+    const deferKeptAgain = keptWrite('defer:4h');
     await page.evaluate(() => sendWayPick('defer:4h'));
     choices = {...choices, default_for: '24h'};
     await reread(page);
@@ -414,7 +422,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     assert.deepEqual(await ways(), ['defer:never'], 'no deadlines to pick');
     await page.keyboard.press('Escape');
     assert.deepEqual(await send('No deadline'), {text: 'No deadline', public: false, delivery: 'defer', defer_for: 'never'});
-    await page.waitForFunction(() => !SEND_WAY_TIMER);
+    await deferKeptAgain;
     assert.equal(prefs['compose.send_way'], 'defer:4h', 'the kept way stays what the person picked');
 
     // A task with no bot keeps the plain arrow and no caret, and its comment carries no delivery.
