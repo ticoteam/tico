@@ -214,8 +214,10 @@ a.th-status-act:hover{text-decoration:none}
 
 /* Thread settings: one flat list, a label on the left and its control on the right, thin lines between */
 .ths-dialog.dash-dialog{width:min(520px,calc(100vw - 32px))}
-.ths-dialog>form{flex:1;min-height:0}
-.ths.dash-form{flex:1;min-height:0;gap:0;padding:4px 16px}
+/* Auto bases, as settings.css's model-login: in WebKit 26 (the macOS app, Safari 26) a 0 basis on the dialog's form left the
+   content-sized dialog 0px tall, so only the dimmed screen showed. The body grows the same way. */
+.ths-dialog>form{flex:1 1 auto;min-height:0}
+.ths.dash-form{flex:1 1 auto;min-height:0;gap:0;padding:4px 16px}
 .ths .ths-row{display:flex;flex-direction:row;align-items:center;gap:16px;min-height:52px;padding:10px 0;border:0;border-top:1px solid var(--line);color:var(--ink);font-size:var(--t-base)}
 .ths .ths-row:first-child{border-top:0}
 .ths .ths-row[hidden],.ths .tcn-host:not(:has(.tcn-sec:not([hidden]))){display:none}
