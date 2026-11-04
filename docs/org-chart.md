@@ -95,7 +95,9 @@ people:
 ```
 
 A bot's group is `team` in its entry in `registry/employees.yaml`, and after that in the app. A bot with no group of its own is in its
-manager's; giving it an empty `team` takes it out of every group.
+manager's group when the manager is a bot. A bot that reports to a person and names no group takes that person's group when it is
+made. It keeps that group: moving the person later leaves the bot where it was. Change the bot's group as described below. Giving a bot
+an empty `team` takes it out of every group.
 
 Owners and admins change groups; everyone else reads them.
 
@@ -125,6 +127,9 @@ Engineering and so on), and the group is made if the team has none yet. A group 
 (labels on the chart) and a bot's department (its template's group in the team builder, or its manager's). The first time a team
 starts on this version, each becomes a group and each bot becomes a member of the group it had; a human's `team` that named no group
 becomes one too. Nobody changes group and `reports_to` is not touched. It runs once and is safe to run again.
+
+**Bots made before this version.** When this version first starts, a bot with no group of its own takes the first group above it in its
+chain of managers. Bots that name a group, even an empty one, are left alone. So are the Assistant, the built-in bots and message bots.
 
 ## The humans
 
