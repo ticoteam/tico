@@ -18,9 +18,10 @@ const {t} = require('./support/load.cjs');
       return result.task || result;
     };
     for (const phone of [true, false]) {
+      const surface = phone ? 'phone' : 'desktop';
       const meeting = await call('POST', 'meetings/import', {title: 'Release planning', transcript: 'Dana: Review the plan.', review: 'live'});
-      let task = await call('POST', 'tasks', {title: 'Review the public plan', body: 'Review the plan.', owner: 'human:dana', private: false});
-      const hidden = await call('POST', 'tasks', {title: 'Private review', body: 'Private.', owner: 'human:dana', private: true});
+      let task = await call('POST', 'tasks', {title: 'Review the public plan on ' + surface, body: 'Review the plan.', owner: 'human:dana', private: false});
+      const hidden = await call('POST', 'tasks', {title: 'Private review on ' + surface, body: 'Private.', owner: 'human:dana', private: true});
       const page = await pageAs(browser, hub, 'priya', {phone});
       const errors = [];
       let reads = 0;
@@ -36,7 +37,7 @@ const {t} = require('./support/load.cjs');
         assert.match(await row.innerText(), /Review the public plan/);
         assert.equal(await page.locator(`[data-linked-task="${hidden.id}"]`).count(), 0);
         await page.evaluate(id => { window.heldLinkedTask = document.querySelector(`[data-linked-task="${id}"]`); }, task.id);
-        task = await call('POST', 'tasks/' + task.id, {version: task.version, title: 'Review the final plan', status: 'doing'});
+        task = await call('POST', 'tasks/' + task.id, {version: task.version, title: 'Review the final plan on ' + surface, status: 'doing'});
         await page.waitForFunction(id => {
           const text = document.querySelector(`[data-linked-task="${id}"]`)?.textContent || '';
           return text.includes('Review the final plan') && text.includes('doing');
