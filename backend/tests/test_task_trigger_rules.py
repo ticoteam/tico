@@ -262,14 +262,16 @@ def test_scopes_and_all_five_conditions_match_task_owner_not_message_recipient(a
         assert not history(c, unmatched["id"])
 
 
-def test_decline_and_step_action_runs_only_after_final_task_write(api):
+@pytest.mark.parametrize("status", ["done", "declined"])
+def test_done_or_decline_step_action_does_not_start_an_entered_step_rule_in_the_same_chain(api, status):
     with api.app.state.store.transaction() as c:
         typ = task_type(c)
         task = make(c, type=typ["id"])
-    moved = rule(api, "task.declined", "move_step", {"step": "In QA"})
+    event = "task.done" if status == "done" else "task.declined"
+    moved = rule(api, event, "move_step", {"step": "In QA"})
     rule(api, "task.step_changed", when={"step": "In QA"}, params={"text": "Must not chain"})
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "human:ana", task["id"], status="declined", note="Declined")
+        H.task_update(c, "human:ana", task["id"], status=status, note=status.title())
         after = H.task(c, task["id"])
         assert after["status"] == "review" and after["step_id"] == next(s["id"] for s in typ["steps"] if s["name"] == "In QA")
         assert moved["id"] in after["note"] and "Must not chain" not in after["note"]
