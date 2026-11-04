@@ -120,10 +120,15 @@ let NEEDS_READ = 0, NEEDS_KEPT = 0;
 // paths is answered from it as if asked alone, with that read's own status and ETag. Anything but a 200 (an older
 // server's 404, a lapsed sign-in, a locked company) leaves each get() to ask for itself, as before.
 const BOOT_READS = ['/employees', '/me', '/humans', '/status', '/v2/status', `/v2/needs-you?limit=${NEEDS_PAGE}`];
+// The server leaves out a part slower than its budget (backend/app.py boot_part_budget, 800 ms); an answer slower than this
+// is not waited for at all, and every part is asked on its own.
+const BOOT_READS_WAIT_MS = 1500;
 function bootReadsPrefetch() {
   const at = Date.now();
-  const reads = getRaw(`/v2/boot?limit=${NEEDS_PAGE}`)
-    .then(({r, text}) => r.status === 200 ? JSON.parse(text).reads || null : null).catch(() => null);
+  const reads = Promise.race([
+    getRaw(`/v2/boot?limit=${NEEDS_PAGE}`).then(({r, text}) => r.status === 200 ? JSON.parse(text).reads || null : null),
+    new Promise(done => setTimeout(() => done(null), BOOT_READS_WAIT_MS)),
+  ]).catch(() => null);
   for (const p of BOOT_READS) {
     if (GET_PREFETCHED.has(p)) continue;
     GET_PREFETCHED.set(p, {at, raw: reads.then(all => {

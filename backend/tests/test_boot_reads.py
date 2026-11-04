@@ -40,3 +40,16 @@ def test_the_parts_ignore_the_callers_caching_and_compression(api):
 def test_signed_out_is_signed_out(api):
     alone = api.get("/api/employees")
     assert api.get("/api/v2/boot").status_code == alone.status_code != 200
+
+
+def test_a_part_past_its_budget_is_left_out_for_the_page_to_ask_alone(api):
+    auth = {"Authorization": "Bearer ana-test"}
+    state = api.app.state
+    kept, state.boot_part_budget = state.boot_part_budget, 0
+    try:
+        r = api.get("/api/v2/boot", headers=auth)
+    finally:
+        state.boot_part_budget = kept
+    # Nothing is done in no time: every part is left out, and the answer still comes, at once.
+    assert r.status_code == 200 and r.json() == {"reads": {}}
+    assert tuple(api.get("/api/v2/boot", headers=auth).json()["reads"]) == READS

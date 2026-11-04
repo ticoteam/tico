@@ -1177,7 +1177,9 @@ def create_app(settings=None):
     # GET /api/v2/boot: the six reads every page opens with (ui/app/boot.js), in one round trip. Each is asked of this
     # same app with the caller's own headers, so it answers exactly as it does alone: its own sign-in, access and
     # privacy checks, its own status and error, its own ETag. A page that gets anything but a 200 here (an older
-    # server's 404 included) asks the six separately, as before.
+    # server's 404 included) asks the six separately, as before. A part not done within its budget is left out (and
+    # stopped), so one slow read never holds the rest: the page asks a missing part on its own.
+    app.state.boot_part_budget = 0.8     # seconds; a test may lower it
     BOOT_READS = ("/api/employees", "/api/me", "/api/humans", "/api/status", "/api/v2/status", "/api/v2/needs-you")
     # Headers a part must not inherit: its answer is one plain body, never a 304 or compressed (the whole answer is).
     BOOT_DROP = {b"accept-encoding", b"if-none-match", b"if-modified-since", b"content-length", b"content-type"}
@@ -1221,11 +1223,19 @@ def create_app(settings=None):
         `limit` is passed on to Needs you, the page's first page of it."""
         limit = request.query_params.get("limit", "")
         needs = ("limit=" + limit).encode() if limit.isdigit() and len(limit) <= 4 else b""
-        parts = await asyncio.gather(*(boot_read(request.scope, path, needs if path == "/api/v2/needs-you" else b"")
-                                       for path in BOOT_READS))
+        tasks = {path: asyncio.ensure_future(boot_read(request.scope, path,
+                                                       needs if path == "/api/v2/needs-you" else b""))
+                 for path in BOOT_READS}
+        await asyncio.wait(tasks.values(), timeout=request.app.state.boot_part_budget)
+        parts = []
+        for path, task in tasks.items():
+            if not task.done():
+                task.cancel()
+            elif not task.cancelled() and task.exception() is None:
+                parts.append((path, *task.result()))
         return fast_json.RawJsonResponse(b'{"reads":{' + b",".join(
             json.dumps(path).encode() + b':{"status":' + str(status).encode() + b',"etag":' + json.dumps(etag).encode()
-            + b',"body":' + body + b"}" for path, (status, etag, body) in zip(BOOT_READS, parts)) + b"}}")
+            + b',"body":' + body + b"}" for path, status, etag, body in parts) + b"}}")
 
     @app.get("/api/v2/ops/timing")
     def request_timings(request: Request):
