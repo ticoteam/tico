@@ -5,11 +5,13 @@ listed once quiet a day, Tico's own notices and check-backs are not news, a task
 bot with nothing to list gets no message, a private task is named without its title or any detail of it, a list reaches the
 bot alone, and a quiet task is listed again only after seven days. Synthetic fixtures only."""
 import importlib
+import json
 from datetime import datetime, timezone
 
 import pytest
 
 from backend import bot_settings as BS
+from backend.enqueue import enqueue_stored
 from backend import scheduler, still_needed, task_check_backs, task_roundup
 from backend import step_backlog as SB
 from backend import task_relations as TR
@@ -46,6 +48,23 @@ def settle(c, tid, slug, turned):
               (H.shift(turned, days=-1), tid))
     c.execute("INSERT INTO turns(id,bot,thread_id,started_at,finished_at,trigger,message_id,task_id,exit,summary) "
               "VALUES(?,?,NULL,?,?,'schedule',NULL,?,'done','')", (H.new_id(), slug, turned, turned, tid))
+
+
+def started(c, tid, slug, when):
+    """A run of the bot that carried the task at `when`: its attempt makes the task started, so it is not an assignment the
+    bot has yet to start (backend/assigned_start.py). The message that started the run is written before the turn."""
+    c.execute("INSERT OR IGNORE INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r-roundup','box','ana','h',?)",
+              (when,))
+    conv = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (tid,)).fetchone()[0]
+    mid = H.new_id()
+    c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
+              "VALUES(?,?,?,?,'task','',?,?)",
+              (mid, conv, H.human_actor("ana"), H.bot_actor(slug), json.dumps({"task": tid}), H.shift(when, days=-1)))
+    enqueue_stored(c, mid)
+    job = c.execute("SELECT id FROM jobs WHERE message_id=?", (mid,)).fetchone()[0]
+    c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job,))
+    c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
+              "VALUES(?,?,?,'r-roundup',1,?,'completed',?,?)", (H.new_id(), job, slug, H.new_id(), when, when))
 
 
 def blocks(c, blocker, tid, when):
@@ -341,6 +360,7 @@ def test_a_listed_task_is_news_only_after_its_listing_and_a_quiet_one_is_listed_
     with store.transaction() as c:
         idle = task(c, "Renew the parking permit")
         settle(c, idle["id"], "finance", ago(days=2))
+        started(c, idle["id"], "finance", ago(days=2))
         note(c, idle["id"], H.human_actor("ana"), ago(hours=1))     # news after the turn, before the first list
         complete_jobs(c)
         assert task_roundup.run(c, DAY)["woke"] == ["finance"]
@@ -463,6 +483,7 @@ def test_a_step_set_later_on_a_task_that_had_none_is_news_but_its_creation_row_i
         mine = task(c, "Plan the hike")
         c.execute("UPDATE tasks SET created_at=? WHERE id=?", (ago(days=3), mine["id"]))   # created before the step below
         settle(c, mine["id"], "finance", ago(days=2))
+        started(c, mine["id"], "finance", ago(days=2))
         H._task_event(c, mine["id"], H.human_actor("ana"), "step", None, "Draft the route", "Set the step")
         c.execute("UPDATE history_events SET created_at=? WHERE subject_id=? AND kind='step' AND new='Draft the route'",
                   (ago(hours=1), mine["id"]))
