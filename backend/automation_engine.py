@@ -173,9 +173,9 @@ def _step(flow, state, thread, services):
 def _chain(services, chain, values, step, key, first):
     """Run one chain of actions in order, each as an effect keyed `<key>.<m>` where m counts from `first` across the
     step. A refused action ends the chain (what follows it may depend on it); the list keeps it as the last entry.
-    Each entry is (action, source, plain). A plain action produces under the step's own id, as every action always
-    has: a due-date run's task is one per step, so the first rule that fires keeps that identity. Any other action
-    produces under its own effect key, so two rules that fire in one run never share a task."""
+    Each entry is (action, source, plain). A plain action produces under the step's own id, as every task always has:
+    a due-date run opens one task per identity, so only the run's first create_task is plain (`_filter` marks it). Any
+    other action produces under `<step>@<key>.<m>`, so a later task in the same run never shares the first one's row."""
     done = []
     for action, source, plain in chain:
         m = first + len(done)
@@ -194,19 +194,23 @@ def _filter(flow, state, thread, step, services):
     values = values_of(state, thread)
     destinations = {d["id"]: d for d in flow.get("destinations") or []}
     key, actions, fired, failed, ended = len(state["steps"]), [], [], False, False
+    taken = False   # a create_task in this run has taken the step's own id (`_chain`)
     for n, rule in enumerate(step.get("rules") or []):
         if not F.all_hold(rule.get("when") or [], values, rule.get("match", "all")):
             continue
-        first_rule = not fired
         fired.append(n)
-        chain = [(action, {"from": "rule", "rule": n}, first_rule) for action in rule.get("then") or []]
+        chain = [(action, {"from": "rule", "rule": n}) for action in rule.get("then") or []]
         if rule.get("to") is not None:
             if rule["to"] not in destinations:   # check() refuses a flow that names none; a run never reaches this
                 raise ValueError(f"no destination named {rule['to']}")
             dest = destinations[rule["to"]]
-            chain += [(action, {"from": "destination", "destination": dest["id"]}, False)
-                      for action in dest.get("then") or []]
-        actions += _chain(services, chain, values, step, key, len(actions))
+            chain += [(action, {"from": "destination", "destination": dest["id"]}) for action in dest.get("then") or []]
+        marked = []
+        for action, source in chain:   # in run order, so the first create_task of the run is the plain one
+            plain = action["do"] == "create_task" and not taken
+            taken = taken or plain
+            marked.append((action, source, plain))
+        actions += _chain(services, marked, values, step, key, len(actions))
         if any(not action.get("ok") for action in actions):
             failed = True
             break
