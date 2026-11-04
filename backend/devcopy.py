@@ -340,7 +340,12 @@ def prune(c, days, keep_automations=False):
     if "jobs" in present:
         delete("jobs", "state IN (%s)" % ",".join("?" * len(OPEN_JOBS)), OPEN_JOBS)
     if "attempts" in present:
-        delete("attempts", "finished_at IS NULL OR state IN (%s)" % ",".join("?" * len(OPEN_ATTEMPTS)), OPEN_ATTEMPTS)
+        open_run = "finished_at IS NULL OR state IN (%s)" % ",".join("?" * len(OPEN_ATTEMPTS))
+        if "settled_at" in {row[1] for row in c.execute('PRAGMA table_info("attempts")')}:
+            # A run with no job has no lease, so its end is settled_at (migration 0071 makes a turn with no attempts row
+            # one): open means unsettled. A job-backed attempt keeps the rule above.
+            open_run = "(job_id IS NULL AND settled_at IS NULL) OR (job_id IS NOT NULL AND (%s))" % open_run
+        delete("attempts", open_run, OPEN_ATTEMPTS)
     stamp = now()
     if days:
         cutoff = shift(stamp, days=-days)
@@ -353,6 +358,10 @@ def prune(c, days, keep_automations=False):
                 f" AND {quote(key)} NOT IN (SELECT {quote(col)} FROM {quote(child)} WHERE {quote(col)} IS NOT NULL)"
                 for child, col, key in refs)
             delete(table, where, (cutoff,))
+    # A copy from before migration 0071 keeps its turns whole (KEEP). A run the cut removed must not come back through
+    # its turns row as a lease-less run, so the record goes with its attempts row.
+    if "attempts" in present and "turns" in present:
+        delete("turns", "id NOT IN (SELECT id FROM attempts)")
     # Kept rows keep no way in: a value no token hashes to (the columns are NOT NULL UNIQUE where not nullable).
     if "agents" in present:
         c.execute("UPDATE agents SET token_hash='devcopy-revoked:'||bot, revoked_at=coalesce(revoked_at,?), "
