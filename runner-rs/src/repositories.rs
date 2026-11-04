@@ -1069,9 +1069,18 @@ impl Repositories {
             branch = found.filter(|_| result.ok()).ok_or("Could not find the default branch; check GitHub access")?;
         }
         if let Err(problem) = self.fill_mirror(name, &mirror, &prefix, &branch, &address, name, &clean, &env, 15, epoch_s(), true).await {
+            if let Fail::Msg(note) = &problem {
+                if note.starts_with("repository copy needs attention:") {
+                    self.update_row(name, |row| {
+                        row.insert("state".into(), json!("failed"));
+                        row.insert("error".into(), json!(note));
+                    });
+                    let _ = self.save();
+                    return Err(note.clone());
+                }
+            }
             // A network failure may use the last good mirror; malformed config must never be trusted with a token.
-            if !matches!(&problem, Fail::Msg(m) if m.contains("repository copy needs attention:"))
-                && mirror_config_overrides(&prefix, &mirror, &clean).await.is_ok()
+            if mirror_config_overrides(&prefix, &mirror, &clean).await.is_ok()
                 && run(&prefix, &["-C", &mirror_s, "show-ref", "--verify", &format!("refs/heads/{branch}")], &clean, 10).await.is_ok_and(|o| o.ok()) {
                 return Ok(json!({"cached": true, "mirror": file_uri(&mirror), "default_branch": branch, "warning": mirror_warning(&mirror)}));
             }
