@@ -6,10 +6,12 @@
 //! person's Tico session, which this app already has for each of its orgs, so the Recorder asks this app to show it:
 //! `tico://open?org=<org address>&path=<page, relative to that address>`. Only an org this app has, and only its
 //! approval page (`oauth/authorize`), opens; nothing is approved without the person choosing Allow there. The app
-//! switches to that org, shows the page in the org's own window, and tells the Recorder it did (`/opened` on the
-//! Recorder's loopback, so the Recorder does not open the browser). Tico's answer, a redirect to the Recorder's
-//! loopback (`http://127.0.0.1:<port>/callback?code=…&state=…`), is handed to the Recorder from here rather than
-//! loaded in the page or a browser tab (`deliver`), and the org's page goes back to where it was.
+//! shows the page in a small window of its own on that org's data store, above the main window, and tells the
+//! Recorder it did (`/opened` on the Recorder's loopback, so the Recorder does not open the browser). The main window
+//! is left as it is. Tico's answer, a redirect to the Recorder's loopback
+//! (`http://127.0.0.1:<port>/callback?code=…&state=…`), is handed to the Recorder from here rather than loaded in the
+//! window or a browser tab (`deliver`), and the window closes.
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -17,8 +19,8 @@ use tauri::Manager;
 use url::Url;
 
 use crate::orgs::{Org, Orgs};
-use crate::windows::{next_click, org_page, show_window, switch_for_click};
-use crate::{active_org, App, AppState};
+use crate::windows::{open_approval_window, show_window, Home};
+use crate::{App, AppState};
 
 pub(crate) const RECORDER_ID: &str = "team.tico.recorder.native";
 /// The approval page, relative to an org's address.
@@ -102,63 +104,50 @@ pub(crate) fn loopback(target: &Url) -> Option<(Url, String)> {
 
 /// An approval page this app opened, waiting for Tico's answer.
 pub(crate) struct Pending {
-    pub org: String,
+    /// The label of the window showing it.
+    pub window: String,
     pub redirect: Url,
-    /// The org page's address before the approval page replaced it.
-    pub back: Option<Url>,
-    /// The org that was open before, when the approval switched away from it.
-    pub previous: Option<String>,
     pub at: Instant,
 }
 
 static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
 
-/// Whether a navigation of org `org`'s page is Tico's answer to the approval waiting: the loopback address it was
-/// told to answer to, from that org's page, in time.
-pub(crate) fn answers(pending: Option<&Pending>, org: &str, url: &Url) -> bool {
+/// Whether a navigation in window `window` is Tico's answer to the approval waiting: the loopback address it was
+/// told to answer to, from the window showing the approval page, in time.
+pub(crate) fn answers(pending: Option<&Pending>, window: &str, url: &Url) -> bool {
     pending.is_some_and(|pending| {
-        pending.org == org && pending.at.elapsed() < ANSWER_WAIT && url.scheme() == "http"
+        pending.window == window && pending.at.elapsed() < ANSWER_WAIT && url.scheme() == "http"
             && url.host_str() == Some("127.0.0.1") && url.port() == pending.redirect.port()
             && url.path() == pending.redirect.path() && url.username().is_empty() && url.fragment().is_none()
     })
 }
 
-/// A `tico://open` link: shows the org's approval page in its window, switching to the org first. A link this app
-/// refuses only brings the window forward.
+/// A `tico://open` link: shows the org's approval page in a window of its own on that org's data store
+/// (`open_approval_window`), above the main window; the org's page and the org open in the main window are left as
+/// they are. A newer link replaces a window still waiting. A link this app refuses only brings the window forward.
 pub(crate) fn open_link(app: &App, link: &Url) {
     let found = approval(&app.state::<AppState>().orgs.lock().unwrap(), link);
-    let Some((org, target)) = found else {
+    let Some((home, target)) = found.and_then(|(org, target)| Some((Home::of(&org)?, target))) else {
         log::warn!("a Tico Recorder sign-in link named no org or page this app opens");
         show_window(app);
         return;
     };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let previous = active_org(&app).map(|open| open.id);
-        if previous.as_deref() != Some(org.id.as_str()) {
-            if let Err(e) = switch_for_click(&app, &org.id, next_click()) {
-                log::warn!("could not open an org for Tico Recorder: {e}");
-                return;
-            }
-        }
-        let Some(page) = org_page(&app, &org.id) else { return };
-        let hub = org.hub();
-        let back = page.url().ok().filter(|url| hub.as_ref().is_some_and(|hub| url.origin() == hub.origin()));
+        static NEXT: AtomicU32 = AtomicU32::new(1);
+        let label = format!("approval-{}", NEXT.fetch_add(1, Ordering::Relaxed));
         let answer = loopback(&target);
-        if let Some((redirect, _)) = &answer {
-            *PENDING.lock().unwrap() = Some(Pending {
-                org: org.id.clone(),
-                redirect: redirect.clone(),
-                back,
-                previous: previous.filter(|id| *id != org.id),
-                at: Instant::now(),
-            });
-        }
-        if let Err(e) = page.navigate(target) {
-            log::warn!("could not open Tico's approval page: {e}");
-            return;
+        let replaced = std::mem::replace(
+            &mut *PENDING.lock().unwrap(),
+            answer.as_ref().map(|(redirect, _)| Pending { window: label.clone(), redirect: redirect.clone(), at: Instant::now() }),
+        );
+        if let Some(window) = replaced.and_then(|old| app.get_webview_window(&old.window)) {
+            let _ = window.close();
         }
         show_window(&app);
+        if !open_approval_window(&app, &home, &label, target) {
+            return;
+        }
         if let Some((redirect, state)) = answer {
             let mut opened = redirect;
             opened.set_path("/opened");
@@ -170,37 +159,23 @@ pub(crate) fn open_link(app: &App, link: &Url) {
     });
 }
 
-/// Tico's answer to an approval this app opened (see `answers`), from org `org`'s page: handed to the Recorder here,
-/// and the page goes back to where it was (or the org that was open before is opened again). Answers whether it was
-/// one, so the page does not load it.
-pub(crate) fn deliver(app: &App, org: &str, url: &Url) -> bool {
-    let pending = {
+/// Tico's answer to an approval this app opened (see `answers`), in window `window`: handed to the Recorder from
+/// here, and the window closes. Answers whether it was one, so the window does not load it.
+pub(crate) fn deliver(app: &App, window: &str, url: &Url) -> bool {
+    {
         let mut held = PENDING.lock().unwrap();
-        if !answers(held.as_ref(), org, url) {
+        if !answers(held.as_ref(), window, url) {
             return false;
         }
-        held.take()
-    };
-    let Some(pending) = pending else { return false };
-    let (app, url) = (app.clone(), url.clone());
+        held.take();
+    }
+    let (app, url, window) = (app.clone(), url.clone(), window.to_string());
     tauri::async_runtime::spawn(async move {
         if let Err(e) = loopback_get(&url).await {
             log::warn!("could not hand Tico's answer to Tico Recorder: {e}");
         }
-        let still_open = active_org(&app).is_some_and(|open| open.id == pending.org);
-        match pending.previous {
-            Some(previous) if still_open => {
-                if let Err(e) = switch_for_click(&app, &previous, next_click()) {
-                    log::warn!("could not go back to the org that was open: {e}");
-                }
-            }
-            _ => {
-                let org = app.state::<AppState>().orgs.lock().unwrap().get(&pending.org).cloned();
-                let back = pending.back.or_else(|| org.and_then(|org| org.hub()).map(|hub| crate::config::Config::new(hub).start_url()));
-                if let (Some(page), Some(back)) = (org_page(&app, &pending.org), back) {
-                    let _ = page.navigate(back);
-                }
-            }
+        if let Some(window) = app.get_webview_window(&window) {
+            let _ = window.close();
         }
     });
     true
@@ -300,19 +275,21 @@ mod tests {
         stateless.query_pairs_mut().append_pair("redirect_uri", "http://127.0.0.1:5123/callback");
         assert!(loopback(&stateless).is_none());
 
-        let pending = Pending { org: "o_aaaaaaaa".into(), redirect, back: None, previous: None, at: Instant::now() };
+        let pending = Pending { window: "approval-1".into(), redirect, at: Instant::now() };
         let answer = Url::parse("http://127.0.0.1:5123/callback?code=c&state=s1").unwrap();
-        assert!(answers(Some(&pending), "o_aaaaaaaa", &answer));
-        assert!(!answers(Some(&pending), "o_bbbbbbbb", &answer), "another org's page");
-        assert!(!answers(None, "o_aaaaaaaa", &answer), "no approval waiting");
+        assert!(answers(Some(&pending), "approval-1", &answer));
+        assert!(!answers(Some(&pending), "approval-2", &answer), "an older approval window");
+        assert!(!answers(Some(&pending), "o_aaaaaaaa", &answer), "the org's own page");
+        assert!(!answers(Some(&pending), "main", &answer));
+        assert!(!answers(None, "approval-1", &answer), "no approval waiting");
         for other in ["http://127.0.0.1:5124/callback?code=c", "http://127.0.0.1:5123/other?code=c", "https://127.0.0.1:5123/callback",
                       "http://localhost:5123/callback", "http://evil.example.com:5123/callback"] {
-            assert!(!answers(Some(&pending), "o_aaaaaaaa", &Url::parse(other).unwrap()), "{other}");
+            assert!(!answers(Some(&pending), "approval-1", &Url::parse(other).unwrap()), "{other}");
         }
         // A machine up for less than the wait has no instant that long ago.
         if let Some(at) = Instant::now().checked_sub(ANSWER_WAIT + Duration::from_secs(1)) {
             let stale = Pending { at, ..pending };
-            assert!(!answers(Some(&stale), "o_aaaaaaaa", &answer), "too late");
+            assert!(!answers(Some(&stale), "approval-1", &answer), "too late");
         }
     }
 

@@ -959,10 +959,6 @@ fn sign_in_hooks(app: &App, hub: Option<url::Url>, page_org: Option<String>) -> 
 /// Whether a window follows a navigation; one it does not follow opens in the default browser, except from a page
 /// that is not on screen (a prefetch), which opens nothing.
 fn stays_in_app(opener: &App, signing_in: &AtomicBool, page_org: Option<&str>, hub: Option<&url::Url>, url: &url::Url) -> bool {
-    // Tico's answer to an approval page Tico Recorder asked this app to show goes to the Recorder from here.
-    if page_org.is_some_and(|org| crate::recorder::deliver(opener, org, url)) {
-        return false;
-    }
     let stays = follow_window(&opener.state::<AppState>(), signing_in, page_org.is_some(), hub, url);
     let on_screen = page_org.is_none_or(|org| active_org(opener).is_some_and(|open| open.id == org));
     if !stays && on_screen {
@@ -1400,6 +1396,45 @@ pub(crate) fn open_meeting_window(app: &App, home: &Home, id: &str) {
     }
     if builder.build().is_ok() {
         owned_by(app, &label, &home.id);
+    }
+}
+
+/// A small window, above the main window, showing the approval page Tico Recorder asked for (`recorder::open_link`)
+/// on org `home`'s data store, so it has that org's Tico session; the org's own page is left as it is. Tico's answer
+/// to the Recorder, a redirect to the Recorder's loopback, is handed over by `recorder::deliver` instead of loaded.
+pub(crate) fn open_approval_window(app: &App, home: &Home, label: &str, url: url::Url) -> bool {
+    let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), None);
+    let (opener, own) = (app.clone(), label.to_string());
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+    let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
+        .title("Tico Recorder")
+        .inner_size(520.0, 680.0)
+        .resizable(true)
+        .center()
+        .focused(true)
+        .user_agent(USER_AGENT)
+        .disable_drag_drop_handler()
+        .on_new_window(new_window_handler(app, home.clone(), false))
+        .on_navigation(move |url| !crate::recorder::deliver(&opener, &own, url) && navigate(url))
+        .on_page_load(move |_, payload| page(payload));
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(store) = home.store {
+            builder = builder.data_store_identifier(*store.as_bytes());
+        }
+        if let Some(parent) = main_window(app).filter(|main| main.is_visible().unwrap_or(false)).and_then(|main| main.ns_window().ok()) {
+            builder = builder.parent_raw(parent);
+        }
+    }
+    match builder.build() {
+        Ok(_) => {
+            owned_by(app, label, &home.id);
+            true
+        }
+        Err(e) => {
+            log::warn!("could not open Tico's approval page: {e}");
+            false
+        }
     }
 }
 
