@@ -1,10 +1,16 @@
 'use strict';
 
-// Re-read on task redraw so a meeting's current visibility decides whether its link appears.
+// Keep the loaded section across redraws, then re-read its current visibility.
 function taskMeetingsAdopt(d, task) {
-  const slot = $('[data-task-meetings]', d);
+  let slot = $('[data-task-meetings]', d);
   if (!slot) return;
+  const id = String(task.id);
+  if (d.tmEl && d.tmEl !== slot && d.tmEl.dataset.task === id) {
+    slot.replaceWith(d.tmEl);
+    slot = d.tmEl;
+  }
   d.tmEl = slot;
+  slot.dataset.task = id;
   const reading = {};
   d.tmRead = reading;
   const rows = [];
@@ -24,7 +30,12 @@ function taskMeetingsAdopt(d, task) {
       catch (e) { more.disabled = false; toast(e.message, true); }
     };
   };
-  load().catch(() => {});
+  load().catch(error => {
+    if (d.tmRead === reading && [403, 404].includes(error.status)) {
+      slot.hidden = true;
+      slot.replaceChildren();
+    }
+  });
 }
 
 // A link changes no task fields, so the task list's identical-row suppression cannot refresh this section.
