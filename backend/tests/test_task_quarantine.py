@@ -2,7 +2,7 @@
 import pytest
 
 from backend import hubdb as H
-from backend.tests.test_api import api, claim, get, post, ready  # noqa: F401 (fixture)
+from backend.tests.test_api import api, claim, get, post, ready, settled  # noqa: F401 (fixture)
 from backend.tests.test_execution_review import job_state
 from backend.tests.test_held_runs import botops
 from backend.tests.test_task_lanes import new_task, task_bot
@@ -90,6 +90,7 @@ def test_task_hold_lifts_and_its_count_restarts(api, time_machine, lift):
             H.status_set(c, actor, "ops", state="active", reason="Reviewed")
     assert holds(api) == []
     ready(api, machine, ["ops"])
+    settled(api, machine)
     resumed = started(api, machine)
     assert resumed["job_id"] == attempt["job_id"]
     assert "by a quarantine" in resumed["message"]["body"]

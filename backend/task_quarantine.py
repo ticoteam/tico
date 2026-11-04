@@ -19,7 +19,7 @@ def source(c, actor, task_id=None):
                         "JOIN conversations cv ON cv.id=m.conversation_id WHERE a.id=? AND a.bot_id=?",
                         (H.RUN.get(), H.actor_id(actor))).fetchone()
         if row:
-            if row["task_id"] and not H.task(c, H._task_ref(row["task_id"])):
+            if row["task_id"] is not None and not H.task(c, H._task_ref(row["task_id"])):
                 return None
             return "task:" + row["task_id"] if row["task_id"] else "chat:" + row["conversation_id"]
         return None
