@@ -1099,7 +1099,7 @@ KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "setup": 1, "
 # for the person to do on it until the bot restates it (backend/restate_asks.py asks it to).
 
 
-_VISIBLE_TASK_SQL = "SELECT * FROM tasks WHERE id=? AND (%s)"
+_VISIBLE_TASK_SQL = f"SELECT * FROM {H.TASKS} tasks WHERE id=? AND (%s)"
 
 
 def _prime_person_origins(c, visible_sql, ids):
@@ -2290,7 +2290,7 @@ def install_views(app, store, auth, mutate, task_view):
         open_tasks = {}
         read_now = [slug for slug in shown if access.get(slug, auth.FULL)["read"]]
         for part in H.chunks(read_now):
-            for task in H._rows(c.execute("SELECT * FROM tasks WHERE owner_id IN (" + ",".join("?" * len(part)) +
+            for task in H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE owner_id IN (" + ",".join("?" * len(part)) +
                                           ") AND status IN ('open','doing')", ["bot:" + slug for slug in part])):
                 open_tasks.setdefault(H.actor_id(task["owner_id"]), []).append(task)
         # Each bot's task flow counts, all bots at once: the wait and step checks are read once for every task.

@@ -215,6 +215,7 @@ def maybe_waiting(c, rows):
     suspect = {r['id'] for r in rows if snoozed(r) or r.get('next_run') or r.get('waiting_on')
                or r.get('blocked_kind') == 'manual'}
     ids = [r['id'] for r in rows if r['id'] not in suspect]
+    ids_set = set(ids)
     open_ids = [r['id'] for r in rows if r['id'] not in suspect and r['status'] == 'open']
     cutoff = H.shift(H.now(), minutes=-PUT_BACK_MINUTES)
 
@@ -222,6 +223,9 @@ def maybe_waiting(c, rows):
         for part in H.chunks(values):
             suspect.update(r[0] for r in c.execute(sql.replace('{m}', _marks(part)), (*part, *args)))
 
+    # A row read from plain `tasks` carries no hold fields: its open snooze or owner's hold is read here instead.
+    found("SELECT DISTINCT task_id FROM task_holds WHERE task_id IN ({m}) AND released_at IS NULL "
+          "AND (kind='snoozed' OR cause='manual')", [r['id'] for r in rows if r['id'] in ids_set and 'blocked_since' not in r])
     # put_back_held: a queue return in the hour, for a task still open
     found("SELECT DISTINCT e.subject_id FROM history_events e JOIN tasks t ON t.id=e.subject_id AND t.owner_id=e.actor_id "
           "WHERE e.subject_type='task' AND e.subject_id IN ({m}) AND e.kind IN ('status','queue_return') AND e.new='open' "
@@ -332,6 +336,8 @@ def next_run_held(c, row, *, message=None):
 def waiting(c, row, starting=False, *, include_next_run=True, result=False):
     """`result`: the claim is handing out a subtask's result (refs.subtask). The task's open subtasks never hold
     that back, or a parent waiting on two subtasks hears from neither until both finish; every other wait does."""
+    from . import task_holds
+    row = task_holds.with_holds(c, row)     # its holds' fields, when read from plain `tasks`
     if snoozed(row) or put_back_held(c, row) or include_next_run and next_run_held(c, row):
         return True
     from .read_cache import one
@@ -360,7 +366,7 @@ def counts_many(c, tasks_by_bot, who=None):
     for bot, tasks in tasks_by_bot.items():
         if tasks is None:
             tasks_by_bot[bot] = H._rows(c.execute(
-                "SELECT * FROM tasks WHERE owner_id=? AND status IN ('open','doing')", ('bot:' + bot,)))
+                f"SELECT * FROM {H.TASKS} tasks WHERE owner_id=? AND status IN ('open','doing')", ('bot:' + bot,)))
     every = [row for tasks in tasks_by_bot.values() for row in tasks]
     suspect = maybe_waiting(c, every)
     steps = step_names(c, every)
@@ -386,6 +392,8 @@ def refusal(c, row, config, woken=False, result=False, *, message=None, suspect=
     that, while waits, the off switch and the task cap still do. `result`: the job is a subtask's result, which a
     Waiting task's open subtasks do not hold back (`waiting`). `suspect`: `maybe_waiting` over the caller's tasks; a
     task outside it is not asked `waiting` again."""
+    from . import task_holds
+    row = task_holds.with_holds(c, row)     # its holds, when the row came from plain `tasks`
     if row and row.get("blocked_since") and (row.get("blocked_kind") == "gate"
                                               or waiting(c, row, starting=True, result=result)):
         return "task_wait"
@@ -458,7 +466,7 @@ def missing(c, settings, runner, body, failed=None, waiting=None):
             continue
         if failed is not None:
             failed.clean.add(slug)
-        for row in H._rows(c.execute("SELECT * FROM tasks WHERE owner_id=? AND status='open' "
+        for row in H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE owner_id=? AND status='open' "
                                      "ORDER BY (rank IS NULL),rank,created_at,id", ('bot:' + slug,))):
             try:
                 if found := _startable_task(c, row, slug, config, scope, runner, busy):

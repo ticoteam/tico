@@ -11,6 +11,7 @@ from backend.tests.test_profiles import put
 from backend.tests.test_task_lanes import new_task, task_bot
 from backend.enqueue import enqueue_stored
 from backend import bot_settings as BS
+from backend.tests.hold_rows import set_holds
 
 
 @pytest.fixture
@@ -70,7 +71,7 @@ def test_intentional_waits_and_any_attempt_are_not_rewoken(api, clock, hold):
             if hold == 'waiting':
                 c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (task['id'],))
             elif hold == 'snoozed':
-                c.execute('UPDATE tasks SET snoozed_until=? WHERE id=?', (H.shift(H.now(), days=1), task['id']))
+                set_holds(c, task['id'], snoozed_until=H.shift(H.now(), days=1))
             elif hold == 'blocked':
                 blocker = H.task_create(c, 'human:ana', 'Prerequisite', 'Finish first.', 'human:ana', lint=False)
                 H.TR.add_blocker(c, H.KEEPER, task['id'], blocker['id'])
@@ -496,7 +497,7 @@ def test_overdue_checks_the_readers_rule_per_candidate_and_never_lists_every_tas
             list(A.overdue(c, visible=visible))
         finally:
             c.set_trace_callback(None)
-        [page] = [s for s in seen if s.startswith('SELECT t.* FROM tasks t JOIN bots b')]
+        [page] = [s for s in seen if s.startswith('SELECT t.* FROM ' + H.TASKS + ' t JOIN bots b')]
         plan = " ".join(r[3] for r in c.execute("EXPLAIN QUERY PLAN " + page))
     assert "SCAN tasks" not in plan and "SCAN t " not in plan and "LIST SUBQUERY" not in plan, plan
 
@@ -633,7 +634,7 @@ def test_overdue_reads_its_page_in_fixed_statements_not_per_task(api, clock, n):
     assert [s for s in seen if s.startswith("SELECT id,created_at FROM history_events WHERE subject_type='task' AND subject_id=")] == []
     assert [s for s in seen if s.startswith('SELECT detail FROM events WHERE target=')] == []
     # A short page is the last one: no second, empty page query.
-    assert sum(s.startswith('SELECT t.* FROM tasks t JOIN bots b') for s in seen) == 1
+    assert sum(s.startswith('SELECT t.* FROM ' + H.TASKS + ' t JOIN bots b') for s in seen) == 1
 
 
 def fleet(store, bots, tasks, attempts, *, days=30):

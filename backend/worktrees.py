@@ -468,7 +468,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
                 ('missing_woke', detail.get('missing_since'), 1, 'Worktree missing for a day'),
                 ('stalled_woke', detail.get('activity_at') if report.ahead else None, 3, 'Worktree has unpushed commits and no activity for three days')):
                 if since and not detail.get(key) and (datetime.now(timezone.utc) - datetime.fromisoformat(since.replace('Z', '+00:00'))).total_seconds() >= days * 86400:
-                    task = H._one(c, "SELECT * FROM tasks WHERE id=?", (row['task_id'],))
+                    task = H._one(c, f"SELECT * FROM {H.TASKS} tasks WHERE id=?", (row['task_id'],))
                     if task['status'] not in CLOSED:
                         H._wake(c, task, task['owner_id'], message + ': ' + row['path'], trigger='stall_check', source=row['id'])
                         detail[key] = True

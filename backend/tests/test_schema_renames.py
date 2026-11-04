@@ -95,6 +95,12 @@ RUNNER_STATE = {name for name, _ in importlib.import_module("backend.migrations.
 # Moved out of its table by migration 0070 (backend/migrations/0070_bot_settings.py) into the table named here: the
 # declaration is in bot_settings, which backend/tests/test_bot_settings.py checks.
 MOVED = {("bot_config", "config_json"): "bot_settings"}
+# Dropped by backend/migrations/0075_task_holds.py: a task's hold columns became task_holds rows, and the indexes and
+# triggers that named them go with them.
+_HOLDS = importlib.import_module("backend.migrations.0075_task_holds")
+DROPPED = {("tasks", column) for column in _HOLDS.COLUMNS}
+DROPPED_INDEXES |= set(_HOLDS.OLD_INDEXES)
+DROPPED_TRIGGERS |= set(_HOLDS.OLD_TRIGGERS)
 
 
 @pytest.fixture(scope="module")
@@ -134,6 +140,9 @@ def test_every_column_has_its_new_name_and_the_rows_kept_their_values(upgraded):
             continue
         renamed = NEW.get((table, renamed), renamed)
         have = columns(conn, "runner_states" if table == "runners" and renamed in RUNNER_STATE else table)
+        if (table, renamed) in DROPPED:
+            assert renamed not in have and old not in have, (table, old, renamed)
+            continue
         assert renamed in have and old not in have, (table, old, renamed)
     assert conn.execute("SELECT readiness FROM runners_with_state WHERE id='runner-1'").fetchone()[0] == '{"ok":true}'
     task = conn.execute("SELECT * FROM tasks WHERE id='task-1'").fetchone()

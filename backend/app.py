@@ -1236,6 +1236,7 @@ def create_app(settings=None):
 
     def task_view(row, c=None, parts=None, pipelines=None, visible_sql="1", who=None, hold_marks=None):
         if c is not None:
+            row = task_holds.with_holds(c, row)
             H.hydrate_task_tags(c, [row])
         value = {"id": row["id"], "short_id": row["id"][:8], **row, "acceptance_criteria": json.loads(row.get("acceptance", "[]")),
                  "labels": H.task_labels(row), "lane": row.get("lane") or "company",
@@ -1248,7 +1249,8 @@ def create_app(settings=None):
             value["deferred"] = value["quiet"] = deferred
         # The stored condition is in `deferred.resume`; a board of 500 tasks does not carry the column besides.
         value.pop("resume", None)
-        # A snooze and a move to Blocked read as one list of holds (task_holds.public); their columns stay the server's.
+        # A snooze and a move to Blocked read as one list of holds (task_holds.public); the fields a task row carries
+        # for its open task_holds rows (hubdb.TASKS) stay the server's.
         if c is not None and hold_marks is None:
             hold_marks = task_holds.marks(c, [row])
         value["holds"] = task_holds.public(row, (hold_marks or {}).get(row["id"]))
@@ -8078,7 +8080,7 @@ def create_app(settings=None):
                 person = H.human(c, H.actor_id(record["actor"])) if record["actor"].startswith("human:") else None
                 if person:
                     paused_by = {"name": person["name"], "at": record["created_at"]}
-            tasks = H._rows(c.execute("SELECT * FROM tasks WHERE owner_id=? AND status IN ('open','doing','waiting')",
+            tasks = H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE owner_id=? AND status IN ('open','doing','waiting')",
                                      ('bot:' + bot,)))
             count = sum(1 for task in tasks if privacy.task_readable(c, who, task))
             value = {"state": row["state"], "revision": config["revision"] if config else None,

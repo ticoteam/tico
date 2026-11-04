@@ -13,6 +13,7 @@ from backend import bot_settings as BS
 from backend import scheduler, task_check_backs, task_roundup
 from backend import task_relations as TR
 from backend.store import H
+from backend.tests.hold_rows import set_holds
 from backend.tests.test_api import api  # noqa: F401
 
 DAY = "2026-11-03T14:00:00.000000Z"     # the 6am run (company time is Pacific, PST on this date); fixed for the tests
@@ -639,8 +640,7 @@ def test_a_date_a_snooze_left_behind_holds_nothing_while_a_snooze_in_force_or_an
         task_check_backs.set_time(c, H.task(c, left["id"]), H.shift(DAY, hours=2), "Look again", at=DAY, system=True)
         settle(c, left["id"], "finance", ago(days=2))            # a date nobody set, as a snooze leaves it: it holds nothing
         snoozed = task(c, "Plan the offsite")
-        c.execute("UPDATE tasks SET snoozed_until=?, snoozed_by_id='human:ana' WHERE id=?",
-                  (H.shift(DAY, hours=2), snoozed["id"]))
+        set_holds(c, snoozed["id"], snoozed_until=H.shift(DAY, hours=2), snoozed_by_id="human:ana")
         settle(c, snoozed["id"], "finance", ago(days=2))         # a snooze in force hides the task
         explicit = task(c, "Chase the quote")
         task_check_backs.set_time(c, H.task(c, explicit["id"]), H.shift(DAY, hours=2), "Check the quote",
