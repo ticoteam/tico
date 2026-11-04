@@ -148,7 +148,13 @@ async function pagesEditAudience(state) {
 function pagesAccessRefresh() {
   getForget();
   // Remove the held content immediately; each open surface reads again with current permissions.
-  document.querySelectorAll('.pg-card').forEach(card => card.remove());
+  document.querySelectorAll('.pg-card, .vcard[data-kind="page"]').forEach(card => card.remove());
+  for (const entry of VIEW_FILES.values()) {
+    if (entry.url) URL.revokeObjectURL(entry.url);
+    else entry.promise.then(item => URL.revokeObjectURL(item.url)).catch(() => {});
+  }
+  VIEW_FILES.clear();
+  if (VIEW?.items.some(item => item.fileId && item.kind === 'html')) $('#doc-viewer')?.close();
   if (PG) void pageFullView(PG.id);
   if (LF) void lfLoad();
   if (TASK_CHAT) { TASK_CHAT.dialog.tpEl = null; taskChatLive(TASK_CHAT); }

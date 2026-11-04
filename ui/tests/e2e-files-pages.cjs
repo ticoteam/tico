@@ -1,7 +1,7 @@
 // Journey: bot files and pages, as Dana. The Engineering Lead's pages and files (the pages seed) show in Library > Files
 // with their titles; a page opens and draws its title, its version and its status line. Runs on a phone and a desktop.
 const assert = require('node:assert/strict');
-const {journey, open, go, call, assertClean, drawn, shot, t, SEEDS} = require('./support/e2e.cjs');
+const {journey, open, go, call, expectFailure, assertClean, drawn, shot, t, SEEDS} = require('./support/e2e.cjs');
 
 journey('e2e-files-pages', async ({hub, browser, phone}) => {
   const where = phone ? 'phone' : 'desktop';
@@ -27,23 +27,33 @@ journey('e2e-files-pages', async ({hub, browser, phone}) => {
   assert.match(status, /v\d+/, `${where}: the page shows its version`);
   const view = await drawn(page, '#pg-view', text => text.includes('Engineering weekly'), `${where}: the page draws its title`);
   assert.match(view, /Engineering weekly/, `${where}: the page shows its title`);
+  const reader = await open(browser, hub, 'priya', {phone, hash: new URL(page.url()).hash});
+  await reader.locator('#pg-view .pg-title').waitFor();
+  assert.equal(await reader.locator('[data-pg-audience]').count(), 0);
+  expectFailure(reader, 404, /^\/api\/v2\/pages\//, 'GET');
   const access = page.locator('[data-pg-audience]');
   await access.waitFor();
   assert.equal((await access.innerText()).trim(), "Everyone who can see where it's filed");
   await access.click();
   const editor = page.locator('#access-editor');
   await editor.locator('[data-access-everyone]').uncheck();
-  await editor.locator('[data-access-pick="people"]').first().check();
+  await editor.locator('[data-access-pick="people"][value="dana"]').check();
   const saved = page.waitForResponse(r => r.request().method() === 'PATCH' && /\/api\/v2\/pages\//.test(r.url()));
   await editor.locator('button[type=submit]').click();
   assert.equal((await saved).status(), 200);
   await page.locator('.pg-status .pg-lock').waitFor();
+  await drawn(reader, '#pg-view', text => text.includes('not yours to see'), `${where}: reader loses the open page`);
+  assert.equal(await reader.locator('.pg-card').count(), 0);
   await page.locator('[data-pg-audience]').click();
   await editor.locator('[data-access-everyone]').check();
   const cleared = page.waitForResponse(r => r.request().method() === 'PATCH' && /\/api\/v2\/pages\//.test(r.url()));
   await editor.locator('button[type=submit]').click();
   assert.equal((await cleared).status(), 200);
   await drawn(page, '[data-pg-audience]', text => text.includes("Everyone who can see where it's filed"), `${where}: cleared audience`);
+  await reader.locator('#pg-view .pg-title').waitFor();
+  assert.equal(await reader.locator('[data-pg-audience], .pg-lock').count(), 0);
+  assertClean(reader, `${where}: reader regains the page`);
+  await reader.context().close();
   assertClean(page, `${where}: page open`);
   await shot(page, `e2e-page-${where}`);
 
