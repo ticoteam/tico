@@ -771,7 +771,8 @@ function thvComposerLabel(view) {
 // Who the words go to: the bot in its Home or DM, the thread by its name, the people in a DM.
 function thvPlaceholder(view) {
   const t = view.thread, slug = view.opts.goals;
-  if (slug) return 'Message ' + botDisplayName(slug);
+  // The bot's own name only: botDisplayName adds the slug when two bots share a name, and the page already says which.
+  if (slug) return 'Message ' + (slug === assistantBot() ? assistantName() : botRow(slug)?.display_name || botRow(slug)?.slug || slug);
   if (t && threadOnRail(t)) return 'Message #' + threadTitle(t);
   const name = t ? threadTitle(t, view.messages) : view.opts.dm ? actorName(view.opts.dm) : '';
   return name ? 'Message ' + name : 'Message';
