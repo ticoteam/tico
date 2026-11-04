@@ -262,26 +262,32 @@ async fn remove_store(app: &App, store: Uuid) -> bool {
 }
 
 /// Whether a server has the hub's own sign-in (`/auth/login`, TICO_AUTH_PROXY=oidc), so an org added through Tico
-/// sign-in opens there and goes straight in on the copied session instead of showing the hub's sign-in page. Only a
-/// clear no counts: a 404, or Cloudflare Access in front (that hub signs in through Access, not its own page).
-/// No redirects are followed and no cookies are sent.
-async fn has_login(hub: Url) -> bool {
+/// sign-in opens there and goes straight in on the copied session instead of showing the hub's sign-in page. Asked
+/// with a GET, as the hub serves and exempts only GET there; no redirect is followed, no cookie is sent and the body
+/// is never read (the hub's answer starts a sign-in only by a signed cookie, which is dropped).
+async fn has_login(hub: Url, issuer: Url) -> bool {
     let Ok(http) = reqwest::Client::builder().timeout(std::time::Duration::from_secs(5))
-        .redirect(reqwest::redirect::Policy::none()).no_proxy().build() else { return true };
+        .redirect(reqwest::redirect::Policy::none()).no_proxy().build() else { return false };
     let Ok(login) = hub.join(LOGIN_PATH) else { return false };
-    match http.head(login).send().await {
-        Ok(response) => login_answer(Some(response.status().as_u16()), config::behind_access(&response)),
-        Err(_) => login_answer(None, false),
-    }
+    let Ok(response) = http.get(login.clone()).send().await else { return false };
+    let location = response.headers().get(reqwest::header::LOCATION).and_then(|value| value.to_str().ok())
+        .and_then(|value| login.join(value).ok());
+    login_answer(response.status().as_u16(), location.as_ref(), &issuer)
 }
 
 /// The hub's sign-in path, relative to its address (backend/oidc.py LOGIN_PATH).
 pub(crate) const LOGIN_PATH: &str = "auth/login";
 
-/// What the answer to `HEAD /auth/login` says: no route (404) or Access in front means no; anything else, including
-/// no answer, means yes, as a server Tico sign-in names is a Tico hub with its own sign-in.
-fn login_answer(status: Option<u16>, behind_access: bool) -> bool {
-    status != Some(404) && !behind_access
+/// What the answer to `GET /auth/login` says. Only a redirect into a sign-in means yes: to the Tico issuer that just
+/// signed the person in, or to the hub's own `/auth/login` at its public address. Anything else (404 with OIDC off,
+/// Cloudflare Access in front, an error page, no answer) opens the root, as before.
+fn login_answer(status: u16, location: Option<&Url>, issuer: &Url) -> bool {
+    let Some(location) = location.filter(|_| (300..400).contains(&status)) else { return false };
+    let host = location.host_str().unwrap_or_default();
+    if host.ends_with(".cloudflareaccess.com") || !matches!(location.scheme(), "https" | "http") {
+        return false;
+    }
+    (!host.is_empty() && issuer.host_str() == Some(host)) || location.path().ends_with("/auth/login")
 }
 
 /// Adds the picked servers as orgs, signed in through the issuer's session, and opens the first new one (or, when
@@ -306,7 +312,7 @@ async fn finish(app: &App, session: &Session, picks: Option<Picks>) {
     };
     let prepared: Vec<Uuid> = fresh.iter().map(|(_, store)| *store).collect();
     // Whether each new server has the hub's own sign-in, asked while the session is copied.
-    let probes: Vec<_> = fresh.iter().map(|(hub, _)| tauri::async_runtime::spawn(has_login(hub.clone()))).collect();
+    let probes: Vec<_> = fresh.iter().map(|(hub, _)| tauri::async_runtime::spawn(has_login(hub.clone(), picks.issuer.clone()))).collect();
     #[cfg(target_os = "macos")]
     if !fresh.is_empty() {
         note_pending(app, &prepared, &[]);
@@ -321,7 +327,7 @@ async fn finish(app: &App, session: &Session, picks: Option<Picks>) {
     }
     let mut fresh_flagged = Vec::with_capacity(fresh.len());
     for ((hub, store), probe) in fresh.into_iter().zip(probes) {
-        fresh_flagged.push((hub, store, probe.await.unwrap_or(true)));
+        fresh_flagged.push((hub, store, probe.await.unwrap_or(false)));
     }
     let fresh = fresh_flagged;
     // Added under the list's lock, after checking once more that this sign-in was not cancelled meanwhile, and leaving
@@ -539,14 +545,22 @@ async fn copy_cookies(window: &tauri::WebviewWindow, host: String, stores: Vec<U
 #[cfg(test)]
 mod tests {
     #[test]
-    fn only_a_clear_no_keeps_a_tico_sign_in_org_off_the_hub_sign_in() {
-        assert!(login_answer(Some(302), false), "the hub's sign-in redirects to the issuer");
-        assert!(login_answer(Some(405), false), "a GET-only route still exists");
-        assert!(login_answer(Some(200), false));
-        assert!(login_answer(None, false), "no answer: a Tico server is taken to have it");
-        assert!(!login_answer(Some(404), false), "no such route: the root opens");
-        assert!(!login_answer(Some(302), true), "Cloudflare Access in front: the root opens");
+    fn only_a_redirect_into_a_sign_in_sends_a_tico_sign_in_org_to_the_hub_sign_in() {
+        let issuer = Url::parse("https://tico.dev/").unwrap();
+        let at = |address: &str| Url::parse(address).unwrap();
+        assert!(login_answer(302, Some(&at("https://tico.dev/oauth/authorize?client_id=x")), &issuer), "to the issuer");
+        assert!(login_answer(307, Some(&at("https://team.example.com/auth/login")), &issuer), "to the hub's public address");
+        assert!(!login_answer(404, None, &issuer), "OIDC off: no such route");
+        assert!(!login_answer(401, None, &issuer));
+        assert!(!login_answer(405, None, &issuer));
+        assert!(!login_answer(200, None, &issuer));
+        assert!(!login_answer(502, None, &issuer), "the provider could not be reached");
+        assert!(!login_answer(302, Some(&at("https://team.cloudflareaccess.com/cdn-cgi/access/login/team.example.com")), &issuer));
+        assert!(!login_answer(302, Some(&at("https://accounts.google.com/o/oauth2/auth")), &issuer), "not this sign-in's issuer");
+        assert!(!login_answer(302, None, &issuer), "a redirect to nowhere");
+        assert!(!login_answer(200, Some(&at("https://tico.dev/")), &issuer), "not a redirect");
     }
+
 
     use super::*;
 

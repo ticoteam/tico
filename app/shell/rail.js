@@ -21,7 +21,9 @@ function tone(url) {
 // Resting on another org for a moment builds its page hidden (rail_hover), so a click shows it at once; leaving it
 // lets the app close that page again if no click comes.
 const HOVER_MS = 150;
-let hoverTimer = 0, hovered = '';
+let hoverTimer = 0, hovered = '', pointer = null;
+document.addEventListener('pointermove', event => { pointer = {x: event.clientX, y: event.clientY}; });
+document.documentElement.addEventListener('pointerleave', () => { pointer = null; leave(); });
 function leave() {
   clearTimeout(hoverTimer);
   if (!hovered) return;
@@ -29,9 +31,16 @@ function leave() {
   invoke('rail_hover', { id: null }).catch(() => {});
 }
 
+// The org button under the pointer, if any: :hover, or where the pointer last moved (a button drawn under a resting
+// pointer is not :hover until it moves).
+function under() {
+  const hover = list.querySelector('button.org:hover');
+  if (hover) return hover;
+  const at = pointer && document.elementFromPoint(pointer.x, pointer.y);
+  return at && at.closest ? at.closest('button.org') : null;
+}
+
 function render(orgs) {
-  // The buttons are replaced, so the one under the pointer gets no pointerleave.
-  leave();
   list.replaceChildren(...orgs.map(org => {
     const li = document.createElement('li');
     const button = document.createElement('button');
@@ -40,6 +49,7 @@ function render(orgs) {
     button.type = 'button';
     button.className = 'org';
     button.textContent = initials(org);
+    button.dataset.id = org.id;
     button.style.setProperty('--b', `var(--c${n}b)`);
     button.style.setProperty('--f', `var(--c${n}f)`);
     // Two lines: the org, then who is signed in to it.
@@ -63,6 +73,9 @@ function render(orgs) {
     li.append(button);
     return li;
   }));
+  // The buttons were replaced, so the old one under the pointer got no pointerleave: a redraw (the hovered org's
+  // page reporting its name, say) keeps the rest only while the pointer is still on that org.
+  if (hovered && under()?.dataset.id !== hovered) leave();
 }
 
 const refresh = () => invoke('rail_orgs').then(render).catch(() => {});

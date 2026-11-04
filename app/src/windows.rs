@@ -43,6 +43,27 @@ pub(crate) fn server_capability(hub: &url::Url, label: &str) -> Value {
     capability["identifier"] = Value::from(label);
     capability["windows"] = serde_json::json!([]);
     capability["webviews"] = serde_json::json!([label]);
+    capability["remote"] = remote_of(hub);
+    capability
+}
+
+/// What an org's page may show once it is on screen: the dialogs the page's `alert` and `confirm` become (the dialog
+/// plugin). Granted apart, when the page is first shown, so that a page built hidden for a prefetch cannot put a
+/// dialog over the open org. Capabilities cannot be taken back, so each page webview has a label of its own
+/// (`new_page_label`): a later prefetch of the same org never inherits an earlier page's grant.
+pub(crate) fn dialog_capability(hub: &url::Url, label: &str) -> Value {
+    serde_json::json!({
+        "identifier": format!("{label}-dialogs"),
+        "description": "Dialogs for one org's page while it is on screen.",
+        "windows": [],
+        "webviews": [label],
+        "permissions": ["dialog:allow-ask", "dialog:allow-message", "dialog:allow-confirm"],
+        "remote": remote_of(hub),
+        "local": false,
+    })
+}
+
+fn remote_of(hub: &url::Url) -> Value {
     // Explicit port also confines default-port URLs: URLPattern otherwise treats an
     // omitted port as a wildcard. Host characters must stay literal in URLPattern.
     let mut host = String::new();
@@ -51,8 +72,7 @@ pub(crate) fn server_capability(hub: &url::Url, label: &str) -> Value {
         host.push(ch);
     }
     let port = hub.port_or_known_default().unwrap();
-    capability["remote"] = serde_json::json!({"urls": [format!("{}://{host}:{port}/*", hub.scheme())]});
-    capability
+    serde_json::json!({"urls": [format!("{}://{host}:{port}/*", hub.scheme())]})
 }
 
 #[cfg(test)]
@@ -104,7 +124,28 @@ mod capability_tests {
         // any target) and list every window and webview, which name the other orgs.
         let permissions: Vec<&str> = a["permissions"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         assert!(permissions.iter().all(|p| !p.starts_with("core:")), "{permissions:?}");
-        assert!(permissions.contains(&"allow-bridge") && permissions.contains(&"dialog:allow-confirm"));
+        assert!(permissions.contains(&"allow-bridge"));
+        // Dialogs only in their own grant, for one page webview, at that org's origin.
+        assert!(permissions.iter().all(|p| !p.starts_with("dialog:")), "{permissions:?}");
+        let dialogs = dialog_capability(&acme, "org-o_aaaaaaaa-7");
+        assert_eq!(dialogs["identifier"], "org-o_aaaaaaaa-7-dialogs");
+        assert_eq!(dialogs["webviews"], serde_json::json!(["org-o_aaaaaaaa-7"]));
+        assert_eq!(dialogs["windows"], serde_json::json!([]));
+        assert_eq!(dialogs["remote"], a["remote"]);
+        let granted: Vec<&str> = dialogs["permissions"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert_eq!(granted, ["dialog:allow-ask", "dialog:allow-message", "dialog:allow-confirm"]);
+    }
+
+    #[test]
+    fn every_page_webview_has_a_label_of_its_own_that_names_its_org() {
+        let (first, second) = (new_page_label("o_aaaaaaaa"), new_page_label("o_aaaaaaaa"));
+        assert_ne!(first, second, "a later page of the same org never inherits an earlier one's grants");
+        assert_eq!(org_of(&first), Some("o_aaaaaaaa"));
+        assert_eq!(org_of(&second), Some("o_aaaaaaaa"));
+        assert_eq!(org_of("org-o_aaaaaaaa"), Some("o_aaaaaaaa"));
+        for other in ["rail", "main", "server", "hub-1", "meeting-o_aaaaaaaa-m1", "clear-o_aaaaaaaa", "org-", "tico-signin-ab"] {
+            assert_eq!(org_of(other), None, "{other}");
+        }
     }
 
     #[test]
@@ -155,15 +196,28 @@ fn build_main(app: &App) -> tauri::Result<Window> {
     builder.build()
 }
 
-/// The label of an org's page webview. Ids are never reused, so a label never names two orgs.
-pub(crate) fn org_label(id: &str) -> String {
-    format!("org-{id}")
+/// A label for a new page webview of org `id`: `org-<id>-<n>`, never used before in this run. Ids are never reused,
+/// so a label never names two orgs, and no two pages of one org share one (see `dialog_capability`).
+pub(crate) fn new_page_label(id: &str) -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    format!("org-{id}-{}", NEXT.fetch_add(1, Ordering::Relaxed))
+}
+
+/// The org a page webview's label names, if it is an org page's.
+pub(crate) fn org_of(label: &str) -> Option<&str> {
+    let rest = label.strip_prefix("org-")?;
+    Some(rest.split_once('-').map_or(rest, |(id, _)| id)).filter(|id| !id.is_empty())
+}
+
+/// Org `id`'s page, if its webview is open (at most one is).
+pub(crate) fn org_page(app: &App, id: &str) -> Option<Webview> {
+    app.webviews().into_iter().find(|(label, _)| org_of(label) == Some(id)).map(|(_, webview)| webview)
 }
 
 /// The open org's page, if its webview is open.
 pub(crate) fn active_webview(app: &App) -> Option<Webview> {
     let org = active_org(app)?;
-    app.get_webview(&org_label(&org.id))
+    org_page(app, &org.id)
 }
 
 /// The org list down the left of the window, shown with 2+ orgs.
@@ -253,7 +307,11 @@ pub(crate) fn first_page(usual: url::Url, hub: &url::Url, sign_in: bool) -> url:
 /// prefetch (`on_screen` false) loads hidden, off to the side, until a switch shows it.
 fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<()> {
     let (Some(window), Some(home)) = (main_window(app), Home::of(org)) else { return Ok(()) };
-    grant_org(app, &home)?;
+    let label = new_page_label(&home.id);
+    grant(app, server_capability(&home.hub, &label))?;
+    if on_screen {
+        grant(app, dialog_capability(&home.hub, &label))?;
+    }
     timing::mark(app, &home.id, "granted");
     let config = Config::new(home.hub.clone());
     // A prefetch that is never shown leaves the flag for the page that is.
@@ -265,7 +323,7 @@ fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<()> 
     let start = first_page(config.start_url(), &home.hub, sign_in);
     let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), Some(home.id.clone()));
     #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
-    let mut builder = WebviewBuilder::new(org_label(&home.id), WebviewUrl::External(start))
+    let mut builder = WebviewBuilder::new(&label, WebviewUrl::External(start))
         .user_agent(USER_AGENT)
         // Files dropped on a page reach it (chat composers, task files): Tauri's own drop handler would swallow them on macOS.
         .disable_drag_drop_handler()
@@ -298,16 +356,21 @@ fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<()> 
     Ok(())
 }
 
-/// Adds the page capability for an org's webview, once per org id. Ids are never reused, so a removed org's grant
-/// cannot match a live webview.
-fn grant_org(app: &App, home: &Home) -> tauri::Result<()> {
+/// Adds a capability for one page webview, once. Labels are never reused, so a grant never reaches another page.
+fn grant(app: &App, capability: Value) -> tauri::Result<()> {
     let state = app.state::<AppState>();
     let mut granted = state.granted.lock().unwrap();
-    if !granted.contains(&home.id) {
-        app.add_capability(server_capability(&home.hub, &org_label(&home.id)).to_string())?;
-        granted.insert(home.id.clone());
+    let identifier = capability["identifier"].as_str().unwrap_or_default().to_string();
+    if !granted.contains(&identifier) {
+        app.add_capability(capability.to_string())?;
+        granted.insert(identifier);
     }
     Ok(())
+}
+
+/// Whether org `id`'s page is the one on screen: the last shown, and not a prefetch waiting to be.
+pub(crate) fn on_screen(shown: &[String], prefetched: Option<&str>, id: &str) -> bool {
+    shown.last().is_some_and(|last| last == id) && prefetched != Some(id)
 }
 
 /// How many org pages stay open: the open one only, so a switch closes the previous page once the new one is on
@@ -341,20 +404,20 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
         (orgs.active().cloned(), was_open)
     };
     let Some(org) = org else { return Ok(()) };
-    let live = app.get_webview(&org_label(&org.id));
-    if was_open && live.is_some() {
+    let live = org_page(app, &org.id);
+    let showing = {
+        let prefetched = state.prefetch.lock().unwrap().org.clone();
+        on_screen(&state.shown.lock().unwrap(), prefetched.as_deref(), id)
+    };
+    // Open and on screen: nothing to show. Open but hidden (the prefetch became the open org when the open one was
+    // removed) goes on to be shown.
+    if was_open && live.is_some() && showing {
         timing::finish(app, id, "already open");
         refresh_chrome(app);
         return Ok(());
     }
     let Some(home) = Home::of(&org) else { return Ok(()) };
-    {
-        let mut prefetch = state.prefetch.lock().unwrap();
-        if prefetch.org.as_deref() == Some(id) {
-            prefetch.org = None;
-            prefetch.serial += 1;
-        }
-    }
+    state.prefetch.lock().unwrap().take(id);
     // The connection follows the open org, and the status starts over.
     select_org(&state, Config::new(home.hub.clone()), live.is_some());
     *state.status.lock().unwrap() = crate::hub::HubStatus::default();
@@ -362,6 +425,7 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
         build_window(app)?;
         show_when_painted(app);
     } else if let Some(page) = &live {
+        grant(app, dialog_capability(&home.hub, page.label()))?;
         layout(app);
         let _ = page.show();
         let _ = page.set_focus();
@@ -373,7 +437,7 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
     timing::shown(app, id);
     let gone = note_shown(&mut state.shown.lock().unwrap(), id, KEEP_ALIVE);
     for other in gone.iter().filter(|other| other.as_str() != id) {
-        if let Some(page) = app.get_webview(&org_label(other)) {
+        if let Some(page) = org_page(app, other) {
             let _ = page.close();
         }
     }
@@ -398,17 +462,54 @@ fn select_org(state: &AppState, config: Config, built: bool) {
 #[derive(Default)]
 pub(crate) struct Prefetch {
     pub(crate) org: Option<String>,
+    // Moves on at every rest, leave and switch: a build or a close waiting for its turn goes ahead only if nothing
+    // came in meanwhile.
     serial: u64,
+}
+
+impl Prefetch {
+    /// The pointer rested on an org: any pending close, and any older rest still waiting to build, is called off.
+    /// The ticket lets this rest's build check that it is still the latest.
+    pub(crate) fn rest(&mut self) -> u64 {
+        self.serial += 1;
+        self.serial
+    }
+
+    pub(crate) fn is_latest(&self, ticket: u64) -> bool {
+        self.serial == ticket
+    }
+
+    /// The pointer left: a rest still waiting to build is called off, and a page already built gets the ticket for its
+    /// close.
+    pub(crate) fn left(&mut self) -> Option<u64> {
+        self.serial += 1;
+        self.org.as_ref().map(|_| self.serial)
+    }
+
+    /// A switch to `id` (or `id` going away) takes its prefetched page, if it has one.
+    pub(crate) fn take(&mut self, id: &str) -> bool {
+        if self.org.as_deref() != Some(id) {
+            return false;
+        }
+        self.org = None;
+        self.serial += 1;
+        true
+    }
 }
 
 /// How long a prefetched page waits for its click once the pointer leaves its org.
 const PREFETCH_FOR: Duration = Duration::from_secs(10);
 
 /// The pointer rested on an org in the rail: its page is built hidden, so a click shows it at once. It replaces the
-/// page built for another org. Nothing for the open org, and nothing before the main window exists.
+/// page built for another org. Nothing for the open org, and nothing before the main window exists. The rest is
+/// recorded before waiting for a switch in progress, so a leave (or another rest) meanwhile calls the build off.
 pub(crate) fn prefetch(app: &App, id: &str) -> tauri::Result<()> {
     let state = app.state::<AppState>();
+    let ticket = state.prefetch.lock().unwrap().rest();
     let _changing = state.changing.lock().unwrap();
+    if !state.prefetch.lock().unwrap().is_latest(ticket) {
+        return Ok(());
+    }
     let org = {
         let list = state.orgs.lock().unwrap();
         if list.active().is_some_and(|org| org.id == id) {
@@ -420,11 +521,9 @@ pub(crate) fn prefetch(app: &App, id: &str) -> tauri::Result<()> {
     if main_window(app).is_none() {
         return Ok(());
     }
-    let built = app.get_webview(&org_label(id)).is_some();
+    let built = org_page(app, id).is_some();
     let replaced = {
         let mut prefetch = state.prefetch.lock().unwrap();
-        // A pending close for the org the pointer is back on is called off.
-        prefetch.serial += 1;
         if prefetch.org.as_deref() == Some(id) && built {
             return Ok(());
         }
@@ -443,15 +542,7 @@ pub(crate) fn prefetch(app: &App, id: &str) -> tauri::Result<()> {
 /// The pointer left the org it rested on: its prefetched page closes unless a click (or another rest on it) comes
 /// within `PREFETCH_FOR`.
 pub(crate) fn leave(app: &App) {
-    let serial = {
-        let state = app.state::<AppState>();
-        let mut prefetch = state.prefetch.lock().unwrap();
-        if prefetch.org.is_none() {
-            return;
-        }
-        prefetch.serial += 1;
-        prefetch.serial
-    };
+    let Some(serial) = app.state::<AppState>().prefetch.lock().unwrap().left() else { return };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(PREFETCH_FOR).await;
@@ -479,7 +570,7 @@ fn close_unused(app: &App, id: &str) {
     }
     *state.parked_visual.lock().unwrap() = None;
     timing::drop_prefetch(app, id);
-    if let Some(page) = app.get_webview(&org_label(id)) {
+    if let Some(page) = org_page(app, id) {
         let _ = page.close();
     }
 }
@@ -489,9 +580,7 @@ pub(crate) fn forget_page(app: &App, id: &str) {
     let state = app.state::<AppState>();
     state.shown.lock().unwrap().retain(|shown| shown != id);
     let mut prefetch = state.prefetch.lock().unwrap();
-    if prefetch.org.as_deref() == Some(id) {
-        prefetch.org = None;
-        prefetch.serial += 1;
+    if prefetch.take(id) {
         *state.parked_visual.lock().unwrap() = None;
     }
 }
@@ -548,6 +637,39 @@ mod page_tests {
         assert!(note_shown(&mut shown, "d", KEEP_ALIVE).is_empty(), "the open page never closes itself");
         assert_eq!(note_shown(&mut shown, "e", 0), order(&["d"]), "a cap below one still keeps the open page");
         assert_eq!(shown, order(&["e"]));
+    }
+
+    #[test]
+    fn an_open_org_is_on_screen_only_when_it_was_shown_last_and_is_not_a_prefetch() {
+        let shown = order(&["a"]);
+        assert!(on_screen(&shown, None, "a"));
+        assert!(!on_screen(&shown, None, "b"));
+        assert!(!on_screen(&shown, Some("a"), "a"));
+        // Open A, prefetch B, remove A: B is the open org but was never shown, so it must still be shown.
+        assert!(!on_screen(&[], Some("b"), "b"));
+        assert!(!on_screen(&[], None, "b"));
+    }
+
+    #[test]
+    fn a_leave_or_newer_rest_calls_off_a_build_still_waiting_and_a_pending_close() {
+        let mut prefetch = Prefetch::default();
+        let rest = prefetch.rest();
+        assert!(prefetch.is_latest(rest));
+        // Left before the build got its turn: nothing to close, and the build is off.
+        assert_eq!(prefetch.left(), None);
+        assert!(!prefetch.is_latest(rest));
+        let older = prefetch.rest();
+        let newer = prefetch.rest();
+        assert!(!prefetch.is_latest(older) && prefetch.is_latest(newer));
+        prefetch.org = Some("b".into());
+        let close = prefetch.left().unwrap();
+        assert!(prefetch.is_latest(close));
+        prefetch.rest();
+        assert!(!prefetch.is_latest(close), "back on it: the close is off");
+        let close = prefetch.left().unwrap();
+        assert!(!prefetch.take("c"));
+        assert!(prefetch.take("b") && prefetch.org.is_none());
+        assert!(!prefetch.is_latest(close), "clicked: the close is off");
     }
 
     #[test]

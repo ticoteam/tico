@@ -35,7 +35,7 @@ use hub::{Client, HubStatus};
 use orgs::{Document, Org, Orgs};
 #[cfg(target_os = "macos")]
 use windows::clear_store;
-use windows::{build_server_window, build_window, eval, forget_owned, layout, main_window, open_search, org_label, reload, show_window, switch_to, sync_rail, take_owned, RAIL};
+use windows::{active_webview, build_server_window, build_window, eval, forget_owned, layout, main_window, open_search, org_page, reload, show_window, switch_to, sync_rail, take_owned, RAIL};
 
 const USER_AGENT: &str = "TicoHub/2.0 Tauri";
 const MIN_WIDTH: u32 = 360;
@@ -53,7 +53,8 @@ struct AppState {
     orgs: Mutex<Orgs>,
     // The windows an org opened (hub files, meetings) as (window label, org id): removing the org closes them.
     owned: Mutex<Vec<(String, String)>>,
-    // The orgs whose page capability is granted. Ids are never reused, so a grant never has to be taken back.
+    // The capabilities granted to page webviews, by identifier. Page labels are never reused, so a grant never has
+    // to be taken back.
     granted: Mutex<HashSet<String>>,
     // Held while the open org changes or an org goes, so a switch and a removal never interleave. Never taken on
     // the main thread: a switch waits on it for webview work.
@@ -238,7 +239,7 @@ pub(crate) fn org_count(app: &App) -> usize {
 
 /// The label of the open org's page, or "" with none (no webview has that label).
 fn active_label(app: &App) -> String {
-    active_org(app).map(|org| org_label(&org.id)).unwrap_or_default()
+    active_webview(app).map(|page| page.label().to_string()).unwrap_or_default()
 }
 
 #[tauri::command]
@@ -397,7 +398,7 @@ async fn remove_org(app: &App, id: &str) {
             }
         }
         windows::forget_page(app, id);
-        if let Some(page) = app.get_webview(&org_label(id)) {
+        if let Some(page) = org_page(app, id) {
             let _ = page.close();
         }
         (removed, was_open)

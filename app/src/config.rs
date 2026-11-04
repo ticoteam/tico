@@ -67,7 +67,7 @@ pub async fn validate_server(raw: &str) -> Result<Url, String> {
 }
 
 /// A redirect to the team's Cloudflare Access login (`<team>.cloudflareaccess.com/cdn-cgi/access/login/...`).
-pub(crate) fn behind_access(response: &reqwest::Response) -> bool {
+fn behind_access(response: &reqwest::Response) -> bool {
     response.status().is_redirection() && response.headers().get(reqwest::header::LOCATION)
         .and_then(|value| value.to_str().ok()).and_then(|value| Url::parse(value).ok())
         .is_some_and(|login| login.scheme() == "https" && login.path().starts_with("/cdn-cgi/access/login/")

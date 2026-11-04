@@ -6,7 +6,7 @@ use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::orgs;
-use crate::windows::{open_meeting_window, org_label, Home};
+use crate::windows::{open_meeting_window, org_of, Home};
 use crate::{add_org, applog, emit_orgs, log_dir, org_count, popup_orgs, update_now, visual_origin, App, AppState, LOG_LINES};
 
 /// The page's side of the bridge: `window.ticoNative(name).postMessage(body)`, which
@@ -53,15 +53,16 @@ fn from_server(app: &App, webview: &Webview) -> bool {
     let document = webview.url().ok();
     let state = app.state::<AppState>();
     let list = state.orgs.lock().unwrap();
-    let open = list.active().map(|org| org_label(&org.id));
+    let open = list.active().map(|org| org.id.as_str());
     let connection = state.connection.lock().unwrap();
-    server_document(connection.as_ref().map(|c| &c.hub), webview.label(), open.as_deref(), document.as_ref())
+    let caller = org_of(webview.label()).unwrap_or_default();
+    server_document(connection.as_ref().map(|c| &c.hub), caller, open, document.as_ref())
 }
 
-/// The page is the open org's page: in that org's own webview, at that org's origin. Not the rail, not an org that is
-/// no longer open, and not a hosted file.
-fn server_document(hub: Option<&url::Url>, label: &str, open: Option<&str>, document: Option<&url::Url>) -> bool {
-    open == Some(label) && hub.zip(document).is_some_and(|(hub, document)| {
+/// The page is the open org's page: in that org's own webview (`caller`, the org its label names), at that org's
+/// origin. Not the rail, not an org that is no longer open, and not a hosted file.
+fn server_document(hub: Option<&url::Url>, caller: &str, open: Option<&str>, document: Option<&url::Url>) -> bool {
+    !caller.is_empty() && open == Some(caller) && hub.zip(document).is_some_and(|(hub, document)| {
         matches!(document.scheme(), "http" | "https") && document.username().is_empty()
             && document.password().is_none() && document.origin() == hub.origin()
     })
@@ -75,10 +76,10 @@ fn own_page_call(name: &str) -> bool {
 
 /// The org whose page this is, when the page is at that org's own origin: any org page, open or not.
 fn page_org(app: &App, webview: &Webview) -> Option<String> {
-    let id = webview.label().strip_prefix("org-")?;
+    let id = org_of(webview.label())?;
     let hub = app.state::<AppState>().orgs.lock().unwrap().get(id)?.hub();
     let document = webview.url().ok();
-    server_document(hub.as_ref(), webview.label(), Some(webview.label()), document.as_ref()).then(|| id.to_string())
+    server_document(hub.as_ref(), id, Some(id), document.as_ref()).then(|| id.to_string())
 }
 
 /// `{origin}`, or `{origin, files}` from a page that saw `visualFiles` in this shell's features: Tico file hosting's
@@ -93,12 +94,13 @@ fn visual_from(hub: Option<&url::Url>, body: Option<&Value>) -> Option<visual_or
 
 fn set_visual_origin(state: &AppState, label: &str, document: Option<&url::Url>, body: Option<&Value>) -> Result<bool, String> {
     let list = state.orgs.lock().unwrap();
-    let open = list.active().map(|org| org_label(&org.id));
-    if open.as_deref() != Some(label) {
+    let caller = org_of(label).unwrap_or_default();
+    let open = list.active().map(|org| org.id.as_str());
+    if open != Some(caller) {
         // The prefetched page, hidden: its allowance waits apart from the open page's until it is shown.
         let prefetched = state.prefetch.lock().unwrap().org.clone();
-        let hub = prefetched.filter(|id| org_label(id) == label).and_then(|id| list.get(&id).and_then(|org| org.hub()));
-        if hub.is_none() || !server_document(hub.as_ref(), label, Some(label), document) {
+        let hub = prefetched.filter(|id| id == caller).and_then(|id| list.get(&id).and_then(|org| org.hub()));
+        if hub.is_none() || !server_document(hub.as_ref(), caller, Some(caller), document) {
             return Err("Only the selected server's page may configure visuals.".into());
         }
         let mut parked = state.parked_visual.lock().unwrap();
@@ -107,7 +109,7 @@ fn set_visual_origin(state: &AppState, label: &str, document: Option<&url::Url>,
     }
     let connection = state.connection.lock().unwrap();
     let hub = connection.as_ref().map(|c| &c.hub);
-    if !server_document(hub, label, open.as_deref(), document) {
+    if !server_document(hub, caller, open, document) {
         return Err("Only the selected server's page may configure visuals.".into());
     }
     let mut visual = state.visual_origin.lock().unwrap();
@@ -135,7 +137,7 @@ pub(crate) fn bridge(app: App, webview: Webview, name: String, body: Option<Valu
             // `recording` is what an older page called it.
             let id = body.as_ref().and_then(|b| b.get("meeting").or_else(|| b.get("recording"))).and_then(Value::as_str);
             // The caller's own org, from its label: a switch since the check must not open it on another org.
-            let caller = webview.label().strip_prefix("org-").and_then(|org| app.state::<AppState>().orgs.lock().unwrap().get(org).cloned());
+            let caller = org_of(webview.label()).and_then(|org| app.state::<AppState>().orgs.lock().unwrap().get(org).cloned());
             if let (Some(id), Some(home)) = (id, caller.and_then(|org| Home::of(&org))) {
                 open_meeting_window(&app, &home, id);
             }
@@ -170,7 +172,7 @@ fn org_info(app: &App, label: &str, body: Option<&Value>) -> Result<(), String> 
     // details to the org that opened next.
     let id = {
         let mut list = state.orgs.lock().unwrap();
-        let id = label.strip_prefix("org-").filter(|id| list.get(id).is_some()).map(str::to_string);
+        let id = org_of(label).filter(|id| list.get(id).is_some()).map(str::to_string);
         if let Some(id) = &id {
             list.set_details(id, &name, &email);
         }
