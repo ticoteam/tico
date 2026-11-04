@@ -1064,3 +1064,24 @@ def test_a_rule_decision_left_unsent_is_taken_back_once_the_rule_is_off(environm
     with api.app.state.store.read() as c:
         assert c.execute("SELECT decision FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0] is None
     assert hq.seen == []
+
+
+def test_a_rule_send_leaves_no_unread_notice_for_the_default_person_and_needs_you_unchanged(environment, hq):  # noqa: F811  (the fixture)
+    from backend.store import H
+    api = environment()
+    bot = as_bot(api)
+    with api.app.state.store.read() as c:
+        pending_before = c.execute("SELECT count(*) FROM approvals WHERE decision IS NULL").fetchone()[0]
+    needs_before = api.get("/api/v2/needs-you?count=1", headers=signed_in()).json()["count"]
+    r = draft(api, bot)                    # the team rule is on by default: the draft is decided and sent in this request
+    assert r.status_code == 200 and r.json()["sent"] is True, r.text
+    assert api.get("/api/v2/needs-you?count=1", headers=signed_in()).json()["count"] == needs_before
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM approvals WHERE decision IS NULL").fetchone()[0] == pending_before
+        person = H.human_actor(H.default_human(c))
+        mid = c.execute("SELECT message_id FROM approvals").fetchone()[0]
+        kind, read_at, delivered_at = c.execute("SELECT kind, read_at, delivered_at FROM messages WHERE id=?",
+                                                (mid,)).fetchone()
+        unread = {m["id"] for m in H.inbox(c, person)["messages"]}
+    assert kind == "notice" and read_at and delivered_at          # the message stays, as history, and it is read
+    assert mid not in unread                                       # no unread notice for the default person

@@ -493,6 +493,11 @@ class Support:
                     try:
                         H.approval_decide(c, H.human_actor(person), approval_id, "approved", RULE_NOTE)
                         c.execute("UPDATE approvals SET decided_via=? WHERE id=?", (RULE_VIA, approval_id))
+                        if row["message_id"]:
+                            # The notice the draft wrote for the default person is read and delivered with its decision,
+                            # as the person's own ack would leave it (app.py acknowledge): the message stays as history.
+                            H.mark_delivered(c, H.KEEPER, row["message_id"], recipient=H.human_actor(person))
+                            H.mark_read(c, H.KEEPER, row["message_id"], recipient=H.human_actor(person))
                         c.execute("RELEASE domain_write")
                     except H.Refused as exc:
                         refusal = refused(c, who, exc)   # the decision undone, the refusal kept and counted
