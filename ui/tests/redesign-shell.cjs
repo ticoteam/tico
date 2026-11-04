@@ -102,6 +102,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
     for (const [tag, viewport] of [['phone', PHONE], ['desktop', DESKTOP]]) {
       const {page, errors} = await open(browser, {viewport, messageBot: true});
       if (tag === 'phone') await page.locator('#mobile-more').click();
+      await page.locator('#tree [data-toggle="b:eng-lead"]').click();
       const counsel = page.locator('#tree [data-org="b:counsel"]');
       await counsel.waitFor({state: 'visible'});
       const manager = page.locator('#tree [data-org="b:eng-lead"]').locator('xpath=ancestor::li[1]');
