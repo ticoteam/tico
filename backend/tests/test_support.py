@@ -1246,4 +1246,6 @@ def test_a_request_a_person_sent_under_approval_before_the_upgrade_is_back_in_th
         keys = {r["id"]: r["request_key"] for r in c.execute("SELECT id, request_key FROM support_tickets")}
     assert keys[mine] == "draft:" + asked
     assert keys[watched] == "approval:" + monitored
-    assert keys[filed["ticket"]["id"]] == "approval:" + filed["id"]
+    with api.app.state.store.read() as c:                       # the bot's approval, whose id its send-at-once draft did not echo
+        bot_approval = c.execute("SELECT id FROM approvals WHERE requested_by_id='bot:coo' AND kind='support'").fetchone()[0]
+    assert keys[filed["ticket"]["id"]] == "approval:" + bot_approval
