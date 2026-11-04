@@ -94,9 +94,19 @@ def test_a_tool_call_reads_as_its_work_in_plain_words():
     assert turns.tool_label({"tool": "mcp__peec-ai__list_brands"}) == "Ran peec ai list brands"
 
 
-def test_a_shell_label_is_its_program_and_never_what_follows_it():
-    assert turns.tool_label({"tool": "Bash", "summary": "run.sh --key sk-live-1"}) == "Ran run.sh"
+def test_a_shell_label_never_shows_an_unknown_program_or_its_arguments():
+    assert turns.tool_label({"tool": "Bash", "summary": "run.sh --key sk-live-1"}) == "Ran Bash"
     assert turns.tool_label({"tool": "Bash", "summary": "hub task close --token sk-live-1"}) == "Closing a task"
+
+
+def test_a_legacy_shell_summary_naming_a_file_or_arguments_is_never_shown():
+    """Older runners sent a shell line's summary as the line's words, so a file name or its arguments can arrive. None
+    of it is shown: the tool's own name is."""
+    assert turns.tool_label({"tool": "Bash", "summary": "customer-private.json"}) == "Ran Bash"
+    assert turns.tool_label({"tool": "Bash", "summary": "/tmp/customer-private.json"}) == "Ran Bash"
+    assert turns.tool_label({"tool": "Bash", "summary": "npm publish --token x"}) == "Ran Bash"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub customer-private.json"}) == "Ran hub"
+    assert turns.tool_label({"tool": "Bash", "summary": "cd"}) == "Ran cd"
 
 
 def test_a_folded_step_carries_its_label_and_keeps_its_tool_name():

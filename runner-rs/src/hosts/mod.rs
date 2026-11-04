@@ -262,10 +262,6 @@ pub fn shell_outside_actions(command: &str) -> Vec<&'static str> {
         .map(|(label, _)| *label).collect()
 }
 
-/// Shell setup a command can open with (`cd dir && ...`, `export X=1; ...`). It says nothing about the work, so a
-/// summary reads past it to the next run.
-const SHELL_SETUP: [&str; 5] = ["cd", "export", "set", "source", "."];
-
 /// Every command path the hub CLI parses (clients/hubcli.py), its aliases and its top-level renames included, as
 /// space-joined words such as `task close` or `needs-you show`. backend/tests/test_hub_command_tree.py fails when
 /// this list and the CLI differ, so a command added or renamed there is added here too.
@@ -404,19 +400,57 @@ const HUB_PATHS: &[&str] = &[
     "webhook update", "whoami",
 ];
 
-/// What a shell command does, for a tool event: the program it runs, by file name, never its arguments. A `hub` run
-/// reads as `hub` and the command path its words name, up to three words. A compound line (`&&`, `||`, `|`, `;`,
-/// newlines) names its `hub` run first, else its first run past shell setup. Leading `NAME=value` assignments and
-/// redirections are skipped, a `sh -c` wrapper is unwrapped, and a `#` comment is no run at all. A line with a heredoc,
-/// a substitution or a process substitution is not cut into runs: only its first program is read. A command whose quoting
-/// does not close, or whose program word is not a plain path, gives nothing, and a program name must match
-/// `^[A-Za-z0-9._+-]{1,40}$`.
+/// What a shell command does, for a tool event: `hub` and its command path when the line runs a `hub` command, else the
+/// program the line starts with, as a plain file name. Arguments, redirection targets and everything after the first
+/// program never reach the summary, and a line whose quoting does not close, or whose program is not a plain path, gives
+/// nothing.
 pub fn command_program(command: &str) -> String {
-    let Some(words) = chosen_words(command) else { return String::new() };
+    if let Some(words) = hub_run(command) {
+        return hub_summary(&words);
+    }
+    let Some(words) = first_program(command) else { return String::new() };
     if words[0] == "hub" {
         return hub_summary(&words);
     }
     if program_name_ok(&words[0]) { clip(&words[0]) } else { String::new() }
+}
+
+/// The words of the line's `hub` run, from its `hub` word on: the first run whose first word after assignments and
+/// redirections is `hub`. The line is cut at its separators only here, and only the command path is read from the run
+/// (through `hub_summary`), so a mis-split can at worst name a real command path.
+fn hub_run(command: &str) -> Option<Vec<String>> {
+    command_runs(command).into_iter().find_map(|run| {
+        let words = shell_words(run)?;
+        let at = program_index(&words)?;
+        let program = words[at].rsplit('/').next().unwrap_or(&words[at]);
+        (program == "hub").then(|| words[at..].to_vec())
+    })
+}
+
+/// The first program of a whole line, read the way a shell reads its first command: leading assignments and redirections
+/// skipped, a `sh -c` wrapper unwrapped to its script, and nothing split. None when the quoting does not close, the program
+/// could come from an expansion, or the program word is not a plain path (`[A-Za-z0-9._+/-]`, subshell parentheses
+/// trimmed). The result is the program's file name, then the words after it.
+fn first_program(command: &str) -> Option<Vec<String>> {
+    let words = shell_words(command)?;
+    let at = program_index(&words)?;
+    if words[..=at].iter().any(|w| w.contains("$(") || w.contains('`') || w.contains("${")) {
+        return None;
+    }
+    let raw = words[at].trim_matches(&['(', ')'][..]);
+    if raw.is_empty() || !raw.chars().all(|c| c.is_ascii_alphanumeric() || "._+/-".contains(c)) {
+        return None;
+    }
+    let program = raw.rsplit('/').next().unwrap_or(raw).to_string();
+    let shell = matches!(program.as_str(), "sh" | "bash" | "zsh" | "dash");
+    if let (true, Some(flag), Some(inner)) = (shell, words.get(at + 1), words.get(at + 2)) {
+        if flag.starts_with('-') && flag.ends_with('c') {
+            return first_program(inner);
+        }
+    }
+    let mut out = vec![program];
+    out.extend(words[at + 1..].iter().cloned());
+    Some(out)
 }
 
 /// A program name a summary may show: a plain file name (`npm`, `node18.x`, `g++`), never a word with an expansion or a
@@ -424,27 +458,6 @@ pub fn command_program(command: &str) -> String {
 fn program_name_ok(program: &str) -> bool {
     static NAME: OnceLock<Regex> = OnceLock::new();
     NAME.get_or_init(|| Regex::new(r"^[A-Za-z0-9._+-]{1,40}$").unwrap()).is_match(program)
-}
-
-/// The words of the run that names what a command does: the first `hub` run, else the first run past shell setup,
-/// else the first run.
-fn chosen_words(command: &str) -> Option<Vec<String>> {
-    let runs: Vec<Vec<String>> = shell_runs(command).into_iter().filter_map(run_words).collect();
-    let hub = runs.iter().find(|words| words[0] == "hub");
-    let work = runs.iter().find(|words| !SHELL_SETUP.contains(&words[0].as_str()));
-    hub.or(work).or(runs.first()).cloned()
-}
-
-/// The runs a shell line is read as. A line with a heredoc, a substitution, a process substitution or an ANSI-C string is
-/// one run and is not cut: its bodies and nested quoting are not parsed here, so only its first program is read from it.
-/// Any other line is cut at its separators by `command_runs`.
-fn shell_runs(command: &str) -> Vec<&str> {
-    const OPAQUE: [&str; 7] = ["<<", "$(", "`", "${", "<(", ">(", "$'"];
-    if OPAQUE.iter().any(|token| command.contains(*token)) {
-        vec![command]
-    } else {
-        command_runs(command)
-    }
 }
 
 /// The runs a shell line holds: its text cut at `&&`, `||`, `|`, `;` and newlines. A separator inside quotes, inside
@@ -500,32 +513,6 @@ fn starts_word(command: &str, i: usize) -> bool {
     command[..i].chars().next_back().map_or(true, |p| p.is_whitespace() || ";|&()".contains(p))
 }
 
-/// The words of one shell run, from its program on: leading `NAME=value` assignments and redirections dropped, and the
-/// program reduced to its file name. A `sh -c` wrapper gives the words of its script instead. None when the run has no
-/// program, its quoting does not close, its program could come from an expansion, or its program word is anything but a
-/// plain path (`[A-Za-z0-9._+/-]`, after its subshell parentheses are trimmed).
-fn run_words(run: &str) -> Option<Vec<String>> {
-    let words = shell_words(run)?;
-    let at = program_index(&words)?;
-    if words[..=at].iter().any(|w| w.contains("$(") || w.contains('`') || w.contains("${")) {
-        return None;
-    }
-    let raw = words[at].trim_matches(&['(', ')'][..]);
-    if raw.is_empty() || !raw.chars().all(|c| c.is_ascii_alphanumeric() || "._+/-".contains(c)) {
-        return None;
-    }
-    let program = raw.rsplit('/').next().unwrap_or(raw).to_string();
-    let shell = matches!(program.as_str(), "sh" | "bash" | "zsh" | "dash");
-    if let (true, Some(flag), Some(inner)) = (shell, words.get(at + 1), words.get(at + 2)) {
-        if flag.starts_with('-') && flag.ends_with('c') {
-            return chosen_words(inner);
-        }
-    }
-    let mut out = vec![program];
-    out.extend(words[at + 1..].iter().cloned());
-    Some(out)
-}
-
 /// The index of a run's program word: the first word that is neither a `NAME=value` assignment nor a redirection. When a
 /// redirection's operator stands alone, its target (the next word) is skipped too.
 fn program_index(words: &[String]) -> Option<usize> {
@@ -567,7 +554,6 @@ fn hub_summary(words: &[String]) -> String {
     }
     std::iter::once("hub").chain(path).collect::<Vec<_>>().join(" ")
 }
-
 
 /// A command's words after shell quoting (single, double, backslash), or None when a quote is left open.
 fn shell_words(command: &str) -> Option<Vec<String>> {
@@ -1177,21 +1163,45 @@ mod tests {
         assert_eq!(command_program("export HUB_TOKEN=sk-live-1; /usr/local/bin/hub task create --title sk-live-1"), "hub task create");
         assert_eq!(command_program("hub task note sk-live-1 close"), "hub task");
         assert_eq!(command_program("cd web && npm run build && hub task list"), "hub task list");
-        assert_eq!(command_program("set -e\nnpm test | tee out.log"), "npm");
+        assert_eq!(command_program("set -e\nnpm test | tee out.log"), "set");
         assert_eq!(command_program("cargo test 2>&1 | tail"), "cargo");
         assert_eq!(command_program("cd /tmp"), "cd");
-        assert_eq!(command_program("(cd web && npm test)"), "npm");
-        assert_eq!(command_program("sh -c 'cd x && cargo test'"), "cargo");
+        assert_eq!(command_program("(cd web && npm test)"), "cd");
+        assert_eq!(command_program("sh -c 'cd x && cargo test'"), "cd");
         assert_eq!(command_program("hub task create --title \"a && hub task close\""), "hub task create");
         assert_eq!(command_program("hub ask botops please check the release"), "hub ask");
-        assert_eq!(command_program("FOO=1 && curl x"), "curl");
+        assert_eq!(command_program("FOO=1 && curl x"), "");
         assert_eq!(command_program("X=$(a && sk-live-1) hub task list"), "");
         assert_eq!(tool_summary(&json!({"command": "cd web && hub task list --token sk-live-1"})), "hub task list");
     }
 
     #[test]
+    fn no_line_shows_its_private_words_whatever_it_quotes_redirects_or_tests() {
+        for line in [
+            r#"export X="$(printf '%s' "a; private-token")""#,
+            "cd /repo <<'EOF'\nprivate-token\nEOF\nnpm test",
+            "cd /repo && >/tmp/customer-123.json printf ok",
+            "cd /repo && > /tmp/customer-123.json printf ok",
+            "cd /tmp && >|private-token printf ok",
+            "cd /tmp && [[ a == a || private-token == other ]]",
+            "(( 1 || private_token ))",
+            "cd /repo # note; private-token\nnpm test",
+        ] {
+            let shown = command_program(line);
+            assert!(!shown.contains("private") && !shown.contains("customer"), "{line:?} showed {shown:?}");
+        }
+        assert_eq!(command_program("cd /repo <<'EOF'\nprivate-token\nEOF\nnpm test"), "cd");
+        assert_eq!(command_program("cd /repo && >/tmp/customer-123.json printf ok"), "cd");
+        assert_eq!(command_program(">|private-token printf ok"), "printf");
+        assert_eq!(command_program("cd /tmp && >|private-token printf ok"), "cd");
+        assert_eq!(command_program("(( 1 || private_token ))"), "");
+        assert_eq!(command_program("cd /w && hub task close 7f3a"), "hub task close");
+        assert_eq!(command_program("cd /w && npm test"), "cd");
+    }
+
+    #[test]
     fn a_shell_comment_is_in_no_run() {
-        assert_eq!(command_program("cd /repo # note; private-token\nnpm test"), "npm");
+        assert_eq!(command_program("cd /repo # note; private-token\nnpm test"), "cd");
         assert_eq!(command_program("cd /repo # note; private-token"), "cd");
         assert_eq!(command_program("echo ok # x && hub task close"), "echo");
         assert_eq!(command_program("cd x; a#b && hub task list"), "hub task list");
@@ -1218,15 +1228,15 @@ mod tests {
         // A heredoc body is no run.
         assert_eq!(command_program("cd /repo <<'EOF'\nprivate-token\nEOF\nnpm test"), "cd");
         // A redirection is skipped to the program behind it, whether its target is attached or the next word.
-        assert_eq!(command_program("cd /repo && >/tmp/customer-123.json printf ok"), "printf");
-        assert_eq!(command_program("cd /repo && > /tmp/customer-123.json printf ok"), "printf");
-        assert_eq!(command_program("cd /w && 2>&1 npm test"), "npm");
+        assert_eq!(command_program("cd /repo && >/tmp/customer-123.json printf ok"), "cd");
+        assert_eq!(command_program("cd /repo && > /tmp/customer-123.json printf ok"), "cd");
+        assert_eq!(command_program("cd /w && 2>&1 npm test"), "cd");
         // A program word is a plain path, and a program name is at most 40 characters.
         assert_eq!(command_program("$HOME/bin/tool --x"), "");
         assert_eq!(command_program(&format!("{} x", "a".repeat(41))), "");
-        // The hub and npm commands still read as before.
+        // A hub command in a later run still reads; any other line reads as its first program.
         assert_eq!(command_program("cd /w && hub task close 7f3a"), "hub task close");
-        assert_eq!(command_program("cd /w && npm test"), "npm");
+        assert_eq!(command_program("cd /w && npm test"), "cd");
     }
 
     #[test]

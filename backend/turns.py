@@ -102,6 +102,11 @@ def build_steps(rows):
 # A shell call's events name the program it runs (the runner's summary: `npm`, or `hub task close`), never its
 # arguments. These tool names are shells.
 SHELL_TOOLS = {"bash", "shell"}
+# The programs a shell call may be labelled with on its own. The runner sends a shell line's first program (or `hub` and
+# its command path); a summary of any other shape, from a current or an older runner, is never shown.
+SHELL_PROGRAMS = {"awk", "cargo", "cat", "cd", "curl", "docker", "find", "gh", "git", "go", "grep", "jq", "ls", "make",
+                  "node", "npm", "npx", "pnpm", "pytest", "python", "python3", "rg", "sed", "sqlite3", "wc", "yarn"}
+HUB_WORD = re.compile(r"[a-z][a-z0-9-]*")
 # A hub command's plain phrase, by its CLI words, every one a real command of clients/hubcli.py (or one of its top-level
 # aliases, the RENAMED table). A word break is a space, so `read-back` is the two words `read back`. A phrase for a
 # command's first word alone covers the rest of its group; the longest key that starts the command wins.
@@ -187,26 +192,41 @@ def hub_phrase(words):
     return None
 
 
-def tool_label(payload):
-    """What a tool call does, in a few plain words: a hub command's phrase, else "Ran" and the program (a shell's
-    summary: its first word, or `hub` and two words for a hub command) or the tool's own name. The arguments and
-    the output of a call are never read."""
-    name = str(payload.get("tool") or payload.get("name") or "")
-    shell = re.sub(r"[^A-Za-z0-9]+", " ", name).strip().lower() in SHELL_TOOLS
-    summary = " ".join(str(payload.get("summary") or "").split()) if shell else ""
-    phrase = hub_phrase(hub_words(summary or name) or [])
-    if phrase:
-        return phrase
-    head = summary.split()[:1]
-    if head == ["hub"]:
-        words = " ".join(summary.split()[:3])
-    elif head:
-        words = head[0]
-    else:
-        words = " ".join(re.sub(r"[^A-Za-z0-9]+", " ", name).split())
+def tool_words(name):
+    """A tool's own name in plain words, `mcp__peec-ai__list_brands` as `peec ai list brands`, or "a tool"."""
+    words = " ".join(re.sub(r"[^A-Za-z0-9]+", " ", name).split())
     if words.lower().startswith("mcp "):
         words = words[4:]
-    return "Ran " + (words[:TOOL_LABEL_CHARS].strip() or "a tool")
+    return words[:TOOL_LABEL_CHARS].strip() or "a tool"
+
+
+def shell_label(summary):
+    """A shell call's label from its summary, or None when the summary is neither a hub command nor one program from
+    SHELL_PROGRAMS. A hub command's summary is `hub` and its command path (the runner checks the path against the CLI's
+    command list): its phrase when it has one, else `Ran hub` and the words when they are all plain lowercase words."""
+    words = summary.split()
+    if words[:1] == ["hub"]:
+        phrase = hub_phrase(hub_words(summary) or [])
+        if phrase:
+            return phrase
+        rest = words[1:]
+        if rest and all(HUB_WORD.fullmatch(w) for w in rest):
+            return ("Ran hub " + " ".join(rest))[:TOOL_LABEL_CHARS]
+        return "Ran hub"
+    if len(words) == 1 and words[0] in SHELL_PROGRAMS:
+        return "Ran " + words[0]
+    return None
+
+
+def tool_label(payload):
+    """What a tool call does, in a few plain words: a hub command's phrase, else "Ran" and the program or the tool's own
+    name. A shell call names only a hub command or a known program; its summary's arguments, paths and output are never
+    shown."""
+    name = str(payload.get("tool") or payload.get("name") or "")
+    if re.sub(r"[^A-Za-z0-9]+", " ", name).strip().lower() in SHELL_TOOLS:
+        summary = " ".join(str(payload.get("summary") or "").split())
+        return shell_label(summary) or "Ran " + tool_words(name)
+    return hub_phrase(hub_words(name) or []) or "Ran " + tool_words(name)
 
 
 def reply_parts(rows):
