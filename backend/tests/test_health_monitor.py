@@ -706,3 +706,32 @@ def test_the_monitor_files_for_botops_and_a_task_for_a_person_is_refused(api):
             H.task_update(c, "bot:" + health_monitor.SLUG, fix["id"], owner="human:ana")
         assert handed.value.rule == "botops-only"
         assert H.task(c, fix["id"])["owner_id"] == "bot:botops"
+
+
+def test_a_report_the_owner_asked_for_and_approved_stays_the_monitors_under_its_approval_key(environment, hq):
+    """Whoever asked, the Health Monitor's report is the monitor's ticket: its key is `approval:`, which its "Seen again"
+    note finds, and the owner's own chat does not list it (support.OWN)."""
+    api, runner = built(environment)
+    api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
+    api.put("/api/v2/access/rules", json={"health_monitor_reports": False}, headers=signed_in())
+    runner_errors(api, runner, STREAM)
+    scan(api)
+    url = f"/api/v2/health-monitor/findings/event_stream:{runner['runner_id']}/report"
+    approval = api.post(url, json={}, headers=signed_in()).json()["approval"]
+    with api.app.state.store.transaction() as c:
+        owner = api.app.state.auth.owner_identity(c)
+        c.execute("UPDATE approvals SET decision='approved', decided_by_id=? WHERE id=?", (owner.actor, approval))
+    api.app.state.support.file_approved(owner, approval)
+    assert json.loads(hq.seen[-1].content)["source"] == "health_monitor"
+    with api.app.state.store.read() as c:
+        (key, source) = c.execute("SELECT request_key, json_extract(sent,'$.source') FROM support_tickets").fetchone()
+    assert key == "approval:" + approval and source == "health_monitor"
+    assert api.get("/api/v2/support/tickets", headers=signed_in()).json()["tickets"] == []
+    runner_errors(api, runner, [])
+    scan(api)
+    runner_errors(api, runner, STREAM)
+    scan(api)
+    repeat = api.post(url, json={}, headers=signed_in())
+    assert repeat.status_code == 200 and repeat.json()["comment"], repeat.text
+    (ticket,) = hq.tickets.values()
+    assert [m["body"][:37] for m in ticket["messages"]] == ["[Health Monitor] Seen again (2 times)"]

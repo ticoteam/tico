@@ -157,7 +157,7 @@ def test_the_writes_a_failing_job_made_before_its_error_are_rolled_back(api, mon
     assert turn["bot"] == "cpo"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 0
-        assert c.execute("SELECT count(*) FROM turns WHERE bot='ops'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 0
     [bad] = jobs_of(api, "ops")
     assert (bad["state"], bad["attempt_id"], bad["held"]) == ("queued", None, 1)
     [good] = jobs_of(api, "cpo")

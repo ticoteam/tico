@@ -46,7 +46,7 @@ TASK_ROWS = ("history_events", "task_links", "task_tags", "task_delegations", "t
 # history is the shared history table's task rows (backend/migrations/0064_history_events.py).
 TASK_KEYS = {"history_events": ("subject_id", "subject_type='task'")}
 # Rows that are work done on the task: any one of them refuses the run.
-TASK_WORK = ("turns", "approvals", "bot_tool_requests", "meeting_deliveries", "schedule_occurrences",
+TASK_WORK = ("attempts", "approvals", "bot_tool_requests", "meeting_deliveries", "schedule_occurrences",
              "watcher_items")
 # A file a person attached to the task itself (scope `task:<id>`) is not work; any other file touched on the task is.
 # A verdict on a file under review (`reviewed`, backend/file_reviews.py) is not work either: the file is the work, and
@@ -59,7 +59,7 @@ FILE_WORK = (("bot_files", "SELECT count(*) FROM bot_files WHERE task_id IN ({})
              ("bot_file_versions", "SELECT count(*) FROM bot_files f WHERE f.task_id IN ({}) AND f.scope='task:' || f.task_id "
                                    "AND EXISTS (SELECT 1 FROM bot_file_versions v WHERE v.file_id=f.id "
                                    "AND (v.attempt_id IS NOT NULL OR v.actor LIKE 'bot:%'))"))
-MESSAGE_WORK = ("turns", "jobs", "attempt_inputs", "approvals", "credential_requests",
+MESSAGE_WORK = ("attempts", "jobs", "attempt_inputs", "approvals", "credential_requests",
                 "bot_transition_checkpoints", "batches")
 CONVERSATION_WORK = ("attempt_conversations", "session_epochs", "assistant_actions", "chat_goals",
                      "credential_requests", "bot_transition_checkpoints")

@@ -1352,7 +1352,7 @@ def turn_done(c, attempt, outcome, text):
         return
     # A turn the run started is its task's; a notice (wake_bot, note) is its message.
     ref = H._task_ref(refs.get("task")) if refs.get("automation_step") else msg["id"]
-    priced = c.execute("SELECT est_cost_usd FROM turns WHERE id=?", (attempt["id"],)).fetchone()
+    priced = c.execute("SELECT est_cost_usd FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
     cost, ok = float((priced and priced[0]) or 0), outcome == "completed"
     if run["status"] == "running" or (run["status"] == "skipped" and run["claimed_at"]):
         # Still being worked (a run dropped mid-step is too, until its step is saved): the save takes the answer.
@@ -1445,8 +1445,8 @@ def _spent(c, aid, rid):
 
 def _usual_cost(c, bot):
     """What a turn of `bot` usually costs: its last TURN_COST_SAMPLE priced turns' average, else TURN_COST."""
-    rows = [r[0] for r in c.execute("SELECT est_cost_usd FROM turns WHERE bot=? AND est_cost_usd IS NOT NULL "
-                                    "ORDER BY started_at DESC LIMIT ?", (bot, TURN_COST_SAMPLE))]
+    rows = [r[0] for r in c.execute("SELECT est_cost_usd FROM attempts WHERE bot_id=? AND est_cost_usd IS NOT NULL "
+                                    "ORDER BY created_at DESC LIMIT ?", (bot, TURN_COST_SAMPLE))]
     return round(sum(rows) / len(rows), 6) if rows else TURN_COST
 
 

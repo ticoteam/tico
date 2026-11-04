@@ -85,15 +85,16 @@ class TaskCheckBackWakeRow(TypedDict):
 
 
 class AttemptRow(TypedDict):
-    """One `attempts` row (SELECT *)."""
+    """One `attempts` row (SELECT *): a run, its lease and its record. The lease columns are NULL together on a run
+    recorded with no lease (migration 0072); the record's columns are NULL on one that failed before it had one."""
     id: str
-    job_id: str
+    job_id: str | None
     bot_id: str
-    runner_id: str
-    generation: int
-    token_hash: str
-    state: str
-    lease_until: str
+    runner_id: str | None
+    generation: int | None
+    token_hash: str | None
+    state: str | None
+    lease_until: str | None
     created_at: str
     started_at: str | None
     finished_at: str | None
@@ -108,6 +109,31 @@ class AttemptRow(TypedDict):
     lane: str
     wake: str | None
     model: str | None
+    settled_at: str | None
+    trigger: str | None
+    message_id: str | None
+    task_id: str | None
+    exit: str | None
+    summary: str | None
+    trigger_kind: str | None
+    trigger_source: str | None
+    purpose: str | None
+    rule_id: str | None
+    writes: int | None
+    outcome: str | None
+    did_nothing: int | None
+    rotated: str | None
+    session_kind: str | None
+    session_why: str | None
+    input_tokens: int | None
+    cached_tokens: int | None
+    output_tokens: int | None
+    prompt_tokens: int | None
+    usage_model: str | None
+    provider: str | None
+    est_cost_usd: float | None
+    billing: str | None
+    usage_reason: str | None
 
 
 class RunnerRow(TypedDict):

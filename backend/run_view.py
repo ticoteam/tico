@@ -190,9 +190,9 @@ def run_view(c, auth, who, tid):
     # The page limit counts only runs this reader can open: hidden newer runs must not push theirs off the page.
     turns = []
     for row in c.execute(
-            "SELECT t.id,t.bot,t.exit,a.job_id,a.state,a.created_at,a.started_at,a.finished_at,a.lease_until,a.result,a.wake,"
-            "m.conversation_id FROM turns t JOIN attempts a ON a.id=t.id JOIN jobs j ON j.id=a.job_id "
-            "JOIN messages m ON m.id=j.message_id WHERE t.task_id=? ORDER BY a.created_at DESC LIMIT ?",
+            "SELECT a.id,a.bot_id AS bot,a.exit,a.job_id,a.state,a.created_at,a.started_at,a.finished_at,a.lease_until,"
+            "a.result,a.wake,m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
+            "JOIN messages m ON m.id=j.message_id WHERE a.task_id=? ORDER BY a.created_at DESC LIMIT ?",
             (tid, SCAN_LIMIT)):
         r = dict(row)
         if readable(r):

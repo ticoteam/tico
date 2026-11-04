@@ -49,7 +49,7 @@ def authors_of(c, settings, task_id):
     task = H.task(c, task_id) if task_id else None
     if not task:
         return set()
-    turns = [row["id"] for row in c.execute("SELECT id FROM turns WHERE task_id=?", (task_id,))]
+    turns = [row["id"] for row in c.execute("SELECT id FROM attempts WHERE task_id=?", (task_id,))]
     makers = {s["family"] for made in ran_on(c, turns).values() for s in made["segments"] if s["family"]}
     if H.is_bot(task["owner_id"]):
         row = c.execute(BS.ONE_SQL, (H.actor_id(task["owner_id"]),)).fetchone()

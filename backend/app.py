@@ -4333,8 +4333,9 @@ def create_app(settings=None):
         weighs who built what reads this, never the bot's configured model: a fallback turn ran elsewhere."""
         from .usage_records import ran_on
         actor = privacy.actor(who)
-        rows = H._rows(c.execute("SELECT id,bot,started_at,finished_at,exit FROM turns WHERE task_id=? "
-                                 "ORDER BY started_at DESC LIMIT ?", (tid, limit)))
+        rows = H._rows(c.execute("SELECT id,bot_id AS bot,created_at AS started_at,settled_at AS finished_at,exit "
+                                 "FROM attempts WHERE task_id=? AND (job_id IS NULL OR trigger IS NOT NULL) "
+                                 "ORDER BY created_at DESC LIMIT ?", (tid, limit)))
         privacy.prime_attempts(c, [r["id"] for r in rows])
         rows = [r for r in rows if privacy.attempt_readable(c, actor, r["id"])]
         made = ran_on(c, [r["id"] for r in rows])
@@ -4785,6 +4786,7 @@ def create_app(settings=None):
             fields = body.model_dump(exclude={"version", "close", "on_behalf_of"})
             privacy.require_wait(c, caller, row, body.waiting_on)
             gates, waits = [], []
+            owner_event_data = None
             for verdict in ingest or ():
                 # Ask ingest (backend/ask_ingest.py), judged against the plate before the change: a bot handing its
                 # own task to a person is filing it for them, and sent back or FYI with the filter on the task stays
@@ -4792,7 +4794,8 @@ def create_app(settings=None):
                 if verdict["kind"] == "task" and row["owner_id"] == who.actor and body.owner and \
                         H.resolve_actor(c, body.owner) == verdict["person"]:
                     gate = ask_ingest.apply(c, verdict)
-                    ask_ingest.record(c, verdict, gate, task_id)
+                    item_id = ask_ingest.record(c, verdict, gate, task_id)
+                    owner_event_data = {"ask_ingest_item": item_id}
                     if gate["acts"]:
                         fields["owner"] = None
                 elif verdict["kind"] == "wait" and row["owner_id"] == who.actor and \
@@ -4815,7 +4818,8 @@ def create_app(settings=None):
                 if new_owner != row["owner_id"]:
                     task_caps.check(c, who.actor, new_owner)
             after = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None, review_prs=snapshots,
-                                  receipt_owner=Access.load_owner(c, settings)["email"], public_allowance=allowance)
+                                  receipt_owner=Access.load_owner(c, settings)["email"], public_allowance=allowance,
+                                  owner_event_data=owner_event_data)
             if fields.get("owner") and body.owner and new_owner != row["owner_id"]:
                 task_caps.record(c, task_id, who.actor, new_owner)
             warnings = after.get("warnings")

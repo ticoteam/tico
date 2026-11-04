@@ -23,7 +23,7 @@ def _last_activity(row):
 def _live(conn, task_id):
     """A run on this task is leased or going: it is not idle, whatever its timestamps say."""
     try:
-        return conn.execute("SELECT 1 FROM turns t JOIN attempts a ON a.id=t.id WHERE t.task_id=? "
+        return conn.execute("SELECT 1 FROM attempts a WHERE a.task_id=? "
                             "AND a.state IN ('leased','running') LIMIT 1", (task_id,)).fetchone() is not None
     except sqlite3.OperationalError:     # a local hub has no attempts table
         return False

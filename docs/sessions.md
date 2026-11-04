@@ -63,7 +63,7 @@ resumes the saved session. If the host refuses, Tico asks once more after a shor
 A new session starts only when the saved one is not on this computer (another computer ran the bot, or its
 files were cleared) or the host refuses it twice. The new session starts from the task's checkpoint and what was said
 since that turn, the bot's own replies included, and it is told so. A session does not move between computers. Every
-run records how its session began (`turns.session_kind`, `turns.session_why`, [hub sql](hub-sql.md)): resumed or new,
+run records how its session began (`attempts.session_kind`, `attempts.session_why`, [hub sql](hub-sql.md)): resumed or new,
 with the reason (`none_saved`, `not_found`, `resume_failed`, `compact_failed`, `interrupted`, `fallback_side`). A new
 session other than the first also leaves a line in the run's diagnostics and in the task's history ("Started a new
 session: the old one wasn't on this computer"), and Health names a bot that lost its session more than twice in a day.
