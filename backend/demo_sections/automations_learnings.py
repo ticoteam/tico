@@ -54,6 +54,43 @@ CONTENT = {
              "title": "Pick and ship {{message.subject}}",
              "body": "Marketplace order. Check stock, pack it and mark it shipped.",
              "owner": "inventory"}}]},
+        # Ben's inbox as a board (ui/app/automations-flow.js auBoardShape): rules, a question, then Sort into the
+        # destinations. Off, so the week's mail runs only the automations above and below.
+        {"key": "inbox-board", "name": "Ben's inbox", "owner": "person:ben", "enabled": False,
+         "trigger": {"type": "message", "inbox": "ben@acme.example"},
+         "destinations": [
+             {"id": "me", "name": "Me", "color": "amber", "then": [{"do": "leave_for_you", "args": {}}]},
+             {"id": "orders", "name": "Orders", "color": "green", "then": [{"do": "create_task", "args": {
+                 "title": "Pick and ship {{message.subject}}", "owner": "inventory"}}]},
+             {"id": "support", "name": "Support", "color": "blue", "then": [{"do": "create_task", "args": {
+                 "title": "Answer {{message.subject}}", "owner": "technical-support"}}]},
+             {"id": "archive", "name": "Archive", "color": "gray", "then": [{"do": "archive", "args": {}}]}],
+         "steps": [
+             {"id": "rules", "type": "filter", "rules": [
+                 {"when": [{"field": "message.from", "op": "contains", "value": "bigmarket.example"}], "match": "all",
+                  "then": [], "to": "orders", "next": "end", "stop": True},
+                 {"when": [{"field": "message.from", "op": "contains", "value": "acme.example"}], "match": "all",
+                  "then": [{"do": "label", "args": {"name": "Team"}}], "next": "rule", "stop": False},
+                 {"when": [{"field": "message.subject", "op": "matches", "value": "receipt|invoice paid"}], "match": "all",
+                  "then": [{"do": "label", "args": {"name": "Receipts"}}], "to": "archive", "next": "end", "stop": True}]},
+             {"id": "ask", "type": "decide", "out": "ask", "level": "medium", "questions": {
+                 "review": {"type": "noul", "instructions": "Is it about a store review or a broken unit?"}}},
+             {"id": "asked", "type": "filter", "rules": [
+                 {"when": [{"field": "ask.review", "op": "is", "value": "yes", "min": 0.75}], "match": "all",
+                  "then": [], "to": "support", "next": "end", "stop": True}]},
+             {"id": "sort", "type": "decide", "out": "sort", "level": "high", "questions": {
+                 "to": {"type": "choice", "instructions": "Pick where this goes. Unsure: Me.",
+                        "criteria": {"me": "Me", "orders": "Orders", "support": "Support", "archive": "Archive"}}}},
+             {"id": "route", "type": "filter", "rules": [
+                 {"when": [{"field": "sort.to", "op": "is", "value": "me", "min": 0.5}], "match": "all", "then": [],
+                  "to": "me", "next": "end", "stop": True},
+                 {"when": [{"field": "sort.to", "op": "is", "value": "orders", "min": 0.5}], "match": "all", "then": [],
+                  "to": "orders", "next": "end", "stop": True},
+                 {"when": [{"field": "sort.to", "op": "is", "value": "support", "min": 0.5}], "match": "all", "then": [],
+                  "to": "support", "next": "end", "stop": True},
+                 {"when": [{"field": "sort.to", "op": "is", "value": "archive", "min": 0.5}], "match": "all", "then": [],
+                  "to": "archive", "next": "end", "stop": True},
+                 {"when": [], "match": "all", "then": [], "to": "me", "next": "end", "stop": True}]}]},
         {"key": "reviews", "name": "1-star reviews to reputation", "owner": "person:ben",
          "closer": "reputation", "note": "Reply posted.",
          "trigger": {"type": "event", "name": "custom.review.posted",
@@ -303,6 +340,7 @@ def _automations(b):
     for spec in CONTENT["automations"]:
         trigger = dict(spec["trigger"])
         body = {"name": spec["name"], "owner": spec["owner"], "trigger": trigger, "steps": spec["steps"]}
+        body.update({k: spec[k] for k in ("destinations", "enabled") if k in spec})
         ids[spec["key"]] = b.call("POST", "automations", body)["id"]
     return ids
 
