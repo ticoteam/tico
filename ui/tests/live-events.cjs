@@ -86,37 +86,28 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     }
     return json(unrouted(p));
   });
-  // Navigation and thread subscriptions can leave canceled routes queued. Deliver only to the page's active stream.
-  // A reconnect can reopen the same URL: wait until the page's newest EventSource has reached the route, or the
-  // blocks go to the closed one and are lost.
-  const send = async (match, ...blocks) => {
+  // The stream the page holds now, once the newest EventSource has reached the route (not yet answered). Navigation
+  // and thread subscriptions can leave canceled routes queued; a reconnect can reopen the same URL.
+  const holding = async match => {
     const deadline = Date.now() + t(8000);
     const document = new URL(page.url()); document.hash = '';
-    let stream;
     for (;;) {
       const [active, started] = await page.evaluate(() => [LIVE.es?.url, window.__liveStreams || 0]);
-      stream = streams.filter(s => s.document === document.href && s.url.href === active && match(s.url)).at(-1);
-      if (stream && (made.get(document.href) || 0) >= started) break;
+      const stream = streams.filter(s => s.document === document.href && s.url.href === active && match(s.url)).at(-1);
+      if (stream && (made.get(document.href) || 0) >= started) return stream;
       if (Date.now() > deadline) throw new Error('no stream: ' + streams.map(s => s.url.search).join(' | '));
       await new Promise(r => setTimeout(r, 50));
     }
+  };
+  // Deliver only to the page's active stream. A block may be a function of the stream's URL (its `after`): the server's
+  // answer depends on where the page resumes.
+  const send = async (match, ...blocks) => {
+    const stream = await holding(match);
     streams.splice(streams.indexOf(stream), 1);
     for (const old of streams.splice(0)) await old.route.abort().catch(() => {});   // superseded ones the page closed
-    await stream.route.fulfill({contentType: 'text/event-stream', body: blocks.join('')});
+    const body = blocks.map(b => typeof b === 'function' ? b(stream.url) : b).join('');
+    await stream.route.fulfill({contentType: 'text/event-stream', body});
     return stream.url;
-  };
-  // A block goes to the stream the page holds at that moment. The page can replace that connection before it reads the
-  // block (a reconnect), and the block is then lost with the old one: what the page did not show is sent again, to the
-  // stream it holds now (the server resends from the last change number on reconnect; the same change number is harmless).
-  const sendUntil = async (match, blockText, shown, arg) => {
-    for (let attempt = 1; ; attempt++) {
-      const url = await send(match, blockText);
-      const done = await page.waitForFunction(shown, arg, {timeout: t(4000)}).then(() => true, error => {
-        if (attempt === 3) throw error;
-        return false;
-      });
-      if (done) return url;
-    }
   };
   const following = url => url.searchParams.get('conversation') === 'c-ops';
 
@@ -217,32 +208,55 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   assert.deepEqual(await page.evaluate(() => TASKS_ST.tasks.map(t => t.id).sort()), ['t1', 't3'], 'an unchanged task stays');
   assert.deepEqual(reads.labels.slice(-1), ['W/"l1"']);
   assert.deepEqual(await page.evaluate(() => TASKS_ST.labels), ['launch']);
-  // An already-open status tooltip follows wait start and clear, including a first turn with no stored row.
-  let seq = 15;
+  // An already-open status tooltip follows wait start and clear, including a first turn with no stored row. Each width
+  // opens the bot page fresh. The server's changes for this page, in order (`changes`), and what it sends a stream that
+  // starts at `after` (backend/events.py): its `ready` frame with the newest change number, then every change after
+  // `after`. Every stream starts with `ready`, so a page holds the cursor it resumes from.
+  const changes = [];
+  const head = () => changes.at(-1)?.seq ?? 16;
+  const resend = url => {
+    const after = url.searchParams.get('after');
+    return block(head(), 'ready', {}) + (after == null ? '' : changes.filter(c => c.seq > Number(after)).map(c => c.text).join(''));
+  };
+  let seq = 17;
+  const publish = (event, data) => { const text = block(seq++, event, data); changes.push({seq: seq - 1, text}); return text; };
   for (const width of [1280, 390]) {
     await page.setViewportSize({width, height: 820});
-    // Each viewport gets a fresh stream: these finite fixture responses otherwise accumulate reconnect backoff.
     await page.goto(`https://tico-ui.test/?tooltip=${width}#/bot/ops`);
     await page.locator('.bot-ident [data-tip-bot="ops"]').waitFor();
+    // The page's stream for this bot: once the thread has subscribed, it holds the stream it keeps.
+    await page.waitForFunction(() => LIVE.es?.url.includes('thread='));
     // The thread's first render can scroll; a scroll intentionally dismisses a tooltip.
     // Open it after that render and the thread subscription have settled.
     await page.waitForFunction(() => BOT?.slug === 'ops' && [...THV_VIEWS]
       .filter(v => v.host.isConnected).every(v => v.state !== 'loading'));
+    await send(url => url.searchParams.get('party') === 'bot:ops', resend);
+    await page.waitForFunction(() => LIVE.after != null);
     await page.locator('.bot-ident [data-tip-bot="ops"]').focus();
     await page.locator('#bot-tip:not([hidden])').waitFor();
     assert.doesNotMatch(await page.locator('#bot-tip').innerText(), /Waiting for.*ChatGPT/);
     const waiting = 'Waiting for the ChatGPT login (held by Scribe on #7 Count the words since 19:06Z; position 2)';
-    const onBotPage = await sendUntil(url => url.searchParams.get('party') === 'bot:ops', block(seq++, 'bots', {bot: 'ops', status: {bot: 'ops', state: 'waiting_bot', focus: waiting,
-      waiting, changed_at: now, open_tasks: 1, needs_human: 0}}),
-    text => !document.querySelector('#bot-tip').hidden && document.querySelector('#bot-tip').textContent.includes(text) && !LIVE_SOON.has('bots'), waiting)
-      .catch(async error => {
-        console.error('tooltip live state', await page.evaluate(() => ({width: innerWidth,
-          hidden: document.querySelector('#bot-tip')?.hidden, text: document.querySelector('#bot-tip')?.textContent,
-          status: S.v2.status.ops, stream: LIVE.es?.url, cursor: LIVE.after, queued: [...LIVE_SOON.keys()]})));
-        throw error;
-      });
+    const cursor = await page.evaluate(() => LIVE.after);
+    const change = publish('bots', {bot: 'ops', status: {bot: 'ops', state: 'waiting_bot', focus: waiting,
+      waiting, changed_at: now, open_tasks: 1, needs_human: 0}});
+    // The page replaces its connection before it reads the change: the old stream carries it and is then closed, so
+    // the change reaches the page only through the stream it resumes on.
+    const held = await holding(url => url.searchParams.get('party') === 'bot:ops');
+    streams.splice(streams.indexOf(held), 1);
+    await page.evaluate(() => liveEventsConnect());
+    await held.route.fulfill({contentType: 'text/event-stream', body: change});
+    const onBotPage = await send(url => url.searchParams.get('party') === 'bot:ops', resend);
+    assert.equal(onBotPage.searchParams.get('after'), String(cursor), 'the reconnect resumes from the last change the page read');
+    await page.waitForFunction(text => !document.querySelector('#bot-tip').hidden
+      && document.querySelector('#bot-tip').textContent.includes(text) && !LIVE_SOON.has('bots'), waiting).catch(async error => {
+      console.error('tooltip live state', await page.evaluate(() => ({width: innerWidth,
+        hidden: document.querySelector('#bot-tip')?.hidden, text: document.querySelector('#bot-tip')?.textContent,
+        status: S.v2.status.ops, stream: LIVE.es?.url, cursor: LIVE.after, queued: [...LIVE_SOON.keys()]})));
+      throw error;
+    });
     assert.equal(onBotPage.searchParams.get('party'), 'bot:ops', "a bot's page is sent its own tasks' changes, not every task's");
-    await sendUntil(() => true, block(seq++, 'bots', {bot: 'ops', status: null}), () => !document.querySelector('#bot-tip').hidden
+    await send(() => true, publish('bots', {bot: 'ops', status: null}));
+    await page.waitForFunction(() => !document.querySelector('#bot-tip').hidden
       && !document.querySelector('#bot-tip').textContent.includes('Waiting for the ChatGPT') && !LIVE_SOON.has('bots'));
     assert.equal(await page.evaluate(() => S.v2.status.ops), undefined);
   }
