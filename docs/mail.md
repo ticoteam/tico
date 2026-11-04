@@ -117,9 +117,10 @@ command twice **updates the same Gmail draft** instead of leaving two. Change a 
 new draft. The thread gets `hub/drafted`, so Ana can see it in Gmail.
 
 `--attach <path>` adds a file; repeat it for several, up to 25 MB in all (Gmail's limit, checked
-from the file sizes before anything is read). Attachments are off unless the mail policy turns them on for the
-mailbox: `mailboxes.<address>.allow_attachments: true` for one mailbox, or
-`defaults.allow_attachments: true` for every mailbox that does not set its own. A file must be inside your own folder (`bot-<slug>`, or an
+from the file sizes before anything is read). Attachments are off by default. An admin turns them on for all mailboxes
+in **Settings > Google > What Tico may do > Send attachments**. If a `registry/mail-policy.yaml` is present, it wins:
+`mailboxes.<address>.allow_attachments` for one mailbox, or `defaults.allow_attachments` for every mailbox that does
+not set its own. The registry default is false. A file must be inside your own folder (`bot-<slug>`, or an
 older bot's `emp-<slug>`), after following symlinks; a relative path starts there, and `..` is
 refused. Files that look like keys or passwords are refused wherever they are: `.env*`, `*.pem`,
 `*.key`, `id_rsa*`, `id_ed25519*`, `*.p12`, `*.pfx`, `.netrc`, `.npmrc`, `.pypirc`,
@@ -431,6 +432,8 @@ below.
 - **Read mail and calendar**: always on.
 - **Organize mail** (label, archive, drafts), **Send mail** and **Create and change calendar events**: on until an admin
   turns them off. Each box saves on its own.
+- **Send attachments**: off by default. Allows workspace files on outbound drafts for every mailbox; a registry mail
+  policy, when present, takes precedence. Sending still needs an approval naming the draft and its files.
 
 Organize mail and Send mail both need Google's `gmail.modify`, so Tico holds each box itself too: the mail connector
 refuses a label, archive or draft with Organize mail off, a send with Send mail off, and a calendar write with Change
@@ -446,13 +449,15 @@ bookings use) from the runner's own read (`GET /api/v2/connectors/mail/targets`)
 cannot be asked, writes are refused ("Tico couldn't check the company's mail settings; try again") and reads go on; a
 run without the runner's registration can't ask, so it only reads. Change calendar needs `calendar.events`.
 
-A box turned off takes effect on the next token: Connect Google asks Google only for what is ticked, each refresh leaves
-out a write turned off (the grant keeps it, so turning it back on needs no new sign-in), and Whole Workspace tokens are
+Organize mail, Send mail and Change calendar turned off take effect on the next token: Connect Google asks Google only
+for what is ticked, each refresh leaves out a write turned off (the grant keeps it, so turning it back on needs no new
+sign-in), and Whole Workspace tokens are
 minted read only for it (`gmail.readonly`, `calendar.readonly`). Domain-wide delegation takes only scopes authorized by
 name, so step 2 below authorizes the read-only scopes too, and Check records which ones Google accepted. A Workspace
 authorized before them keeps minting its write scopes (Tico still holds each box off) and shows **Redo step 2 to narrow
 Google access.**; redo step 2, then click Check. A box turned on that a person's grant lacks shows **Connect Google again** on their card. Both agent
-prompts say what Tico will ask Google for. Only an admin acting as themselves changes it: never a bot, BotOps or the
+prompts say what Tico will ask Google for. Send attachments is enforced by the mail tool, without a separate Google
+scope. Only an admin acting as themselves changes these settings: never a bot, BotOps or the
 Assistant.
 
 **What these settings enforce.** Where Google allows it, Tico narrows the token itself: Organize mail and Send mail both
@@ -727,7 +732,8 @@ exactly what its bot.yaml asks.
 **Computers with no registry (Docker).** A Docker computer has no `registry/` folder, so nothing gives the mail tool a
 `mail-policy.yaml`. Its policy is built in: sending on globally, the team's own domains as internal (from the bot's mailbox
 and the team roster, never gmail.com and other public providers; `TICO_INTERNAL_DOMAINS` names them outright), the usual
-caps (20 sends a day, one outside recipient, no outside Cc, no attachments), no wait between messages to the same person
+caps (20 sends a day, one outside recipient, no outside Cc, attachments off until enabled in Settings > Google), no wait
+between messages to the same person
 (the forward address gets many messages), and an empty blocklist. `mail policy show` prints "built-in defaults". Put a
 `mail-policy.yaml` in the registry and that file is the policy instead. The message bot's template also carries
 `questions/mail-triage.json`, so the decision questions are in the bot's own repository wherever it runs.

@@ -58,7 +58,7 @@ LIST_KEYS = ("addresses", "domains")
 
 FALLBACK_DEFAULTS = {"max_sends_per_day": 20, "per_recipient_cooldown_days": 14,
                      "max_external_recipients": 1, "allow_cc_external": False,
-                     "allow_attachments": False}     # opt-in: a team turns attachments on in its policy file
+                     "allow_attachments": False}     # opt-in: the Tico setting, or a registry policy
 
 # What a computer with no registry runs on: sending is on globally (each bot still needs sending on in Tico and a
 # `send` verb), the caps are the usual ones, and nothing is on the blocklist. The per-recipient wait is 0 days because the
@@ -163,8 +163,10 @@ def team_domains(slug="", env=None):
 def builtin(slug="", env=None):
     """The policy a computer with no registry runs on (see BUILTIN_DEFAULTS): sending on globally, the team's own
     domains as internal, the usual caps, no allowances, an empty blocklist."""
+    may = company(slug) if slug else None
+    defaults = dict(BUILTIN_DEFAULTS, allow_attachments=isinstance(may, dict) and may.get("send_attachments") is True)
     return {"send_enabled": True, "sandbox_mailbox": "", "internal_domains": team_domains(slug, env),
-            "mailboxes": {}, "defaults": dict(BUILTIN_DEFAULTS),
+            "mailboxes": {}, "defaults": defaults,
             "blocklist": {k: [] for k in LIST_KEYS},
             "owner_handles_personally": {k: [] for k in LIST_KEYS},
             "allowances": [], "forbidden_phrases": [], "signature_names": [],
@@ -876,12 +878,12 @@ def switch(slug, manifest=None):
 
 
 COMPANY_FIELDS = {"organize_mail": "company_organize", "send_mail": "company_send",
-                  "change_calendar": "company_calendar"}
+                  "send_attachments": "company_attachments", "change_calendar": "company_calendar"}
 UNREAD = "unread"                                       # company(): Tico could not be asked (oauth.company_allows)
 
 
 def company(slug):
-    """The company's What Tico may do for `slug`'s run, as {organize_mail, send_mail, change_calendar}, from Tico and
+    """The company's What Tico may do for `slug`'s run, from Tico and
     nothing the run says itself: a bot's from its mail setting (backend/mail_settings.py), the owner's (the runner's
     own commands, a person's run) from the runner's read (runner_company). It holds everyone who acts through Tico.
 
@@ -899,7 +901,8 @@ def company(slug):
 def _allowed(row):
     if not any(f in row for f in COMPANY_FIELDS.values()):
         return None
-    return {name: row.get(field) is not False for name, field in COMPANY_FIELDS.items()}
+    return {name: row.get(field) is True if name == "send_attachments" else row.get(field) is not False
+            for name, field in COMPANY_FIELDS.items()}
 
 
 # The runner's read of What Tico may do (GET /api/v2/connectors/mail/targets over its own registration). Tests
@@ -924,7 +927,8 @@ def runner_company():
     may = answer.get("company")
     if not isinstance(may, dict):
         return None                                     # an older server: it says nothing of What Tico may do
-    return {name: may.get(name) is not False for name in COMPANY_FIELDS}
+    return {name: may.get(name) is True if name == "send_attachments" else may.get(name) is not False
+            for name in COMPANY_FIELDS}
 
 
 def outbound_send(slug, manifest=None):
@@ -990,17 +994,23 @@ def check_draft(pol, slug, mailbox, to, cc=(), attachments=0, is_reply=False):
     return everyone
 
 
+ATTACHMENTS_SETTING = "Settings > Google > What Tico may do > Send attachments"
+
+
+def attachments_refusal(pol, mailbox=None):
+    box = str(mailbox or "").strip().lower() or "<mailbox>"
+    source = (f"turn on {ATTACHMENTS_SETTING}" if pol.get("builtin") else
+              f"allow_attachments is off for it in registry/mail-policy.yaml, which overrides {ATTACHMENTS_SETTING}")
+    return f"attachments are not allowed on mail Tico writes from {box}: {source}."
+
+
 def check_attachments_allowed(pol, mailbox=None):
     """Refuses (exit 2) any attachment unless the policy opts in for this mailbox. Checked before a
     file is read."""
     if not attachments_allowed(pol, mailbox):
-        box = str(mailbox or "").strip().lower() or "<mailbox>"
-        raise Refused(f"attachments are not allowed on mail the hub writes from {box} "
-                      "(allow_attachments is off for it in registry/mail-policy.yaml; "
-                      "it is off unless the team turns it on).",
-                      "Draft it without --attach and put the file on the task. To change it, file a "
-                      f"task for BotOps to set mailboxes.{box}.allow_attachments: true; it is a "
-                      "registry change, not something to wait on a person for.")
+        raise Refused(attachments_refusal(pol, mailbox),
+                      "Draft it without --attach and put the file on the task. An admin changes the Tico setting; "
+                      "if a registry policy is present, its allow_attachments rule must allow the mailbox.")
 
 
 # ---------------------------------------------------------------- the send chain
@@ -1165,8 +1175,7 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
         # size, so no standing path (an internal address, a forward target, the thread's sender or an
         # allowance) covers it: every attached send needs the owner's per-message yes.
         if not caps["allow_attachments"]:
-            return no("attachments", "attachments are not allowed from this mailbox (allow_attachments "
-                                     "is off for it in registry/mail-policy.yaml)")
+            return no("attachments", attachments_refusal(pol, mailbox))
         seen = appr
         if seen is not None and not seen["ok"] and not ext and not ext_cc:
             seen = approval_check(approval, to, cc, thread_id, repo, slug=slug,   # all internal

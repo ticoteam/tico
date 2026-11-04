@@ -201,6 +201,83 @@ class CompanyGates(Base):
         self.assertFalse(self.in_inbox())
 
 
+class CompanyAttachments(Base):
+    """A bot turn reads the attachment opt-in with its scoped hub credential, without the runner's registration."""
+
+    def setUp(self):
+        super().setUp()
+        pl.POLICY_FILE = self.root / "no-mail-policy.yaml"
+        os.environ["HUB_BOT"] = "inbox"
+        (self.root / "emp-inbox" / "answer.pdf").write_bytes(b"%PDF-1.4 the answer")
+        self.company(company_attachments=True)
+        pl.RUNNER_GET = lambda path: self.fail("A bot turn must read its own mail setting")
+
+    def draft(self, path="answer.pdf"):
+        return self.run_cli("draft", "--reply-to", THREAD, "--body-file", self.body_file(BODY),
+                            "--attach", path, "--issue", "1", "--json")
+
+    def test_builtin_policy_allows_a_bot_turn_to_draft_a_workspace_attachment_but_send_still_needs_approval(self):
+        rc, out, err = self.draft()
+        self.assertEqual(rc, 0, out + err)
+        draft = json.loads(out)
+        self.assertTrue(draft["send_needs_approval"])
+        self.assertEqual(draft["approval_request"]["payload"]["draft"], draft["draft"])
+        self.assertEqual(draft["approval_request"]["payload"]["attachments"][0]["name"], "answer.pdf")
+        rc, out, err = self.run_cli("send", "--draft", draft["draft"], "--issue", "1", "--json")
+        self.assertEqual(rc, 0, out + err)
+        self.assertEqual((json.loads(out)["sent"], json.loads(out)["gate"]), (False, "attachments"))
+        self.assertEqual(self.service.sent, [])
+
+    def test_off_missing_or_unread_company_setting_refuses_before_reading_a_file(self):
+        for value in (False, None):
+            self.company(company_attachments=value)
+            rc, out, _ = self.draft("does-not-exist.pdf")
+            self.assertEqual(rc, 2, out)
+            self.assertIn(pl.ATTACHMENTS_SETTING, out)
+        pl.SERVER_GET = lambda slug: None
+        rc, out, _ = self.draft("does-not-exist.pdf")
+        self.assertEqual(rc, 2, out)
+        self.assertIn(pl.ATTACHMENTS_SETTING, out)
+        self.assertEqual(self.service.drafts_by_id, {})
+
+    def test_registry_mailbox_false_wins_over_company_true_and_registry_default_true(self):
+        pl.POLICY_FILE = self.policy_file
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true")
+                          .replace("ana@acme.example: { paused: false }",
+                                   "ana@acme.example: { paused: false, allow_attachments: false }"))
+        rc, out, _ = self.draft()
+        self.assertEqual(rc, 2, out)
+        self.assertIn("registry/mail-policy.yaml", out)
+        self.assertIn(pl.ATTACHMENTS_SETTING, out)
+        self.assertEqual(self.service.drafts_by_id, {})
+
+    def test_registry_opt_in_keeps_working_with_company_setting_off(self):
+        self.company(company_attachments=False)
+        pl.POLICY_FILE = self.policy_file
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        rc, out, err = self.draft()
+        self.assertEqual(rc, 0, out + err)
+
+    def test_company_opt_in_keeps_workspace_secret_and_size_boundaries(self):
+        outside = self.root / "elsewhere.pdf"
+        outside.write_bytes(b"another bot's file")
+        secret = self.root / "emp-inbox" / ".env"
+        secret.write_bytes(b"private")
+        large = self.root / "emp-inbox" / "large.pdf"
+        with large.open("wb") as stream:
+            stream.truncate(cli.MAX_ATTACH_BYTES + 1)
+        for path, reason in ((outside, "outside this bot's folder"), (secret, "never attached"), (large, "25 MB")):
+            rc, out, _ = self.draft(str(path))
+            self.assertEqual(rc, 2, out)
+            self.assertIn(reason, out)
+        self.assertEqual(self.service.drafts_by_id, {})
+
+    def test_owner_builtin_policy_reads_the_attachment_setting_from_runner_targets(self):
+        for enabled in (True, False):
+            pl.RUNNER_GET = lambda path: {"company": {"send_attachments": enabled}}
+            self.assertIs(pl.load(slug=access.OWNER)["defaults"]["allow_attachments"], enabled)
+
+
 class TheOwnerIsHeldToo(Base):
     """`--as <owner handle>` (the runner's own commands, a person's run) reads What Tico may do over the runner's
     registration (connectors/mail/targets); no token, name or answer on stdin exempts it."""

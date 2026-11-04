@@ -46,11 +46,12 @@ WORKSPACE_SCOPES = {"gmail": ["https://www.googleapis.com/auth/gmail.modify"],
 # authorized by name (gmail.modify does not cover gmail.readonly there), so the authorized list carries these too.
 READ_ONLY_SCOPES = {"gmail": ["https://www.googleapis.com/auth/gmail.readonly"],
                     "calendar": ["https://www.googleapis.com/auth/calendar.readonly"]}
-# What Tico may do in Google beyond reading (Settings > Google), one JSON row in registry_metadata. Each is on until an
-# admin turns it off. Organize mail and Send mail both need gmail.modify (Google has no narrower scope Tico uses), so
-# Send mail is also held in Tico: off, no bot sends (backend/mail_settings.py, connectors/mail/policy.py).
+# What Tico may do in Google beyond reading (Settings > Google), one JSON row in registry_metadata. Sending attachments
+# is opt-in; the other writes are on until an admin turns them off. Organize mail and Send mail both need gmail.modify
+# (Google has no narrower scope Tico uses), so Send mail is also held in Tico: off, no bot sends
+# (backend/mail_settings.py, connectors/mail/policy.py).
 PERMISSIONS_KEY = "google_permissions"
-PERMISSIONS = ("organize_mail", "send_mail", "change_calendar")
+PERMISSIONS = ("organize_mail", "send_mail", "send_attachments", "change_calendar")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 DELEGATION_URL = "https://admin.google.com/ac/owl/domainwidedelegation"
 OAUTH_CONTEXT = "google-oauth-client"
@@ -95,7 +96,7 @@ def scope_urls():
 
 
 def permissions(c):
-    """What the company lets Tico do in Google beyond reading: {organize_mail, send_mail, change_calendar}."""
+    """What the company lets Tico do in Google beyond reading; sending attachments is opt-in."""
     from .read_cache import metadata
     row = metadata(c, PERMISSIONS_KEY)
     try:
@@ -103,7 +104,8 @@ def permissions(c):
     except ValueError:
         stored = {}
     stored = stored if isinstance(stored, dict) else {}
-    return {name: stored.get(name) is not False for name in PERMISSIONS}
+    return {name: stored.get(name) is True if name == "send_attachments" else stored.get(name) is not False
+            for name in PERMISSIONS}
 
 
 def acts(may=None):
@@ -722,6 +724,7 @@ class CheckBody(M.Contract):
 class PermissionsBody(M.Contract):
     organize_mail: bool
     send_mail: bool
+    send_attachments: bool = False
     change_calendar: bool
 
 

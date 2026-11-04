@@ -211,7 +211,7 @@ const scenarios = {
     assert.deepEqual(seen.errors, []);
   },
 
-  'What Tico may do: once above both ways, all on by default, each box saved and named in the prompt': async browser => {
+  'What Tico may do: attachments off by default, each box saved and named in the prompt': async browser => {
     let fake = googleFake();
     let {page, seen} = await open(browser, fake);
     assert.equal(await page.locator('[data-google-may-card]').count(), 0, 'the question comes first, alone');
@@ -219,14 +219,21 @@ const scenarios = {
     const asks = /Tico will ask Google for: read mail and calendar, organize mail, send mail, create and change calendar events\./;
     assert.match(await page.locator('[data-google-prompt=accounts] textarea').inputValue(), asks);
     const boxes = () => page.$$eval('[data-google-may]', els => Object.fromEntries(els.map(el => [el.dataset.googleMay, el.checked])));
-    assert.deepEqual(await boxes(), {organize_mail: true, send_mail: true, change_calendar: true});
+    assert.deepEqual(await boxes(), {organize_mail: true, send_mail: true, send_attachments: false, change_calendar: true});
     assert.equal(await page.locator('[data-google-may-read] input').count(), 0, 'reading is always on, not a box');
     assert.match(await page.locator('[data-google-may-card]').innerText(), /Mail sending/);
     await page.locator('[data-google-may=change_calendar]').uncheck();
     await until(() => writesTo(fake, '/api/v2/google/permissions', 'PUT').length === 1, 'the box is saved');
     assert.deepEqual(writesTo(fake, '/api/v2/google/permissions', 'PUT')[0].body,
-      {organize_mail: true, send_mail: true, change_calendar: false});
+      {organize_mail: true, send_mail: true, send_attachments: false, change_calendar: false});
     await page.waitForFunction(() => /send mail\.$/m.test(document.querySelector('[data-google-prompt=accounts] textarea')?.value || ''));
+    await page.locator('[data-google-may=send_attachments]').check();
+    await until(() => writesTo(fake, '/api/v2/google/permissions', 'PUT').length === 2, 'attachments are enabled');
+    assert.deepEqual(writesTo(fake, '/api/v2/google/permissions', 'PUT')[1].body,
+      {organize_mail: true, send_mail: true, send_attachments: true, change_calendar: false});
+    // Attachments are the mail tool's rule, not a Google scope: the prompt still ends at send mail.
+    assert.match(await page.locator('[data-google-prompt=accounts] textarea').inputValue(), /send mail\./);
+    assert.doesNotMatch(await page.locator('[data-google-prompt=accounts] textarea').inputValue(), /attachments/);
     assert.deepEqual(seen.errors, []);
     await page.close();
     // Both ways set up: the setting shows once, above both cards, as saved.
@@ -236,12 +243,15 @@ const scenarios = {
     const order = await page.$$eval('#set-google [data-google-may-card], #set-google [data-google-card]',
       els => els.map(el => el.dataset.googleCard || 'may'));
     assert.deepEqual(order, ['may', 'workspace', 'account']);
-    assert.deepEqual(await boxes(), {organize_mail: true, send_mail: true, change_calendar: false});
+    assert.deepEqual(await boxes(), {organize_mail: true, send_mail: true, send_attachments: true, change_calendar: false});
     await page.locator('[data-google-may=send_mail]').uncheck();
-    await until(() => writesTo(fake, '/api/v2/google/permissions', 'PUT').length === 2, 'the second box is saved');
-    assert.deepEqual(fake.state.permissions, {organize_mail: true, send_mail: false, change_calendar: false});
+    await until(() => writesTo(fake, '/api/v2/google/permissions', 'PUT').length === 3, 'the send box is saved');
+    assert.deepEqual(fake.state.permissions, {organize_mail: true, send_mail: false, send_attachments: true, change_calendar: false});
     await page.locator('[data-google-may=send_mail]').waitFor();
-    assert.deepEqual(await boxes(), {organize_mail: true, send_mail: false, change_calendar: false});
+    assert.deepEqual(await boxes(), {organize_mail: true, send_mail: false, send_attachments: true, change_calendar: false});
+    await page.locator('[data-google-may=send_attachments]').uncheck();
+    await until(() => writesTo(fake, '/api/v2/google/permissions', 'PUT').length === 4, 'attachments are disabled again');
+    assert.deepEqual(fake.state.permissions, {organize_mail: true, send_mail: false, send_attachments: false, change_calendar: false});
     assert.deepEqual(seen.errors, []);
     await page.close();
     // A member sees only their own account, never the company's setting.

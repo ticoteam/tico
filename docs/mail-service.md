@@ -68,8 +68,8 @@ Ana uses the same CLI interactively with `--as ana`, which has every verb.
 Legal is authorized by Ana (September 4, 2026, #130) to read messages and attachments from
 `ana@acme.example`. Its Gmail access entry has `can: [read]` and `read_only: true`. The shared
 service refuses mailbox filing, labels, rules, mark-read, starring, drafts, and sends for that
-entry. This is separate from `allow_attachments` in the outbound policy, which controls adding
-attachments to mail Tico writes and remains unchanged.
+entry. This is separate from **Send attachments** in Settings > Google (or `allow_attachments` in a registry
+mail policy), which controls adding attachments to mail Tico writes.
 
 Legal's `default_mailbox: legal@acme.example` preserves its existing routines. It must explicitly use
 `--as legal --mailbox ana@acme.example` for Ana's messages; rules and filing are not allowed there.
@@ -113,13 +113,15 @@ with the reason attached; it never silently drops the work.
   to send. With the switch off, none of this applies and a send is a draft.
 - With no registry (a Docker computer has no `registry/mail-policy.yaml`) the policy is built in: sending is on
   globally, internal domains are the ones the bot's mailbox and the team roster use (public providers such as
-  gmail.com never count), the caps are 20 sends a day, one external recipient, no external Cc, no attachments, and
-  the blocklist is empty. A `registry/mail-policy.yaml`, where there is one, replaces all of it.
+  gmail.com never count), the caps are 20 sends a day, one external recipient, no external Cc, and attachments off until
+  an admin enables **Settings > Google > What Tico may do > Send attachments**. The blocklist is empty.
+  A `registry/mail-policy.yaml`, where there is one, replaces all of it.
 - Caps, which apply to every send including those three kinds: sends per bot per day, per-recipient cooldown (14 days
   unless they wrote last; 0 in the built-in policy, because the forward address is written to again and again and
   the daily cap is the brake),
-  one external recipient per message, no CC or BCC outside acme.example, no attachments unless the
-  policy sets `defaults.allow_attachments: true` (it is off by default). A per-message approval (below) lifts the recipient
+  one external recipient per message, no CC or BCC outside acme.example, no attachments unless the Tico setting
+  allows them (off by default). A registry policy, when present, wins: `defaults.allow_attachments`, overridden by
+  `mailboxes.<address>.allow_attachments` for a mailbox. A per-message approval (below) lifts the recipient
   count, the external Cc rule and the cooldown for that one message; never the daily cap, the
   blocklist, or `allow_attachments`.
 - Attachments come only from the bot's own folder, never from a secret-looking file (`.env*`, keys, `credentials*`,
