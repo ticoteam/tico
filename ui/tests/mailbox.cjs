@@ -74,8 +74,9 @@ const scenarios = {
     assert.equal(await row.locator('a').textContent(), 'Support triage');
     const on = row.locator('[data-mb-routine]');
     assert.equal(await on.isChecked(), true);
-    await on.uncheck();
+    await on.click();   // a click, not uncheck(): a second draw of the page may replace the switch mid-click
     await until(page, () => writes(fake, 'PATCH', '/api/v2/automations/au-triage').length, 'the routine PATCH');
+    await page.waitForFunction(() => document.querySelector('[data-mb-routine=au-triage]')?.checked === false);
     assert.deepEqual(writes(fake, 'PATCH', '/api/v2/automations/au-triage'), [{enabled: false}]);
     await page.close();
     // Without the right to change it, the switch is off limits.
@@ -84,10 +85,12 @@ const scenarios = {
     assert.equal(await second.page.locator('[data-mb-routine=au-triage]').isDisabled(), true);
     await second.page.close();
     // A refusal from the server.
-    fake.state.routines['support@acme.example'][0].can_edit = true;
+    Object.assign(fake.state.routines['support@acme.example'][0], {can_edit: true, enabled: true});
     const third = await open(browser, fake, googleFake(), {...at('mb-support'), automations: {refuse: 'Not yours to change'}});
     const box = third.page.locator('[data-mb-routine=au-triage]');
-    await box.uncheck();
+    await third.page.waitForFunction(() => document.querySelector('[data-mb-routine=au-triage]')?.checked === true);
+    await box.click();
+    await until(third.page, () => writes(fake, 'PATCH', '/api/v2/automations/au-triage').length === 2, 'the refused PATCH');
     await third.page.waitForFunction(() => {
       const el = document.querySelector('[data-mb-routine=au-triage]');
       return el && !el.disabled && el.checked;

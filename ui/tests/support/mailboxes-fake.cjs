@@ -124,6 +124,7 @@ exports.open = async (browser, fake, google, {hash = '#/settings/mailboxes', rea
       fake.writes.push({method, path: p, body});
       const id = decodeURIComponent(p.split('/').pop());
       if (automations.refuse) return json({error: {code: 'forbidden', detail: automations.refuse, retryable: false}}, 403);
+      for (const list of Object.values(fake.state.routines)) for (const r of list) if (r.id === id) r.enabled = !!body.enabled;
       return json({automation: {id, enabled: body.enabled}});
     }
     if (p.startsWith('/api/v2/google') || p.startsWith('/api/v2/mail/google')) {

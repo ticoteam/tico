@@ -356,7 +356,7 @@ const scenarios = {
     assert.equal(checks().length, 1, 'the hidden card does not check');
     assert.equal(await page.locator('#set-google').evaluate(host => host._googleWatch.timer), null);
     assert.doesNotMatch(await page.locator('[data-ws-check-result]').textContent(), /Checking again every 20 seconds/);
-    await page.locator('[data-settings-tab=inbox]').click();
+    await page.locator('[data-settings-tab=mailboxes]').click();
     await until(() => checks().length === 2, 'the immediate check on returning');
     timer = await nextCheckTimer(page, timer, 'the timer after returning');
     assert.match(await page.locator('[data-ws-check-result]').innerText(), /Checking again every 20 seconds/);
@@ -367,7 +367,7 @@ const scenarios = {
     // Another five minutes passes the original deadline, but not a new ten minutes from the resumed check.
     await page.clock.runFor(300000);
     await page.locator('[data-ws-check-result]', {hasText: 'Still not accepted'}).waitFor({state: 'attached'});
-    await page.locator('[data-settings-tab=inbox]').click();
+    await page.locator('[data-settings-tab=mailboxes]').click();
     await page.locator('[data-ws-check]', {hasText: 'Check again'}).waitFor();
     assert.match(await page.locator('[data-ws-check-result]').innerText(), /Still not accepted/);
     assert.doesNotMatch(await page.locator('[data-ws-check-result]').innerText(), /Checking again every 20 seconds/);
@@ -392,7 +392,7 @@ const scenarios = {
     assert.equal(checks().length, 1, 'the hidden card does not check');
     // Another admin uploads a newer pending key while this card is hidden.
     fake.state.pending = row('pending', {generation: 3});
-    await page.locator('[data-settings-tab=inbox]').click();
+    await page.locator('[data-settings-tab=mailboxes]').click();
     await page.waitForFunction(() => document.querySelector('#set-google')?._googleState?.g.pending?.generation === 3);
     assert.equal(checks().length, 1, 'returning with a newer key does not resume the old watch');
     assert.doesNotMatch(await page.locator('[data-ws-check-result]').innerText(), /Checking again every 20 seconds/);
