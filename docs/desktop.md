@@ -39,12 +39,16 @@ Tico is one ordinary window with the Mac's own title bar: drag it by its title o
 resize it from any edge, down to 360 by 400 pixels. At 760 pixels wide or less the page switches to its
 compact layout (the same one a phone uses). The app remembers where you left the window and how big
 it was, separately for each Tico app on the Mac, and opens there next time. It centres the window
-only on the first launch, or when the display it was last on is no longer connected.
+only on the first launch, or when the saved place would leave its title bar off every connected display.
+Then it opens on the primary display at the default size, 1240 by 820 points, or smaller where that
+screen is too small for it, centred.
 
 Tico puts nothing in the Mac's top menu bar. On macOS, closing the window hides it and the app
 keeps running: click Tico's Dock icon to bring the window back, and use **Quit** (⌘Q) to quit.
 The Dock icon's badge is how many things need you. **View → Search…** (⌘K) and
 **View → Reload** (⌘R) are in the app's menu. On Windows and Linux, closing the window quits.
+On macOS, **Open at Login** in the app's menu starts Tico when you log in. It is off until you turn it on,
+and its check mark shows whether it is on. Each Tico app on the Mac has its own setting.
 
 The app checks for signed updates automatically, installs them and relaunches. Generic builds
 use the public GitHub release manifest; your server's web interface updates with the server.
