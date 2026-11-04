@@ -2233,15 +2233,26 @@ impl Recorder {
                 .iter()
                 .any(tico_recorder_native::live::saved_in_tico)
         });
+        // The capture thread may not have written "recording" yet. Join its handle before deleting,
+        // rather than treating that initial database state as proof that all audio writes have stopped.
+        let capture = if self.active.as_ref().is_some_and(|(active, _)| active == id) {
+            self.active.take().map(|(_, handle)| {
+                handle.stop();
+                handle
+            })
+        } else {
+            None
+        };
         // Shared live and not saved: it leaves Tico too. A meeting saved to Tico stays there.
         if !context.live_id.is_empty() && !context.live_removed && !filed {
-            if self.active.as_ref().is_some_and(|(active, _)| active == id) {
-                self.stop();
-            }
             let config = self.config.clone();
             let store = self.store.clone();
             let (job_id, destination) = (id.to_owned(), context.live_destination);
             self.job_for("delete", Some(id.to_owned()), move || {
+                if let Some(handle) = capture {
+                    // A capture failure does not prevent an explicit discard; finish still joins the worker.
+                    let _ = handle.finish();
+                }
                 wait_stopped(&store, &job_id)?;
                 Tico::saved(&config, &destination)?.keep_local(&store, &job_id)?;
                 store.delete(&job_id)?;
@@ -2255,12 +2266,11 @@ impl Recorder {
             return;
         }
         // Recording here: capture stops and its last audio lands before the files go.
-        if self.active.as_ref().is_some_and(|(active, _)| active == id) {
-            self.stop();
+        if let Some(handle) = capture {
             let store = self.store.clone();
             let job_id = id.to_owned();
             self.job_for("delete", Some(id.to_owned()), move || {
-                wait_stopped(&store, &job_id)?;
+                let _ = handle.finish();
                 store.delete(&job_id)?;
                 Ok(json!({"message":"Deleted"}))
             });
