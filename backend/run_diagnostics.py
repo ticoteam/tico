@@ -11,19 +11,21 @@ STALL_MINUTES = 5
 # The runner enforces the limit itself, but a frozen computer cannot, so the server must not wait for it.
 MAX_RUN_MINUTES, MAX_RUN_GRACE_MINUTES = 60, 5
 CAP_EVENT = 'attempt.max-run-cap'
-# What a computer reports when it stopped the turn itself: a restart of the computer, or its clean stop. Both are the
-# computer's own report, so they relax generic tool uncertainty alike (execution.restart_reported); a lost lease is not.
-RUNNER_STOPS = ('Runner restarted during execution', 'Runner stopped during execution')
+# The computer's own reports that it stopped a turn itself. A restart is a synthetic completion text from the runner's
+# recovery (runner-rs state.rs). A clean stop is never a completion text (that is the model's reply): the runner saves it
+# as a diagnostic event, read by clean_stop_reported. Both relax generic tool uncertainty (execution.restart_reported).
+RESTART_TEXT = 'Runner restarted during execution'
+CLEAN_STOP = 'Runner stopped during execution'
 
 
 def clean_stop_reported(c, attempt_id):
     """The end reason of a stop the computer reported in its own diagnostic (the runner saves it as an event when it
     stops a turn: runner-rs drive.rs), or None. A clean stop reaches the hub this way, not as the completion's text,
     which is the reply and usually empty, and it stays readable when the completion never arrived."""
-    found = c.execute("SELECT json_extract(payload,'$.end_reason') FROM attempt_events WHERE attempt_id=? "
-                      "AND kind='diagnostic' AND json_extract(payload,'$.end_reason') IN (?,?) "
-                      "ORDER BY seq DESC LIMIT 1", (attempt_id, *RUNNER_STOPS)).fetchone()
-    return found[0] if found else None
+    found = c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? AND kind='diagnostic' "
+                      "AND json_extract(payload,'$.end_reason')=? ORDER BY seq DESC LIMIT 1",
+                      (attempt_id, CLEAN_STOP)).fetchone()
+    return CLEAN_STOP if found else None
 TAIL_BYTES = 64 * 1024
 TAIL_LINES = 200
 # Defense in depth after the runner's literal/encoded granted-secret redactor.
@@ -86,8 +88,8 @@ def reason(c, row: AttemptRow, outcome, summary=''):
             return scrub(json.loads(capped[0]).get('reason') or 'Ended by the server')[:500]
         return 'Computer lost or heartbeat stopped (attempt lease expired)'
     result = json.loads(row['result'] or '{}')
-    if result.get('text') in RUNNER_STOPS:
-        return result['text']
+    if result.get('text') == RESTART_TEXT:
+        return RESTART_TEXT
     # The newest terminal cause wins over a primary model that failed before a fallback succeeded.
     events = c.execute("SELECT kind,payload FROM attempt_events WHERE attempt_id=? "
                         "AND kind IN ('error','diagnostic') ORDER BY seq DESC LIMIT 50", (row['id'],)).fetchall()

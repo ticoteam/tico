@@ -138,7 +138,6 @@ def test_stderr_export_is_capped_redacted_private_and_survives_missing_stream(ap
 @pytest.mark.parametrize(('outcome', 'text', 'stopped', 'expected'), [
     ('completed', 'done', False, 'Finished'),
     ('interrupted', 'Runner restarted during execution', False, 'Runner restarted during execution'),
-    ('interrupted', 'Runner stopped during execution', False, 'Runner stopped during execution'),
     ('interrupted', '', True, 'Canceled by human:ana'),
 ])
 def test_finished_restart_and_canceled_reasons(api, outcome, text, stopped, expected):

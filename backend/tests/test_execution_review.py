@@ -454,7 +454,7 @@ def test_a_run_that_says_it_reports_tool_calls_resumes_plainly_when_it_called_no
     assert 'recorded no tool call' in claim(api, machine)['message']['body']
 
 
-def restarted_mid_turn(api, calls, *, reported=True, hop=False, restart=True, stopped=False):
+def restarted_mid_turn(api, calls, *, reported=True, hop=False, restart=True, stopped=False, reply=None):
     """A Claude-style run that says it reports its tool calls, made `calls` ((name, parent) pairs) and was cut off:
     by a runner restart that reported it interrupted, or by a lapsed lease. `hop`: it then fell back to a host that
     does not report its calls (`tool_events: false`, runner-rs execute.rs). `stopped`: the computer's clean stop
@@ -476,7 +476,7 @@ def restarted_mid_turn(api, calls, *, reported=True, hop=False, restart=True, st
                        'payload': {'end_reason': 'Runner stopped during execution'}})
     post(api, f"attempts/{attempt['id']}/events", {'events': events}, machine['token'])
     if reported:
-        text = '' if stopped else 'Runner restarted during execution' if restart else 'Execution interrupted'
+        text = reply if reply is not None else '' if stopped else 'Runner restarted during execution' if restart else 'Execution interrupted'
         post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': len(events),
              'text': text}, machine['token'])
     else:
@@ -2316,4 +2316,12 @@ def test_a_lapse_with_no_stop_report_and_a_shell_stays_held(api):
     """No restart, no clean-stop diagnostic: a lost lease keeps the conservative rule and the shell run is held."""
     machine, message, attempt = restarted_mid_turn(api, [('Bash', None)], reported=False, stopped=False)
     aged(api, attempt['id'], grace=True)
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+
+
+def test_a_reply_that_reads_as_a_clean_stop_without_its_diagnostic_stays_held(api):
+    """The completion text is the model's reply: a reply that says the runner stopped, with no saved clean-stop
+    diagnostic, is no computer report, so a run that used a shell is held as any other interrupted run."""
+    add_recovery_reviewer(api)
+    machine, message, attempt = restarted_mid_turn(api, [('Bash', None)], reply='Runner stopped during execution')
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'

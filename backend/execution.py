@@ -17,7 +17,7 @@ from . import browser_exit, claim_holds, claim_loads, cloud_access, cloud_machin
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
-from .run_diagnostics import RUNNER_STOPS, clean_stop_reported
+from .run_diagnostics import RESTART_TEXT, clean_stop_reported
 from .statuses import PARKED_SQL
 from .verdict_moves import HANDOFF_FIRST_SQL
 from .store import H, P, Problem, bot_readiness, digest, encode, message_page, readiness_document
@@ -704,13 +704,14 @@ LEGACY_OUTSIDE_PROGRAMS = {
 
 def restart_reported(c, attempt_id):
     """Only the computer's own report that it stopped the turn relaxes generic tool uncertainty; a lost lease does not.
-    The report is a restart's or a clean stop's completion text (RUNNER_STOPS), or, for a clean stop, the diagnostic the
-    runner saved when it stopped (`clean_stop_reported`), which still counts when its completion never reached the hub."""
+    A restart is its completion text (RESTART_TEXT). A clean stop is only its saved diagnostic (`clean_stop_reported`):
+    the completion text is the model's reply, so it never counts; the diagnostic still counts when the completion never
+    reached the hub."""
     row = c.execute("SELECT state,result FROM attempts WHERE id=?", (attempt_id,)).fetchone()
     if not row or row['state'] not in ('interrupted', 'expired'):
         return False
     result = json.loads(row['result'] or '{}')
-    if result.get('outcome') == 'interrupted' and result.get('text') in RUNNER_STOPS:
+    if result.get('outcome') == 'interrupted' and result.get('text') == RESTART_TEXT:
         return True
     return clean_stop_reported(c, attempt_id) is not None
 
@@ -5941,7 +5942,7 @@ class Execution:
         carries the task's hand-off note, and holds a second consecutive cut for review instead of dismissing it.
         A completed attempt breaks the consecutive-cut streak.
 
-        A computer-reported restart, or its clean stop (run_diagnostics.RUNNER_STOPS: the computer stopped the turn itself
+        A computer-reported restart, or its clean stop (run_diagnostics.clean_stop_reported: the computer stopped the turn itself
         and said so), resumes on the next sweep even after a shell or local edit, unless a consumed approval or a named
         merge, publish, send or payment requires review. Its note gives the interruption time and asks it to check
         existing effects first. Lost leases without that report retain the conservative rule.
