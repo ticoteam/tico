@@ -5349,6 +5349,7 @@ export type ThreadTimeline = {
   breadcrumb?: Array<ThreadCrumb>;
   messages: Array<Record<string, unknown>>;
   next_cursor?: string | null;
+  read_marks?: Record<string, number>;
   thread: ThreadView;
 };
 

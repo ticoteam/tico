@@ -3535,8 +3535,8 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
     message whose branch alone is over the byte cap keeps its summary and an "N more" row in the branch's place.
 
     `flat`: the thread and its whole readable open subtree in time order, every message at depth 0, paged by the same
-    cursor (a seq) and caps. Each shown message has `reply_to` (reply_quotes) in both modes; the first page also has
-    `bot_status` (thread_bot_status)."""
+    cursor (a seq) and caps, with `read_marks` for the root and each thread a message on the page is in. Each shown
+    message has `reply_to` (reply_quotes) in both modes; the first page also has `bot_status` (thread_bot_status)."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = require(c, v, thread_id)
     limit = max(1, min(int(limit or 50), MAX_PAGE))
@@ -3592,10 +3592,24 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
     next_cursor = pages[-1][0]["seq"] if more and pages else None
     out = {"thread": {**view(c, v, row), **_earlier(c, v, row)}, "breadcrumb": breadcrumb(c, v, row),
            "messages": [r for rows_of in reversed(pages) for r in rows_of], "next_cursor": next_cursor}
+    if flat:
+        out["read_marks"] = read_marks(c, v, [row["id"], *(r.get("thread_id") for r in out["messages"])])
     if cursor in (None, ""):
         from . import thread_bot_status
         out["bot_status"] = thread_bot_status.status(c, v, row)
     return out
+
+
+def read_marks(c, v, thread_ids):
+    """{thread id: the viewer's last_read_seq} for each of these threads, 0 where they have read nothing: a flat page
+    has no sub_thread summaries, so each message is read against its own thread's mark from here."""
+    ids = list(dict.fromkeys(t for t in thread_ids if t))
+    if not ids:
+        return {}
+    got = {r[0]: int(r[1] or 0) for r in c.execute(
+        f"SELECT thread_id, last_read_seq FROM thread_followers WHERE actor=? AND thread_id IN ({','.join('?' * len(ids))})",
+        (v.actor, *ids))}
+    return {t: got.get(t, 0) for t in ids}
 
 
 def _attention_roots(c, v):
