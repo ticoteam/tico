@@ -687,7 +687,8 @@ function thvComposerDraw(view) {
   C.el = host.querySelector('.thv-ask');
   host.querySelector('.thv-replying').onclick = ev => { if (ev.target.closest('[data-reply-cancel]')) thvReplyStart(view, null); };
   const box = C.el.querySelector('.p-text'), file = C.el.querySelector('.p-file'), menu = C.el.querySelector('.thv-attach-menu');
-  const grow = () => { box.style.height = 'auto'; box.style.height = Math.min(box.scrollHeight, 160) + 'px'; };
+  // Empty, the box is one line whatever the placeholder: a long bot name's placeholder would count as a second.
+  const grow = () => { box.style.height = 'auto'; box.style.height = box.value ? Math.min(box.scrollHeight, 160) + 'px' : ''; };
   box.addEventListener('input', () => { grow(); thvMentionFind(view); thvComposerButtons(view); });
   box.addEventListener('keydown', ev => {
     if (C.mention && thvMentionKey(view, ev)) return;

@@ -133,6 +133,8 @@ a.th-status-act:hover{text-decoration:none}
 .thv-composer .ask{margin:0}
 .thv-composer .p-chips:empty{display:none}
 .thv-goal{flex:none}
+/* "Message <bot>" stays on its one line, cut short */
+.thv-ask .p-text::placeholder{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* a bot's Home or DM: the ways menu opens upward from Send's caret; goal mode shows a Goal chip before the words */
 .thv-ask .p-menu.p-ways{top:auto;bottom:calc(100% + 6px);right:0;left:auto}
 .thv-goal-chip{display:inline-flex;flex:none;align-items:center;gap:4px;align-self:center;padding:2px 4px 2px 10px;border:1px solid var(--line);border-radius:999px;color:var(--ink);font-size:var(--t-sm);white-space:nowrap}
