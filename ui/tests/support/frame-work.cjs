@@ -8,7 +8,8 @@ const percentile = (values, p) => [...values].sort((a, b) => a - b)[Math.floor(v
 
 // Chromium's ts/dur are elapsed microseconds; tts/tdur are thread CPU microseconds. A busy neighbouring browser
 // can delay this renderer without doing any work in it. Charge the renderer's work, including style/layout/paint,
-// to the frame, not that scheduling delay. CPU throttling suspends the thread too, so restore its 4x cost explicitly.
+// to the frame, not that scheduling delay. Measure without CDP throttling and charge work at 4x: Chromium's POSIX
+// ThreadCPUThrottler::HandleSignal busy-waits on this same thread, contaminating both elapsed time and CPU time.
 // Missing thread clocks must fail, never silently turn a broken recording into zero work.
 function frameWork(events) {
   const marks = events.filter(e => e.name === 'TimeStamp' && e.args?.data?.message?.startsWith(MARK)).sort((a, b) => a.ts - b.ts);

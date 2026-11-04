@@ -3,7 +3,7 @@
 // - Idle 10 s with Ask closed: no layout, at most 4 style recalcs per idle swap (one or two land in 10 s), under 150 ms of main-thread work, no paints from
 //   the dot, and every running animation on a dot moves transform or opacity only, on one dot at most.
 // - Each idle variant swapped in by hand: no layout and no paint.
-// - With the CPU slowed 4x, opening Ask (the dot flies up to the panel's header), a reply (the header's dot works, then
+// - With renderer work charged at 4x, opening Ask (the dot flies up to the panel's header), a reply (the header's dot works, then
 //   rests) and closing (it flies back down): renderer CPU work per frame p95 <= 20 ms and max <= 50 ms, and no task
 //   over 50 ms, with thread CPU time charged at 4x. Wall frame gaps and long tasks are diagnostics: neighbouring CI
 //   browsers can deschedule this renderer. Work budgets never stretch with runner load.
@@ -18,7 +18,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
-const {CPU_RATE, FRAME_SAMPLES, frameWork, assertFrameWork} = require('./support/frame-work.cjs');
+const {FRAME_SAMPLES, frameWork, assertFrameWork} = require('./support/frame-work.cjs');
 
 const now = new Date().toISOString();
 const msg = (id, from, body) => ({id, sender_id: from, body, refs: {}, created_at: now, kind: 'say'});
@@ -161,7 +161,7 @@ const round = v => Math.round(v * 10) / 10;
     assert.equal(out.variants.layouts, 0, `idle variants: ${out.variants.layouts} layouts`);
     assert.ok(swapPaints.length <= 1, `idle variants: paints ${JSON.stringify(swapPaints)}`);
 
-    // ---- Open, a reply, close, with the CPU slowed 4x. A first open and close loads the chat; the second is timed.
+    // ---- Open, a reply, close, charging CPU work at 4x. A first open and close loads the chat; the second is timed.
     await page.locator('#ask-row').click();
     await page.locator('#ask-panel .ask-form .p-text').waitFor();
     await page.waitForFunction(() => !document.querySelector('.ldot-fly'));
@@ -172,7 +172,6 @@ const round = v => Math.round(v * 10) / 10;
       && document.getAnimations().filter(a => a.effect?.target?.closest?.('#ask-panel, #ask-row, .ldot-layer'))
         .every(a => !Number.isFinite(a.effect.getComputedTiming().endTime) || a.playState === 'finished'));
     await settle();
-    await cdp.send('Emulation.setCPUThrottlingRate', {rate: CPU_RATE});
     const phases = {
       open: async () => { await page.locator('#ask-row').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle(); },
       reply: async () => {
@@ -186,15 +185,14 @@ const round = v => Math.round(v * 10) / 10;
       },
       close: async () => { await page.keyboard.press('Escape'); await page.locator('#ask-panel').waitFor({state: 'hidden'}); await settle(); },
     };
-    out.throttled = {};
+    out.work4x = {};
     const measured = {};
     for (const [name, act] of Object.entries(phases)) {
       const {work, wall} = await frames(page, act);
       measured[name] = work;
-      out.throttled[name] = {frames: work.frames, cpuP95: round(work.p95), cpuMax: round(work.max), taskCpuMax: round(work.task),
+      out.work4x[name] = {frames: work.frames, cpuP95: round(work.p95), cpuMax: round(work.max), taskCpuMax: round(work.task),
         wallP95: round(wall.p95), wallMax: round(wall.max), longTask: round(wall.long)};
     }
-    await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
     for (const [name, work] of Object.entries(measured)) assertFrameWork(name, work);
 
     // ---- Opening and closing (the row, ⌘J, Escape), flights included, change no `hidden` attribute anywhere and add
