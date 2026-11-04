@@ -762,6 +762,8 @@ def decide(current, found, at, idle_s):
     on = current["state"] in ON and current["machine_id"]
     # A machine being made that has not enrolled yet (enroll_by is its deadline; 0 once it enrolled).
     booting = bool(current["enroll_by"] and current["machine_id"] and current["state"] not in DEAD)
+    if current["next_try_at"] and at < current["next_try_at"] and not found["retry_now"]:
+        return None, None                                   # refused stops back off even after the last bot leaves
     if not found["active"]:
         # Paused, drained, archived or moved (every member, on the shared one): stopped, but never under a turn still
         # out (a drain lets it finish), nor mid-update (a cut-short update is a broken runner at the next start). Only
@@ -772,8 +774,6 @@ def decide(current, found, at, idle_s):
         if on and (found["turns"] or found["updating"]):
             return ("heartbeat" if at - (current["heartbeat_at"] or 0) >= HEARTBEAT else None), None
         return ("stop" if on else None), None
-    if current["next_try_at"] and at < current["next_try_at"] and not found["retry_now"]:
-        return None, None                                   # waiting out a refusal
     if found["frozen"]:
         return ("stop" if on else None), "out_of_credit"
     if booting and at >= current["enroll_by"]:

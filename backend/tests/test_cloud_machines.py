@@ -792,6 +792,20 @@ def test_hq_errors_back_off_with_one_event_and_a_wait_note(cloud):
     assert cloud.row()["failures"] == 0 and cloud.row()["problem"] == ""
 
 
+def test_a_refused_stop_backs_off_after_the_last_bot_is_drained(cloud):
+    enrolled(cloud)
+    idle(cloud)
+    draining(cloud, "ops", 1)
+    cloud.hq.fail["stop"] = [CM.Refused("unreachable"), CM.Refused("unreachable")]
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == ["stop"]
+    assert cloud.tick(10) == ["stop"]                     # inside the first 15-second backoff
+    assert cloud.tick(5) == ["stop", "stop"]
+    assert cloud.tick(29) == ["stop", "stop"]             # the second refusal waits 30 seconds
+    assert cloud.tick(1) == ["stop", "stop", "stop"]
+    assert cloud.row()["state"] == "stopped" and cloud.row()["failures"] == 0
+
+
 def test_a_resume_right_after_a_stop_retries_soon_without_counting_a_failure(cloud):
     enrolled(cloud)
     cloud.tick(400)
