@@ -348,6 +348,21 @@ def test_a_revoked_bot_computer_is_no_host_so_a_publisher_takes_the_first_connec
     assert publish(api, office["token"], expected=200)          # and the publisher owns the grant it holds
 
 
+def test_a_publisher_without_mail_takes_a_first_connect_beside_a_non_publisher_grant(api, google, monkeypatch):
+    seed_org(api)
+    declare(api, BOX)
+    holder = runner(api, operator="ben", label="Bot Mac")       # not a publisher: it hosts Ana's bot and holds her grant
+    place(api, holder)
+    ready(api, holder, [])
+    begin_ana(api)
+    finish_ana(api, holder, monkeypatch, "1//ana")
+    _, query = connect.start(api, "cara-test")                  # Cara's first connect: no bot computer, no holder
+    connect.back(api, "cara-test", state=query["state"], code="c-2")
+    office = runner(api, label="Office Mac")                    # a publisher with no mail credentials
+    claimed = post(api, "connectors/mail/google/claim", {"holds_mail": False}, office["token"])["connect"]
+    assert claimed and claimed["id"] == "cara" and claimed["action"] == "connect" and claimed["mailbox"] == PERSONAL
+
+
 def test_a_revoked_computers_fresh_failure_does_not_count(api, workspace_key):
     seed_org(api)
     declare(api, BOX)

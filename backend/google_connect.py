@@ -241,13 +241,12 @@ def view(row, mailbox, syncing, configured_now):
     return out
 
 
-def _other_holder(c, runner_id):
-    """Whether another computer holds mail credentials or a live grant, so a publisher leaves a first connect alone."""
-    return c.execute(
-        "SELECT 1 FROM google_mail_holders h JOIN runners r ON r.id=h.runner_id AND r.revoked_at IS NULL "
-        "WHERE h.runner_id<>? AND h.holds=1 AND h.seen_at>? UNION ALL SELECT 1 FROM google_connects g "
-        "JOIN runners r ON r.id=g.holder AND r.revoked_at IS NULL WHERE g.holder<>? LIMIT 1",
-        (runner_id, time.time() - HOLDER_SECONDS, runner_id)).fetchone() is not None
+def _credentialed_publishers(c, runner_id):
+    """The other publishers that said recently that they hold mail credentials. Only publishers are recorded
+    (google_claim), so a non-publisher's grant or answer never holds a first connect back."""
+    return [row[0] for row in c.execute(
+        "SELECT h.runner_id FROM google_mail_holders h JOIN runners r ON r.id=h.runner_id AND r.revoked_at IS NULL "
+        "WHERE h.runner_id<>? AND h.holds=1 AND h.seen_at>?", (runner_id, time.time() - HOLDER_SECONDS)).fetchall()]
 
 
 def claimable(c, runner_id, holds, named=False):
@@ -257,19 +256,20 @@ def claimable(c, runner_id, holds, named=False):
     connect and the reconnect, online or not: a publisher waits for it rather than taking the connect, and a reconnect
     goes there whoever held the earlier grant (the old holder's refreshes are then refused, see google_refresh). A
     disconnect goes to the holder, the only computer that can revoke the grant it holds. With no bot computer, the holder
-    keeps its grant; a publisher takes a first connect, or a grant whose holder was removed, unless another computer has
-    said it holds mail credentials recently."""
+    keeps its grant; a publisher takes a first connect, or a grant whose holder was removed, unless another publisher has
+    said it holds mail credentials recently and takes that row."""
     expire(c)
     rows = c.execute("SELECT * FROM google_connects WHERE status IN ('ready','disconnecting') "
                      "ORDER BY updated_at").fetchall()
     if not rows:
         return None
     hosts, live = google_rights.inbox_hosts(c), google_rights.live_runners(c)
-    elsewhere = None
+    others = _credentialed_publishers(c, runner_id)
     for row in rows:
-        if elsewhere is None:
-            elsewhere = _other_holder(c, runner_id)
-        orphan = named and (holds or not elsewhere)     # a publisher, when no other computer has said it holds mail
+        # A publisher without mail credentials defers to another publisher that has them, but only one that takes this
+        # row (google_rights.takes): a computer holding some other mailbox never holds this one back.
+        elsewhere = any(google_rights.takes(other, True, row, hosts, live) for other in others)
+        orphan = named and (holds or not elsewhere)     # a publisher, unless another publisher with credentials takes it
         if google_rights.takes(runner_id, orphan, row, hosts, live):
             return row
     return None
@@ -381,8 +381,13 @@ def install(app, store, member, mutate):
         with store.transaction() as c:
             runner, named = member(c, request.state.identity)
             holds = bool(body and body.holds_mail)
-            c.execute("INSERT INTO google_mail_holders(runner_id,holds,seen_at) VALUES(?,?,?) ON CONFLICT(runner_id) "
-                      "DO UPDATE SET holds=excluded.holds,seen_at=excluded.seen_at", (runner["id"], int(holds), time.time()))
+            # Only a publisher's answer is kept: claimable lets a publisher without credentials defer to one that has them.
+            if named:
+                c.execute("INSERT INTO google_mail_holders(runner_id,holds,seen_at) VALUES(?,?,?) ON CONFLICT(runner_id) "
+                          "DO UPDATE SET holds=excluded.holds,seen_at=excluded.seen_at",
+                          (runner["id"], int(holds), time.time()))
+            else:
+                c.execute("DELETE FROM google_mail_holders WHERE runner_id=?", (runner["id"],))
             # Only recent answers count (claimable), so older ones and revoked computers' go.
             c.execute("DELETE FROM google_mail_holders WHERE seen_at<? OR runner_id IN "
                       "(SELECT id FROM runners WHERE revoked_at IS NOT NULL)", (time.time() - HOLDER_SECONDS,))
