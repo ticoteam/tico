@@ -12,7 +12,7 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
   onboarding_needed: true, providers_configured: false, version: '0.2.0', runner_compat: {version: '0.2.0', min_runner: '0.1.0'}};
 const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-product', 'Head of Product'], ['builder', 'Builder'],
   ['support-agent', 'Support Agent'], ['content-marketer', 'Content Marketer'], ['goal-manager', 'Strategy Bot'],
-  ['librarian', 'Librarian']].map(([slug, display_name]) => ({slug, display_name,
+  ['librarian', 'Librarian']].map(([slug, display_name]) => ({id: slug, slug, display_name,
   status: 'active', template: slug, onboarding_state: ['coo', 'botops'].includes(slug) ? '' : 'onboarded', setup_task_id: null,
   repository_present: false}));
 
@@ -66,7 +66,7 @@ const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-produ
           company_import: {fingerprint: 'a'.repeat(64), deferred: ['tool_connections'], seats: 1,
                            people: [{id: 'dana', name: 'Dana', title: 'Controller', seats: [], invited_at: null}]},
           company_import_failed: null, seats: {bookkeeping: 's-1'},
-          bots: [{...SAMPLE_BOTS[0], slug: 'coo', display_name: 'Assistant', status: 'active'}]};
+          bots: [{...SAMPLE_BOTS[0], id: 'coo', slug: 'coo', display_name: 'Assistant', status: 'active'}]};
         return json({...record, home: 'human:owner'});
       }
       if (p === '/api/v2/setup/getting-started/state') return json({tour: true, checklist: false, cards: [], skipped: []});

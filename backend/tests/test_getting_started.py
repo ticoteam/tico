@@ -19,7 +19,7 @@ def body_of(api):
 def heartbeat(api, runner_id, *, seconds_ago=0, runtimes=None):
     """A runner's last word, as the heartbeat stores it."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=?, readiness_json=? WHERE id=?",
+        c.execute("UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
                   (H.shift(H.now(), seconds=-seconds_ago),
                    json.dumps({"schema_version": 1, "runtimes": runtimes or {}, "bots": {}}), runner_id))
 

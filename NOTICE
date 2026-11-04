@@ -43,3 +43,11 @@ It includes third-party software, kept under its own license:
       Connect an agent (ui/connect-agent.js) means.
       The xAI and Grok marks in it are from Lobe Icons (https://github.com/lobehub/lobe-icons,
       @lobehub/icons-static-svg 1.95.1), MIT License; neither is in Simple Icons.
+
+  recorder/vendor/anarlog/ (onnx, embedding, voiceprint, pyannote-local)
+      Speaker diarization crates from anarlog (https://github.com/fastrepl/anarlog, commit
+      98d6219), MIT License. Copyright (c) 2023-present Fastrepl, Inc. License text:
+      recorder/vendor/anarlog/LICENSE
+      Tico Recorder downloads two models at build time (recorder/vendor/anarlog/models.rs,
+      checked by SHA-256; not committed): pyannote segmentation 3.0, MIT License, and WeSpeaker ResNet34
+      trained on VoxCeleb, CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).

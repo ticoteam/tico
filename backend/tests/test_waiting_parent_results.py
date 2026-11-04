@@ -7,6 +7,7 @@ from backend import execution, task_relations as TR
 from backend.store import H
 from backend.tests.test_api import api, claim, post  # noqa: F401  (api is a fixture)
 from backend.tests.test_task_lanes import task_bot
+from backend.tests.hold_rows import set_holds
 
 VERDICT = "VERDICT: approve PR #12 head "
 
@@ -51,22 +52,22 @@ def waiting_parent(api, results=3):
 def queued(api, task_id, bot="ops"):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute(
-            "SELECT j.*, m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations cv "
-            f"ON cv.id=m.conversation_id WHERE j.bot=? AND j.state='queued' AND {H.MESSAGE_TASK_SQL}=? "
+            "SELECT j.*, m.refs FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations cv "
+            f"ON cv.id=m.conversation_id WHERE j.bot_id=? AND j.state='queued' AND {H.MESSAGE_TASK_SQL}=? "
             "ORDER BY j.rowid", (bot, task_id))]
 
 
 def refusal(api, machine, job):
     """job_refusal's verdict on `job` as the claim would ask it, with nothing busy."""
     with api.app.state.store.read() as c:
-        runner = c.execute("SELECT * FROM runners WHERE id=?", (machine["runner_id"],)).fetchone()
-        ready = execution.readiness_document(runner["readiness_json"])
+        runner = c.execute("SELECT * FROM runners_with_state WHERE id=?", (machine["runner_id"],)).fetchone()
+        ready = execution.readiness_document(runner["readiness"])
         return execution.job_refusal(c, job, {}, ready, set(), execution.lanes_on(runner),
                                      execution.roots_on(runner))
 
 
 def results(api, task_id):
-    return [j for j in queued(api, task_id) if H._json(j["refs_json"], {}).get("subtask")]
+    return [j for j in queued(api, task_id) if H._json(j["refs"], {}).get("subtask")]
 
 
 def test_every_queued_result_is_claimed_in_the_parents_session_while_another_subtask_is_open(api):
@@ -103,24 +104,23 @@ def test_a_result_still_waits_for_the_parents_other_waits(api, wait):
     machine, parent, done, still = waiting_parent(api, results=1)
     with api.app.state.store.transaction() as c:
         if wait == "snooze":
-            c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), hours=2), parent))
+            set_holds(c, parent, snoozed_until=H.shift(H.now(), hours=2))
         elif wait == "waiting_on":
             c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (parent,))
         elif wait == "approval":
-            c.execute("INSERT INTO approvals(id,kind,task_id,requested_by,created) VALUES(?,'send',?,'bot:ops',?)",
+            c.execute("INSERT INTO approvals(id,kind,task_id,requested_by_id,created_at) VALUES(?,'send',?,'bot:ops',?)",
                       (H.new_id(), parent, H.now()))
         elif wait == "worktree":
             from backend.worktree_waits import ensure
             ensure(c)
-            c.execute("INSERT INTO worktree_waits(id,task_id,owner,repo,generation,state,created,updated) "
+            c.execute("INSERT INTO worktree_waits(id,task_id,owner,repo,generation,state,created_at,updated_at) "
                       "VALUES(?,?,'bot:ops','acme/app',0,'waiting',?,?)", (H.new_id(), parent, H.now(), H.now()))
         elif wait == "question":    # read past the skipped subtasks: wait_detail's own checks still hold it
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+            c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
                       "VALUES(?,?,'bot:ops','human:ana','ask','Which release?',?,?)",
                       (H.new_id(), H.task(c, parent)["conversation_id"], '{"task": "%s"}' % parent, H.now()))
         elif wait == "manual":
-            c.execute("UPDATE tasks SET blocked_kind='manual',blocked_reason='Held until the freeze lifts' "
-                      "WHERE id=?", (parent,))
+            set_holds(c, parent, blocked_kind='manual', blocked_reason='Held until the freeze lifts')
         else:   # a task outside this one that it waits on, not one of its subtasks
             other = H.task_create(c, "human:ana", "Ship the release", "x", "bot:cpo", lint=False)["id"]
             TR.relate(c, "human:ana", other, parent, "blocks")

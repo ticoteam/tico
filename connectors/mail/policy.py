@@ -463,9 +463,84 @@ def _default_hub_get(path):
 HUB_GET = _default_hub_get
 
 
+# One try at the org rule check: the server's longest check deadline (backend/org_rule_check.py DEADLINES, 15 s at
+# High) plus a margin for the write around it. A server that has not answered by then has let the check go.
+RULE_CHECK_TIMEOUT = 20
+
+
+class HubFailed(Exception):
+    """Tico was asked and gave no usable answer. `reason`: forbidden (the token is not this bot's), http_<status>,
+    unavailable (timed out or unreachable) or error."""
+
+    def __init__(self, reason, status=0):
+        super().__init__(reason)
+        self.reason, self.status = reason, status
+
+
+def _default_hub_post(path, body, key=None):
+    """One Tico POST, one try within RULE_CHECK_TIMEOUT, `key` its Idempotency-Key. Tests replace `HUB_POST`. None
+    means no cloud credential (outside a turn); a request Tico refused or did not answer raises HubFailed."""
+    url, token = os.environ.get("HUB_API_URL"), os.environ.get("HUB_TOKEN")
+    if not url or not token:
+        return None
+    from clients.tico import APIError, Client
+    try:
+        return Client(url, token, timeout=RULE_CHECK_TIMEOUT, retries=0).post(path, body, key=key)
+    except APIError as exc:
+        reason = "forbidden" if exc.status == 403 else f"http_{exc.status}" if exc.status else \
+            "unavailable" if exc.code == "unavailable" else "error"
+        raise HubFailed(reason, status=exc.status) from None
+    except Exception:
+        raise HubFailed("error") from None
+
+
+HUB_POST = _default_hub_post
+
+
+def rule_check(slug, to, cc, subject, body, key=None):
+    """The org rule check of a mail before it is sent (backend/org_rule_check.py, `POST /api/v2/bots/{bot}/mail-check`):
+    {"outcome": "pass" | "held" | "warn" | "unchecked" | "not_checked", ...}. None when there is no Tico to ask.
+    A check that failed (refused, timed out, a server error) lets the send go on, as every other failure of the check
+    lets an output through, but never quietly: it comes back {"outcome": "unchecked", "failed": reason}, for the send
+    to log and answer with. `key`, a UUID, is the check's id (its Idempotency-Key): a send after a failed check is
+    reported by it later (`report_misses`), and Tico counts it once, whether its route counted it already or never
+    saw it."""
+    try:
+        answer = HUB_POST(f"bots/{slug}/mail-check", {"to": list(to or []), "cc": list(cc or []),
+                                                      "subject": subject or "", "body": body or ""}, key=key)
+    except HubFailed as exc:
+        import sys
+        print(f"mail: the org rule check failed ({exc.reason}); this send goes out unchecked", file=sys.stderr)
+        return {"outcome": "unchecked", "failed": exc.reason}
+    return answer if isinstance(answer, dict) else None
+
+
+def report_misses(slug, ids):
+    """Tell Tico of sends after a failed check (`POST /api/v2/bots/{bot}/mail-check/misses`), by their checks' ids:
+    it counts each once, however often it hears of it. The ids Tico took (a 2xx), to forget; [] when it did not
+    answer or is a release without the route (404, 405), and they wait for the next time."""
+    if not ids:
+        return []
+    try:
+        answer = HUB_POST(f"bots/{slug}/mail-check/misses", {"ids": list(ids)})
+    except HubFailed:
+        return []
+    return list(ids) if isinstance(answer, dict) else []
+
+
 def _hub_row(kind, n):
     row = HUB_GET(f"{kind}/{n}")
     return row if isinstance(row, dict) and row.get("id") else None
+
+
+def _bot_names(slug):
+    """The label and the id of one bot. Tico names a bot in actor strings by its id (`bot:<id>`); a label is
+    what the caller passed. Without a Tico row only the label is known."""
+    names = {slug}
+    row = HUB_GET(f"bots/{slug}")
+    if isinstance(row, dict) and row.get("id"):
+        names.add(row["id"])
+    return names
 
 
 def _blank_approval(n):
@@ -677,12 +752,12 @@ def _hub_message_check(n, slug):
     if not row:
         out["detail"] = f"Tico has no approval or message {n} this employee may read"
         return out
-    if row.get("from_actor") != f"human:{OWNER}":
-        out["detail"] = (f"Tico message {n} is from {row.get('from_actor') or 'nobody'}, "
+    if row.get("sender_id") != f"human:{OWNER}":
+        out["detail"] = (f"Tico message {n} is from {row.get('sender_id') or 'nobody'}, "
                          f"not {OWNER}")
         return out
-    if slug and row.get("to_actor") != f"bot:{slug}":
-        out["detail"] = (f"Tico message {n} was sent to {row.get('to_actor') or 'nobody'}, "
+    if slug and row.get("recipient_id") not in {f"bot:{name}" for name in _bot_names(slug)}:
+        out["detail"] = (f"Tico message {n} was sent to {row.get('recipient_id') or 'nobody'}, "
                          f"not bot:{slug}")
         return out
     if not SEND_INTENT.search(str(row.get("body") or "")):
@@ -767,6 +842,7 @@ def switch(slug, manifest=None):
     cannot read it cannot tell an onboarding bot from an Active one. `asks` / `asks_forward` are what bot.yaml
     requests, for messages."""
     if str(slug).strip().lower() == OWNER:
+        # The owner has no per-bot switch; the company's Send mail still holds its every send (oauth.company_allows).
         return {"on": True, "forward_to": [], "source": "owner", "detail": "the owner", "asks": True,
                 "asks_forward": [], "read": True, "onboarding": False}
     try:
@@ -781,6 +857,8 @@ def switch(slug, manifest=None):
     row = _server_row(slug)
     out["read"] = row is not None
     out["onboarding"] = bool((row or {}).get("onboarding"))
+    # The company's Settings > Google (What Tico may do): with Send mail off no bot sends, whatever its own switch says.
+    out["company_off"] = (row or {}).get("company_send") is False
     hint = SETTING_HINT.format(slug=slug)
     if row is None or not row.get("set"):
         out["detail"] = (("no person has turned sending on for " + slug + " in Tico yet"
@@ -795,6 +873,58 @@ def switch(slug, manifest=None):
     out["detail"] = (f"{'on' if out['on'] else 'off'} in Tico, set by {who}"
                      + ("" if out["on"] else "; " + hint))
     return out
+
+
+COMPANY_FIELDS = {"organize_mail": "company_organize", "send_mail": "company_send",
+                  "change_calendar": "company_calendar"}
+UNREAD = "unread"                                       # company(): Tico could not be asked (oauth.company_allows)
+
+
+def company(slug):
+    """The company's What Tico may do for `slug`'s run, as {organize_mail, send_mail, change_calendar}, from Tico and
+    nothing the run says itself: a bot's from its mail setting (backend/mail_settings.py), the owner's (the runner's
+    own commands, a person's run) from the runner's read (runner_company). It holds everyone who acts through Tico.
+
+    None for a server that answers without the fields (an older one). UNREAD when the setting could not be read: the
+    run's writes are refused then, and its reads go on."""
+    slug = str(slug or "").strip().lower()
+    if slug == OWNER:
+        return runner_company()
+    row = _server_row(slug)
+    if row is None:
+        return UNREAD
+    return _allowed(row)
+
+
+def _allowed(row):
+    if not any(f in row for f in COMPANY_FIELDS.values()):
+        return None
+    return {name: row.get(field) is not False for name, field in COMPANY_FIELDS.items()}
+
+
+# The runner's read of What Tico may do (GET /api/v2/connectors/mail/targets over its own registration). Tests
+# replace RUNNER_GET.
+RUNNER_GET = None
+
+
+def runner_company():
+    """What Tico may do for an owner run (an automation's mail action, a calendar booking, a person's own run): asked
+    of Tico over the runner's registration, as a bot's run asks for its own, so nothing on stdin decides it. UNREAD
+    when Tico could not be asked, a run without the registration included."""
+    try:
+        if RUNNER_GET is not None:
+            answer = RUNNER_GET("connectors/mail/targets")
+        else:
+            from . import oauth                         # noqa: PLC0415
+            answer = oauth.broker().get("connectors/mail/targets")
+    except Exception:
+        answer = None
+    if not isinstance(answer, dict):
+        return UNREAD
+    may = answer.get("company")
+    if not isinstance(may, dict):
+        return None                                     # an older server: it says nothing of What Tico may do
+    return {name: may.get(name) is not False for name in COMPANY_FIELDS}
 
 
 def outbound_send(slug, manifest=None):
@@ -947,6 +1077,10 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
         return no("onboarding", f"this run cannot read {slug}'s mail setting from Tico, so it cannot confirm {slug} "
                                 "has finished onboarding and sends no email, with or without an approval; "
                                 "try again once Tico answers")
+    # Like onboarding, before the approval read: no approval lifts the company's own no.
+    if sw.get("company_off"):
+        return no("company", "the company turned Send mail off in Tico (Settings > Google > What Tico may do), so "
+                             f"{slug} sends no email, with or without an approval; an admin turns it back on there")
     ok("onboarding", f"{slug} is not onboarding")
 
     ext = externals(pol, to)

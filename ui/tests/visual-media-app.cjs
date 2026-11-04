@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 
 function wav(seconds) {
   const rate = 8000, n = rate * seconds, data = Buffer.alloc(n * 2);
@@ -35,14 +36,15 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     const errors = [], visualReqs = [], fileReqs = [], held = [];
     page.on('pageerror', e => errors.push(e.message));
     const messages = [
-      {id: 'm1', from_actor: 'bot:editor', body: 'The cut and the voice note.', created: now, refs: {attachments: [
+      {id: 'm1', sender_id: 'bot:editor', body: 'The cut and the voice note.', created_at: now, refs: {attachments: [
         A('f-cut', 'video', {width: 1280, height: 720, poster_url: VIS + 'tok-f-cut-poster'}), A('f-voice', 'audio')]}},
-      {id: 'm2', from_actor: 'human:ana', body: 'My recording', created: now, refs: {attachments: [A('f-mine', 'audio', {title: 'Ana recording'})]}},
-      {id: 'm3', from_actor: 'bot:editor', body: 'Five.', created: now, refs: {attachments: [
+      {id: 'm2', sender_id: 'human:ana', body: 'My recording', created_at: now, refs: {attachments: [A('f-mine', 'audio', {title: 'Ana recording'})]}},
+      {id: 'm3', sender_id: 'bot:editor', body: 'Five.', created_at: now, refs: {attachments: [
         A('f-p1', 'image', {width: 400, height: 200}), A('f-a1', 'audio'), A('f-p2', 'image', {width: 400, height: 200}), A('f-v1', 'video'), A('f-a2', 'audio')]}},
     ];
     let gen = 1;
     const signed = () => gen === 1 ? messages : messages.map(m => ({...m, refs: {...m.refs, attachments: m.refs.attachments.map(a => ({...a, src: `${a.src}.${gen}`}))}}));
+    const threads = threadsFake({bot: 'editor', messages: () => signed()});
     await context.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -64,20 +66,20 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       if (p === '/api/issues') return json([]);
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/events') { held.push(route); return; }
-      if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c-editor', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:editor']}] : []});
-      if (p === '/api/v2/conversations/c-editor/snapshot') return json({messages: signed(), execution: null});
+      const answer = threads(p, url, req.method());
+      if (answer !== undefined) return json(answer);
       if (p === '/api/v2/tasks' && req.method() === 'GET') return json({tasks: [task], next_offset: null});
       if (p === '/api/v2/tasks/t1/files') return json({files: []});
       if (p === '/api/v2/tasks/t1') return json({task, comments: taskComments, events: [], children: [], parent: null, mover: true, messages: [], can_comment: true});
       return json(unrouted(p));
     });
-    const task = {id: 't1', title: 'Launch video', owner: 'bot:editor', requester: 'human:ana', status: 'review', lane: 'company', rank: 1, labels: [], links: [],
-      parts: {total: 0, done: 0}, version: 1, created: now, updated: now, body: 'Cut it.', attachments: []};
-    const taskComments = [{id: 'c1', kind: 'say', from_actor: 'bot:editor', body: 'Cut attached.', created: now, answers: [],
+    const task = {id: 't1', title: 'Launch video', owner_id: 'bot:editor', requester_id: 'human:ana', status: 'review', lane: 'company', rank: 1, labels: [], links: [],
+      parts: {total: 0, done: 0}, version: 1, created_at: now, updated_at: now, body: 'Cut it.', attachments: []};
+    const taskComments = [{id: 'c1', kind: 'say', sender_id: 'bot:editor', body: 'Cut attached.', created_at: now, answers: [],
       refs: {task: 't1', comment: true, attachments: [A('f-cut', 'video', {width: 1280, height: 720})]}}];
 
     // ---- chat: players in the cards, from the visual address, paused; a person's clip too
-    await page.goto('https://tico-ui.test/#/bot/editor/chat');
+    await page.goto('https://tico-ui.test/#/bot/editor/dm');
     const m1 = page.locator('[data-message="m1"]');
     await m1.locator('figure.vcard audio').waitFor();
     const video = m1.locator('figure.vcard[data-kind="video"] video'), voice = m1.locator('figure.vcard[data-kind="audio"] audio');
@@ -110,9 +112,9 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       answered = held.length;
       if (way === 'no moveBefore') await page.evaluate(() => { window.__mb = Element.prototype.moveBefore; delete Element.prototype.moveBefore; });
       gen += 1;
-      messages.push({id, from_actor: 'bot:editor', body: 'One more.', created: now, refs: {attachments: [A('f-more-' + id, 'audio')]}});
+      messages.push({id, sender_id: 'bot:editor', body: 'One more.', created_at: now, refs: {attachments: [A('f-more-' + id, 'audio')]}});
       const seq = 8 + gen;
-      await stream.fulfill({contentType: 'text/event-stream', body: `id: ${seq}\nevent: messages\ndata: ${JSON.stringify({seq, conversation_id: 'c-editor'})}\n\n`});
+      await stream.fulfill({contentType: 'text/event-stream', body: `id: ${seq}\nevent: messages\ndata: ${JSON.stringify({seq, thread_id: 't-dm-editor'})}\n\n`});
       await page.locator(`[data-message="${id}"] figure.vcard audio`).waitFor();
       const kept = await page.evaluate(() => { const m = document.querySelector('[data-message="m1"] figure.vcard[data-kind="audio"] audio');
         return [m.dataset.mark, m.currentTime, m.paused]; });

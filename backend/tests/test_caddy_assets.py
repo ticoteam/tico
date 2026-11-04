@@ -16,6 +16,7 @@ import time
 import pytest
 
 from backend import caddy_assets as assets
+from backend.company_page import reader_app
 from backend.config import ROOT
 
 
@@ -36,7 +37,8 @@ def test_external_origin_does_not_enable_local_serving_and_marker_is_private_and
     assert hosts(config) == [APP] and config["admin"] == {"disabled": True}
     public = config["apps"]["http"]["servers"]["tico"]
     assert public["routes"][0]["handle"][0] == {
-        "handler": "reverse_proxy", "upstreams": [{"dial": "server:8765"}]}
+        "handler": "reverse_proxy", "upstreams": [{"dial": "server:8765"}],
+        "load_balancing": {"try_duration": "30s", "try_interval": "250ms"}}
     assert "logs" not in public and public["routes"][-1]["handle"][0]["status_code"] == 404
     base = copy.deepcopy(config)
     ready = base["apps"]["http"]["servers"].pop(assets.READY_SERVER)
@@ -49,6 +51,56 @@ def test_external_origin_does_not_enable_local_serving_and_marker_is_private_and
     # stricter asset-host rule must not disable those app-only installations.
     for domain in ("localhost", "127.0.0.1", "10.0.0.12"):
         assert hosts(assets.render(domain)) == [domain]
+
+
+MEET_ENV = {"TICO_MEET_URL": "wss://" + APP, "TICO_MEET_INTERNAL_URL": "http://livekit:7880",
+            "TICO_MEET_API_KEY": "APIacme", "TICO_MEET_API_SECRET": "acme-secret-0123456789abcdef0123456789abcdef"}
+
+
+def test_the_meet_signal_is_proxied_on_the_app_host_at_rtc_and_only_while_calls_are_set_up():
+    server = assets.render(APP, "", "", signal="livekit:7880")["apps"]["http"]["servers"]["tico"]
+    assert server["routes"][0] == {
+        "match": [{"host": [APP], "path": ["/rtc", "/rtc/*"]}],
+        "handle": [{"handler": "reverse_proxy", "upstreams": [{"dial": "livekit:7880"}]}],
+        "terminal": True}
+    plain = assets.render(APP, "", "")["apps"]["http"]["servers"]["tico"]
+    assert "path" not in plain["routes"][0]["match"][0]
+    assert assets._signal_dial({}) is None
+    assert assets._signal_dial(MEET_ENV) == "livekit:7880"
+    assert assets._signal_dial({**MEET_ENV, "TICO_MEET_INTERNAL_URL": "http://bad host:7880"}) is None
+
+
+def test_the_tunnel_sends_the_meet_signal_straight_to_the_media_server_only_for_calls_on_the_app_host(tmp_path):
+    # A tunnel install has no Caddy in front of the media server, so cloudflared's ingress carries /rtc itself: ahead of
+    # the app's own route, and only when calls are set up on the app host. Otherwise browsers cannot connect, and the
+    # install says so in its log.
+    def ingress(**env):
+        run = subprocess.run(["bash", str(ENTRYPOINT), "tunnel-config"], capture_output=True, text=True, check=True,
+                             env={"PATH": os.environ["PATH"], "TICO_TUNNEL_DIR": str(tmp_path), "TICO_DOMAIN": APP,
+                                  **env})
+        return (tmp_path / "ingress.yml").read_text(), run.stderr
+
+    text, stderr = ingress(**MEET_ENV)
+    rtc = "  - hostname: acme.example\n    path: '^/rtc(?:/.*)?$'\n    service: http://livekit:7880\n"
+    assert text == ("ingress:\n" + rtc + "  - hostname: acme.example\n    service: http://hold:8080\n"
+                    "  - service: http_status:404\n")
+    assert stderr == ""
+    for env in ({**MEET_ENV, "TICO_MEET_URL": "wss://meet.acme.example"}, {**MEET_ENV, "TICO_MEET_API_KEY": ""}):
+        text, stderr = ingress(**env)
+        assert "/rtc" not in text and "calls cannot connect over this tunnel" in stderr
+    text, stderr = ingress()
+    assert "/rtc" not in text and stderr == ""
+
+
+def test_both_proxies_hold_a_request_through_a_server_restart_like_the_cell_router_and_never_answer_502():
+    from setup import cell
+    public = assets.render(APP, "https://" + VISUAL, RUNNER, serve_visuals=True)["apps"]["http"]["servers"]["tico"]
+    proxies = [handler for route in public["routes"] for handler in route["handle"] if handler["handler"] == "reverse_proxy"]
+    assert len(proxies) == 2
+    assert all(proxy["load_balancing"] == {"try_duration": cell.HOLD_FOR, "try_interval": cell.HOLD_EVERY} for proxy in proxies)
+    (errors,) = public["errors"]["routes"]
+    assert errors["handle"] == [{"handler": "static_response", "status_code": 503, "headers": {"Retry-After": ["5"]},
+                                 "body": cell.HOLD_BODY}]
 
 
 def test_literal_hosts_cannot_inject_config_or_share_the_visual_security_boundary():
@@ -104,7 +156,7 @@ def test_unwritable_unmounted_directory_is_inert_while_off_but_refuses_explicit_
         for env in ({"TICO_CADDY_DIR": str(directory)},
                     {"TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP, "TICO_CADDY_VISUALS": "0"}):
             assert assets.prepare(env) == {"written": False, "path": None, "generation": None,
-                                           "serve_visuals": False, "reason": None}
+                                           "serve_visuals": False, "reason": None, "serve_reader": False}
         with pytest.raises(RuntimeError, match="^caddy_config_write_failed$"):
             assets.prepare({"TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP, "TICO_CADDY_VISUALS": "1",
                             "TICO_VISUAL_ORIGIN": "https://" + VISUAL})
@@ -191,7 +243,9 @@ def test_pinned_caddy_routes_exact_signed_reads_strips_auth_and_does_not_log_tok
         def log_message(self, *args):
             pass
         def reply(self):
-            calls.append((self.command, self.path, {key.lower(): value for key, value in self.headers.items()}))
+            length = int(self.headers.get("Content-Length") or 0)
+            calls.append((self.command, self.path, {key.lower(): value for key, value in self.headers.items()},
+                          self.rfile.read(length) if length else b""))
             ranged = self.headers.get("Range") == "bytes=2-4"
             body = b"234" if ranged else b"0123456789"
             self.send_response(206 if ranged else 200)
@@ -226,14 +280,15 @@ def test_pinned_caddy_routes_exact_signed_reads_strips_auth_and_does_not_log_tok
         for handler in route["handle"]:
             if handler["handler"] == "reverse_proxy":
                 handler["upstreams"] = [{"dial": "127.0.0.1:" + str(backend.server_port)}]
+                handler["load_balancing"]["try_duration"] = "1s"   # the hold, shorter than this client's timeout
     env = {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "config"), "XDG_DATA_HOME": str(tmp_path / "data")}
     path, logs = tmp_path / "caddy.json", tmp_path / "caddy.log"
     path.write_text(json.dumps(config))
     proc, stopped = None, False
-    def request(host, path="/", method="GET", headers=None, endpoint=port):
+    def request(host, path="/", method="GET", headers=None, endpoint=port, body=None):
         connection = http.client.HTTPConnection("127.0.0.1", endpoint, timeout=2)
         try:
-            connection.request(method, path, headers={"Host": host, **(headers or {})})
+            connection.request(method, path, body=body, headers={"Host": host, **(headers or {})})
             response = connection.getresponse()
             return response.status, {key.lower(): value for key, value in response.getheaders()}, response.read()
         finally:
@@ -281,15 +336,30 @@ def test_pinned_caddy_routes_exact_signed_reads_strips_auth_and_does_not_log_tok
                 assert request(VISUAL, SIGNED_PATH, method)[0] == 404
             assert request("unrelated.example", SIGNED_PATH)[0] == 404
             assert request(VISUAL, assets.READY_PATH)[0] == 404 and len(calls) == before
+            # A restart: a write sent while nothing listens is held, then answered by the server that comes back.
+            address = backend.server_address
             backend.shutdown()
             backend.server_close()
             stopped = True
-            # Failed proxy diagnostics used to include request.uri and Referer.
-            # Require an actual error log while proving both token carriers gone.
-            assert request(VISUAL, SIGNED_PATH, headers={"Referer": "https://" + VISUAL + SIGNED_PATH})[0] == 502
-            wait_for(lambda: '"logger":"http.log.error"' in logs.read_text())
+            held = {}
+            sender = threading.Thread(target=lambda: held.update(answer=request(APP, "/api/v2/tasks", "POST", body=b"held")))
+            sender.start()
+            time.sleep(.4)
+            backend = ThreadingHTTPServer(address, Backend)
+            thread = threading.Thread(target=backend.serve_forever, daemon=True)
+            thread.start()
+            stopped = False
+            sender.join(timeout=3)
+            assert held["answer"][0] == 200 and calls[-1][0] == "POST" and calls[-1][3] == b"held"
+            backend.shutdown()
+            backend.server_close()
+            stopped = True
+            # Down for longer than the hold: a plain 503 with Retry-After, never a 502.
+            # Failed proxy diagnostics used to include request.uri and Referer; neither token carrier is logged.
+            status, headers, body = request(VISUAL, SIGNED_PATH, headers={"Referer": "https://" + VISUAL + SIGNED_PATH})
+            assert (status, headers["retry-after"], body.decode()) == (503, "5", assets.HOLD_BODY)
             error_lines = [json.loads(line) for line in logs.read_text().splitlines() if '"logger":"http.log.error"' in line]
-            assert error_lines and all("request" not in line for line in error_lines)
+            assert all("request" not in line for line in error_lines)
             assert TOKEN not in logs.read_text() and SIGNED_PATH not in logs.read_text()
     finally:
         if proc is not None:
@@ -303,3 +373,95 @@ def test_pinned_caddy_routes_exact_signed_reads_strips_auth_and_does_not_log_tok
             backend.shutdown()
             backend.server_close()
         thread.join(timeout=2)
+
+
+# --- the Company page's reader origin (docs/company-page.md) ----------------------------------------------------------
+
+READER = "reader.acme.example"
+# The router lets through exactly what the reader app answers: its route table, with each `{name}` as a wildcard. A path
+# added to one and not the other is a drift this test catches, since a route the router blocks is dead and one it lets
+# through the app never meant to answer.
+READER_PATHS = sorted({re.sub(r"\{[^}]*\}", "*", path) for _, path in reader_app.ROUTES})
+
+
+def reader_routes(config):
+    return [route for route in config["apps"]["http"]["servers"]["tico"]["routes"]
+            if any(READER in match.get("host", []) for match in route.get("match", []))]
+
+
+def test_the_reader_origin_proxies_only_the_reader_app_paths_keeps_the_cookie_and_leaves_the_app_as_it_was():
+    base = assets.render(APP, runner_hostname=RUNNER)
+    config = assets.render(APP, runner_hostname=RUNNER, reader_origin="https://" + READER, serve_reader=True)
+    (route,) = reader_routes(config)
+    assert set(assets.READER_PATHS) == set(READER_PATHS)
+    assert route["match"] == [{"host": [READER], "path": assets.READER_PATHS,
+                               "expression": "{http.request.orig_uri.path} == {http.request.uri.path}"}]
+    proxy = route["handle"][0]
+    assert proxy["handler"] == "reverse_proxy" and proxy["upstreams"] == [{"dial": "server:8765"}]
+    assert proxy["load_balancing"] == {"try_duration": "30s", "try_interval": "250ms"}
+    assert proxy["headers"] == {"request": {"delete": ["Authorization", "Proxy-Authorization", "Cf-Access-*",
+                                                       "X-Amzn-Oidc-*", "X-Tico-*"]},
+                                "response": {"set": {"Content-Security-Policy": ["frame-ancestors 'none'; base-uri 'none'"]}}}
+    # no /reader/* and no script or style policy here: the page's own CSP meta tag carries those
+    assert not any(path.startswith("/reader") or path.startswith("/api") for path in READER_PATHS)
+    server = config["apps"]["http"]["servers"]["tico"]
+    assert server["routes"][:-2] == base["apps"]["http"]["servers"]["tico"]["routes"][:-1]
+    assert server["routes"].index(route) == len(server["routes"]) - 2
+    assert server["routes"][-1]["handle"] == [{"handler": "static_response", "status_code": 404}]
+    assert hosts(config) == [APP, READER]
+
+
+def test_the_reader_origin_is_off_unless_it_is_asked_for_and_is_never_the_visual_or_app_host():
+    base = assets.render(APP, runner_hostname=RUNNER)
+    assert assets.render(APP, runner_hostname=RUNNER, reader_origin="https://" + READER) == base
+    assert assets.render(APP, runner_hostname=RUNNER, reader_origin="https://" + READER, serve_reader=True) != base
+
+
+@pytest.mark.parametrize("origin", [
+    "https://" + APP, "https://" + RUNNER, "https://" + VISUAL, "http://" + READER, "https://" + READER + ":8443",
+    "https://user@" + READER, "https://" + READER + "/reader", "https://" + READER + "?x", "https://127.0.0.1",
+    "https://" + "r" * 300 + ".example", "https://Reader.Acme.\nExample", "*.acme.example"])
+def test_a_reader_origin_that_is_not_its_own_https_host_is_left_out(origin):
+    config = assets.render(APP, "https://" + VISUAL, RUNNER, serve_visuals=True, reader_origin=origin, serve_reader=True)
+    assert hosts(config) == [APP, VISUAL] and not reader_routes(config)
+
+
+def test_the_reader_origin_stays_off_the_visual_host_even_while_visuals_are_not_served():
+    config = assets.render(APP, "https://" + VISUAL, RUNNER, reader_origin="https://" + VISUAL, serve_reader=True)
+    assert hosts(config) == [APP] and not reader_routes(config)
+
+
+def test_the_reader_origin_needs_the_app_it_proxies_to():
+    *_, reading, reason = assets._configuration("", "", "", False, "https://" + READER, True)
+    assert (reading, reason) == (False, "reader_app_required")
+
+
+def test_prepare_serves_the_reader_origin_and_says_why_it_will_not(tmp_path, caplog):
+    env = {"TICO_CADDY_DIR": str(tmp_path), "TICO_DOMAIN": APP, "TICO_READER_ORIGIN": "https://" + READER,
+           "TICO_RUNNER_URL": "https://" + RUNNER}
+    result = assets.prepare(env)
+    assert result["written"] and result["serve_reader"] and not result["serve_visuals"]
+    assert hosts(json.loads((tmp_path / "caddy.json").read_bytes())) == [APP, READER]
+    assert "reader" not in caplog.text
+    result = assets.prepare({**env, "TICO_READER_ORIGIN": "https://" + APP})
+    assert not result["serve_reader"] and "reader_origin_host_collision" in caplog.text
+    assert hosts(json.loads((tmp_path / "caddy.json").read_bytes())) == [APP]
+    caplog.clear()
+    result = assets.prepare({**env, "TICO_RUNNER_URL": "https://user@" + RUNNER})
+    assert not result["serve_reader"] and "runner_url_invalid" in caplog.text
+    assert hosts(json.loads((tmp_path / "caddy.json").read_bytes())) == [APP]
+
+
+def test_the_pinned_caddy_accepts_the_reader_origin_configuration(tmp_path):
+    # Caddy's own JSON loader and placeholder parser, on the image this install pins (docker/compose.yaml).
+    import shutil
+    from setup import cell
+    if not shutil.which("docker") or subprocess.run(
+            ["docker", "image", "inspect", cell.ROUTER_IMAGE], capture_output=True).returncode:
+        pytest.skip("the pinned caddy image is not on this machine")
+    config = assets.render(APP, "https://" + VISUAL, RUNNER, serve_visuals=True, reader_origin="https://" + READER,
+                           serve_reader=True)
+    (tmp_path / "caddy.json").write_text(json.dumps(config))
+    run = subprocess.run(["docker", "run", "--rm", "-v", f"{tmp_path}:/etc/caddy:ro", cell.ROUTER_IMAGE, "caddy",
+                          "validate", "--config", "/etc/caddy/caddy.json"], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr[-800:]

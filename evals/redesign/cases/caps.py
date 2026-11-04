@@ -183,7 +183,7 @@ def goals_and_spend_follow(f):
     """The bot's goal keeps its owner (goals belong to the bot, not its group), and its limits row counts it against the
     new group's pool (GET /api/v2/usage/limits `pools`, redesign on)."""
     setup(f, "move", "goal", "pool", "goal_after", "limits_after")
-    owner = goal_of(body(f, "goal_after")).get("owner")
+    owner = goal_of(body(f, "goal_after")).get("owner_id")
     pools = ((body(f, "limits_after").get("bots") or {}).get(OPENAI_ID) or {}).get("pools")
     want = "group:" + got(f, "release")
     return owner == OPENAI_REF and pools == [want], f"goal owner {owner}, pools {pools}, want [{want}]"

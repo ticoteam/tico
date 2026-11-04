@@ -38,11 +38,20 @@ services:
       TICO_DOMAIN_ALIASES:
       TICO_PORT: ${TICO_PORT:-8765}
       TICO_PUBLIC_URL:
+      # Link previews in Slack (docs/slack-gateway.md): the server builds the manifest, and its unfurl_domains
+      # list these hosts.
+      TICO_SLACK_UNFURL_HOSTS:
+      TICO_SLACK_OPEN_LABEL:
+      TICO_SLACK_OPEN_URL:
       # Visuals in replies (backend/visuals.py): a separate site of their own; unset = pictures, video and audio only.
       TICO_VISUAL_ORIGIN:
       TICO_VISUAL_SECRET:
       # Local Caddy serving is a separate opt-in; a visual origin may belong to an external CDN.
       TICO_CADDY_VISUALS:
+      # The Company page's own origin (docs/company-page.md), served by the Caddy front door; unset = no page origin.
+      TICO_READER_ORIGIN:
+      # Where the page's public files are written; unset = the data directory's company-page-public folder.
+      TICO_COMPANY_PAGE_DIR:
       TICO_RUNNER_URL:
       TICO_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-tico}
       TICO_SERVER_NETWORK: ${TICO_SERVER_NETWORK:-${COMPOSE_PROJECT_NAME:-tico}_default}
@@ -59,9 +68,10 @@ services:
       TICO_OIDC_LABEL:
       TICO_CORS_ORIGINS:
       TICO_CLIENT_IP_HEADER:
-      # Forwarded client addresses are believed only from loopback (the server's own relay) and the two front doors'
-      # fixed addresses on the edge network below, so each visitor keeps their own rate-limit bucket.
-      TICO_TRUSTED_PROXIES: ${TICO_TRUSTED_PROXIES:-127.0.0.1/32,::1/128,${TICO_CADDY_ADDRESS:-172.30.254.2}/32,${TICO_CLOUDFLARED_ADDRESS:-172.30.254.3}/32}
+      # Forwarded client addresses are believed only from loopback (the server's own relay), the two front doors'
+      # fixed addresses on the edge network below, and its dynamic range, where only this server and the tunnel's hold
+      # live, so each visitor keeps their own rate-limit bucket.
+      TICO_TRUSTED_PROXIES: ${TICO_TRUSTED_PROXIES:-127.0.0.1/32,::1/128,${TICO_CADDY_ADDRESS:-172.30.254.2}/32,${TICO_CLOUDFLARED_ADDRESS:-172.30.254.3}/32,${TICO_EDGE_DYNAMIC_RANGE:-172.30.254.8/29}}
       TICO_GOOGLE_OAUTH_CLIENT_ID:
       TICO_GOOGLE_OAUTH_CLIENT_SECRET:
       TICO_ACCESS_ISSUER:
@@ -112,6 +122,10 @@ services:
       TICO_DECISIONS_MONTHLY_USD:
       TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT:
       TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT:
+      TICO_RULES_MONTHLY_USD:
+      TICO_RULE_CHECK_LEVEL:
+      TICO_RULES_CHECK_DAILY:
+      TICO_RULE_CHECK_CONCURRENCY:
       TICO_DECISIONS_IDEA_TRIAGE:
       TICO_STALE_REVIEW:
       TICO_TOPIC_FRESH:
@@ -140,6 +154,11 @@ services:
       AWS_DEFAULT_REGION:
       TICO_EXPECTED_AWS_ACCOUNT:
       TICO_EXPECTED_AWS_ROLE:
+      # Tico Meet (backend/call_media.py): the LiveKit that the meet profile runs. Calls are off unless all four are set.
+      TICO_MEET_URL:
+      TICO_MEET_INTERNAL_URL: ${TICO_MEET_INTERNAL_URL:-http://livekit:7880}
+      TICO_MEET_API_KEY:
+      TICO_MEET_API_SECRET:
     volumes:
       - tico-data:/data
       - tico-control:/control
@@ -228,6 +247,9 @@ services:
       TICO_SLACK_MAX_RECIPIENTS:
       TICO_SLACK_DIGEST_MINUTES:
       TICO_SLACK_DIGEST_CAP:
+      TICO_SLACK_UNFURL_HOSTS:
+      TICO_SLACK_OPEN_LABEL:
+      TICO_SLACK_OPEN_URL:
       TICO_SLACK_SECRET_ARN:
       TICO_TELEMETRY:
       DO_NOT_TRACK:
@@ -272,15 +294,20 @@ services:
       server: {condition: service_healthy}
 
   # Front door 2: a named Cloudflare tunnel. No ports. It always runs with a small config, written by the
-  # server from TICO_DOMAIN, that routes TICO_DOMAIN to http://server:8765 and answers anything else with a 404;
-  # without it a tunnel that has no route of its own (a reused, locally managed one) answers 503. A tunnel whose
-  # Public Hostname is set in the Cloudflare dashboard keeps that route: cloudflared prefers what Cloudflare holds.
+  # server from TICO_DOMAIN, that routes TICO_DOMAIN to the hold below (http://hold:8080) and answers anything else
+  # with a 404; without it a tunnel that has no route of its own (a reused, locally managed one) answers 503. A tunnel
+  # whose Public Hostname is set in the Cloudflare dashboard keeps that route: cloudflared prefers what Cloudflare holds.
+  # cloudflared reads the file only when it starts. It is ingress.yml: a cloudflared from an older compose file reads
+  # cloudflared.yml, which only an older server writes (straight to server:8765), so the changed command is what moves
+  # an install over. The update that brings it recreates cloudflared once, after the hold answers (the updater starts
+  # with --no-deps, so it starts the hold and checks it first); a hold that does not come up rolls the update back,
+  # and cloudflared keeps the old route.
   cloudflared:
     <<: *hardening
     profiles: [cloudflared]
     cpu_shares: 4096
     image: cloudflare/cloudflared:2026.7.3@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf
-    command: tunnel --no-autoupdate --config /tunnel/cloudflared.yml run
+    command: tunnel --no-autoupdate --config /tunnel/ingress.yml run
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
     networks:
@@ -289,6 +316,91 @@ services:
       - tico-tunnel:/tunnel:ro
     depends_on:
       server: {condition: service_healthy}
+      hold: {condition: service_started}
+
+  # Between the tunnel and the server, since cloudflared cannot retry: while the server restarts (an update, a deploy)
+  # a request waits here and then gets its normal answer, the policy of the Caddy front door (backend/caddy_assets.py)
+  # and the cell router (setup/cell.py). A dial that fails is tried again every 250 ms for up to 30 s; after a
+  # connection opened only a GET is retried, so a write is never sent twice; what still fails is a plain 503 with
+  # Retry-After, never a 502. SSE and other unknown-length answers are flushed as they come (Caddy's own rule); there is
+  # no reload, so a WebSocket stays open as long as both ends keep it. It must be up through the restart it covers, so
+  # it waits for nothing, and its config is written out here rather than in a file: the pinned image and this
+  # definition do not change with a release, so an update never recreates it. It believes forwarded client addresses
+  # only from cloudflared, and the server believes it (TICO_TRUSTED_PROXIES).
+  hold:
+    <<: *hardening
+    profiles: [cloudflared]
+    cpu_shares: 4096
+    image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    entrypoint: ["/bin/sh", "-c", "printf '%s' \"$$TICO_HOLD_CADDYFILE\" > /tmp/Caddyfile && exec caddy run --config /tmp/Caddyfile --adapter caddyfile"]
+    read_only: true
+    tmpfs: [/tmp, /data, /config]
+    cap_add: [NET_BIND_SERVICE]   # caddy's binary carries this as a file capability; exec fails without it
+    environment:
+      TICO_HOLD_CADDYFILE: |
+        {
+          admin off
+          auto_https off
+          persist_config off
+          servers {
+            trusted_proxies static ${TICO_CLOUDFLARED_ADDRESS:-172.30.254.3}/32
+          }
+        }
+        http://:8080 {
+          reverse_proxy server:8765 {
+            lb_try_duration 30s
+            lb_try_interval 250ms
+          }
+          handle_errors {
+            header Retry-After 5
+            respond "Tico is starting. Try again in a few seconds." 503
+          }
+        }
+    networks: [edge]
+
+  # Tico Meet's media server (LiveKit, Apache-2.0), for audio and screen-share calls. Off unless COMPOSE_PROFILES
+  # includes meet; one per cell host. The server calls its API at http://livekit:7880, and Caddy proxies browsers'
+  # signal connection from the app host's /rtc path to that same port (backend/caddy_assets.py), so only the media
+  # and TURN ports are published. The key and secret come from .env and go to this service and the server only. The
+  # image is pinned by digest, so a retagged upstream image cannot change it. It joins edge at a fixed address outside
+  # the dynamic range, so the server does not trust it as a front door, and Caddy and the tunnel reach it there.
+  livekit:
+    <<: *hardening
+    profiles: [meet]
+    image: ${TICO_MEET_IMAGE:-livekit/livekit-server:v1.8.4@sha256:621fd87bd64a0c83e1f2418ee0323eb920d00acdd73e5f79b303c64f6cc532af}
+    read_only: true
+    tmpfs: [/tmp]
+    networks:
+      default: {}
+      edge: {ipv4_address: "${TICO_LIVEKIT_ADDRESS:-172.30.254.4}"}
+    environment:
+      LIVEKIT_KEYS: "${TICO_MEET_API_KEY:-}: ${TICO_MEET_API_SECRET:-}"
+      LIVEKIT_CONFIG: |
+        port: 7880
+        rtc:
+          tcp_port: 7881
+          port_range_start: 50000
+          port_range_end: 50100
+          use_external_ip: true
+        turn:
+          enabled: true
+          domain: ${TICO_MEET_DOMAIN:-meet.invalid}
+          tls_port: 5349
+          udp_port: 3478
+          cert_file: /certs/fullchain.pem
+          key_file: /certs/privkey.pem
+          external_tls: false
+        logging:
+          json: true
+    # TURN over TLS needs a certificate for TICO_MEET_DOMAIN here: fullchain.pem and privkey.pem. Set
+    # TICO_MEET_CERT_DIR to a host folder, or leave it for an empty named volume (the service then will not start).
+    volumes:
+      - ${TICO_MEET_CERT_DIR:-tico-meet-certs}:/certs:ro
+    ports:
+      - "7881:7881"
+      - "3478:3478/udp"
+      - "5349:5349"
+      - "50000-50100:50000-50100/udp"
 
   # Behind the in-app "Update now" button. It holds the Docker socket, which is root on this host; the
   # server runs no bots, so nothing untrusted shares the host. On through COMPOSE_PROFILES and
@@ -315,9 +427,11 @@ services:
       - ./:/project
 
 # The front doors reach the server only over this network, from fixed addresses the server trusts for forwarded
-# client addresses (TICO_TRUSTED_PROXIES above). Nothing else joins it. Containers given no fixed address draw from
-# the upper half of the range, so they never take a front door's. If the subnet clashes with a network on this
-# computer, set TICO_EDGE_SUBNET, TICO_EDGE_DYNAMIC_RANGE, TICO_CADDY_ADDRESS and TICO_CLOUDFLARED_ADDRESS in .env.
+# client addresses (TICO_TRUSTED_PROXIES above). The media server (meet profile) joins at a fixed address the
+# server does not trust. Containers given no fixed address (the server
+# and the hold) draw from the upper half of the range, so they never take a front door's. If the subnet clashes with a
+# network on this computer, set TICO_EDGE_SUBNET, TICO_EDGE_DYNAMIC_RANGE, TICO_CADDY_ADDRESS, TICO_CLOUDFLARED_ADDRESS
+# and TICO_LIVEKIT_ADDRESS in .env.
 networks:
   edge:
     ipam:
@@ -328,6 +442,7 @@ networks:
 volumes:
   tico-data:
   tico-company-file:
+  tico-meet-certs:
   tico-backups:
   tico-control:
   tico-tunnel:

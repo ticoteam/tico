@@ -67,7 +67,7 @@ def test_large_documents_round_trip_and_report_allowance_is_runner_route_only(ap
     small = api.get("/api/v2/bots/ops/memory?include_documents=false", headers=headers("ben-test"))
     assert small.status_code == 200
     assert small.json()["documents"] == {}
-    assert small.json()["document_status"]["memory/learnings.md"]["updated"]
+    assert small.json()["document_status"]["memory/learnings.md"]["updated_at"]
     assert len(small.content) < 10_000
     # Worst-case JSON escaping, both files at the byte ceiling, and all 50 diffs also fit.
     body = {"documents": {path: "\x01" * MAX_DOCUMENT_BYTES
@@ -93,21 +93,21 @@ def test_oversized_documents_keep_the_copy_date_and_clear_when_the_file_fits(api
     machine = runner(api)
     assign(api, machine, "ops")
     post(api, "bots/ops/memory/report", {"documents": {path: "original"}}, machine["token"])
-    saved = history(api, "ben-test")["document_status"][path]["updated"]
+    saved = history(api, "ben-test")["document_status"][path]["updated_at"]
     # The runner sends only the path; the stored date must remain the copy's date.
     post(api, "bots/ops/memory/report", {"oversized": [path]}, machine["token"])
     result = history(api, "ben-test")
     assert result["documents"][path] == "original"
-    assert result["document_status"][path] == {"oversized": True, "updated": saved}
+    assert result["document_status"][path] == {"oversized": True, "updated_at": saved}
     # Server-side enforcement uses bytes too, even for a caller that sends the content.
     over = "é" * (MAX_DOCUMENT_BYTES // 2 + 1)
     assert len(over) < MAX_DOCUMENT_BYTES < len(over.encode("utf-8"))
     post(api, "bots/ops/memory/report", {"documents": {path: over}}, machine["token"])
     assert history(api, "ben-test")["documents"][path] == "original"
-    assert history(api, "ben-test")["document_status"][path] == {"oversized": True, "updated": saved}
+    assert history(api, "ben-test")["document_status"][path] == {"oversized": True, "updated_at": saved}
     # Returning to the previous content also clears the warning without redating the copy.
     post(api, "bots/ops/memory/report", {"documents": {path: "original"}}, machine["token"])
-    assert history(api, "ben-test")["document_status"][path] == {"oversized": False, "updated": saved}
+    assert history(api, "ben-test")["document_status"][path] == {"oversized": False, "updated_at": saved}
     post(api, "bots/ops/memory/report", {"documents": {path: "current"}}, machine["token"])
     result = history(api, "ben-test")
     assert result["documents"][path] == "current"
@@ -120,4 +120,4 @@ def test_oversized_without_a_saved_copy_stays_visible_and_unknown_paths_are_igno
     post(api, "bots/ops/memory/report", {"oversized": ["memory/learnings.md", "secrets/x"]}, machine["token"])
     result = history(api, "ben-test")
     assert result["documents"] == {}
-    assert result["document_status"] == {"memory/learnings.md": {"oversized": True, "updated": ""}}
+    assert result["document_status"] == {"memory/learnings.md": {"oversized": True, "updated_at": ""}}

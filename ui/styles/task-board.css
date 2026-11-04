@@ -6,7 +6,7 @@
 .bfaces{display:inline-flex;align-items:center;gap:2px}
 .bface{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:50%;background:none;cursor:pointer;opacity:.55;transition:opacity var(--dur) var(--ease)}
 .bface:hover,.bface[aria-pressed="true"]{opacity:1}
-.bface[aria-pressed="true"]{box-shadow:0 0 0 2px var(--accent)}
+.bface[aria-pressed="true"]{box-shadow:0 0 0 2px var(--ink)}
 .bfaces:not(:has([aria-pressed="true"])) .bface{opacity:1}
 .bface:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .bfocus svg{flex:none;color:var(--muted)}
@@ -42,9 +42,9 @@ button.bcard-blocked:hover{text-decoration:underline}
 /* carrying a card: it stays dimmed where it was, a copy follows the pointer, a line shows where it lands */
 .board[data-board-drag] .bcard{touch-action:auto}
 .bcard.dragging{opacity:.35}
-.bghost{position:fixed;left:0;top:0;z-index:4000;pointer-events:none;box-shadow:0 10px 28px rgba(0,0,0,.18);border-color:var(--accent);cursor:grabbing}
-.bdrop{flex:none;height:2px;margin:-4px 2px;border-radius:2px;background:var(--accent)}
-.bcol.over{border-color:var(--accent)}
+.bghost{position:fixed;left:0;top:0;z-index:4000;pointer-events:none;box-shadow:0 10px 28px rgba(0,0,0,.18);border-color:var(--ink);cursor:grabbing}
+.bdrop{flex:none;height:2px;margin:-4px 2px;border-radius:2px;background:var(--ink)}
+.bcol.over{border-color:var(--ink)}
 body.board-holding,body.board-holding *{cursor:grabbing!important;user-select:none}
 @media (max-width:760px){
   .bcol.bfold{display:flex;flex:0 0 44px}

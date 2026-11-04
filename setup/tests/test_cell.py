@@ -3,10 +3,12 @@ import fcntl
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,11 @@ SECRET = "oidc-secret-" + "s" * 40
 INVITE = "inv_" + "i" * 30
 BACKUP_KEY, BACKUP_SECRET = "AKIA" + "B" * 16, "bk/" + "x" * 37
 TOKEN = "eyJ" + "t" * 80
+
+
+def utc_in(seconds):
+    """A wake time `seconds` from now, as a request or `sleep --wake-at` writes it (2026-10-30T18:00:00Z)."""
+    return time.strftime(cell.WAKE_AT_FORMAT, time.gmtime(time.time() + seconds))
 
 
 class FakeSystem:
@@ -733,6 +740,103 @@ def test_updating_a_sleeping_company_keeps_it_asleep_and_its_wake_is_guarded(rea
     assert woke["ok"] and woke["version"] == "v1.4.0" and "pending" not in record(ready)
 
 
+def test_sleep_sets_a_timed_wake_and_a_sleep_without_one_clears_it(ready):
+    ready(*add_args(ready))
+    at = utc_in(2 * 86400)
+    assert ready("sleep", "--company", "boatyard", "--wake-at", at)["changed"] is True
+    assert record(ready)["state"] == "sleeping" and record(ready)["wake_at"] == at
+    later = utc_in(3 * 86400)               # already asleep: the time changes, nothing is stopped again
+    assert ready("sleep", "--company", "boatyard", "--wake-at", later)["changed"] is False
+    assert record(ready)["wake_at"] == later and ready.system.ps["boatyard"][0] == "exited"
+    assert ready("sleep", "--company", "boatyard")["changed"] is False
+    assert "wake_at" not in record(ready) and record(ready)["state"] == "sleeping"
+
+
+@pytest.mark.parametrize("how", ["wake", "start", "stop", "add"])
+def test_a_timed_wake_is_cleared_by_any_path_that_starts_or_stops_the_company(ready, how):
+    ready(*add_args(ready))
+    ready("sleep", "--company", "boatyard", "--wake-at", utc_in(86400))
+    assert record(ready)["wake_at"]
+    if how == "add":
+        assert ready(*add_args(ready))["ok"]
+    else:
+        assert ready(how, "--company", "boatyard")["ok"]
+    assert "wake_at" not in record(ready)
+
+
+@pytest.mark.parametrize("value", ["2026-10-30 18:00:00Z", "tomorrow", "2026-10-30T18:00:00", "2026-10-30", "",
+                                   "2099-01-01T00:00:00Z"])
+def test_a_wake_at_that_is_not_utc_or_is_too_far_out_changes_nothing(ready, value):
+    ready(*add_args(ready))
+    answer = ready("sleep", "--company", "boatyard", "--wake-at", value)
+    assert answer["ok"] is False and answer["error"] == "bad_wake_at"
+    assert record(ready)["state"] == "running" and "wake_at" not in record(ready)
+
+
+def test_wake_at_is_stored_in_utc_and_may_be_up_to_31_days_out():
+    assert cell.wake_at_text(None) is None
+    assert cell.wake_at_text("2026-10-30T20:00:00+02:00") == "2026-10-30T18:00:00Z"
+    assert cell.wake_at_text("2026-10-30T18:00:00.250Z") == "2026-10-30T18:00:00Z"
+    assert cell.wake_at_text("2026-10-30T18:00Z") == "2026-10-30T18:00:00Z"
+    later = utc_in(30 * 86400)
+    assert cell.wake_at_text(later) == later
+    for bad in ("2026-10-30T18:00:00", "2026-10-30T18:00:00 Z", "2026-10-30 18:00:00Z", "2026-10-30t18:00:00z",
+                "20261030T180000Z", "2026-10-30T18:00:00+0200", "2026-10-30", 1761847200, ["2026-10-30T18:00:00Z"]):
+        with pytest.raises(cell.CellError) as e:
+            cell.wake_at_text(bad)
+        assert e.value.code == "bad_wake_at"
+
+
+@pytest.mark.parametrize("value", ["", "abc", "-5", "1441", "99999", "1.5", "+30"])
+def test_sleep_minutes_must_be_a_whole_number_from_0_to_1440(ready, value):
+    before = ready(*add_args(ready))
+    answer = ready(*add_args(ready, "boatyard", "--sleep-minutes", value))
+    assert answer["ok"] is False and answer["error"] == "bad_args" and "--sleep-minutes" in answer["detail"]
+    assert "sleep_minutes" not in record(ready) and before["ok"]
+    assert ready("set-sleep", "--company", "boatyard", "--minutes", value)["error"] == "bad_args"
+    assert "sleep_minutes" not in record(ready)
+
+
+@pytest.mark.parametrize("value", [0, 30, 1440])
+def test_add_stores_the_sleep_policy_and_set_sleep_changes_it(ready, value):
+    assert ready(*add_args(ready, "boatyard", "--sleep-minutes", str(value)))["ok"]
+    assert record(ready)["sleep_minutes"] == value
+    assert ready("set-sleep", "--company", "boatyard", "--minutes", "45") == \
+        {"ok": True, "company": "boatyard", "sleep_minutes": 45, "changed": True}
+    assert record(ready)["sleep_minutes"] == 45
+    assert ready("set-sleep", "--company", "boatyard", "--minutes", "45")["changed"] is False
+
+
+def test_set_sleep_zero_is_never_and_default_removes_the_policy(ready):
+    ready(*add_args(ready))
+    assert "sleep_minutes" not in record(ready)                       # no policy until staff set one
+    assert ready("set-sleep", "--company", "boatyard", "--minutes", "default")["changed"] is False
+    assert ready("set-sleep", "--company", "boatyard", "--minutes", "0") == \
+        {"ok": True, "company": "boatyard", "sleep_minutes": 0, "changed": True}
+    assert record(ready)["sleep_minutes"] == 0
+    assert ready("set-sleep", "--company", "boatyard", "--minutes", "default") == \
+        {"ok": True, "company": "boatyard", "sleep_minutes": None, "changed": True}
+    assert "sleep_minutes" not in record(ready)
+
+
+def test_set_sleep_refuses_an_unknown_or_removed_company_and_changes_nothing(ready):
+    assert ready("set-sleep", "--company", "nobody", "--minutes", "30")["error"] == "not_found"
+    ready(*add_args(ready))
+    ready("remove", "--company", "boatyard", "--keep-data")
+    assert ready("set-sleep", "--company", "boatyard", "--minutes", "30")["error"] == "not_found"
+    assert record(ready)["state"] == "removed" and "sleep_minutes" not in record(ready)
+
+
+def test_add_again_keeps_the_saved_sleep_policy_unless_the_flag_is_given(ready):
+    ready(*add_args(ready, "boatyard", "--sleep-minutes", "30"))
+    assert ready(*add_args(ready))["changed"] is False and record(ready)["sleep_minutes"] == 30
+    ready("set-sleep", "--company", "boatyard", "--minutes", "90")
+    assert ready(*add_args(ready))["ok"] and record(ready)["sleep_minutes"] == 90          # set by staff, kept
+    assert ready(*add_args(ready, "boatyard", "--sleep-minutes", "0"))["ok"] and record(ready)["sleep_minutes"] == 0
+    assert ready(*add_args(ready, "boatyard", "--sleep-minutes", "12", "--memory", "3g"))["ok"]
+    assert record(ready)["sleep_minutes"] == 12 and record(ready)["memory"] == "3g"
+
+
 def test_init_installs_the_wake_service(host):
     first = host("init", "--json")
     unit = (host.etc / cell.WAKE_UNIT).read_text()
@@ -758,6 +862,7 @@ def held(root, name):
 
 def record(host, slug="boatyard"):
     return json.loads((host.root / "companies" / slug / "company.json").read_text())
+
 
 
 def test_remove_frees_the_slot_only_after_the_router_dropped_the_route(ready):
@@ -1124,6 +1229,71 @@ def test_without_a_tunnel_the_routes_are_written_but_nothing_restarts(ready):
     ready(*move_args(ready, slug="tidy", domain="tidy.rocks"))
     assert '"tidy.rocks"' in (ready.root / "tunnel" / "cloudflared.yml").read_text()
     assert restarts(ready, 0) == 0
+
+
+# routes: a service on the host that is not a company (the public demo)
+
+DEMO = ["route", "set", "--name", "demo", "--host", "demo.tico.team", "--host", "demo.tico.dev",
+        "--port", "19081", "--port", "19082", "--noindex", "--json"]
+
+
+def test_a_route_goes_to_its_first_healthy_port_and_is_never_indexed():
+    route = {"name": "demo", "hosts": ["demo.tico.team", "demo.tico.dev"], "ports": [19081, 19082], "noindex": True}
+    plain = cell.router_config([{"domain": "a.tico.team", "port": 20000}])
+    text = cell.router_config([{"domain": "a.tico.team", "port": 20000}], [route])
+    block = text[text.index("http://demo.tico.team:8080, http://demo.tico.dev:8080 {"):text.index("http://:8080 {")]
+    assert text.replace(block, "") == plain                       # the companies' blocks are untouched
+    assert "reverse_proxy 127.0.0.1:19081 127.0.0.1:19082 {" in block and "lb_policy first" in block
+    assert "health_uri /healthz" in block and "lb_try_duration 30s" in block
+    assert block.count('header X-Robots-Tag "noindex, nofollow"') == 2          # answers and the hold's 503
+    assert 'respond "User-agent: *\nDisallow: /\n" 200' in block
+    one = cell.router_config([], [{**route, "ports": [19081], "noindex": False}])
+    assert "lb_policy" not in one and "X-Robots-Tag" not in one and "robots.txt" not in one
+
+
+def test_route_set_is_kept_by_every_later_router_write_and_remove_drops_it(tunneled):
+    routes = tunneled.root / "tunnel" / "cloudflared.yml"
+    plain = routes.read_text()
+    n = len(tunneled.system.calls)
+    answer = tunneled(*DEMO[:-1], "--router-only", "--json")
+    assert answer == {"ok": True, "route": "demo", "changed": True, "router": True, "tunnel": False,
+                      "tunnel_pending": True}
+    assert routes.read_text() == plain and restarts(tunneled, n) == 0     # --router-only: no tunnel restart
+    caddy = tunneled.root / "router" / "Caddyfile"
+    assert "http://demo.tico.team:8080, http://demo.tico.dev:8080" in caddy.read_text()
+    tunneled(*add_args(tunneled, "alpha"))                                 # a company's add keeps the route
+    assert "demo.tico.dev" in caddy.read_text() and '"demo.tico.dev"' in routes.read_text()
+    assert tunneled("route", "list", "--json")["routes"][0]["ports"] == [19081, 19082]
+    n = len(tunneled.system.calls)
+    assert tunneled(*DEMO)["changed"] is False and restarts(tunneled, n) == 0
+    answer = tunneled("route", "remove", "--name", "demo", "--json")
+    assert answer["changed"] and answer["tunnel"] and restarts(tunneled, n) == 1
+    assert "demo.tico" not in caddy.read_text() and routes.read_text() == plain
+
+
+def test_route_and_company_hosts_never_overlap(ready):
+    ready(*add_args(ready, "alpha"))
+    assert ready("route", "set", "--name", "demo", "--host", "alpha.tico.team", "--port", "19081",
+                 "--json")["error"] == "domain_taken"
+    assert ready(*DEMO)["ok"]
+    args = add_args(ready, "demo")
+    assert ready(*args)["error"] == "domain_taken"                         # demo.tico.team is the route's
+
+
+def test_if_router_current_refuses_a_router_this_checkout_did_not_write(ready):
+    ready(*add_args(ready, "alpha"))
+    assert ready(*DEMO, "--if-router-current")["ok"]                     # this checkout's file, with or without routes
+    path = ready.root / "router" / "Caddyfile"
+    newer = path.read_text() + "# a newer core's block\n"
+    path.write_text(newer)
+    assert ready(*DEMO, "--if-router-current")["error"] == "router_changed"
+    assert path.read_text() == newer
+
+
+@pytest.mark.parametrize("extra", [["--port", "8080"], ["--port", "20001"], ["--port", "80"], []])
+def test_route_ports_stay_clear_of_the_cells_own(ready, extra):
+    answer = ready("route", "set", "--name", "demo", "--host", "demo.tico.team", *extra, "--json")
+    assert answer["error"] == "bad_args"
 
 
 # carried settings
@@ -1525,6 +1695,276 @@ def test_staff_holding_the_company_gets_its_request_a_409(ready):
     assert ask(svc)[0] == 202 and status(svc)["state"] == "healthy"
 
 
+def test_a_sleep_request_sleeps_the_company_with_its_wake_at(ready):
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    at = utc_in(2 * 86400)
+    assert ask(svc, path="/sleep", body={"wake_at": at, "reason": "idle"}) == \
+        (202, {"state": "sleeping", "wake_at": at})
+    assert record(ready)["state"] == "sleeping" and record(ready)["wake_at"] == at
+    assert ready.system.ps["boatyard"][0] == "exited" and "reverse_proxy 127.0.0.1:8082" in caddyfile(ready)
+
+
+@pytest.mark.parametrize("body", [{"wake_at": None}, {}])
+def test_a_sleep_without_a_time_is_an_ordinary_sleep(ready, body):
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    assert ask(svc, path="/sleep", body=body) == (202, {"state": "sleeping", "wake_at": None})
+    assert record(ready)["state"] == "sleeping" and "wake_at" not in record(ready)
+    assert "reverse_proxy 127.0.0.1:8082" in caddyfile(ready)
+
+
+def test_the_answer_gets_back_before_the_company_stops(ready):
+    ready(*add_args(ready))
+    svc = service(ready, lead=0.5)
+    assert svc.post("boatyard", 0, "/sleep", b'{"wake_at": null}') == (202, {"state": "sleeping", "wake_at": None})
+    assert record(ready)["state"] == "running"              # the work waits its lead
+    for worker in list(svc.workers):
+        worker.join(10)
+    assert record(ready)["state"] == "sleeping" and ready.system.ps["boatyard"][0] == "exited"
+
+
+def test_a_sleep_body_never_chooses_the_company(ready):
+    ready(*add_args(ready, "alpha"))
+    ready(*add_args(ready, "bravo"))
+    svc = service(ready, lead=0)
+    body = {"wake_at": None, "company": "bravo", "slug": "bravo", "reason": "idle"}
+    assert ask(svc, "alpha", path="/sleep", body=body) == (202, {"state": "sleeping", "wake_at": None})
+    assert record(ready, "alpha")["state"] == "sleeping" and record(ready, "bravo")["state"] == "running"
+
+
+@pytest.mark.parametrize("auth", ["", "Bearer", "Bearer wrong", "Basic abc"])
+def test_a_sleep_with_a_missing_or_wrong_token_is_refused_as_update_is(ready, auth):
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    assert ask(svc, path="/sleep", body={"wake_at": None}, auth=auth) == (401, {"error": "unauthorized"})
+    assert record(ready)["state"] == "running" and ready.system.ps["boatyard"][0] == "running"
+
+
+@pytest.mark.parametrize("wake_at", ["2026-10-30 18:00:00Z", "tomorrow", "2026-10-30T18:00:00", 12345,
+                                     "2099-01-01T00:00:00Z"])
+def test_a_bad_wake_at_is_422_and_changes_nothing(ready, wake_at):
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    assert ask(svc, path="/sleep", body={"wake_at": wake_at}) == (422, {"error": "bad_wake_at"})
+    assert record(ready)["state"] == "running" and ready.system.ps["boatyard"][0] == "running"
+
+
+@pytest.mark.parametrize("body", [b"not json", b"[]", b'"x"'])
+def test_a_body_that_is_not_a_json_object_is_422(ready, body):
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    assert svc.post("boatyard", 0, "/sleep", body) == (422, {"error": "bad_body"})
+    assert record(ready)["state"] == "running"
+
+
+def test_a_sleep_while_an_update_runs_or_staff_hold_the_company_is_busy(ready):
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    svc.set("boatyard", state="pulling")
+    assert ask(svc, path="/sleep", body={"wake_at": None}) == (409, {"error": "busy"})
+    svc.set("boatyard", state="idle")
+    fd = os.open(ready.root / "locks" / "company-boatyard.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)          # `cell update` (or stop, start...) run by staff, under way
+    try:
+        assert ask(svc, path="/sleep", body={"wake_at": None}) == (409, {"error": "busy"})
+    finally:
+        os.close(fd)
+    assert record(ready)["state"] == "running" and status(svc)["state"] == "idle"
+    assert ask(svc, path="/sleep", body={"wake_at": None})[0] == 202 and record(ready)["state"] == "sleeping"
+
+
+def held_sleep(svc):
+    """The service with each sleep's work held before its lead ends: (release, the sleep threads started so far)."""
+    import threading
+    lead, real = threading.Event(), svc.sleep_work
+    svc.sleep_work = lambda slug, mine: (lead.wait(10), real(slug, mine))
+    return lead, lambda: [w for w in list(svc.workers) if w.name.startswith("sleep-")]
+
+
+def test_an_update_admitted_during_a_sleeps_lead_cancels_the_sleep(ready):
+    import threading
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    lead, sleepers = held_sleep(svc)
+    checked, real = threading.Event(), ready.system.release_published
+    ready.system.release_published = lambda tag: checked.wait(10) and real(tag)     # the update held at its check
+    assert svc.post("boatyard", 0, "/sleep", b'{"wake_at": null}') == (202, {"state": "sleeping", "wake_at": None})
+    held = sleepers()
+    assert svc.post("boatyard", 0, "/update", b'{"version": "v1.3.0"}')[0] == 202 and svc.sleeps == {}
+    lead.set()                                                  # the sleep's lead ends while the update is under way
+    for worker in held:
+        worker.join(10)
+    assert record(ready)["state"] == "running" and ready.system.ps["boatyard"][0] == "running"
+    assert status(svc)["state"] == "pulling" and svc.sleeps == {}
+    checked.set()
+    for worker in list(svc.workers):
+        worker.join(10)
+    assert status(svc)["state"] == "healthy" and record(ready)["version"] == "v1.3.0"
+    assert record(ready)["state"] == "running" and ready.system.ps["boatyard"][0] == "running"
+
+
+def test_an_update_while_a_sleep_stops_the_server_is_refused_until_it_is_done(ready):
+    import threading
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    stopping, go, real = threading.Event(), threading.Event(), ready.system.run
+
+    def run(argv, **kw):
+        if "--project-name" in argv and "stop" in argv:
+            stopping.set()
+            go.wait(10)
+        return real(argv, **kw)
+    ready.system.run = run
+    assert svc.post("boatyard", 0, "/sleep", b'{"wake_at": null}')[0] == 202
+    assert stopping.wait(10)                                    # committed: the server is stopping
+    code, body = svc.post("boatyard", 0, "/update", b'{"version": "v1.3.0"}')
+    assert code == 409 and "going to sleep" in body["message"] and status(svc)["state"] == "idle"
+    assert svc.post("boatyard", 0, "/sleep", b'{"wake_at": null}') == (409, {"error": "busy"})
+    go.set()
+    for worker in list(svc.workers):
+        worker.join(10)
+    assert record(ready)["state"] == "sleeping" and svc.sleeps == {}
+    assert ask(svc)[0] == 202 and status(svc)["state"] == "healthy"   # the reservation is gone: updated, still asleep
+    assert record(ready)["version"] == "v1.3.0" and record(ready)["state"] == "sleeping"
+
+
+def test_a_later_sleep_replaces_a_pending_one_and_its_wake_at_wins(ready):
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    lead, sleepers = held_sleep(svc)
+    first, second = utc_in(86400), utc_in(2 * 86400)
+    assert svc.post("boatyard", 0, "/sleep", json.dumps({"wake_at": first}).encode())[0] == 202
+    assert svc.post("boatyard", 0, "/sleep", json.dumps({"wake_at": second}).encode())[0] == 202
+    held = sleepers()
+    lead.set()
+    for worker in held:
+        worker.join(10)
+    assert record(ready)["state"] == "sleeping" and record(ready)["wake_at"] == second and svc.sleeps == {}
+    assert sum(1 for c in ready.system.calls if "--project-name" in c and "stop" in c) == 1
+
+
+def test_a_sleep_that_fails_releases_its_reservation(ready):
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    ready.system.fail["stop server"] = Result(1, "", "cannot stop")
+    assert ask(svc, path="/sleep", body={"wake_at": None})[0] == 202
+    assert record(ready)["state"] == "running" and svc.sleeps == {}
+    ready.system.fail.clear()
+    assert ask(svc)[0] == 202 and status(svc)["state"] == "healthy"
+
+
+def test_sleep_over_http_is_gated_and_sized_as_update_is(ready):
+    import http.client
+    ready(*add_args(ready))
+    svc = service(ready, lead=0, bind=lambda index: ("127.0.0.1", 0), subnet=lambda index: "127.0.0.0/8")
+    listener = U.Listener(svc, "boatyard", 0, svc.bind(0))
+    try:
+        port = listener.server_address[1]
+
+        def call(body, auth="Bearer " + token(ready)):
+            c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            c.request("POST", "/sleep", body=body, headers={"Authorization": auth})
+            r = c.getresponse()
+            out = (r.status, json.loads(r.read()))
+            c.close()
+            return out
+        assert call(b'{"wake_at": null}', auth="Bearer nope") == (401, {"error": "unauthorized"})
+        assert call(b"x" * (U.MAX_BODY + 1))[0] == 413
+        assert call(b'{"wake_at": "soon"}') == (422, {"error": "bad_wake_at"})
+        assert call(b'{"wake_at": null}') == (202, {"state": "sleeping", "wake_at": None})
+        for worker in list(svc.workers):
+            worker.join(10)
+        assert record(ready)["state"] == "sleeping"
+    finally:
+        listener.shutdown()
+        listener.server_close()
+    strict = service(ready, lead=0, bind=lambda index: ("127.0.0.1", 0))     # the real subnet: loopback is not boatyard
+    listener = U.Listener(strict, "boatyard", 0, strict.bind(0))
+    try:
+        c = http.client.HTTPConnection("127.0.0.1", listener.server_address[1], timeout=5)
+        c.request("POST", "/sleep", body=b'{"wake_at": null}', headers={"Authorization": "Bearer " + token(ready)})
+        assert c.getresponse().status == 403
+        c.close()
+    finally:
+        listener.shutdown()
+        listener.server_close()
+
+
+def test_get_sleep_answers_the_company_policy(ready):
+    ready(*add_args(ready, "boatyard"))
+    ready(*add_args(ready, "alpha"))
+    svc = service(ready)
+    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": None})            # no policy yet
+    ready("set-sleep", "--company", "boatyard", "--minutes", "30")
+    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": 30})
+    ready("set-sleep", "--company", "boatyard", "--minutes", "0")
+    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": 0})               # never sleeps
+    ready("set-sleep", "--company", "boatyard", "--minutes", "default")
+    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": None})
+    ready("set-sleep", "--company", "alpha", "--minutes", "1440")
+    assert ask(svc, "alpha", index=1, path="/sleep", method="GET") == (200, {"minutes": 1440})
+    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": None})            # its own record only
+
+
+@pytest.mark.parametrize("value", [5000, -1, "30", True, None])
+def test_get_sleep_answers_null_for_a_record_that_holds_no_valid_policy(ready, value):
+    ready(*add_args(ready))
+    path = ready.root / "companies" / "boatyard" / "company.json"
+    c = json.loads(path.read_text())
+    c["sleep_minutes"] = value
+    path.write_text(json.dumps(c))
+    assert status_of(service(ready), "/sleep") == {"minutes": None}
+
+
+def status_of(svc, path):
+    return svc.get("boatyard", path)[1]
+
+
+@pytest.mark.parametrize("auth", ["", "Bearer", "Bearer wrong", "Basic abc"])
+def test_get_sleep_is_gated_as_status_is(ready, auth):
+    ready(*add_args(ready))
+    ready("set-sleep", "--company", "boatyard", "--minutes", "30")
+    svc = service(ready)
+    assert ask(svc, path="/sleep", method="GET", auth=auth) == (401, {"error": "unauthorized"})
+    assert ask(svc, path="/status", method="GET", auth=auth) == (401, {"error": "unauthorized"})
+    mine = "Bearer " + token(ready)
+    assert svc.gate("boatyard", 0, peer(1), mine)[0] == 403          # another company's container
+    assert svc.gate("boatyard", 1, peer(1), mine)[0] == 403          # a listener whose slot is not boatyard's
+    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": 30})
+
+
+def test_get_sleep_over_http_is_gated_as_status_is(ready):
+    import http.client
+    ready(*add_args(ready))
+    ready("set-sleep", "--company", "boatyard", "--minutes", "30")
+    svc = service(ready, bind=lambda index: ("127.0.0.1", 0), subnet=lambda index: "127.0.0.0/8")
+    listener = U.Listener(svc, "boatyard", 0, svc.bind(0))
+    try:
+        def call(auth):
+            c = http.client.HTTPConnection("127.0.0.1", listener.server_address[1], timeout=5)
+            c.request("GET", "/sleep", headers={"Authorization": auth})
+            r = c.getresponse()
+            out = (r.status, json.loads(r.read()))
+            c.close()
+            return out
+        assert call("Bearer nope") == (401, {"error": "unauthorized"})
+        assert call("Bearer " + token(ready)) == (200, {"minutes": 30})
+    finally:
+        listener.shutdown()
+        listener.server_close()
+    strict = service(ready, bind=lambda index: ("127.0.0.1", 0))     # the real subnet: loopback is not boatyard
+    listener = U.Listener(strict, "boatyard", 0, strict.bind(0))
+    try:
+        c = http.client.HTTPConnection("127.0.0.1", listener.server_address[1], timeout=5)
+        c.request("GET", "/sleep", headers={"Authorization": "Bearer " + token(ready)})
+        assert c.getresponse().status == 403
+        c.close()
+    finally:
+        listener.shutdown()
+        listener.server_close()
+
+
 def load_sidecar(monkeypatch, tmp_path):
     import importlib.util
     for key, value in {"TICO_UPDATER_MODE": "", "TICO_PROJECT_DIR": str(tmp_path), "TICO_UPDATER_SELF": "never",
@@ -1886,3 +2326,258 @@ def test_latest_beyond_the_core_is_checked_as_published_before_any_install(ready
 def test_the_cores_release_is_its_folders_name_when_it_has_no_installer_file():
     assert U.host_core(Path("/opt/tico-cell/core-v1.4.0")) == "v1.4.0"
     assert U.host_core(Path("/opt/tico-cell/core")) == ""      # the pre-versioned folder: every newer release gets its own
+
+
+# --- company page hosts (docs/company-page.md) -------------------------------------------------------------------
+
+def page_company(state="running", slug="acme", page="acme.tico.page", port=20000):
+    return {"slug": slug, "domain": f"{slug}.tico.team", "port": port, "page_host": page, "state": state}
+
+
+def site_of(text, host):
+    """One site block of a rendered Caddyfile: from its address line to the next block's."""
+    start = text.index(f"http://{host}:{cell.ROUTER_PORT} {{")
+    end = text.find(f"\nhttp://", start + 1)
+    return text[start:end if end != -1 else len(text)]
+
+
+def test_a_page_host_serves_the_public_paths_from_its_own_folder_and_nothing_else():
+    site = site_of(cell.router_config([page_company()]), "acme.tico.page")
+    assert "request_header -Authorization" in site
+    assert f'request_header Cookie "{cell.APP_COOKIES_RE}" ""' in site
+    assert "\t\tpath /\n" in site and "\t\tpath /data.json /feed.xml\n" in site and "\t\tpath /assets/*\n" in site
+    assert "try_files index.html" in site and "try_files {path}" in site
+    assert "root * /pages/acme/current" in site and "file_server" in site
+    assert 'header Cache-Control "public, max-age=60"' in site and "header X-Content-Type-Options nosniff" in site
+    # the file matchers (/, the two files, the assets): GET and HEAD only, no reader cookie, no query string
+    assert site.count("\t\tmethod GET HEAD\n") == 3 and site.count(f"not header Cookie {cell.READER_COOKIE_GLOB}") == 3
+    assert site.count("expression \"{http.request.uri.query} == ''\"") == 3
+    # everything else is the company's own proxy, with the same hold and close delay as its domain
+    assert site.rindex("handle {") > site.index("@page_files")
+    assert "reverse_proxy 127.0.0.1:20000 {" in site and "stream_close_delay 5m" in site
+    assert site.count("lb_try_duration 30s") == 1 and "handle_errors" in site
+
+
+def test_a_sleeping_page_host_serves_files_and_wakes_the_company_for_the_rest():
+    site = site_of(cell.router_config([page_company("sleeping")]), "acme.tico.page")
+    assert "file_server" in site and "root * /pages/acme/current" in site
+    assert f"reverse_proxy {cell.WAKE_ADDRESS}:{cell.WAKE_PORT} {{" in site
+    assert f"header_up {cell.WAKE_HEADER} acme" in site and "flush_interval -1" in site
+    assert "127.0.0.1:20000" not in site
+
+
+def test_a_stopped_page_host_is_a_503_at_once_and_its_folder_is_not_served():
+    site = site_of(cell.router_config([page_company("stopped")]), "acme.tico.page")
+    assert site.count("respond \"This Tico company is stopped.\" 503") == 1
+    assert "file_server" not in site and "reverse_proxy" not in site and "root" not in site
+
+
+def test_no_page_host_can_read_another_companys_folder():
+    text = cell.router_config([page_company(), page_company(slug="beta", page="beta.tico.page", port=20001)])
+    for slug in ("acme", "beta"):
+        assert set(re.findall(r"/pages/[^/\s]+", site_of(text, f"{slug}.tico.page"))) == {f"/pages/{slug}"}
+
+
+def test_a_page_host_is_one_of_the_companys_hosts_for_the_wake_service_and_the_tunnel():
+    assert cell.hosts_of(page_company()) == ["acme.tico.team", "acme.tico.page"]
+    assert cell.tunnel_hosts("tico.team", [page_company()]) == ["acme.tico.page"]
+
+
+def test_the_router_mounts_the_page_folders_read_only_and_nothing_else_of_the_cell():
+    text = cell.edge_compose(Path("/opt/cell"), tunnel=False)
+    assert "      - /opt/cell/pages:/pages:ro" in text
+    assert "/opt/cell/companies" not in text
+
+
+@pytest.mark.parametrize("bad", ["acme.tico.team", "tico.team", "10.0.0.1", "*.tico.page", "https://acme.tico.page",
+                                 "localhost", "acme_page.tico.page"])
+def test_a_page_host_must_be_a_plain_hostname_that_is_not_the_companys_own_or_the_cells(ready, bad):
+    assert ready(*add_args(ready, "acme", "--page-host", bad))["error"] == "bad_domain"
+    assert not (ready.root / "companies" / "acme" / "company.json").exists()
+    assert not (ready.root / "pages" / "acme").exists()
+
+
+def test_a_page_host_another_company_uses_is_refused(ready):
+    ready(*add_args(ready, "alpha", "--page-host", "alpha.tico.page"))
+    assert ready(*add_args(ready, "bravo", "--page-host", "alpha.tico.page"))["error"] == "domain_taken"
+    assert ready(*add_args(ready, "bravo", "--page-host", "alpha.tico.team"))["error"] == "domain_taken"
+    assert ready(*add_args(ready, "bravo", "--domain", "bravo.tico.team", "--alias", "alpha.tico.page"))["error"] == "domain_taken"
+
+
+def test_add_with_a_page_host_makes_its_folder_and_names_it_to_the_server(ready):
+    assert ready(*add_args(ready, "acme", "--page-host", "acme.tico.page"))["ok"]
+    folder = ready.root / "pages" / "acme"
+    assert stat.S_IMODE(folder.stat().st_mode) == 0o755              # the router reads it as nobody
+    assert (str(folder), cell.SERVER_UID, cell.SERVER_UID) in ready.system.chowns
+    assert record(ready, "acme")["page_host"] == "acme.tico.page"
+    env = (ready.root / "companies" / "acme" / ".env").read_text()
+    assert "TICO_READER_ORIGIN=https://acme.tico.page\n" in env and "TICO_COMPANY_PAGE_DIR=/company-page-public\n" in env
+    override = (ready.root / "companies" / "acme" / "compose.cell.yaml").read_text()
+    assert f"      - {folder}:/company-page-public\n" in override and "TICO_READER_ORIGIN: https://acme.tico.page" in override
+    assert "acme.tico.page" in caddyfile(ready) and "/pages/acme/current" in caddyfile(ready)
+
+
+def test_a_company_without_a_page_host_has_no_folder_no_page_settings_and_no_page_route(ready):
+    ready(*add_args(ready, "acme"))
+    assert not (ready.root / "pages" / "acme").exists()
+    assert "TICO_READER_ORIGIN" not in (ready.root / "companies" / "acme" / ".env").read_text()
+    assert "/company-page-public" not in (ready.root / "companies" / "acme" / "compose.cell.yaml").read_text()
+    assert "/pages/" not in caddyfile(ready)
+
+
+def test_adding_again_keeps_the_page_host_unless_the_flag_is_given(ready):
+    ready(*add_args(ready, "acme", "--page-host", "acme.tico.page"))
+    assert ready(*add_args(ready, "acme"))["ok"]
+    assert record(ready, "acme")["page_host"] == "acme.tico.page"
+    assert "TICO_READER_ORIGIN=https://acme.tico.page" in (ready.root / "companies" / "acme" / ".env").read_text()
+
+
+def test_set_page_host_turns_the_page_on_for_a_running_company_and_keeps_its_other_settings(ready):
+    ready(*add_args(ready, "acme"))
+    env_dir = ready.root / "companies" / "acme"
+    before = (env_dir / ".env").read_text()
+    answer = ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")
+    assert answer["ok"] and answer["changed"] and answer["page_host"] == "acme.tico.page"
+    assert record(ready, "acme")["page_host"] == "acme.tico.page"
+    env = (env_dir / ".env").read_text()
+    assert "TICO_READER_ORIGIN=https://acme.tico.page\n" in env and "TICO_COMPANY_PAGE_DIR=/company-page-public\n" in env
+    kept = [line for line in before.splitlines() if not line.startswith("#")]
+    assert all(line in env.splitlines() for line in kept)            # sign-in, backups and the rest are untouched
+    folder = ready.root / "pages" / "acme"
+    assert stat.S_IMODE(folder.stat().st_mode) == 0o755
+    assert f"      - {folder}:/company-page-public\n" in (env_dir / "compose.cell.yaml").read_text()
+    assert "acme.tico.page" in caddyfile(ready) and "/pages/acme/current" in caddyfile(ready)
+
+
+def test_set_page_host_again_is_a_no_op_and_an_empty_host_clears_it(ready):
+    ready(*add_args(ready, "acme"))
+    ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")
+    assert ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")["changed"] is False
+    assert ready("set-page-host", "--company", "acme", "--host", "")["changed"]
+    assert "page_host" not in record(ready, "acme")
+    assert "TICO_READER_ORIGIN" not in (ready.root / "companies" / "acme" / ".env").read_text()
+    assert "/pages/" not in caddyfile(ready) and (ready.root / "pages" / "acme").exists()
+
+
+def test_set_page_host_that_failed_to_start_is_redone_in_full_when_given_again(ready, monkeypatch):
+    ready(*add_args(ready, "acme"))
+    real_up = cell.Cell.up
+
+    def broken(self, *a, **k):
+        raise cell.CellError("compose_failed", "up failed")
+    monkeypatch.setattr(cell.Cell, "up", broken)
+    assert ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")["ok"] is False
+    assert record(ready, "acme")["page_pending"] is True
+    monkeypatch.setattr(cell.Cell, "up", real_up)
+    again = ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")
+    assert again["ok"] and again["changed"]
+    assert "page_pending" not in record(ready, "acme")
+    assert "acme.tico.page" in caddyfile(ready)
+
+
+def test_a_page_host_that_is_the_companys_visual_or_runner_host_is_refused(ready):
+    ready(*add_args(ready, "acme"))
+    env = ready.root / "companies" / "acme" / ".env"
+    env.write_text(env.read_text() + "TICO_VISUAL_ORIGIN=https://vis.acme.example\nTICO_RUNNER_URL=https://run.acme.example/x\nTICO_PUBLIC_URL=//app.acme.example\n")
+    for taken in ("vis.acme.example", "run.acme.example", "app.acme.example"):
+        assert ready("set-page-host", "--company", "acme", "--host", taken)["error"] == "bad_domain"
+    assert "page_host" not in record(ready, "acme")
+
+
+def test_set_page_host_refuses_a_host_that_is_taken_or_the_companys_own(ready):
+    ready(*add_args(ready, "alpha", "--page-host", "alpha.tico.page"))
+    ready(*add_args(ready, "bravo"))
+    assert ready("set-page-host", "--company", "bravo", "--host", "alpha.tico.page")["error"] == "domain_taken"
+    assert ready("set-page-host", "--company", "bravo", "--host", "bravo.tico.team")["error"] == "bad_domain"
+    assert ready("set-page-host", "--company", "bravo", "--host", "tico.team")["error"] == "bad_domain"
+    assert ready("set-page-host", "--company", "nobody", "--host", "nobody.tico.page")["error"] == "not_found"
+    assert "page_host" not in record(ready, "bravo")
+
+
+def test_clearing_the_page_host_drops_its_route_and_keeps_the_folder(ready):
+    ready(*add_args(ready, "acme", "--page-host", "acme.tico.page"))
+    (ready.root / "pages" / "acme" / "release.txt").write_text("kept")
+    assert ready(*add_args(ready, "acme", "--page-host", ""))["ok"]
+    assert "page_host" not in record(ready, "acme")
+    assert "acme.tico.page" not in caddyfile(ready) and "/pages/" not in caddyfile(ready)
+    assert "TICO_READER_ORIGIN" not in (ready.root / "companies" / "acme" / ".env").read_text()
+    assert "/company-page-public" not in (ready.root / "companies" / "acme" / "compose.cell.yaml").read_text()
+    assert (ready.root / "pages" / "acme" / "release.txt").read_text() == "kept"
+
+
+def test_a_page_host_in_a_sleeping_or_stopped_company_keeps_its_folder_and_route_state(ready):
+    ready(*add_args(ready, "acme", "--page-host", "acme.tico.page"))
+    ready("sleep", "--company", "acme")
+    assert "header_up X-Tico-Cell-Wake acme" in caddyfile(ready)
+    ready("stop", "--company", "acme")
+    assert 'respond "This Tico company is stopped." 503' in site_of(caddyfile(ready), "acme.tico.page")
+    assert (ready.root / "pages" / "acme").is_dir()
+
+
+def test_list_and_status_show_the_page_host_only_when_there_is_one(ready):
+    ready(*add_args(ready, "acme", "--page-host", "acme.tico.page"))
+    ready(*add_args(ready, "bravo"))
+    listed = {c["company"]: c for c in ready("list")["companies"]}
+    assert listed["acme"]["page_host"] == "acme.tico.page" and "page_host" not in listed["bravo"]
+    status = ready("status", "--company", "acme", "--json")
+    assert status["page_host"] == "acme.tico.page" and status["page_url"] == "https://acme.tico.page"
+    assert "page_url" not in ready("status", "--company", "bravo", "--json")
+
+
+@pytest.mark.parametrize("keep", [False, True])
+def test_remove_deletes_the_page_folder_unless_data_is_kept(ready, keep):
+    ready(*add_args(ready, "acme", "--page-host", "acme.tico.page"))
+    assert ready("remove", "--company", "acme", *(["--keep-data"] if keep else []))["removed"] is True
+    assert (ready.root / "pages" / "acme").exists() is keep
+    assert "acme.tico.page" not in caddyfile(ready)
+
+
+def test_a_removal_the_router_refuses_keeps_the_page_folder_it_still_serves(ready):
+    ready(*add_args(ready, "acme", "--page-host", "acme.tico.page"))
+    ready.system.fail["caddy reload"] = Result(1, "", "Error: adapting config")
+    assert ready("remove", "--company", "acme")["error"] == "router_failed"
+    assert (ready.root / "pages" / "acme").is_dir()
+
+
+def test_init_page_domain_is_one_wildcard_route_for_every_page_host(tunneled):
+    routes = tunneled.root / "tunnel" / "cloudflared.yml"
+    assert tunneled("init", "--page-domain", "tico.page", "--json")["page_domain"] == "tico.page"
+    text = routes.read_text()
+    assert text.index('"*.tico.team"') < text.index('"*.tico.page"') < text.index("http_status:404")
+    assert tunneled(*add_args(tunneled, "acme", "--page-host", "acme.tico.page"))["ok"]
+    assert '"acme.tico.page"' not in routes.read_text()              # under the page wildcard: no route of its own
+    assert tunneled(*add_args(tunneled, "beta", "--page-host", "beta.example.com"))["ok"]
+    assert '"beta.example.com"' in routes.read_text()                # outside it: a route of its own
+    assert tunneled("init", "--json")["page_domain"] == "tico.page"  # kept when left out
+    assert tunneled("init", "--page-domain", "", "--json").get("page_domain") is None
+    text = routes.read_text()
+    assert "*.tico.page" not in text and '"acme.tico.page"' in text and "page_domain" not in json.loads(
+        (tunneled.root / "cell.json").read_text())
+
+
+@pytest.mark.parametrize("bad", ["tico.team", "*.tico.page", "10.0.0.1", "tico.page/x"])
+def test_init_page_domain_must_be_a_plain_domain_of_its_own(tunneled, bad):
+    assert tunneled("init", "--page-domain", bad, "--json")["error"] == "bad_domain"
+    assert "*.tico.page" not in (tunneled.root / "tunnel" / "cloudflared.yml").read_text()
+
+
+def test_page_hosts_under_the_page_domain_need_no_route_and_others_do():
+    companies = [page_company(), page_company(slug="beta", page="beta.example.com", port=20001),
+                 page_company(slug="gamma", page="a.b.tico.page", port=20002)]
+    assert cell.tunnel_hosts("tico.team", companies, "tico.page") == ["a.b.tico.page", "beta.example.com"]
+    text = cell.tunnel_config("tico.team", ["a.b.tico.page", "beta.example.com"], "tico.page")
+    assert text.index('"beta.example.com"') < text.index('"*.tico.team"') < text.index('"*.tico.page"') \
+        < text.index("http_status:404")
+    assert cell.tunnel_config("tico.team", [], None) == cell.tunnel_config("tico.team")
+
+
+def test_the_pinned_router_accepts_the_page_config(tmp_path):
+    # Caddy's own parser, on the image this cell pins: a page block the router refuses would take down every company.
+    import subprocess, shutil
+    if not shutil.which("docker") or subprocess.run(
+            ["docker", "image", "inspect", cell.ROUTER_IMAGE], capture_output=True).returncode:
+        pytest.skip("the pinned caddy image is not on this machine")
+    (tmp_path / "Caddyfile").write_text(cell.router_config([page_company(), page_company(slug="beta", page="beta.tico.page", port=20001), page_company(slug="gamma", page="gamma.tico.page", port=20002)]))
+    run = subprocess.run(["docker", "run", "--rm", "-v", f"{tmp_path}:/etc/caddy:ro", cell.ROUTER_IMAGE, "caddy", "validate",
+                          "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr[-800:]

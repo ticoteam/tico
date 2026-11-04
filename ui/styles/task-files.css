@@ -12,11 +12,11 @@
 .task-files .tf-status{font-weight:400;letter-spacing:var(--track-normal);text-transform:none}
 .task-files .prop-add[hidden]{display:none}
 .tf-empty{margin:0;font-size:var(--t-sm)}
-dialog.tmodal.over{outline:2px dashed var(--accent);outline-offset:-6px}
+dialog.tmodal.over{outline:2px dashed var(--ink);outline-offset:-6px}
 .tf-strip{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 6px;scrollbar-width:thin}
 .tf-tile{flex:none;display:flex;flex-direction:column;gap:2px;min-width:0;padding:0 0 4px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);font:inherit;text-align:left;cursor:pointer;overflow:hidden}
 .tf-tile:hover{border-color:var(--g4)}
-.tf-tile.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.tf-tile.on{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
 .tf-tile:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .tf-thumb{position:relative;display:grid;place-items:center;height:72px;background:var(--surface2);border-bottom:1px solid var(--line)}
 .tf-thumb img{position:absolute;inset:0}
@@ -50,12 +50,12 @@ dialog.tmodal.over{outline:2px dashed var(--accent);outline-offset:-6px}
 .tf-nav.prev{left:8px}.tf-nav.next{right:8px}
 .tf-pdf{display:inline-flex;flex-direction:column;gap:6px;max-width:min(320px,100%);color:var(--ink);text-decoration:none}
 .tf-pdf .tf-skel{min-height:160px;border:1px solid var(--line);border-radius:6px;background:#fff}
-.tf-pdf-open{font-size:var(--t-sm);color:var(--accent)}
+.tf-pdf-open{font-size:var(--t-sm);color:var(--ink)}
 .tf-card{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);font-size:var(--t-sm);min-width:0}
 .tf-card .tf-glyph{display:grid;place-items:center;width:40px;height:40px;border-radius:6px;background:var(--surface2)}
 .tf-card-t{display:flex;flex-direction:column;flex:1;min-width:0}
 .tf-card .tf-name{padding:0}
-.tf-card a{color:var(--accent);text-decoration:none;white-space:nowrap}
+.tf-card a{color:var(--ink);text-decoration:none;white-space:nowrap}
 .tf-doc{position:relative;min-width:0;overflow-wrap:anywhere}
 .tf-doc>.md,.tf-doc>pre{margin:0}
 .tf-doc pre.plain{white-space:pre-wrap;font:var(--t-sm)/var(--lh) var(--mono)}
@@ -92,7 +92,7 @@ dialog.tmodal.over{outline:2px dashed var(--accent);outline-offset:-6px}
 .tc-thumb{width:64px;height:48px;padding:0;border:1px solid var(--line);border-radius:6px;cursor:pointer;background:var(--surface2)}
 .tc-file{display:inline-flex;align-items:center;gap:5px;max-width:100%;padding:2px 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:inherit;font-size:var(--t-sm);text-decoration:none;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tc-file:hover,.tc-thumb:hover{border-color:var(--g4)}
-.tc-kind{font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);color:var(--accent)}
+.tc-kind{font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);color:var(--ink)}
 .tc-titled{display:inline-flex;flex-direction:column;gap:2px;max-width:120px;min-width:0}
 .tc-file-title{font-size:var(--t-sm);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* a question: a chip, the question, its options; once answered, the answers. The message box (pill.js) shares the
@@ -107,7 +107,7 @@ dialog.tmodal.over{outline:2px dashed var(--accent);outline-offset:-6px}
 .ask-opts{display:flex;flex-wrap:wrap;gap:6px}
 .ask-opt{display:inline-flex;flex-direction:column;align-items:flex-start;gap:1px;max-width:100%;padding:4px 10px;border:1px solid var(--line);border-radius:7px;background:var(--surface2);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
 .ask-opt:hover{border-color:var(--g5)}
-.ask-opt[aria-pressed="true"]{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,var(--surface2))}
+.ask-opt[aria-pressed="true"]{border-color:var(--ink);background:color-mix(in srgb,var(--ink) 8%,var(--surface2))}
 .ask-opt:disabled{opacity:.6;cursor:default}
 .ask-opt.ro,.ask-opt.ro:hover{cursor:default;background:transparent;color:var(--muted);border-color:var(--line)}
 .ask-l{font-weight:600}
@@ -142,5 +142,5 @@ dialog.tmodal.over{outline:2px dashed var(--accent);outline-offset:-6px}
 .pin-row:hover .pin-x,.pin-x:focus-visible{opacity:1}
 .pin-x:hover{color:var(--ink);background:var(--hover)}
 @media (hover:none){.pin-x{opacity:1}}
-.tl-pin[aria-pressed="true"]{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
+.tl-pin[aria-pressed="true"]{color:var(--ink);border-color:color-mix(in srgb,var(--ink) 50%,var(--line))}
 .tf-rm{font-size:var(--t-sm);padding:2px 8px}

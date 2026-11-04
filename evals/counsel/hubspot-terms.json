@@ -1,0 +1,29 @@
+{
+  "expected": [
+    {
+      "text": "Make sure every user's access and use follows this agreement.",
+      "quote": "You must ensure that all access, use and receipt by your Users is subject to and in compliance with this Agreement.",
+      "section": "Users",
+      "who_hint": "marketing"
+    },
+    {
+      "text": "Users of the subscription must be 18 or older.",
+      "quote": "You must be 18 years of age or older to use the Subscription Service.",
+      "section": "Eligibility",
+      "who_hint": "marketing"
+    },
+    {
+      "text": "Do not downgrade the subscription during the current term.",
+      "quote": "You are not permitted to downgrade your Subscription Service during your Current Term.",
+      "section": "Subscription",
+      "who_hint": "finance"
+    }
+  ],
+  "url": "https://www.hubspot.com/terms-of-service",
+  "fetched_at": "2026-10-30T23:40:35Z",
+  "from": {
+    "name": "HubSpot Terms of Service",
+    "kind": "vendor"
+  },
+  "truncated": true
+}

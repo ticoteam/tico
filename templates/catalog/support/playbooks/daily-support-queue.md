@@ -1,8 +1,16 @@
 # Daily support queue
 
-Schedule: weekdays at 09:00 team time (routine `daily-support-queue`), after setup. Also run by hand on request. Budget 20 minutes. The outcome is one digest on the
-task: every ticket in a bucket with a draft where it can be answered, escalations sent, follow-ups due
-listed, and doc gaps reported to the Librarian. Nothing goes to a customer.
+Schedule: weekdays at 09:00 team time (routine `daily-support-queue`), after setup. Also run by hand on request. Budget 20 minutes.
+
+Inputs: the tasks routed to you, the support mailbox and any channel setup named, `state.md` (the watermark),
+`knowledge/follow-ups.md` and `knowledge/known-issues.md`.
+
+Outcome: one digest on the task, in the shape of `knowledge/examples/support-queue.md`: every ticket in a bucket with a
+draft where it can be answered, escalations routed, follow-ups due, and doc gaps reported to the Librarian. Nothing
+goes to a customer.
+
+Done when every ticket that arrived since the watermark is in a bucket with a draft, a route or a marked gap, every
+due follow-up has its nudge or its closed-quiet line, the watermark is moved, and the task note holds the counts.
 
 ---
 
@@ -19,7 +27,8 @@ and go on. An unread queue and an empty queue must never read the same.
 
 Every ticket is in exactly one bucket: answered by the docs, known issue, needs a human, or new. Ask
 the Librarian once per distinct question, not once per ticket: tickets that ask the same thing share
-the answer. `covered: false` means the docs do not say, and the ticket is "new".
+the answer. `covered: false` means the docs do not say, and the ticket is "new". Before you call a ticket a repeat,
+follow `skills/check-a-repeat-before-you-escalate/SKILL.md`.
 
 ## 3. Draft, route, cluster
 
@@ -33,9 +42,9 @@ the answer. `covered: false` means the docs do not say, and the ticket is "new".
   count; you do not write the answer. Three that report the same failure become one line in
   `knowledge/known-issues.md` and one task for the owner of the fix. Add a repeat to an existing
   entry's count, not a new entry.
-- **Follow up.** Read `knowledge/follow-ups.md`. For each ticket waiting on a customer longer than the
-  nudge rule, draft the nudge on the task; after the last nudge, mark it "closed quiet" and say so.
-  For each ticket waiting on a colleague or a fix, name who and since when.
+- **Follow up.** Read `knowledge/follow-ups.md`. For each ticket due for a nudge, follow
+  `skills/run-a-follow-up-cadence/SKILL.md`: draft the nudge on the task, or after the last one mark it "closed quiet"
+  and say so. For each ticket waiting on a colleague or a fix, name who and since when.
 
 ### Tico HQ tickets and GitHub threads
 
@@ -47,8 +56,8 @@ and one line each, no ticket or thread text.
 ## 4. Write the digest
 
 In the shape of `knowledge/examples/support-queue.md`: counts first, what needs a human today, then
-tickets by bucket with the draft and the doc it rests on, follow-ups due, then patterns and doc gaps. Save it to `reports/YYYY-MM-DD-triage.md` only when the
-pass is worth keeping. Paraphrase; no personal details, no credentials.
+tickets by bucket with the draft and the doc it rests on, follow-ups due, then patterns and doc gaps. Save it to
+`reports/YYYY-MM-DD-support-queue.md` only when the pass is worth keeping. Paraphrase; no personal details, no credentials.
 
 ## 5. Finish
 

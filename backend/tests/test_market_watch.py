@@ -32,7 +32,7 @@ def counts(api):
     with api.app.state.store.read() as c:
         return {t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
                 for t in ("market_insights", "market_evidence")} | {
-            "page_events": c.execute("SELECT count(*) FROM market_events WHERE field LIKE 'page.%'").fetchone()[0]}
+            "page_events": c.execute("SELECT count(*) FROM history_events WHERE subject_type IN ('market_entity','market_edge','market_evidence','market_document') AND kind LIKE 'page.%'").fetchone()[0]}
 
 
 @pytest.fixture
@@ -54,7 +54,7 @@ def test_a_name_that_resolves_to_a_private_address_is_blocked_when_read(seeded, 
     watch(seeded)
     assert check(seeded) == {"read": 1, "changed": 0, "errors": 1}
     row = get(seeded, "market/watches")["watches"][0]
-    assert row["last_status"] == "blocked" and row["checked"]
+    assert row["last_status"] == "blocked" and row["checked_at"]
     assert counts(seeded)["market_insights"] == 0
 
 
@@ -100,7 +100,8 @@ def test_a_real_change_files_one_insight_one_evidence_and_one_event_once(seeded,
     assert {k: after[k] - before[k] for k in after} == {"market_insights": 1, "market_evidence": 1, "page_events": 1}
     with seeded.app.state.store.read() as c:
         evidence = H._rows(c.execute("SELECT source_kind, source_url, quote FROM market_evidence"))[-1]
-        event = H._rows(c.execute("SELECT subject_kind, subject_id, field FROM market_events WHERE field LIKE 'page.%'"))[0]
+        event = H._rows(c.execute("SELECT substr(subject_type, 8) AS subject_kind, subject_id, kind AS field FROM history_events "
+                                  "WHERE subject_type LIKE 'market%' AND kind LIKE 'page.%'"))[0]
         insight = H._rows(c.execute("SELECT kind, about, status FROM market_insights WHERE about = 'Northwind'"))[0]
     assert evidence["source_kind"] == "page-change" and evidence["source_url"] == PAGE
     assert "Pro plan now costs" in evidence["quote"]
@@ -151,7 +152,7 @@ def test_the_same_page_twice_and_the_cap_on_active_watches_are_409(seeded):
     store = seeded.app.state.store
     with store.transaction() as c:
         for n in range(W.MAX_ACTIVE - 1):
-            c.execute("INSERT INTO market_watches (id, entity_id, url, kind, active, created) VALUES (?,?,?,?,1,?)",
+            c.execute("INSERT INTO market_watches (id, entity_id, url, kind, active, created_at) VALUES (?,?,?,?,1,?)",
                       (f"w{n}", "company/northwind", f"https://northwind.example/p{n}", "other", H.now()))
     assert watch(seeded, url="https://northwind.example/over", expected=409)["error"]["code"] == "limit"
 
@@ -168,7 +169,7 @@ def test_a_page_change_trips_a_cited_bet_only_once_the_insight_is_applied(seeded
 
     def bet_tasks():
         with seeded.app.state.store.read() as c:
-            return [(t["title"], t["owner"]) for t in H._rows(c.execute("SELECT title, owner FROM tasks WHERE title LIKE 'Bet %'"))]
+            return [(t["title"], t["owner_id"]) for t in H._rows(c.execute("SELECT title, owner_id FROM tasks WHERE title LIKE 'Bet %'"))]
     assert bet_tasks() == []                       # a raw diff may be layout or wording: no fit check yet
     with seeded.app.state.store.read() as c:
         insight_id = c.execute("SELECT id FROM market_insights WHERE source_ref LIKE 'watch:%'").fetchone()[0]

@@ -15,7 +15,7 @@ use crate::util::text_of;
 
 pub type Env = BTreeMap<String, String>;
 
-/// The process settings a turn and the runner's own git keep (`runner/safe_git.py` _SETTINGS), plus `LC_*`.
+/// The process settings a turn and the runner's own git keep (`runner_support/safe_git.py` _SETTINGS), plus `LC_*`.
 pub const SETTINGS: &[&str] = &[
     "HOME", "PATH", "SHELL", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP", "LANG", "TZ", "TERM", "COLORTERM", "CODEX_HOME",
     "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR",
@@ -24,11 +24,11 @@ pub const SETTINGS: &[&str] = &[
 ];
 pub const RUNNER_HUB_ENV: &[&str] = &[
     "HUB_TOKEN", "HUB_API_URL", "HUB_WORKSPACE", "HUB_EMPLOYEE", "HUB_OPERATION_ID", "HUB_BOT", "HUB_DIR", "HUB_DB",
-    "HUB_HUMAN_OVERRIDE", "HUB_INGEST_TOKEN", "HUB_RUNNER_CONFIG", "HUB_TASK_ID",
+    "HUB_HUMAN_OVERRIDE", "HUB_INGEST_TOKEN", "HUB_RUNNER_CONFIG", "HUB_TASK_ID", "HUB_BOT_FOLDER",
 ];
 pub const RESERVED_ENV: &[&str] = &["HOME", "PATH", "SHELL", "PYTHONPATH", "PYTHONHOME", "NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "CODEX_HOME", "CLAUDE_CONFIG_DIR"];
 pub const RESERVED_PREFIXES: &[&str] = &["TICO_", "DYLD_", "LD_"];
-/// Keys a turn never inherits unless a grant brings them (`runner/op.py` SECRET_KEYS).
+/// Keys a turn never inherits unless a grant brings them (`runner_support/op.py` SECRET_KEYS).
 pub const SECRET_KEYS: &[&str] = &["OPENROUTER_API_KEY", "HUB_INGEST_TOKEN", "OP_SERVICE_ACCOUNT_TOKEN"];
 
 pub fn process_environment() -> Env {
@@ -114,6 +114,10 @@ pub struct Vault {
     /// The turn's relay to the Tico AI Gateway (gateway_relay.rs), stopped with the vault.
     pub relay: Option<crate::gateway_relay::Relay>,
     pub turn_user: Option<crate::turn_users::Lease>,
+    /// The company subscriptions this turn signs in with (crate::model_subscriptions).
+    pub subscriptions: Vec<crate::model_subscriptions::Delivered>,
+    /// The bot's browser proxy, and the OS users this turn lets use it (crate::browser_exit).
+    pub browser_exit: Option<crate::browser_exit::Admission>,
 }
 
 impl Vault {
@@ -123,9 +127,15 @@ impl Vault {
     /// a leased turn runs such a harness as its own user, with private copies of its file credentials, its own HOME and
     /// TMPDIR. Any other harness keeps owner-only sign-in files in the bot's home (Claude Code, Codex and the rest), so
     /// it runs as `bot` with the files in the bot's turn directory, lease or not.
+    /// A Tico model needs the relay, and under isolation its own user too; on a cloud machine (gateway_relay.rs
+    /// `Separation::TrustGroup`) it runs on the relay alone, as this runner's user.
     pub fn for_model(&mut self, env: &mut Env, model: Option<&str>, isolated: bool) -> Result<Option<(u32, u32)>, String> {
+        self.for_model_under(env, model, isolated, crate::isolation::enabled())
+    }
+
+    pub(crate) fn for_model_under(&mut self, env: &mut Env, model: Option<&str>, isolated: bool, isolation: bool) -> Result<Option<(u32, u32)>, String> {
         let gateway = crate::hosts::pi::is_gateway(model);
-        if gateway && (self.turn_user.is_none() || self.relay.is_none()) {
+        if gateway && (self.relay.is_none() || isolation && self.turn_user.is_none()) {
             return Err("Tico model turn has no private user and relay (not_isolated)".into());
         }
         if !gateway {
@@ -139,6 +149,9 @@ impl Vault {
             (crate::isolation::identity().ok_or("missing Docker bot identity")?, crate::isolation::turn_dir())
         };
         user.move_files(env, &mut self.files, id, &dir)?;
+        if let Some(admission) = self.browser_exit.as_mut() {
+            admission.allow(id.0); // the user this hop's browser runs as
+        }
         for (name, index) in &self.file_vars { env.insert(name.clone(), self.files[*index].display().to_string()); }
         if own {
             user.private_home(env)?;
@@ -162,6 +175,8 @@ impl Drop for Vault {
         // Revoke the connection before a cleaned UID can be lent to another turn.
         self.relay.take();
         self.remove_files();
+        // A turn that ended before its own `finish` (an error, a panic) still lets go of its subscription homes.
+        crate::model_subscriptions::finish(&mut self.subscriptions);
         self.turn_user.take();
     }
 }
@@ -245,6 +260,9 @@ pub async fn environment_with(ctx: &EnvContext<'_>, attempt: &Value, vault: &mut
             }
             vault_keys.insert(key.to_string());
         }
+        // A company subscription the claim handed this turn: after the grants, so it decides how the runtime signs in.
+        vault.subscriptions = crate::model_subscriptions::apply(ctx.state_dir, &granted["subscriptions"], &mut env,
+                                                                 &mut vault.values, &mut vault_keys);
     }
     // 1Password references among the grants are read now (crate::op), with the token from `_shared.env`.
     let mut refs: BTreeMap<String, String> =
@@ -287,9 +305,36 @@ pub async fn environment_with(ctx: &EnvContext<'_>, attempt: &Value, vault: &mut
     ] {
         env.insert(k.to_string(), v);
     }
+    // The bot's own checkout folder, as recorded (crate::sessions::named_folder): a bot made with a UUID id is not in
+    // bot-<HUB_BOT>, and a rename keeps its folder, so the connectors that read its manifest find it by this.
+    match crate::sessions::named_folder(&attempt["config"]) {
+        Some(folder) => env.insert("HUB_BOT_FOLDER".into(), folder),
+        None => env.remove("HUB_BOT_FOLDER"),
+    };
     // Headed browsers and computer use draw on the computer's screen, where people can watch (crate::screen).
     if let Some(display) = crate::screen::display() {
         env.insert("DISPLAY".into(), display.into());
+    }
+    // A bot with a browser exit browses from that computer's internet: Chrome started by name goes through the proxy,
+    // and nothing falls back to this computer's own address (crate::browser_exit). A proxy that can't start fails
+    // the turn.
+    if let Some(mut admission) = crate::browser_exit::turn_proxy(bot, attempt).await? {
+        // Under isolation only this turn's own user may use the proxy: its leased user (Vault::for_model lets that in
+        // once it is known), or the shared bot user a turn without a lease runs as.
+        if let (Some((uid, _)), None) = (crate::isolation::identity(), &vault.turn_user) {
+            admission.allow_always(uid);
+        }
+        let proxy = admission.url.clone();
+        vault.browser_exit = Some(admission);
+        let flags = format!("--proxy-server={proxy} --force-webrtc-ip-handling-policy=disable_non_proxied_udp");
+        let chromium = match env.get("CHROMIUM_FLAGS").filter(|f| !f.is_empty()) {
+            Some(f) => format!("{f} {flags}"),
+            None => flags,
+        };
+        env.insert("CHROMIUM_FLAGS".into(), chromium);
+        let path = env.get("PATH").cloned().unwrap_or_default();
+        env.insert("PATH".into(), format!("{}:{path}", root.join("scripts").join("browser-exit").display()));
+        env.insert("TICO_BROWSER_PROXY".into(), proxy);
     }
     // A bot's commits carry the bot's name, never the person whose computer runs it.
     let name = attempt["config"]["display_name"].as_str().filter(|n| !n.is_empty()).unwrap_or(bot).to_string();

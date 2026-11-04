@@ -1,0 +1,53 @@
+{
+  "expected": [
+    {
+      "text": "Get prior express consent from each recipient before sending any message.",
+      "quote": "Prior to sending any messages via the Twilio Messaging Services, as further described below, you must obtain prior express consent from the message recipient",
+      "section": "Consent",
+      "who_hint": "messaging"
+    },
+    {
+      "text": "Keep proof of each consent until the recipient withdraws it, and give it to Twilio on request.",
+      "quote": "You are required to retain proof of all consents obtained from recipients for as long as needed to meet your legal requirements and at least until a recipient withdraws their consent.",
+      "section": "Consent",
+      "who_hint": "messaging"
+    },
+    {
+      "text": "The first message to a recipient must say Reply STOP to unsubscribe, or use another standard opt-out keyword.",
+      "quote": "The initial message that you send to a recipient needs to include the following language",
+      "section": "Revocation of Consent",
+      "who_hint": "messaging"
+    },
+    {
+      "text": "After a recipient opts out, send no further messages except one confirmation.",
+      "quote": "When a recipient revokes their previously provided consent, also known as an opt-out, you may deliver one final message to confirm that the revocation of their prior consent or opt-out has been processed, but any subsequent messages are prohibited.",
+      "section": "Revocation of Consent",
+      "who_hint": "messaging"
+    },
+    {
+      "text": "Keep the opt-out process straightforward, easy to reach, and one step.",
+      "quote": "The opt-out process must be straightforward and easily accessible, requiring a single step to complete.",
+      "section": "Revocation of Consent",
+      "who_hint": "messaging"
+    },
+    {
+      "text": "A conversational reply to us is not consent for ongoing recurring messages.",
+      "quote": "This conversational engagement does not provide you necessary consent to engage in ongoing recurring engagement with that individual.",
+      "section": "Consent for Messages Initiated by an Individual to You",
+      "who_hint": "messaging"
+    },
+    {
+      "text": "If our product's users send messages through us, require them to get express written consent from downstream users.",
+      "quote": "you must require those End Users and customers to obtain prior express written consent from any downstream users of your software application or service.",
+      "section": "Consent from Your End Users or Customers",
+      "who_hint": "product"
+    }
+  ],
+  "url": "https://www.twilio.com/en-us/legal/messaging-policy",
+  "fetched_at": "2026-10-30T23:39:34Z",
+  "from": {
+    "name": "Twilio Messaging Policy",
+    "kind": "vendor"
+  },
+  "truncated": false
+}

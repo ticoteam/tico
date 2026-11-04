@@ -680,7 +680,7 @@ out = {}
 if mode == "top":
     cap(budget)
     try:
-        out["sql_top"] = c.execute("SELECT fingerprint, SUM(n), SUM(total_ms), MAX(max_ms) FROM flight_sql WHERE ts>=? "
+        out["sql_top"] = c.execute("SELECT fingerprint, SUM(n), SUM(total_ms), MAX(max_ms) FROM flight_sql WHERE created_at>=? "
                                    "GROUP BY fingerprint ORDER BY 3 DESC LIMIT ?",
                                    (int(sys.argv[4]), int(sys.argv[5]))).fetchall()
     except sqlite3.Error as e:
@@ -791,18 +791,30 @@ def db_block(box: Box, root: Path, slug: str, cache: dict, now: float, server: s
 
 
 def backup_block(box: Box, pid: int | None, now: float) -> dict | None:
-    """The newest copy in the replica, as the server's own backup loop last saw it (/tmp/tico-backup-status.json in the
-    server container, read through /proc/<pid>/root: no docker exec)."""
+    """The backup as the server's own backup loop last saw it (/tmp/tico-backup-status.json in the server container, read
+    through /proc/<pid>/root: no docker exec). `age_s` is the newest copy's age, for display. `behind_s` is how long the
+    backup location has been behind the database, null when caught up, and `stale` says it is past the warning time the
+    server wrote (`warn_after_s`, ten sync intervals at least ten minutes). `checked_s` is how long ago the loop last read
+    the backup location; past the warning time it is stale too. `unsent_files` is the local pile-up. A quiet
+    database is never stale, whatever its copy's age: it has nothing new to send."""
     if not pid:
         return None
     try:
         saved = json.loads(safe_read(box.path(f"proc/{int(pid)}/root"), STATUS_FILE, 65536, cap=65536))
     except (OSError, ValueError):
         return None
-    at = parse_iso(saved.get("last_replicated_at")) if isinstance(saved, dict) else None
-    if at is None:
+    if not isinstance(saved, dict):
         return None
-    return {"age_s": max(0, int(now - at)), "detail": "litestream"}
+    unsent = saved.get("unsent_files") if isinstance(saved.get("unsent_files"), int) else None
+    at = parse_iso(saved.get("last_replicated_at"))
+    since = parse_iso(saved.get("behind_since"))
+    warn_after = saved["warn_after_s"] if isinstance(saved.get("warn_after_s"), int) else 600
+    behind = None if since is None else max(0, int(now - since))
+    checked = parse_iso(saved.get("checked_at"))
+    checked_s = None if checked is None else max(0, int(now - checked))
+    stale = (behind is not None and behind > warn_after) or (checked_s is not None and checked_s > warn_after)
+    return {"age_s": None if at is None else max(0, int(now - at)), "behind_s": behind, "checked_s": checked_s,
+            "stale": stale, "unsent_files": unsent, "detail": "litestream"}
 
 
 FLIGHT = "data/flight"      # under the company's folder
@@ -889,7 +901,7 @@ def container_row(i: dict, stats: dict) -> dict:
     mem = i.get("memory")
     return {"role": labels.get("com.docker.compose.service") or None, "name": i["name"], "state": st.get("Status"),
             "health": health.get("Status") or None, "restarts": i.get("restarts"), "oom_killed": bool(st.get("OOMKilled")),
-            "started": iso(parse_iso(st.get("StartedAt"))),
+            "started_at": iso(parse_iso(st.get("StartedAt"))),
             "cpu_pct": s.get("cpu_pct"), "mem_mb": s.get("mem_mb"),
             "mem_limit_mb": round(mem / 2 ** 20) if isinstance(mem, int) and mem > 0 else s.get("mem_limit_mb"),
             "pids": s.get("pids"), "net_rx_mb": s.get("net_rx_mb"), "net_tx_mb": s.get("net_tx_mb"),
@@ -1264,7 +1276,7 @@ def t_stacks(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
 
 
 def tracing(root: Path, now: float) -> bool:
-    """Whether tracemalloc is on: the newest memory record since the server's last start says `started`."""
+    """Whether tracemalloc is on: the newest memory record since the server's last start says `started_at`."""
     state = False
     for r in flight_file().records(root / FLIGHT, now - 86400, flight_opener(root, FLIGHT)):
         if r.get("kind") == "start":

@@ -17,7 +17,7 @@ import re
 import stat
 import sys
 
-ORIGIN = "http://server:8765"
+ORIGIN = "http://hold:8080"
 RUNNER_PATH = "'^/(?:api/v2|download)(?:/.*)?$'"
 VISUAL_PATH = "'^/visuals/'"
 _ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
@@ -40,16 +40,29 @@ def environment_identity(env=os.environ):
     import json
     import secrets
     import sqlite3
-    db = sqlite3.connect(env["TICO_DB"])
+    from backend.hubdb import leave_wal_for_litestream
+    if os.path.exists(env["TICO_DB"]):
+        # Upgrade the old metadata column before reading the id, without Settings.from_env: a named install needs
+        # the id this step supplies before it can construct Settings. Warm starts need only the read-only probe.
+        probe = sqlite3.connect("file:%s?mode=ro" % env["TICO_DB"], uri=True)
+        try:
+            columns = {row[1] for row in probe.execute("PRAGMA table_info(registry_metadata)")}
+        finally:
+            probe.close()
+        if "value_json" in columns and "value" not in columns:
+            from backend import hubdb, migrations
+            migrations.preflight(env["TICO_DB"])
+            hubdb.connect(env["TICO_DB"]).close()
+    db = leave_wal_for_litestream(sqlite3.connect(env["TICO_DB"]))
     try:
-        row = db.execute("SELECT value_json FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
+        row = db.execute("SELECT value FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
         value = env.get("TICO_ENVIRONMENT_ID") or (json.loads(row[0]) if row else secrets.token_hex(8))
         if not re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", value):
             raise SystemExit("TICO_ENVIRONMENT_ID is lowercase letters, digits and hyphens")
         encoded = json.dumps(value)
         if row is None or row[0] != encoded:      # the same id already stored needs no write
             db.execute("INSERT INTO registry_metadata VALUES('docker-environment-id', ?) "
-                       "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (encoded,))
+                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (encoded,))
             db.commit()
     finally:
         db.close()
@@ -58,9 +71,10 @@ def environment_identity(env=os.environ):
 
 # The Cloudflare tunnel's route. cloudflared's image has no shell and reads no environment for routes, and a tunnel that
 # is run with only its token has none of its own ("No ingress rules ... cloudflared will return 503"), so the one route
-# it needs is written here from TICO_DOMAIN into a volume the tunnel container reads: the domain to this server, anything
-# else a 404. Written on every start, so a changed TICO_DOMAIN follows, and by the server image itself, so an update that
-# replaces compose.yaml never needs a file the old updater does not know about. A tunnel managed in the Cloudflare
+# it needs is written here from TICO_DOMAIN into a volume the tunnel container reads: the domain through compose.yaml's
+# hold service to this server, anything else a 404. Written on every start, so a changed TICO_DOMAIN follows, and by the
+# server image itself, so an update that replaces compose.yaml never needs a file the old updater does not know about.
+# It is ingress.yml; cloudflared.yml is left as an older server wrote it. A tunnel managed in the Cloudflare
 # dashboard keeps its own route: cloudflared prefers the configuration Cloudflare holds and uses this file only when the
 # tunnel has none. docs/install.md, "Cloudflare Tunnel".
 
@@ -206,7 +220,17 @@ def tunnel_config(env=os.environ):
     except Refused as refused:
         print(str(refused), file=sys.stderr)
         return 1
-    lines = ["ingress:", "  - hostname: " + domain, "    service: " + ORIGIN]
+    lines = ["ingress:"]
+    # Calls use the app host's /rtc path directly on LiveKit, ahead of the whole-app route, as in the Caddy profile.
+    meet_url = env.get("TICO_MEET_URL", "")
+    meet_host = meet_url.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
+    if meet_url and meet_host == domain and env.get("TICO_MEET_API_KEY") and env.get("TICO_MEET_API_SECRET"):
+        netloc = (env.get("TICO_MEET_INTERNAL_URL") or "http://livekit:7880").split("://", 1)[-1].split("/", 1)[0]
+        lines += ["  - hostname: " + domain, "    path: '^/rtc(?:/.*)?$'", "    service: http://" + netloc]
+    elif meet_url:
+        print("warning: calls cannot connect over this tunnel: set TICO_MEET_URL, key and secret for " + domain,
+              file=sys.stderr)
+    lines += ["  - hostname: " + domain, "    service: " + ORIGIN]
     for host in aliases:
         lines += ["  - hostname: " + host, "    service: " + ORIGIN]
     if runner:
@@ -217,7 +241,7 @@ def tunnel_config(env=os.environ):
         lines += ["  - hostname: " + visual, "    path: " + VISUAL_PATH, "    service: " + ORIGIN]
     lines.append("  - service: http_status:404")
     content = ("\n".join(lines) + "\n").encode()
-    path, temporary = os.path.join(directory, "cloudflared.yml"), os.path.join(directory, "cloudflared.yml.new")
+    path, temporary = os.path.join(directory, "ingress.yml"), os.path.join(directory, "ingress.yml.new")
     if _unchanged(path, content) and not os.path.lexists(temporary):
         return 0
     with open(temporary, "wb") as handle:

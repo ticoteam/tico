@@ -7,6 +7,7 @@ roster tables and the task steps are shared between snapshots, at an unchanged c
 
 from copy import deepcopy
 
+from . import bot_settings as BS
 from . import roster_clock
 
 
@@ -41,7 +42,7 @@ def rows(c, statement, args=()):
 
 
 def configs(c, slugs=None):
-    statement = 'SELECT * FROM bot_config'
+    statement = BS.ROW_SQL
     values = cache(c)
     full = values.get((statement, ())) if values is not None else None
     if slugs is None:
@@ -53,12 +54,12 @@ def configs(c, slugs=None):
     ordered = sorted(wanted)
     for start in range(0, len(ordered), 500):
         part = ordered[start:start + 500]
-        out.extend(rows(c, statement + ' WHERE bot IN (' + ','.join('?' * len(part)) + ')', part))
+        out.extend(rows(c, statement + ' WHERE bc.bot IN (' + ','.join('?' * len(part)) + ')', part))
     return tuple(out)
 
 
 def metadata(c, key):
-    found = rows(c, 'SELECT value_json FROM registry_metadata WHERE key=?', (key,))
+    found = rows(c, 'SELECT value FROM registry_metadata WHERE key=?', (key,))
     return found[0] if found else None
 
 

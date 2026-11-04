@@ -96,7 +96,7 @@
       "status": "started",
       "item_id": "tool-1",
       "parent_id": null,
-      "summary": "hub",
+      "summary": "hub webhook send",
       "outside_actions": [
         "send webhook"
       ]
@@ -109,7 +109,7 @@
       "status": "started",
       "item_id": "tool-1",
       "parent_id": null,
-      "summary": "hub",
+      "summary": "hub webhook send",
       "outside_actions": [
         "send webhook"
       ]
@@ -179,7 +179,7 @@
       "status": "started",
       "item_id": "tool-1",
       "parent_id": null,
-      "summary": "hub",
+      "summary": "hub task show",
       "outside_actions": []
     },
     "claude": {
@@ -190,7 +190,7 @@
       "status": "started",
       "item_id": "tool-1",
       "parent_id": null,
-      "summary": "hub",
+      "summary": "hub task show",
       "outside_actions": []
     }
   },

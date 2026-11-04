@@ -18,6 +18,9 @@ the others, so no entry's words are in the audit log.
 
 Unversioned and idempotent, like the task tabs (backend/bot_task_tabs.py): an older release never reads the table."""
 
+import logging
+import sqlite3
+
 from fastapi import Request
 
 from . import strategy_bot, rooms
@@ -25,6 +28,8 @@ from . import goals as G
 from . import company as C
 from . import models as M
 from .store import H, Problem
+
+log = logging.getLogger("tico.learned")
 
 TEXT_MAX = 280            # one short line
 LAYER_MAX = 100           # entries in one layer: every turn in the chat is handed all of them
@@ -34,9 +39,9 @@ LAYERS = ("personal", "company")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS learned_entries (
   id TEXT PRIMARY KEY, layer TEXT NOT NULL CHECK (layer IN ('personal','company')),
-  person TEXT NOT NULL DEFAULT '', text TEXT NOT NULL, created TEXT NOT NULL, created_by TEXT NOT NULL,
-  via TEXT, updated TEXT, updated_by TEXT);
-CREATE INDEX IF NOT EXISTS learned_entries_layer ON learned_entries(layer, person, created);
+  person TEXT NOT NULL DEFAULT '', text TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+  via TEXT, updated_at TEXT, updated_by TEXT);
+CREATE INDEX IF NOT EXISTS learned_entries_layer ON learned_entries(layer, person, created_at);
 """
 
 
@@ -65,12 +70,12 @@ def company_reader(c, who, settings):
 
 
 def _view(row):
-    return {"id": row["id"], "layer": row["layer"], "text": row["text"], "created": row["created"],
-            "updated": row["updated"], "taught_in_chat": bool(row["via"])}
+    return {"id": row["id"], "layer": row["layer"], "text": row["text"], "created_at": row["created_at"],
+            "updated_at": row["updated_at"], "taught_in_chat": bool(row["via"])}
 
 
 def entries(c, layer, person=""):
-    return [_view(r) for r in c.execute("SELECT * FROM learned_entries WHERE layer=? AND person=? ORDER BY created",
+    return [_view(r) for r in c.execute("SELECT * FROM learned_entries WHERE layer=? AND person=? ORDER BY created_at",
                                         (layer, person if layer == "personal" else ""))]
 
 
@@ -103,12 +108,44 @@ def for_turn(c, settings, conversation, bot):
     text = strategy.summary_text(c)
     if text:
         layers = {**(layers or {}), "strategy": text}
+    if growth_facing(c, bot):
+        # The brand, for the bots whose words reach customers (backend/brand.py).
+        from . import brand
+        text = brand.summary_text(c)
+        if text:
+            layers = {**(layers or {}), "brand": text}
     return layers
+
+
+GROWTH_TEAMS = ("market", "sales", "growth", "partner")
+
+
+def growth_facing(c, bot):
+    """Whether a bot faces customers: it, or a team it sits in (up the team tree), is named for marketing, sales,
+    growth or partnerships."""
+    try:
+        from . import people, views
+        label = (H.bot(c, bot) or {}).get("slug") or str(bot or "")
+        if any(word in label.lower() for word in GROWTH_TEAMS):
+            return True
+        roster = views.roster(c)
+        groups = (roster or {}).get("org_groups") or {}
+        gid, seen = people.team_of(bot, views.entries(c), roster), set()
+        while gid and gid not in seen:
+            seen.add(gid)
+            group = groups.get(gid) or {}
+            if any(word in f"{gid} {group.get('name') or ''}".lower() for word in GROWTH_TEAMS):
+                return True
+            gid = group.get("parent")
+    except (sqlite3.Error, LookupError, TypeError, ValueError, AttributeError):
+        # A roster that does not parse leaves the turn without the brand, never without a turn.
+        log.warning("growth-facing check failed for %s", bot, exc_info=True)
+    return False
 
 
 def _layers(c, settings, conversation, bot):
     conversation = conversation or {}
-    owner = str(conversation.get("owner_actor") or "")
+    owner = str(conversation.get("owner_id") or "")
     if conversation.get("scope") != rooms.PERSONAL or not H.is_human(owner) or conversation.get("closed_at"):
         return None
     if bot != settings.assistant_bot or conversation.get("room_key") != rooms.ASSISTANT_ROOM:
@@ -163,12 +200,12 @@ def add(c, who, layer, text, settings):
     if c.execute("SELECT count(*) FROM learned_entries WHERE layer=? AND person=?", (layer, person)).fetchone()[0] \
             >= LAYER_MAX:
         raise Problem("too_many", f"That layer holds {LAYER_MAX} entries: delete some on What it has learned first", 409)
-    row = {"id": H.new_id(), "layer": layer, "person": person, "text": text, "created": H.now(),
+    row = {"id": H.new_id(), "layer": layer, "person": person, "text": text, "created_at": H.now(),
            "created_by": who.actor, "via": (who.task_actor or "") if who.via else None}
-    c.execute("INSERT INTO learned_entries(id,layer,person,text,created,created_by,via) "
-              "VALUES(:id,:layer,:person,:text,:created,:created_by,:via)", row)
+    c.execute("INSERT INTO learned_entries(id,layer,person,text,created_at,created_by,via) "
+              "VALUES(:id,:layer,:person,:text,:created_at,:created_by,:via)", row)
     H.event(c, who.actor, "learned.added", row["id"], {"layer": layer})
-    return _view({**row, "updated": None})
+    return _view({**row, "updated_at": None})
 
 
 def _own_entry(c, who, eid, settings):
@@ -188,7 +225,7 @@ def edit(c, who, eid, text, settings):
     row = _own_entry(c, who, eid, settings)
     text = _clean(text)
     H._writer(c, who.actor)
-    c.execute("UPDATE learned_entries SET text=?, updated=?, updated_by=? WHERE id=?", (text, H.now(), who.actor, eid))
+    c.execute("UPDATE learned_entries SET text=?, updated_at=?, updated_by=? WHERE id=?", (text, H.now(), who.actor, eid))
     H.event(c, who.actor, "learned.edited", eid, {"layer": row["layer"]})
     return _view(c.execute("SELECT * FROM learned_entries WHERE id=?", (eid,)).fetchone())
 

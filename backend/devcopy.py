@@ -9,7 +9,7 @@ added after this list, is emptied and named in the output: a new table is safe u
 
 Runs stay for realism: finished attempts in the window keep their events, conversations and inputs (inputs are
 message links, no text, and decide who may see a run). Unfinished jobs and attempts go. The tokens on kept rows are
-replaced by values no token hashes to: bots, external agents, runners (also revoked) and attempts (lease ended).
+replaced by values no token hashes to: external agents, runners (also revoked) and attempts (lease ended).
 The key files that sit beside a database (backup.KEY_FILES) are never copied, so a credential row missed here still
 opens nothing. Beside the copy go a `server.env` with TICO_REHEARSAL=1 (nothing runs on a timer, nothing leaves the
 server, and runners are refused), a fresh local sign-in token, and empty registry and attachment folders.
@@ -32,41 +32,55 @@ from contextlib import closing
 from pathlib import Path
 
 from . import backup
+from .finance import actions as finance
 from .hubdb import now, shift
 
 # Emptied, never pruned: one surviving row is one thing the copy could do.
 EMPTY = (
     # queued work
-    "job_recovery", "service_jobs", "doc_source_jobs", "update_queue", "task_reminders", "calendar_actions",
-    "meeting_deliveries", "worktree_waits", "check_waits", "check_head_provenance", "idempotency",
-    "idempotency_messages", "blob_media_retries",
-    "github_product_repo_operations", "github_review_operations", "invite_sends",
+    "job_recovery", "service_jobs", "doc_source_jobs", "update_queue", "task_reminders", "task_check_back_wakes", "calendar_actions",
+    "meeting_deliveries", "worktree_waits", "check_waits", "check_head_provenance", "idempotency",   # bindings too
+    "idempotency_messages", "blob_media_retries", "seat_requests",   # a cloud agent request's key: a replay re-files
     # milestone waits: each pending row is a wake the copy could send; the milestones seen only settle those
     "task_milestone_waits", "milestones",
     # reconnect cards: an open one is a wake the copy could send; the refusals only settle those
     "task_reconnects", "google_signin_refusals",
+    # Pass deadlines can withdraw tasks; a rehearsal copy never resumes that work.
+    "memory_tidy_passes", "memory_tidy_packets",
     # routines and watchers
     "webhooks", "webhook_events", "webhook_sends", "webhook_attempts",   # outgoing: a copy never sends an event out
-    "task_rules", "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "trigger_bodies", "trigger_seen", "rule_events_seen", "rule_task_runs", "rule_task_state", "trigger_relays", "hook_relay_state", "sleep_idle_state", "tico_notices", "watcher_runs", "watcher_items", "watcher_refs",
+    "task_rules", "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "trigger_bodies", "trigger_seen", "rule_events_seen", "rule_task_runs", "rule_task_state", "trigger_relays", "hook_relay_state", "sleep_idle_state", "tico_notices", "mail_items", "mail_intake", "mail_reads", "mail_private_backfill", "watcher_runs", "watcher_items", "watcher_refs",
     "task_manager_seen", "task_manager_reports",    # the Task Manager's repeat ledger and last checks: the copy starts its hourly report fresh
+    "bookkeeper_seen", "bookkeeper_watch_listed",   # the Bookkeeper's ledgers: the copy starts its checks fresh
+    "org_rule_holds",    # org rules: a held output could still be sent anyway from the copy
+    "org_rule_verdicts",  # org rule checks: the model's verdicts, a cache
     "watcher_pending", "watcher_triage",    # support triage: tickets waiting for their check (customer text), and its verdicts
     "screening_pending", "screening_verdicts",  # screening: outside text waiting for its check, and the model's verdicts
     # runner and bot sessions
-    "enrollments", "hosting_enrollments", "assignments", "agent_pairings", "bot_sessions", "session_epochs", "bot_session_epochs", "compact_first", "model_logins", "model_login_cleared", "computer_keys", "model_login_key_off",
+    "enrollments", "hosting_enrollments", "assignments", "cloud_machines", "cloud_machine_codes", "agent_pairings", "bot_sessions", "session_epochs", "bot_session_epochs", "compact_first", "model_logins", "model_login_cleared", "computer_keys", "model_login_key_off",
     "computer_profiles", "subscription_assignments", "runner_harness_actions", "runner_harness_choices",
     "runner_versions", "start_places", "org_turn_waits",
+    # Browse through: a computer's sharing and a bot's choice open tunnels through a real person's internet; the relay's
+    # batch marks only settle that relay's usage reports (backend/browser_exit.py)
+    "browser_exits", "bot_browser_exits", "browser_exit_marks",
     # human sign-in and service keys
     "human_tokens", "oidc_sessions", "oidc_codes", "oauth_grants", "oauth_clients", "service_keys",
     "service_key_tasks", "owner_links",
     # credentials
     "credentials", "credential_keys", "credential_grants", "credential_uses", "credential_requests", "credential_imports",
     "directory_credentials", "company_storage", "tico_storage",
+    # company model subscriptions: the sealed logins (vault values) and which computer or attempt holds which one
+    "model_subscriptions", "computer_subscriptions", "attempt_subscriptions", "pending_subscription_fallbacks", "subscription_connects",
     # mail, Slack, GitHub, Granola, meeting bots, support
     "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
+    # Settings > Google: the Workspace key (sealed), setup codes and the OAuth client secret (sealed), and the health each
+    # computer reported. A copy holds none of them (google_connects.client_id goes with its table).
+    "google_workspaces", "google_setup_codes", "google_oauth_clients", "connector_reports",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
     "support_tickets", "support_access", "support_access_log",
     # Agent inbox bodies/codes and delivery cursors never enter a rehearsal copy.
     "inbound_inboxes", "inbound_messages", "inbound_sync",
+    "bills_inbound",     # emailed bills: senders, subjects and HQ delivery ids
     "usage_alerts", "task_requesters", "roadmap_actions",
     # raw provider streams: customer text, and whatever the secret scrub missed
     "attempt_captures", "attempt_capture_drops", "attempt_diagnostics",
@@ -80,50 +94,87 @@ EMPTY = (
     # migration snapshot (restoring it would act).
     "automations", "automation_versions", "automation_runs", "automation_mail_actions", "automation_daily",
     "automation_inboxes", "automation_effects", "automation_holds", "automation_guard_holds", "automation_turn_answers",
-    "redesign_migrations",
     # Task cap counts are today's sends; the caps themselves are kept.
-    "task_cap_sends", "task_cap_log",
+    "task_cap_log",
     # A hard delete's queue of bytes still to remove from storage: the copy never deletes from the source's stores.
     "blob_purges",
+    # Calls: a live call's room and recorder are on the source's LiveKit, so the copy holds no live call. Its
+    # transcripts and action items are thread messages, kept with the history.
+    "calls", "call_participants", "call_holds",
+    # Slack links: an active link posts to Slack both ways; its queue and message map only serve that link.
+    "slack_thread_links", "slack_link_members", "slack_message_links", "slack_inbound_events",
+    # The Company page: the readers (their addresses, sessions and invite hashes, the messages they wrote, what they read,
+    # what was mailed to them), and the company's published statements and rules. A copy is rehearsal data, so none of it.
+    "readers", "audience_readers", "reader_sessions", "reader_invites", "reader_messages", "reader_notices", "edition_views",
+    "company_page_settings", "audiences", "audience_sources", "disclosure_revisions", "disclosure_rules", "editions",
+    "edition_sources", "edition_checks", "page_stats", "stat_board_approvals", "page_releases",
 )
+# Finance's own tables are classified in finance/actions.py (DEV_COPY_KEPT, and DEV_COPY_EMPTIED which Finance empties
+# in its scrub), so no Finance table name is written here.
 # Definitions `--keep-automations` keeps (out of EMPTY, or unclassified): never their queues, deliveries or secrets.
 AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",
                "automation_versions")
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
-HISTORY = {"attempts": "created", "jobs": "created", "messages": "created", "events": "ts", "deltas": "ts",
-           "bot_status_history": "since", "audit_log": "at"}
+HISTORY = {"attempts": "created_at", "jobs": "created_at", "messages": "created_at", "events": "created_at", "deltas": "created_at",
+           "bot_status_history": "started_at", "audit_log": "created_at", "browser_exit_usage": "day"}
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
     "agents", "approvals", "archives", "assistant_actions", "attempt_conversations", "attempt_events", "attempt_load_snapshots",
     "attempt_inputs", "backup_verified_blobs", "batches", "blob_locations", "blob_media", "blobs",
-    "bot_agent_instructions", "bot_budget", "bot_config", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files",
+    "bot_agent_instructions", "bot_budget", "bot_config", "bot_settings", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files",
     "bot_memory_documents", "bot_memory_oversized", "bot_memory_seen", "bot_memory_updates", "bot_repo_access", "bot_status",
     "bot_task_tabs", "bot_tool_requests", "cards", "deferrals", "pin_places", "pins", "bot_transition_checkpoints", "bot_transitions", "bots", "strategy_actions",
     "ask_ingest_items", "ask_ingest_settings", "strategy_merges", "changes", "chat_goals",
-    "ceo_actions", "ceo_merges",  # the names before the rename, kept, mirrored, for one release (hubdb.STRATEGY_TABLES)
-    "cloud_migrations", "company_events", "company_profile", "connector_snapshots", "conversations", "doc_sources", "doc_versions", "docs",
-    "document_versions", "documents", "external_documents", "file_deletions", "external_sections", "external_snapshot_docs",
+    "cloud_migrations", "schema_migrations", "company_profile", "connector_snapshots", "conversations", "doc_sources", "doc_versions", "docs",
+    "external_documents", "file_deletions", "external_sections", "external_snapshot_docs",
     "external_snapshots", "external_versions", "feed_sources", "feed_updates", "flight_db", "flight_events",
     "flight_process", "flight_requests",
-    "flight_slow", "flight_sql", "provenance_clock", "roster_clock", "row_clock", "goal_asks", "goal_checkins", "goal_events", "goal_kpis", "goal_proposals", "goals",
-    "health_findings", "health_reports", "humans", "import_refs", "invariant_state", "intake_items", "kpi_definitions", "kpi_readings",
-    "kpis", "learning_cursors", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs", "learned_entries", "linked_docs", "listening_destinations",
+    "flight_slow", "flight_sql", "provenance_clock", "roster_clock", "row_clock", "goal_asks", "goal_checkins", "goal_kpis", "goal_proposals", "goals",
+    "health_findings", "health_reports", "humans", "principals", "import_refs", "invariant_state", "intake_items", "kpi_definitions", "kpi_readings",
+    "kpis", "learning_cursors",
+    # Threads: the search index (its triggers follow the messages kept), and the digest and follow-up ledgers, which
+    # stop the copy emailing or nudging again what the source already did.
+    "thread_digests", "thread_followups", "thread_earlier_notices", "thread_rankings", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs", "learned_entries", "linked_docs", "listening_destinations",
     "listen_items", "listen_judgments", "listen_runs", "live_meeting_chat", "live_meeting_chat_routes",
     "live_meeting_access", "live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_events", "live_meeting_humans",
     "live_meeting_turns", "live_meeting_windows", "live_meetings", "mail_agent_instructions", "mail_messages",
-    "main_pushes", "market_citations", "market_edges", "market_entities", "market_entity_keys", "market_events",
-    "market_evidence", "market_figures", "market_insights", "market_sizes", "market_sources", "market_watches", "market_briefings", "market_turn_sources", "media_assets", "media_control", "meeting_brain", "meeting_comments",
+    "main_pushes", "market_citations", "market_edges", "market_entities", "market_entity_keys",
+    "market_evidence", "market_figures", "market_insights", "market_sizes", "market_sources", "market_watches", "market_briefings", "market_pages", "market_turn_sources", "media_assets", "media_control", "meeting_brain", "meeting_comments",
     "meeting_items", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
     "message_links_seen", "notes", "pages", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
-    "recording_source_refs", "recording_transcripts", "redesign_migrated", "redesign_migration_accepts", "refusals", "registry_metadata", "repositories", "rule_suggestions", "rules", "run_backoff", "runners",
+    "recording_source_refs", "recording_transcripts", "org_rules", "org_rule_misses", "redesign_migrated", "refusals", "registry_metadata", "repositories", "rule_due_dates", "rule_due_status", "rule_reads", "rule_sources", "rule_suggestions", "rules", "run_backoff", "runners", "runner_states",
     "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
-    "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_events", "strategy_versions",
+    "memory_tidy_cards", "memory_tidy_keeps", "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_versions",
     "system_runs", "tags", "task_assets",
-    "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_links", "task_relations",
+    "task_check_models", "task_delegations", "history_events", "task_file_reviews", "task_holds", "task_links",
+    "task_relations",
     "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
-    "turn_usage_segments", "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
-    "usage_limits", "usage_pools", "task_caps",
-))
+    "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
+    "usage_facts", "usage_meter_reads", "budget_nodes", "task_caps", "reach_settings", "reach_lines",
+    # The five change logs before migration 0064 moved them into history_events. A copy of a database from before that
+    # migration still holds them: kept, so the copy's first start moves their rows (it is pruned before it is migrated).
+    # 0064 drops them, so they are named here only until then.
+    "task_events", "goal_events", "market_events", "company_events", "strategy_events",
+    # A copy of a database from before migrations 0053/0054 still holds these: kept, so the dev server's first start
+    # moves them into usage_facts and budget_nodes (the copy is pruned before it is migrated).
+    # A copy from before migration 0072 still holds turns (the run records, now attempts rows): kept until 0072 moves them.
+    "turn_usage_segments", "usage_limits", "usage_pools",
+    "feedbacks",       # 👍/👎 on bot work (backend/feedback.py)
+    # Shared records (backend/records): locations, items and projects
+    "items", "locations", "projects", "record_aliases",
+    # Growth and brand (backend/growth.py, backend/brand.py)
+    "brand_drafts", "brand_versions", "gtm_sources", "growth_channels", "growth_cohorts", "growth_settings",
+    # Native threads (backend/threads.py) and teammate permissions (backend/teammate_access.py). A delivery to an
+    # outside destination that has not gone is made moot below, so the copy never sends it.
+    "message_deliveries", "message_mentions", "message_reactions", "message_revisions", "sequences",
+    "teammate_accesses", "thread_followers", "thread_members", "thread_pins", "thread_routings",
+    "message_routes",
+    "message_search_keys",    # the search index's keys (thread_search.py); its FTS table is copied whole too, and search joins messages
+    "home_merges", "home_merge_messages",   # where each person's old chat with a bot went (backend/bot_home_merge.py)
+    # The Google Workspace generation counter (backend/google_workspace.py): no secrets, and kept so a copy never issues
+    # a number that an older setup code already holds.
+    "google_setup_generations",
+)) | frozenset(finance.DEV_COPY_KEPT)
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.
 OWNED = frozenset(("attempt_events", "attempt_conversations", "attempt_inputs", "attempt_load_snapshots"))
@@ -145,7 +196,8 @@ def data_tables(c):
 
 def unclassified(c, keep_automations=False):
     kept = AUTOMATIONS if keep_automations else ()
-    return sorted(t for t in data_tables(c) if t not in KEEP and t not in HISTORY and t not in EMPTY and t not in kept)
+    return sorted(t for t in data_tables(c) if t not in KEEP and t not in HISTORY and t not in EMPTY and t not in kept
+                  and t not in finance.DEV_COPY_EMPTIED)
 
 
 def quote(name):
@@ -253,7 +305,17 @@ def revoke_automation_secrets(c):
     if "webhooks" in present:
         columns = {r[1] for r in c.execute("PRAGMA table_info(webhooks)")}
         c.execute("UPDATE webhooks SET secret='', secret_prev='', secret_prev_until=NULL"
-                  + (", headers_json='[]'" if "headers_json" in columns else ""))
+                  + (", headers='[]'" if "headers" in columns else ""))
+
+
+def open_attempts(c):
+    """(WHERE clause, args) for the attempts a copy removes as still open. A run with no job has no lease, so it is open
+    until settled_at; a job-backed attempt is open until finished_at, or while its state is open. A file from before
+    migration 0072 has no settled_at and no run without a job."""
+    open_state = "finished_at IS NULL OR state IN (%s)" % ",".join("?" * len(OPEN_ATTEMPTS))
+    if "settled_at" in {row[1] for row in c.execute('PRAGMA table_info("attempts")')}:
+        return "(job_id IS NULL AND settled_at IS NULL) OR (job_id IS NOT NULL AND (%s))" % open_state, OPEN_ATTEMPTS
+    return open_state, OPEN_ATTEMPTS
 
 
 def prune(c, days, keep_automations=False):
@@ -272,21 +334,30 @@ def prune(c, days, keep_automations=False):
         revoke_automation_secrets(c)
     # A deleted task's snapshot holds copies of its own rows; an emptied table's copies (requesters' contacts and
     # token hashes, delivery bookkeeping) go too, so neither a read of the trash nor a restore brings them back.
+    # Finance's emptied tables are in this set too, though Finance deletes them (in its scrub, below).
+    gone_all = set(gone) | set(finance.DEV_COPY_EMPTIED)
     if "task_trash" in present:
-        for task_id, raw in c.execute("SELECT task_id,rows_json FROM task_trash").fetchall():
+        for task_id, raw in c.execute("SELECT task_id,rows FROM task_trash").fetchall():
             snapshot = json.loads(raw or "{}")
             rows = snapshot.get("rows") if isinstance(snapshot, dict) else None
-            if isinstance(rows, dict) and set(rows) & set(gone):
-                snapshot["rows"] = {t: r for t, r in rows.items() if t not in gone}
-                c.execute("UPDATE task_trash SET rows_json=? WHERE task_id=?", (json.dumps(snapshot), task_id))
+            if isinstance(rows, dict) and set(rows) & gone_all:
+                snapshot["rows"] = {t: r for t, r in rows.items() if t not in gone_all}
+                c.execute("UPDATE task_trash SET rows=? WHERE task_id=?", (json.dumps(snapshot), task_id))
     # The secret that keys visitors' hashed addresses is the live install's; the copy gets its own.
     if "registry_metadata" in present:
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='roadmap_ip_secret'",
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='roadmap_ip_secret'",
                   (json.dumps(secrets.token_hex(32)),))
+    # Finance makes its tables inert itself: pending actions, undrained events, links to emptied holds, and the rows that
+    # move money or call a provider (DEV_COPY_EMPTIED). Any Finance table present means the scrub runs: a copy missing one
+    # table still has the rest made inert (scrub_dev_copy skips the tables a copy does not have).
+    if present & (set(finance.DEV_COPY_KEPT) | set(finance.DEV_COPY_EMPTIED)):
+        for table, count in finance.scrub_dev_copy(c, now()).items():
+            if count:
+                removed[table] = removed.get(table, 0) + count
     if "jobs" in present:
         delete("jobs", "state IN (%s)" % ",".join("?" * len(OPEN_JOBS)), OPEN_JOBS)
     if "attempts" in present:
-        delete("attempts", "finished IS NULL OR state IN (%s)" % ",".join("?" * len(OPEN_ATTEMPTS)), OPEN_ATTEMPTS)
+        delete("attempts", *open_attempts(c))
     stamp = now()
     if days:
         cutoff = shift(stamp, days=-days)
@@ -299,16 +370,19 @@ def prune(c, days, keep_automations=False):
                 f" AND {quote(key)} NOT IN (SELECT {quote(col)} FROM {quote(child)} WHERE {quote(col)} IS NOT NULL)"
                 for child, col, key in refs)
             delete(table, where, (cutoff,))
+    # A copy from before migration 0072 keeps its turns whole (KEEP). A run the cut removed must not come back through
+    # its turns row as a lease-less run, so the record goes with its attempts row.
+    if "attempts" in present and "turns" in present:
+        delete("turns", "id NOT IN (SELECT id FROM attempts)")
     # Kept rows keep no way in: a value no token hashes to (the columns are NOT NULL UNIQUE where not nullable).
-    if "bots" in present:
-        c.execute("UPDATE bots SET token_hash=NULL")
     if "agents" in present:
         c.execute("UPDATE agents SET token_hash='devcopy-revoked:'||bot, revoked_at=coalesce(revoked_at,?), "
                   "revoked_by=coalesce(revoked_by,'devcopy')", (stamp,))
     if "runners" in present:
         c.execute("UPDATE runners SET token_hash='devcopy-revoked:'||id, revoked_at=coalesce(revoked_at,?)", (stamp,))
     if "attempts" in present:
-        c.execute("UPDATE attempts SET token_hash='devcopy-revoked:'||id, lease_until=coalesce(finished,created)")
+        c.execute("UPDATE attempts SET token_hash='devcopy-revoked:'||id, lease_until=coalesce(finished_at,created_at) "
+                  "WHERE job_id IS NOT NULL")
     # A row that points at one just removed goes too (attempt_events of an attempt, oauth_grants of a token):
     # repeated until no foreign key is broken by what this run removed.
     touched, frontier = set(removed), set(removed)
@@ -324,9 +398,13 @@ def prune(c, days, keep_automations=False):
                 touched.add(child)
                 frontier.add(child)
     if "messages" in present:
-        for table in ("message_links", "message_links_dirty", "message_links_seen"):
+        for table in ("message_links", "message_links_dirty", "message_links_seen", "message_deliveries",
+                      "message_mentions", "message_reactions", "message_revisions"):
             if table in present:
                 delete(table, "message_id NOT IN (SELECT id FROM messages)")
+    if "message_deliveries" in present:
+        c.execute("UPDATE message_deliveries SET state='moot' WHERE state IN ('pending','capped','held') "
+                  "AND recipient LIKE 'slack:%'")
     return {t: n for t, n in removed.items() if n}
 
 
@@ -367,8 +445,9 @@ def build(source, dest, days=30, force=False, keep_automations=False):
         left = [t for t in emptied(c, keep_automations) if c.execute(f"SELECT 1 FROM {quote(t)} LIMIT 1").fetchone()]
         if left:
             raise SystemExit("devcopy: tables not empty after pruning: " + ", ".join(left))
+        where, args = open_attempts(c)
         live = c.execute("SELECT count(*) FROM attempts WHERE token_hash NOT LIKE 'devcopy-revoked:%' "
-                         "OR finished IS NULL").fetchone()[0] if "attempts" in tables(c) else 0
+                         f"OR ({where})", args).fetchone()[0] if "attempts" in tables(c) else 0
         if live:
             raise SystemExit("devcopy: an unfinished or unrevoked attempt survived pruning")
         present = tables(c)
@@ -384,7 +463,7 @@ def build(source, dest, days=30, force=False, keep_automations=False):
 def owner_email(path):
     import json
     with closing(sqlite3.connect(Path(path).as_uri() + "?mode=ro", uri=True)) as c:
-        row = c.execute("SELECT value_json FROM registry_metadata WHERE key='owner'").fetchone() \
+        row = c.execute("SELECT value FROM registry_metadata WHERE key='owner'").fetchone() \
             if "registry_metadata" in tables(c) else None
         if row:
             email = str((json.loads(row[0]) or {}).get("email") or "")

@@ -1,5 +1,5 @@
 // The owner's chat is their Assistant like everyone else's (backend/assistant.py chat_bot, ui/app/state.js myChatBot): the
-// page and their own page's tab read the Assistant, the composer takes words only, and their earlier chat with the
+// page and their own page's tab read the Assistant, the composer takes words and files, and their earlier chat with the
 // Strategy Bot stays readable, read-only, under "Earlier chats". An admin keeps the Assistant, with no Earlier chats,
 // and a helper's own page (#/bot/botops, #/bot/goal-manager) opens for them with no composer.
 // Fixtures only.
@@ -8,9 +8,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 
 const now = new Date().toISOString();
-const msg = (id, from, body) => ({id, from_actor: from, body, refs: {}, created: now, kind: 'say'});
+const msg = (id, from, body) => ({id, sender_id: from, body, refs: {}, created_at: now, kind: 'say'});
 const bot = (name, display_name) => ({name, display_name, host: 'keeper', status: 'active', can_chat: false});
 
 async function open(browser, me, view, strategyName) {
@@ -18,6 +19,7 @@ async function open(browser, me, view, strategyName) {
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], {origin: 'https://tico-ui.test'});
   const page = await context.newPage();
   const errors = [], read = [], sent = [];
+  const helpers = ['botops', 'goal-manager'].map(bot => threadsFake({bot, home: [{id: 'h-' + bot, sender_id: 'bot:' + bot, body: 'Nothing to report.'}]}));
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
@@ -34,12 +36,13 @@ async function open(browser, me, view, strategyName) {
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/conversations') return json({conversations: []});
+    for (const answer of helpers.map(h => h(p, url, route.request().method()))) if (answer !== undefined) return json(answer);
     if (p === '/api/v2/assistant') return json(view);
     // A send: words as JSON, files as a form, like any bot chat (ui/app/api.js cloudCompose).
     if (/^\/api\/v2\/(?:uploads\/)?assistant\/messages$/.test(p)) {
       const request = route.request(), form = !p.includes('/uploads/');
       sent.push({path: p, body: form ? request.postDataJSON() : request.postDataBuffer().toString('latin1')});
-      return json({message: msg('s' + sent.length, 'human:' + me.id, 'sent'), reply: null, fast: false, intent: null});
+      return json({message: msg('s' + sent.length, 'human:' + me.id, 'sent'), });
     }
     if (p === `/api/v2/conversations/${view.room_id}/snapshot`) return json({messages: view.messages, execution: null, has_more: false, next_before: null});
     if (p === '/api/v2/conversations/old1/messages') {
@@ -81,16 +84,23 @@ const view = (over) => ({available: true, state: 'active', can_turn_on: false, r
       await page.goto('https://tico-ui.test/#/assistant');
       await page.locator('#chat-composer .p-text').waitFor();
       assert.equal(await page.locator('#main .asst-top h1').innerText(), 'Assistant', 'owner: the page is their Assistant');
-      // Words only, as for everyone: pasted words land and send, a pasted picture attaches nothing.
+      // Words send as words; a pasted picture attaches, and then the message goes up as an upload.
       const box = page.locator('#chat-composer .p-text');
-      assert.equal(await page.locator('#chat-composer .p-attach').count(), 0, 'owner: no attach button');
-      await paste(page, 'image');
+      assert.equal(await page.locator('#chat-composer .p-attach').count(), 1, 'owner: the clip');
       await paste(page, 'text');
       assert.equal(await box.inputValue(), 'Why did revenue dip in March?', 'owner: pasted words land in the box');
-      assert.equal(await page.locator('#chat-composer .p-chips').innerHTML(), '', 'owner: no picture attached');
       await box.press('Enter');
       await page.waitForFunction(() => !document.querySelector('#chat-composer .p-text').value);
       assert.deepEqual(sent.map(s => [s.path, s.body]), [['/api/v2/assistant/messages', {text: 'Why did revenue dip in March?'}]], 'owner: words send as words');
+      await paste(page, 'image');
+      await page.locator('#chat-composer .p-chips > *').first().waitFor();
+      await box.press('Enter');
+      await page.waitForFunction(() => !document.querySelector('#chat-composer .p-chips')?.children.length);
+      // The box empties as the message leaves; the upload itself follows.
+      for (let i = 0; i < 100 && sent.length < 2; i++) await page.waitForTimeout(50);
+      assert.equal(sent[1]?.path, '/api/v2/uploads/assistant/messages', 'owner: a picture goes up as an upload');
+      assert.match(sent[1].body, /name="text"\r\n\r\nAttached files\./);
+      assert.match(sent[1].body, /filename="[^"]*\.png"/);
       // Earlier chats: closed, loaded when opened, read-only, older pages on request.
       const earlier = page.locator('#asst-earlier');
       assert.equal(await earlier.isVisible(), true, 'owner: Earlier chats is there');
@@ -115,21 +125,22 @@ const view = (over) => ({available: true, state: 'active', can_turn_on: false, r
       await page.locator('#chat-composer .p-text').waitFor();
       assert.equal(await page.locator('#main .asst-top h1').innerText(), 'Assistant', 'admin: the Assistant page');
       assert.equal(await page.locator('#asst-earlier').isHidden(), true, 'admin: no Earlier chats');
-      // The Assistant takes words only: pasted words land, a pasted picture attaches nothing.
-      assert.equal(await page.locator('#chat-composer .p-attach').count(), 0, 'admin: no attach button');
+      // The Assistant takes a picture with the words: both go up together.
+      assert.equal(await page.locator('#chat-composer .p-attach').count(), 1, 'admin: the clip');
       await paste(page, 'image');
       await paste(page, 'text');
       assert.equal(await page.locator('#chat-composer .p-text').inputValue(), 'Why did revenue dip in March?', 'admin: pasted words land');
-      assert.equal(await page.locator('#chat-composer .p-chips').innerHTML(), '', 'admin: no picture attached');
+      assert.equal(await page.locator('#chat-composer .p-chips > *').count(), 1, 'admin: the picture attached');
       await page.locator('#chat-composer .p-text').press('Enter');
       await page.waitForFunction(() => !document.querySelector('#chat-composer .p-text').value);
-      assert.deepEqual(sent.map(s => s.path), ['/api/v2/assistant/messages'], 'admin: words only');
-      // A helper's own page still opens for an admin, with no composer: the Assistant hands it its work.
+      await page.waitForFunction(() => !document.querySelector('#chat-composer .p-chips')?.children.length);
+      for (let i = 0; i < 100 && !sent.length; i++) await page.waitForTimeout(50);
+      assert.deepEqual(sent.map(s => s.path), ['/api/v2/uploads/assistant/messages'], 'admin: words and the picture together');
+      // A helper's own page still opens for an admin, with its Home but no DM: the Assistant hands it its work.
       for (const helper of ['botops', 'goal-manager']) {
         await page.goto('https://tico-ui.test/#/bot/' + helper);
-        await page.locator('#chat-composer [data-ask-open]').waitFor();
-        assert.equal(await page.locator('#chat-composer .p-text').count(), 0, `admin: no composer on ${helper}'s page`);
-        assert.match(await page.locator('#chat-composer').innerText(), /The Assistant hands .+ its work/);
+        await page.locator('#bot-thread .th-msg', {hasText: 'Nothing to report.'}).waitFor();
+        assert.equal(await page.locator('#btabs [data-bt=dm]').count(), 0, `admin: no DM tab on ${helper}'s page`);
       }
       assert.deepEqual(errors, [], 'admin: no page errors');
       await page.close();

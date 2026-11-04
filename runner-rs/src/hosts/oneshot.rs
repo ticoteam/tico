@@ -204,6 +204,7 @@ impl<W: Wire> OneShot<W> {
             .current_dir(&settings.cwd)
             .env_clear()
             .envs(&env);
+        super::new_group(&mut command);
         let mut child = command.spawn()?;
         let stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &env);
         Ok((child, stderr))

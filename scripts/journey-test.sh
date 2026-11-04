@@ -16,6 +16,8 @@
 # or that run on demand (replica restore, runner restart, backup). With TICO_JOURNEY_IMAGES_READY=<file> the candidate
 # images are built by the caller: the upgrade waits for that file to say "ok" instead of building them.
 # TICO_JOURNEY_CANDIDATE=vX.Y.Z names a local candidate built (or pulled and tagged) as that version instead of v9.9.9.
+# --release skips the rollback and replica stages (7, 8) when no file in ROLLBACK_PATHS changed since the previous tag;
+# TICO_JOURNEY_ROLLBACK=always runs them anyway, never skips them. Local runs always run them unless told otherwise.
 #
 # What it does, in one throwaway install directory and Docker project (tico-journey-<run id>), auth none:
 #   1 install     the PREVIOUS release: its checksummed bundle unpacked, a .env, `docker compose up -d`
@@ -27,7 +29,8 @@
 #   4 upgrade     "Update now" (POST /api/v2/system/update) moves the server to the candidate; the previous updater
 #                 applies the candidate's bundle and then replaces itself with the candidate's updater
 #   5 old runner  the previous release's runner, still running, against the candidate server: a turn in the same
-#                 session and a second worktree (v0.3.11, v0.3.36 and v0.3.37 broke exactly there)
+#                 session (migration 0067 moves the chat into the Home: a fresh thread there) and a second worktree
+#                 (v0.3.11, v0.3.36 and v0.3.37 broke exactly there)
 #   6 new runner  the computer moves to the candidate runner on the same volume: its turn still has the HUB_ variable
 #                 (v0.2.31 dropped them), continues the same session, the seeded worktree is still there and the
 #                 older releases' rows are intact; with the harness's saved sessions gone, the next turn still answers
@@ -78,6 +81,22 @@ INSTALL_UPDATER="$REGISTRY/ticoteam/tico-updater"   # the install's updater imag
 SWAP_HELPER=tico-updater-swap-$PROJECT              # docker/updater.py names the helper after the compose project
 BUCKET=acme-journey-bucket                          # the team's own HUB_BUCKET value, fake
 
+# Code the rollback steps (7 and 8) exercise. --release runs them only when one of these changed since $PREV
+# (rollback_changed); TICO_JOURNEY_ROLLBACK=always|never overrides. Keep this list honest when a path moves.
+ROLLBACK_PATHS=(
+  docker/updater.py                  # takes the pre-update snapshot, restores it, decides rolled_back and writes /status
+  docker/entrypoint.sh               # `tico-entrypoint prepare` and the Litestream replicate/restore the broken image runs
+  Dockerfile                         # bakes litestream, tico-entrypoint and the updater image the rollback test builds on
+  docker/fetch-tool.sh               # downloads the pinned Litestream binary the server image carries
+  docker/versions.env                # pins the Litestream version fetch-tool.sh downloads
+  compose.yaml                       # the server service the bundle ships: volumes, env, health, the /data layout
+  scripts/build_install_bundle.py    # decides which files the bundle the updater applies contains
+  backend/replication.py             # Litestream config, reset-stale-litestream and the replica the restore step reads
+  backend/hubdb.py                   # leave_wal_for_litestream: the WAL Litestream replicates, read by prepare
+  backend/releases.py                # the update status (snapshot, restored) the rollback step asserts on
+  scripts/journey-test.sh            # the rollback steps themselves
+)
+
 for tool in docker curl python3; do command -v "$tool" >/dev/null || { echo "journey: $tool is required" >&2; exit 2; }; done
 docker info >/dev/null 2>&1 || { echo "journey: the Docker daemon is not running" >&2; exit 2; }
 if [ -z "$PREV" ]; then
@@ -85,10 +104,34 @@ if [ -z "$PREV" ]; then
   [ -n "$PREV" ] || { echo "journey: no previous release tag found; pass --previous" >&2; exit 2; }
 fi
 
+rollback_changed() {  # 0: run the rollback steps. Their code changed since $PREV, or the diff cannot be computed.
+  export GIT_TERMINAL_PROMPT=0
+  if ! git rev-parse -q --verify "$PREV^{commit}" >/dev/null 2>&1; then   # a shallow or tagless checkout: fetch just that tag
+    git fetch -q --depth=1 origin tag "$PREV" >/dev/null 2>&1 || return 0
+    git rev-parse -q --verify "$PREV^{commit}" >/dev/null 2>&1 || return 0
+  fi
+  git diff --quiet "$PREV" HEAD -- "${ROLLBACK_PATHS[@]}" >/dev/null 2>&1
+  case $? in
+    0) return 1 ;;   # identical
+    *) return 0 ;;   # changed (1), or git failed (128 and friends): run it
+  esac
+}
+ROLLBACK_RUN=1 ROLLBACK_WHY=""
+case "${TICO_JOURNEY_ROLLBACK:-auto}" in
+  always) ;;
+  never) ROLLBACK_RUN=0; ROLLBACK_WHY="TICO_JOURNEY_ROLLBACK=never: skipping the rollback steps" ;;
+  auto)
+    # Local runs always run them; the release gate skips them when nothing they exercise changed.
+    if [ "$FAST" = 1 ] && ! rollback_changed; then
+      ROLLBACK_RUN=0; ROLLBACK_WHY="rollback code unchanged since $PREV: skipping the rollback steps"
+    fi ;;
+  *) echo "journey: TICO_JOURNEY_ROLLBACK must be auto, always or never" >&2; exit 2 ;;
+esac
+
 WORK="$(mktemp -d)"
 DIR="$WORK/install"
 mkdir -p "$DIR" "$WORK/releases/download"
-RESULTS=() STATE_ID="" FAILED=0 SEED_THREAD="" SEED_TASK=""
+RESULTS=() STATE_ID="" FAILED=0 SEED_THREAD="" SEED_TASK="" SEED_CONVERSATION=""
 
 dc() { docker compose -p "$PROJECT" --project-directory "$DIR" "$@"; }
 say() { printf '  %s\n' "$*"; }
@@ -148,7 +191,15 @@ start_runner() {  # image tag, then the join arguments: as docker/runner.compose
 }
 runner_online() { get getting-started | json 'sys.exit(0 if any(i["id"]=="computer" and i["done"] for i in d["items"]) else 1)'; }
 runner_id() { get operations | json 'd["machines"][0]["id"]'; }
-last_seen() { sql "SELECT coalesce(max(last_seen),'') FROM runners WHERE revoked_at IS NULL"; }
+last_seen() {  # the computers' last contact: runner_states (migration 0062) once this database has it, else runners under the
+  # column it has (the previous release predates the rename)
+  if [ "$(sql "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='runner_states'")" = 1 ]; then
+    sql "SELECT coalesce(max(last_seen_at),'') FROM runners_with_state WHERE revoked_at IS NULL"
+  else
+    local column; column="$(sql "SELECT name FROM pragma_table_info('runners') WHERE name IN ('last_seen_at','last_seen') ORDER BY name='last_seen_at' DESC LIMIT 1")"
+    sql "SELECT coalesce(max($column),'') FROM runners WHERE revoked_at IS NULL"
+  fi
+}
 seen_since() { [[ "$(last_seen)" > "$1" ]]; }
 botops_ready() { get operations | json 'sys.exit(0 if d["machines"][0]["readiness"]["bots"]["botops"]["ready"] else 1)'; }
 
@@ -170,7 +221,14 @@ ask() {  # name, then what to ask (env=NAME, worktree=TASK): one turn with BotOp
   retry 120 reply_to "$cid" "$nonce" || { say "no reply from the fake harness to $nonce"; return 1; }
 }
 fact() { tr ' ' '\n' < "$WORK/reply" | sed -n "s/^$1=//p" | head -n 1; }   # one fact of the last reply
-replied() { get "conversations/$(cat "$WORK/conversation")/messages" | json 'sys.exit(0 if any(m["body"].startswith("journey-reply:") for m in d["messages"]) else 1)'; }
+current_room() {  # conversation id: the room its messages are in now. When the bot's chats moved into its Home (migration
+  # 0067, backend/bot_home_merge.py) the old room is closed and its messages carry the Home's id; home_merges records which.
+  # Looked up on every check, so the room is found where it is after the update, a rollback or a restore.
+  local home
+  home="$(sql "SELECT home_id FROM home_merges WHERE conversation_id='$1' LIMIT 1" 2>/dev/null)"
+  printf '%s\n' "${home:-$1}"
+}
+replied() { get "conversations/$(current_room "$(cat "$WORK/conversation")")/messages" | json 'sys.exit(0 if any(m["body"].startswith("journey-reply:") for m in d["messages"]) else 1)'; }
 conversation_intact() { replied && [ "$(environment_id)" = "$STATE_ID" ]; }
 fixture_intact() {  # the rows scripts/make_upgrade_fixture.py added, as many as it added
   [ "$(sql "SELECT (SELECT count(*) FROM bots WHERE slug IN ('coo','cmo','seo')) || ' ' || (SELECT count(*) FROM tasks WHERE id IN ('t1','t2','t3')) || ' ' || (SELECT count(*) FROM messages WHERE id IN ('m1','m2'))")" = "3 3 2" ]
@@ -260,7 +318,7 @@ services:
     pull_policy: missing
   updater:
     environment:
-      TICO_HEALTH_SECONDS: "$([ "$FAST" = 1 ] && echo 30 || echo 60)"
+      TICO_HEALTH_SECONDS: "90"    # installs use 180; an upgrade from v0.5.55+ starts in ~30s, and the rollback step waits all of it
       TICO_UPDATER_POLL: "0.5"
       TICO_RELEASES_URL: http://$RELEASE_SERVER:8000
 EOF
@@ -312,6 +370,7 @@ step_seed() {
   post "credentials/$credential/grants" '{"subject": "bot:botops"}' >/dev/null || return 1
   SEED_TASK="$(new_task "Acme launch checklist")" || return 1
   ask seed env=HUB_BUCKET worktree="$SEED_TASK" || return 1
+  SEED_CONVERSATION="$(cat "$WORK/conversation")"
   SEED_THREAD="$(fact thread)"
   [ "$(fact HUB_BUCKET)" = "$(bucket_sha)" ] || { say "the seed turn did not get HUB_BUCKET: $(cat "$WORK/reply")"; return 1; }
   [ "$(fact worktree)" = ok ] || { say "the seed turn could not add a worktree: $(cat "$WORK/reply")"; return 1; }
@@ -362,7 +421,15 @@ step_old_runner() {
   [ "$(docker inspect --format '{{.Config.Image}}' "$RUNNER" | sed 's/.*://')" = "$PREV" ] || { say "the runner is not on $PREV"; return 1; }
   task="$(new_task "Acme pricing page")" || return 1
   ask old worktree="$task" || return 1
-  [ "$(fact thread)" = "$SEED_THREAD" ] || { say "the $PREV runner did not continue the seeded session: $(cat "$WORK/reply")"; return 1; }
+  if [ "$(current_room "$SEED_CONVERSATION")" != "$SEED_CONVERSATION" ]; then
+    # The seeded chat moved into the bot's Home on the update (backend/bot_home_merge.py): this turn starts a new thread
+    # there, so the Home's thread is the baseline for the checks after this one.
+    [ "$(fact thread)" != "$SEED_THREAD" ] || { say "the chat moved to the Home but the $PREV runner kept the seeded thread: $(cat "$WORK/reply")"; return 1; }
+    [ "$(cat "$WORK/conversation")" = "$(current_room "$SEED_CONVERSATION")" ] || { say "the $PREV runner's turn did not land in the Home"; return 1; }
+    SEED_THREAD="$(fact thread)"
+  else
+    [ "$(fact thread)" = "$SEED_THREAD" ] || { say "the $PREV runner did not continue the seeded session: $(cat "$WORK/reply")"; return 1; }
+  fi
   [ "$(fact worktree)" = ok ] || { say "the $PREV runner could not add a worktree: $(cat "$WORK/reply")"; return 1; }
   [ "$(worktree_state "$task" | tr '\n' ' ')" = "present on-disk " ] || { say "the $PREV runner's new worktree is $(worktree_state "$task" | tr '\n' ' ')"; return 1; }
 }
@@ -392,14 +459,16 @@ step_rollback() {
   # A "release" that migrates the database and then never serves: the case the snapshot exists for. The updater
   # doing it is the candidate's own, which replaced itself after the upgrade.
   # Through the server's real entrypoint (`prepare`: seed, identity, Litestream's configuration), so Litestream follows the
-  # database and replicates the migration before the rollback puts the snapshot back. It never serves.
+  # database and replicates the migration before the rollback puts the snapshot back. It never serves: it syncs the
+  # replica every second, its child exits after 5 s, and Docker restarts it into a crash loop the updater ends early.
   mkdir -p "$WORK/broken"
   cat > "$WORK/broken/tico-broken" <<'EOF'
 #!/bin/sh
 set -e
+export TICO_BACKUP_SYNC_INTERVAL=1s
 tico-entrypoint prepare
 python -c 'import sqlite3; c = sqlite3.connect("/data/hub.sqlite"); c.execute("CREATE TABLE journey_migrated(x)"); c.commit()'
-exec litestream replicate -config /tmp/litestream.yml -exec "sleep 3600"
+exec litestream replicate -config /tmp/litestream.yml -exec "sh -c 'sleep 5; exit 1'"
 EOF
   printf 'FROM %s:%s\nCOPY --chmod=755 tico-broken /usr/local/bin/tico-broken\nENTRYPOINT ["tico-broken"]\n' "$SERVER_IMAGE" "$CAND" > "$WORK/broken/Dockerfile"
   docker build -q -t "$SERVER_IMAGE:$BROKEN" "$WORK/broken" >/dev/null || return 1
@@ -485,6 +554,11 @@ run_step() {  # label function; after a failure the rest are skipped
   if "$fn"; then RESULTS+=("$label|PASS|$((SECONDS - start))")
   else RESULTS+=("$label|FAIL|$((SECONDS - start))"); FAILED=1; failure_logs; fi
 }
+skip_step() {  # label [reason]: not run, not a failure, and the steps after it still run
+  printf '==> %s\n' "$1"
+  [ -z "${2:-}" ] || say "$2"
+  RESULTS+=("$1|SKIP|0")
+}
 failure_logs() {  # what the containers said last: the release gate's log is all there is once the stack is gone
   local name
   for name in server updater; do
@@ -501,9 +575,15 @@ run_step "seed: fixture rows, runner, HUB_ variable, session, worktree" step_see
 run_step "upgrade $PREV -> $CAND (updater replaces itself)" step_upgrade
 run_step "$PREV runner on the $CAND server: turn and worktree" step_old_runner
 run_step "$CAND runner keeps the seeded data" step_new_runner
-run_step "roll back a bad update (snapshot restored)" step_rollback
+L_ROLLBACK="roll back a bad update (snapshot restored)" L_REPLICA="restore from the replica after that rollback"
+if [ "$ROLLBACK_RUN" = 1 ]; then
+  run_step "$L_ROLLBACK" step_rollback
+  [ "$FAST" = 1 ] || run_step "$L_REPLICA" step_replica
+else   # the replica step needs the rollback's replicated database, so it is skipped with it
+  skip_step "$L_ROLLBACK" "$ROLLBACK_WHY"
+  skip_step "$L_REPLICA"
+fi
 if [ "$FAST" = 0 ]; then
-  run_step "restore from the replica after that rollback" step_replica
   run_step "runner restarts after a turn took its secrets" step_runner_restart
 fi
 run_step "second updater hop $CAND -> $THIRD" step_second_hop

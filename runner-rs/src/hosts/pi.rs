@@ -373,13 +373,19 @@ pub fn openrouter_key(env: &Env, local: bool) -> String {
         .unwrap_or_default()
 }
 
-/// The pi runtime's sign-in: an OPENROUTER_API_KEY grant for every bot that runs on it.
+/// Whether a bot on pi signs in with its own OPENROUTER_API_KEY grant. A Tico model signs in with the company's gateway
+/// key, which the server hands its run.
+pub fn needs_grant(config: &Value) -> bool {
+    !is_gateway(config["model"].as_str())
+}
+
+/// The pi runtime's sign-in: an OPENROUTER_API_KEY grant for every bot that runs on it. The runtime is "missing" while
+/// one lacks it; each bot's own row says whether it is ready (`hosts::bot_key_problem`).
 pub fn sign_in(assignments: &[Value]) -> (&'static str, String) {
     let mut missing: Vec<String> = assignments
         .iter()
         .filter(|r| r["config"]["runtime"] == "pi")
-        // A Tico model signs in with the company's gateway key, which the server hands its run.
-        .filter(|r| !is_gateway(r["config"]["model"].as_str()))
+        .filter(|r| needs_grant(&r["config"]))
         .map(|r| text_of(&r["bot"]))
         .filter(|bot| !crate::hosts::gemini::has_grant(bot, "OPENROUTER_API_KEY"))
         .collect();
@@ -1065,6 +1071,7 @@ impl PiHost {
         }
         let mut command = crate::isolation::command_as(settings.identity, &argv[0]);
         command.args(&argv[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).current_dir(&settings.cwd).env_clear().envs(env);
+        super::new_group(&mut command);
         Ok(command)
     }
 
@@ -1374,6 +1381,11 @@ while True:
     /// The records of one of its JSON-lines logs.
     pub fn logged(dir: &Path, name: &str) -> Vec<Value> {
         std::fs::read_to_string(dir.join(name)).unwrap_or_default().lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
+    }
+
+    /// Whether the idle pool still owns this conversation's lease or relay.
+    pub fn has_held(pool: &super::Pool, owner: &str) -> bool {
+        pool.kept().values().any(|k| k.owner == owner && !k.held.is_empty())
     }
 
     /// A fake pi in `dir`, kept in `pool` for `owner` with `held` after one turn that completed.

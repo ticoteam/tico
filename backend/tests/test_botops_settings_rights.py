@@ -18,7 +18,7 @@ def test_an_owner_changes_team_settings_through_botops_and_a_member_is_refused(a
     err, made = mcp(api, "hub_task_type_create", {"name": "Ops", "default_visibility": "private"}, ana["token"])
     assert not err and made["type"]["default_visibility"] == "private", made
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT actor,detail_json FROM events WHERE action='task_type.create' ORDER BY rowid DESC "
+        row = c.execute("SELECT actor,detail FROM events WHERE action='task_type.create' ORDER BY rowid DESC "
                         "LIMIT 1").fetchone()
         assert row["actor"] == "human:ana", dict(row)            # hers, via BotOps
     finish(api, botops, ana)

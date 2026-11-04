@@ -4,6 +4,10 @@ Triggered by a task that asks "should we build X?", and used in the weekly summa
 Budget 15 minutes per request. The outcome is one scored proposal with its evidence and a route. Nothing
 is added to the roadmap.
 
+Inputs: the request task, `knowledge/scoring.md`, the feedback, support, usage and research reports named in step 2, and `hub goal list --all`.
+
+Done when: the proposal shows all four scores with their sources, names its weakest input, has a route, and any missing fact has been asked for once.
+
 ---
 
 ## 1. Restate the problem
@@ -33,5 +37,5 @@ Score = reach × impact × confidence ÷ effort. Show all four numbers and every
 
 On the task, in five lines: the problem, the score and its weakest input, the goal it serves (or "no
 goal: park"), a recommendation (build, research first, park) and the owner of the next step:
-`product-researcher` to raise confidence, `product-manager` for a spec. Ask only for missing facts with `hub task ask <id>`. Route requested next steps with `hub task create --owner <slug> --parent <id>` and log it in
+`product-researcher` to raise confidence, `product-manager` for a spec. Ask only for missing facts with `hub task ask <id>`, as in `skills/ask-with-recommended-answers/SKILL.md`. Route requested next steps with `hub task create --owner <slug> --parent <id>` and log it in
 `knowledge/decision-log.md`.

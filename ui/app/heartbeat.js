@@ -1,14 +1,13 @@
-/* ui/app/heartbeat.js — The account status dot and its lines, Needs you, account menu label, download link
+/* ui/app/heartbeat.js — The account status dot and its lines, account menu label, download link
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 // Only urgent issues with a concrete human action interrupt the person. The full diagnostic
 // list remains in Settings, including temporary outages and bot execution reviews.
 const needsPerson = issue => issue.needs_person === true && !!(issue.action || issue.restart);
-const needsYouKey = issue => [issue.kind, issue.bot || '', issue.machine || '', issue.title].join('|');
-const NEEDS_YOU_KEY = 'tico.needsYou';
-function needsYouMemory() { try { return JSON.parse(localStorage.getItem(NEEDS_YOU_KEY) || '{}'); } catch { return {}; } }
-function needsYouRemember(patch) { try { localStorage.setItem(NEEDS_YOU_KEY, JSON.stringify({...needsYouMemory(), ...patch})); } catch {} }
+// Health checks BotOps reviews (backend/health.py): a stopped run or a quarantined bot stays in Settings > Health and
+// never lights the person's status dot.
+const BOTOPS_CHECKS = new Set(['stopped_runs', 'quarantine']);
 // One status dot, left of the person's name in the account button (Chris, Oct 22): coloured by the worst line,
 // red when something is broken and needs the person, amber for a warning or something that clears by itself.
 // The same lines head the account menu and a hover card on the dot, one plain line each with its fix. No line, no dot.
@@ -16,10 +15,10 @@ const ACCOUNT_HEALTH = '<a class="ghost" href="#/settings" data-gs-tab="health" 
 const firstSentence = text => { const s = String(text || '').trim(); const m = s.match(/^.*?[.!?](?=\s|$)/); return (m ? m[0] : s).replace(/[.]$/, ''); };
 function accountIssueFix(issue) {
   if (issue.kind === 'uncertain_work' && issue.bot) return `<button class="ghost" type="button" data-account-review="${esc(issue.bot)}">Review</button>`;
-  if (issue.restart && issue.machine) return '<button class="ghost" type="button" data-account-needs-you title="Open Needs you to restart this computer">Open</button>';
+  if (issue.restart && issue.machine) return runnerRestartButton(issue);
   if (issue.kind === 'machine' && issue.machine) return '<a class="ghost" href="#/settings" data-gs-tab="devices">Fix</a>';
-  if (issue.bot) return `<a class="ghost" href="#/bot/${esc(issue.bot)}/more" title="Open the bot">Fix</a>`;
-  return '<button class="ghost" type="button" data-account-needs-you title="Open Needs you">Open</button>';
+  if (issue.bot) return `<a class="ghost" href="#/bot/${encodeURIComponent(issue.bot)}/more" title="Open the bot">Fix</a>`;
+  return ACCOUNT_HEALTH;
 }
 function accountStatusLines() {
   const st = S.status, lines = [];
@@ -35,7 +34,7 @@ function accountStatusLines() {
   // A computer offline for a moment (asleep, a restart) comes back by itself: Health calls it bad at once, but the
   // server asks a person only after NEEDS_YOU_MINUTES (backend/views.py, "stopped checking in"). Until a machine issue
   // needs this person, the offline checks are amber; with no computer set up at all, nothing clears, so red stays.
-  const attention = window.hlAttention?.() || [];
+  const attention = (window.hlAttention?.() || []).filter(check => !BOTOPS_CHECKS.has(check.id));
   const machineNeedsYou = (st?.health_issues || []).some(issue => issue.kind === 'machine' && needsPerson(issue));
   const computers = window.hlComputers?.();
   const noComputer = Array.isArray(computers) && !computers.length;
@@ -80,7 +79,6 @@ function renderAccountStatus() {
 }
 function renderHeartbeat() {
   renderAccountStatus();
-  needsYouAutoOpen((S.status?.health_issues || []).filter(needsPerson));
 }
 // Desktop: hovering the dot shows the lines without opening the menu. A tap opens the menu, which starts with them.
 (() => {
@@ -100,222 +98,27 @@ function renderHeartbeat() {
 })();
 document.addEventListener('click', ev => {
   if (ev.target.closest('[data-account-retry]')) { void refresh(false); return; }
-  if (ev.target.closest('[data-account-needs-you]')) { needsYou(); return; }
+  const restart = ev.target.closest('[data-runner-restart]');
+  if (restart) { void restartComputer(restart); return; }
   const review = ev.target.closest('[data-account-review]');
   if (review) executionReview(review.dataset.accountReview);
 });
-// The first time a new issue that needs a person shows up, it opens in front of them, wherever
-// they are in the app. Closing it is remembered per issue, and Snooze quiets everything for an
-// hour, so a person is asked once, not on every poll.
-function needsYouAutoOpen(urgent) {
-  // Only an issue the server explicitly marked for a person opens by itself; anything else waits
-  // behind the sidebar alert. Never over another dialog: whatever the person is doing comes first.
-  const explicit = urgent.filter(needsPerson);
-  if (!explicit.length || document.querySelector('dialog[open], .needs-you')) return;
-  const memory = needsYouMemory();
-  if (memory.snoozedUntil && Date.now() < memory.snoozedUntil) return;
-  const seen = new Set(memory.seen || []);
-  if (explicit.every(issue => seen.has(needsYouKey(issue)))) return;
-  needsYou();
-}
-// A panel above the sidebar alert, not a modal: it pops open in front of the person without
-// trapping them or covering what they were doing, and it is not a <dialog>, so nothing that
-// waits for `dialog[open]` (the review it can launch, for one) is confused by it.
 // A computer with a Tico update restarts from here. The runner takes main when
 // that is safe and restarts once nothing is running, so the line can say nothing is interrupted.
 const runnerRestartButton = issue => issue.restart && issue.machine
   ? `<button class="primary" type="button" data-runner-restart="${esc(issue.machine)}">Restart</button>` : '';
-function bindRunnerRestart(root) {
-  root.querySelectorAll('[data-runner-restart]').forEach(button => {
-    button.onclick = async () => {
-      button.disabled = true; button.textContent = 'Restarting…';
-      const line = button.closest('.settings-issue')?.querySelector('p');
-      try {
-        const r = await post(`/v2/computers/${encodeURIComponent(button.dataset.runnerRestart)}/restart`, {});
-        if (line) line.textContent = r.running
-          ? `Restarting after ${r.running} run${r.running === 1 ? ' finishes' : 's finish'}.`
-          : 'Restarting now. Nothing is running, so nothing will be interrupted.';
-        button.textContent = 'Restarting';
-      } catch (e) { button.disabled = false; button.textContent = 'Restart'; toast(e.message, true); }
-    };
-  });
-}
-// A choice saved while the bot was busy keeps the run listed (backend execution.stopped_rows `decided`): its line says
-// what Tico will do and offers no second choice, which the server would refuse. Once some of a run's folded requests
-// have a choice, only that choice is offered, for the rest.
-const stoppedChosen = run => run.decided || run.jobs?.find(job => job.decided)?.decided;
-// Whether a settled line's choice still waits for the bot's turn: a choice the server already held (no `deferred` of
-// this page's own click) was saved while the bot was busy.
-const stoppedWaits = run => !run.jobs || run.jobs.some(job => job.deferred !== false);
-// A bot's stopped runs, one short line each: the task, why it stopped (saying so when that was a restart or a limit,
-// not a bug) and its own Try again / Don't retry, the safe pick first by the review card's rule (Chris, Oct 26).
-// Details opens that card (settings.js executionReview) with the evidence.
-function stoppedLines(issue, list) {
-  if (!issue.runs?.length) return '';
-  const button = (run, i, decision, label, lead) => `<button type="button"${lead ? '' : ' class="ghost"'} data-run-decision="${decision}" data-run="${i}"${run.decided || stoppedChosen(run) && stoppedChosen(run) !== decision ? ' disabled' : ''}>${label}</button>`;
-  // When every run stopped the same routine way the card's own line already says it is not a bug.
-  const shared = issue.runs.every(run => run.routine && run.cause === issue.runs[0].cause);
-  const line = (run, i) => `<li class="stopped-line" data-run-row="${i}"${run.decided ? ` data-decided="${esc(run.decided)}"` : ''}>
-    <span class="stopped-name" title="${esc(run.title || '')}">${esc(run.title || 'A request you can’t open')}</span>
-    <span class="stopped-why">${esc(run.why)}${run.routine && !shared ? ' · not a bug' : ''}</span>
-    ${issue.can_review ? `<div class="stopped-picks">${run.retry ? button(run, i, 'resume', 'Try again', true) + button(run, i, 'dismiss', 'Don’t retry')
-      : button(run, i, 'dismiss', 'Don’t retry', true) + button(run, i, 'resume', 'Try again')}</div>` : ''}
-    <p class="stopped-result" data-result role="status" aria-live="polite">${run.decided ? esc(stoppedOutcome(run.decided, stoppedWaits(run))) : ''}</p></li>`;
-  list.push(issue);
-  // Only while a risky line still offers Try again: not once it is decided or its saved requests chose Don't retry.
-  const risky = issue.can_review && issue.runs.some(run => !run.retry && !run.decided && stoppedChosen(run) !== 'dismiss');
-  return `<ul class="stopped-lines" data-runs="${list.length - 1}">${issue.runs.map(line).join('')}</ul>
-    ${issue.more_runs ? `<p class="muted">And ${issue.more_runs} more in Details.</p>` : ''}
-    ${risky ? '<p class="muted">Try again tells the bot to check what already happened first.</p>' : ''}`;
-}
-function bindStoppedLines(panel, list) {
-  panel.querySelectorAll('[data-runs]').forEach(ul => {
-    const issue = list[+ul.dataset.runs];
-    ul.querySelectorAll('[data-run-row]').forEach(li => {
-      const run = issue.runs[+li.dataset.runRow], buttons = li.querySelectorAll('button'), result = li.querySelector('[data-result]');
-      // A group holding this line (bindUpdateGroup) hears when its choice starts and ends saving, so no run gets both.
-      const saving = on => { run.saving = on; li.dispatchEvent(new Event('run-saving', {bubbles: true})); };
-      buttons.forEach(button => button.onclick = async () => {
-        const decision = button.dataset.runDecision;
-        buttons.forEach(b => b.disabled = true);
-        result.classList.remove('err'); result.textContent = 'Saving choice…';
-        saving(true);
-        try {
-          await decideRun(run, decision);
-          li.dataset.decided = run.decided;
-          result.textContent = stoppedOutcome(run.decided, stoppedWaits(run));
-        } catch (e) {
-          result.classList.add('err'); result.textContent = e.message;
-          buttons.forEach(b => b.disabled = !!stoppedChosen(run) && b.dataset.runDecision !== stoppedChosen(run));
-          return;
-        } finally { saving(false); }
-        if (!ul.querySelector('[data-run-row]:not([data-decided])')) void refresh(false);
-      });
-    });
-  });
-}
-// Saves one run's choice on each of its requests. A message folded into the run rides on it, so one choice settles them
-// all; a request already settled (an earlier click that stopped partway, or a choice saved while the bot was busy) is
-// not sent again. The run keeps the outcome, so Needs you closed and reopened before a refresh still shows it.
-async function decideRun(run, decision) {
-  for (const job of run.jobs.filter(job => !job.decided)) {
-    const done = await reconcileStopped(job, decision);
-    job.decided = decision; job.deferred = !!done.deferred;
-  }
-  run.decided = run.jobs.every(job => job.decided === decision) ? decision : 'mixed';
-  return run.decided;
-}
-// Tico's own update restarts every computer at once, so the runs it stops arrive together. The ones the server puts in
-// the update's group (`update_group`: no named outside action, no approval used) and that nobody has started deciding
-// share one choice, two or more stopped within ten minutes of the first; a later update makes a group of its own.
-// Each keeps its own line under Details, and any other run keeps its own choice outside the group.
-const UPDATE_GROUP_MS = 10 * 60e3;
-function updateGroups(issues) {
-  const members = issues.flatMap(issue => (issue.runs || []).map((run, i) => ({issue, run, i, at: Date.parse(run.at || '')})))
-    .filter(m => m.run.cause === 'update' && m.run.update_group && !m.run.chosen && !stoppedChosen(m.run) && Number.isFinite(m.at))
-    .sort((a, b) => a.at - b.at);
-  const groups = [];
-  for (const m of members) {
-    const last = groups.at(-1);
-    if (last && m.at - last.at <= UPDATE_GROUP_MS) last.members.push(m);
-    else groups.push({members: [m], at: m.at});
-  }
-  return groups.filter(g => g.members.length > 1).map((g, k) => ({...g, k, at: new Date(g.at)}));
-}
-// Only the people who may decide a run see its buttons: the others read the same line with no choice to make.
-// The update's stop is timing, not proof its computer restarted, so Try all again is offered only when every run is
-// one the review card recommends retrying. Otherwise the row says how many ran commands Tico cannot check and offers
-// Don't retry for all of them; retrying any of them is that run's own choice under Details.
-const updateGroupRow = group => {
-  const n = group.members.length, deciding = group.members.filter(m => m.issue.can_review && m.run.jobs).length;
-  const scope = deciding === n ? 'all of them' : `the ${deciding} you can decide`;
-  const risky = group.members.filter(m => !m.run.retry).length;
-  const risk = `${risky === n ? 'All of them' : `${risky} of them`} ran commands Tico can’t check: try ${risky === 1 ? 'it' : 'them'} one at a time under Details.`;
-  const resume = cls => `<button class="${cls}" type="button" data-group-decision="resume">Try all again</button>`;
-  const dismiss = cls => `<button class="${cls}" type="button" data-group-decision="dismiss">Don’t retry</button>`;
-  return `<div class="settings-issue stopped-group" data-update-group="${group.k}">
-    <div><strong>${n} run${n === 1 ? '' : 's'} stopped during Tico’s update at ${group.at.toISOString().slice(11, 16)} UTC</strong>
-    <p>${!deciding ? 'Only the operator of each bot can decide them.' : risky ? `${risk} Don’t retry applies to ${scope}.`
-      : `Try all again applies to ${scope}; each bot checks what already happened before repeating anything.`}</p></div>
-    <div class="issue-buttons">${deciding ? (risky ? dismiss('primary') : resume('primary') + dismiss('ghost')) : ''}<button class="ghost" type="button" data-group-details aria-expanded="false">Details</button></div>
-    <ul class="stopped-lines" data-group-runs hidden></ul><p class="stopped-result" data-group-result role="status" aria-live="polite"></p></div>`;
-};
-function bindUpdateGroup(panel, group, stopped) {
-  const el = panel.querySelector(`[data-update-group="${group.k}"]`);
-  if (!el) return;
-  const runs = el.querySelector('[data-group-runs]'), result = el.querySelector('[data-group-result]');
-  // Each member's own line moves under Details, keeping the buttons bound by bindStoppedLines.
-  for (const m of group.members) {
-    m.li = panel.querySelector(`[data-runs="${stopped.indexOf(m.issue)}"] [data-run-row="${m.i}"]`);
-    if (m.li) runs.append(m.li);
-  }
-  const details = el.querySelector('[data-group-details]');
-  details.onclick = () => {
-    runs.hidden = !runs.hidden;
-    details.setAttribute('aria-expanded', String(!runs.hidden));
-    details.textContent = runs.hidden ? 'Details' : 'Hide details';
-  };
-  const picks = [...el.querySelectorAll('[data-group-decision]')];
-  // The group's choices wait while a run's own choice saves, and stay closed once the group's are saved.
-  let busy = false;
-  const free = () => picks.forEach(b => b.disabled = busy || group.members.some(m => m.run.saving));
-  el.addEventListener('run-saving', free);
-  picks.forEach(button => button.onclick = async () => {
-    if (busy || group.members.some(m => m.run.saving)) return;
-    const decision = button.dataset.groupDecision;
-    const todo = group.members.filter(m => m.issue.can_review && m.run.jobs && !stoppedChosen(m.run) && m.li);
-    // Each run's own choices wait while the group's are saved, so no run gets both; afterwards they show what was
-    // saved, as a run's own line does.
-    const lines = todo.map(m => [m.run, [...m.li.querySelectorAll('[data-run-decision]')]]);
-    const settle = () => lines.forEach(([run, buttons]) => buttons.forEach(b =>
-      b.disabled = !!run.decided || !!stoppedChosen(run) && b.dataset.runDecision !== stoppedChosen(run)));
-    busy = true; free();
-    lines.forEach(([, buttons]) => buttons.forEach(b => b.disabled = true));
-    result.classList.remove('err'); result.textContent = 'Saving choices…';
-    try {
-      // One request per run, in order: a refusal stops the rest and shows here, and the runs already saved stay saved.
-      for (const m of todo) {
-        if (stoppedChosen(m.run)) continue;
-        await decideRun(m.run, decision);
-        m.li.dataset.decided = m.run.decided;
-        m.li.querySelector('[data-result]').textContent = stoppedOutcome(m.run.decided, stoppedWaits(m.run));
-      }
-    } catch (e) {
-      result.classList.add('err'); result.textContent = e.message;
-      busy = false; free();
-      settle();
-      return;
-    }
-    settle();
-    result.textContent = decision === 'resume' ? 'Queued to try again.' : 'Dismissed. Tico won’t retry these runs.';
-    void refresh(false);
-  });
-}
-function needsYou() {
-  document.querySelector('.needs-you')?.remove();
-  const issues = (S.status?.health_issues || []).filter(needsPerson);
-  const groups = updateGroups(issues);
-  const panel = document.createElement('section'); panel.className = 'needs-you';
-  panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'Needs you');
-  const stopped = [];
-  // The text and its lines take the full width; the actions sit under them, each as wide as its words.
-  const row = issue => `<div class="settings-issue" data-key="${esc(needsYouKey(issue))}"><div><strong>${esc(issue.title)}</strong><p>${esc(issue.detail)}</p>${issue.action && issue.action !== 'review' ? `<p class="muted">${esc(issue.action)}</p>` : ''}${stoppedLines(issue, stopped)}</div>
-    <div class="issue-buttons">${issue.kind === 'uncertain_work' ? `<button class="ghost" data-execution-review="${esc(issue.bot)}">${issue.runs?.length ? 'Details' : 'Review now'}</button>` : ''}${runnerRestartButton(issue)}${issue.bot ? `<a class="ghost" href="#/bot/${esc(issue.bot)}/more">Open bot</a>` : ''}</div></div>`;
-  panel.innerHTML = `<header><h2>${issues.length === 1 ? 'One thing needs you' : `${issues.length} things need you`}</h2><button class="ghost" data-close aria-label="Close">Close</button></header>
-    <div data-list>${groups.map(updateGroupRow).join('')}${issues.map(row).join('') || '<p>Nothing needs you right now.</p>'}</div>
-    <div class="row"><button class="ghost" data-snooze>Snooze for an hour</button><a class="ghost" href="#/settings">Open Settings</a></div>`;
-  const close = () => { needsYouRemember({seen: issues.map(needsYouKey)}); panel.remove(); };
-  panel.querySelector('[data-close]').onclick = close;
-  panel.querySelector('[data-snooze]').onclick = () => { needsYouRemember({snoozedUntil: Date.now() + 3600e3}); close(); };
-  panel.querySelectorAll('[data-execution-review]').forEach(button => {
-    button.onclick = () => { close(); executionReview(button.dataset.executionReview); };
-  });
-  panel.querySelectorAll('a[href]').forEach(a => a.addEventListener('click', close));
-  bindRunnerRestart(panel);
-  bindStoppedLines(panel, stopped);
-  groups.forEach(group => bindUpdateGroup(panel, group, stopped));
-  document.body.appendChild(panel);
-  return panel;
+// Sends the restart from any Restart button (the status line, the Settings checks) and says what it did on the
+// line the button sits in, if there is one.
+async function restartComputer(button) {
+  button.disabled = true; button.textContent = 'Restarting…';
+  const line = button.closest('.settings-issue')?.querySelector('p');
+  try {
+    const r = await post(`/v2/computers/${encodeURIComponent(button.dataset.runnerRestart)}/restart`, {});
+    if (line) line.textContent = r.running
+      ? `Restarting after ${r.running} run${r.running === 1 ? ' finishes' : 's finish'}.`
+      : 'Restarting now. Nothing is running, so nothing will be interrupted.';
+    button.textContent = 'Restarting';
+  } catch (e) { button.disabled = false; button.textContent = 'Restart'; toast(e.message, true); }
 }
 function renderAccount() {
   const el = $('#account'), me = S.me;
@@ -327,6 +130,7 @@ function renderAccount() {
   renderInboxNav();
   renderNewVersion();
   renderDownloadLink();
+  nativeOrgSync();
   // Only a session an identity proxy vouches for has anything to end; a bearer or the local app does not.
   $('#sign-out').hidden = !me.proxy_session;
 }

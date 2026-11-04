@@ -27,7 +27,7 @@ from . import task_run_models
 from .store import H, Problem
 
 MAIL_ACTIONS = {"archive": "archive", "label": "label", "leave_for_you": "leave", "draft_reply": "draft",
-                "send_reply": "send", "forward": "forward"}
+                "send_reply": "send", "forward": "forward", "unsubscribe": "unsubscribe"}
 MAX_TEXT = 8000
 MAX_ITEM = 4000
 
@@ -64,12 +64,19 @@ def _fail(detail):
     return {"ok": False, "detail": str(detail)[:300]}
 
 
-def run(c, auto, run_id, do, args, values):
+def run(c, auto, run_id, do, args, values, step=None):
     """Carry out one action for the automation `auto` ({id, flow}). Wrapped in a savepoint: a refused action writes
-    nothing but its refusal."""
+    nothing but its refusal. `step` is what the action is keyed by: a create_task's producer (automation_engine._filter
+    gives each of a filter's actions its own), one occurrence task per producer; a mail action's is the step's own id,
+    which orders the step's mail actions on one message into one chain (`_queue_mail`)."""
     c.execute("SAVEPOINT automation_action")
     try:
-        result = ACTIONS[do](c, auto, run_id, args or {}, values or {})
+        if do == "create_task":
+            result = _create_task(c, auto, run_id, args or {}, values or {}, step=step)
+        elif do in MAIL_ACTIONS:
+            result = ACTIONS[do](c, auto, run_id, args or {}, values or {}, step=step)
+        else:
+            result = ACTIONS[do](c, auto, run_id, args or {}, values or {})
         c.execute("RELEASE automation_action")
         return result
     except (H.Refused, Problem, ValueError, KeyError) as exc:
@@ -84,13 +91,32 @@ def _message(values):
     return message if isinstance(message, dict) else None
 
 
-def _queue_mail(c, auto, run_id, action, message, args, result=None):
-    """`result` starts the action's result: a send the switch turned into a draft keeps `send_off` once reported."""
+def _queue_mail(c, auto, run_id, action, message, args, result=None, step=None, refused=None):
+    """`result` starts the action's result: a send the switch turned into a draft keeps `send_off` once reported.
+    A step's mail actions on one message form a chain: this one comes after the one the step queued before it
+    (`after`), and is claimed only once that one settled ok (backend/automations.py `claim`). Behind one that already
+    failed or was canceled it is queued as skipped or canceled, so it never runs. `refused` is the reason the hub keeps
+    this action from running: it is recorded as failed (ok false, nothing for a computer to claim), and a chained
+    action after it is skipped the same way."""
     aid = H.new_id()
-    c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args_json,state,created,"
-              "result_json) VALUES(?,?,?,?,?,?,?,'queued',?,?)",
-              (aid, auto["id"], run_id, str(message.get("mailbox") or "").strip().lower(), str(message.get("id") or ""),
-               action, json.dumps(args, default=str), H.now(), json.dumps(result) if result else None))
+    mailbox, msg_id = str(message.get("mailbox") or "").strip().lower(), str(message.get("id") or "")
+    prev = c.execute("SELECT id, state FROM automation_mail_actions WHERE run_id=? AND \"step\"=? AND mailbox=? "
+                     "AND msg_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                     (run_id, step, mailbox, msg_id)).fetchone() if step else None
+    after, state = (prev["id"] if prev else None), "queued"
+    if prev and prev["state"] in ("failed", "skipped", "canceled"):
+        state = "canceled" if prev["state"] == "canceled" else "skipped"
+    elif refused:
+        state, result = "failed", {"ok": False, "detail": refused, "retry": False}
+    c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,created_at,"
+              "result,\"step\",\"after\") VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+              (aid, auto["id"], run_id, mailbox, msg_id, action, json.dumps(args, default=str), state, H.now(),
+               json.dumps(result) if result else None, step, after))
+    if refused and state == "failed":
+        return {"ok": False, "detail": refused, "mail_action": aid, "queued": False}
+    if state != "queued":
+        return {"ok": False, "detail": "skipped: an earlier action on this message failed", "mail_action": aid,
+                "queued": False}
     return {"ok": True, "detail": f"{action} queued", "mail_action": aid, "queued": True}
 
 
@@ -105,7 +131,7 @@ def _inbox(message):
 
 
 def _mail_or_slack(do):
-    def act(c, auto, run_id, args, values):
+    def act(c, auto, run_id, args, values, step=None):
         message = _message(values)
         if not message:
             return _fail(f"{do} needs a message")
@@ -115,12 +141,47 @@ def _mail_or_slack(do):
         if do == "send_reply" and not send_on(c, _inbox(message)):
             H.event(c, acts_as(c, auto) or H.KEEPER, "automation.send_off", auto["id"],
                     {"run": run_id, "mailbox": message.get("mailbox"), "msg_id": message.get("id")})
-            return {**_queue_mail(c, auto, run_id, "draft", message, args, {"send_off": True}), "detail": "send_off",
-                    "send_off": True}
+            return {**_queue_mail(c, auto, run_id, "draft", message, args, {"send_off": True}, step=step),
+                    "detail": "send_off", "send_off": True}
         if do == "forward" and args.get("webhook"):
             return _webhook(c, auto, "custom.forward.automation", args["webhook"], message)
-        return _queue_mail(c, auto, run_id, action, message, args)
+        return _queue_mail(c, auto, run_id, action, message, args, step=step)
     return act
+
+
+def _unsubscribe(c, auto, run_id, args, values, step=None):
+    """A one-click unsubscribe from the message's own link, carried out by its mailbox's computer like an archive. Mail
+    only: a Slack message has no unsubscribe link, so it is refused, and so is anything without a mailbox. Mail the
+    hub knows the owner keeps (_keep_reason) is never queued: it is recorded as refused, so nothing chained after runs."""
+    message = _message(values)
+    if not message:
+        return _fail("unsubscribe needs a message")
+    if message.get("source") == "slack" or not str(message.get("mailbox") or "").strip():
+        return _fail("unsubscribe works on mail only, and this message is not mail")
+    why = _keep_reason(c, auto, message)
+    return _queue_mail(c, auto, run_id, MAIL_ACTIONS["unsubscribe"], message, args, step=step,
+                       refused=f"not unsubscribing: {why}" if why else None)
+
+
+def _keep_reason(c, auto, message):
+    """Why the owner keeps this mail, or '' when it may be unsubscribed from. Judged on the hub from what the hub knows,
+    so a flow's args or a computer's answer cannot change it: the company's domains (access.company_domains with the
+    settings this run has; the roster's domains when it has none), the people on the roster, and the mailbox itself.
+    A message with no sender is kept too: the hub cannot tell whose mail it is."""
+    from . import access, views
+    sender = str(message.get("from") or "").strip().lower()
+    if not sender:
+        return "the sender is unknown"
+    if sender == str(message.get("mailbox") or "").strip().lower():
+        return "the sender is internal"
+    settings = auto.get("settings")
+    domains = access.company_domains(c, settings) if settings is not None else access.roster_domains(c)
+    domain = sender.rsplit("@", 1)[-1]
+    if "@" in sender and any(domain == d or domain.endswith("." + d) for d in domains):
+        return "the sender is internal"
+    if sender in {str(p.get("email") or "").strip().lower() for p in views.roster(c)["people"]}:
+        return "the sender is on the people roster"
+    return ""
 
 
 def _slack(c, auto, run_id, do, args, message):
@@ -129,16 +190,18 @@ def _slack(c, auto, run_id, do, args, message):
         if not text:
             return _fail("send_reply needs a body")
         bot = R._slug(args.get("bot")) or _owner_bot(c, auto)
+        bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         if not bot:
             return _fail("send_reply in Slack needs a bot to post as")
         conv = R._bot_room(c, bot)
-        msg = H._write_message(c, H.bot_actor(bot), conv.get("owner_actor") or H.KEEPER, text, conv, "say",
+        msg = H._write_message(c, H.bot_actor(bot), conv.get("owner_id") or H.KEEPER, text, conv, "say",
                                {"automation": auto["id"], "automation_run": run_id,
                                 "automation_inbox": _inbox(message), **_chain_refs(auto)}, None, None)
         now = H.now()
-        c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated) "
-                  "VALUES(?,?,?,?,?,'ready',?,?)",
-                  (msg["id"], message.get("channel"), message.get("thread_ts") or message.get("ts"), bot, text, now, now))
+        c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at,recipient_actor) "
+                  "VALUES(?,?,?,?,?,'ready',?,?,?)",
+                  (msg["id"], message.get("channel"), message.get("thread_ts") or message.get("ts"), bot, text, now, now,
+                   msg.get("recipient_id")))
         return {"ok": True, "detail": "posted", "message": msg["id"]}
     if do in ("send_reply", "draft_reply"):
         if do == "send_reply":
@@ -150,17 +213,17 @@ def _slack(c, auto, run_id, do, args, message):
 
 def slack_held(c, post):
     """An automation's Slack reply whose inbox's send switch went off after it was queued (`slack_posts` row `post`):
-    not posted but cancelled, and the owner gets the draft as a task, as with the switch off when it was queued.
+    not posted but canceled, and the owner gets the draft as a task, as with the switch off when it was queued.
     Returns whether it was held."""
     refs = (H.message(c, post["message_id"]) or {}).get("refs") or {}
     inbox = refs.get("automation_inbox")
     if not inbox or send_on(c, inbox):
         return False
-    c.execute("UPDATE slack_posts SET state='cancelled',error='send_off',updated=? WHERE message_id=?",
+    c.execute("UPDATE slack_posts SET state='canceled',error='send_off',updated_at=? WHERE message_id=?",
               (H.now(), post["message_id"]))
-    row = c.execute("SELECT id, flow_json FROM automations WHERE id=?", (refs.get("automation"),)).fetchone()
+    row = c.execute("SELECT id, flow FROM automations WHERE id=?", (refs.get("automation"),)).fetchone()
     if row:
-        auto, run_id = {"id": row["id"], "flow": json.loads(row["flow_json"])}, refs.get("automation_run")
+        auto, run_id = {"id": row["id"], "flow": json.loads(row["flow"])}, refs.get("automation_run")
         H.event(c, actor_of(auto["flow"]["owner"]), "automation.send_off", auto["id"], {"run": run_id})
         made = _create_task(c, auto, run_id, {"title": f"Draft reply: {post['text'][:80]}", "body": post["text"]}, {})
         from . import automations
@@ -192,19 +255,44 @@ def _actor(c, auto):
     return actor
 
 
-def _create_task(c, auto, run_id, args, values):
+def _create_task(c, auto, run_id, args, values, step=None):
     title = " ".join(_text(args, "title").split())[:300]
     if not title:
         return _fail("create_task needs a title")
     actor = _actor(c, auto)
     owner = str(args.get("owner") or "")
-    owner = owner if ":" in owner else (("bot:" + owner) if owner and H.bot(c, owner) else
+    found = H.resolve_bot(c, owner) if owner and ":" not in owner else None
+    owner = owner if ":" in owner else (("bot:" + found["id"]) if found else
                                         ("human:" + owner) if owner else actor)
     if owner.startswith("person:"):
         owner = "human:" + owner[7:]
-    row = H.task_create(c, actor, title, _text(args, "body") or title, owner, lint=False, deduplicate=False,
-                        wake_refs={"automation": auto["id"], **_chain_refs(auto)})
+    due, marker, refs = _occurrence(c, auto, args, values)
+    row = H.task_create(c, actor, title, _text(args, "body") or title, owner, due=due, lint=False,
+                        deduplicate=False, wake_refs={**refs, **_chain_refs(auto)}, occurrence=marker,
+                        occurrence_step=str(step) if marker and step else None, rule_due_id=refs.get("rule_due_id"))
     return {"ok": True, "detail": f"task {row['id']}", "task": row["id"]}
+
+
+def _occurrence(c, auto, args, values):
+    """A task a run opens: its due, the occurrence marker and the refs that name it. A due-date run's task is due at
+    the end of its due day in the trigger's zone unless the step says otherwise (the step's `due` wins), and the
+    marker is "<automation_id>:<due_on>" (`tasks.occurrence`), so the task stays that day's deadline. Other runs get
+    no marker: (None, None, {automation}).
+
+    The rule due date the task stands for (`rule_due_id`) is never the run's input, a manual run's sample included: it
+    is the automation's own trigger's, and only while the automation is that due date's routine (rule_due.links)."""
+    occurrence = values.get("due") if isinstance(values.get("due"), dict) else {}
+    if not occurrence.get("due_on"):
+        return str(args.get("due") or "") or None, None, {"automation": auto["id"]}
+    from . import automation_due as D
+    from . import rule_due
+    from datetime import date
+    end = D.due_end(date.fromisoformat(occurrence["due_on"]), occurrence.get("tz") or "UTC")
+    trigger = auto["flow"].get("trigger") or {}
+    due_id = str(trigger.get("rule_due_id") or "") if trigger.get("type") == "due" else ""
+    linked = bool(due_id) and H._has_table(c, "rule_due_dates") and rule_due.links(c, due_id, auto["id"])
+    refs = {"automation": auto["id"], "due_on": occurrence["due_on"], **({"rule_due_id": due_id} if linked else {})}
+    return (str(args.get("due") or "") or end), f"{auto['id']}:{occurrence['due_on']}", refs
 
 
 def _on_task(name):
@@ -221,7 +309,8 @@ def _on_task(name):
             owner = str(args.get("owner") or "").replace("person:", "human:")
             if not owner:
                 return _fail("assign needs an owner")
-            owner = owner if ":" in owner else ("bot:" + owner if H.bot(c, owner) else "human:" + owner)
+            found = H.resolve_bot(c, owner) if ":" not in owner else None
+            owner = owner if ":" in owner else ("bot:" + found["id"] if found else "human:" + owner)
             if H.task_private(c, task) and not H.task_private_readable(c, owner, task):
                 return _fail("the new owner cannot read this private task")
             H.task_update(c, actor, task["id"], owner=owner, note=said)
@@ -236,9 +325,9 @@ def _on_task(name):
     return act
 
 
-def _label(c, auto, run_id, args, values):
+def _label(c, auto, run_id, args, values, step=None):
     if _message(values) and not values.get("task"):
-        return _mail_or_slack("label")(c, auto, run_id, args, values)
+        return _mail_or_slack("label")(c, auto, run_id, args, values, step=step)
     if not (args.get("tag") or args.get("name")):
         return _fail("label needs a tag")
     return _on_task("label")(c, auto, run_id, args, values)
@@ -261,6 +350,7 @@ def _note(c, auto, run_id, args, values):
     """On the run's task, else to `bot`; with neither (a sample task with no id, a mail, a schedule) the note is kept
     in the run log only, as its step's `note`."""
     bot = R._slug(args.get("bot"))
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     if task_of(c, auto, values):
         return _on_task("note")(c, auto, run_id, args, values)
     if not bot:
@@ -274,6 +364,7 @@ def _note(c, auto, run_id, args, values):
 
 def _wake_bot(c, auto, run_id, args, values):
     bot = R._slug(args.get("bot")) or _owner_bot(c, auto)
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     text = _text(args, "text", "prompt") or f"Automation {auto['flow'].get('name')}: take a look."
     task = task_of(c, auto, values)
     room = _told(c, auto, bot)
@@ -337,10 +428,14 @@ def _post_update(c, auto, run_id, args, values):
         from types import SimpleNamespace
         from . import market_briefing as MB
         title, body = _briefing(text, args.get("title"))
-        out["briefing"] = MB.post(c, SimpleNamespace(actor=author), MB.this_week(), title, body, [], source=source)["week"]
+        out["briefing"] = MB.post(c, SimpleNamespace(actor=author), MB.this_week(), title, body, None, source=source)["week"]
         text = _pointer(c, poster, title)
     if "updates" in to:
-        posted = updates.post(c, poster, text, kind="daily", source=source)
+        # A warned step's text leads with its warn line (_warned_args): it goes on after the writing checks.
+        from .org_rule_check import unwarned
+        bare = unwarned(text)
+        posted = updates.post(c, poster, bare, kind="daily", source=source,
+                              warning=text[:len(text) - len(bare)].rstrip("\n"))
         out["update"] = (posted or {}).get("id")
     return out
 
@@ -353,8 +448,13 @@ def _pointer(c, poster, title):
            f"([read]({BRIEFING_LINK}))"
     row = c.execute("SELECT body FROM updates WHERE bot=? AND kind='daily' AND day=?",
                     (poster, updates.today())).fetchone()
-    kept = [x for x in str(row["body"] if row else "").splitlines() if x.strip() and not x.startswith("- Market briefing:")]
-    return "\n".join(kept[-(updates.BULLETS_MAX - 1):] + [line])
+    # A warned daily's warn line stays its own paragraph on top (unwarned), out of the bullets kept.
+    from .org_rule_check import unwarned
+    body = str(row["body"] if row else "")
+    bare = unwarned(body)
+    warned = body[:len(body) - len(bare)]
+    kept = [x for x in bare.splitlines() if x.strip() and not x.startswith("- Market briefing:")]
+    return warned + "\n".join(kept[-(updates.BULLETS_MAX - 1):] + [line])
 
 
 def _webhook(c, auto, kind, hook, data):
@@ -371,11 +471,13 @@ def _call_webhook(c, auto, run_id, args, values):
 ACTIONS = {"archive": _mail_or_slack("archive"), "leave_for_you": _mail_or_slack("leave_for_you"),
            "draft_reply": _mail_or_slack("draft_reply"), "send_reply": _mail_or_slack("send_reply"),
            "forward": _mail_or_slack("forward"), "create_task": _create_task, "label": _label, "wake_bot": _wake_bot,
-           "note": _note, "post_update": _post_update, "call_webhook": _call_webhook, "assign": _on_task("assign")}
+           "note": _note, "post_update": _post_update, "call_webhook": _call_webhook, "assign": _on_task("assign"),
+           "unsubscribe": _unsubscribe}
 
 
 # ---------------------------------------------------------------------------------------------------- turns
-def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", label=None, run_model=None):
+def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", label=None, run_model=None,
+               occurrence=None):
     """A turn for this run alone: a new task for the named bot, filed by the automation's owner the way a routine
     files its run (backend/routines.py `open_task`), so it runs in that task's own room and never in a person's chat,
     an Assistant room or another task's session. `assistant:<person>` is the person's Assistant (its room is made on
@@ -394,15 +496,18 @@ def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", la
         bot = assistant_bot
         assistant.ensure_room(c, "human:" + ident, assistant_bot)
     else:
-        bot = ident
-        found = H.bot(c, bot)
+        found = H.resolve_bot(c, ident) or {}
         if not found or found["state"] not in R.BOT_STATES_OK:
-            raise ValueError(f"No bot {bot}" if not found else f"{bot} is {found['state']}")
+            raise ValueError(f"No bot {ident}" if not found else f"{ident} is {found['state']}")
+        bot = found["id"]
     name = str(auto["flow"].get("name") or auto["id"])
     title = f"{name} · {label}"[:300] if label else name[:300]
-    task = H.task_create(c, actor, title, prompt, H.bot_actor(bot), lint=False, deduplicate=False, routine=True,
-                         trigger="other", trigger_source="automation:" + auto["id"],
-                         wake_refs={"automation": auto["id"], "automation_run": run_id, "automation_step": step_id,
+    # A due-date run's turn is that occurrence's task, due and marked the same way as a create_task's (`_occurrence`).
+    due, marker, occ_refs = _occurrence(c, auto, {}, {"due": occurrence} if occurrence else {})
+    task = H.task_create(c, actor, title, prompt, H.bot_actor(bot), due=due, lint=False, deduplicate=False,
+                         routine=True, trigger="other", trigger_source="automation:" + auto["id"], occurrence=marker,
+                         occurrence_step=str(step_id) if marker else None, rule_due_id=occ_refs.get("rule_due_id"),
+                         wake_refs={**occ_refs, "automation_run": run_id, "automation_step": step_id,
                                     "automation_key": str(key), **_chain_refs(auto)})
     if run_model:
         # The step's model is the task's own (checked when the automation was saved, so kept as it is here).
@@ -418,25 +523,25 @@ def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", la
 # and how many LIKEs the query takes.
 FIND = {
     "mail": ("SELECT mailbox, msg_id AS id, thread_id AS thread, from_addr AS 'from', subject, snippet, date, "
-             "updated AS at FROM mail_messages WHERE deleted_at IS NULL AND {after} AND lower(mailbox) IN ({mine}) "
-             "AND (subject LIKE ? OR from_addr LIKE ? OR snippet LIKE ?)", "updated", "msg_id", 3),
-    "tasks": ("SELECT id, title, status, owner, requester, created AS at FROM tasks WHERE {after} "
-              "AND coalesce(private,0)=0 AND title LIKE ?", "created", "id", 1),
-    "prs": ("SELECT id, task_id AS task, url, title, state, repo, number, created AS at FROM task_links "
-            "WHERE kind='pr' AND {after} AND (coalesce(title,'') LIKE ? OR url LIKE ?)", "created", "id", 2),
+             "updated_at AS at FROM mail_messages WHERE deleted_at IS NULL AND {after} AND lower(mailbox) IN ({mine}) "
+             "AND (subject LIKE ? OR from_addr LIKE ? OR snippet LIKE ?)", "updated_at", "msg_id", 3),
+    "tasks": ("SELECT id, title, status, owner_id, requester_id, created_at AS at FROM tasks WHERE {after} "
+              "AND coalesce(private,0)=0 AND title LIKE ?", "created_at", "id", 1),
+    "prs": ("SELECT id, task_id AS task, url, title, state, repo, number, created_at AS at FROM task_links "
+            "WHERE kind='pr' AND {after} AND (coalesce(title,'') LIKE ? OR url LIKE ?)", "created_at", "id", 2),
     "listening": ("SELECT i.id, i.destination, l.url, l.author, l.content, i.created_at AS at FROM intake_items i "
                   "JOIN listen_items l ON l.id=i.item_id WHERE {after} AND l.content LIKE ?", "i.created_at", "i.id", 1),
-    "docs": ("SELECT id, path, title, updated AS at FROM docs WHERE archived=0 AND {after} "
-             "AND (title LIKE ? OR path LIKE ?)", "updated", "id", 2),
+    "docs": ("SELECT id, path, title, updated_at AS at FROM docs WHERE archived=0 AND {after} "
+             "AND (title LIKE ? OR path LIKE ?)", "updated_at", "id", 2),
 }
 
 
 # The stale-PR find: an open or draft PR whose last activity (else its creation) is at or before the idle line. The
 # cursor reads that activity, so a PR is found again only once new activity makes it idle again.
-PR_IDLE = ("SELECT id, task_id AS task, url, title, state, repo, number, coalesce(activity_at, created) AS at "
+PR_IDLE = ("SELECT id, task_id AS task, url, title, state, repo, number, coalesce(activity_at, created_at) AS at "
            "FROM task_links WHERE kind='pr' AND coalesce(state,'') IN ('open','draft') AND {after} "
-           "AND coalesce(activity_at, created)<=? AND (coalesce(title,'') LIKE ? OR url LIKE ?)",
-           "coalesce(activity_at, created)", "id", 2)
+           "AND coalesce(activity_at, created_at)<=? AND (coalesce(title,'') LIKE ? OR url LIKE ?)",
+           "coalesce(activity_at, created_at)", "id", 2)
 
 
 def find(c, auto, source, query, limit, cursor, *, mailboxes=(), skip=(), idle_hours=None):

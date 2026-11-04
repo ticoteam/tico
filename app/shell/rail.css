@@ -1,0 +1,30 @@
+/* The org rail (app/src/windows.rs): app-owned, drawn only here and never shown to an org's page. Tokens follow
+   ui/styles/tokens.css; colors per org come from its address (rail.js). */
+:root{
+  --bg:#191b1a;--line:#2c2e2d;--muted:#979a99;--ink:#e8eae9;--accent:#5cc092;--hover:#212322;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --c0b:#3b3424;--c0f:#e2b25a;--c1b:#1f3329;--c1f:#6cc48f;--c2b:#1b2a3d;--c2f:#7fb3f0;--c3b:#2e2540;--c3f:#b79cf0;
+  --c4b:#3d2229;--c4f:#f08fa6;--c5b:#1c3436;--c5f:#6fcfd2;--c6b:#3d2a1f;--c6f:#f0a070;--c7b:#2a2e36;--c7f:#a9b4c4;
+  color-scheme:dark}
+@media (prefers-color-scheme:light){:root{
+  --bg:#f4f5f0;--line:#dfe3db;--muted:#56635e;--ink:#172221;--accent:#2e6b4f;--hover:#eceee8;
+  --c0b:#f6ecd6;--c0f:#8a6416;--c1b:#dcefe3;--c1f:#2e6b4f;--c2b:#dde9f8;--c2f:#285a94;--c3b:#ebe3fa;--c3f:#5e3fa0;
+  --c4b:#f9e0e6;--c4f:#9c2f4a;--c5b:#d9f0f0;--c5f:#21706f;--c6b:#fae6d9;--c6f:#94471c;--c7b:#e4e7ec;--c7f:#46505e;
+  color-scheme:light}}
+html,body{height:100%;margin:0}
+body{background:var(--bg);border-right:1px solid var(--line);box-sizing:border-box;font:600 13px/1 var(--sans);
+  color:var(--ink);overflow:hidden;-webkit-user-select:none;user-select:none;cursor:default}
+/* Only the org list scrolls; + stays in view below it at any height. The list's padding keeps the rings unclipped. */
+nav{display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px 0 12px;height:100%;box-sizing:border-box;overflow:hidden}
+ul{list-style:none;margin:0;padding:4px 0;display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;
+  flex:0 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-width:none}
+ul::-webkit-scrollbar{display:none}
+li{flex:none}
+.org,.add{all:unset;box-sizing:border-box;width:36px;height:36px;border-radius:9px;display:flex;align-items:center;
+  justify-content:center;cursor:pointer;letter-spacing:.02em}
+.org{background:var(--b);color:var(--f);outline:2px solid transparent;outline-offset:2px;transition:outline-color .12s}
+.org:hover{outline-color:var(--line)}
+.org[aria-current="true"]{outline-color:var(--accent)}
+.org:focus-visible,.add:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.add{flex:none;border:1.5px dashed var(--line);color:var(--muted);font-size:18px;font-weight:400}
+.add:hover{color:var(--ink);border-color:var(--muted);background:var(--hover)}

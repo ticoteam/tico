@@ -27,6 +27,7 @@ def test_a_server_answers_while_its_start_jobs_run_and_waits_for_them_to_stop(tm
     monkeypatch.setattr(Onboarding, "ensure_librarian", job("librarian", wait=True))
     monkeypatch.setattr(Onboarding, "ensure_goal_manager", job("goal_manager"))
     monkeypatch.setattr(Onboarding, "ensure_task_manager", job("task_manager"))
+    monkeypatch.setattr(Onboarding, "ensure_counsel", job("counsel"))
     monkeypatch.setattr(listening, "seed_market", job("market"))
     monkeypatch.setattr(message_bots, "backfill", job("message_bots"))
     monkeypatch.setattr(github, "ship_deployed", job("ship_deployed"))
@@ -37,7 +38,7 @@ def test_a_server_answers_while_its_start_jobs_run_and_waits_for_them_to_stop(tm
         assert ran == []
         release.set()
     # Stopping waited for them, and they ran in their old order, off the event loop's thread.
-    assert ran == ["librarian", "goal_manager", "task_manager", "market", "message_bots", "ship_deployed"]
+    assert ran == ["librarian", "goal_manager", "task_manager", "counsel", "market", "message_bots", "ship_deployed"]
     assert threading.get_ident() not in threads and len(threads) == 1
 
 

@@ -9,13 +9,13 @@
 - The message bots' mailboxes (`message_bot_mailboxes` and friends), which mail and the converter read."""
 import json
 import re
-from datetime import datetime, timezone
 
 from clients.manifest import tools_of
 from clients.routines import DEFAULT_ZONE, validate_schedules
 from . import people as P
 from .scheduler import next_due, stamp
-from .store import H, Problem, encode
+from .store import H, Problem
+from . import bot_settings as BS
 
 DEFAULT_TEXT = "Run this scheduled routine."
 # Every active bot looks at its own open tasks once a day, staggered across
@@ -38,7 +38,7 @@ FIELDS = ("title", "cron", "on", "timezone", "text")
 
 
 def _clock(at):
-    return at or datetime.now(timezone.utc)
+    return at or H.parse_ts(H.now())      # the hub clock: a demo build's routines are due by its own now
 
 
 def validate(fields):
@@ -79,7 +79,7 @@ def row(c, sid):
     if not auto:
         return None
     return {**dict(found), "enabled": int(auto["enabled"]), "deleted_at": auto["deleted_at"], "automation": auto["id"],
-            "next_due": auto["next_due"]}
+            "next_due_at": auto["next_due_at"]}
 
 
 def _set_moved(c, actor, auto, enabled):
@@ -91,7 +91,9 @@ def _set_moved(c, actor, auto, enabled):
 def create(c, actor, bot, fields, *, key=None, at=None):
     """A new routine for `bot`. With `key`, the same key names the same routine: creating it
     again updates it in place (a bot that sets up its own routines every turn makes one)."""
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)        # a routine names its bot by id or slug
     at = _clock(at)
+    bot = (H.resolve_bot(c, bot) or {}).get("id", H.actor_id(bot))     # a routine names its bot by id
     entry = validate(fields)
     from . import strategy_acts
     # more runs cost more: the owner's
@@ -109,7 +111,7 @@ def create(c, actor, bot, fields, *, key=None, at=None):
     now = stamp(at)
     event = entry["on"] or None
     due = None if event else stamp(next_due(entry["cron"], at, entry["timezone"]))
-    c.execute("INSERT INTO schedules(id,bot,routine_key,cron,event_name,title,playbook,next_due,source,updated_at) "
+    c.execute("INSERT INTO schedules(id,bot,routine_key,cron,event_name,title,playbook,next_due_at,source,updated_at) "
               "VALUES(?,?,?,?,?,?,?,?,'hub',?)",
               (sid, bot, key, entry["cron"], event, entry["title"], entry["instructions"] or DEFAULT_TEXT, due, now))
     c.execute("INSERT INTO schedule_config(schedule_id,timezone,enabled) VALUES(?,?,?)",
@@ -162,8 +164,8 @@ def update(c, actor, sid, changes, *, at=None, restore=False):
     if event:
         due = None
     else:
-        due = stamp(next_due(entry["cron"], at, entry["timezone"])) if cadence_changed else current["next_due"]
-    c.execute("UPDATE schedules SET cron=?,event_name=?,title=?,playbook=?,next_due=?,deleted_at=NULL,updated_at=? WHERE id=?",
+        due = stamp(next_due(entry["cron"], at, entry["timezone"])) if cadence_changed else current["next_due_at"]
+    c.execute("UPDATE schedules SET cron=?,event_name=?,title=?,playbook=?,next_due_at=?,deleted_at=NULL,updated_at=? WHERE id=?",
               (entry["cron"], event, entry["title"], entry["instructions"] or DEFAULT_TEXT, due, now, sid))
     enabled = current["enabled"] if changes.get("enabled") is None else (1 if changes["enabled"] else 0)
     c.execute("INSERT INTO schedule_config(schedule_id,timezone,enabled) VALUES(?,?,?) ON CONFLICT(schedule_id) "
@@ -185,7 +187,7 @@ def remove(c, actor, sid, *, at=None):
     current = row(c, sid)
     if not current:
         return None
-    c.execute("UPDATE schedules SET deleted_at=?,updated_at=?,next_due=NULL WHERE id=?", (now, now, sid))
+    c.execute("UPDATE schedules SET deleted_at=?,updated_at=?,next_due_at=NULL WHERE id=?", (now, now, sid))
     H.event(c, actor, "routine.deleted", sid, {"bot": current["bot"]})
     return row(c, sid)
 
@@ -204,7 +206,7 @@ def no_input(c, settings, schedule, local):
 
 
 def _roster(c):
-    found = c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()
+    found = c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()
     if found:
         return P.load(json.loads(found[0]))
     return P.load({"people": H.humans(c)})
@@ -230,10 +232,10 @@ def set_declared_mailbox(c, bot, address):
     address = str(address or "").strip().lower()
     if not MAILBOX.fullmatch(address):
         raise Problem("mailbox", "That is not an email address", 422)
-    found = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    found = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     if not found:
         raise Problem("not_found", "Bot not found", 404)
-    config = json.loads(found["config_json"] or "{}")
+    config = json.loads(found["config"] or "{}")
     tools = [dict(t) if isinstance(t, dict) else t for t in (config.get("tools") or config.get("access") or [])]
     gmail = next((t for t in tools if isinstance(t, dict) and str(t.get("service", "")).lower() == "gmail"), None)
     if gmail is None:
@@ -242,7 +244,8 @@ def set_declared_mailbox(c, bot, address):
         gmail["identity"] = address
     config.pop("access", None)
     config["tools"] = tools
-    c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(config), bot))
+    BS.write(c, bot, config)
+    c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
 
 
 def message_bot_mailboxes(c, roster=None):
@@ -251,17 +254,26 @@ def message_bot_mailboxes(c, roster=None):
     person's own email only when the bot declares none. People who left (hidden) and archived bots are
     skipped, and so is a mailbox that two bots share (listed once)."""
     roster = roster if roster is not None else _roster(c)
+    people = [p for p in (roster or {}).get("people") or [] if p.get("inbox_bot") and not p.get("hidden")]
+    # The bots and their declarations are read together, a fixed number of statements however long the roster is.
+    named = sorted({p["inbox_bot"] for p in people})
+    states, configs = {}, {}
+    for start in range(0, len(named), 500):
+        part = named[start:start + 500]
+        ids = sorted({H.actor_id(bot) for bot in part})
+        marks = ",".join("?" * len(ids))
+        states.update((r["id"], r["state"]) for r in c.execute(f"SELECT id,state FROM bots WHERE id IN ({marks})", ids))
+        marks = ",".join("?" * len(part))
+        configs.update((r["bot"], r["config"]) for r in c.execute(
+            f"SELECT bc.bot AS bot, {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot IN ({marks})", part))
     out, seen = [], set()
-    for person in (roster or {}).get("people") or []:
-        bot = person.get("inbox_bot")
-        if not bot or person.get("hidden"):
+    for person in people:
+        bot = person["inbox_bot"]
+        state = states.get(H.actor_id(bot))
+        if state is None or state == "archived":
             continue
-        row = H.bot(c, bot)
-        if not row or row["state"] == "archived":
-            continue
-        found = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
         try:
-            config = json.loads(found["config_json"] or "{}") if found else {}
+            config = json.loads(configs.get(bot) or "{}")
         except ValueError:
             config = {}
         declared = declared_mailbox(config)
@@ -305,9 +317,9 @@ def token_mailboxes(c, bot, roster=None):
     if not who:
         return []
     boxes = message_bot_mailboxes(c, roster)
-    found = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    found = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     try:
-        config = json.loads(found["config_json"] or "{}") if found else {}
+        config = json.loads(found["config"] or "{}") if found else {}
     except ValueError:
         config = {}
     people = P.below(who["id"], roster) if reads_reports(config, mailbox_of(who, boxes)) else [who]
@@ -363,7 +375,7 @@ def retire_open_tasks_checks(c, at=None):
 def ensure_task_sweep(c, at=None):
     """The fleet maintainer's one daily sweep of stuck tasks. Set once; a person's delete stays."""
     slug = H.FLEET_MAINTAINER
-    if not c.execute("SELECT 1 FROM bots WHERE slug=? AND state='active'", (slug,)).fetchone():
+    if not c.execute("SELECT 1 FROM bots WHERE id=? AND state='active'", (slug,)).fetchone():
         return None
     if c.execute("SELECT 1 FROM schedules WHERE bot=? AND routine_key=?", (slug, SWEEP_KEY)).fetchone():
         return None

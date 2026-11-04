@@ -11,7 +11,7 @@ const AU_STEP_STATUS = {skipped: 'skipped', failed: 'failed', spend_cap: 'spend 
 // A run's outcome in one to three words: what its last action did.
 const AU_DONE = {archive: 'Archived', leave_for_you: 'Left for you', draft_reply: 'Draft reply', send_reply: 'Replied',
   create_task: 'Task created', label: 'Labeled', forward: 'Forwarded', wake_bot: 'Bot woken', note: 'Noted',
-  post_update: 'Update posted', call_webhook: 'Webhook called', assign: 'Assigned'};
+  post_update: 'Update posted', call_webhook: 'Webhook called', assign: 'Assigned', unsubscribe: 'Unsubscribed'};
 
 async function auRunsLoad(state, more = false) {
   const id = state.cur?.id;
@@ -96,7 +96,7 @@ function auRunsDraw(pane) {
     ${r.rows.map(run => {
       const open = r.open.has(run.id), dot = auRunDot(run);
       return `<tr class="au-rr${open ? ' open' : ''}" role="button" tabindex="0" aria-expanded="${open}" data-run="${esc(run.id)}">
-        <td class="au-rt"><span class="nav-icon" aria-hidden="true">${open ? 'expand_more' : 'chevron_right'}</span>${esc(auRunTime(run.started))}</td>
+        <td class="au-rt"><span class="nav-icon" aria-hidden="true">${open ? 'expand_more' : 'chevron_right'}</span>${esc(auRunTime(run.started_at))}</td>
         <td><span class="au-dot ${dot}" role="img" aria-label="${esc(AU_RUN_STATUS[run.status] || run.status)}"></span></td>
         <td class="au-ro">${esc(auRunOutcome(run))}</td><td class="au-n">${esc(auMoney(run.cost))}</td></tr>`
         + (open ? `<tr class="au-rx"><td colspan="4">${(run.steps || []).map(s => `<div class="au-sl">${auTag(s.type)}<span>${esc(auRunStepText(s))}</span>

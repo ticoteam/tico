@@ -3,7 +3,7 @@
 .pg-card{display:flex;flex-direction:column;gap:6px;min-width:0}
 .pg-status{color:var(--muted);font-size:var(--t-sm);line-height:var(--lh-tight);overflow-wrap:anywhere}
 .pg-status.pg-stale{color:var(--wait-ink)}
-.pg-status a{color:var(--accent-quiet)}
+.pg-status a{color:var(--link-quiet)}
 .pg-box{position:relative;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}
 .page-frame{display:block;width:100%;border:0;background:#fff}
 .pg-tap{position:absolute;inset:0;border-radius:inherit}
@@ -18,7 +18,7 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 .pg-framed:not(.pg-full){gap:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
 .pg-framed:not(.pg-full)>.pg-status{padding:6px 10px;border-bottom:1px solid var(--line)}
 .pg-framed:not(.pg-full) .pg-box{border:0;border-radius:0}
-.pg-open-btn{flex:none;color:var(--accent-quiet);font-size:var(--t-sm)}
+.pg-open-btn{flex:none;color:var(--link-quiet);font-size:var(--t-sm)}
 
 /* the full view */
 .pg-view{max-width:1100px;margin:0 auto;padding:12px 20px 48px}
@@ -58,7 +58,7 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 .lf-frow select{max-width:180px;font-size:var(--t-sm)}
 .lf-frow select[hidden]{display:none}
 .lf-toggle{flex:none;height:var(--ctl);padding:0 10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:transparent;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
-.lf-toggle[aria-pressed="true"]{color:var(--ink);background:var(--surface2);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.lf-toggle[aria-pressed="true"]{color:var(--ink);background:var(--surface2);border-color:color-mix(in srgb,var(--ink) 45%,var(--line))}
 .lf-task{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border:1px solid var(--line);border-radius:var(--r-ctl);font-size:var(--t-sm)}
 .lf-task[hidden]{display:none}
 .lf-row{display:flex;align-items:flex-start;gap:10px;padding:9px 8px;border-radius:7px;color:var(--ink);text-decoration:none}
@@ -84,4 +84,4 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
   .pg-ver{max-width:110px}
 }
 .pg-pinned{margin:10px 0 0;color:var(--muted);font-size:var(--t-sm)}
-.pg-pinned a{color:var(--accent-quiet)}
+.pg-pinned a{color:var(--link-quiet)}

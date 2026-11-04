@@ -62,7 +62,7 @@ server_environment() {
   esac
 }
 
-# The Cloudflare tunnel's route (cloudflared.yml in the tunnel volume) and the optional Caddy front door's files are
+# The Cloudflare tunnel's route (ingress.yml in the tunnel volume) and the optional Caddy front door's files are
 # written by backend/boot.py, which also says why: on every start, by `prepare` below, and by these two commands.
 tunnel_config() { python3 -m backend.boot tunnel-config; }
 
@@ -71,7 +71,7 @@ tunnel_config() { python3 -m backend.boot tunnel-config; }
 BACKUPS=${TICO_BACKUP_DIR:-/backups}
 
 backup_configuration() {  # writes $LITESTREAM_CONFIG; returns 1 when backups are off
-  local url region sync interval_seconds unit
+  local url region sync interval_seconds unit generation
   if [ "${TICO_BACKUP:-}" = off ]; then
     TICO_BACKUP_MODE=off
   elif [ -n "${TICO_BACKUP_URL:-}" ]; then
@@ -90,6 +90,13 @@ backup_configuration() {  # writes $LITESTREAM_CONFIG; returns 1 when backups ar
   interval_seconds=$(( 10#${BASH_REMATCH[1]} * unit ))
   { [ "$interval_seconds" -ge 1 ] && [ "$interval_seconds" -le 3600 ]; } || die "TICO_BACKUP_SYNC_INTERVAL must be between 1s and 1h; got '$sync'"
   url="${TICO_BACKUP_URL:-file://$BACKUPS}"
+  # The backup generation the data is in, from the cache beside the database (backend/replication.py). Reading it needs no
+  # network, so a slow or unreachable bucket cannot hold up the start. No cache means the root layout, and the reset job that
+  # starts Litestream reads environment.json and corrects this file before Litestream starts. A cache that cannot be read
+  # stops the start: a guess could replicate over the copy the data is in.
+  generation=$(python -m backend.replication cached-generation "$DATA") \
+    || die "the backup generation file in $DATA cannot be read; fix it, or remove it so the next start reads environment.json"
+  url="${url%/}${generation:+/$generation}"
   region="${TICO_BACKUP_REGION:-}"
   [ -n "$region" ] || [ -z "${TICO_BACKUP_ENDPOINT:-}" ] || region=us-east-1
   {
@@ -121,6 +128,21 @@ warn_backups() {
   esac
 }
 
+# Moves the database's -wal and -shm to BASE-wal and BASE-shm, and moves nothing while a database file is at the path. A WAL
+# holds commits that may not be in the database file yet (hubdb.leave_wal_for_litestream), and SQLite applies a WAL at a
+# database's path to whatever file is there. So a WAL moves with the database it belongs to, and one left without its
+# database moves aside before a restore writes there. Nothing is deleted.
+move_sidecars_aside() {  # BASE: the name the database has once it is moved, or its orphan's name
+  local leftover
+  [ ! -e "$TICO_DB" ] || return 0
+  for leftover in "$TICO_DB-wal" "$TICO_DB-shm"; do
+    if [ -e "$leftover" ]; then
+      mv "$leftover" "$1${leftover#"$TICO_DB"}"
+      log "moved $(basename "$leftover") aside as $(basename "$1")${leftover#"$TICO_DB"}"
+    fi
+  done
+}
+
 # An empty volume never quietly becomes a new team when a team exists (or may exist) behind it. The restore
 # result is kept, not ignored; and markers outside the database (backend/replication.py) say what was here before.
 # --initialize-empty (or TICO_INITIALIZE_EMPTY=1) is the explicit way to start over.
@@ -128,9 +150,17 @@ seed() {
   local restore_failed=() guard=()
   case "${TICO_INITIALIZE_EMPTY:-}" in 1|true|yes) guard+=(--initialize-empty) ;; esac
   if [ ! -s "$TICO_DB" ]; then
+    move_sidecars_aside "$TICO_DB.orphan-$(date -u +%Y%m%dT%H%M%SZ)"
     if backup_configuration; then
-      log "restoring the database from its backup, if there is one"
-      litestream restore -if-db-not-exists -if-replica-exists -config "$LITESTREAM_CONFIG" "$TICO_DB" || restore_failed=(--restore-failed)
+      # The restore reads the generation the data is in, as environment.json names it now: a copy from another folder could be
+      # an older one. Strict: a generation that cannot be read fails the restore, as a restore that failed does; the cache is
+      # not a stand-in here.
+      if python -m backend.replication sync-generation --strict "$LITESTREAM_CONFIG" "$TICO_DB"; then
+        log "restoring the database from its backup, if there is one"
+        litestream restore -if-db-not-exists -if-replica-exists -config "$LITESTREAM_CONFIG" "$TICO_DB" || restore_failed=(--restore-failed)
+      else
+        restore_failed=(--restore-failed)
+      fi
     fi
     if [ -s "$TICO_DB" ]; then
       python -m backend.replication restore-blobs || log "could not restore attachments; run: docker compose run --rm server restore --force"
@@ -214,10 +244,20 @@ supervise() {
   reap() { while :; do wait "$1" && rc=0 || rc=$?; [ "$rc" -gt 128 ] && kill -0 "$1" 2>/dev/null || return 0; done; }
   trap 'requested=1; stopping' TERM INT
   if [ "$backups" = 1 ]; then
-    python -m backend.replication loop &
-    loop=$!
-    litestream replicate -config "$LITESTREAM_CONFIG" &
+    # The reset first makes the config name the backup generation that environment.json names. Then stale Litestream state
+    # beside the database is cleared when the backup location is empty, and a new backup generation is started when the copy
+    # is stuck. It runs here, in the job that starts Litestream, so the server does not wait for it. An unfinished switch
+    # waits here, with the server running, until the backup location can be read; a stop ends the wait. exec makes the job
+    # Litestream itself: $! is its pid. Exit 3 means a generation switch broke off after it began, and exit 4 that nothing
+    # says which generation the data is in; Litestream does not start on either, since its config may not match.
+    ( rc=0; python -m backend.replication reset-stale-litestream "$LITESTREAM_CONFIG" "$TICO_DB" || rc=$?
+      case "$rc" in 3|4) exit 1 ;; esac
+      exec litestream replicate -config "$LITESTREAM_CONFIG" ) &
     litestream=$!
+    # The loop gets Litestream's pid: a copy that has stopped moving is healed by stopping Litestream, and the container
+    # then restarts (backend/replication.py, stuck_replica_check).
+    TICO_LITESTREAM_PID=$litestream python -m backend.replication loop &
+    loop=$!
   fi
   "$@" &
   server=$!
@@ -286,7 +326,7 @@ import json, os, sqlite3, sys, time
 for _ in range(60):
     try:
         row = sqlite3.connect("file:%s?mode=ro" % os.environ["TICO_DB"], uri=True).execute(
-            "SELECT value_json FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
+            "SELECT value FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
     except sqlite3.Error:
         row = None
     if row:
@@ -302,7 +342,7 @@ PY
 # Rebuilds an empty data volume from the backup (the remote one, else the tico-backups volume). The install's
 # id is in the database, so it returns with it. A volume that already holds data is only replaced with --force.
 restore() {
-  local force=0
+  local force=0 aside
   case "${1:-}" in --force) force=1 ;; '') ;; *) die "usage: restore [--force]" ;; esac
   aws_identity  # before the backup or the credential key is read, or a database is moved aside
   export TICO_DB=$DATA/hub.sqlite TICO_BLOB_DIR=$DATA/blobs
@@ -310,12 +350,17 @@ restore() {
     [ "$force" = 1 ] || die "the data volume is not empty; restore would replace it. Re-run with --force to keep the current database aside and restore over it"
   fi
   backup_configuration || die "backups are off (TICO_BACKUP=off); there is nothing to restore from"
+  python -m backend.replication sync-generation --strict "$LITESTREAM_CONFIG" "$TICO_DB" \
+    || die "could not find the backup generation the data is in (see above), so nothing was restored; if the backup location cannot be read, try again when it is reachable"
+  # The current database moves aside with its WAL, so the kept copy opens with every commit it had. A WAL left without a
+  # database moves aside too, or SQLite would apply it to the restored copy.
   if [ -e "$TICO_DB" ]; then
-    local aside
     aside="$TICO_DB.before-restore.$(date +%s)"
     log "keeping the current database as $aside"
     mv "$TICO_DB" "$aside"
-    rm -f "$TICO_DB-wal" "$TICO_DB-shm"
+    move_sidecars_aside "$aside"
+  else
+    move_sidecars_aside "$TICO_DB.orphan-$(date -u +%Y%m%dT%H%M%SZ)"
   fi
   log "restoring from ${TICO_BACKUP_URL:-the tico-backups volume ($BACKUPS)}"
   litestream restore -if-replica-exists -config "$LITESTREAM_CONFIG" "$TICO_DB"

@@ -34,3 +34,8 @@ drafts, then the not-legal-advice line. `hub file publish` it, commit, and `hub 
 
 An invoice you could not open is listed with its amount from the task and "not reviewed". A matter with no budget is
 "no budget", never a guessed one.
+
+## Done when
+- Every invoice received last month has a review, or is listed as "not reviewed" with its amount from the task.
+- The summary has the headline, the table by matter and firm, the matters list, and the questions to raise as drafts.
+- The summary is published with `hub file publish`, and the task is closed with the total and the amount in question first.

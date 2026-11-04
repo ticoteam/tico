@@ -14,7 +14,10 @@
   /* one step above the hairlines (--line): a connector reads as a path between avatars, not as a divider */
   --tree-line:var(--g4);
   --tree-w:1.5px;
+  /* the room an elbow and its neighbours leave for the turn; areas size their offsets from it */
   --tree-r:8px;
+  /* the turn itself: just a touch of round, so the lines read as square corners softened */
+  --tree-corner:3px;
   /* the room between an elbow's end and the avatar it points at: one pixel, so the two read as joined, never overlap */
   --tree-gap:1px;
 }
@@ -35,7 +38,7 @@
   left:calc(var(--tree-x) - var(--tree-w) / 2);top:calc(-1 * var(--tree-up,0px));
   width:calc(var(--tree-elbow) + var(--tree-w) / 2);height:calc(var(--tree-up,0px) + var(--tree-y,50%) + var(--tree-w) / 2);
   border:0 solid var(--tree-line);border-left-width:var(--tree-w);border-bottom-width:var(--tree-w);
-  border-bottom-left-radius:min(var(--tree-r),var(--tree-elbow))}
+  border-bottom-left-radius:min(var(--tree-corner),var(--tree-elbow))}
 :where(
   .tree ul:not(.node-sources)>li:not(:last-child),
   .upd-sub>.upd-node:not(:last-child),
@@ -45,7 +48,7 @@
   left:calc(var(--tree-x) - var(--tree-w) / 2);top:calc(-1 * var(--tree-up,0px));bottom:0;
   border-left:var(--tree-w) solid var(--tree-line)}
 :where(
-  .tree li:has(>ul:not(.node-sources):not([hidden])>li)>:is(.noderow,.node-sources,.org-bet-pop),
+  .tree li:has(>ul:not(.node-sources):not([hidden])>li)>:is(.noderow,.node-sources),
   .upd-node:has(>.upd-sub>.upd-node)>:is(.upd-card,.upd-none),
   .gt-ind.gt-kids
 )::after{content:"";position:absolute;pointer-events:none;

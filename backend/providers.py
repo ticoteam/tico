@@ -20,13 +20,14 @@ from . import gateway_tiers, models_preset
 from .batch_work import shared_check
 from .harnesses import attach_harnesses, normalize_fallback
 from .store import Problem
+from . import bot_settings as BS
 
 KEY = "providers"
 # What a bot's config says when it has no opinion and follows the company default.
 DEFAULT = "default"
 
 # `runtime` is the host a runner starts (runner-rs/src/hosts/<runtime>.rs); `harness` names the tool
-# manifest that installs it (runner/harnesses/<harness>.toml). `login`, what the person types on the runner's
+# manifest that installs it (runner-rs/harnesses/<harness>.toml). `login`, what the person types on the runner's
 # machine to sign that runtime in, comes from the manifest. Providers with no CLI of their own share the
 # catch-all runtime (`catch_all`): pi, reached with an OpenRouter API key.
 PROVIDERS = (
@@ -79,45 +80,48 @@ for _row in PROVIDERS:
 # with no `provider` belong to external agents that bring their own model: they are never a
 # default, and any company may create a bot on one.
 MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
-    {"id": "gpt-6-astra", "label": "gpt 6 astra", "runtime": "codex", "provider": "openai",
+    {"id": "gpt-6-astra", "context_tokens": 1_050_000, "label": "gpt 6 astra", "runtime": "codex", "provider": "openai",
      "efforts": ("low", "medium", "high", "xhigh", "max", "ultra"),
      "default_effort": "medium", "deprecated": True},
-    {"id": "gpt-6.1-sol", "label": "gpt 6.1 sol", "runtime": "codex", "provider": "openai",
+    {"id": "gpt-6.1-sol", "context_tokens": 1_050_000, "label": "gpt 6.1 sol", "runtime": "codex", "provider": "openai",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "medium"},
-    {"id": "gpt-6-sol", "label": "gpt 6 sol", "runtime": "codex", "provider": "openai",
+    {"id": "gpt-6.1-terra", "context_tokens": 1_050_000, "label": "gpt 6.1 terra", "runtime": "codex", "provider": "openai",
+     "efforts": ("low", "medium", "high", "xhigh", "max"),
+     "default_effort": "medium"},
+    {"id": "gpt-6-sol", "context_tokens": 1_050_000, "label": "gpt 6 sol", "runtime": "codex", "provider": "openai",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "medium", "deprecated": True},
-    {"id": "gpt-6-luna", "label": "gpt 6 luna", "runtime": "codex", "provider": "openai",
+    {"id": "gpt-6-luna", "context_tokens": 1_050_000, "label": "gpt 6 luna", "runtime": "codex", "provider": "openai",
      "recommended": True,
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "max"},
-    {"id": "gpt-5.6-sol", "label": "gpt 5.6 sol", "runtime": "codex", "provider": "openai",
+    {"id": "gpt-5.6-sol", "context_tokens": 1_050_000, "label": "gpt 5.6 sol", "runtime": "codex", "provider": "openai",
      "efforts": ("low", "medium", "high", "xhigh", "max", "ultra"),
      "default_effort": "low", "deprecated": True},
-    {"id": "grok-4.6", "label": "grok 4.6", "runtime": "grok", "provider": "xai",
+    {"id": "grok-4.6", "context_tokens": 500_000, "label": "grok 4.6", "runtime": "grok", "provider": "xai",
      "recommended": True,
      "efforts": ("low", "medium", "high", "xhigh"),
      "default_effort": "high"},
-    {"id": "gemini-3.8-flash", "label": "gemini 3.8 flash", "runtime": "gemini", "provider": "google",
+    {"id": "gemini-3.8-flash", "context_tokens": 1_048_576, "label": "gemini 3.8 flash", "runtime": "gemini", "provider": "google",
      "recommended": True,
      "efforts": ("low", "medium", "high"),
      "default_effort": "high"},
-    {"id": "claude-opus-5-5", "label": "opus 5.5", "runtime": "claude", "provider": "anthropic",
+    {"id": "claude-opus-5-5", "context_tokens": 1_000_000, "label": "opus 5.5", "runtime": "claude", "provider": "anthropic",
      "recommended": True,
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "high"},
-    {"id": "claude-opus-5", "label": "opus 5", "runtime": "claude", "provider": "anthropic",
+    {"id": "claude-opus-5", "context_tokens": 1_000_000, "label": "opus 5", "runtime": "claude", "provider": "anthropic",
      "deprecated": True,
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "high"},
-    {"id": "claude-sonnet-5-5", "label": "sonnet 5.5", "runtime": "claude", "provider": "anthropic",
+    {"id": "claude-sonnet-5-5", "context_tokens": 1_000_000, "label": "sonnet 5.5", "runtime": "claude", "provider": "anthropic",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "high"},
-    {"id": "claude-fable-5-1", "label": "fable 5.1", "runtime": "claude", "provider": "anthropic",
+    {"id": "claude-fable-5-1", "context_tokens": 1_000_000, "label": "fable 5.1", "runtime": "claude", "provider": "anthropic",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "high"},
-    {"id": "claude-haiku-5-5", "label": "haiku 5.5", "runtime": "claude", "provider": "anthropic",
+    {"id": "claude-haiku-5-5", "context_tokens": 1_000_000, "label": "haiku 5.5", "runtime": "claude", "provider": "anthropic",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "medium"},
     # Cursor picks the model itself on `auto`; any other model it offers is named in the bot's config.
@@ -211,6 +215,7 @@ MODEL_BY_ID = _ById((row["id"], row) for row in MODEL_CATALOG)
 #              0.025x input on Fable 5.1, 0.05x on Opus 5.5 and Sonnet 5.5, 0.1x on the rest)
 #              claude-haiku-5-5 read 2026-10-17: the rate for prompts up to 100,000 tokens (LONG_PROMPT below).
 #   OpenAI     developers.openai.com/api/docs/pricing (standard, short context)
+#              gpt-6.1-terra read 2026-11-03 (standard, short context; its model page gives the same rates)
 #   Google     ai.google.dev/gemini-api/docs/pricing (paid standard; $0.75/$3.75 until 2026-12-31, doubling from 2027-01-01)
 #   xAI        docs.x.ai/developers/models (prompts under 200k)
 #   pi models  OpenRouter's public model list, openrouter.ai/api/v1/models (what the pi runtime is billed)
@@ -254,6 +259,7 @@ PRICES = _Priced({
     "gpt-6-sol": (2.0, 0.20, 10.0),
     "gpt-6-luna": (0.10, 0.01, 0.50),
     "gpt-6.1-sol": (2.0, 0.10, 10.0),
+    "gpt-6.1-terra": (1.0, 0.05, 5.0),
     "gpt-5.6-sol": (4.0, 0.40, 20.0),
     "gpt-5.6-terra": (2.0, 0.20, 12.0),
     "gpt-5.6-luna": (0.20, 0.02, 1.20),
@@ -429,7 +435,7 @@ def _record(value):
     stored = stored if isinstance(stored, dict) else {}
     return {"enabled": [p for p in stored.get("enabled") or [] if p in PROVIDER_BY_ID],
             "runtime": str(stored.get("runtime") or ""), "model": str(stored.get("model") or ""),
-            "revision": int(stored.get("revision") or 0), "updated": str(stored.get("updated") or ""),
+            "revision": int(stored.get("revision") or 0), "updated_at": str(stored.get("updated") or ""),
             "updated_by": str(stored.get("updated_by") or ""), "source": str(stored.get("source") or ""),
             # On unless the owner turned it off: a bot out of quota runs on another provider (default_fallbacks).
             "auto_fallback": stored.get("auto_fallback") is not False,
@@ -547,7 +553,7 @@ def save(c, actor, body, now, settings=None):
     kept = _record(saved[0])["meeting_model"] if saved else None
     meeting = kept if body.get("meeting_model") is None else meeting_choice({"enabled": enabled}, body.get("meeting_model"))
     after = {"enabled": enabled, "runtime": runtime, "model": model, "revision": before["revision"] + 1,
-             "updated": now, "updated_by": actor, "source": "owner",
+             "updated_at": now, "updated_by": actor, "source": "owner",
              "auto_fallback": before["auto_fallback"] if auto is None else bool(auto),
              "check_models": (before["check_models"] if checks is None
                               else normalize_check_models(checks, {"enabled": enabled, "runtime": runtime,
@@ -556,8 +562,10 @@ def save(c, actor, body, now, settings=None):
              "decide_level": before["decide_level"] if level is None else J.normalize_level(level),
              "meeting_model": before["meeting_model"] if body.get("meeting_model") is None else meeting}
     # The Gateway's provider is never stored: it follows the connection (`with_gateway`).
-    stored = {**after, "enabled": [name for name in enabled if name not in gateway], "meeting_model": meeting}
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    # The document holds `updated`, as it always has; only what the code hands out calls it `updated_at`.
+    stored = {**{k: v for k, v in after.items() if k != "updated_at"}, "updated": now,
+              "enabled": [name for name in enabled if name not in gateway], "meeting_model": meeting}
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (KEY, json.dumps(stored, sort_keys=True)))
     return before, after
 
@@ -567,7 +575,7 @@ def view(record):
     return {"configured": configured(record), "enabled": record["enabled"],
             "default": {"runtime": record["runtime"], "model": record["model"]},
             "revision": record["revision"], "source": record["source"],
-            "updated": record["updated"], "updated_by": record["updated_by"],
+            "updated_at": record["updated_at"], "updated_by": record["updated_by"],
             "auto_fallback": record["auto_fallback"],
             "check_models": record["check_models"], "check_order": check_order(record),
             "preset": record.get("preset", ""), "presets": list(models_preset.PRESETS),
@@ -743,11 +751,11 @@ def fill(record, config):
     return {**config, "runtime": runtime, "model": model}
 
 
-def bot_choice(c, settings, config):
+def bot_choice(c, settings, config, record=None):
     """(runtime, model) for a bot's stored config, or ('', '') when nothing resolves: for the
-    places that only record or display what a bot runs on and must not fail."""
+    places that only record or display what a bot runs on and must not fail. `record`: load(c, settings), if read."""
     try:
-        return resolve(load(c, settings), config)
+        return resolve(load(c, settings) if record is None else record, config)
     except ProviderError:
         return "", ""
 
@@ -772,10 +780,10 @@ def runtimes_run_on(c, settings):
     from .shared_bots import follow
     from .task_models import of as task_model_of
     record, found = load(c, settings), {}
-    for row in c.execute("SELECT a.runner_id, a.bot, bc.config_json FROM assignments a "
-                         "LEFT JOIN bot_config bc ON bc.bot=a.bot"):
+    for row in c.execute(f"SELECT a.runner_id, a.bot, {BS.CONFIG} AS config FROM assignments a "
+                         f"LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN}"):
         try:
-            config = follow(c, row["bot"], json.loads(row["config_json"] or "{}"))
+            config = follow(c, row["bot"], json.loads(row["config"] or "{}"))
         except ValueError:
             config = {}
         try:
@@ -795,10 +803,10 @@ def runtimes_needed(c, settings):
     record = load(c, settings)
     wanted = wanted_runtimes(record)
     need = {}
-    for row in c.execute("SELECT a.runner_id, bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
-                         "AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot"):
+    for row in c.execute(f"SELECT a.runner_id, {BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
+                         f"AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN}"):
         try:
-            config = json.loads(row["config_json"] or "{}")
+            config = json.loads(row["config"] or "{}")
         except ValueError:
             config = {}
         runtime = bot_choice(c, settings, config)[0]

@@ -1,7 +1,7 @@
 # Setup
 
 Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 30 minutes. The outcome is six recorded answers, a snapshot of the first one or two conversations you can read, and the first routine checked.
+finished. Budget 30 minutes. The outcome is five recorded answers, a snapshot of the first one or two conversations you can read, and the first routine checked.
 
 ---
 
@@ -23,11 +23,10 @@ What you do (turn interviews, calls and feedback into snapshots, opportunities a
 Numbered, each with its one-line why. Offer a default so a human can answer "fine".
 
 1. What outcome is the product team working toward this quarter, in one sentence? Why: Research is grouped under an outcome. Without one, I collect stories that answer nothing.
-2. Where do interviews and user conversations live: meeting recordings, a folder of notes, survey exports? Can I read them? Why: Sets the sources. I say what I could not read instead of guessing.
+2. Where do interviews and user conversations live, and can I read them? What may I never store or quote: names, organizations, anything from a private meeting? Why: Sets the sources and the privacy rules. I say what I could not read instead of guessing, and quotes stay anonymised until you say otherwise.
 3. Who are the users you most need to understand, and which decision is open right now? Why: The first brief is written for that decision, for that human.
 4. Which competitors matter, and which of their features do people compare you to? Why: Sets the first comparison. Competitor facts go to the market graph, not to a file here.
-5. What may I never store or quote: names, organizations, anything from a private meeting? Why: Quotes are anonymised until you say otherwise.
-6. When should the weekly research digest land, and who gets it? (Default: Thursdays at 10:00, to you.) Why: Sets the recipient and the first routine's schedule.
+5. When should the weekly research digest land, and who gets it? (Default: Thursdays at 10:00, to you.) Why: Sets the recipient and the first routine's schedule.
 
 ## 4. Record
 
@@ -39,13 +38,13 @@ Take the first one or two conversations you can read and follow `playbooks/write
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will send you a research digest every Thursday at 10:00 with new snapshots and the opportunities they support, and I will contact no one." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send you a research digest every Thursday at 10:00 with new snapshots and the opportunities they support, and I will contact no one." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

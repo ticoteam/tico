@@ -1,5 +1,5 @@
 //! `tico-runner`: the Tico local runner. launchd and systemd units that start `python -m runner run` reach it through
-//! runner/engine.py. It keeps the registration file, state directory, lock and outbox, and registers and checks this
+//! runner/__main__.py and runner_support/engine.py. It keeps the registration file, state directory, lock and outbox, and registers and checks this
 //! computer itself (`enroll`, `adopt`, `doctor`, crate::commands).
 
 // A turn's failure carries its whole report, and the caches key on tuples: both read better as they are.
@@ -25,8 +25,10 @@ mod accounts;
 mod afterwatch;
 mod appdriver;
 mod backlog;
+mod browser_exit;
 mod capture;
 mod client;
+mod cloud_machine;
 mod commands;
 mod config;
 mod credential_imports;
@@ -63,7 +65,10 @@ mod checkout_groups;
 mod mail_key;
 mod manifest;
 mod memory_history;
+mod memory_tidy;
+mod memory_tidy_keep;
 mod mcp;
+mod model_subscriptions;
 mod op;
 mod panics;
 mod perbot;
@@ -101,7 +106,7 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 
-/// The source fingerprint of this build (build.rs; runner/engine.py `source_id`).
+/// The source fingerprint of this build (build.rs; runner_support/engine.py `source_id`).
 pub const BUILD_ID: &str = env!("TICO_BUILD_ID");
 
 #[derive(Parser)]
@@ -232,7 +237,7 @@ enum ProfileAction {
     Login { name: String, runtime: String },
 }
 
-/// `profile add|list|login` (runner/__main__.py profile_command): local to this computer, no network.
+/// `profile add|list|login` (runner_support/__main__.py profile_command): local to this computer, no network.
 fn profile_main(action: ProfileAction, config: &mut config::Config) -> i32 {
     let result = match action {
         ProfileAction::Add { name, share_operator } => profiles::command(config, "add", Some(&name), share_operator),
@@ -310,7 +315,7 @@ fn main() {
         std::process::exit(0);
     }
     if argv.get(1).is_some_and(|a| a == "--build-id") {
-        // The source fingerprint build.rs stamped in: runner/engine.py rebuilds when the checkout's differs.
+        // The source fingerprint build.rs stamped in: runner_support/engine.py rebuilds when the checkout's differs.
         println!("{}", BUILD_ID);
         std::process::exit(0);
     }
@@ -340,6 +345,8 @@ fn main() {
         std::process::exit(0);
     }
     let mut config = config::Config::load(&path).unwrap_or_else(|e| fail(&e));
+    // Before any thread starts, and before `profile login` looks for its harness.
+    harness_tools::expose_if_owned(&config);
     if let Command::Profile { action } = cli.command {
         std::process::exit(profile_main(action, &mut config));
     }
@@ -419,6 +426,9 @@ async fn start(command: Command, config: config::Config) -> i32 {
     flight::init(&state_dir);
     panics::install();
     let state = state::State::open(&state_dir).unwrap_or_else(|e| fail(&e));
+    // No turn runs yet: a company subscription's sign-in file left from one that was cut off goes.
+    model_subscriptions::sweep(&state_dir);
+    gateway_relay::sweep(&config.projects_dir());
     follow::record_revision(&state_dir);
     follow::init(&config.data, &state_dir);
     if isolation::enabled() {
@@ -458,6 +468,7 @@ async fn start(command: Command, config: config::Config) -> i32 {
     // No launchd here (TICO_SIDE_JOBS=1): the runner also supervises importers, close-calls and connectors.
     let side = sidejobs::start(&service.config);
     screen::start(service.config.path.clone(), client.clone());
+    browser_exit::start(client.clone());
     service.run().await;
     screen::shutdown().await;
     if let Some((task, stop)) = side {
@@ -469,7 +480,7 @@ async fn start(command: Command, config: config::Config) -> i32 {
 
 #[cfg(test)]
 mod build_id_tests {
-    /// build.rs's SHA-256 and file list agree with `ring` here and with runner/engine.py `source_id`.
+    /// build.rs's SHA-256 and file list agree with `ring` here and with runner_support/engine.py `source_id`.
     #[test]
     fn the_build_id_is_the_checkouts_source_id() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
@@ -484,7 +495,7 @@ mod build_id_tests {
                 }
             }
         }
-        for p in std::fs::read_dir(root.join("runner/harnesses")).unwrap().flatten().map(|e| e.path()) {
+        for p in std::fs::read_dir(root.join("runner-rs/harnesses")).unwrap().flatten().map(|e| e.path()) {
             if p.extension().is_some_and(|e| e == "toml") {
                 names.push(p.strip_prefix(root).unwrap().display().to_string());
             }
@@ -500,7 +511,7 @@ mod build_id_tests {
         let id: String = digest.as_ref()[..8].iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(super::BUILD_ID, id);
         let python = std::process::Command::new("python3")
-            .args(["-c", "import sys; from runner.engine import source_id; print(source_id(__import__('pathlib').Path(sys.argv[1])))"])
+            .args(["-c", "import sys; from runner_support.engine import source_id; print(source_id(__import__('pathlib').Path(sys.argv[1])))"])
             .arg(root)
             .current_dir(root)
             .output();

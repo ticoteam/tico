@@ -25,6 +25,20 @@ pub fn retry_pause() -> Duration {
     Duration::from_secs(2)
 }
 
+/// Whether the bot keeps nothing from one task to the next (`stateless` in its config, set by the server:
+/// backend/hubdb.py stateless). Its turns resume no session of another task or of the chat, read and keep no memory/
+/// or state.md, and copy no harness memory into its repository.
+pub fn stateless(config: &Value) -> bool {
+    crate::util::truthy(config.get("stateless"))
+}
+
+/// Whether this turn is a nightly memory tidy pass (`memory_pass` in its config, set by backend/check_models.py apply).
+/// It reads its memory like any turn, but commits and pushes none of it: what it changed in its checkout is discarded
+/// once the turn ends (sessions::discard_pass), so no commit of its own reaches the bot's main branch.
+pub fn memory_pass(config: &Value) -> bool {
+    crate::util::truthy(config.get("memory_pass"))
+}
+
 /// How a turn's session began.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Session {
@@ -72,11 +86,13 @@ impl Session {
         !self.resumed && matches!(self.why, Some(NOT_FOUND | RESUME_FAILED | COMPACT_FAILED | INTERRUPTED))
     }
 
-    /// Told to the new thread, after the rest of its prompt (`checkpoint`: the prompt gives the task's).
-    pub fn prompt_note(&self, checkpoint: bool) -> Option<String> {
+    /// Told to the new thread, after the rest of its prompt (`checkpoint`: the prompt gives the task's; `stateless`: the
+    /// bot reads no memory or state, so it is pointed at the task alone).
+    pub fn prompt_note(&self, checkpoint: bool, stateless: bool) -> Option<String> {
         if !self.replaces() {
             return None;
         }
+        let read = if stateless { "Read the task" } else { "Read state.md and memory/" };
         let because = match self.why {
             Some(NOT_FOUND) => "was not on this computer",
             Some(COMPACT_FAILED) => "could not be compacted",
@@ -90,7 +106,7 @@ impl Session {
         };
         Some(format!(
             "New session: your previous session here {because}, so this turn starts a new one without its transcript; {seed}. \
-             Read state.md and memory/ before acting; `hub task show` and `hub conversation show` have anything older."
+             {read} before acting; `hub task show` and `hub conversation show` have anything older."
         ))
     }
 }
@@ -177,12 +193,27 @@ mod tests {
 
     #[test]
     fn only_a_session_that_left_one_behind_gets_the_new_session_note() {
-        let n = Session::new(NOT_FOUND, None).prompt_note(true).unwrap();
+        let n = Session::new(NOT_FOUND, None).prompt_note(true, false).unwrap();
         assert!(n.starts_with("New session:") && n.contains("was not on this computer") && n.contains("where the task stood"), "{n}");
-        assert!(Session::new(COMPACT_FAILED, None).prompt_note(false).unwrap().contains("could not be compacted"));
+        assert!(n.contains("Read state.md and memory/ before acting"), "{n}");
+        assert!(Session::new(COMPACT_FAILED, None).prompt_note(false, false).unwrap().contains("could not be compacted"));
         for s in [Session::new(NONE_SAVED, None), Session::new(FALLBACK_SIDE, None), Session::resumed(), Session::compacted()] {
-            assert_eq!(s.prompt_note(true), None, "{s:?}");
+            assert_eq!(s.prompt_note(true, false), None, "{s:?}");
         }
+    }
+
+    #[test]
+    fn a_stateless_bot_is_never_told_to_read_memory_or_state() {
+        let n = Session::new(NOT_FOUND, None).prompt_note(true, true).unwrap();
+        assert!(n.contains("Read the task before acting") && !n.contains("memory") && !n.contains("state.md"), "{n}");
+        assert!(stateless(&json!({"stateless": true})));
+        assert!(!stateless(&json!({"stateless": false})) && !stateless(&json!({"harness": "claude"})));
+    }
+
+    #[test]
+    fn only_a_memory_pass_turn_is_marked_as_one() {
+        assert!(memory_pass(&json!({"memory_pass": true})));
+        assert!(!memory_pass(&json!({"memory_pass": false})) && !memory_pass(&json!({"harness": "claude"})));
     }
 
     #[test]

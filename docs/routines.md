@@ -1,8 +1,8 @@
 # Routines (now Automations)
 
 A routine is now an automation: a trigger and steps. A bot's routine is an automation whose trigger is a
-**Schedule** (a five-field cron in a time zone), an **Event** from Tico's catalog, or an incoming **Webhook**, and whose
-step is a **Bot turn**: a task for the bot with the prompt, which the bot runs in its own session. For the jobs Tico
+**Schedule** (a five-field cron in a time zone), an **Event** from Tico's catalog, an incoming **Webhook** or a
+**Before a due date** trigger (below), and whose step is a **Bot turn**: a task for the bot with the prompt, which the bot runs in its own session. For the jobs Tico
 runs on its own, see [System routines](system-routines.md).
 
 An install that had routines moved them once, on the upgrade to Automations; see
@@ -27,6 +27,42 @@ An install that had routines moved them once, on the upgrade to Automations; see
   For an event, the trigger is `{"type": "event", "name": "meeting.ready"}`; for a webhook,
   `{"type": "webhook", "id": "<trigger id>"}` (`hub trigger list` shows the ids). A new automation is saved off
   unless the flow sends `"enabled": true`.
+
+## Before a due date
+
+A due-date trigger runs its steps for each occurrence of a date that repeats, a few days before it falls due, so a
+payroll run, a renewal or a board report gets its task in time:
+
+```
+{"type": "due", "first_due": "2027-01-31", "repeats": "yearly", "open_days": 14, "tz": "America/Los_Angeles"}
+```
+
+- `first_due` is the first due day; `repeats` is `once`, `weekly`, `monthly`, `quarterly` or `yearly`. Occurrences
+  are counted from `first_due`, and a month too short for the day falls on its last day (a monthly routine from Jan 31
+  is due Feb 28 or 29, then Mar 31).
+- `open_days` (default 14) is how many days before the due day the run starts, at 00:00 in `tz` (default the company's
+  zone).
+- A task a run opens (a `create_task` step, or a bot turn) is due at the end of its due day in `tz` (its `due` argument
+  overrides it), and it carries the occurrence: `tasks.occurrence` is `<automation id>:<due day>`, and the task's
+  notice carries `due_on`, and `rule_due_id` when one is set. Its due is a deadline, not a wake date, and the asks
+  sweep never expires it. It reads as its due day in `tz`, whatever the viewer's zone. A step that sets its own
+  `due` keeps that instant.
+- One task per occurrence and step: a retry of a run that already made it reuses that task, so nothing is filed twice.
+  An occurrence's task is not parked until its due day, even while its bot is idle (its bot works it through the lead
+  time); an explicit snooze still parks it.
+- Each occurrence runs once, however often the scheduler passes. A missed day (the server was down) catches up on the
+  next pass. An overdue occurrence stays open and never holds back the next one.
+- While the company's routines are paused (out of credit or locked) or the routine's bot is not active, its days wait
+  and nothing is dropped: they run in order after the pause, and one `automation.deferred` event records why.
+- A find step runs one at a time, so a day waits while the run before it is unfinished. A day whose run fails is run
+  again at most an hour after the failure. After three failed runs of a day it is given up: one
+  `automation.due_gave_up` event records its due day and the error, and the routine goes on. Each failed day keeps its
+  own tries, so days that failed together retry separately. Changing the trigger's dates or repeat stops the retries of
+  runs made under the old trigger.
+- Run by hand with no input (Run now), a due routine starts its next due day as its scheduler would, so the task it
+  makes carries that day's due and occurrence.
+- The Automations list shows the next due day (`next_due`) and when its run starts (`next_run`). Changing the trigger
+  restarts the count from the next due day on; a rename or cap change does not.
 
 ## Seeing them all
 
@@ -104,3 +140,20 @@ A template's `bot.yaml` may still declare `routines:` (`id`, `title`, `cron` or 
 playbook path, and optionally `enabled: false`). `hub bot create` seeds them once, and each becomes an automation for the
 new bot. After that the automations are what run; editing the file changes nothing. `clients/preflight.py` still checks
 the block.
+
+## Inbox templates
+
+A new inbox can start from one of four templates: Founder, Support, Sales and Blank. `hub automation templates` lists
+them, and `hub automation template <id> --owner <ref> --inbox <address>` fills one in for an owner. The fill is a flow
+like any other: its roles (`legal_lead`, `support_lead`, ...) are resolved on the org chart, and what the owner cannot
+use is taken out. A role goes to the first active bot on the chart that can take the work: one that is still onboarding,
+takes no tasks under its profile, or runs on a synced harness is passed over. A wake the owner may not tell becomes a
+task for the first bot that takes one. A destination no bot can reach goes, with the rules and questions that point at
+it. A group owner gets Sort (a choice over the destinations, one route each and a default) where a person or a bot gets
+choose. A bot gets choose only if it can run its own turn: an onboarding bot, one whose profile is Responder, or one on a
+synced harness gets Sort instead. The choose's prompt names the message (its subject and body by mail, its text in
+Slack), and so does each task body and wake text the template hands on. A wake's text is quoted as data; a task body is
+substituted as plain text, so the message reaches it unquoted. In Slack, a bot that cannot take a non-routine task (a
+draft is one) gets no draft actions, and its choose becomes Sort. A group with no lead to act as loses the actions that need one (tasks, replies); when nothing it would do can run
+in its Slack channel, the fill is refused with a 422. Nothing is saved: the filled flow comes back off, and `hub automation create --file -` saves it.
+The same fill is `GET /api/v2/automations/templates/{id}?owner=...&inbox=...`.

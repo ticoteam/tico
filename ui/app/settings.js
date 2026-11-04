@@ -64,7 +64,7 @@ function settingsMachinesRefresh() {
   });
   return SETTINGS_PRESENCE.pending;
 }
-// Each model CLI's capabilities, from its manifest (GET /v2/models `harnesses`, runner/harnesses/*.toml): what the UI
+// Each model CLI's capabilities, from its manifest (GET /v2/models `harnesses`, runner-rs/harnesses/*.toml): what the UI
 // asks instead of naming CLIs. Fetched once; until then, or if the fetch fails, every capability reads as unknown.
 let HARNESS_ROWS = [];
 let HARNESS_ROWS_LOADING = null;
@@ -82,12 +82,16 @@ let SETTINGS_TAB = (() => { try { return sessionStorage.getItem(SETTINGS_TAB_KEY
 let SETTINGS_ADDRESS = '';
 // Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
 // can't see opens General with a line saying so; an unknown name just opens General.
-const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'repos', 'tasks', 'inbox',
-  'inbound', 'system',
+const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'repos', 'tasks', 'inbox',
+  'inbound', 'mail', 'system',
   'webhooks', 'health', 'history', 'gateway', 'billing'];
-// System was Rules (wake rules, now automations) and before that Routines; chat: the old Chat tab, now the Models card.
+// System was Rules (wake rules, now automations) and before that Routines; chat: the old Chat tab; providers and
+// subscriptions: what is the Models tab now; limits: its turn levels.
 const SETTINGS_ALIAS = {humans: 'people', computers: 'devices', repositories: 'repos', google: 'inbox', 'email-phone': 'inbound',
-  rules: 'system', routines: 'system', recurring: 'system', chat: 'models'};
+  rules: 'system', routines: 'system', recurring: 'system', chat: 'models', providers: 'models', subscriptions: 'models',
+  limits: 'models', 'turn-levels': 'models'};
+// Cards that moved from Computers to Models: an old link to one (the settings catalogue's) opens Models.
+const SETTINGS_MOVED_TO_MODELS = ['#settings-models', '#set-providers', '#set-gateway', '#set-turn-levels'];
 let SETTINGS_DENIED = false;
 let SETTINGS_TRANSITION_TIMER = null;
 // A section a link points into (an old tab's name, settingsShow); it scrolls there once drawn.
@@ -204,11 +208,13 @@ function pageSettings() {
       ${settingsIsAdmin() ? '<button type="button" data-settings-tab="people" role="tab">People</button>' : ''}
       <button type="button" data-settings-tab="bots" role="tab">Bots</button>
       <button type="button" data-settings-tab="devices" role="tab">Computers</button>
+      <button type="button" data-settings-tab="models" role="tab">Models</button>
       <button type="button" data-settings-tab="repos" role="tab">Repositories</button>
       <button type="button" data-settings-tab="tasks" role="tab">Tasks</button>
-      <button type="button" data-settings-tab="inbox" role="tab">My Google account</button>
+      <button type="button" data-settings-tab="inbox" role="tab">Google</button>
       <details class="settings-more" id="settings-more"><summary>More</summary><div>
         <button type="button" data-settings-tab="inbound" role="tab">Email &amp; Phone</button>
+        <button type="button" data-settings-tab="mail" role="tab">Mail</button>
         <button type="button" data-settings-tab="system" role="tab">System</button>
         <button type="button" data-settings-tab="webhooks" role="tab">Webhooks</button>
         <button type="button" data-settings-tab="health" role="tab">Health<span class="hl-alert" data-hl-alert hidden></span></button>
@@ -228,23 +234,28 @@ function pageSettings() {
             <p id="settings-team-icon-status" class="settings-cell-note" role="status"></p>
           </div>
         </div>` : ''}
-        <p class="settings-cell-note" id="settings-visuals">${settingsVisualsLine()}</p></section>
+        <p class="settings-cell-note" id="settings-visuals">${settingsVisualsLine()}</p>
+        ${S.me?.role === 'owner' ? '<div id="settings-bot-reports"></div>' : ''}</section>
       <section class="card" id="settings-company"><header><h2>Tico company</h2></header><div id="set-company"></div></section>` : ''}
       <section class="card" id="settings-assistant-pane"><header><h2>${esc(assistantName())}</h2><div class="row">
         <a class="ghost" href="${ASSISTANT}">Open chat</a>
-        ${settingsCanManageBot((S.emps || []).find(e => e.name === assistantBot())) ? `<a class="ghost" href="#/bot/${encodeURIComponent(assistantBot())}/more">Bot settings</a>` : ''}
+        ${settingsCanManageBot(botRow(assistantBot())) ? `<a class="ghost" href="#/bot/${encodeURIComponent(assistantBot())}/more">Bot settings</a>` : ''}
       </div></header><div id="settings-assistant-approvals"></div></section>
       <div id="settings-assistant"></div>
       ${S.me?.role === 'owner' ? `<section class="card" id="settings-privacy"><header><h2>Privacy</h2></header><div id="set-privacy">${skelRows(3, {card: true, dot: false})}</div></section>
       <section class="card" id="settings-storage"><header><h2>Storage</h2></header><div id="set-storage">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
     </div>
     <div class="settings-pane" id="settings-devices" role="tabpanel">
-      <section class="card"><div id="set-machines">${skelRows(3, {card: true, dot: false})}</div></section>
-      ${settingsIsAdmin() ? '<section class="card"><header><h2>Company turn levels</h2></header><div id="set-turn-levels"></div></section>' : ''}
+      <section class="card" id="settings-computers"><header><h2>Computers</h2><button class="primary settings-head-act" type="button" id="machine-add-open">Add computer</button></header><div id="set-machines">${skelRows(3, {card: true, dot: false})}</div></section>
       ${settingsIsAdmin() ? '<section class="card" id="settings-hosted" hidden><header><h2>Hosted servers</h2></header><div id="set-hosted"></div></section>' : ''}
       <section class="card" id="settings-sleep" hidden><header><h2>Sleep when idle</h2></header><div id="set-sleep"></div></section>
-      <section class="card" id="settings-models"><header><h2>Models</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section>
       ${settingsCanMakeTokens() || S.me?.has_tokens ? `<section class="card" id="settings-tokens"><header><h2>API tokens</h2></header><div id="set-tokens">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
+    </div>
+    <div class="settings-pane" id="settings-models" role="tabpanel" hidden>
+      <section class="card" id="settings-subs"><header><h2>Subscriptions</h2><button class="primary settings-head-act" type="button" id="subs-add" hidden>Add subscription</button></header><div id="set-subs">${skelRows(2, {card: true, dot: false})}</div></section>
+      <section class="card" id="settings-gateway-card"><header><h2>Tico Gateway</h2></header><div id="set-gateway-card">${skelRows(1, {card: true, dot: false})}</div></section>
+      <section class="card" id="settings-defaults"><header><h2>Defaults</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section>
+      ${settingsIsAdmin() ? '<section class="card" id="settings-limits"><header><h2>Limits</h2></header><div id="set-turn-levels"></div></section>' : ''}
     </div>
     <div class="settings-pane" id="settings-bots" role="tabpanel" hidden>
       <section class="card settings-bots-card"><header><h2>Bots</h2>${settingsCanCreateBots() ? '<div class="row"><button class="primary" type="button" id="settings-add-bot" disabled>Add bot</button><button class="ghost" type="button" id="settings-add-catalog" disabled><span class="sb-wide">Add from template</span><span class="sb-narrow">From template</span></button></div>' : ''}</header><div id="set-bots">${skelRows(3, {card: true, dot: false})}</div></section>
@@ -277,7 +288,8 @@ function pageSettings() {
       <section class="card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
     </div>
     <div class="settings-pane" id="settings-inbound" role="tabpanel" hidden><section class="card" id="set-inbound"></section></div>
-    <div class="settings-pane" id="settings-inbox" role="tabpanel" hidden><section class="card"><header><h2>Your Google account</h2></header><div id="set-google"></div></section></div>
+    <div class="settings-pane" id="settings-mail" role="tabpanel" hidden><div id="set-mail">${skelRows(3, {card: true, dot: false})}</div></div>
+    <div class="settings-pane" id="settings-inbox" role="tabpanel" hidden><section class="card"><header><h2>Google</h2></header><div id="set-google"></div></section></div>
     <div class="settings-pane" id="settings-history" role="tabpanel" hidden><section class="card"><header><h2>History</h2>
       ${S.me?.role === 'owner' ? '<div class="theme-seg" id="settings-history-view" role="radiogroup" aria-label="History"><button type="button" role="radio" data-history-view="runs">Runs</button><button type="button" role="radio" data-history-view="changes">Changes</button></div>' : ''}</header>
       <div id="set-runs">${skelRows(3, {card: true, dot: false})}</div>
@@ -336,8 +348,7 @@ function settingsShow(tab) {
   tab = SETTINGS_ALIAS[tab] || tab;
   if (tab === 'tags' || tab === 'types') tab = 'tasks'; // Saved links keep working.
   if (tab === 'triggers') tab = 'webhooks';             // Settings > Triggers became Webhooks
-  // The company's models choice is a section of Computers; a link to it (or to the old AI providers tab) scrolls there.
-  if (tab === 'models' || tab === 'providers') { tab = 'devices'; SETTINGS_REVEAL = '#settings-models'; }
+  if (tab === 'devices' && SETTINGS_MOVED_TO_MODELS.includes(SETTINGS_REVEAL)) tab = 'models';
   // The Strategy Bot's settings were a tab of their own; they are a helper's card in System now.
   if (tab === 'strategy-bot') { tab = 'system'; SETTINGS_REVEAL = '#set-strategy-bot-card'; }
   if (SETTINGS_GENERAL[tab]) { SETTINGS_REVEAL = SETTINGS_GENERAL[tab]; tab = 'general'; }
@@ -354,7 +365,7 @@ function settingsShow(tab) {
   if (denied) denied.hidden = !SETTINGS_DENIED;
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
   settingsAddress();
-  if (['health', 'history', 'system', 'webhooks', 'inbound', 'gateway', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
+  if (['health', 'history', 'system', 'webhooks', 'inbound', 'mail', 'gateway', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
   const tasks = $('#settings-tasks');
   if (tasks) tasks.hidden = SETTINGS_TAB !== 'tasks';
   tabs.forEach(button => {
@@ -365,13 +376,14 @@ function settingsShow(tab) {
   settingsTags();
   taskTypesSettingsShow(SETTINGS_TAB);
   if (SETTINGS_TAB === 'tasks') { void roadmapSettingsMount(); void askFilterSettingsLoad(); }
-  const devices = $('#settings-devices'), history = $('#settings-history'), bots = $('#settings-bots');
+  const devices = $('#settings-devices'), models = $('#settings-models'), history = $('#settings-history'), bots = $('#settings-bots');
   if (bots) { bots.hidden = SETTINGS_TAB !== 'bots'; if (SETTINGS_TAB === 'bots') void renderTeamBudgets(); }
   if (devices) devices.hidden = SETTINGS_TAB !== 'devices';
+  if (models) models.hidden = SETTINGS_TAB !== 'models';
   settingsMachinesWatch();
   if (settingsMachinesVisible() && SETTINGS_DATA.loaded) void settingsMachinesRefresh();
-  // Before the first load the form has no models or computers to show; loadSettings draws it then.
-  if (SETTINGS_TAB === 'devices' && SETTINGS_DATA.loaded) { void renderSettingsProviders(); void renderSettingsTurnLevels(); }
+  // Before the first load the forms have no models or computers to show; loadSettings draws them then.
+  if (SETTINGS_DATA.loaded) settingsModelsRender();
   if (history) { history.hidden = SETTINGS_TAB !== 'history'; if (SETTINGS_TAB === 'history') settingsHistoryShow(); }
   const general = $('#settings-general');
   if (general) {
@@ -387,7 +399,7 @@ function settingsShow(tab) {
         // The owner's one click when the team has no Assistant (ui/assistant.js): restore it or add it.
         owner && window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
         privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(),
-        company && settingsIsAdmin() && renderSettingsCompany()]).then(() => settingsReveal(SETTINGS_REVEAL));
+        company && settingsIsAdmin() && renderSettingsCompany(), owner && renderSettingsBotReports()]).then(() => settingsReveal(SETTINGS_REVEAL));
     }
   }
   const peoplePane = $('#settings-people');
@@ -400,6 +412,8 @@ function settingsShow(tab) {
   if (healthPane) { healthPane.hidden = SETTINGS_TAB !== 'health'; if (SETTINGS_TAB === 'health') window.hlMount?.(); }
   const inboundPane = $('#settings-inbound');
   if (inboundPane) { inboundPane.hidden = SETTINGS_TAB !== 'inbound'; if (SETTINGS_TAB === 'inbound') void inboundMount(); }
+  const mailPane = $('#settings-mail');
+  if (mailPane) { mailPane.hidden = SETTINGS_TAB !== 'mail'; if (SETTINGS_TAB === 'mail' && !formBusy(mailPane)) void renderSettingsMail(); }
   const inboxPane = $('#settings-inbox');
   if (inboxPane) { inboxPane.hidden = SETTINGS_TAB !== 'inbox'; if (SETTINGS_TAB === 'inbox') void window.mountGoogleConnect?.($('#set-google')); }
   const reposPane = $('#settings-repos');
@@ -462,6 +476,7 @@ async function renderSettingsAssistantApprovals() {
   let v, list;
   try { [v, list] = await Promise.all([get('/v2/assistant/settings'), get('/v2/assistant/decisions')]); }
   catch (e) { host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (!host.isConnected) return;   // Settings redrew while this loaded; the new page draws its own
   const name = esc(assistantName());
   const rows = (list.decisions || []).map(d => {
     const words = d.decided_for?.words ? `“${esc(d.decided_for.words)}”` : '';
@@ -476,7 +491,7 @@ async function renderSettingsAssistantApprovals() {
       ? `When you ask in its chat, your ${name} approves or declines your approvals. It reads the list back first, and only your own words count.`
       : 'Your team’s owner has turned this off for everyone (Settings > People).'}</p>
     ${rows ? `<h3>Decided by ${name} for you</h3><ul class="assistant-decisions">${rows}</ul>` : ''}`;
-  $('#assistant-decides').onchange = async ev => {
+  host.querySelector('#assistant-decides').onchange = async ev => {
     const box = ev.target;
     try { await post('/v2/assistant/settings', {decides_approvals: box.checked}); toast('Saved'); void renderSettingsAssistantApprovals(); }
     catch (e) { box.checked = !box.checked; settingsFieldError(box, e.message); }
@@ -488,26 +503,52 @@ async function renderSettingsAssistantApprovals() {
     void renderSettingsAssistantApprovals();
   });
 }
+// Settings > General > Team: whether a bot's report to the Tico team goes without a card (team rule bot_reports_direct,
+// backend/support.py send_by_rule). Owner only. Off, every bot report waits for a person's yes in Needs you.
+async function renderSettingsBotReports() {
+  const host = $('#settings-bot-reports');
+  if (!host || formBusy(host)) return;
+  let rules;
+  try { rules = (await get('/v2/access')).rules || {}; }
+  catch (e) { if (host.isConnected) host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (!host.isConnected) return;
+  host.innerHTML = `<label class="people-line"><input type="checkbox" role="switch" class="people-switch" id="bot-reports-direct"${rules.bot_reports_direct !== false ? ' checked' : ''} aria-label="Bots send reports to the Tico team without asking">
+    <span>Bots send reports to the Tico team without asking</span></label>`;
+  host.querySelector('#bot-reports-direct').onchange = async ev => {
+    const box = ev.target;
+    try { await put('/v2/access/rules', {bot_reports_direct: box.checked}); toast('Saved'); void renderSettingsBotReports(); }
+    catch (e) { box.checked = !box.checked; settingsFieldError(box, e.message); }
+  };
+}
 // Settings > General > Privacy: the one switch for the anonymous usage count, and a new random install ID (PRIVACY.md).
 async function renderSettingsPrivacy() {
   const host = $('#set-privacy');
   if (!host) return;
   let v;
-  try { v = await get('/v2/system/usage-count'); } catch (e) { host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  try { v = await get('/v2/system/usage-count'); } catch (e) { if (host.isConnected) host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (!host.isConnected) return; // Settings redrew while this was loading; the new card draws itself
   const forced = v.off_by && v.off_by !== 'setting';
   host.innerHTML = `<label class="privacy-row"><input type="checkbox" id="privacy-count"${v.enabled ? ' checked' : ''}${forced ? ' disabled' : ''}> Help count active installs</label>
     <p class="settings-cell-note">${forced ? (v.off_by === 'demo' ? 'Always off in the demo. ' : `Turned off by ${esc(v.off_by)}. `) : ''}A random ID, the version and three yes/no activity flags. <a href="${esc(v.doc)}" target="_blank" rel="noopener noreferrer">What is sent</a></p>
     <p class="settings-cell-note">${v.install_id ? `Install ID: <code>${esc(v.install_id)}</code> <button class="ghost" type="button" id="privacy-reset">Reset install ID</button>` : 'No install ID yet: one is made the first time the count is sent.'}</p>`;
-  $('#privacy-count').onchange = async ev => {
+  host.querySelector('#privacy-count').onchange = async ev => {
     try { await put('/v2/system/usage-count', {enabled: ev.target.checked}); toast('Saved'); void renderSettingsPrivacy(); }
     catch (e) { ev.target.checked = !ev.target.checked; settingsFieldError(ev.target, e.message); }
   };
-  if ($('#privacy-reset')) $('#privacy-reset').onclick = async ev => {
+  const reset = host.querySelector('#privacy-reset');
+  if (reset) reset.onclick = async ev => {
     const button = ev.currentTarget;
     if (!await settingsConfirm({title: 'Reset install ID?', ok: 'Reset install ID',
       text: 'Tico makes a new random ID. The old one is gone for good, so earlier counts can no longer be linked to this install.'})) return;
     try { await post('/v2/system/usage-count/reset'); toast('Saved'); void renderSettingsPrivacy(); } catch (e) { settingsFieldError(button, e.message); }
   };
+}
+// Models draws its cards when shown; Computers reads the subscriptions and the Gateway toggle for its pickers.
+function settingsModelsRender() {
+  if (SETTINGS_TAB === 'models') { void renderSettingsSubs(); void renderSettingsProviders(); void renderSettingsTurnLevels(); }
+  else if (SETTINGS_TAB === 'devices' && S.me?.cloud) {
+    void Promise.all([subsLoad(), providersViewLoad().catch(() => null)]).then(() => { if (settingsMachinesVisible()) renderSettingsMachines(); });
+  }
 }
 async function renderSettingsTurnLevels() {
   const host = $('#set-turn-levels');
@@ -516,26 +557,24 @@ async function renderSettingsTurnLevels() {
   try {
     const value = await get('/v2/settings/turn-levels', {fresh: true});
     if (!host.isConnected || !settingsIsAdmin() || formBusy(host)) return;
-    host.innerHTML = `<form id="turn-levels-form">
-      <p>Levels are per person who can sign in, across all company computers. Guests do not count.</p>
-      <label>Warning level per person <input name="warning_per_person" type="number" required min="1" max="10000" value="${value.warning_per_person}"></label>
-      <p class="settings-cell-note">At warning, Tico opens a Health incident. New turns still start.</p>
-      <label>Stop level per person <input name="stop_per_person" type="number" required min="1" max="10000" value="${value.stop_per_person}"></label>
-      <p class="settings-cell-note">At stop, new turns wait. Running turns continue; waiting work starts in order when the count drops.</p>
-      <p>${value.people} ${value.people === 1 ? 'person' : 'people'}: warning at ${value.warning}, stop at ${value.stop}. ${value.in_use} turns in use.</p>
-      <button class="primary" type="submit">Save turn levels</button><p data-turn-levels-status role="status"></p>
+    host.innerHTML = `<form id="turn-levels-form" class="models-form">
+      <div class="models-row"><span class="k"><label for="turn-levels-warn">Warn at</label>${helpBubble('Per person who can sign in, across all company computers. At warn, Tico opens a Health incident; at stop, new runs wait.')}</span>
+        <span class="models-num"><input id="turn-levels-warn" name="warning_per_person" type="number" required min="1" max="10000" value="${value.warning_per_person}"><span class="muted">runs per person</span></span></div>
+      <div class="models-row"><span class="k"><label for="turn-levels-stop">Stop at</label></span>
+        <span class="models-num"><input id="turn-levels-stop" name="stop_per_person" type="number" required min="1" max="10000" value="${value.stop_per_person}"><span class="muted">runs per person</span></span></div>
+      <div class="onb-actions"><button class="primary" type="submit">Save</button><span class="muted" data-turn-levels-status role="status">${value.people} ${value.people === 1 ? 'person' : 'people'} · ${value.in_use} of ${value.stop} in use</span></div>
     </form>`;
     const form = host.querySelector('form');
     form.onsubmit = async event => {
       event.preventDefault();
       const status = form.querySelector('[data-turn-levels-status]'), button = form.querySelector('button');
       const warning = Number(form.elements.warning_per_person.value), stop = Number(form.elements.stop_per_person.value);
-      if (warning > stop) { status.textContent = 'The warning level must not exceed the stop level.'; status.classList.add('err'); return; }
+      if (warning > stop) { status.textContent = 'Warn at must not be above Stop at.'; status.classList.add('err'); return; }
       button.disabled = true; status.textContent = ''; status.classList.remove('err');
       try {
         const saved = await post('/v2/settings/turn-levels', {warning_per_person: warning, stop_per_person: stop});
         toast('Saved');
-        status.textContent = `Warning at ${saved.warning}; stop at ${saved.stop} company turns.`;
+        status.textContent = `Warn at ${saved.warning} · stop at ${saved.stop} company runs`;
       } catch (error) { status.textContent = error.message; status.classList.add('err'); }
       finally { button.disabled = false; }
     };
@@ -554,7 +593,9 @@ async function loadSettings() {
       get('/employees'),
       S.me?.cloud && S.me?.role === 'owner' ? get('/v2/settings/history') : Promise.resolve({changes: [], transitions: []}),
       S.me?.cloud ? get('/v2/usage/limits').catch(() => null) : Promise.resolve(null),
-      loadHarnessRows()
+      loadHarnessRows(),
+      // The Computers table's pickers: the company's subscriptions, and whether the Gateway runs a tool without one.
+      S.me?.cloud ? Promise.all([subsLoad(), providersViewLoad().catch(() => null)]) : null
     ]);
     S.emps = namedRoster(employees);
     setPeople(people);
@@ -573,8 +614,7 @@ async function loadSettings() {
     void renderSettingsTokens();
     void renderSettingsHosted();
     void renderSettingsSleep();
-    void renderSettingsTurnLevels();
-    if (SETTINGS_TAB === 'devices' && !$('#set-prov')) void renderSettingsProviders();
+    if (SETTINGS_TAB === 'models') settingsModelsRender();
     const add = $('#settings-add-bot');
     if (add) { add.onclick = () => void settingsRecruitFlow(); add.disabled = false; }
     const fromCatalog = $('#settings-add-catalog');
@@ -596,7 +636,6 @@ function renderSettingsIssues() {
   el.querySelectorAll('[data-execution-review]').forEach(button => {
     button.onclick = () => executionReview(button.dataset.executionReview);
   });
-  bindRunnerRestart(el);
 }
 // The stopped-run card is the decision only (Chris, Oct 22: "remove 80%, give me clear action items"): one line
 // on what stopped, one recommendation with its button first, the rest under Details. `stopped` comes from
@@ -623,7 +662,7 @@ const STOPPED_NOTE = {
   dismiss: 'The human chose not to retry this delivery. Inspect the task separately.',
 };
 const reconcileStopped = (job, decision, detail = '') => post(`/v2/jobs/${encodeURIComponent(job.id)}/reconcile`, {
-  attempt_id: job.attempt_id, decision, note: detail ? `${STOPPED_NOTE[decision]} Details: ${detail}` : STOPPED_NOTE[decision],
+  run_id: job.run_id, decision, note: detail ? `${STOPPED_NOTE[decision]} Details: ${detail}` : STOPPED_NOTE[decision],
   acknowledge_uncertain_effects: true
 });
 const stoppedOutcome = (decision, deferred) => decision === 'mixed'
@@ -634,21 +673,23 @@ const stoppedOutcome = (decision, deferred) => decision === 'mixed'
 async function executionReview(bot, after = () => $('#settings-tabs') && loadSettings()) {
   const dialog = document.createElement('dialog'); dialog.className = 'tmodal tmodal-shell stopped-runs-dialog';
   dialog.setAttribute('aria-label', 'Stopped runs');
-  dialog.innerHTML = `<header class="tmodal-head"><h2>Stopped runs</h2><span class="spacer"></span><button class="ghost" type="button" data-close>Close</button></header><div class="tmodal-body" data-review>Loading…</div>`;
+  // Open bot lives here, not on the Needs you card that opens this.
+  dialog.innerHTML = `<header class="tmodal-head"><h2>Stopped runs</h2><span class="spacer"></span><a class="ghost" href="#/bot/${esc(encodeURIComponent(bot))}/more" data-open-bot>Open bot</a><button class="ghost" type="button" data-close>Close</button></header><div class="tmodal-body" data-review>Loading…</div>`;
   dialog.querySelector('[data-close]').onclick = () => dialog.close();
+  dialog.querySelector('[data-open-bot]').onclick = () => dialog.close();
   dialog.addEventListener('close', () => dialog.remove());
   document.body.appendChild(dialog); dialog.showModal();
   const host = dialog.querySelector('[data-review]');
   try {
     const {jobs} = await get(`/v2/bots/${encodeURIComponent(bot)}/execution-review`);
     host.innerHTML = jobs.length ? jobs.map(job => {
-      const saved = job.attempt?.final_text || job.output.map(event=>event.text).filter(Boolean).join('');
+      const saved = job.run?.final_text || job.output.map(event=>event.text).filter(Boolean).join('');
       const pick = STOPPED_PICK[job.stopped] || STOPPED_PICK.unknown, retry = pick.retry;
       const tools = (job.acted || []).join(', ');
       const button = (decision, label) => `<button type="submit" name="decision" value="${decision}"${(decision === 'resume') === retry ? '' : ' class="ghost"'}>${label}</button>`;
       return `<form data-job="${esc(job.id)}" class="stopped-run">
       <h3>${esc(job.task?.title || 'Interrupted conversation')}</h3>
-      <p data-stopped>Stopped ${esc(fmt(job.attempt?.started || job.attempt?.created))} ${esc(pick.what(tools))}.</p>
+      <p data-stopped>Stopped ${esc(fmt(job.run?.started_at || job.run?.created_at))} ${esc(pick.what(tools))}.</p>
       <p data-pick><strong>${esc(pick.say(tools))}</strong></p>
       <details data-details><summary>Details</summary>
         ${job.task ? `<p class="muted">Task ${esc(job.task.status)}${job.task.owner_name ? `, owner ${esc(job.task.owner_name)}` : ''}</p>` : ''}
@@ -699,5 +740,5 @@ async function executionReview(bot, after = () => $('#settings-tabs') && loadSet
 function renderSettingsServices() {
   const el = $('#set-services'); if (!el) return;
   const rows = SETTINGS_DATA.services;
-  el.innerHTML = `<div class="settings-services-list">${rows.map(service => `<div><strong>${esc(service.name || service.service)}</strong> · ${service.last_error ? `<span class="err">${esc(service.last_error)}</span>` : '<span class="ok">healthy</span>'}${service.last_success ? `<span class="settings-cell-note">${esc(ago(service.last_success))}</span>` : ''}</div>`).join('') || '<span class="muted">No health reports yet.</span>'}</div>`;
+  el.innerHTML = `<div class="settings-services-list">${rows.map(service => `<div><strong>${esc(service.name || service.service)}</strong> · ${service.last_error ? `<span class="err">${esc(service.last_error)}</span>` : '<span class="ok">healthy</span>'}${service.last_succeeded_at ? `<span class="settings-cell-note">${esc(ago(service.last_succeeded_at))}</span>` : ''}</div>`).join('') || '<span class="muted">No health reports yet.</span>'}</div>`;
 }

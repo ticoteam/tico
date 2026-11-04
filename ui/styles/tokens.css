@@ -2,7 +2,7 @@
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* swap, not block: text never waits on the icon font. Its ligature names ("dynamic_feed") stay hidden until the font
    is in (html.icons-ready, set by ui/theme.js; see base.css), so they never flash as words. */
-@font-face{font-family:"Material Symbols Outlined";font-style:normal;font-weight:300;font-display:swap;src:url(/vendor/fonts/material-symbols-outlined.woff2?v=887fa52538ae) format("woff2")}
+@font-face{font-family:"Material Symbols Outlined";font-style:normal;font-weight:300;font-display:swap;src:url(/vendor/fonts/material-symbols-outlined.woff2?v=39b2d0e13e8a) format("woff2")}
 /* Text: Inter, self-hosted (ui/vendor/fonts/inter-variable.woff2, built by scripts/build-text-font.py; OFL, see
    LICENSE-inter.txt). One variable file: weights 400-700, optical sizes 14-32, Latin and Latin Extended.
    optional, not swap: a page that does not have the font within ~100ms (a cold cache) keeps the fallback for its whole
@@ -41,13 +41,12 @@
   --dur-fast:120ms;--dur:180ms;--ease:cubic-bezier(.2,0,0,1);--ease-out:cubic-bezier(0,0,.2,1);
   /* the house rules these serve are at the top of components.css */
   /* focus: one ring for buttons, links, rows and switches, outside the box, or inside it on a row that meets its
-     container's edge; a text field takes the halo instead (its border turns the accent) */
-  --focus-ring:2px solid var(--accent);--focus-offset:2px;--focus-inset:-2px;
-  --focus-halo:3px solid color-mix(in srgb,var(--accent) 28%,transparent);
+     container's edge; a text field takes the halo instead (its border turns --focus). Ink, not the accent: --focus is
+     g7, 9:1 or more on every surface in both themes. */
+  --focus-ring:2px solid var(--focus);--focus-offset:2px;--focus-inset:-2px;
+  --focus-halo:3px solid color-mix(in srgb,var(--focus) 28%,transparent);
   /* control heights: small and regular (a phone's are 40px, forms.css) */
   --ctl-sm:28px;--ctl:32px;
-  /* the Ask pill's footprint on a computer (ask.css): 16px off the bottom, 40px tall, 20px clear above it; how wide it is */
-  --fab-room:76px;--ask-pill:104px;
   /* a fold's chevron (chevron_right) turns a quarter to open */
   --chev-open:rotate(90deg);
 }
@@ -55,21 +54,22 @@
    saved), "light", or "system", which follows the OS. Light is the same nine steps in reverse order, so every rule
    names a step's role (--bg, --surface, --line...) and never a theme. */
 :root{
-  /* Paper & Ink: one gray ramp with a slight green bias, g0 the page and g8 the text; g6 (--muted) keeps 4.5:1 on every
+  /* Paper & Ink: one gray ramp, near neutral in dark (a trace of green) and slightly green in light, g0 the page and g8 the text; g6 (--muted) keeps 4.5:1 on every
      surface up to g3, in both themes */
-  --g0:#101513;--g1:#161c1a;--g2:#1d2421;--g3:#27302c;--g4:#333d39;--g5:#56625d;--g6:#909d97;--g7:#b6c1bb;--g8:#e5ebe7;
+  --g0:#131413;--g1:#191b1a;--g2:#212322;--g3:#2c2e2d;--g4:#393b3a;--g5:#5d5f5e;--g6:#979a99;--g7:#bcbfbd;--g8:#e8eae9;
   --bg:var(--g0);--surface:var(--g1);--surface2:var(--g2);--line:var(--g3);--muted:var(--g6);--ink:var(--g8);
   --hover:var(--g3);
   /* the chosen segment of a switch, a step above its track (--surface2) */
   --raised:var(--g3);
   /* your own message: one clear step above the pane it sits on */
-  --bubble:#2b3430;
-  /* Jade, from the dot's own hue: 8.2:1 on --bg, 7:1 on --surface2. */
+  --bubble:#303231;
+  /* Jade, from the dot's own hue: 8.2:1 on --bg, 7:1 on --surface2. Green is the Liquid Dot's and the one primary
+     action's on a view (and a chart's one series); links, counts, selection, focus and status marks are ink. */
   --accent:#5cc092;--accent-ink:#0c1a14;
-  /* Links in a dense list (a bot's right rail): the accent, a step quieter. Mixed from --accent and --muted, so
-     it follows the theme without a value of its own. */
   --accent-quiet:color-mix(in srgb,var(--accent) 68%,var(--muted));
-  --run:#7fb3f0;--wait:#e2b25a;--fail:#f08080;--idle:#6d7b75;--ok:#6cc48f;
+  /* Links are ink (underlined where they sit in ink text); in a dense list (a bot's right rail), a step quieter. */
+  --link:var(--ink);--link-quiet:var(--g7);--focus:var(--g7);
+  --run:#7fb3f0;--wait:#e2b25a;--fail:#f08080;--idle:#757877;--ok:#6cc48f;
   /* Waiting labels need a separate ink: the amber also fills badges with dark text. */
   --wait-ink:var(--wait);
   --run-bg:#1b2a3d;--wait-bg:#3a2f18;--fail-bg:#3d1f1f;--ok-bg:#1d3327;--idle-bg:var(--g2);

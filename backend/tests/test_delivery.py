@@ -25,7 +25,7 @@ def setup(api):
 def rows(api, **where):
     sql = " AND ".join(f"{k}=?" for k in where) or "1"
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute(f"SELECT * FROM deferrals WHERE {sql} ORDER BY created",
+        return [dict(r) for r in c.execute(f"SELECT * FROM deferrals WHERE {sql} ORDER BY created_at",
                                            tuple(where.values()))]
 
 
@@ -93,7 +93,7 @@ def test_the_stalled_task_check_leaves_a_deferred_task_to_its_deadline(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Watch refunds", "body": "x", "delivery": "defer"})
     with api.app.state.store.read() as c:
         assert task["id"] not in {t["id"] for t in H.stalled_tasks(c, at=H.shift(H.now(), hours=2))}
-        c.execute("UPDATE deferrals SET settled=?, how='carried' WHERE item=?", (H.now(), task["id"]))
+        c.execute("UPDATE deferrals SET settled_at=?, how='carried' WHERE item=?", (H.now(), task["id"]))
         assert task["id"] in {t["id"] for t in H.stalled_tasks(c, at=H.shift(H.now(), hours=2))}
 
 
@@ -109,7 +109,7 @@ def test_a_paused_bot_is_not_woken_until_it_is_active_again(api):
     assert job_of(api, held["id"]) is None
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug='ops'")
-        assert delivery.next_due(c) == rows(api, item=held["id"])[0]["due"]
+        assert delivery.next_due(c) == rows(api, item=held["id"])[0]["due_at"]
     tick(api, 32)
     assert job_of(api, held["id"])[1] == "queued"
 
@@ -168,7 +168,7 @@ def test_a_new_task_takes_queue_or_defer_but_not_steer(api):
     assert queued["next_run"] is False
     # The older flag is a deferred task with the default day.
     older = post(api, "tasks", {"owner": "ops", "title": "Watch refunds", "body": "x", "next_run": True})
-    assert older["next_run"] is True and rows(api, item=older["id"])[0]["due"] > H.shift(H.now(), hours=23)
+    assert older["next_run"] is True and rows(api, item=older["id"])[0]["due_at"] > H.shift(H.now(), hours=23)
 
 
 def test_a_chat_message_steers_by_default_queues_when_asked_and_defers_with_no_deadline(api):
@@ -188,7 +188,7 @@ def test_a_chat_message_steers_by_default_queues_when_asked_and_defers_with_no_d
     held = post(api, "chat/ops", {"text": "Some day: the yearly view.", "delivery": "defer"})
     assert job_of(api, held["id"]) is None
     [row] = rows(api, item=held["id"])
-    assert row["kind"] == "message" and row["due"] is None and row["conversation_id"] == held["conversation_id"]
+    assert row["kind"] == "message" and row["due_at"] is None and row["conversation_id"] == held["conversation_id"]
 
 
 def test_notes_take_a_deadline_and_the_old_names_still_work(api):
@@ -196,7 +196,7 @@ def test_notes_take_a_deadline_and_the_old_names_still_work(api):
     note = post(api, "notes", {"to": "ops", "text": "Check the refunds.", "defer_for": "4h"})["note"]
     assert rows(api, item=note["id"])[0]["kind"] == "note"
     plain = post(api, "notes", {"to": "ops", "text": "Check the signups."})["note"]
-    assert rows(api, item=plain["id"])[0]["due"] is None
+    assert rows(api, item=plain["id"])[0]["due_at"] is None
 
     parse = hubcli.parser().parse_args
     for flag in ("--next-run", "--quiet"):
@@ -262,7 +262,7 @@ def test_deferred_comments_older_than_the_history_page_are_written_out_not_dropp
     assert rows(api, item=old["id"])[0]["how"] == "carried"
     # What did not fit waits for the next turn, unsettled, and says so.
     assert "56 more deferred here wait for your next turn" in attempt["deferred"]
-    assert len([r for r in rows(api, bot="ops", kind="comment") if r["settled"] is None]) == 56
+    assert len([r for r in rows(api, bot="ops", kind="comment") if r["settled_at"] is None]) == 56
 
 
 def test_deadlines_in_one_session_share_one_run_and_another_turn_cancels_it(api):
@@ -286,7 +286,7 @@ def test_deadlines_in_one_session_share_one_run_and_another_turn_cancels_it(api)
     assert attempt["message"]["id"] == trigger["id"]
     assert "Billing first." in attempt["deferred"] and "Then the docs." in attempt["deferred"]
     assert {r["how"] for r in rows(api, kind="comment")} == {"carried"}
-    assert job_of(api, first["id"])[1] == "cancelled"
+    assert job_of(api, first["id"])[1] == "canceled"
 
 
 # The statements the deferral hot paths run on every claim, scheduler pass and stalled-task check (backend/delivery.py).
@@ -294,13 +294,13 @@ def test_deadlines_in_one_session_share_one_run_and_another_turn_cancels_it(api)
 HOT_DEFERRAL_QUERIES = (
     "SELECT DISTINCT d.fired_job FROM deferrals d JOIN jobs j ON j.id=d.fired_job WHERE d.attempt=? "
     "AND j.state='queued' AND d.fired_job IS NOT ? AND NOT EXISTS(SELECT 1 FROM deferrals x "
-    "WHERE x.fired_job=d.fired_job AND x.settled IS NULL)",
-    "UPDATE deferrals SET settled=?,how='fired' WHERE settled IS NULL AND fired_job IS NOT NULL AND "
+    "WHERE x.fired_job=d.fired_job AND x.settled_at IS NULL)",
+    "UPDATE deferrals SET settled_at=?,how='fired' WHERE settled_at IS NULL AND fired_job IS NOT NULL AND "
     "NOT EXISTS(SELECT 1 FROM jobs j WHERE j.id=deferrals.fired_job "
     "AND j.state IN ('queued','leased','running','input'))",
-    "SELECT 1 FROM deferrals WHERE kind='task' AND item=? AND settled IS NULL LIMIT 1",
-    "UPDATE deferrals SET settled=?,how='carried',attempt=? WHERE bot=? AND kind=? AND "
-    "settled IS NULL AND item IN (?,?)",
+    "SELECT 1 FROM deferrals WHERE kind='task' AND item=? AND settled_at IS NULL LIMIT 1",
+    "UPDATE deferrals SET settled_at=?,how='carried',attempt=? WHERE bot=? AND kind=? AND "
+    "settled_at IS NULL AND item IN (?,?)",
 )
 
 

@@ -30,7 +30,7 @@ run('redesign-library-ask', ['org', 'toured'], async ({hub, browser, phone, tag}
   if (!phone) {
     await at(page, '#/tasks');   // outside Library, where the fold is the person's own choice
     // ---- Library folds: kept across a reload, open again inside Library, closed again outside it
-    const toggle = page.locator('.rd-lib-toggle');
+    const toggle = page.locator('.rd-lib-toggle:not(.rd-rules-toggle)');
     assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
     assert.equal(await libOpen(page), true);
     await toggle.click();

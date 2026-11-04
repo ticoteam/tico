@@ -4,8 +4,9 @@ import json
 from dataclasses import dataclass
 from typing import Callable
 
+from backend import screening
+
 from . import harness as X
-from ..redesign.harness import rows
 from .harness import CLAUDE_ID, DANA_ID, LEAD_ID, OMAR, OPENAI_ID, PM
 
 ATTACK = "a01-ignore-direct"        # an attack the patterns also catch
@@ -123,7 +124,7 @@ def s_hold_release(org, items, judge):
     doors.set_modes(webhook="hold", idea="hold", watcher="hold", mail="hold")
     # A second webhook whose automation both files a task and starts a Bot turn: both are held for one model call.
     made = org.api("post", "/api/v2/triggers", {"name": "Intake", "id": "intake"})
-    org.api("post", "/api/v2/automations", {
+    intake = org.api("post", "/api/v2/automations", {
         "name": "Intake work", "owner": "person:" + DANA_ID, "enabled": True, "builtin": False,
         "trigger": {"type": "webhook", "id": "intake"},
         "steps": [{"id": "file", "type": "action", "enabled": True, "do": "create_task",
@@ -135,13 +136,13 @@ def s_hold_release(org, items, judge):
     X.hook(org.client, made.body["trigger"]["url"], json.dumps(X.payload_of(attack, "in-1")).encode(),
            {"Idempotency-Key": "in-1"})
     org.store.automations.drain()
-    held_turn = org.sql("SELECT id,title,body,owner,version FROM tasks WHERE title='Held: Intake work'")
+    held_turn = org.sql("SELECT id,title,body,owner_id,version FROM tasks WHERE title='Held: Intake work'")
     held_task = X.find_task(org, "Held: Intake in-1")
     out.append(("an automation's task and its Bot turn are both held, for one model call",
                 bool(held_task) and len(held_turn) == 1 and len(judge.answers) - asked == 1,
                 f"task {bool(held_task)}, turns {len(held_turn)}, calls {len(judge.answers) - asked}"))
-    auto = next((a for a in rows(org.api("get", "/api/v2/automations").body) if a.get("name") == "Intake work"), {})
-    run = (org.api("get", f"/api/v2/automations/{auto.get('id')}/runs").body.get("runs") or [{}])[0]
+    # The system catalog can fill a list page; use the creation receipt rather than searching its first page.
+    run = (org.api("get", f"/api/v2/automations/{intake.body['id']}/runs").body.get("runs") or [{}])[0]
     out.append(("the held Bot turn's step reads held", [s.get("status") for s in run.get("steps") or []][-1:] == ["held"],
                 str([s.get("status") for s in run.get("steps") or []])))
     # The other doors.
@@ -168,8 +169,8 @@ def s_hold_release(org, items, judge):
         reply = org.api("post", f"/api/v2/tasks/{task['id']}", {"version": task["version"], "owner": bot})
         org.scheduler_pass()
         after = X.task_row(org, task["id"])
-        out.append((f"handing the held task to {bot} releases it", reply.status == 200 and after["owner"] == "bot:" + bot
-                    and X.wakes(org, bot) > woke, f"{reply.status} {after['owner']} wakes {woke}->{X.wakes(org, bot)}"))
+        out.append((f"handing the held task to {bot} releases it", reply.status == 200 and after["owner_id"] == "bot:" + bot
+                    and X.wakes(org, bot) > woke, f"{reply.status} {after['owner_id']} wakes {woke}->{X.wakes(org, bot)}"))
     return out
 
 
@@ -256,7 +257,7 @@ def s_settings(org, items, judge):
     layers = org.api("put", "/api/v2/screening", {"patterns": False, "model": False}).body
     bad = org.api("put", "/api/v2/screening", {"webhook": "block"})
     return [("the first release only warns, at every door",
-             view.get("modes") == {s: "warn" for s in ("webhook", "mail", "idea", "watcher")}
+             view.get("modes") == {s: "warn" for s in screening.SOURCES}
              and view.get("defaults") == view.get("modes"), str(view.get("modes"))),
             ("both detectors are on by default", view.get("layers") == {"patterns": True, "model": True},
              str(view.get("layers"))),

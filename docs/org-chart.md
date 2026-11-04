@@ -10,6 +10,8 @@ row of its own, and the groups, then the humans and bots, that report to them si
 human nobody is above follows as an ordinary row with their reports under them. With no such top person it nests as before. The built-in bots (the Assistant, BotOps, the
 Librarian, the Strategy Bot) stay out of the chart and the Goals tree. Ask opens the Assistant from any page, and the Assistant hands BotOps what needs it;
 the Librarian is reached from Docs and Market, the Strategy Bot from its panel beside the Strategy tabs. Settings > Bots lists all four.
+
+A paused bot shows a pause icon and **Paused** badge in **Settings > Bots** and beside its Team chart node. The whole chart node is dimmed. Click the badge or node to open the bot's page.
 When bots' names start with the same words (the "Head of" in **Head of Product** and **Head of Sales**), those words are
 muted, and on a narrow sidebar they drop out whole so each row keeps the part that tells it apart. Hover a bot to see its
 whole name. A bot still onboarding has a small amber gear beside its name (**Onboarding**).
@@ -70,14 +72,15 @@ direct reports' ([Updates](using-tico.md#updates)).
 
 ## Groups
 
-The **+** beside **Team** offers **Recruit a bot**, **Add existing bot**, **Add section** and **Add human**, according to
-your permissions. Each group's **+** offers the same, with **Add group** (a group inside it) and no **Add human**.
-**Add section** and **Add group** open the inline group-name field. **Recruit a bot** asks for a job title and an optional
-job description, makes a Recruiting seat (a role with no bot yet) under the manager you choose and opens it: its job
-description, which the Strategy Bot drafts for the owner, then **Recruit** and the pick
+The **+** beside **Team** offers **Post a job**, **Build a team**, **Cloud agents**, **From scratch**, **Add existing bot**,
+**Add section** and **Add human**, according to your permissions and what this Tico has loaded. Each group's **+** offers the
+same, with **Add group** (a group inside it) and no **Add human**. **Add section** and **Add group** open the inline
+group-name field. **Post a job** asks for a job title (its description is drafted as you leave the title), makes a
+Recruiting seat (a role with no bot yet) under the manager you choose and opens its Applicants page
 ([Recruiting a seat](onboarding.md#recruiting-a-seat)). From a group's **+** the seat is in that group and reports to its
-head by default. **Add existing bot** opens [Connect an external agent](connect-an-agent.md). Open seats show on the chart
-under their manager with a **Recruiting** mark; clicking one opens it.
+head by default. **From scratch** opens the bot editor. **Add existing bot** opens
+[Connect an external agent](connect-an-agent.md). Open seats show on the chart under their manager with a **Recruiting**
+mark, or their applicant count once listed; clicking one opens its Applicants page.
 
 Clicking a group's name opens its page and unfolds it; its arrow folds it.
 

@@ -65,6 +65,7 @@ export type Assistant = {
 
 export type AssistantAction = {
   body?: Record<string, unknown>;
+  for?: string | null;
   method?: "POST" | "PUT" | "PATCH" | "DELETE";
   path: string;
   summary: string;
@@ -74,6 +75,18 @@ export type AssistantActionResult = {
   action: Record<string, unknown>;
   message_id?: string;
   shown_once?: Record<string, unknown>;
+};
+
+export type AssistantChangeList = {
+  changes: Array<Record<string, unknown>>;
+  next: string | null;
+};
+
+export type AssistantChangeResult = {
+  already: boolean;
+  id: string;
+  object: string;
+  restored: boolean;
 };
 
 export type AssistantMessage = {
@@ -89,17 +102,19 @@ export type AssistantPage = {
 
 export type AssistantReadBack = {
   approvals: Array<string>;
+  note?: string;
 };
 
 export type AssistantSent = {
-  fast: boolean;
-  intent?: string | null;
   message: Message;
-  reply?: Record<string, unknown> | null;
 };
 
 export type AssistantSettings = {
   decides_approvals: boolean;
+};
+
+export type AssistantWithdraw = {
+  reason?: string;
 };
 
 export type Audience = {
@@ -107,6 +122,24 @@ export type Audience = {
   everyone: boolean;
   people: Array<string>;
   teams: Array<string>;
+};
+
+export type AudienceCreate = {
+  approver?: string | null;
+  cadence?: string | null;
+  due_rule?: Record<string, unknown> | null;
+  enabled?: boolean | null;
+  lag_days?: number | null;
+  name: string;
+};
+
+export type AudiencePatch = {
+  approver?: string | null;
+  cadence?: string | null;
+  due_rule?: Record<string, unknown> | null;
+  enabled?: boolean | null;
+  lag_days?: number | null;
+  name?: string | null;
 };
 
 export type AuditPage = {
@@ -124,6 +157,7 @@ export type Automation = {
   runs: number;
 };
 };
+  destinations?: Array<Record<string, unknown>> | null;
   enabled?: boolean;
   hold?: {
   dropped: number;
@@ -136,8 +170,9 @@ export type Automation = {
   kind?: string;
   last_run?: Record<string, unknown> | null;
   name?: string;
+  next_due_at?: string | null;
   next_run?: string | null;
-  owner?: string;
+  owner_id?: string;
   paused?: boolean;
   pending?: number;
   problems?: Array<{
@@ -172,6 +207,7 @@ export type AutomationHeld = {
   runs: number;
 };
 };
+  destinations?: Array<Record<string, unknown>> | null;
   enabled?: boolean;
   hold?: {
   dropped: number;
@@ -185,8 +221,9 @@ export type AutomationHeld = {
   last_run?: Record<string, unknown> | null;
   moved?: number;
   name?: string;
+  next_due_at?: string | null;
   next_run?: string | null;
-  owner?: string;
+  owner_id?: string;
   paused?: boolean;
   pending?: number;
   problems?: Array<{
@@ -205,6 +242,7 @@ export type AutomationHeld = {
 export type AutomationIn = {
   batch?: Record<string, unknown> | null;
   builtin?: boolean;
+  destinations?: Array<unknown> | null;
   enabled?: boolean;
   group?: string | null;
   name: string;
@@ -226,21 +264,22 @@ export type AutomationOverviewRuns = {
   automation_name: string;
   cost?: number;
   count?: number;
-  finished?: string | null;
+  finished_at?: string | null;
   id: string;
   outcome?: string;
-  owner?: string;
-  started: string;
+  owner_id?: string;
+  started_at: string;
   started_by?: string;
   status: string;
   step_count?: number | null;
-  trigger: "message" | "task_received" | "schedule" | "webhook" | "listening" | "event" | "system";
+  trigger: "message" | "task_received" | "schedule" | "webhook" | "listening" | "event" | "due" | "system";
 }>;
   since: string;
 };
 
 export type AutomationPatch = {
   batch?: Record<string, unknown> | null;
+  destinations?: Array<unknown> | null;
   enabled?: boolean | null;
   group?: string | null;
   name?: string | null;
@@ -254,9 +293,9 @@ export type AutomationPatch = {
 export type AutomationRun = {
   automation_id: string;
   cost?: number;
-  finished?: string | null;
+  finished_at?: string | null;
   id: string;
-  started?: string;
+  started_at?: string;
   status: "queued" | "running" | "waiting" | "ok" | "failed" | "empty" | "skipped" | "held";
   steps: Array<Record<string, unknown>> | null;
   summary?: string | null;
@@ -304,11 +343,28 @@ export type AutomationStats = {
   until: string;
 };
 
+export type AutomationTemplate = {
+  destinations: Array<Record<string, unknown>>;
+  enabled: boolean;
+  name: string;
+  owner: string;
+  steps: Array<Record<string, unknown>>;
+  trigger: Record<string, unknown>;
+};
+
+export type AutomationTemplates = {
+  templates: Array<{
+  destinations: Array<string>;
+  id: string;
+  name: string;
+}>;
+};
+
 export type AutomationVersions = {
   next: number | null;
   versions: Array<{
   actor: string;
-  at: string;
+  created_at: string;
   flow: Record<string, unknown>;
   n: number;
   status: "active" | "pending";
@@ -316,16 +372,22 @@ export type AutomationVersions = {
 }>;
 };
 
+export type BillsAddress = {
+  address?: string | null;
+};
+
 export type Bot = {
   access: Access;
   can_complete_onboarding?: boolean;
   description?: string;
   display_name: string;
+  folder?: string;
+  id: string;
   keep_tasks_going?: number | null;
   onboarding_ready?: Record<string, unknown> | null;
   onboarding_state?: string;
   online?: boolean;
-  operator?: string | null;
+  owner_id?: string | null;
   owners: Array<unknown>;
   queued?: number;
   reports_to?: string | null;
@@ -356,6 +418,23 @@ export type BotAccessView = {
   you?: Access;
 };
 
+export type BotBrowserExit = {
+  runner_id: string | null;
+};
+
+export type BotBrowserExitView = {
+  browser_exit: {
+  name?: string;
+  runner_id?: string;
+} | null;
+  choices?: Array<{
+  label: string;
+  owner_id: string;
+  runner_id: string;
+}>;
+  may_change?: boolean;
+};
+
 export type BotBudget = {
   expected_revision: number;
   turns_per_day?: number | null;
@@ -381,12 +460,13 @@ export type BotDetail = {
   description?: string;
   display_name: string;
   goals?: string;
+  id?: string;
   keep_tasks_going?: number | null;
   onboarding_ready?: Record<string, unknown> | null;
   onboarding_state?: string;
   online?: boolean;
-  operator?: string | null;
-  operator_name?: string;
+  owner_id?: string | null;
+  owner_name?: string;
   owners: Array<unknown>;
   queued?: number;
   reports_to?: string | null;
@@ -400,6 +480,25 @@ export type BotDetail = {
   template?: string;
   template_version?: string;
   turns_at_once?: number | null;
+};
+
+export type BotDreamView = {
+  dream: {
+  auto: boolean;
+  closed_at: string | null;
+  doing: string | null;
+  questions: {
+  message_id: string;
+  mine: boolean;
+  text: string;
+} | null;
+  reason: string | null;
+  started_at: string;
+  state: "starting" | "dreaming" | "asking" | "done" | "stopped";
+  status: string;
+  summary: string | null;
+  task: string;
+} | null;
 };
 
 export type BotFile = {
@@ -451,7 +550,7 @@ export type BotInstructions = {
   content: string;
   published: boolean;
   source: string;
-  updated: string | null;
+  updated_at: string | null;
 };
 
 export type BotKeepTasksGoing = {
@@ -558,7 +657,7 @@ export type BotToolRegistered = {
 };
 
 export type BotToolRemoval = {
-  cancelled?: boolean;
+  canceled?: boolean;
   detail?: string;
   removal?: boolean;
   task_id?: string;
@@ -591,6 +690,104 @@ export type BotUsageLimit = {
   limit: UsageLimitView;
 };
 
+export type BrowserExit = {
+  bots: Array<string>;
+  computer: {
+  id: string;
+  label: string;
+};
+  daily_cap_bytes: number;
+  may_change: boolean;
+  may_turn_off: boolean;
+  sharing: boolean;
+  used_today_bytes: number | null;
+};
+
+export type BrowserExitPolicy = {
+  bots?: Array<string> | null;
+  daily_cap_bytes?: number | null;
+  sharing: boolean;
+};
+
+export type BrowserExitUsage = {
+  days: Array<{
+  bytes: number;
+  day: string;
+}>;
+  next: number | null;
+  rows: Array<{
+  bot: string;
+  bytes: number;
+  day: string;
+  host: string;
+  tunnels: number;
+}>;
+};
+
+export type Call = {
+  bots: Array<string>;
+  connector: string;
+  end_reason: string | null;
+  ended_at: string | null;
+  holds: Array<CallHold>;
+  id: string;
+  meeting_id: string;
+  participants: Array<CallParticipant>;
+  speak_replies: boolean;
+  started_at: string;
+  state: "live" | "ended";
+  thread_id: string;
+  title: string;
+};
+
+export type CallBots = {
+  bots: Array<string>;
+};
+
+export type CallHold = {
+  created_at: string;
+  detail: string;
+  kind: "transcript" | "action_items";
+  reason: string;
+};
+
+export type CallJoin = {
+  call: Call;
+  expires_in: number;
+  token: string;
+  url: string;
+};
+
+export type CallList = {
+  available: boolean;
+  calls: Array<CallSummary>;
+  next_before: string | null;
+};
+
+export type CallParticipant = {
+  actor: string;
+  joined_at: string;
+  left_at: string | null;
+  removed_at: string | null;
+};
+
+export type CallSummary = {
+  connector: string;
+  end_reason: string | null;
+  ended_at: string | null;
+  id: string;
+  started_at: string;
+  state: "live" | "ended";
+  thread_id: string;
+  title: string;
+};
+
+export type CallToken = {
+  expires_in: number;
+  token: string;
+  url: string;
+};
+
 export type Card = {
   data: Record<string, unknown> | null;
   heading: string;
@@ -599,7 +796,7 @@ export type Card = {
   name?: string;
   settings: Record<string, unknown>;
   team_name?: string;
-  template: "tasks_by_status" | "done_per_week" | "needs_you" | "spend" | "kpi" | "automation_runs" | "latest_pages";
+  template: "tasks_by_status" | "done_per_week" | "needs_you" | "spend" | "kpi" | "automation_runs" | "latest_pages" | "needs_attention" | "unread_threads" | "my_tasks" | "updates" | "growth_number" | "growth_funnel" | "growth_channels" | "growth_retention" | "growth_board";
   title?: string;
 };
 
@@ -619,6 +816,19 @@ export type CardEdit = {
 export type CardList = {
   cards: Array<Card>;
   next: string | null;
+};
+
+export type CatchUp = {
+  scope?: string;
+};
+
+export type CatchUpResult = {
+  left_out: number;
+  messages: number;
+  posted?: Record<string, unknown>;
+  scope: string;
+  thread_id: string;
+  words?: string;
 };
 
 export type ChangelogEntry = {
@@ -691,6 +901,40 @@ export type ClarifyAsk = {
   ask: string;
 };
 
+export type CloudAgent = {
+  connect_id: string | null;
+  id: string;
+  line: string;
+  maker: string;
+  name: string;
+  site: string;
+  supported: boolean;
+};
+
+export type CloudAgentAdd = {
+  reports_to?: string;
+  seat_id?: string;
+  team?: string;
+};
+
+export type CloudAgentAdded = {
+  bot: string;
+  harness: string;
+  model: string;
+  seat: string;
+};
+
+export type CloudAgentList = {
+  agents: Array<CloudAgent>;
+};
+
+export type CloudAgentRequest = {
+  first_task?: string;
+  name?: string;
+  reports_to?: string;
+  team?: string;
+};
+
 export type CommentDelivery = {
   default: "queue" | "defer" | null;
   default_for: string | null;
@@ -715,18 +959,18 @@ export type CompanyHistory = {
   events: Array<{
   actor: string;
   actor_name: string;
+  created_at: string;
   field: "vision" | "description";
   id: string;
   new: string;
   old: string;
-  ts: string;
 }>;
 };
 
 export type CompanyResult = {
   company: {
   description: string;
-  updated: string | null;
+  updated_at: string | null;
   updated_by: string | null;
   updated_by_name: string;
   vision: string;
@@ -737,6 +981,30 @@ export type CompanyResult = {
 export type CompanyUpdate = {
   description?: string | null;
   vision?: string | null;
+};
+
+export type ComputerSubscription = {
+  confirm?: boolean;
+  runner_id: string;
+  runtime: string;
+  subscription?: string | null;
+};
+
+export type ComputerSubscriptionList = {
+  assignments: Array<{
+  runner_id: string;
+  runtime: "claude" | "codex";
+  subscription_id: string;
+}>;
+  capable: Array<string>;
+};
+
+export type ComputerSubscriptionResult = {
+  runner_id: string;
+  runtime: "claude" | "codex";
+  sessions_reset: number;
+  stopped: number;
+  subscription_id: string | null;
 };
 
 export type Config = {
@@ -753,11 +1021,33 @@ export type Config = {
   visuals?: "full" | "hosted" | "media";
 };
 
+export type Connection = {
+  bots: Array<{
+  name: string;
+  slug: string;
+}>;
+  can_configure?: boolean;
+  configure: string;
+  detail?: string;
+  id: string;
+  kind: "slack" | "github" | "mailbox" | "inbox" | "meetings" | "trigger" | "webhook" | "postal" | "listening";
+  more_bots?: number;
+  name: string;
+  readers: string;
+  scope: "company" | "team" | "person";
+  status: "on" | "off" | "waiting" | "error" | "paused";
+};
+
+export type ConnectionList = {
+  connections: Array<Connection>;
+  next: string | null;
+};
+
 export type Contract = Record<string, unknown>;
 
 export type Conversation = {
   closed_at: string | null;
-  created: string;
+  created_at: string;
   id: string;
   kind: string;
   last_message_at: string;
@@ -775,6 +1065,14 @@ export type ConversationList = {
   actor: string;
   actors?: Record<string, string>;
   conversations: Array<Conversation>;
+};
+
+export type DmCreate = {
+  body?: string | null;
+  defer_for?: string | null;
+  delivery?: "steer" | "queue" | "defer" | null;
+  members: Array<string>;
+  title?: string;
 };
 
 export type DocCreate = {
@@ -812,7 +1110,7 @@ export type DocSource = {
   error_code: string;
   id: string;
   kind: string;
-  last_checked: string | null;
+  last_checked_at: string | null;
   path: string;
   provider: string;
   reference: string;
@@ -848,7 +1146,7 @@ export type DocsAsked = {
 export type DocsConversations = {
   conversations: Array<{
   closed_at: string | null;
-  created: string;
+  created_at: string;
   id: string;
   last_message_at: string | null;
   title: string;
@@ -899,7 +1197,58 @@ export type DocsSetup = {
   sources?: Array<string>;
 };
 
+export type DraftCheck = {
+  as?: "message" | "comment" | "task" | "assign";
+  text: string;
+  to: string;
+};
+
+export type DraftNow = {
+  audience_id: string;
+  author?: string | null;
+  period_end?: string | null;
+  period_start?: string | null;
+};
+
+export type DueAdd = {
+  first_due: string;
+  owner: string;
+  repeats: "once" | "weekly" | "monthly" | "quarterly" | "yearly";
+  task_days?: number | null;
+  timezone?: string | null;
+};
+
+export type DueEdit = {
+  first_due?: string | null;
+  owner?: string | null;
+  repeats?: "once" | "weekly" | "monthly" | "quarterly" | "yearly" | null;
+  task_days?: number | null;
+  timezone?: string | null;
+};
+
+export type DueSatisfied = {
+  due_on?: string | null;
+};
+
+export type EditionBody = {
+  sections: Array<Record<string, unknown>>;
+  title?: string | null;
+};
+
 export type Empty = Record<string, unknown>;
+
+export type Estimate = (FinanceOrderRow & {
+  lines: Array<{
+  id: string;
+  line_no: number;
+}>;
+  view_version?: number;
+});
+
+export type Estimates = {
+  estimates: Array<FinanceOrderRow>;
+  next_cursor: string | null;
+};
 
 export type EventType = {
   aliases?: Array<string>;
@@ -917,8 +1266,7 @@ export type EventTypeList = {
 };
 
 export type Execution = {
-  attempt_id: string | null;
-  bot: string;
+  bot_id: string;
   job_id: string;
   label: string;
   message_id: string;
@@ -927,6 +1275,7 @@ export type Execution = {
   kind: "progress" | "reply" | "tool";
   text: string;
 }>;
+  run_id: string | null;
   state: string;
   text: string;
 };
@@ -937,7 +1286,7 @@ export type ExternalDocResult = {
   commit: string;
   content: string;
   id: string;
-  last_checked: string | null;
+  last_checked_at: string | null;
   path: string;
   reference_notice: string;
   source_id: string;
@@ -955,7 +1304,7 @@ export type ExternalHit = {
   commit: string;
   excerpt: string;
   id: string;
-  last_checked: string | null;
+  last_checked_at: string | null;
   path: string;
   score: number;
   section: string;
@@ -969,6 +1318,72 @@ export type ExternalHit = {
 
 export type ExtraRepos = {
   repositories: Array<string>;
+};
+
+export type Feedback = {
+  bot_id: string;
+  created_at: string;
+  id: string;
+  note_id: string | null;
+  note_status: "waiting" | "carried" | "settled" | "canceled" | null;
+  org_rule_id: string | null;
+  outcome: "none" | "told_bot" | "rule";
+  person_id: string;
+  rating: "up" | "down";
+  reason: string;
+  rule_status: "suggested" | "active" | "retired" | null;
+  subject_id: string;
+  subject_type: "message" | "task" | "approval";
+  updated_at: string;
+};
+
+export type FeedbackGive = {
+  rating: "up" | "down";
+  reason?: string;
+  subject_id: string;
+  subject_type: "message" | "task" | "approval";
+  tell_bot?: boolean;
+};
+
+export type FeedbackMarkers = {
+  counts: Array<{
+  down: number;
+  subject_id: string;
+  up: number;
+}>;
+  items: Array<Feedback>;
+};
+
+export type FeedbackPage = {
+  items: Array<Feedback>;
+  next_cursor: string | null;
+};
+
+export type FeedbackReasons = {
+  reasons: Array<{
+  count: number;
+  text: string;
+}>;
+};
+
+export type FeedbackRemoved = {
+  id: string;
+  ok: boolean;
+};
+
+export type FeedbackRule = {
+  all_bots?: boolean;
+  text: string;
+};
+
+export type FeedbackRuleDraft = {
+  drafted: boolean;
+  text: string;
+};
+
+export type FeedbackRuleMade = {
+  feedback: Feedback;
+  rule: Record<string, unknown>;
 };
 
 export type FileActivity = {
@@ -1009,7 +1424,7 @@ export type FileSearchHit = {
   page: boolean;
   score: number;
   title: string;
-  updated: string;
+  updated_at: string;
   url: string | null;
   version: number;
 };
@@ -1030,18 +1445,750 @@ export type FilterIn = {
   task_types?: Array<string>;
 };
 
+export type Finance1099 = {
+  currency: string;
+  due_on: string;
+  rows: Array<{
+  card_paid_excluded?: number;
+  cash_paid: number;
+  reportable: boolean;
+  threshold?: number;
+  tin_on_file?: boolean;
+  vendor: string;
+  vendor_id: string;
+}>;
+  threshold: number;
+  year: number;
+};
+
+export type FinanceAccess = {
+  can_edit_defaults: boolean;
+  can_view_as: boolean;
+  defaults: {
+  manager: string;
+  manager_payroll: string;
+  member: string;
+};
+  private_lines: Array<{
+  account_id: string;
+  full_detail: Array<string> | null;
+  name: string;
+  others_see: string;
+}>;
+  teammates: Array<{
+  default: "everything" | "team_expenses" | "own_expenses" | "none";
+  default_team: string | null;
+  grants: Array<Record<string, unknown>>;
+  kind: string;
+  may_grant: boolean;
+  reports_to: string | null;
+  rights: Array<string> | null;
+  team: string | null;
+  teammate: string;
+}>;
+  teams: Array<{
+  id: string;
+  lead: string | null;
+  name: string;
+  parent: string | null;
+}>;
+  view_version: number;
+};
+
+export type FinanceAction = {
+  action_id?: string | null;
+  code?: string;
+  kind: string;
+  reason?: string;
+  status: string;
+};
+
+export type FinanceActionKinds = {
+  approval_kind?: string;
+  fields?: Array<{
+  name: string;
+  required: boolean;
+  type: string;
+  words: string;
+}>;
+  kind?: string;
+  kinds?: Array<{
+  kind: string;
+  live: boolean;
+  words: string;
+}>;
+  live?: boolean;
+  right?: string;
+  words?: string;
+};
+
+export type FinanceActionRequest = {
+  dry_run?: boolean;
+  kind: string;
+  payload?: Record<string, unknown>;
+};
+
+export type FinanceBalanceSheet = {
+  as_of: string;
+  assets: Array<{
+  account_id: string | null;
+  balance: number;
+  code: string;
+  entry_sources: Array<string>;
+  name: string;
+  parent_id: string | null;
+  sources: Array<{
+  balance_as_of: string | null;
+  due_out: {
+  amount: number;
+  count: number;
+};
+  last4: string | null;
+  money_account_id: string;
+  name: string;
+  provider: string;
+  provider_balance: number | null;
+}>;
+  subtype: string;
+}>;
+  closed_through: string | null;
+  currency: string;
+  equity: Array<{
+  account_id: string | null;
+  balance: number;
+  code: string;
+  entry_sources: Array<string>;
+  name: string;
+  parent_id: string | null;
+  sources: Array<{
+  balance_as_of: string | null;
+  due_out: {
+  amount: number;
+  count: number;
+};
+  last4: string | null;
+  money_account_id: string;
+  name: string;
+  provider: string;
+  provider_balance: number | null;
+}>;
+  subtype: string;
+}>;
+  liabilities: Array<{
+  account_id: string | null;
+  balance: number;
+  code: string;
+  entry_sources: Array<string>;
+  name: string;
+  parent_id: string | null;
+  sources: Array<{
+  balance_as_of: string | null;
+  due_out: {
+  amount: number;
+  count: number;
+};
+  last4: string | null;
+  money_account_id: string;
+  name: string;
+  provider: string;
+  provider_balance: number | null;
+}>;
+  subtype: string;
+}>;
+  scoped: boolean;
+  totals: {
+  asset: number;
+  equity: number;
+  liability: number;
+};
+  view_version: number;
+};
+
+export type FinanceBills = {
+  bills: Array<FinanceDocumentRow>;
+  bills_email: string | null;
+  currency: string;
+  next_cursor: string | null;
+  open: FinanceOpenTotal;
+  view_version: number;
+};
+
+export type FinanceBillsAddress = {
+  bills_email: string | null;
+  inbox_id: string | null;
+};
+
+export type FinanceBudgets = {
+  budgets: Array<Record<string, unknown>>;
+  more: boolean;
+  on: string;
+  view_version: number;
+};
+
+export type FinanceCards = {
+  cards: Array<{
+  allocation: number | null;
+  budget: Record<string, unknown> | null;
+  created_at: string;
+  currency: string;
+  expires_at: string | null;
+  holder: string;
+  id: string;
+  kind: string;
+  last4: string | null;
+  limit: number | null;
+  limit_interval: string | null;
+  money_account_id: string | null;
+  nickname: string;
+  provider: string;
+  provider_limit: number | null;
+  spent: number | null;
+  status: string;
+  sync_status: string;
+}>;
+  next: string | null;
+  view_version: number;
+};
+
+export type FinanceChart = {
+  accounts: Array<{
+  attributable?: Array<{
+  team?: string;
+  teammate?: string;
+}>;
+  company_wide?: boolean;
+  id: string;
+  name: string;
+  number: string;
+  parent_id?: string | null;
+  subtype?: string;
+  type: string;
+}>;
+  more: boolean;
+  view_version: number;
+};
+
+export type FinanceCloseChecklist = {
+  checks: Array<{
+  key: string;
+  label: string;
+  ok: boolean;
+}>;
+  end: string;
+  month: string;
+  ready: boolean;
+  start: string;
+  status: string;
+  view_version: number;
+};
+
+export type FinanceConnectionRequest = {
+  approver_email?: string | null;
+  credential_id: string;
+  name?: string | null;
+  provider?: "mercury" | "stripe";
+  server_ip?: string | null;
+  token_creator_email?: string | null;
+};
+
+export type FinanceConnectionResult = {
+  action_id?: string | null;
+  approver?: string | null;
+  code?: string;
+  kind: string;
+  reason?: string;
+  result?: Record<string, unknown>;
+  status: string;
+};
+
+export type FinanceContacts = {
+  contacts: Array<{
+  active: boolean;
+  created_at?: string;
+  default_account?: Record<string, unknown> | null;
+  emails?: Array<string>;
+  has_tax_id?: boolean;
+  id: string;
+  is_1099?: boolean;
+  kind: "vendor" | "customer" | "both";
+  name: string;
+  owed?: {
+  bills?: number;
+  invoices?: number;
+};
+  recipient_id?: string | null;
+  tax_id_last4?: string | null;
+}>;
+  next_cursor: string | null;
+  view_version: number;
+};
+
+export type FinanceDocument = (FinanceDocumentRow & {
+  actions: Array<{
+  action_id: string;
+  actor: string;
+  approval_id: string | null;
+  approval_to: string | null;
+  created_at: string;
+  kind: string;
+  rule_id: string | null;
+  status: string;
+}>;
+  attachment_count?: number;
+  attachments: Array<{
+  created_at: string;
+  created_by: string;
+  file_id: string;
+  id: string;
+}>;
+  attachments_more?: boolean;
+  lines: Array<{
+  account: Record<string, unknown> | null;
+  amount: number;
+  description: string;
+  id: string;
+  tags: Record<string, unknown>;
+  taxable?: boolean;
+}>;
+  schedule?: Record<string, unknown> | null;
+  settlement_count?: number;
+  settlements: Array<{
+  amount: number;
+  created_by: string;
+  entry_id: string | null;
+  from_id: string | null;
+  from_kind: "payment" | "feed" | "credit" | "account" | "expected";
+  id: string;
+  settled_on: string;
+  voided_at: string | null;
+}>;
+  settlements_more?: boolean;
+  terms_days?: number | null;
+  view_version?: number;
+});
+
+export type FinanceDocumentRow = {
+  account?: Record<string, unknown> | null;
+  aging?: string | null;
+  approved_at?: string | null;
+  approved_by?: string | null;
+  attachments?: number;
+  created_at?: string;
+  created_by?: string;
+  currency: string;
+  customer?: {
+  id?: string | null;
+  name?: string | null;
+} | null;
+  date: string;
+  days_late?: number;
+  due_date?: string | null;
+  entry_id?: string | null;
+  id: string;
+  kind: "bill" | "invoice";
+  memo?: string;
+  number: string;
+  origin?: string;
+  paid: number;
+  paid_by?: string | null;
+  paid_on?: string | null;
+  pay_on?: string | null;
+  payment?: {
+  amount: number;
+  error: string | null;
+  id: string | null;
+  on: string;
+  status: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "canceled" | "unknown" | "denied" | "expired" | "withdrawn";
+} | null;
+  payment_link?: string | null;
+  remaining: number;
+  sent_at?: string | null;
+  split?: boolean;
+  status: string;
+  team?: string | null;
+  total: number;
+  vendor?: {
+  id?: string | null;
+  name?: string | null;
+} | null;
+  written_off?: number;
+};
+
+export type FinanceFeedExpected = {
+  amount: number;
+  date: string;
+  expected: Array<{
+  amount: number;
+  contact_id: string;
+  contact_name: string;
+  document_id: string;
+  kind: string;
+  marked_on: string;
+  number: string;
+  settlement_id: string;
+}>;
+  feed_id: string;
+  kind: "bill" | "invoice";
+  more: boolean;
+  view_version: number;
+};
+
+export type FinanceInbox = {
+  counts: Record<string, number>;
+  currency: string;
+  items: Array<{
+  id: string;
+  kind: "uncategorized" | "bill_to_enter" | "unmatched_receipt" | "missing_receipt" | "bill_due" | "invoice_overdue" | "budget_near_limit" | "sync_failed" | "period_ready" | "unreconciled" | "bill_email";
+  label: string;
+}>;
+  more: Array<string>;
+  next_cursor: string | null;
+  view_version: number;
+};
+
+export type FinanceInvoices = {
+  currency: string;
+  invoices: Array<FinanceDocumentRow>;
+  next_cursor: string | null;
+  open: FinanceOpenTotal;
+  view_version: number;
+};
+
+export type FinanceMercuryUsers = {
+  users: Array<{
+  connection_id: string;
+  email: string | null;
+  id: string;
+  name: string;
+  updated_at: string;
+}>;
+};
+
+export type FinanceMetric = {
+  as_of: string;
+  currency?: string;
+  data_as_of?: string | null;
+  name: string;
+  stale?: boolean;
+  unit: "minor" | "percent" | "months" | "count" | "days";
+  value: number | string | null;
+  view_version?: number;
+};
+
+export type FinanceOpenTotal = {
+  aging: {
+  "1_30": number;
+  "31_60": number;
+  "61_90": number;
+  current: number;
+  over_90: number;
+};
+  count: number;
+  more: boolean;
+  remaining: number;
+};
+
+export type FinanceOrderRow = {
+  contact: {
+  id: string;
+  name: string;
+};
+  currency: string;
+  date: string;
+  id: string;
+  memo: string;
+  number: string;
+  status: string;
+  total: number;
+};
+
+export type FinancePayFrom = {
+  accounts: Array<{
+  available_balance?: number | null;
+  balance?: number | null;
+  balance_as_of?: string | null;
+  id: string;
+  last4?: string | null;
+  name: string;
+  provider?: string;
+}>;
+  currency: string;
+  view_version: number;
+};
+
+export type FinancePayments = {
+  next_cursor: string | null;
+  payments: Array<{
+  account?: {
+  code?: string;
+  id?: string;
+  name?: string;
+} | null;
+  amount: number | null;
+  created_at?: string;
+  created_by?: string;
+  currency: string;
+  error?: string | null;
+  id: string;
+  memo?: string;
+  method?: string;
+  mode?: string;
+  money_account_id?: string;
+  obligation?: string | null;
+  recipient?: {
+  id?: string;
+  last4?: string | null;
+  name?: string;
+  version?: number;
+} | null;
+  settled_at?: string | null;
+  status: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "canceled" | "unknown";
+}>;
+};
+
+export type FinancePnl = {
+  basis: string;
+  budget_as_of?: string | null;
+  columns: Array<{
+  end: string;
+  label: string;
+  start: string;
+  state: "past" | "current" | "future";
+}>;
+  end: string;
+  excluded: boolean;
+  expense: Array<number>;
+  filter?: {
+  teammates: Array<string>;
+  teams: Array<string>;
+  unattributed: boolean;
+  who: "both" | "bots" | "people";
+};
+  income: Array<number>;
+  net: Array<number>;
+  period: string;
+  rows: Array<{
+  account_id: string;
+  actual: Array<number> | null;
+  budget: Array<number | null> | null;
+  code: string;
+  name: string;
+  parent_id: string;
+  private: boolean;
+  projection: Array<number> | null;
+  section: "revenue" | "cost_of_revenue" | "operating" | "other";
+  total: number | null;
+  type: string;
+}>;
+  start: string;
+  team?: string | null;
+  teammate?: string | null;
+  teammates?: Array<{
+  budget: number | null;
+  kind: string;
+  spent: number;
+  teammate: string;
+}>;
+  view: string;
+  view_version: number;
+};
+
+export type FinanceRecipients = {
+  recipients: Array<{
+  created_at?: string;
+  id: string;
+  known?: boolean;
+  last4?: string | null;
+  method: string;
+  name: string;
+  replaces_id?: string | null;
+  synced?: boolean;
+  version: number;
+}>;
+};
+
+export type FinanceReconciliations = {
+  locked_through: Record<string, string | null>;
+  reconciliations: Array<{
+  cleared?: number;
+  cleared_total?: number;
+  created_at?: string;
+  created_by?: string;
+  difference: number;
+  id: string;
+  money_account_id: string;
+  statement_balance: number;
+  statement_end: string;
+  statement_id?: string | null;
+  status: "open" | "done" | "undone";
+  undone_at?: string | null;
+}>;
+};
+
+export type FinanceReport = {
+  view_version: number;
+};
+
+export type FinanceReportOf = {
+  kind: "pnl" | "pnl_by" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
+  prior?: Record<string, unknown>;
+};
+
+export type FinanceRules = {
+  rules: Array<{
+  active?: boolean;
+  created_at?: string;
+  examples?: Array<Record<string, unknown>>;
+  external_rule_id?: string | null;
+  id: string;
+  kind?: "gate" | "posting";
+  name: string;
+  outcome: Record<string, unknown>;
+  owner?: string;
+  priority?: number;
+  runs?: Array<{
+  action_id: string | null;
+  at: string;
+  outcome: string | null;
+}>;
+  when: Record<string, unknown>;
+  words?: string;
+}>;
+};
+
+export type FinanceSalesTax = {
+  currency: string;
+  rows: Array<{
+  code: string;
+  due: number;
+  due_on?: string | null;
+  exempt_sales: number;
+  jurisdiction?: string;
+  period: string;
+  tax_collected: number;
+  tax_remitted?: number;
+  taxable_sales: number;
+}>;
+  year: number;
+};
+
+export type FinanceSearch = {
+  currency: string;
+  next_cursor: string | null;
+  results: Array<{
+  id: string;
+  kind: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project";
+  label: string;
+}>;
+  view_version: number;
+};
+
+export type FinanceSources = {
+  groups: Array<{
+  count: number;
+  group: "banks" | "cards" | "payments" | "payroll" | "bills_invoices" | "tico" | "accounting" | "manual";
+  name: string;
+  rows: Array<Record<string, unknown>>;
+}>;
+  view_version: number;
+};
+
+export type FinanceStatements = {
+  statements: Array<{
+  currency?: string;
+  end_date: string;
+  ending_balance: number;
+  id: string;
+  money_account_id: string;
+  source?: string;
+  start_date?: string | null;
+  starting_balance?: number | null;
+}>;
+};
+
+export type FinanceTransactions = {
+  currency: string;
+  next: string | null;
+  rows: Array<{
+  account?: string;
+  account_id?: string;
+  amount: number;
+  card_id?: string | null;
+  counterparty?: string;
+  currency: string;
+  date: string;
+  description?: string;
+  entry_id?: string | null;
+  id: string;
+  kind: "feed" | "entry";
+  lines?: Array<Record<string, unknown>>;
+  memo?: string;
+  money_account?: Record<string, unknown> | null;
+  pending?: boolean;
+  reconciled?: boolean;
+  reversed?: boolean;
+  source?: string;
+  status?: string;
+  tags?: Record<string, unknown>;
+  vendor?: string;
+  vendor_name?: string;
+}>;
+  view_version: number;
+};
+
+export type FinanceTransfers = {
+  next_cursor: string | null;
+  transfers: Array<{
+  amount: number;
+  created_at?: string;
+  created_by?: string;
+  currency: string;
+  from: {
+  id: string;
+  last4: string | null;
+  name: string;
+};
+  id: string;
+  last_error?: string | null;
+  memo?: string;
+  settled_at?: string | null;
+  status: "queued" | "submitted" | "unknown" | "failed" | "posted" | "canceled";
+  to: {
+  id: string;
+  last4: string | null;
+  name: string;
+};
+}>;
+};
+
+export type FinanceWebhookDeliveries = {
+  deliveries: Array<{
+  body: string;
+  delivery: string;
+  outcome: string;
+  received_at: string;
+  trigger: string;
+  type: string;
+  via: string;
+}>;
+};
+
+export type Follow = {
+  notify?: string;
+};
+
 export type Goal = {
   body: string;
-  created: string;
-  created_by: string;
+  created_at: string;
+  created_by_id: string;
   id: string;
-  owner: string;
+  owner_id: string;
   owner_name?: string;
   parent_id: string | null;
   rank: number | null;
   status: string | null;
   status_at: string | null;
-  status_by: string | null;
+  status_by_id: string | null;
   status_by_name?: string;
   status_note: string;
   status_source: string | null;
@@ -1049,10 +2196,10 @@ export type Goal = {
   suggest_note?: string | null;
   suggest_status?: string | null;
   title: string;
-  updated: string;
+  updated_at: string;
   why?: string;
   why_at?: string | null;
-  why_by?: string | null;
+  why_by_id?: string | null;
 };
 
 export type GoalAction = {
@@ -1075,13 +2222,13 @@ export type GoalCheckinView = {
   author: string;
   author_name?: string;
   body: string;
+  created_at: string;
   goal_id: string;
   id: string;
   kpi_id?: string | null;
+  sender_id: string;
+  sender_name?: string;
   signal: "on_track" | "at_risk" | "off_track" | null;
-  source_actor: string;
-  source_actor_name?: string;
-  ts: string;
 };
 
 export type GoalCheckins = {
@@ -1130,7 +2277,7 @@ export type GoalList = {
 
 export type GoalProposalCreate = {
   goal_id?: string | null;
-  kind: "goal_wording" | "goal_kpi" | "kpi_definition" | "kpi_target" | "flag" | "goal_why" | "recovery" | "strategy_draft";
+  kind: "goal_wording" | "goal_kpi" | "kpi_definition" | "kpi_target" | "flag" | "goal_why" | "recovery" | "strategy_draft" | "brand_draft";
   kpi_id?: string | null;
   payload?: Record<string, unknown>;
   reason?: string;
@@ -1204,19 +2351,19 @@ export type GoalResult = {
   chain: Array<Goal>;
   checkins: Array<GoalCheckinView>;
   children: Array<Goal>;
-  created: string;
-  created_by: string;
+  created_at: string;
+  created_by_id: string;
   events: Array<Record<string, unknown>>;
   id: string;
   kpis: Array<Kpi>;
-  owner: string;
+  owner_id: string;
   owner_name?: string;
   parent_id: string | null;
   proposals: Array<GoalProposalView>;
   rank: number | null;
   status: string | null;
   status_at: string | null;
-  status_by: string | null;
+  status_by_id: string | null;
   status_by_name?: string;
   status_note: string;
   status_source: string | null;
@@ -1225,10 +2372,10 @@ export type GoalResult = {
   suggest_status?: string | null;
   tasks: Array<Record<string, unknown>>;
   title: string;
-  updated: string;
+  updated_at: string;
   why?: string;
   why_at?: string | null;
-  why_by?: string | null;
+  why_by_id?: string | null;
 };
 };
 
@@ -1241,18 +2388,18 @@ export type GoalTree = {
   goals: Array<{
   body: string;
   checkin?: GoalCheckinView | null;
-  created: string;
-  created_by: string;
+  created_at: string;
+  created_by_id: string;
   id: string;
   kpis: Array<Kpi>;
   open_tasks: number;
-  owner: string;
+  owner_id: string;
   owner_name?: string;
   parent_id: string | null;
   rank: number | null;
   status: string | null;
   status_at: string | null;
-  status_by: string | null;
+  status_by_id: string | null;
   status_by_name?: string;
   status_note: string;
   status_source: string | null;
@@ -1260,10 +2407,10 @@ export type GoalTree = {
   suggest_note?: string | null;
   suggest_status?: string | null;
   title: string;
-  updated: string;
+  updated_at: string;
   why?: string;
   why_at?: string | null;
-  why_by?: string | null;
+  why_by_id?: string | null;
 }>;
   other_kpis: Array<Kpi>;
   owners: Record<string, unknown>;
@@ -1288,21 +2435,30 @@ export type GoalWhy = {
 export type GoalsNeedsYou = {
   actor: string;
   items: Array<{
+  actions: Array<"answer" | "update" | "decide" | "add_reading" | "open">;
+  body: string | null;
+  created_at: string | null;
   freshness?: string;
   goal_id?: string;
   goal_title?: string | null;
   goals?: Array<Record<string, unknown>>;
+  id: string;
   kind: "vision" | "kpi_red" | "recovery" | "why" | "proposal" | "kpi_stale";
   kpi_id?: string;
   kpi_name?: string | null;
   options?: Array<Record<string, unknown>>;
   proposal?: Record<string, unknown>;
   reason?: string;
+  subject: {
+  id: string;
+  type: "task" | "message" | "approval" | "proposal" | "kpi" | "strategy";
+} | null;
   task?: {
   id: string;
   status?: string;
   title?: string;
 };
+  title: string;
 }>;
 };
 
@@ -1332,7 +2488,7 @@ export type GranolaSignIn = {
   step?: string;
   tool_error?: boolean;
 } | null;
-  last_sync: string | null;
+  last_synced_at: string | null;
   mode: string;
   needs_signin: boolean;
   plan_hint: string | null;
@@ -1356,7 +2512,7 @@ export type GranolaStatus = {
   step?: string;
   tool_error?: boolean;
 } | null;
-  last_sync: string | null;
+  last_synced_at: string | null;
   mode: "account" | "api_key" | "off";
   needs_signin: boolean;
   plan_hint: "free" | "paid" | null;
@@ -1366,7 +2522,7 @@ export type GranolaStatus = {
 };
 
 export type GranolaSync = {
-  last_sync: string | null;
+  last_synced_at: string | null;
   state: "syncing" | "recent" | "off" | "needs_signin";
 };
 
@@ -1378,6 +2534,7 @@ export type Grant = {
 };
 
 export type Group = {
+  bot_slugs: Array<string>;
   bots: Array<string>;
   id: string;
   name: string;
@@ -1408,6 +2565,75 @@ export type GroupUpdate = {
   name?: string | null;
   parent?: string | null;
   remove?: GroupMembers;
+};
+
+export type GrowthChannel = {
+  name: string;
+  owner_ref: string | null;
+  series: Array<GrowthMonth>;
+  slug: string;
+  stage: string | null;
+};
+
+export type GrowthKpi = {
+  goal_id: string | null;
+  growth_role: string | null;
+  id: string;
+  latest: number | null;
+  latest_at: string | null;
+  loop_name: string | null;
+  loop_step: number | null;
+  name: string;
+  parent_kpi_id: string | null;
+  series: Array<{
+  at: string | null;
+  value: number;
+}>;
+  stage: string | null;
+  target: number | null;
+  unit: string;
+};
+
+export type GrowthMarker = {
+  at: string;
+  channels: Array<string>;
+  goal_id: string | null;
+  kind: "started" | "finished";
+  outcome: "won" | "lost" | "inconclusive" | "dropped" | null;
+  task_id: string;
+  title: string;
+};
+
+export type GrowthMonth = {
+  bot_cost: number | null;
+  cac: number | null;
+  expected_months: number | null;
+  kept_d180: number | null;
+  kept_d30: number | null;
+  kept_d90: number | null;
+  ltv: number | null;
+  ltv_cac: number | null;
+  margin_pct: number | null;
+  month: string;
+  new_customers: number | null;
+  payback_months: number | null;
+  quality: string | null;
+  revenue_month: number | null;
+  spend: number | null;
+};
+
+export type GrowthNumbers = {
+  channels: Array<GrowthChannel>;
+  kpis: {
+  guardrails: Array<GrowthKpi>;
+  inputs: Array<GrowthKpi>;
+  north_star: GrowthKpi | null;
+  other: Array<GrowthKpi>;
+};
+  markers: Array<GrowthMarker>;
+  may_edit: boolean;
+  months: Array<string>;
+  series: Array<GrowthMonth>;
 };
 
 export type HeaderIn = {
@@ -1445,6 +2671,16 @@ export type HeldAction = {
   action: string;
 };
 
+export type HoldAppeal = {
+  why?: string;
+};
+
+export type HoldEmpty = Record<string, unknown>;
+
+export type HoldSend = {
+  nonce: string;
+};
+
 export type IfNoAnswer = {
   by?: string | null;
   do: string;
@@ -1471,12 +2707,22 @@ export type InboundCursor = {
   cursor: number;
 };
 
+export type InboundInbox = {
+  address: string;
+  audience: "company" | "team";
+  group_id: string | null;
+  inbox_id: string;
+  kind: string;
+  name: string;
+  state: string;
+};
+
 export type InboundInboxes = {
   configured: boolean;
   error: string;
   gaps: Array<Record<string, unknown>>;
   inboxes: Array<Record<string, unknown>>;
-  last_sync: number | null;
+  last_synced_at: number | null;
 };
 
 export type InboundMessages = {
@@ -1512,6 +2758,11 @@ export type InboundTaskResult = {
 } | null;
 };
 
+export type InboxAudience = {
+  audience?: "company" | "team";
+  group_id?: string | null;
+};
+
 export type InboxSend = {
   send: boolean;
 };
@@ -1524,15 +2775,15 @@ export type InboxSwitch = {
 export type InternalDoc = {
   archived: boolean;
   body: string;
-  created: string;
-  created_by: string;
+  created_at: string;
+  created_by_id: string;
   created_by_name: string;
   id: string;
   locked: boolean;
   path: string;
   title: string;
-  updated: string;
-  updated_by: string;
+  updated_at: string;
+  updated_by_id: string;
   updated_by_name: string;
   version: number;
 };
@@ -1551,8 +2802,8 @@ export type InternalDocRow = {
   locked: boolean;
   path: string;
   title: string;
-  updated: string;
-  updated_by: string;
+  updated_at: string;
+  updated_by_id: string;
   updated_by_name: string;
   version: number;
 };
@@ -1560,7 +2811,7 @@ export type InternalDocRow = {
 export type InternalDocVersion = {
   actor: string;
   actor_name: string;
-  created: string;
+  created_at: string;
   current: boolean;
   note: string;
   path: string;
@@ -1574,7 +2825,7 @@ export type InternalDocVersionResult = {
   actor: string;
   actor_name: string;
   body: string;
-  created: string;
+  created_at: string;
   note: string;
   path: string;
   title: string;
@@ -1587,13 +2838,40 @@ export type InternalDocVersions = {
   versions: Array<InternalDocVersion>;
 };
 
+export type InviteInput = {
+  days?: number;
+};
+
+export type Item = {
+  archived_at?: string | null;
+  asset_account_id?: string | null;
+  currency: string;
+  expense_account_id?: string | null;
+  id: string;
+  income_account_id?: string | null;
+  kind: "service" | "inventory" | "non_inventory" | "bundle" | "category";
+  name: string;
+  price?: number | null;
+  sku: string;
+  unit: string;
+};
+
+export type ItemOne = {
+  item: Item;
+};
+
+export type Items = {
+  items: Array<Item>;
+  next_cursor: string | null;
+};
+
 export type Kpi = {
   archived_at?: string | null;
-  archived_by?: string | null;
+  archived_by_id?: string | null;
   auto: boolean;
   cadence: "daily" | "weekly" | "monthly";
-  created?: string | null;
-  created_by?: string | null;
+  created_at?: string | null;
+  created_by_id?: string | null;
   definition?: string;
   definition_version: number;
   direction: "up" | "down" | "range";
@@ -1603,7 +2881,7 @@ export type Kpi = {
   latest: KpiReadingView | null;
   link?: KpiLink;
   name: string;
-  owner: string;
+  owner_id: string;
   owner_name?: string;
   readings: number;
   reason: string;
@@ -1613,7 +2891,7 @@ export type Kpi = {
   status: "green" | "yellow" | "red" | "gray" | "none" | null;
   target_label?: string;
   unit: string;
-  updated?: string | null;
+  updated_at?: string | null;
 };
 
 export type KpiCreate = {
@@ -1697,14 +2975,15 @@ export type KpiReadingResult = {
 };
 
 export type KpiReadingView = {
-  actor?: string;
+  actor_id?: string | null;
   actor_name?: string;
   collected_at?: string;
-  created?: string;
+  created_at?: string;
   definition_version: number;
   evidence?: string;
   id: string;
   kpi_id?: string;
+  measured_at?: string;
   note?: string;
   period_end: string;
   period_start?: string;
@@ -1712,7 +2991,6 @@ export type KpiReadingView = {
   source?: string;
   superseded_by?: string | null;
   supersedes?: string | null;
-  ts?: string;
   value: number;
 };
 
@@ -1735,9 +3013,14 @@ export type KpiUpdate = {
   cadence?: "daily" | "weekly" | "monthly" | null;
   definition?: string | null;
   direction?: "up" | "down" | "range" | null;
+  growth_role?: "north_star" | "input" | "guardrail" | null;
+  loop_name?: string | null;
+  loop_step?: number | null;
   name?: string | null;
   owner?: string | null;
+  parent_kpi_id?: string | null;
   source_note?: string | null;
+  stage?: "reach" | "acquire" | "activate" | "retain" | "refer" | null;
   unit?: string | null;
 };
 
@@ -1823,16 +3106,22 @@ export type LinkEdit = {
   url?: string | null;
 };
 
+export type LinkRequest = {
+  channel: string;
+  history?: boolean;
+  thread_id: string;
+};
+
 export type LinkedDoc = {
   added_by: string;
   added_by_name: string;
-  created: string;
+  created_at: string;
   description: string;
   host: string;
   id: string;
   kind: "website" | "google_drive" | "google_doc" | "notion" | "github" | "other";
   title: string;
-  updated: string;
+  updated_at: string;
   url: string;
 };
 
@@ -1848,6 +3137,24 @@ export type LocalFinding = {
   cpu: number;
   mb: number;
   process: string;
+};
+
+export type Location = {
+  address: Record<string, unknown>;
+  archived_at?: string | null;
+  id: string;
+  kind: string;
+  name: string;
+  parent_id?: string | null;
+};
+
+export type LocationOne = {
+  location: Location;
+};
+
+export type Locations = {
+  locations: Array<Location>;
+  next_cursor: string | null;
 };
 
 export type MarketAnswers = {
@@ -1867,6 +3174,7 @@ export type Me = {
   actor: string;
   email: string;
   role: string;
+  slug?: string;
 };
 
 export type MeetingReviewList = {
@@ -1887,6 +3195,49 @@ export type MeetingSearch = {
   results: Array<unknown>;
 };
 
+export type MemberAdd = {
+  actor: string;
+  role?: string;
+};
+
+export type MemoryTidyCard = {
+  bot: string;
+  cost_usd: number;
+  created_at: string;
+  diary: string;
+  diff?: string;
+  expires_at: string;
+  id: string;
+  keep_available: boolean;
+  keep_pending?: boolean;
+  kind: "memory_tidy";
+  memory_commit: string;
+  model: string;
+  reason: string;
+  requester_id: string;
+  reviewer: string;
+  status: "open" | "withdrawn" | "discarded" | "kept";
+  title: string;
+};
+
+export type MemoryTidyCardResult = {
+  card: MemoryTidyCard;
+};
+
+export type MemoryTidyCards = {
+  cards: Array<MemoryTidyCard>;
+};
+
+export type MemoryTidyDecision = {
+  decision: "keep" | "discard";
+};
+
+export type MemoryTidyPilot = {
+  bot: string;
+  effort?: "low";
+  model: string;
+};
+
 export type Message = {
   answer?: ReviewAnswer;
   answers?: Array<string | ReviewAnswer>;
@@ -1894,24 +3245,24 @@ export type Message = {
   body: string;
   body_raw?: string;
   conversation_id: string;
-  created: string;
+  created_at: string;
   deleted_at?: string | null;
   edited_at?: string | null;
-  from_actor: string;
-  from_name?: string;
   held?: string;
   id: string;
   in_reply_to: string | null;
   kind: string;
+  recipient_id: string;
+  recipient_name?: string;
   refs: Record<string, unknown>;
   run?: {
-  attempt_id?: string;
   job_id?: string;
+  run_id?: string;
   state?: "started_run" | "added_to_run";
 };
+  sender_id: string;
+  sender_name?: string;
   sent_as?: SentAs;
-  to_actor: string;
-  to_name?: string;
   woke?: boolean;
 };
 
@@ -1938,23 +3289,85 @@ export type MessagePage = {
   next_before: string | null;
 };
 
+export type MessagePatch = {
+  text: string;
+};
+
 export type MessageResult = {
   message: Message;
+};
+
+export type MessageTask = {
+  owner: string;
+  title: string;
+};
+
+export type ModelSubscription = {
+  added_by: string;
+  added_by_name: string;
+  computers: Array<string>;
+  created_at: string;
+  id: string;
+  kind: "claude_token" | "codex_login" | "anthropic_key" | "openai_key";
+  label: string;
+  name: string;
+  owner_id: string;
+  owner_name: string;
+  preview: string;
+  revision: number;
+  runtime: "claude" | "codex";
+  status: "new" | "working" | "needs_reconnect";
+  status_at: string | null;
+  status_detail: string;
+  updated_at: string;
+  usage: {
+  cost_usd_month: number | null;
+  reason?: string | null;
+  resets_at?: string | null;
+  used_pct: number | null;
+  window: "5h" | "week" | null;
+} | null;
+};
+
+export type ModelSubscriptionDeleted = {
+  computers: number;
+  deleted: boolean;
+  id: string;
+  sessions_reset: number;
+  stopped: number;
+};
+
+export type ModelSubscriptionList = {
+  kinds: Array<{
+  connect: boolean;
+  help: string;
+  kind: "claude_token" | "codex_login" | "anthropic_key" | "openai_key";
+  label: string;
+  owned: boolean;
+  runtime: "claude" | "codex";
+  secret_label: string;
+}>;
+  subscriptions: Array<ModelSubscription>;
 };
 
 export type Moderate = {
   action: string;
 };
 
+export type NeedsSummary = {
+  actor: string;
+  bots_left: number;
+  by_bot: Array<Record<string, unknown>>;
+  by_kind: Record<string, unknown>;
+  this_week: number;
+  total: number;
+};
+
 export type NeedsYou = {
   actor: string;
   bots?: Record<string, number>;
   count?: number;
-  items: Array<{
-  id: string;
-  kind: "task" | "question" | "declined" | "approval";
-  title: string;
-}>;
+  items: Array<NeedsYouItem>;
   next?: string | null;
   older?: Array<Record<string, unknown>>;
   restart?: boolean;
@@ -1962,6 +3375,23 @@ export type NeedsYou = {
 } | {
   actor: string;
   count: number;
+};
+
+export type NeedsYouItem = {
+  actions: Array<"answer" | "update" | "decide" | "add_reading" | "open">;
+  body: string | null;
+  created_at: string | null;
+  id: string;
+  kind: string;
+  subject: {
+  id: string;
+  type: "task" | "message" | "approval" | "proposal" | "kpi" | "strategy";
+} | null;
+  title: string;
+};
+
+export type Note = {
+  note?: string;
 };
 
 export type NoticeList = {
@@ -2019,20 +3449,33 @@ export type OrgModels = {
   models: Array<OrgModel>;
 };
 
+export type Origin = {
+  cause: Record<string, unknown>;
+  created_at: string;
+  id: string;
+  kind: string;
+  made_by: Record<string, unknown>;
+  ref: string;
+  siblings: Record<string, unknown>;
+  stop: Array<Record<string, unknown>>;
+  task: string | null;
+  title: string;
+};
+
 export type Page = {
   archived: boolean;
   as_of: string | null;
-  bot: string;
+  bot_id: string;
   bot_name: string;
   cadence: "none" | "daily" | "weekly" | "monthly";
   file_id: string;
-  replaced_by: string | null;
+  replaced_by_id: string | null;
   replaced_by_title?: string | null;
   src: string | null;
   stale_days: number | null;
   task_id: string | null;
   title: string;
-  updated: string;
+  updated_at: string;
   updated_by: string | null;
   updated_by_name?: string;
   version: number;
@@ -2055,6 +3498,13 @@ export type PagePublished = {
   created?: boolean;
   page: Page;
   unembedded: Array<string>;
+};
+
+export type PageSettings = {
+  accent?: string | null;
+  logo_file_id?: string | null;
+  slug?: string | null;
+  transparency?: string | null;
 };
 
 export type PageShown = {
@@ -2087,10 +3537,12 @@ export type PersonAssistant = {
 
 export type PersonUpdate = {
   about?: string | null;
+  email_digest?: boolean | null;
   github?: string | null;
   goals?: string | null;
   left?: boolean | null;
   notes?: string | null;
+  notify_browser?: boolean | null;
   notify_slack_bot_messages?: boolean | null;
   notify_slack_task_done?: boolean | null;
   on_behalf_of?: string | null;
@@ -2125,7 +3577,9 @@ export type Place = {
   audience?: Record<string, unknown>;
   can_edit: boolean;
   group?: string;
-  kind: "dashboard" | "team" | "bot" | "task";
+  kind: "dashboard" | "growth" | "team" | "bot" | "task" | "person";
+  month?: string;
+  months?: Array<string>;
   name?: string;
   pins: Array<{
   card?: Card;
@@ -2136,7 +3590,7 @@ export type Place = {
   bot: string;
   file_id: string;
   title: string;
-  updated: string;
+  updated_at: string;
 };
   position: number;
   size: "small" | "medium" | "large";
@@ -2158,6 +3612,10 @@ export type PlaceOrder = {
 
 export type PlaceSave = {
   audience?: PlaceAudience | null;
+};
+
+export type Preset = {
+  name: string;
 };
 
 export type Problem = {
@@ -2214,9 +3672,26 @@ export type ProfileChoices = {
   profiles: Array<ProfileChoice>;
 };
 
+export type Project = {
+  archived_at?: string | null;
+  customer_id?: string | null;
+  id: string;
+  name: string;
+  status: "open" | "closed";
+};
+
+export type ProjectOne = {
+  project: Project;
+};
+
+export type Projects = {
+  next_cursor: string | null;
+  projects: Array<Project>;
+};
+
 export type PublicComment = {
   author: "Team" | "Visitor";
-  created: string;
+  created_at: string;
   id: string;
   text: string;
 };
@@ -2270,6 +3745,23 @@ export type PublicationInput = {
   visibility?: string | null;
 };
 
+export type Publish = {
+  approval_id?: string | null;
+};
+
+export type PurchaseOrder = (FinanceOrderRow & {
+  lines: Array<{
+  id: string;
+  line_no: number;
+}>;
+  view_version?: number;
+});
+
+export type PurchaseOrders = {
+  next_cursor: string | null;
+  orders: Array<FinanceOrderRow>;
+};
+
 export type QuestionOption = {
   description?: string;
   file?: string | null;
@@ -2298,6 +3790,28 @@ export type RanOn = {
   runtime: string | null;
 }>;
   task_model: Record<string, unknown> | null;
+};
+
+export type ReadMark = {
+  seq: number;
+};
+
+export type ReaderChange = {
+  audience_ids?: Array<string> | null;
+  name?: string | null;
+  notify?: boolean | null;
+};
+
+export type ReaderImport = {
+  audience_id?: string | null;
+  audience_ids?: Array<string>;
+  csv: string;
+};
+
+export type ReaderInput = {
+  audience_ids?: Array<string>;
+  email: string;
+  name?: string | null;
 };
 
 export type Recent = {
@@ -2362,7 +3876,7 @@ export type Repository = {
   default_branch: string | null;
   enabled: boolean;
   full_name: string;
-  last_seen: string | null;
+  last_seen_at: string | null;
   reachable: boolean;
   setup_command: string | null;
   setup_source: string | null;
@@ -2463,8 +3977,108 @@ export type RoadmapSettings = {
   suggestions_bot?: string | null;
 };
 
+export type Rule = {
+  data_class: string;
+  lag_days?: number;
+  mode: string;
+  ref_id?: string;
+  rounding?: string | null;
+};
+
+export type RuleAsk = {
+  question: string;
+};
+
+export type RuleCite = {
+  file_id: string;
+  quote: string;
+  section?: string;
+  version?: number | null;
+};
+
+export type RuleCreate = {
+  cite?: RuleCite | null;
+  description?: string;
+  if_broken?: "block" | "escalate" | "warn" | null;
+  kind: "internal" | "external";
+  reviewer?: string | null;
+  source_id?: string | null;
+  text: string;
+  where?: Array<string>;
+  who?: RuleScope | null;
+  with?: RuleScope | null;
+};
+
+export type RuleDecide = {
+  version?: number | null;
+  who?: RuleScope | null;
+};
+
+export type RuleEdit = {
+  description?: string | null;
+  if_broken?: "block" | "escalate" | "warn" | null;
+  reviewer?: string | null;
+  source_id?: string | null;
+  text?: string | null;
+  version: number;
+  where?: Array<string> | null;
+  who?: RuleScope | null;
+  with?: RuleScope | null;
+};
+
+export type RuleRead = {
+  file_id?: string | null;
+  kind?: string | null;
+  note?: string;
+  source_id: string;
+  url?: string | null;
+};
+
+export type RuleScope = {
+  all_bots?: boolean;
+  bots?: Array<string>;
+  everyone?: boolean;
+  groups?: Array<string>;
+  names?: Array<string>;
+  outside_editions?: boolean;
+  people?: Array<string>;
+};
+
+export type RuleSourceCreate = {
+  kind: "vendor" | "customer" | "government" | "other";
+  name: string;
+};
+
+export type Rules = {
+  rules: Array<Rule>;
+};
+
+export type RulesByTeammate = {
+  bots: Array<{
+  slug: string;
+  who: Array<string>;
+  with: Array<string>;
+}>;
+  people: Array<{
+  id: string;
+  who: Array<string>;
+  with: Array<string>;
+}>;
+  rules: Array<{
+  can_edit: boolean;
+  id: string;
+  if_broken: "block" | "escalate" | "warn" | null;
+  kind: "internal" | "external";
+  text: string;
+}>;
+};
+
 export type RunNow = {
   input?: Record<string, unknown>;
+};
+
+export type RunnerLabel = {
+  label: string;
 };
 
 export type RunnerTurnsAtOnce = {
@@ -2472,6 +4086,7 @@ export type RunnerTurnsAtOnce = {
 };
 
 export type ScreeningModes = {
+  document?: "off" | "warn" | "hold" | null;
   idea?: "off" | "warn" | "hold" | null;
   mail?: "off" | "warn" | "hold" | null;
   model?: boolean | null;
@@ -2483,15 +4098,35 @@ export type ScreeningModes = {
 export type ScreeningTest = Record<string, unknown>;
 
 export type Seat = {
-  created?: string;
+  agent: string;
+  agent_name: string;
+  created_at?: string;
   description: string;
   id: string;
   kind: "seat";
   org_parent?: string;
   reports_to: string;
+  request_state: string;
   stage: "recruiting";
   team?: string;
   title: string;
+};
+
+export type SeatAgent = {
+  agent: CloudAgent;
+  seat: Seat;
+  steps: Array<"requested" | "building" | "ready">;
+  tasks: Array<{
+  id: string;
+  status: string;
+  title: string;
+}>;
+};
+
+export type SeatAgentRequest = {
+  agent: string;
+  first_task?: string;
+  name?: string;
 };
 
 export type SeatBatch = {
@@ -2502,16 +4137,30 @@ export type SeatBatchCreate = {
   seats: Array<SeatCreate>;
 };
 
+export type SeatCanceled = {
+  closed: boolean;
+  id: string;
+  request_state: string;
+};
+
 export type SeatCandidate = {
-  department?: string;
+  department: string;
+  department_id?: string;
   effort?: string;
-  icon?: string;
+  icon: string;
+  line: string;
+  match: "strong" | "good" | "";
   model: string;
   model_name: string;
   name: string;
-  reason: string;
-  recommended: boolean;
+  never?: Array<string>;
+  onboarding?: Array<string>;
+  owns: Array<string>;
+  prerequisites: Array<SeatNeed>;
+  source: "template";
+  starter?: boolean;
   summary?: string;
+  tags: Array<string>;
   template: string;
 };
 
@@ -2539,16 +4188,15 @@ export type SeatCreate = {
 
 export type SeatDetail = {
   can_edit: boolean;
-  created?: string;
+  created_at?: string;
   description: string;
-  description_by?: "strategy_bot" | "chart" | "person";
-  draft: {
-  at: string;
-  by: string;
-  state: "none" | "drafting" | "drafted";
-};
+  description_by?: "chart" | "person";
   id: string;
   kind: "seat";
+  reports_now?: {
+  name: string;
+  until: string;
+};
   reports_to: string;
   stage: "recruiting";
   team?: string;
@@ -2556,16 +4204,27 @@ export type SeatDetail = {
 };
 
 export type SeatDraft = {
-  text: string;
+  redraft?: boolean;
+  reports_to?: string;
+  team?: string;
+  title: string;
+};
+
+export type SeatDrafted = {
+  description: string;
+  source: "catalog" | "model" | "none";
 };
 
 export type SeatHire = {
   model?: string;
+  name?: string;
+  runner_id?: string | null;
   template: string;
 };
 
 export type SeatHired = {
   model?: string;
+  name?: string;
   note?: string | null;
   reports_to: string;
   seat: string;
@@ -2577,6 +4236,13 @@ export type SeatHired = {
 
 export type SeatList = {
   seats: Array<Seat>;
+};
+
+export type SeatNeed = {
+  label: string;
+  required: boolean;
+  state: "connected" | "on_hire" | "not_set";
+  tool: string;
 };
 
 export type SeatUpdate = {
@@ -2596,6 +4262,32 @@ export type ServiceKeyCreate = {
   scope?: "tasks" | "update";
 };
 
+export type SlackLink = {
+  audience: string;
+  channel: {
+  id: string;
+  name: string;
+  private: boolean;
+};
+  created_at: string;
+  history: {
+  count: number;
+  state: "off" | "pending" | "running" | "done" | "failed";
+};
+  id: string;
+  linked_by: string;
+  reason: string;
+  state: "requested" | "active" | "suspended" | "refused" | "unlinked";
+  thread_id: string;
+  updated_at: string;
+};
+
+export type SlackLinkList = {
+  available: boolean;
+  links: Array<SlackLink>;
+  next_cursor: string | null;
+};
+
 export type SleepSet = {
   hours?: number | null;
   runners?: boolean | null;
@@ -2611,7 +4303,10 @@ export type SleepWhenIdle = {
   last_error: string;
   last_request: Record<string, unknown> | null;
   layout: string | null;
+  managed: boolean;
+  minutes: number;
   runners: boolean;
+  source: "cell" | "owner" | "default";
   wake_at: string | null;
 };
 };
@@ -2621,6 +4316,10 @@ export type Snapshot = {
   has_more: boolean;
   messages: Array<Message>;
   next_before: string | null;
+};
+
+export type Source = {
+  author: string;
 };
 
 export type SourceCreate = {
@@ -2661,6 +4360,29 @@ export type StaleDecision = {
 export type StaleShown = {
   id: string;
   version: number;
+};
+
+export type StartCall = {
+  speak_replies?: boolean;
+  title?: string;
+};
+
+export type StatCreate = {
+  chart?: string;
+  data_class?: string | null;
+  definition?: string | null;
+  label?: string | null;
+  position?: number | null;
+  ref_id: string;
+  source_kind: string;
+};
+
+export type StatPatch = {
+  chart?: string | null;
+  data_class?: string | null;
+  definition?: string | null;
+  label?: string | null;
+  position?: number | null;
 };
 
 export type Storage = {
@@ -2739,7 +4461,7 @@ export type StrategyBotLog = {
 };
 
 export type StrategyBotLogEntry = {
-  created: string;
+  created_at: string;
   done: Array<Record<string, unknown>>;
   goal_id?: string;
   id: string;
@@ -2868,6 +4590,14 @@ export type SubscriptionWeeklyResult = {
 } | null;
 };
 
+export type SubscriptionWrite = {
+  confirm?: boolean;
+  kind?: string | null;
+  name?: string | null;
+  owner_id?: string | null;
+  secret?: string | null;
+};
+
 export type Suggestion = {
   email?: string;
   name?: string;
@@ -2882,11 +4612,12 @@ export type Suggestion = {
 export type SystemRoutineUpdate = {
   at?: string | null;
   on?: boolean | null;
+  pilots?: Array<MemoryTidyPilot> | null;
   preset?: "15m" | "hourly" | "4h" | "daily" | "business" | null;
 };
 
 export type Tag = {
-  created: string;
+  created_at: string;
   id: string;
   is_template: boolean;
   key: string;
@@ -2895,7 +4626,7 @@ export type Tag = {
   metadata: Record<string, unknown>;
   owner: string | null;
   template_id: string | null;
-  updated: string;
+  updated_at: string;
   version: number;
 };
 
@@ -2940,23 +4671,33 @@ export type TakeRecommendation = {
 export type Task = {
   acceptance_criteria?: Array<string>;
   body?: string;
+  check_back?: {
+  at: string;
+  by: string | null;
+  due: boolean;
+  note: string;
+} | null;
+  check_back_at?: string | null;
+  check_back_note?: string | null;
   cover?: {
   height: number | null;
   url: string;
   width: number | null;
 } | null;
-  created: string;
-  due: string | null;
+  created_at: string;
+  due_at: string | null;
   external_requesters?: number;
   guest?: string | null;
+  holds: Array<TaskHold>;
   id: string;
   important_requesters?: number;
   internal_requesters?: number;
   labels: Array<string>;
   lane: string;
   number?: number | null;
+  occurrence?: string | null;
   open_asks?: number;
-  owner: string;
+  owner_id: string;
   owner_name?: string;
   private?: boolean;
   public_summary?: string;
@@ -2964,18 +4705,15 @@ export type Task = {
   relations?: Record<string, Array<{
   direction: string;
   id: string;
-  owner: string;
+  owner_id: string;
   status: string;
   title: string;
 }>>;
-  requester: string;
   requester_count?: number;
+  requester_id: string;
   requester_name?: string;
   roles?: Record<string, Array<string>>;
   size?: number | null;
-  snoozed_by?: string | null;
-  snoozed_note?: string | null;
-  snoozed_until?: string | null;
   status: string;
   step?: TaskStep | null;
   step_id?: string | null;
@@ -2988,7 +4726,7 @@ export type Task = {
   name: string;
 } | null;
   type_id?: string | null;
-  updated: string;
+  updated_at: string;
   version: number;
   visibility?: "public" | "private";
   waiting_on?: string | null;
@@ -3065,7 +4803,7 @@ export type TaskCap = {
 };
 
 export type TaskCapProposal = {
-  created: string;
+  created_at: string;
   id: string;
   per_day: number;
   proposed_by: string;
@@ -3080,7 +4818,7 @@ export type TaskCapRow = {
   per_day: number;
   receiver: string;
   sender: string;
-  updated: string;
+  updated_at: string;
   updated_by: string;
 };
 
@@ -3093,6 +4831,11 @@ export type TaskCapWrite = {
 export type TaskCaps = {
   caps: Array<TaskCapRow>;
   proposals: Array<TaskCapProposal>;
+};
+
+export type TaskCheckBack = {
+  at: string;
+  note?: string | null;
 };
 
 export type TaskComment = {
@@ -3115,6 +4858,8 @@ export type TaskCreate = {
   blocker?: TaskBlocker | null;
   body: string;
   change_paths?: Array<string>;
+  check_back_at?: string | null;
+  check_back_note?: string | null;
   check_model?: string | null;
   check_role?: "review" | "check" | null;
   defer_for?: string | null;
@@ -3178,7 +4923,7 @@ export type TaskFileVersion = {
   ask: TaskReviewAskView | null;
   by: string;
   comment_id: string | null;
-  created: string;
+  created_at: string;
   duration_ms: number | null;
   height: number | null;
   media_state: string | null;
@@ -3223,6 +4968,15 @@ export type TaskFlow = {
   waiting: number;
 };
 
+export type TaskHold = {
+  by: string | null;
+  cause?: "manual" | "dependency" | "stranded" | "gate" | "check" | "worktree" | null;
+  kind: "blocked" | "snoozed";
+  reason: string | null;
+  since: string | null;
+  until: string | null;
+};
+
 export type TaskList = {
   actors?: Record<string, string>;
   cursor: string;
@@ -3255,11 +5009,11 @@ export type TaskReviewAskView = {
 
 export type TaskRun = {
   bot: string;
-  finished: string | null;
+  finished_at: string | null;
   outcome: string | null;
   ran_on: RanOn;
   run: string;
-  started: string | null;
+  started_at: string | null;
 };
 
 export type TaskRunChoice = {
@@ -3314,7 +5068,7 @@ export type TaskStepInput = {
 
 export type TaskType = {
   bots: "read" | "work" | null;
-  created: string;
+  created_at: string;
   default_visibility?: "public" | "private";
   id: string;
   manager?: string | null;
@@ -3323,7 +5077,7 @@ export type TaskType = {
   role?: "product-roadmap" | "engineering" | null;
   steps: Array<TaskStep>;
   steps_only: boolean;
-  updated: string;
+  updated_at: string;
 };
 
 export type TaskTypeCreate = {
@@ -3355,6 +5109,8 @@ export type TaskTypeUpdate = {
 export type TaskUpdate = {
   approval_id?: string | null;
   body?: string | null;
+  check_back_at?: string | null;
+  check_back_note?: string | null;
   close?: boolean;
   due?: string | null;
   goal_id?: string | null;
@@ -3392,6 +5148,263 @@ export type TeamBudgetState = {
 export type TeamBudgets = {
   turns_per_day?: number | null;
   turns_per_hour?: number | null;
+};
+
+export type TeammateAccess = {
+  on_behalf_of?: string | null;
+  read: AccessAudience;
+  revision: number;
+  see: AccessAudience;
+  write: AccessAudience;
+};
+
+export type TeammateAccessView = {
+  default?: Record<string, unknown>;
+  read: Audience;
+  revision: number;
+  see: Audience;
+  target: string;
+  teams?: Array<Record<string, unknown>>;
+  write: Audience;
+  you?: {
+  manage: boolean;
+  read: boolean;
+  see: boolean;
+  write: boolean;
+};
+};
+
+export type ThreadBotStatus = {
+  bots: Array<ThreadBotStatusRow>;
+};
+
+export type ThreadBotStatusRow = {
+  actor: string;
+  detail: string;
+  fix: {
+  href: string;
+  label: string;
+} | null;
+  name: string;
+  run_id: string | null;
+  since: string;
+  state: "working" | "up_next" | "cant_reply";
+};
+
+export type ThreadBrowse = {
+  next_cursor: string | null;
+  threads: Array<(ThreadView & {
+  member_count: number;
+})>;
+};
+
+export type ThreadCatchUp = {
+  count: number;
+  items: Array<{
+  mention: boolean;
+  messages: Array<ThreadMessage>;
+  more: number;
+  new_count: number;
+  thread: ThreadView;
+}>;
+  next_cursor: string | null;
+};
+
+export type ThreadCreate = {
+  audience?: string;
+  audience_group_id?: string | null;
+  body?: string | null;
+  kind?: string;
+  members?: Array<string>;
+  parent_message_id?: string | null;
+  pin_for_members?: boolean;
+  task_id?: string | null;
+  title?: string;
+};
+
+export type ThreadCrumb = {
+  id: string;
+  title: string;
+};
+
+export type ThreadDmCounts = Record<string, number>;
+
+export type ThreadEarlier = {
+  home: string;
+  messages: number;
+};
+
+export type ThreadFollow = {
+  following: boolean;
+  notify?: string;
+  thread_id: string;
+};
+
+export type ThreadMemberChange = {
+  actor: string;
+  removed?: boolean;
+  role?: string;
+  thread_id: string;
+};
+
+export type ThreadMembers = {
+  members: Array<{
+  actor: string;
+  added_by?: string | null;
+  created_at?: string;
+  role: string;
+}>;
+  next_cursor?: string | null;
+};
+
+export type ThreadMessage = {
+  body?: string | null;
+  clipped?: boolean;
+  conversation_id?: string;
+  created_at?: string;
+  deleted?: boolean;
+  depth?: number;
+  edited_at?: string | null;
+  hidden?: boolean;
+  id: string;
+  in_reply_to?: string | null;
+  kind?: string;
+  origin_id?: string | null;
+  parent_message_id?: string | null;
+  recipient_id?: string | null;
+  refs?: Record<string, unknown>;
+  reply_to?: ThreadReplyQuote | null;
+  revision?: number;
+  root_id?: string | null;
+  routed?: ThreadRouted | null;
+  sender_id?: string;
+  seq: number;
+  sub_thread?: Record<string, unknown> | null;
+  thread_id: string;
+};
+
+export type ThreadMessageDeleted = {
+  deleted: boolean;
+  id: string;
+  revision?: number;
+};
+
+export type ThreadPatch = {
+  archived?: boolean | null;
+  audience?: string | null;
+  audience_group_id?: string | null;
+  pinned_for_everyone?: boolean | null;
+  retention_days?: number | null;
+  title?: string | null;
+};
+
+export type ThreadPost = {
+  defer_for?: string | null;
+  delivery?: "steer" | "queue" | "defer" | null;
+  in_reply_to?: string | null;
+  kind?: string;
+  parent_message_id?: string | null;
+  refs?: Record<string, unknown>;
+  text: string;
+  to?: string | null;
+};
+
+export type ThreadRail = {
+  catch_up: number | null;
+  catch_up_ids: Array<string>;
+  dms: ThreadDmCounts;
+  next_cursor: string | null;
+  pinned: Array<ThreadView>;
+  threads: Array<ThreadView>;
+};
+
+export type ThreadReactions = Array<{
+  actors: Array<unknown>;
+  count: number;
+  emoji: string;
+}>;
+
+export type ThreadRead = {
+  last_read_seq: number;
+  thread_id: string;
+};
+
+export type ThreadReadAll = {
+  threads: number;
+};
+
+export type ThreadReplyQuote = {
+  author?: string;
+  author_name?: string;
+  excerpt?: string;
+  hidden?: boolean;
+  id: string;
+};
+
+export type ThreadRouted = {
+  to: Array<{
+  actor: string;
+  name: string;
+}>;
+};
+
+export type ThreadSearch = {
+  hits: Array<{
+  created_at?: string;
+  excerpt: string;
+  message_id: string;
+  sender_id?: string;
+  thread_id: string;
+  title?: string;
+}>;
+  next_cursor: string | null;
+};
+
+export type ThreadSidebar = {
+  attention: Array<Record<string, unknown>>;
+  bot_dms?: ThreadDmCounts;
+  dms: Array<Record<string, unknown>>;
+  next_cursor?: string | null;
+  person_dms?: ThreadDmCounts;
+  threads: Array<ThreadView>;
+};
+
+export type ThreadTimeline = {
+  bot_status?: Array<ThreadBotStatusRow>;
+  breadcrumb?: Array<ThreadCrumb>;
+  messages: Array<Record<string, unknown>>;
+  next_cursor?: string | null;
+  read_marks?: Record<string, number>;
+  thread: ThreadView;
+};
+
+export type ThreadUploaded = {
+  message: ThreadMessage;
+  thread: ThreadView;
+};
+
+export type ThreadView = {
+  archived_at?: string | null;
+  audience: "company" | "team" | "members" | "task" | "home" | "personal" | "participants" | "meeting";
+  audience_group_id?: string | null;
+  created_at?: string;
+  home?: Record<string, unknown> | null;
+  id: string;
+  kind?: string | null;
+  last_message_at?: string | null;
+  last_seq: number;
+  last_unread_seq: number;
+  me?: Record<string, unknown>;
+  members?: Record<string, unknown>;
+  owner_id?: string | null;
+  parent_id?: string | null;
+  parent_message_id?: string | null;
+  path?: Array<unknown>;
+  pinned_for_everyone: boolean;
+  retention_days?: number | null;
+  root_id: string;
+  task_id?: string | null;
+  title: string;
 };
 
 export type TickedRepo = {
@@ -3518,7 +5531,7 @@ export type Usage = {
   dimension_labels?: Record<string, unknown>;
   dimensions?: Record<string, unknown>;
   from: string;
-  group?: "bot" | "day" | "routine" | "harness" | "model" | "effort" | "subscription";
+  group?: "bot" | "day" | "routine" | "task" | "harness" | "model" | "effort" | "subscription";
   name?: string;
   prices_as_of: string;
   routines?: Array<Record<string, unknown>>;
@@ -3567,7 +5580,7 @@ export type UsageLimit = {
 };
 
 export type UsageLimitView = {
-  blocked: "per_30m" | "hourly" | "daily" | "weekly" | "monthly" | null;
+  blocked: "per_30m" | "hourly" | "daily" | "weekly" | "monthly" | "quarterly" | "yearly" | "budget" | null;
   blocked_by: Record<string, unknown> | null;
   daily_usd: number | null;
   day_spent: number | null;
@@ -3651,7 +5664,7 @@ export type WakeUrl = {
 export type Webhook = {
   allow_http: boolean;
   can_change: boolean;
-  created: string;
+  created_at: string;
   created_by: string;
   disabled_at: string | null;
   disabled_reason: string | null;
@@ -3672,7 +5685,7 @@ export type Webhook = {
   rate_per_hour: number;
   requested_by: string | null;
   revision: number;
-  updated: string;
+  updated_at: string;
   url: string;
 };
 
@@ -3783,14 +5796,14 @@ export type WebhookSend = {
 
 export type WebhookSendRow = {
   attempts: number;
-  created: string;
+  created_at: string;
   delivered_at: string | null;
   event_id: string;
   id: string;
   last_error: string;
   last_status: number | null;
-  next_attempt: string | null;
-  state: "ready" | "sending" | "delivered" | "failed" | "cancelled" | "withheld";
+  next_attempt_at: string | null;
+  state: "ready" | "sending" | "delivered" | "failed" | "canceled" | "withheld";
   subject: string;
   type: string;
   webhook_id: string;
@@ -3834,6 +5847,12 @@ export type WebhookWakeUrlSet = {
   url: string | null;
 };
 
+export type backend__company_page__api_editions__Correction = {
+  note?: string;
+  sections: Array<Record<string, unknown>>;
+  title?: string | null;
+};
+
 export type backend__inbound__Create = {
   kind?: "email" | "sms";
   max_price_micros?: number;
@@ -3860,12 +5879,36 @@ export type AcceptInboundPhoneQuoteParams = {
 export type AcceptInboundPhoneQuoteBody = AcceptPhone;
 export type AcceptInboundPhoneQuoteResponse = unknown;
 
+/** POST /api/v2/rules/{rule_id}/accept */
+export type AcceptRuleParams = {
+  "Idempotency-Key": string;
+  rule_id: string;
+};
+export type AcceptRuleBody = RuleDecide;
+export type AcceptRuleResponse = unknown;
+
+/** POST /api/v2/audiences/{audience_id}/sources */
+export type AddAudienceSourceParams = {
+  "Idempotency-Key": string;
+  audience_id: string;
+};
+export type AddAudienceSourceBody = Source;
+export type AddAudienceSourceResponse = unknown;
+
 /** POST /api/v2/cards */
 export type AddCardParams = {
   "Idempotency-Key": string;
 };
 export type AddCardBody = CardAdd;
 export type AddCardResponse = unknown;
+
+/** POST /api/v2/cloud-agents/{agent_id}/add */
+export type AddCloudAgentParams = {
+  "Idempotency-Key": string;
+  agent_id: string;
+};
+export type AddCloudAgentBody = CloudAgentAdd;
+export type AddCloudAgentResponse = CloudAgentAdded;
 
 /** POST /api/v2/doc-sources */
 export type AddDocSourceParams = {
@@ -3912,6 +5955,13 @@ export type AddLinkedDocParams = {
 export type AddLinkedDocBody = LinkCreate;
 export type AddLinkedDocResponse = LinkedDocResult;
 
+/** POST /api/v2/model-subscriptions */
+export type AddModelSubscriptionParams = {
+  "Idempotency-Key": string;
+};
+export type AddModelSubscriptionBody = SubscriptionWrite;
+export type AddModelSubscriptionResponse = ModelSubscription;
+
 /** POST /api/v2/pins */
 export type AddPinParams = {
   "Idempotency-Key": string;
@@ -3928,6 +5978,35 @@ export type AddPublicRoadmapCommentParams = {
 export type AddPublicRoadmapCommentBody = PublicCommentInput;
 export type AddPublicRoadmapCommentResponse = unknown;
 
+/** POST /api/v2/readers */
+export type AddReaderParams = {
+  "Idempotency-Key": string;
+};
+export type AddReaderBody = ReaderInput;
+export type AddReaderResponse = unknown;
+
+/** POST /api/v2/rules */
+export type AddRuleParams = {
+  "Idempotency-Key": string;
+};
+export type AddRuleBody = RuleCreate;
+export type AddRuleResponse = unknown;
+
+/** POST /api/v2/rules/{rule_id}/due */
+export type AddRuleDueParams = {
+  "Idempotency-Key": string;
+  rule_id: string;
+};
+export type AddRuleDueBody = DueAdd;
+export type AddRuleDueResponse = unknown;
+
+/** POST /api/v2/rule-sources */
+export type AddRuleSourceParams = {
+  "Idempotency-Key": string;
+};
+export type AddRuleSourceBody = RuleSourceCreate;
+export type AddRuleSourceResponse = unknown;
+
 /** POST /api/v2/strategy/bets */
 export type AddStrategyBetParams = {
   "Idempotency-Key": string;
@@ -3942,6 +6021,14 @@ export type AddTaskRequesterParams = {
 };
 export type AddTaskRequesterBody = RequesterInput;
 export type AddTaskRequesterResponse = unknown;
+
+/** POST /api/v2/threads/{thread_id}/members */
+export type AddThreadMemberParams = {
+  "Idempotency-Key": string;
+  thread_id: string;
+};
+export type AddThreadMemberBody = MemberAdd;
+export type AddThreadMemberResponse = ThreadMemberChange;
 
 /** POST /api/v2/messages/{mid}/answer */
 export type AnswerMessageParams = {
@@ -3958,6 +6045,22 @@ export type AnswerTaskQuestionParams = {
 };
 export type AnswerTaskQuestionBody = TaskAnswer;
 export type AnswerTaskQuestionResponse = TaskAnswerResult;
+
+/** POST /api/v2/rule-holds/{hold_id}/appeal */
+export type AppealRuleHoldParams = {
+  "Idempotency-Key": string;
+  hold_id: string;
+};
+export type AppealRuleHoldBody = HoldAppeal;
+export type AppealRuleHoldResponse = unknown;
+
+/** POST /api/v2/audiences/{audience_id}/disclosure/preset */
+export type ApplyDisclosurePresetParams = {
+  "Idempotency-Key": string;
+  audience_id: string;
+};
+export type ApplyDisclosurePresetBody = Preset;
+export type ApplyDisclosurePresetResponse = unknown;
 
 /** POST /api/v2/kpis/{kid}/archive */
 export type ArchiveKpiParams = {
@@ -3980,6 +6083,21 @@ export type AskDocsParams = {
 };
 export type AskDocsBody = DocsAsk;
 export type AskDocsResponse = DocsAsked;
+
+/** POST /api/v2/rules/ask */
+export type AskRulesParams = {
+  "Idempotency-Key": string;
+};
+export type AskRulesBody = RuleAsk;
+export type AskRulesResponse = unknown;
+
+/** POST /api/v2/calls/{call_id}/bots */
+export type AttachCallBotsParams = {
+  "Idempotency-Key": string;
+  call_id: string;
+};
+export type AttachCallBotsBody = CallBots;
+export type AttachCallBotsResponse = Call;
 
 /** POST /api/v2/tasks/{tid}/files */
 export type AttachTaskFileParams = {
@@ -4017,6 +6135,15 @@ export type AttachTaskFileBody = {
 };
 export type AttachTaskFileResponse = TaskFileResult;
 
+/** GET /api/v2/threads/browse */
+export type BrowseThreadsParams = {
+  cursor?: string | null;
+  limit?: number | null;
+  q?: string | null;
+};
+export type BrowseThreadsBody = never;
+export type BrowseThreadsResponse = ThreadBrowse;
+
 /** POST /api/v2/task-bulk */
 export type BulkChangeTasksParams = {
   "Idempotency-Key": string;
@@ -4040,6 +6167,30 @@ export type CancelInboundPhoneRequestParams = {
 export type CancelInboundPhoneRequestBody = never;
 export type CancelInboundPhoneRequestResponse = unknown;
 
+/** POST /api/v2/seats/{seat_id}/cancel-request */
+export type CancelSeatRequestParams = {
+  "Idempotency-Key": string;
+  seat_id: string;
+};
+export type CancelSeatRequestBody = never;
+export type CancelSeatRequestResponse = SeatCanceled;
+
+/** POST /api/v2/threads/{thread_id}/catch-up */
+export type CatchUpThreadParams = {
+  "Idempotency-Key": string;
+  thread_id: string;
+};
+export type CatchUpThreadBody = CatchUp;
+export type CatchUpThreadResponse = CatchUpResult;
+
+/** POST /api/v2/model-subscriptions/{sid} */
+export type ChangeModelSubscriptionParams = {
+  "Idempotency-Key": string;
+  sid: string;
+};
+export type ChangeModelSubscriptionBody = SubscriptionWrite;
+export type ChangeModelSubscriptionResponse = ModelSubscription;
+
 /** POST /api/v2/chat/{bot} */
 export type ChatWithBotParams = {
   "Idempotency-Key": string;
@@ -4047,6 +6198,21 @@ export type ChatWithBotParams = {
 };
 export type ChatWithBotBody = ChatCreate;
 export type ChatWithBotResponse = ChatResult;
+
+/** POST /api/v2/editions/{edition_id}/check */
+export type CheckEditionParams = {
+  "Idempotency-Key": string;
+  edition_id: string;
+};
+export type CheckEditionBody = Empty;
+export type CheckEditionResponse = unknown;
+
+/** POST /api/v2/rules/check */
+export type CheckRuleDraftParams = {
+  "Idempotency-Key": string;
+};
+export type CheckRuleDraftBody = DraftCheck;
+export type CheckRuleDraftResponse = unknown;
 
 /** POST /api/v2/tasks/dry-run */
 export type CheckTaskParams = {
@@ -4103,6 +6269,14 @@ export type ConnectInboundCompanyBody = {
 };
 export type ConnectInboundCompanyResponse = InboundCompanyConnection;
 
+/** POST /api/v2/editions/{edition_id}/correct */
+export type CorrectEditionParams = {
+  "Idempotency-Key": string;
+  edition_id: string;
+};
+export type CorrectEditionBody = backend__company_page__api_editions__Correction;
+export type CorrectEditionResponse = unknown;
+
 /** GET /api/v2/updates/unread */
 export type CountUnreadUpdatesParams = {
   mine?: boolean;
@@ -4110,6 +6284,13 @@ export type CountUnreadUpdatesParams = {
 };
 export type CountUnreadUpdatesBody = never;
 export type CountUnreadUpdatesResponse = Unread;
+
+/** POST /api/v2/audiences */
+export type CreateAudienceParams = {
+  "Idempotency-Key": string;
+};
+export type CreateAudienceBody = AudienceCreate;
+export type CreateAudienceResponse = unknown;
 
 /** POST /api/v2/automations */
 export type CreateAutomationParams = {
@@ -4124,6 +6305,13 @@ export type CreateConversationParams = {
 };
 export type CreateConversationBody = ConversationCreate;
 export type CreateConversationResponse = unknown;
+
+/** POST /api/v2/finance/connections */
+export type CreateFinanceConnectionParams = {
+  "Idempotency-Key": string;
+};
+export type CreateFinanceConnectionBody = FinanceConnectionRequest;
+export type CreateFinanceConnectionResponse = FinanceConnectionResult;
 
 /** POST /api/v2/goals */
 export type CreateGoalParams = {
@@ -4160,6 +6348,14 @@ export type CreateInternalDocParams = {
 export type CreateInternalDocBody = DocCreate;
 export type CreateInternalDocResponse = InternalDocResult;
 
+/** POST /api/v2/audiences/{audience_id}/invites */
+export type CreateInviteParams = {
+  "Idempotency-Key": string;
+  audience_id: string;
+};
+export type CreateInviteBody = InviteInput | null;
+export type CreateInviteResponse = unknown;
+
 /** POST /api/v2/kpis */
 export type CreateKpiParams = {
   "Idempotency-Key": string;
@@ -4173,6 +6369,13 @@ export type CreateMyTokenParams = {
 };
 export type CreateMyTokenBody = PersonalTokenCreate;
 export type CreateMyTokenResponse = unknown;
+
+/** POST /api/v2/company-page/stats */
+export type CreatePageStatParams = {
+  "Idempotency-Key": string;
+};
+export type CreatePageStatBody = StatCreate;
+export type CreatePageStatResponse = unknown;
 
 /** POST /api/v2/github/product-repos */
 export type CreateProductRepositoryParams = {
@@ -4231,6 +6434,20 @@ export type CreateTaskTypeParams = {
 export type CreateTaskTypeBody = TaskTypeCreate;
 export type CreateTaskTypeResponse = TaskTypeResult;
 
+/** POST /api/v2/threads */
+export type CreateThreadParams = {
+  "Idempotency-Key": string;
+};
+export type CreateThreadBody = ThreadCreate;
+export type CreateThreadResponse = ThreadView;
+
+/** POST /api/v2/threads/dm */
+export type CreateThreadDmParams = {
+  "Idempotency-Key": string;
+};
+export type CreateThreadDmBody = DmCreate;
+export type CreateThreadDmResponse = ThreadView;
+
 /** POST /api/v2/triggers */
 export type CreateTriggerParams = {
   "Idempotency-Key": string;
@@ -4269,6 +6486,14 @@ export type DecideGoalProposalParams = {
 export type DecideGoalProposalBody = GoalProposalDecision;
 export type DecideGoalProposalResponse = GoalProposalResult;
 
+/** POST /api/v2/memory-tidy/cards/{ident}/decide */
+export type DecideMemoryTidyCardParams = {
+  "Idempotency-Key": string;
+  ident: string;
+};
+export type DecideMemoryTidyCardBody = MemoryTidyDecision;
+export type DecideMemoryTidyCardResponse = MemoryTidyCardResult;
+
 /** POST /api/v2/stale-review/{suggestion_id} */
 export type DecideStaleSuggestionParams = {
   "Idempotency-Key": string;
@@ -4276,6 +6501,14 @@ export type DecideStaleSuggestionParams = {
 };
 export type DecideStaleSuggestionBody = StaleDecision;
 export type DecideStaleSuggestionResponse = unknown;
+
+/** DELETE /api/v2/audiences/{audience_id} */
+export type DeleteAudienceParams = {
+  "Idempotency-Key": string;
+  audience_id: string;
+};
+export type DeleteAudienceBody = never;
+export type DeleteAudienceResponse = unknown;
 
 /** DELETE /api/v2/automations/{aid} */
 export type DeleteAutomationParams = {
@@ -4308,6 +6541,22 @@ export type DeleteGroupParams = {
 };
 export type DeleteGroupBody = never;
 export type DeleteGroupResponse = unknown;
+
+/** DELETE /api/v2/messages/{message_id} */
+export type DeleteMessageParams = {
+  "Idempotency-Key": string;
+  message_id: string;
+};
+export type DeleteMessageBody = never;
+export type DeleteMessageResponse = ThreadMessageDeleted;
+
+/** DELETE /api/v2/company-page/stats/{stat_id} */
+export type DeletePageStatParams = {
+  "Idempotency-Key": string;
+  stat_id: string;
+};
+export type DeletePageStatBody = never;
+export type DeletePageStatResponse = unknown;
 
 /** POST /api/v2/tasks/{tid}/delete */
 export type DeleteTaskParams = {
@@ -4375,6 +6624,15 @@ export type DeleteWebhookRelayParams = {
 export type DeleteWebhookRelayBody = Empty;
 export type DeleteWebhookRelayResponse = WebhookRelayDeleted;
 
+/** DELETE /api/v2/calls/{call_id}/bots/{bot} */
+export type DetachCallBotParams = {
+  "Idempotency-Key": string;
+  bot: string;
+  call_id: string;
+};
+export type DetachCallBotBody = Empty;
+export type DetachCallBotResponse = Call;
+
 /** GET /api/v2/strategy/diff */
 export type DiffStrategyVersionsParams = Record<string, never>;
 export type DiffStrategyVersionsBody = never;
@@ -4396,13 +6654,27 @@ export type DisconnectGranolaParams = {
 export type DisconnectGranolaBody = never;
 export type DisconnectGranolaResponse = GranolaDisconnect;
 
-/** POST /api/v2/seats/{seat_id}/draft */
+/** POST /api/v2/editions */
+export type DraftEditionParams = {
+  "Idempotency-Key": string;
+};
+export type DraftEditionBody = DraftNow;
+export type DraftEditionResponse = unknown;
+
+/** POST /api/v2/feedback/{feedback_id}/rule-draft */
+export type DraftFeedbackRuleParams = {
+  "Idempotency-Key": string;
+  feedback_id: string;
+};
+export type DraftFeedbackRuleBody = never;
+export type DraftFeedbackRuleResponse = FeedbackRuleDraft;
+
+/** POST /api/v2/seats/draft */
 export type DraftSeatParams = {
   "Idempotency-Key": string;
-  seat_id: string;
 };
 export type DraftSeatBody = SeatDraft;
-export type DraftSeatResponse = SeatDetail;
+export type DraftSeatResponse = SeatDrafted;
 
 /** POST /api/v2/strategy/draft-from */
 export type DraftStrategyFromParams = {
@@ -4435,6 +6707,14 @@ export type EditInboundInboxParams = {
 };
 export type EditInboundInboxBody = backend__inbound__Edit;
 export type EditInboundInboxResponse = unknown;
+
+/** PATCH /api/v2/messages/{message_id} */
+export type EditMessageParams = {
+  "Idempotency-Key": string;
+  message_id: string;
+};
+export type EditMessageBody = MessagePatch;
+export type EditMessageResponse = ThreadMessage;
 
 /** PATCH /api/v2/pages/{fid} */
 export type EditPageParams = {
@@ -4469,6 +6749,14 @@ export type EndAutomationHoldParams = {
 export type EndAutomationHoldBody = HeldAction;
 export type EndAutomationHoldResponse = AutomationHeld;
 
+/** POST /api/v2/calls/{call_id}/end */
+export type EndCallParams = {
+  "Idempotency-Key": string;
+  call_id: string;
+};
+export type EndCallBody = Empty;
+export type EndCallResponse = Call;
+
 /** POST /auth/token */
 export type ExchangeCodeParams = Record<string, never>;
 export type ExchangeCodeBody = {
@@ -4476,6 +6764,13 @@ export type ExchangeCodeBody = {
   code_verifier: string;
 };
 export type ExchangeCodeResponse = Token;
+
+/** PUT /api/v2/threads/{thread_id}/follow */
+export type FollowThreadParams = {
+  thread_id: string;
+};
+export type FollowThreadBody = Follow;
+export type FollowThreadResponse = ThreadFollow;
 
 /** GET /api/v2/approvals/{aid} */
 export type GetApprovalParams = {
@@ -4501,6 +6796,22 @@ export type GetAssistantSettingsParams = Record<string, never>;
 export type GetAssistantSettingsBody = never;
 export type GetAssistantSettingsResponse = unknown;
 
+/** GET /api/v2/audiences/{audience_id}/disclosure */
+export type GetAudienceDisclosureParams = {
+  audience_id: string;
+};
+export type GetAudienceDisclosureBody = never;
+export type GetAudienceDisclosureResponse = unknown;
+
+/** GET /api/v2/audiences/{audience_id}/stats */
+export type GetAudienceStatsParams = {
+  audience_id: string;
+  limit?: number;
+  offset?: number;
+};
+export type GetAudienceStatsBody = never;
+export type GetAudienceStatsResponse = unknown;
+
 /** GET /api/v2/automations/{aid} */
 export type GetAutomationParams = {
   aid: string;
@@ -4520,6 +6831,22 @@ export type GetAutomationStatsParams = {
 export type GetAutomationStatsBody = never;
 export type GetAutomationStatsResponse = AutomationStats;
 
+/** GET /api/v2/automations/templates/{tid} */
+export type GetAutomationTemplateParams = {
+  inbox: string;
+  owner: string;
+  tid: string;
+};
+export type GetAutomationTemplateBody = never;
+export type GetAutomationTemplateResponse = AutomationTemplate;
+
+/** GET /api/v2/audiences/{audience_id}/stats/approval */
+export type GetBoardApprovalParams = {
+  audience_id: string;
+};
+export type GetBoardApprovalBody = never;
+export type GetBoardApprovalResponse = unknown;
+
 /** GET /api/v2/bots/{bot} */
 export type GetBotParams = {
   bot: string;
@@ -4535,12 +6862,26 @@ export type GetBotAccessParams = {
 export type GetBotAccessBody = never;
 export type GetBotAccessResponse = BotAccessView;
 
+/** GET /api/v2/bots/{bot}/browser-exit */
+export type GetBotBrowserExitParams = {
+  bot: string;
+};
+export type GetBotBrowserExitBody = never;
+export type GetBotBrowserExitResponse = BotBrowserExitView;
+
 /** GET /api/v2/bots/{bot}/budget */
 export type GetBotBudgetParams = {
   bot: string;
 };
 export type GetBotBudgetBody = never;
 export type GetBotBudgetResponse = BotBudgetState;
+
+/** GET /api/v2/bots/{bot}/dream */
+export type GetBotDreamParams = {
+  bot: string;
+};
+export type GetBotDreamBody = never;
+export type GetBotDreamResponse = BotDreamView;
 
 /** GET /api/v2/bots/{bot}/instructions */
 export type GetBotInstructionsParams = {
@@ -4570,6 +6911,16 @@ export type GetBotRepositoriesParams = {
 export type GetBotRepositoriesBody = never;
 export type GetBotRepositoriesResponse = BotRepositories;
 
+/** GET /api/v2/bots/{bot}/rules */
+export type GetBotRulesParams = {
+  bot: string;
+  external_cursor?: string | null;
+  internal_cursor?: string | null;
+  limit?: number;
+};
+export type GetBotRulesBody = never;
+export type GetBotRulesResponse = unknown;
+
 /** GET /api/v2/bots/{bot}/subscription */
 export type GetBotSubscriptionParams = {
   bot: string;
@@ -4584,8 +6935,16 @@ export type GetBotUpdateSettingsParams = {
 export type GetBotUpdateSettingsBody = never;
 export type GetBotUpdateSettingsResponse = unknown;
 
+/** GET /api/v2/calls/{call_id} */
+export type GetCallParams = {
+  call_id: string;
+};
+export type GetCallBody = never;
+export type GetCallResponse = Call;
+
 /** GET /api/v2/cards/choices */
 export type GetCardChoicesParams = {
+  place?: string;
   team?: string;
 };
 export type GetCardChoicesBody = never;
@@ -4608,6 +6967,31 @@ export type GetCompanyHistoryParams = Record<string, never>;
 export type GetCompanyHistoryBody = never;
 export type GetCompanyHistoryResponse = CompanyHistory;
 
+/** GET /api/v2/company-page/logo */
+export type GetCompanyLogoParams = Record<string, never>;
+export type GetCompanyLogoBody = never;
+export type GetCompanyLogoResponse = string;
+
+/** GET /api/v2/company-page */
+export type GetCompanyPageParams = Record<string, never>;
+export type GetCompanyPageBody = never;
+export type GetCompanyPageResponse = unknown;
+
+/** GET /api/v2/company-page/preview */
+export type GetCompanyPreviewParams = {
+  audience?: string;
+  theme?: string;
+};
+export type GetCompanyPreviewBody = never;
+export type GetCompanyPreviewResponse = string;
+
+/** GET /api/v2/computers/{rid}/browser-exit */
+export type GetComputerBrowserExitParams = {
+  rid: string;
+};
+export type GetComputerBrowserExitBody = never;
+export type GetComputerBrowserExitResponse = BrowserExit;
+
 /** GET /api/v2/config */
 export type GetConfigParams = Record<string, never>;
 export type GetConfigBody = never;
@@ -4628,6 +7012,21 @@ export type GetDocumentParams = {
 };
 export type GetDocumentBody = never;
 export type GetDocumentResponse = unknown;
+
+/** GET /api/v2/editions/{edition_id} */
+export type GetEditionParams = {
+  edition_id: string;
+};
+export type GetEditionBody = never;
+export type GetEditionResponse = unknown;
+
+/** GET /api/v2/estimates/{estimate_id} */
+export type GetEstimateParams = {
+  estimate_id: string;
+  view_as?: string | null;
+};
+export type GetEstimateBody = never;
+export type GetEstimateResponse = Estimate;
 
 /** GET /api/v2/docs/external/{document_id} */
 export type GetExternalDocParams = {
@@ -4651,6 +7050,180 @@ export type GetFileVersionParams = {
 };
 export type GetFileVersionBody = never;
 export type GetFileVersionResponse = string;
+
+/** GET /api/v2/finance/tax/1099 */
+export type GetFinance1099Params = {
+  view_as?: string | null;
+  year?: number | null;
+};
+export type GetFinance1099Body = never;
+export type GetFinance1099Response = Finance1099;
+
+/** GET /api/v2/finance/tax/1099.csv */
+export type GetFinance1099CsvParams = {
+  view_as?: string | null;
+  year?: number | null;
+};
+export type GetFinance1099CsvBody = never;
+export type GetFinance1099CsvResponse = string;
+
+/** GET /api/v2/finance/access */
+export type GetFinanceAccessParams = Record<string, never>;
+export type GetFinanceAccessBody = never;
+export type GetFinanceAccessResponse = FinanceAccess;
+
+/** GET /api/v2/finance/actions/{action_id} */
+export type GetFinanceActionParams = {
+  action_id: string;
+};
+export type GetFinanceActionBody = never;
+export type GetFinanceActionResponse = FinanceAction;
+
+/** GET /api/v2/finance/balance-sheet */
+export type GetFinanceBalanceSheetParams = {
+  as_of?: string | null;
+  view_as?: string | null;
+};
+export type GetFinanceBalanceSheetBody = never;
+export type GetFinanceBalanceSheetResponse = FinanceBalanceSheet;
+
+/** GET /api/v2/finance/bills/{bill_id} */
+export type GetFinanceBillParams = {
+  bill_id: string;
+  view_as?: string | null;
+};
+export type GetFinanceBillBody = never;
+export type GetFinanceBillResponse = FinanceDocument;
+
+/** GET /api/v2/finance/chart */
+export type GetFinanceChartParams = {
+  for?: "bill" | "invoice" | "journal" | null;
+  view_as?: string | null;
+};
+export type GetFinanceChartBody = never;
+export type GetFinanceChartResponse = FinanceChart;
+
+/** GET /api/v2/finance/close/{month} */
+export type GetFinanceCloseChecklistParams = {
+  month: string;
+  top_n?: number;
+};
+export type GetFinanceCloseChecklistBody = never;
+export type GetFinanceCloseChecklistResponse = FinanceCloseChecklist;
+
+/** GET /api/v2/finance/expenses */
+export type GetFinanceExpensesParams = {
+  account_id?: string | null;
+  by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account" | "location" | "class" | "project" | "location_class" | "location_project" | "class_project";
+  end?: string | null;
+  start?: string | null;
+  team?: string | null;
+  teammate?: string | null;
+  top_n?: number;
+  view_as?: string | null;
+};
+export type GetFinanceExpensesBody = never;
+export type GetFinanceExpensesResponse = FinanceReport;
+
+/** GET /api/v2/finance/inbox */
+export type GetFinanceInboxParams = {
+  cursor?: string | null;
+  kind?: string | null;
+  limit?: number;
+  view_as?: string | null;
+};
+export type GetFinanceInboxBody = never;
+export type GetFinanceInboxResponse = FinanceInbox;
+
+/** GET /api/v2/finance/invoices/{invoice_id} */
+export type GetFinanceInvoiceParams = {
+  invoice_id: string;
+  view_as?: string | null;
+};
+export type GetFinanceInvoiceBody = never;
+export type GetFinanceInvoiceResponse = FinanceDocument;
+
+/** GET /api/v2/finance/lines/{account_id} */
+export type GetFinanceLineParams = {
+  account_id: string;
+  end?: string | null;
+  limit?: number;
+  start?: string | null;
+  teammates?: Array<string> | null;
+  teams?: Array<string> | null;
+  top_n?: number;
+  unattributed?: boolean;
+  vendor?: string | null;
+  view_as?: string | null;
+  who?: "both" | "bots" | "people";
+};
+export type GetFinanceLineBody = never;
+export type GetFinanceLineResponse = FinanceReport;
+
+/** GET /api/v2/finance/metrics/{name} */
+export type GetFinanceMetricParams = {
+  account_id?: string | null;
+  budget_id?: string | null;
+  days?: number | null;
+  end?: string | null;
+  name: "cash" | "burn" | "runway_months" | "revenue" | "spend" | "budget_remaining" | "budget_pct_used" | "ap_due" | "ar_overdue" | "uncategorized_count" | "unreconciled_days" | "duplicate_charges" | "price_increases";
+  start?: string | null;
+  team?: string | null;
+  teammate?: string | null;
+  view_as?: string | null;
+};
+export type GetFinanceMetricBody = never;
+export type GetFinanceMetricResponse = FinanceMetric;
+
+/** GET /api/v2/finance/pnl */
+export type GetFinancePnlParams = {
+  basis?: "cash" | "accrual";
+  budget_as_of?: string | null;
+  end?: string | null;
+  period?: "day" | "week" | "month" | "quarter" | "year";
+  start?: string | null;
+  team?: string | null;
+  teammate?: string | null;
+  teammates?: Array<string> | null;
+  teams?: Array<string> | null;
+  unattributed?: boolean;
+  view?: "company" | "expenses";
+  view_as?: string | null;
+  who?: "both" | "bots" | "people";
+};
+export type GetFinancePnlBody = never;
+export type GetFinancePnlResponse = FinancePnl;
+
+/** GET /api/v2/finance/reports/{kind} */
+export type GetFinanceReportParams = {
+  basis?: "cash" | "accrual" | null;
+  by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account" | "location" | "class" | "project" | "location_class" | "location_project" | "class_project" | null;
+  compare?: "prior" | null;
+  end?: string | null;
+  kind: "pnl" | "pnl_by" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
+  period?: "day" | "week" | "month" | "quarter" | "year";
+  start?: string | null;
+  top_n?: number;
+  view_as?: string | null;
+};
+export type GetFinanceReportBody = never;
+export type GetFinanceReportResponse = FinanceReportOf;
+
+/** GET /api/v2/finance/tax/sales-tax */
+export type GetFinanceSalesTaxParams = {
+  view_as?: string | null;
+  year?: number | null;
+};
+export type GetFinanceSalesTaxBody = never;
+export type GetFinanceSalesTaxResponse = FinanceSalesTax;
+
+/** GET /api/v2/finance/tax/sales-tax.csv */
+export type GetFinanceSalesTaxCsvParams = {
+  view_as?: string | null;
+  year?: number | null;
+};
+export type GetFinanceSalesTaxCsvBody = never;
+export type GetFinanceSalesTaxCsvResponse = string;
 
 /** GET /api/v2/goals/{gid} */
 export type GetGoalParams = {
@@ -4680,6 +7253,21 @@ export type GetGoalsNeedsYouResponse = GoalsNeedsYou;
 export type GetGranolaStatusParams = Record<string, never>;
 export type GetGranolaStatusBody = never;
 export type GetGranolaStatusResponse = GranolaStatus;
+
+/** GET /api/v2/groups/{gid}/access */
+export type GetGroupAccessParams = {
+  gid: string;
+  on_behalf_of?: string;
+};
+export type GetGroupAccessBody = never;
+export type GetGroupAccessResponse = TeammateAccessView;
+
+/** GET /api/v2/growth/numbers */
+export type GetGrowthNumbersParams = {
+  months?: number;
+};
+export type GetGrowthNumbersBody = never;
+export type GetGrowthNumbersResponse = GrowthNumbers;
 
 /** GET /api/v2/health */
 export type GetHealthParams = Record<string, never>;
@@ -4720,6 +7308,14 @@ export type GetInternalDocVersionParams = {
 export type GetInternalDocVersionBody = never;
 export type GetInternalDocVersionResponse = InternalDocVersionResult;
 
+/** GET /api/v2/items/{item_id} */
+export type GetItemParams = {
+  item_id: string;
+  view_as?: string | null;
+};
+export type GetItemBody = never;
+export type GetItemResponse = ItemOne;
+
 /** GET /api/v2/kpis/{kid} */
 export type GetKpiParams = {
   kid: string;
@@ -4741,6 +7337,14 @@ export type GetLibrarianSetupResponse = LibrarianSetup;
 export type GetLivenessParams = Record<string, never>;
 export type GetLivenessBody = never;
 export type GetLivenessResponse = unknown;
+
+/** GET /api/v2/locations/{location_id} */
+export type GetLocationParams = {
+  location_id: string;
+  view_as?: string | null;
+};
+export type GetLocationBody = never;
+export type GetLocationResponse = LocationOne;
 
 /** GET /api/v2/me */
 export type GetMeParams = Record<string, never>;
@@ -4768,6 +7372,13 @@ export type GetMeetingTranscriptParams = {
 export type GetMeetingTranscriptBody = never;
 export type GetMeetingTranscriptResponse = unknown;
 
+/** GET /api/v2/memory-tidy/cards/{ident} */
+export type GetMemoryTidyCardParams = {
+  ident: string;
+};
+export type GetMemoryTidyCardBody = never;
+export type GetMemoryTidyCardResponse = MemoryTidyCardResult;
+
 /** GET /api/v2/messages/{mid} */
 export type GetMessageParams = {
   mid: string;
@@ -4786,6 +7397,13 @@ export type GetNeedsYouParams = {
 export type GetNeedsYouBody = never;
 export type GetNeedsYouResponse = NeedsYou;
 
+/** GET /api/v2/needs-you/summary */
+export type GetNeedsYouSummaryParams = {
+  limit?: number;
+};
+export type GetNeedsYouSummaryBody = never;
+export type GetNeedsYouSummaryResponse = NeedsSummary;
+
 /** GET /api/v2/openapi.json */
 export type GetOpenApiParams = Record<string, never>;
 export type GetOpenApiBody = never;
@@ -4800,12 +7418,27 @@ export type GetOrgParams = {
 export type GetOrgBody = never;
 export type GetOrgResponse = Org;
 
+/** GET /api/v2/origins/{ref} */
+export type GetOriginParams = {
+  ref: string;
+};
+export type GetOriginBody = never;
+export type GetOriginResponse = Origin;
+
 /** GET /api/v2/pages/{fid} */
 export type GetPageParams = {
   fid: string;
 };
 export type GetPageBody = never;
 export type GetPageResponse = PageShown;
+
+/** GET /api/v2/humans/{pid}/access */
+export type GetPersonAccessParams = {
+  on_behalf_of?: string;
+  pid: string;
+};
+export type GetPersonAccessBody = never;
+export type GetPersonAccessResponse = TeammateAccessView;
 
 /** GET /api/v2/people/{person}/assistant */
 export type GetPersonAssistantParams = {
@@ -4816,10 +7449,19 @@ export type GetPersonAssistantResponse = PersonAssistant;
 
 /** GET /api/v2/places/{place} */
 export type GetPlaceParams = {
+  month?: string | null;
   place: string;
 };
 export type GetPlaceBody = never;
 export type GetPlaceResponse = Place;
+
+/** GET /api/v2/projects/{project_id} */
+export type GetProjectParams = {
+  project_id: string;
+  view_as?: string | null;
+};
+export type GetProjectBody = never;
+export type GetProjectResponse = ProjectOne;
 
 /** GET /public/roadmaps/{label}/tasks/{tid} */
 export type GetPublicRoadmapTaskParams = {
@@ -4831,6 +7473,14 @@ export type GetPublicRoadmapTaskParams = {
 };
 export type GetPublicRoadmapTaskBody = never;
 export type GetPublicRoadmapTaskResponse = PublicRoadmapTask;
+
+/** GET /api/v2/purchase-orders/{po_id} */
+export type GetPurchaseOrderParams = {
+  po_id: string;
+  view_as?: string | null;
+};
+export type GetPurchaseOrderBody = never;
+export type GetPurchaseOrderResponse = PurchaseOrder;
 
 /** GET /api/v2/org/order/{manager} */
 export type GetReportOrderParams = {
@@ -4844,6 +7494,37 @@ export type GetRoadmapSettingsParams = Record<string, never>;
 export type GetRoadmapSettingsBody = never;
 export type GetRoadmapSettingsResponse = unknown;
 
+/** GET /api/v2/rules/{rule_id} */
+export type GetRuleParams = {
+  rule_id: string;
+};
+export type GetRuleBody = never;
+export type GetRuleResponse = unknown;
+
+/** GET /api/v2/rules/stats */
+export type GetRuleCheckStatsParams = Record<string, never>;
+export type GetRuleCheckStatsBody = never;
+export type GetRuleCheckStatsResponse = unknown;
+
+/** GET /api/v2/rule-due/{due_id} */
+export type GetRuleDueParams = {
+  due_id: string;
+};
+export type GetRuleDueBody = never;
+export type GetRuleDueResponse = unknown;
+
+/** GET /api/v2/rule-holds/{hold_id} */
+export type GetRuleHoldParams = {
+  hold_id: string;
+};
+export type GetRuleHoldBody = never;
+export type GetRuleHoldResponse = unknown;
+
+/** GET /api/v2/rules/counts */
+export type GetRulesCountsParams = Record<string, never>;
+export type GetRulesCountsBody = never;
+export type GetRulesCountsResponse = unknown;
+
 /** GET /api/v2/screening */
 export type GetScreeningParams = Record<string, never>;
 export type GetScreeningBody = never;
@@ -4855,6 +7536,13 @@ export type GetSeatParams = {
 };
 export type GetSeatBody = never;
 export type GetSeatResponse = SeatDetail;
+
+/** GET /api/v2/seats/{seat_id}/request */
+export type GetSeatAgentParams = {
+  seat_id: string;
+};
+export type GetSeatAgentBody = never;
+export type GetSeatAgentResponse = SeatAgent;
 
 /** GET /api/v2/sleep */
 export type GetSleepWhenIdleParams = Record<string, never>;
@@ -4928,6 +7616,38 @@ export type GetTeamBudgetsParams = Record<string, never>;
 export type GetTeamBudgetsBody = never;
 export type GetTeamBudgetsResponse = TeamBudgetState;
 
+/** GET /api/v2/threads/{thread_id} */
+export type GetThreadParams = {
+  thread_id: string;
+};
+export type GetThreadBody = never;
+export type GetThreadResponse = ThreadView;
+
+/** GET /api/v2/threads/{thread_id}/bot-status */
+export type GetThreadBotStatusParams = {
+  thread_id: string;
+};
+export type GetThreadBotStatusBody = never;
+export type GetThreadBotStatusResponse = ThreadBotStatus;
+
+/** GET /api/v2/threads/home/{actor} */
+export type GetThreadHomeParams = {
+  actor: string;
+};
+export type GetThreadHomeBody = never;
+export type GetThreadHomeResponse = ThreadView;
+
+/** GET /api/v2/threads/{thread_id}/timeline */
+export type GetThreadTimelineParams = {
+  cursor?: string | null;
+  flat?: number;
+  limit?: number | null;
+  max_bytes?: number | null;
+  thread_id: string;
+};
+export type GetThreadTimelineBody = never;
+export type GetThreadTimelineResponse = ThreadTimeline;
+
 /** GET /api/v2/triggers/{trigger_id} */
 export type GetTriggerParams = {
   trigger_id: string;
@@ -4989,6 +7709,13 @@ export type GetWebhookSendResponse = unknown;
 export type GetWebhookWakeUrlParams = Record<string, never>;
 export type GetWebhookWakeUrlBody = never;
 export type GetWebhookWakeUrlResponse = WebhookWakeUrl;
+
+/** POST /api/v2/feedback */
+export type GiveFeedbackParams = {
+  "Idempotency-Key": string;
+};
+export type GiveFeedbackBody = FeedbackGive;
+export type GiveFeedbackResponse = Feedback;
 
 /** POST /api/v2/goals/{gid}/status/auto */
 export type HandBackGoalStatusParams = {
@@ -5053,6 +7780,37 @@ export type ImportMeetingBody = {
 };
 export type ImportMeetingResponse = unknown;
 
+/** POST /api/v2/readers/import */
+export type ImportReadersParams = {
+  "Idempotency-Key": string;
+};
+export type ImportReadersBody = ReaderImport;
+export type ImportReadersResponse = unknown;
+
+/** POST /api/v2/calls/{call_id}/join */
+export type JoinCallParams = {
+  "Idempotency-Key": string;
+  call_id: string;
+};
+export type JoinCallBody = Empty;
+export type JoinCallResponse = CallJoin;
+
+/** POST /api/v2/rule-holds/{hold_id}/keep */
+export type KeepRuleHoldParams = {
+  "Idempotency-Key": string;
+  hold_id: string;
+};
+export type KeepRuleHoldBody = HoldEmpty;
+export type KeepRuleHoldResponse = unknown;
+
+/** POST /api/v2/calls/{call_id}/leave */
+export type LeaveCallParams = {
+  "Idempotency-Key": string;
+  call_id: string;
+};
+export type LeaveCallBody = Empty;
+export type LeaveCallResponse = Call;
+
 /** POST /api/v2/goals/{gid}/kpis */
 export type LinkGoalKpiParams = {
   "Idempotency-Key": string;
@@ -5074,12 +7832,58 @@ export type ListAllAutomationRunsParams = {
 export type ListAllAutomationRunsBody = never;
 export type ListAllAutomationRunsResponse = AutomationOverviewRuns;
 
+/** GET /api/v2/approvals */
+export type ListApprovalsParams = {
+  before?: string | null;
+  from?: string | null;
+  limit?: number;
+  offset?: number;
+  since?: string | null;
+  status?: string;
+};
+export type ListApprovalsBody = never;
+export type ListApprovalsResponse = unknown;
+
+/** GET /api/v2/assistant/changes */
+export type ListAssistantChangesParams = {
+  before?: string | null;
+  days?: number;
+  limit?: number;
+};
+export type ListAssistantChangesBody = never;
+export type ListAssistantChangesResponse = AssistantChangeList;
+
 /** GET /api/v2/assistant/decisions */
 export type ListAssistantDecisionsParams = {
   days?: number;
 };
 export type ListAssistantDecisionsBody = never;
 export type ListAssistantDecisionsResponse = unknown;
+
+/** GET /api/v2/assistant/proposals */
+export type ListAssistantProposalsParams = {
+  owner?: string;
+  proposer?: string;
+};
+export type ListAssistantProposalsBody = never;
+export type ListAssistantProposalsResponse = unknown;
+
+/** GET /api/v2/audiences/{audience_id}/sources */
+export type ListAudienceSourcesParams = {
+  audience_id: string;
+  limit?: number;
+  offset?: number;
+};
+export type ListAudienceSourcesBody = never;
+export type ListAudienceSourcesResponse = unknown;
+
+/** GET /api/v2/audiences */
+export type ListAudiencesParams = {
+  limit?: number;
+  offset?: number;
+};
+export type ListAudiencesBody = never;
+export type ListAudiencesResponse = unknown;
 
 /** GET /api/v2/audit */
 export type ListAuditParams = {
@@ -5098,6 +7902,11 @@ export type ListAutomationRunsParams = {
 };
 export type ListAutomationRunsBody = never;
 export type ListAutomationRunsResponse = AutomationRuns;
+
+/** GET /api/v2/automations/templates */
+export type ListAutomationTemplatesParams = Record<string, never>;
+export type ListAutomationTemplatesBody = never;
+export type ListAutomationTemplatesResponse = AutomationTemplates;
 
 /** GET /api/v2/automations/{aid}/versions */
 export type ListAutomationVersionsParams = {
@@ -5149,6 +7958,15 @@ export type ListBotsParams = {
 export type ListBotsBody = never;
 export type ListBotsResponse = BotList;
 
+/** GET /api/v2/threads/{thread_id}/calls */
+export type ListCallsParams = {
+  before?: string;
+  limit?: number;
+  thread_id: string;
+};
+export type ListCallsBody = never;
+export type ListCallsResponse = CallList;
+
 /** GET /api/v2/cards */
 export type ListCardsParams = {
   cursor?: string;
@@ -5169,6 +7987,34 @@ export type ListChangelogParams = {
 };
 export type ListChangelogBody = never;
 export type ListChangelogResponse = ChangelogList;
+
+/** GET /api/v2/cloud-agents */
+export type ListCloudAgentsParams = Record<string, never>;
+export type ListCloudAgentsBody = never;
+export type ListCloudAgentsResponse = CloudAgentList;
+
+/** GET /api/v2/computers/{rid}/browser-exit/usage */
+export type ListComputerBrowserExitUsageParams = {
+  days?: number;
+  limit?: number;
+  offset?: number;
+  rid: string;
+};
+export type ListComputerBrowserExitUsageBody = never;
+export type ListComputerBrowserExitUsageResponse = BrowserExitUsage;
+
+/** GET /api/v2/computer-subscriptions */
+export type ListComputerSubscriptionsParams = Record<string, never>;
+export type ListComputerSubscriptionsBody = never;
+export type ListComputerSubscriptionsResponse = ComputerSubscriptionList;
+
+/** GET /api/v2/connections */
+export type ListConnectionsParams = {
+  cursor?: string;
+  limit?: number;
+};
+export type ListConnectionsBody = never;
+export type ListConnectionsResponse = ConnectionList;
 
 /** GET /api/v2/conversations */
 export type ListConversationsParams = {
@@ -5199,12 +8045,60 @@ export type ListDocsConversationsParams = {
 export type ListDocsConversationsBody = never;
 export type ListDocsConversationsResponse = DocsConversations;
 
+/** GET /api/v2/editions/{edition_id}/notices */
+export type ListEditionNoticesParams = {
+  edition_id: string;
+};
+export type ListEditionNoticesBody = never;
+export type ListEditionNoticesResponse = unknown;
+
+/** GET /api/v2/editions */
+export type ListEditionsParams = {
+  audience?: string | null;
+  before?: string | null;
+  limit?: number;
+  status?: string | null;
+};
+export type ListEditionsBody = never;
+export type ListEditionsResponse = unknown;
+
+/** GET /api/v2/estimates */
+export type ListEstimatesParams = {
+  cursor?: string | null;
+  customer_id?: string | null;
+  limit?: number;
+  q?: string;
+  status?: string | null;
+  view_as?: string | null;
+};
+export type ListEstimatesBody = never;
+export type ListEstimatesResponse = Estimates;
+
 /** GET /api/v2/event-types */
 export type ListEventTypesParams = {
   group?: string | null;
 };
 export type ListEventTypesBody = never;
 export type ListEventTypesResponse = EventTypeList;
+
+/** GET /api/v2/feedback/list */
+export type ListFeedbackParams = {
+  bot_id?: string | null;
+  cursor?: string | null;
+  limit?: number;
+  rating?: string | null;
+  since?: string | null;
+};
+export type ListFeedbackBody = never;
+export type ListFeedbackResponse = FeedbackPage;
+
+/** GET /api/v2/feedback */
+export type ListFeedbackMarkersParams = {
+  subject_ids?: string;
+  subject_type: string;
+};
+export type ListFeedbackMarkersBody = never;
+export type ListFeedbackMarkersResponse = FeedbackMarkers;
 
 /** GET /api/v2/files/{fid}/activity */
 export type ListFileActivityParams = {
@@ -5235,6 +8129,185 @@ export type ListFilesParams = {
 };
 export type ListFilesBody = never;
 export type ListFilesResponse = FileLibrary;
+
+/** GET /api/v2/finance/action-kinds */
+export type ListFinanceActionKindsParams = {
+  kind?: string | null;
+};
+export type ListFinanceActionKindsBody = never;
+export type ListFinanceActionKindsResponse = FinanceActionKinds;
+
+/** GET /api/v2/finance/bills */
+export type ListFinanceBillsParams = {
+  aging?: "current" | "1_30" | "31_60" | "61_90" | "over_90" | null;
+  cursor?: string | null;
+  end?: string | null;
+  late?: boolean;
+  limit?: number;
+  order?: "date" | "paid_on";
+  q?: string;
+  start?: string | null;
+  status?: string | null;
+  vendor_id?: string | null;
+  view_as?: string | null;
+};
+export type ListFinanceBillsBody = never;
+export type ListFinanceBillsResponse = FinanceBills;
+
+/** GET /api/v2/finance/budgets */
+export type ListFinanceBudgetsParams = {
+  at?: string | null;
+  include_inactive?: boolean;
+  limit?: number;
+  view_as?: string | null;
+};
+export type ListFinanceBudgetsBody = never;
+export type ListFinanceBudgetsResponse = FinanceBudgets;
+
+/** GET /api/v2/finance/cards */
+export type ListFinanceCardsParams = {
+  cursor?: string | null;
+  holder?: string | null;
+  limit?: number;
+  q?: string;
+  status?: "active" | "frozen" | "canceled" | null;
+  vendor?: string | null;
+  view_as?: string | null;
+};
+export type ListFinanceCardsBody = never;
+export type ListFinanceCardsResponse = FinanceCards;
+
+/** GET /api/v2/finance/contacts */
+export type ListFinanceContactsParams = {
+  active?: boolean | null;
+  cursor?: string | null;
+  kind?: "vendor" | "customer" | "both" | null;
+  limit?: number;
+  q?: string;
+  view_as?: string | null;
+};
+export type ListFinanceContactsBody = never;
+export type ListFinanceContactsResponse = FinanceContacts;
+
+/** GET /api/v2/finance/feed/{feed_id}/expected */
+export type ListFinanceFeedExpectedParams = {
+  feed_id: string;
+  view_as?: string | null;
+};
+export type ListFinanceFeedExpectedBody = never;
+export type ListFinanceFeedExpectedResponse = FinanceFeedExpected;
+
+/** GET /api/v2/finance/invoices */
+export type ListFinanceInvoicesParams = {
+  aging?: "current" | "1_30" | "31_60" | "61_90" | "over_90" | null;
+  cursor?: string | null;
+  customer_id?: string | null;
+  end?: string | null;
+  late?: boolean;
+  limit?: number;
+  q?: string;
+  start?: string | null;
+  status?: string | null;
+  view_as?: string | null;
+};
+export type ListFinanceInvoicesBody = never;
+export type ListFinanceInvoicesResponse = FinanceInvoices;
+
+/** GET /api/v2/finance/mercury-users */
+export type ListFinanceMercuryUsersParams = Record<string, never>;
+export type ListFinanceMercuryUsersBody = never;
+export type ListFinanceMercuryUsersResponse = FinanceMercuryUsers;
+
+/** GET /api/v2/finance/pay-from */
+export type ListFinancePayFromParams = {
+  view_as?: string | null;
+};
+export type ListFinancePayFromBody = never;
+export type ListFinancePayFromResponse = FinancePayFrom;
+
+/** GET /api/v2/finance/payments */
+export type ListFinancePaymentsParams = {
+  cursor?: string | null;
+  limit?: number;
+  status?: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "canceled" | "unknown" | null;
+  view_as?: string | null;
+};
+export type ListFinancePaymentsBody = never;
+export type ListFinancePaymentsResponse = FinancePayments;
+
+/** GET /api/v2/finance/recipients */
+export type ListFinanceRecipientsParams = Record<string, never>;
+export type ListFinanceRecipientsBody = never;
+export type ListFinanceRecipientsResponse = FinanceRecipients;
+
+/** GET /api/v2/finance/reconciliations */
+export type ListFinanceReconciliationsParams = {
+  limit?: number;
+  money_account_id?: string | null;
+  view_as?: string | null;
+};
+export type ListFinanceReconciliationsBody = never;
+export type ListFinanceReconciliationsResponse = FinanceReconciliations;
+
+/** GET /api/v2/finance/rules */
+export type ListFinanceRulesParams = {
+  external_rule_id?: string | null;
+};
+export type ListFinanceRulesBody = never;
+export type ListFinanceRulesResponse = FinanceRules;
+
+/** GET /api/v2/finance/sources */
+export type ListFinanceSourcesParams = {
+  group?: string | null;
+  view_as?: string | null;
+};
+export type ListFinanceSourcesBody = never;
+export type ListFinanceSourcesResponse = FinanceSources;
+
+/** GET /api/v2/finance/statements */
+export type ListFinanceStatementsParams = {
+  limit?: number;
+  money_account_id?: string | null;
+  view_as?: string | null;
+};
+export type ListFinanceStatementsBody = never;
+export type ListFinanceStatementsResponse = FinanceStatements;
+
+/** GET /api/v2/finance/transactions */
+export type ListFinanceTransactionsParams = {
+  account_id?: string | null;
+  cursor?: string | null;
+  end?: string | null;
+  limit?: number;
+  money_account_id?: string | null;
+  q?: string | null;
+  source?: "all" | "feed" | "entry";
+  start?: string | null;
+  status?: "new" | "matched" | "posted" | "ignored" | "pending" | "failed" | null;
+  teammates?: Array<string> | null;
+  teams?: Array<string> | null;
+  unattributed?: boolean;
+  view_as?: string | null;
+  who?: "both" | "bots" | "people";
+};
+export type ListFinanceTransactionsBody = never;
+export type ListFinanceTransactionsResponse = FinanceTransactions;
+
+/** GET /api/v2/finance/transfers */
+export type ListFinanceTransfersParams = {
+  cursor?: string | null;
+  limit?: number;
+  view_as?: string | null;
+};
+export type ListFinanceTransfersBody = never;
+export type ListFinanceTransfersResponse = FinanceTransfers;
+
+/** GET /api/v2/finance/webhook-deliveries */
+export type ListFinanceWebhookDeliveriesParams = {
+  limit?: number;
+};
+export type ListFinanceWebhookDeliveriesBody = never;
+export type ListFinanceWebhookDeliveriesResponse = FinanceWebhookDeliveries;
 
 /** GET /api/v2/goals/{gid}/checkins */
 export type ListGoalCheckinsParams = {
@@ -5314,6 +8387,26 @@ export type ListInternalDocsParams = {
 export type ListInternalDocsBody = never;
 export type ListInternalDocsResponse = InternalDocList;
 
+/** GET /api/v2/audiences/{audience_id}/invites */
+export type ListInvitesParams = {
+  audience_id: string;
+  cursor?: number;
+  limit?: number;
+};
+export type ListInvitesBody = never;
+export type ListInvitesResponse = unknown;
+
+/** GET /api/v2/items */
+export type ListItemsParams = {
+  archived?: "hide" | "only" | "all";
+  cursor?: string | null;
+  limit?: number;
+  q?: string;
+  view_as?: string | null;
+};
+export type ListItemsBody = never;
+export type ListItemsResponse = Items;
+
 /** GET /api/v2/kpis/{kid}/readings */
 export type ListKpiReadingsParams = {
   effective?: boolean;
@@ -5338,6 +8431,17 @@ export type ListLinkedDocsParams = Record<string, never>;
 export type ListLinkedDocsBody = never;
 export type ListLinkedDocsResponse = LinkedDocList;
 
+/** GET /api/v2/locations */
+export type ListLocationsParams = {
+  archived?: "hide" | "only" | "all";
+  cursor?: string | null;
+  limit?: number;
+  q?: string;
+  view_as?: string | null;
+};
+export type ListLocationsBody = never;
+export type ListLocationsResponse = Locations;
+
 /** GET /api/v2/meetings */
 export type ListMeetingsParams = {
   q?: string;
@@ -5345,6 +8449,11 @@ export type ListMeetingsParams = {
 };
 export type ListMeetingsBody = never;
 export type ListMeetingsResponse = MeetingReviewList;
+
+/** GET /api/v2/memory-tidy/cards */
+export type ListMemoryTidyCardsParams = Record<string, never>;
+export type ListMemoryTidyCardsBody = never;
+export type ListMemoryTidyCardsResponse = MemoryTidyCards;
 
 /** GET /api/v2/conversations/{cid}/messages */
 export type ListMessagesParams = {
@@ -5356,6 +8465,11 @@ export type ListMessagesParams = {
 };
 export type ListMessagesBody = never;
 export type ListMessagesResponse = MessagePage;
+
+/** GET /api/v2/model-subscriptions */
+export type ListModelSubscriptionsParams = Record<string, never>;
+export type ListModelSubscriptionsBody = never;
+export type ListModelSubscriptionsResponse = ModelSubscriptionList;
 
 /** GET /api/v2/models */
 export type ListModelsParams = Record<string, never>;
@@ -5377,6 +8491,14 @@ export type ListOrgModelsParams = Record<string, never>;
 export type ListOrgModelsBody = never;
 export type ListOrgModelsResponse = OrgModels;
 
+/** GET /api/v2/company-page/stats */
+export type ListPageStatsParams = {
+  limit?: number;
+  offset?: number;
+};
+export type ListPageStatsBody = never;
+export type ListPageStatsResponse = unknown;
+
 /** GET /api/v2/pages */
 export type ListPagesParams = {
   archived?: boolean;
@@ -5393,6 +8515,17 @@ export type ListPagesResponse = PageList;
 export type ListProfilesParams = Record<string, never>;
 export type ListProfilesBody = never;
 export type ListProfilesResponse = ProfileChoices;
+
+/** GET /api/v2/projects */
+export type ListProjectsParams = {
+  archived?: "hide" | "only" | "all";
+  cursor?: string | null;
+  limit?: number;
+  q?: string;
+  view_as?: string | null;
+};
+export type ListProjectsBody = never;
+export type ListProjectsResponse = Projects;
 
 /** GET /public/roadmaps/{label} */
 export type ListPublicRoadmapParams = {
@@ -5415,10 +8548,38 @@ export type ListPublicRoadmapCommentsParams = {
 export type ListPublicRoadmapCommentsBody = never;
 export type ListPublicRoadmapCommentsResponse = PublicRoadmapComments;
 
+/** GET /api/v2/purchase-orders */
+export type ListPurchaseOrdersParams = {
+  cursor?: string | null;
+  limit?: number;
+  q?: string;
+  status?: string | null;
+  vendor_id?: string | null;
+  view_as?: string | null;
+};
+export type ListPurchaseOrdersBody = never;
+export type ListPurchaseOrdersResponse = PurchaseOrders;
+
 /** GET /api/v2/automations/question-sets */
 export type ListQuestionSetsParams = Record<string, never>;
 export type ListQuestionSetsBody = never;
 export type ListQuestionSetsResponse = QuestionSets;
+
+/** GET /api/v2/reader-messages */
+export type ListReaderMessagesParams = {
+  cursor?: number;
+  limit?: number;
+};
+export type ListReaderMessagesBody = never;
+export type ListReaderMessagesResponse = unknown;
+
+/** GET /api/v2/readers */
+export type ListReadersParams = {
+  cursor?: number;
+  limit?: number;
+};
+export type ListReadersBody = never;
+export type ListReadersResponse = unknown;
 
 /** GET /api/v2/me/recent */
 export type ListRecentBotsParams = {
@@ -5428,10 +8589,63 @@ export type ListRecentBotsParams = {
 export type ListRecentBotsBody = never;
 export type ListRecentBotsResponse = Recent;
 
+/** GET /api/v2/feedback/recent-reasons */
+export type ListRecentFeedbackReasonsParams = Record<string, never>;
+export type ListRecentFeedbackReasonsBody = never;
+export type ListRecentFeedbackReasonsResponse = FeedbackReasons;
+
 /** GET /api/v2/repositories */
 export type ListRepositoriesParams = Record<string, never>;
 export type ListRepositoriesBody = never;
 export type ListRepositoriesResponse = RepositoryList;
+
+/** GET /api/v2/rules/due */
+export type ListRuleDueParams = {
+  cursor?: string | null;
+  limit?: number;
+  next?: string;
+  status?: string | null;
+};
+export type ListRuleDueBody = never;
+export type ListRuleDueResponse = unknown;
+
+/** GET /api/v2/rule-holds */
+export type ListRuleHoldsParams = {
+  cursor?: string | null;
+  limit?: number;
+  task?: string | null;
+  thread?: string | null;
+};
+export type ListRuleHoldsBody = never;
+export type ListRuleHoldsResponse = unknown;
+
+/** GET /api/v2/rule-sources */
+export type ListRuleSourcesParams = {
+  cursor?: string | null;
+  limit?: number;
+};
+export type ListRuleSourcesBody = never;
+export type ListRuleSourcesResponse = unknown;
+
+/** GET /api/v2/rules */
+export type ListRulesParams = {
+  bot?: string | null;
+  cursor?: string | null;
+  kind?: string | null;
+  limit?: number;
+  mine?: boolean;
+  source?: string | null;
+  status?: string | null;
+  who?: string | null;
+  with?: string | null;
+};
+export type ListRulesBody = never;
+export type ListRulesResponse = unknown;
+
+/** GET /api/v2/rules/by-teammate */
+export type ListRulesByTeammateParams = Record<string, never>;
+export type ListRulesByTeammateBody = never;
+export type ListRulesByTeammateResponse = RulesByTeammate;
 
 /** GET /api/v2/seats */
 export type ListSeatsParams = Record<string, never>;
@@ -5442,6 +8656,15 @@ export type ListSeatsResponse = SeatList;
 export type ListServiceKeysParams = Record<string, never>;
 export type ListServiceKeysBody = never;
 export type ListServiceKeysResponse = unknown;
+
+/** GET /api/v2/slack/links */
+export type ListSlackLinksParams = {
+  cursor?: string;
+  limit?: number;
+  thread?: string;
+};
+export type ListSlackLinksBody = never;
+export type ListSlackLinksResponse = SlackLinkList;
 
 /** GET /api/v2/doc-sources/{source_id}/documents */
 export type ListSourceDocumentsParams = {
@@ -5553,6 +8776,41 @@ export type ListTasksParams = {
 export type ListTasksBody = never;
 export type ListTasksResponse = TaskList;
 
+/** GET /api/v2/threads/catch-up */
+export type ListThreadCatchUpParams = {
+  cursor?: string | null;
+  limit?: number | null;
+};
+export type ListThreadCatchUpBody = never;
+export type ListThreadCatchUpResponse = ThreadCatchUp;
+
+/** GET /api/v2/threads/{thread_id}/members */
+export type ListThreadMembersParams = {
+  cursor?: string | null;
+  limit?: number | null;
+  thread_id: string;
+};
+export type ListThreadMembersBody = never;
+export type ListThreadMembersResponse = ThreadMembers;
+
+/** GET /api/v2/threads/rail */
+export type ListThreadRailParams = {
+  cursor?: string | null;
+  limit?: number | null;
+};
+export type ListThreadRailBody = never;
+export type ListThreadRailResponse = ThreadRail;
+
+/** GET /api/v2/threads */
+export type ListThreadsParams = {
+  cursor?: string | null;
+  limit?: number | null;
+  sort?: string | null;
+  with?: string | null;
+};
+export type ListThreadsBody = never;
+export type ListThreadsResponse = ThreadSidebar;
+
 /** GET /api/v2/triggers/{trigger_id}/deliveries */
 export type ListTriggerDeliveriesParams = {
   trigger_id: string;
@@ -5598,12 +8856,28 @@ export type ListWebhooksParams = {
 export type ListWebhooksBody = never;
 export type ListWebhooksResponse = WebhookList;
 
+/** POST /api/v2/feedback/{feedback_id}/rule */
+export type MakeFeedbackRuleParams = {
+  "Idempotency-Key": string;
+  feedback_id: string;
+};
+export type MakeFeedbackRuleBody = FeedbackRule;
+export type MakeFeedbackRuleResponse = FeedbackRuleMade;
+
 /** POST /api/v2/strategy-bot/decisions */
 export type MakeStrategyBotDecisionParams = {
   "Idempotency-Key": string;
 };
 export type MakeStrategyBotDecisionBody = StrategyBotDecision;
 export type MakeStrategyBotDecisionResponse = StrategyBotLogEntry;
+
+/** POST /api/v2/threads/messages/{message_id}/task */
+export type MakeTaskFromMessageParams = {
+  "Idempotency-Key": string;
+  message_id: string;
+};
+export type MakeTaskFromMessageBody = MessageTask;
+export type MakeTaskFromMessageResponse = TaskResult;
 
 /** POST /api/v2/bots/{bot}/onboarded */
 export type MarkBotOnboardedParams = {
@@ -5619,6 +8893,30 @@ export type MarkChangelogReadParams = {
 };
 export type MarkChangelogReadBody = ChangelogRead;
 export type MarkChangelogReadResponse = ChangelogReadResult;
+
+/** POST /api/v2/rule-due/{due_id}/satisfied */
+export type MarkRuleDueSatisfiedParams = {
+  "Idempotency-Key": string;
+  due_id: string;
+};
+export type MarkRuleDueSatisfiedBody = DueSatisfied;
+export type MarkRuleDueSatisfiedResponse = unknown;
+
+/** POST /api/v2/threads/{thread_id}/read-all */
+export type MarkThreadAndSubthreadsReadParams = {
+  "Idempotency-Key": string;
+  thread_id: string;
+};
+export type MarkThreadAndSubthreadsReadBody = never;
+export type MarkThreadAndSubthreadsReadResponse = ThreadReadAll;
+
+/** POST /api/v2/threads/{thread_id}/read */
+export type MarkThreadReadParams = {
+  "Idempotency-Key": string;
+  thread_id: string;
+};
+export type MarkThreadReadBody = ReadMark;
+export type MarkThreadReadResponse = ThreadRead;
 
 /** POST /api/v2/updates/read */
 export type MarkUpdatesReadParams = {
@@ -5643,13 +8941,21 @@ export type ModerateTaskCommentParams = {
 export type ModerateTaskCommentBody = Moderate;
 export type ModerateTaskCommentResponse = unknown;
 
-/** POST /api/v2/seats/{seat_id}/open */
-export type OpenSeatParams = {
+/** POST /api/v2/threads/{thread_id}/open-earlier */
+export type OpenEarlierMessagesParams = {
   "Idempotency-Key": string;
-  seat_id: string;
+  thread_id: string;
 };
-export type OpenSeatBody = Empty;
-export type OpenSeatResponse = SeatDetail;
+export type OpenEarlierMessagesBody = never;
+export type OpenEarlierMessagesResponse = ThreadEarlier;
+
+/** GET /api/v2/threads/dm */
+export type OpenThreadDmParams = {
+  create?: boolean;
+  with: string;
+};
+export type OpenThreadDmBody = never;
+export type OpenThreadDmResponse = ThreadView;
 
 /** POST /api/v2/places/{place}/order */
 export type OrderPlaceParams = {
@@ -5659,6 +8965,14 @@ export type OrderPlaceParams = {
 export type OrderPlaceBody = PlaceOrder;
 export type OrderPlaceResponse = Place;
 
+/** POST /api/v2/editions/{edition_id}/override */
+export type OverrideEditionParams = {
+  "Idempotency-Key": string;
+  edition_id: string;
+};
+export type OverrideEditionBody = Note;
+export type OverrideEditionResponse = unknown;
+
 /** POST /api/v2/webhooks/{hook_id}/pause */
 export type PauseWebhookParams = {
   "Idempotency-Key": string;
@@ -5667,10 +8981,25 @@ export type PauseWebhookParams = {
 export type PauseWebhookBody = Pause;
 export type PauseWebhookResponse = WebhookChanged;
 
+/** PUT /api/v2/threads/{thread_id}/pin */
+export type PinThreadParams = {
+  thread_id: string;
+};
+export type PinThreadBody = never;
+export type PinThreadResponse = ThreadView;
+
 /** GET /api/v2/meetings/granola/connect/status */
 export type PollGranolaSignInParams = Record<string, never>;
 export type PollGranolaSignInBody = never;
 export type PollGranolaSignInResponse = GranolaSignIn;
+
+/** POST /api/v2/threads/{thread_id}/messages */
+export type PostThreadMessageParams = {
+  "Idempotency-Key": string;
+  thread_id: string;
+};
+export type PostThreadMessageBody = ThreadPost;
+export type PostThreadMessageResponse = ThreadMessage;
 
 /** GET /api/v2/github/product-repos/preview */
 export type PreviewProductRepositoryParams = {
@@ -5693,6 +9022,14 @@ export type ProposeAssistantActionParams = {
 };
 export type ProposeAssistantActionBody = AssistantAction;
 export type ProposeAssistantActionResponse = AssistantActionResult;
+
+/** POST /api/v2/editions/{edition_id}/publish */
+export type PublishEditionParams = {
+  "Idempotency-Key": string;
+  edition_id: string;
+};
+export type PublishEditionBody = Publish;
+export type PublishEditionResponse = unknown;
 
 /** POST /api/v2/pages */
 export type PublishPageParams = {
@@ -5734,6 +9071,14 @@ export type RankRoadmapTasksParams = {
 export type RankRoadmapTasksBody = never;
 export type RankRoadmapTasksResponse = unknown;
 
+/** PUT /api/v2/messages/{message_id}/reactions/{emoji} */
+export type ReactToMessageParams = {
+  emoji: string;
+  message_id: string;
+};
+export type ReactToMessageBody = never;
+export type ReactToMessageResponse = ThreadReactions;
+
 /** POST /api/v2/assistant/read-back */
 export type ReadBackAssistantApprovalsParams = {
   "Idempotency-Key": string;
@@ -5763,6 +9108,13 @@ export type ReadInboundMessageParams = {
 };
 export type ReadInboundMessageBody = never;
 export type ReadInboundMessageResponse = unknown;
+
+/** POST /api/v2/rules/read */
+export type ReadRuleDocumentParams = {
+  "Idempotency-Key": string;
+};
+export type ReadRuleDocumentBody = RuleRead;
+export type ReadRuleDocumentResponse = unknown;
 
 /** POST /api/v2/health-monitor/local-findings */
 export type RecordLocalHealthFindingParams = {
@@ -5813,6 +9165,14 @@ export type RedoUpdatesParams = {
 };
 export type RedoUpdatesBody = UpdateRedo;
 export type RedoUpdatesResponse = unknown;
+
+/** POST /api/v2/calls/{call_id}/token */
+export type RefreshCallTokenParams = {
+  "Idempotency-Key"?: string;
+  call_id: string;
+};
+export type RefreshCallTokenBody = never;
+export type RefreshCallTokenResponse = CallToken;
 
 /** POST /api/v2/doc-sources/{source_id}/refresh */
 export type RefreshDocSourceParams = {
@@ -5875,6 +9235,15 @@ export type ReleaseInboundInboxParams = {
 export type ReleaseInboundInboxBody = Release;
 export type ReleaseInboundInboxResponse = unknown;
 
+/** DELETE /api/v2/audiences/{audience_id}/sources/{source_id} */
+export type RemoveAudienceSourceParams = {
+  "Idempotency-Key": string;
+  audience_id: string;
+  source_id: string;
+};
+export type RemoveAudienceSourceBody = never;
+export type RemoveAudienceSourceResponse = unknown;
+
 /** DELETE /api/v2/bots/{bot}/tools/{tool_id} */
 export type RemoveBotToolParams = {
   "Idempotency-Key": string;
@@ -5900,6 +9269,30 @@ export type RemoveCardParams = {
 };
 export type RemoveCardBody = never;
 export type RemoveCardResponse = unknown;
+
+/** DELETE /api/v2/company-page/logo */
+export type RemoveCompanyLogoParams = {
+  "Idempotency-Key": string;
+};
+export type RemoveCompanyLogoBody = never;
+export type RemoveCompanyLogoResponse = unknown;
+
+/** DELETE /api/v2/feedback/{feedback_id} */
+export type RemoveFeedbackParams = {
+  "Idempotency-Key": string;
+  feedback_id: string;
+};
+export type RemoveFeedbackBody = never;
+export type RemoveFeedbackResponse = FeedbackRemoved;
+
+/** DELETE /api/v2/model-subscriptions/{sid} */
+export type RemoveModelSubscriptionParams = {
+  "Idempotency-Key": string;
+  confirm?: boolean;
+  sid: string;
+};
+export type RemoveModelSubscriptionBody = never;
+export type RemoveModelSubscriptionResponse = ModelSubscriptionDeleted;
 
 /** DELETE /api/v2/humans/{pid} */
 export type RemovePersonParams = {
@@ -5927,6 +9320,22 @@ export type RemovePublicRoadmapRequesterParams = {
 export type RemovePublicRoadmapRequesterBody = never;
 export type RemovePublicRoadmapRequesterResponse = unknown;
 
+/** DELETE /api/v2/readers/{reader_id} */
+export type RemoveReaderParams = {
+  "Idempotency-Key": string;
+  reader_id: string;
+};
+export type RemoveReaderBody = Empty | null;
+export type RemoveReaderResponse = unknown;
+
+/** POST /api/v2/rule-due/{due_id}/remove */
+export type RemoveRuleDueParams = {
+  "Idempotency-Key": string;
+  due_id: string;
+};
+export type RemoveRuleDueBody = DueSatisfied;
+export type RemoveRuleDueResponse = unknown;
+
 /** DELETE /api/v2/task-caps */
 export type RemoveTaskCapParams = {
   "Idempotency-Key": string;
@@ -5935,6 +9344,23 @@ export type RemoveTaskCapParams = {
 };
 export type RemoveTaskCapBody = never;
 export type RemoveTaskCapResponse = TaskCapWrite;
+
+/** DELETE /api/v2/threads/{thread_id}/members/{actor} */
+export type RemoveThreadMemberParams = {
+  "Idempotency-Key": string;
+  actor: string;
+  thread_id: string;
+};
+export type RemoveThreadMemberBody = never;
+export type RemoveThreadMemberResponse = ThreadMemberChange;
+
+/** POST /api/v2/computers/{rid}/label */
+export type RenameComputerParams = {
+  "Idempotency-Key": string;
+  rid: string;
+};
+export type RenameComputerBody = RunnerLabel;
+export type RenameComputerResponse = unknown;
 
 /** PUT /api/v2/subscriptions/name */
 export type RenameSubscriptionParams = Record<string, never>;
@@ -6005,6 +9431,37 @@ export type RequestApprovalParams = {
 export type RequestApprovalBody = ApprovalCreate;
 export type RequestApprovalResponse = ApprovalRequested;
 
+/** POST /api/v2/audiences/{audience_id}/stats/approval */
+export type RequestBoardApprovalParams = {
+  "Idempotency-Key": string;
+  audience_id: string;
+};
+export type RequestBoardApprovalBody = Empty;
+export type RequestBoardApprovalResponse = unknown;
+
+/** POST /api/v2/cloud-agents/{agent_id}/request */
+export type RequestCloudAgentParams = {
+  "Idempotency-Key": string;
+  agent_id: string;
+};
+export type RequestCloudAgentBody = CloudAgentRequest;
+export type RequestCloudAgentResponse = Seat;
+
+/** POST /api/v2/editions/{edition_id}/approval */
+export type RequestEditionApprovalParams = {
+  "Idempotency-Key": string;
+  edition_id: string;
+};
+export type RequestEditionApprovalBody = Empty;
+export type RequestEditionApprovalResponse = unknown;
+
+/** POST /api/v2/finance/actions */
+export type RequestFinanceActionParams = {
+  "Idempotency-Key": string;
+};
+export type RequestFinanceActionBody = FinanceActionRequest;
+export type RequestFinanceActionResponse = FinanceAction;
+
 /** POST /api/v2/inbound/phone-requests */
 export type RequestInboundPhoneParams = {
   "Idempotency-Key": string;
@@ -6028,6 +9485,21 @@ export type RequestPublicRoadmapTaskParams = {
 export type RequestPublicRoadmapTaskBody = PublicRequester;
 export type RequestPublicRoadmapTaskResponse = unknown;
 
+/** POST /api/v2/seats/{seat_id}/request-agent */
+export type RequestSeatAgentParams = {
+  "Idempotency-Key": string;
+  seat_id: string;
+};
+export type RequestSeatAgentBody = SeatAgentRequest;
+export type RequestSeatAgentResponse = Seat;
+
+/** POST /api/v2/slack/links */
+export type RequestSlackLinkParams = {
+  "Idempotency-Key": string;
+};
+export type RequestSlackLinkBody = LinkRequest;
+export type RequestSlackLinkResponse = SlackLink;
+
 /** POST /api/v2/tasks/{tid}/comments/{mid}/resolve */
 export type ResolveTaskQuestionParams = {
   "Idempotency-Key": string;
@@ -6036,6 +9508,14 @@ export type ResolveTaskQuestionParams = {
 };
 export type ResolveTaskQuestionBody = TaskAskResolve;
 export type ResolveTaskQuestionResponse = CommentResult;
+
+/** POST /api/v2/assistant/changes/{cid}/restore */
+export type RestoreAssistantChangeParams = {
+  "Idempotency-Key": string;
+  cid: string;
+};
+export type RestoreAssistantChangeBody = Empty;
+export type RestoreAssistantChangeResponse = AssistantChangeResult;
 
 /** POST /api/v2/automations/{aid}/versions/{n}/restore */
 export type RestoreAutomationVersionParams = {
@@ -6070,6 +9550,14 @@ export type RestoreTaskParams = {
 export type RestoreTaskBody = Empty;
 export type RestoreTaskResponse = unknown;
 
+/** POST /api/v2/slack/links/{link_id}/resume */
+export type ResumeSlackLinkParams = {
+  "Idempotency-Key": string;
+  link_id: string;
+};
+export type ResumeSlackLinkBody = never;
+export type ResumeSlackLinkResponse = SlackLink;
+
 /** POST /api/v2/webhooks/{hook_id}/resume */
 export type ResumeWebhookParams = {
   "Idempotency-Key": string;
@@ -6077,6 +9565,30 @@ export type ResumeWebhookParams = {
 };
 export type ResumeWebhookBody = Empty;
 export type ResumeWebhookResponse = WebhookChanged;
+
+/** POST /api/v2/rules/{rule_id}/retire */
+export type RetireRuleParams = {
+  "Idempotency-Key": string;
+  rule_id: string;
+};
+export type RetireRuleBody = RuleDecide;
+export type RetireRuleResponse = unknown;
+
+/** POST /api/v2/editions/{edition_id}/retract */
+export type RetractEditionParams = {
+  "Idempotency-Key": string;
+  edition_id: string;
+};
+export type RetractEditionBody = Note;
+export type RetractEditionResponse = unknown;
+
+/** POST /api/v2/calls/{call_id}/action-items/retry */
+export type RetryCallActionItemsParams = {
+  "Idempotency-Key": string;
+  call_id: string;
+};
+export type RetryCallActionItemsBody = Empty;
+export type RetryCallActionItemsResponse = Call;
 
 /** POST /api/v2/webhooks/{hook_id}/sends/{send_id}/retry */
 export type RetryWebhookSendParams = {
@@ -6101,6 +9613,15 @@ export type ReviewMeetingsParams = {
 };
 export type ReviewMeetingsBody = ReviewMany;
 export type ReviewMeetingsResponse = MeetingReviewList;
+
+/** DELETE /api/v2/audiences/{audience_id}/invites/{invite_id} */
+export type RevokeInviteParams = {
+  "Idempotency-Key": string;
+  audience_id: string;
+  invite_id: string;
+};
+export type RevokeInviteBody = Empty | null;
+export type RevokeInviteResponse = unknown;
 
 /** POST /api/v2/me/tokens/{token_id}/revoke */
 export type RevokeMyTokenParams = {
@@ -6181,7 +9702,7 @@ export type SaveSystemRoutineResponse = SystemRoutineUpdate;
 export type SearchDocsParams = {
   limit?: number;
   q: string;
-  source?: "all" | "docs" | "market";
+  source?: "all" | "docs" | "market" | "threads";
 };
 export type SearchDocsBody = never;
 export type SearchDocsResponse = DocSearch;
@@ -6193,6 +9714,28 @@ export type SearchFilesParams = {
 };
 export type SearchFilesBody = never;
 export type SearchFilesResponse = FileSearch;
+
+/** GET /api/v2/finance/search */
+export type SearchFinanceParams = {
+  account_id?: string | null;
+  active?: boolean | null;
+  aging?: "current" | "1_30" | "31_60" | "61_90" | "over_90" | null;
+  contact_id?: string | null;
+  contact_kind?: "vendor" | "customer" | "both" | null;
+  cursor?: string | null;
+  end?: string | null;
+  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project" | "po" | "estimate" | "account" | null;
+  limit?: number;
+  money_account_id?: string | null;
+  q?: string;
+  rule_kind?: "gate" | "posting" | null;
+  start?: string | null;
+  status?: string | null;
+  vendor?: string | null;
+  view_as?: string | null;
+};
+export type SearchFinanceBody = never;
+export type SearchFinanceResponse = FinanceSearch;
 
 /** GET /api/v2/docs/search */
 export type SearchInternalAndLinkedDocsParams = {
@@ -6216,6 +9759,15 @@ export type SearchMeetingsParams = {
 export type SearchMeetingsBody = never;
 export type SearchMeetingsResponse = MeetingSearch;
 
+/** GET /api/v2/threads/search */
+export type SearchThreadsParams = {
+  before?: string | null;
+  limit?: number | null;
+  q?: string;
+};
+export type SearchThreadsBody = never;
+export type SearchThreadsResponse = ThreadSearch;
+
 /** POST /api/v2/assistant/messages */
 export type SendAssistantMessageParams = {
   "Idempotency-Key": string;
@@ -6229,6 +9781,14 @@ export type SendMessageParams = {
 };
 export type SendMessageBody = MessageCreate;
 export type SendMessageResponse = Message;
+
+/** POST /api/v2/rule-holds/{hold_id}/send */
+export type SendRuleHoldParams = {
+  "Idempotency-Key": string;
+  hold_id: string;
+};
+export type SendRuleHoldBody = HoldSend;
+export type SendRuleHoldResponse = unknown;
 
 /** POST /api/v2/webhooks/{hook_id}/send */
 export type SendWebhookParams = {
@@ -6253,12 +9813,27 @@ export type SetAssistantSettingsParams = {
 export type SetAssistantSettingsBody = AssistantSettings;
 export type SetAssistantSettingsResponse = unknown;
 
+/** PUT /api/v2/audiences/{audience_id}/disclosure */
+export type SetAudienceDisclosureParams = {
+  audience_id: string;
+};
+export type SetAudienceDisclosureBody = Rules;
+export type SetAudienceDisclosureResponse = unknown;
+
 /** PUT /api/v2/bots/{bot}/access */
 export type SetBotAccessParams = {
   bot: string;
 };
 export type SetBotAccessBody = BotAccess;
 export type SetBotAccessResponse = BotAccessView;
+
+/** POST /api/v2/bots/{bot}/browser-exit */
+export type SetBotBrowserExitParams = {
+  "Idempotency-Key": string;
+  bot: string;
+};
+export type SetBotBrowserExitBody = BotBrowserExit;
+export type SetBotBrowserExitResponse = BotBrowserExitView;
 
 /** POST /api/v2/bots/{bot}/budget */
 export type SetBotBudgetParams = {
@@ -6314,6 +9889,26 @@ export type SetChatGoalParams = {
 export type SetChatGoalBody = GoalAction;
 export type SetChatGoalResponse = ChatGoalResult;
 
+/** POST /api/v2/company-page/logo */
+export type SetCompanyLogoParams = {
+  "Idempotency-Key": string;
+};
+export type SetCompanyLogoBody = FormData | Blob;
+export type SetCompanyLogoResponse = unknown;
+
+/** POST /api/v2/computers/{rid}/browser-exit */
+export type SetComputerBrowserExitParams = {
+  "Idempotency-Key": string;
+  rid: string;
+};
+export type SetComputerBrowserExitBody = BrowserExitPolicy;
+export type SetComputerBrowserExitResponse = unknown;
+
+/** PUT /api/v2/computer-subscriptions */
+export type SetComputerSubscriptionParams = Record<string, never>;
+export type SetComputerSubscriptionBody = ComputerSubscription;
+export type SetComputerSubscriptionResponse = ComputerSubscriptionResult;
+
 /** POST /api/v2/computers/{rid}/turns-at-once */
 export type SetComputerTurnsAtOnceParams = {
   "Idempotency-Key": string;
@@ -6328,6 +9923,11 @@ export type SetExtraRepositoriesParams = {
 };
 export type SetExtraRepositoriesBody = ExtraRepos;
 export type SetExtraRepositoriesResponse = unknown;
+
+/** PUT /api/v2/finance/bills-address */
+export type SetFinanceBillsAddressParams = Record<string, never>;
+export type SetFinanceBillsAddressBody = BillsAddress;
+export type SetFinanceBillsAddressResponse = FinanceBillsAddress;
 
 /** POST /api/v2/goals/{gid}/kpis/{kid} */
 export type SetGoalKpiTargetParams = {
@@ -6354,12 +9954,26 @@ export type SetGoalWhyParams = {
 export type SetGoalWhyBody = GoalWhy;
 export type SetGoalWhyResponse = GoalResult;
 
+/** PUT /api/v2/groups/{gid}/access */
+export type SetGroupAccessParams = {
+  gid: string;
+};
+export type SetGroupAccessBody = TeammateAccess;
+export type SetGroupAccessResponse = TeammateAccessView;
+
 /** PUT /api/v2/usage/pools/groups/{group} */
 export type SetGroupUsageLimitParams = {
   group: string;
 };
 export type SetGroupUsageLimitBody = UsageLimit;
 export type SetGroupUsageLimitResponse = UsagePoolLimit;
+
+/** PUT /api/v2/inbound/inboxes/{ident}/audience */
+export type SetInboundInboxAudienceParams = {
+  ident: string;
+};
+export type SetInboundInboxAudienceBody = InboxAudience;
+export type SetInboundInboxAudienceResponse = InboundInbox;
 
 /** PATCH /api/v2/inboxes/{inbox} */
 export type SetInboxSendParams = {
@@ -6383,6 +9997,13 @@ export type SetMeetingReviewSettingsParams = {
 };
 export type SetMeetingReviewSettingsBody = ReviewSettings;
 export type SetMeetingReviewSettingsResponse = MeetingReviewPreferences;
+
+/** PUT /api/v2/humans/{pid}/access */
+export type SetPersonAccessParams = {
+  pid: string;
+};
+export type SetPersonAccessBody = TeammateAccess;
+export type SetPersonAccessResponse = TeammateAccessView;
 
 /** PUT /api/v2/org/order/{manager} */
 export type SetReportOrderParams = {
@@ -6433,6 +10054,14 @@ export type SetStrategyBotLevelResponse = StrategyBotView;
 export type SetTaskCapParams = Record<string, never>;
 export type SetTaskCapBody = TaskCap;
 export type SetTaskCapResponse = TaskCapWrite;
+
+/** POST /api/v2/tasks/{tid}/check-back */
+export type SetTaskCheckBackParams = {
+  "Idempotency-Key": string;
+  tid: string;
+};
+export type SetTaskCheckBackBody = TaskCheckBack;
+export type SetTaskCheckBackResponse = TaskResult;
 
 /** POST /api/v2/tasks/{tid}/model */
 export type SetTaskModelParams = {
@@ -6494,6 +10123,14 @@ export type SignTriggerParams = {
 export type SignTriggerBody = TriggerSigning;
 export type SignTriggerResponse = unknown;
 
+/** POST /api/v2/rules/{rule_id}/skip */
+export type SkipRuleParams = {
+  "Idempotency-Key": string;
+  rule_id: string;
+};
+export type SkipRuleBody = RuleDecide;
+export type SkipRuleResponse = unknown;
+
 /** POST /api/v2/tasks/{tid}/snooze */
 export type SnoozeTaskParams = {
   "Idempotency-Key": string;
@@ -6501,6 +10138,22 @@ export type SnoozeTaskParams = {
 };
 export type SnoozeTaskBody = TaskSnooze;
 export type SnoozeTaskResponse = TaskResult;
+
+/** POST /api/v2/bots/{bot}/dream */
+export type StartBotDreamParams = {
+  "Idempotency-Key": string;
+  bot: string;
+};
+export type StartBotDreamBody = Empty;
+export type StartBotDreamResponse = BotDreamView;
+
+/** POST /api/v2/threads/{thread_id}/calls */
+export type StartCallParams = {
+  "Idempotency-Key": string;
+  thread_id: string;
+};
+export type StartCallBody = StartCall;
+export type StartCallResponse = Call;
 
 /** POST /api/v2/chat/{bot}/new */
 export type StartNewChatParams = {
@@ -6528,6 +10181,7 @@ export type StreamEventsParams = {
   needs?: string | null;
   party?: string | null;
   task?: string | null;
+  thread?: string | null;
   topics?: string | null;
 };
 export type StreamEventsBody = never;
@@ -6628,6 +10282,14 @@ export type UndoStrategyBotDecisionParams = {
 export type UndoStrategyBotDecisionBody = Empty;
 export type UndoStrategyBotDecisionResponse = StrategyBotLogEntry;
 
+/** DELETE /api/v2/threads/{thread_id}/follow */
+export type UnfollowThreadParams = {
+  "Idempotency-Key": string;
+  thread_id: string;
+};
+export type UnfollowThreadBody = never;
+export type UnfollowThreadResponse = ThreadFollow;
+
 /** POST /api/v2/goals/{gid}/kpis/{kid}/unlink */
 export type UnlinkGoalKpiParams = {
   "Idempotency-Key": string;
@@ -6637,6 +10299,31 @@ export type UnlinkGoalKpiParams = {
 export type UnlinkGoalKpiBody = Empty;
 export type UnlinkGoalKpiResponse = GoalResult;
 
+/** DELETE /api/v2/slack/links/{link_id} */
+export type UnlinkSlackLinkParams = {
+  "Idempotency-Key": string;
+  link_id: string;
+};
+export type UnlinkSlackLinkBody = never;
+export type UnlinkSlackLinkResponse = SlackLink;
+
+/** DELETE /api/v2/threads/{thread_id}/pin */
+export type UnpinThreadParams = {
+  "Idempotency-Key": string;
+  thread_id: string;
+};
+export type UnpinThreadBody = never;
+export type UnpinThreadResponse = ThreadView;
+
+/** DELETE /api/v2/messages/{message_id}/reactions/{emoji} */
+export type UnreactToMessageParams = {
+  "Idempotency-Key": string;
+  emoji: string;
+  message_id: string;
+};
+export type UnreactToMessageBody = never;
+export type UnreactToMessageResponse = ThreadReactions;
+
 /** POST /api/v2/tasks/{tid}/unsnooze */
 export type UnsnoozeTaskParams = {
   "Idempotency-Key": string;
@@ -6644,6 +10331,14 @@ export type UnsnoozeTaskParams = {
 };
 export type UnsnoozeTaskBody = Empty;
 export type UnsnoozeTaskResponse = TaskResult;
+
+/** PATCH /api/v2/audiences/{audience_id} */
+export type UpdateAudienceParams = {
+  "Idempotency-Key": string;
+  audience_id: string;
+};
+export type UpdateAudienceBody = AudiencePatch;
+export type UpdateAudienceResponse = unknown;
 
 /** PATCH /api/v2/automations/{aid} */
 export type UpdateAutomationParams = {
@@ -6677,6 +10372,13 @@ export type UpdateCompanyParams = {
 export type UpdateCompanyBody = CompanyUpdate;
 export type UpdateCompanyResponse = CompanyResult;
 
+/** PATCH /api/v2/company-page */
+export type UpdateCompanyPageParams = {
+  "Idempotency-Key": string;
+};
+export type UpdateCompanyPageBody = PageSettings;
+export type UpdateCompanyPageResponse = unknown;
+
 /** PATCH /api/v2/doc-sources/{source_id} */
 export type UpdateDocSourceParams = {
   "Idempotency-Key": string;
@@ -6684,6 +10386,14 @@ export type UpdateDocSourceParams = {
 };
 export type UpdateDocSourceBody = SourceEdit;
 export type UpdateDocSourceResponse = unknown;
+
+/** PATCH /api/v2/editions/{edition_id} */
+export type UpdateEditionParams = {
+  "Idempotency-Key": string;
+  edition_id: string;
+};
+export type UpdateEditionBody = EditionBody;
+export type UpdateEditionResponse = unknown;
 
 /** POST /api/v2/goals/{gid} */
 export type UpdateGoalParams = {
@@ -6725,6 +10435,14 @@ export type UpdateLinkedDocParams = {
 export type UpdateLinkedDocBody = LinkEdit;
 export type UpdateLinkedDocResponse = LinkedDocResult;
 
+/** PATCH /api/v2/company-page/stats/{stat_id} */
+export type UpdatePageStatParams = {
+  "Idempotency-Key": string;
+  stat_id: string;
+};
+export type UpdatePageStatBody = StatPatch;
+export type UpdatePageStatResponse = unknown;
+
 /** POST /api/v2/humans/{pid} */
 export type UpdatePersonParams = {
   "Idempotency-Key": string;
@@ -6741,6 +10459,14 @@ export type UpdatePinParams = {
 export type UpdatePinBody = PinEdit;
 export type UpdatePinResponse = Place;
 
+/** PATCH /api/v2/readers/{reader_id} */
+export type UpdateReaderParams = {
+  "Idempotency-Key": string;
+  reader_id: string;
+};
+export type UpdateReaderBody = ReaderChange;
+export type UpdateReaderResponse = unknown;
+
 /** PUT /api/v2/repositories/{owner}/{repo} */
 export type UpdateRepositoryParams = {
   owner: string;
@@ -6748,6 +10474,22 @@ export type UpdateRepositoryParams = {
 };
 export type UpdateRepositoryBody = RepoUpdate;
 export type UpdateRepositoryResponse = unknown;
+
+/** POST /api/v2/rules/{rule_id} */
+export type UpdateRuleParams = {
+  "Idempotency-Key": string;
+  rule_id: string;
+};
+export type UpdateRuleBody = RuleEdit;
+export type UpdateRuleResponse = unknown;
+
+/** POST /api/v2/rule-due/{due_id} */
+export type UpdateRuleDueParams = {
+  "Idempotency-Key": string;
+  due_id: string;
+};
+export type UpdateRuleDueBody = DueEdit;
+export type UpdateRuleDueResponse = unknown;
 
 /** PATCH /api/v2/seats/{seat_id} */
 export type UpdateSeatParams = {
@@ -6803,6 +10545,14 @@ export type UpdateTaskTypeParams = {
 export type UpdateTaskTypeBody = TaskTypeUpdate;
 export type UpdateTaskTypeResponse = TaskTypeResult;
 
+/** PATCH /api/v2/threads/{thread_id} */
+export type UpdateThreadParams = {
+  "Idempotency-Key": string;
+  thread_id: string;
+};
+export type UpdateThreadBody = ThreadPatch;
+export type UpdateThreadResponse = ThreadView;
+
 /** POST /api/v2/triggers/{trigger_id} */
 export type UpdateTriggerParams = {
   "Idempotency-Key": string;
@@ -6833,6 +10583,23 @@ export type UploadBotFileBody = {
 };
 export type UploadBotFileResponse = BotFileResult;
 
+/** POST /api/v2/uploads/threads/{thread_id}/messages */
+export type UploadThreadMessageParams = {
+  "Idempotency-Key": string;
+  thread_id: string;
+};
+export type UploadThreadMessageBody = {
+  defer_for?: string | null;
+  delivery?: "steer" | "queue" | "defer" | null;
+  in_reply_to?: string | null;
+  kind?: string;
+  parent_message_id?: string | null;
+  text?: string;
+  titles?: Array<string>;
+  to?: string | null;
+};
+export type UploadThreadMessageResponse = ThreadUploaded;
+
 /** POST /api/v2/inbound/tasks */
 export type UpsertInboundTaskParams = {
   "Idempotency-Key"?: string;
@@ -6846,3 +10613,19 @@ export type WaitInboundMessagesParams = {
 };
 export type WaitInboundMessagesBody = Wait;
 export type WaitInboundMessagesResponse = InboundMessages;
+
+/** POST /api/v2/assistant/actions/{aid}/withdraw */
+export type WithdrawAssistantActionParams = {
+  "Idempotency-Key": string;
+  aid: string;
+};
+export type WithdrawAssistantActionBody = AssistantWithdraw;
+export type WithdrawAssistantActionResponse = AssistantActionResult;
+
+/** POST /api/v2/rule-holds/{hold_id}/withdraw */
+export type WithdrawRuleHoldParams = {
+  "Idempotency-Key": string;
+  hold_id: string;
+};
+export type WithdrawRuleHoldBody = HoldEmpty;
+export type WithdrawRuleHoldResponse = unknown;

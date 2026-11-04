@@ -2,15 +2,19 @@
 
 Run this before the weekly review (above Passive), and when the owner asks. Read `hub goal list --all` and `hub proposal list`.
 
+Inputs: the live goals, the pending proposals, the rejected proposals (`hub proposal list --status rejected`), and `hub kpi list --unlinked`.
+
 For each live goal:
 - **Vague**: no way to tell whether it happened ("improve the customer experience"). Propose clearer words
   (`goal_wording`) that a human can confirm with one click, keeping their meaning. If you cannot tell what they
   meant, flag it as `vague` instead.
 - **Duplicate**: two goals say the same thing under different owners or words. Flag it on the newer one as
   `duplicate`, and name the other goal in the note.
-- **Unmeasured**: a goal with no KPI and no check-in in 30 days. Propose a measure (`goal_kpi`): an existing KPI
-  from `hub kpi list --unlinked` when one fits, else a new one with a plain definition, a cadence and a source.
-  Only propose a target when a number is stated in the goal's own words; never invent one.
+- **Optional measures**: a goal may have no KPI, number or date. You may suggest a measure once; the owner may
+  turn it down. Never warn, flag or remind the owner merely because any of these is absent, including after
+  30 days. Read rejected suggestions and their reasons before proposing, as below. A target must come from the
+  owner's words; never invent a number or date. File a proposal card;
+  never create or edit a goal or set its target directly in this unattended pass.
 
 - **Not tied to a bet**: a live goal with no `bet_id` while the strategy has active bets (`hub strategy show`).
   When one bet plainly fits, propose the link: `goal_wording` with `{"bet_id": "<id>"}` and a reason naming the
@@ -38,3 +42,5 @@ not edit a goal, and `playbooks/README.md` has the payload shapes.
 empty and that has no pending `goal_why`, propose one line saying how the goal serves the vision, in the company's
 own words where it has them: `goal_why` with `{"why": "..."}` and a one-sentence reason. Never write a goal's Why
 yourself; the owner accepts, edits or writes their own.
+
+**Done when:** every live goal has been read, each problem has one pending proposal or a flag, and the rejected suggestions were read before any was filed.

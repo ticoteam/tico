@@ -5,6 +5,7 @@ from pathlib import Path
 from backend.store import H, encode
 from backend.tests.test_api import api, as_member, assign, get, post, runner  # noqa: F401
 from backend.tests.test_mail_api import put_mail, seed_org
+from backend import bot_settings as BS
 
 
 def setup_sources(api, tmp_path):
@@ -28,14 +29,13 @@ def setup_sources(api, tmp_path):
              labels=["INBOX", "hub/triaged/inbox", "hub/needs-owner"],
              rule_hits=[{"id": "needs-human", "actions": {"label": "hub/needs-owner"}}])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'",
-                  (encode({"access": [{"service": "gmail", "identity": "ana@acme.example"}]}),))
+        BS.write(c, 'cpo', {'access': [{'service': 'gmail', 'identity': 'ana@acme.example'}]})
         c.execute("INSERT INTO registry_metadata VALUES('slack_workspace_url',?)",
                   (encode("https://acme.slack.com/"),))
         c.execute("INSERT INTO mail_agent_instructions VALUES(?,?,?,?)",
                   ("inbox", "# Ana Inbox\n\nTriage incoming mail.", "runner-1", H.now()))
         c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,reply_ts,ts,"
-                  "user_id,event_type,text,received,state,author,author_name,updated) "
+                  "user_id,event_type,text,received_at,state,author,author_name,updated_at) "
                   "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   ("E1", "T1", "CCHANNEL1", "channel", "1789800000.000001", "",
                    "1789800000.000001", "U1", "message", "Feature shipped for customers",

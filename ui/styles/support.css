@@ -1,91 +1,82 @@
-/* ui/styles/support.css — the Support pop-up (ui/support.js) and Report this.
+/* ui/styles/support.css — the Tico team chat (ui/support.js), its ? beside Search, and Report this.
    The cascade runs in the order index.html links these files; keep rules in order. */
 #support-access-banner [data-access-left]{color:inherit;text-decoration:none}
 #support-access-banner [data-access-left]:hover{text-decoration:underline}
-/* The pop-up: about 400 px wide and up to 640 px tall, bottom-left beside the sidebar; a bottom sheet on a phone. */
-.support-pop{position:fixed;inset:auto auto 12px calc(var(--rail-left) + 12px);margin:0;padding:0;width:min(400px,calc(100vw - var(--rail-left) - 24px));height:min(640px,calc(100vh - 24px));max-height:none;max-width:none;box-sizing:border-box;border:1px solid var(--line);border-radius:14px;background:var(--surface);color:var(--ink);box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden;font-size:var(--t-base)}
+/* The Tico team chat: about 400 px wide and up to 640 px tall, bottom-left beside the sidebar; on a phone a full page
+   above the tab bar, like Ask. One conversation as bubbles: theirs on the left in the support colour, the person's
+   dark on the right, a date line where the day changes. */
+.support-pop{position:fixed;inset:auto auto 12px calc(var(--rail-left) + 12px);margin:0;padding:0;width:min(400px,calc(100vw - var(--rail-left) - 24px));height:min(640px,calc(100vh - 24px));max-height:none;max-width:none;box-sizing:border-box;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink);box-shadow:0 18px 50px rgba(0,0,0,.4);overflow:hidden;font-size:var(--t-base);line-height:var(--lh)}
 .support-pop::backdrop{background:rgba(0,0,0,.18)}
-.support-pop-in{display:flex;flex-direction:column;height:100%;min-height:0;position:relative;background:var(--surface)}
+.support-pop-in{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--surface)}
 .support-pop [hidden]{display:none!important}
-.support-grab{display:none}
-.support-head{display:flex;align-items:center;gap:4px;padding:10px 10px 4px 16px}.support-head .spacer{flex:1}.support-head h2{margin:0;font-size:var(--t-md)}
-.support-head .support-icon{font-size:15px}
-.support-links{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:0 16px 8px;font-size:var(--t-sm);color:var(--muted)}
-.support-links a,.support-links button.linkish{color:var(--accent);font-size:var(--t-sm);text-decoration:none}
-.support-links a:hover,.support-links button.linkish:hover{text-decoration:underline}
-.support-links button.linkish[aria-pressed="true"]{color:var(--ink)}
-.support-connection{margin:0;padding:0 16px 8px;font-size:var(--t-sm);color:var(--muted)}.support-connection:empty{display:none}.support-connection.err{color:var(--fail)}
-.support-loading,.support-off{margin:0;padding:12px 16px;font-size:var(--t-base);color:var(--muted)}
-/* Your requests: title, status badge, last activity, and a dot for an unread reply. */
-.support-listview{display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto;border-top:1px solid var(--line)}
-.support-list-head{display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--line)}
-.support-list{list-style:none;margin:0;padding:0}
-.support-none{padding:0 16px}
-.support-item{display:grid;gap:5px;width:100%;text-align:left;padding:10px 16px;border:0;border-bottom:1px solid var(--line);border-radius:0;background:none;color:var(--ink);font:inherit;cursor:pointer}
-.support-item:hover{background:var(--surface2)}
-.support-item-top{display:flex;align-items:center;gap:8px;min-width:0}
-.support-item-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
-.support-item.unread .support-item-title{font-weight:600}
-.support-item-body{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-sm);color:var(--muted)}
-.support-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--accent)}
-.support-item-meta{display:flex;align-items:center;gap:8px;font-size:var(--t-xs);color:var(--muted)}
-.support-badge{display:inline-block;font-size:var(--t-2xs);font-weight:600;padding:1px 7px;border-radius:10px;background:var(--idle-bg);color:var(--muted);white-space:nowrap;letter-spacing:var(--track-normal)}
-.support-badge.s-open{background:var(--run-bg);color:var(--run)}.support-badge.s-answered{background:var(--ok-bg);color:var(--ok)}
-/* The chat: the request's title and status in a thin line, the bubbles, then the box. */
-.support-view{display:flex;flex-direction:column;min-height:0;flex:1;position:relative}
-.support-thread-head{display:flex;align-items:center;gap:6px;padding:4px 8px 4px 16px;border-block:1px solid var(--line)}
-.support-thread-title{flex:1;min-width:0;display:flex;align-items:center;gap:8px}
-.support-thread-title strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-sm);font-weight:600}
-.support-pop button.support-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border-color:transparent;color:var(--muted)}
-.support-pop button.support-icon svg{flex:none}.support-pop button.support-icon:hover{color:var(--ink);background:var(--surface2)}.support-pop button.support-trash:hover{color:var(--fail)}
-.support-thread{display:flex;flex-direction:column;flex:1;min-height:120px;overflow-y:auto;padding:12px 16px;overscroll-behavior:contain;overflow-wrap:anywhere}
-.support-msg{max-width:85%;min-width:0;overflow-wrap:anywhere;padding:8px 12px;border-radius:10px;font-size:var(--t-base);margin:0 0 10px}
-.support-msg.you{align-self:flex-end;background:var(--surface2);border:1px solid var(--line);border-bottom-right-radius:3px}
-.support-msg.staff{align-self:flex-start;background:color-mix(in srgb,var(--accent) 12%,var(--surface));border:1px solid color-mix(in srgb,var(--accent) 30%,var(--line));border-bottom-left-radius:3px}
-.support-body{white-space:pre-wrap}
-.support-who{display:block;font-size:var(--t-xs);color:var(--muted);margin-bottom:4px}.support-msg.you .support-who{text-align:right}
-.support-delivered{align-self:flex-end;font-size:var(--t-xs);color:var(--muted);margin:-4px 0 6px}
-.support-empty{margin:auto 0;padding:12px 4px;text-align:center;color:var(--muted);font-size:var(--t-base);line-height:var(--lh)}
-.support-empty p{margin:0 0 6px}
-.support-sent{font-size:var(--t-sm);color:var(--muted);line-height:var(--lh);overflow-wrap:anywhere;margin:6px 0}
-.support-closed{padding:0 16px}
-.support-write{display:grid;gap:6px;flex:none;padding:10px 12px 12px;border-top:1px solid var(--line)}
-.support-input{display:flex;align-items:flex-end;gap:8px}
-.support-input textarea{flex:1;min-width:0;min-height:44px;max-height:min(60vh,360px);resize:vertical;box-sizing:border-box}
-.support-send{flex:none;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;padding:0;border:0;border-radius:50%;background:var(--accent);color:var(--accent-ink);cursor:pointer}
+.support-head{display:flex;align-items:center;gap:8px;padding:8px 6px 8px 12px;border-bottom:1px solid var(--line);min-width:0}
+.support-head h2{margin:0;font-size:var(--t-md);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.support-head .spacer{flex:1}
+.support-av{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:50%;background:var(--sup-ink);color:var(--sup);flex:none}
+.support-av .nav-icon{font-size:16px;width:16px;height:16px;color:inherit;font-variation-settings:"FILL" 1,"wght" 400,"GRAD" 0,"opsz" 20}
+.support-pop .support-close{flex:none;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:0;border-radius:8px;background:transparent;color:var(--muted);cursor:pointer}
+.support-pop .support-close:hover{background:var(--surface2);color:var(--ink)}
+.support-close .nav-icon{font-size:20px;width:20px;height:20px;color:inherit}
+.support-pop .support-close[hidden]{display:none}
+/* Delete chat history, asked inside the chat in place of the conversation. */
+.support-confirm{flex:1;display:flex;flex-direction:column;justify-content:center;gap:8px;padding:24px 20px}.support-confirm[hidden]{display:none}
+.support-confirm p{margin:0}.support-confirm .support-row{margin-top:8px}
+.support-confirm .danger{background:var(--fail);border-color:var(--fail);color:#fff}
+.support-connection{margin:0;padding:6px 12px 0;font-size:var(--t-sm);color:var(--muted)}.support-connection:empty{display:none}.support-connection.err{color:var(--fail)}
+.support-loading,.support-off{margin:0;padding:12px;font-size:var(--t-base);color:var(--muted)}
+.support-view{display:flex;flex-direction:column;min-height:0;flex:1}
+.support-thread{display:flex;flex-direction:column;gap:4px;flex:1;min-height:120px;overflow-y:auto;padding:10px 14px 8px;overscroll-behavior:contain;overflow-wrap:anywhere}
+.support-thread>:first-child{margin-top:auto}   /* a short conversation sits at the bottom, by the box */
+.support-day{align-self:center;margin:10px 0 4px;font-size:var(--t-xs);color:var(--muted)}
+.support-msg{display:flex;flex-direction:column;max-width:80%;min-width:0;margin:1px 0}
+.support-msg.you{align-self:flex-end;align-items:flex-end}
+.support-msg.them{align-self:flex-start;align-items:flex-start}
+.support-body{padding:8px 12px;white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%;box-sizing:border-box}
+.support-msg.you .support-body{border-radius:16px 16px 4px 16px;background:var(--ink);color:var(--bg)}
+.support-msg.them .support-body{border-radius:16px 16px 16px 4px;background:var(--sup);color:var(--ink)}
+.support-who{display:block;margin:6px 0 3px 4px;font-size:var(--t-xs);font-weight:600;color:var(--sup-ink)}
+.support-note{display:block;font-size:var(--t-xs);color:var(--muted);line-height:var(--lh);overflow-wrap:anywhere;margin:3px 4px 0}
+.support-write{display:grid;gap:4px;flex:none;padding:0 8px 8px;min-width:0}
+.support-input{display:flex;align-items:flex-end;gap:4px;padding:4px;border:1px solid var(--line);border-radius:20px;background:var(--surface)}
+.support-input:focus-within{border-color:color-mix(in srgb,var(--ink) 35%,var(--line))}
+.support-input textarea{flex:1;min-width:0;min-height:34px;max-height:min(50vh,320px);padding:7px 4px;border:0;outline:0;background:transparent;resize:none;box-sizing:border-box;font:inherit;color:var(--ink)}
+.support-clip,.support-send{flex:none;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;padding:0;border:0;border-radius:50%;cursor:pointer}
+.support-clip{background:transparent;color:var(--muted)}
+.support-clip:hover{background:var(--surface2);color:var(--ink)}
+.support-clip .nav-icon{font-size:20px;width:20px;height:20px;color:inherit}
+.support-send{background:var(--accent);color:var(--accent-ink)}
 .support-send:hover:not(:disabled){filter:brightness(1.06)}
-.support-error{margin:0;font-size:var(--t-sm)}
-/* Attach details: closed by default; today's composer options inside. */
-.support-attach{font-size:var(--t-sm)}
-.support-attach>summary{color:var(--muted);cursor:pointer;width:max-content;max-width:100%}
-.support-attach[open]>summary{margin-bottom:6px}
-.support-attach>*+*{margin-top:6px}
-.support-diag,.support-row,.support-check{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.support-row{justify-content:flex-end}.support-diag{font-size:var(--t-sm)}.support-diag label{display:flex;gap:6px;align-items:center}
-.support-options{font-size:var(--t-sm)}.support-options summary{color:var(--muted);cursor:pointer}.support-options label{margin-top:8px}.support-options input[type=email]{width:100%;box-sizing:border-box}
-/* Under the request, over the box: Let Tico support in, or the live session with Stop, and the log of its sessions. */
-.support-access{display:grid;gap:6px;flex:none;padding:8px 16px;border-top:1px solid var(--line);font-size:var(--t-sm)}.support-access p{margin:0}.support-access>button{justify-self:start}
+.support-error{margin:0 8px;font-size:var(--t-sm)}
+/* Diagnostics attached: one small line over the box. */
+.support-report{display:flex;align-items:center;gap:6px;margin:0;padding:2px 8px;font-size:var(--t-sm);color:var(--muted);min-width:0}
+.support-report>span:not(.nav-icon){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.support-report .nav-icon{font-size:16px;width:16px;height:16px;color:inherit}
+.support-report .linkish{font-size:var(--t-sm)}
+.support-x{display:inline-grid;place-items:center;width:24px;height:24px;margin-left:auto;padding:0;border:0;border-radius:50%;background:transparent;color:var(--muted);cursor:pointer}
+.support-x:hover{background:var(--surface2);color:var(--ink)}
+.support-x .nav-icon{font-size:16px;width:16px;height:16px}
+/* Over the box: Let the Tico team in, or the live session with Stop, and what the team did. */
+.support-access{display:grid;gap:4px;flex:none;padding:4px 14px 6px;font-size:var(--t-sm)}.support-access p{margin:0}.support-access>button{justify-self:start;font-size:var(--t-sm)}
 .support-access-log ol{margin:6px 0 0;padding-left:18px;max-height:140px;overflow:auto;overflow-wrap:anywhere;color:var(--muted)}
+.support-access-log summary{color:var(--muted);cursor:pointer}
 .support-modal{width:min(760px,calc(100vw - 32px));max-height:90vh}.support-modal .tmodal-body{display:grid;gap:10px;overflow:auto}
 .support-modal p{margin:0;font-size:var(--t-base)}.support-json{width:100%;min-height:280px;box-sizing:border-box;font:var(--t-sm)/var(--lh) var(--mono);white-space:pre;resize:vertical}
+.support-modal p.support-note{font-size:var(--t-sm);margin:0}
 .support-sections{display:flex;gap:8px 16px;flex-wrap:wrap}.support-sections label{display:flex;align-items:center;gap:5px;font-size:var(--t-sm)}
-/* A phone: a bottom sheet that fills most of the screen, swiped down (from its top) to close. Its bottom sits on the
-   bottom of what is visible (support.js fit() sets --support-visible and --support-bottom), so with the keyboard up it
-   shrinks to the space above the keyboard instead of running under it, and the safe-area gap goes with the home bar. */
+.support-perf{display:flex;align-items:center;gap:8px;font-size:var(--t-sm)}
+.support-row,.support-check{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.support-row{justify-content:flex-end}
+/* A phone: a page from the top of the screen to the tab bar, square, no shadow. With the keyboard up it ends at the
+   keyboard (support.js fit() sets --support-visible). */
 @media(max-width:760px){
-  .support-pop{--sheet-h:min(92dvh,var(--support-visible,100dvh));inset:auto 0;top:calc(var(--support-bottom,100dvh) - var(--sheet-h));width:100%;height:var(--sheet-h);border-radius:16px 16px 0 0;border-bottom:0;
-    padding-bottom:clamp(0px,calc(env(safe-area-inset-bottom) - (100dvh - var(--support-visible,100dvh))),env(safe-area-inset-bottom))}
-  /* The page behind stays put while the sheet is open. */
+  .support-pop{inset:0 0 auto 0;width:100%;height:min(calc(100dvh - var(--mobile-nav-height) - env(safe-area-inset-bottom)),var(--support-visible,100dvh));
+    padding-top:env(safe-area-inset-top);border:0;border-radius:0;box-shadow:none}
+  .support-pop::backdrop{background:transparent}
   body:has(> .support-pop[open]){overflow:hidden}
-  .support-pop::backdrop{background:rgba(0,0,0,.38)}
-  .support-grab{display:block;width:40px;height:4px;margin:8px auto 0;border-radius:2px;background:var(--line)}
-  .support-head{padding-top:4px}
-  .support-head .support-icon,.support-list-head .support-icon,.support-thread-head .support-icon{width:40px;height:40px}
+  .support-pop .support-close{width:44px;height:44px}
+  .support-clip,.support-send{width:40px;height:40px}
   .support-write textarea,.support-json{font-size:16px}
 }
 /* Report this (ui/support.js): a link beside what failed. */
 .report-this{font-size:var(--t-sm)}
-button.report-this-icon{all:unset;display:inline-flex;align-items:center;padding:0 2px;color:var(--muted);line-height:var(--lh-none);cursor:pointer}button.report-this-icon:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:3px}button.report-this-icon:hover{color:var(--accent)}.report-this-icon .nav-icon{width:16px;height:16px;font-size:16px;color:inherit}
+button.report-this-icon{all:unset;display:inline-flex;align-items:center;padding:0 2px;color:var(--muted);line-height:var(--lh-none);cursor:pointer}button.report-this-icon:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:3px}button.report-this-icon:hover{color:var(--ink)}.report-this-icon .nav-icon{width:16px;height:16px;font-size:16px;color:inherit}
 .truns-report{margin:4px 0 0}
-.support-report{margin:6px 0 0;font-size:var(--t-sm);color:var(--muted)}
-.support-report strong{color:var(--ink)}

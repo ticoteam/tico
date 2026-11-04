@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from backend import flight_file
+from backend import flight, flight_file
 from setup import cell, cell_stats as cs
 from setup.cell import Result
 
@@ -190,8 +190,7 @@ def busy_minute(ts):
 def make_db(data, freelist=False):
     c = sqlite3.connect(data / "hub.sqlite")
     c.execute("PRAGMA journal_mode=WAL")
-    c.execute("CREATE TABLE flight_sql(ts INTEGER NOT NULL, fingerprint TEXT NOT NULL, n INTEGER NOT NULL, "
-              "total_ms REAL NOT NULL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(ts, fingerprint)) WITHOUT ROWID")
+    c.executescript(flight.SCHEMA)
     hour = int(NOW) // 3600 * 3600
     c.executemany("INSERT INTO flight_sql VALUES(?,?,?,?,?,?,?)", [
         (hour, "SELECT id FROM tasks WHERE status = '?' AND n > N", 300, 400.0, 3.0, 50.0, "{}"),
@@ -263,13 +262,14 @@ def test_a_snapshot_from_proc_docker_and_the_volume(box):
     assert b["healthz"] == {"code": 200, "ms": 12}
     server = next(c for c in b["containers"] if c["role"] == "server")
     assert server == {"role": "server", "name": "tico-boatyard-server-1", "state": "running", "health": "healthy",
-                      "restarts": 2, "oom_killed": False, "started": "2026-10-30T08:08:00Z", "cpu_pct": 3.1,
+                      "restarts": 2, "oom_killed": False, "started_at": "2026-10-30T08:08:00Z", "cpu_pct": 3.1,
                       "mem_mb": 612, "mem_limit_mb": 4096, "pids": 41, "net_rx_mb": 120.1, "net_tx_mb": 88.0,
                       "blk_read_mb": 10.0, "blk_write_mb": 900.0}
     assert {c["role"] for c in b["containers"]} == {"server", "updater"}
     assert b["db"]["size_mb"] > 0 and b["db"]["wal_mb"] is not None and b["db"]["freelist_pct"] > 0
     assert b["db"]["files_mb"] == 1.5
-    assert b["backup"] == {"age_s": 9, "detail": "litestream"}
+    assert b["backup"] == {"age_s": 9, "behind_s": None, "checked_s": None, "stale": False, "unsent_files": None,
+                           "detail": "litestream"}
     f = b["flight"]
     assert f["window_s"] == 300
     assert f["requests"]["count"] == 204 and f["requests"]["errors_5xx"] == 1
@@ -291,6 +291,25 @@ def test_a_snapshot_from_proc_docker_and_the_volume(box):
     assert s["flight"]["requests"]["count"] == 0
     text = json.dumps(snap)
     assert "secret probe output" not in text and "ann@example.com" not in text
+
+
+def test_a_backup_behind_the_database_past_its_warning_time_is_stale_and_its_pile_up_is_counted(box):
+    root = box.path("proc/4300/root/tmp")
+    root.mkdir(parents=True)
+    status = {"last_replicated_at": "2026-10-30T11:59:51Z", "warn_after_s": 600, "unsent_files": 27914,
+              "behind_since": "2026-10-30T11:45:00Z"}
+    (root / "tico-backup-status.json").write_text(json.dumps(status))
+    assert cs.backup_block(box, 4300, NOW) == {"age_s": 9, "behind_s": 900, "checked_s": None, "stale": True,
+                                               "unsent_files": 27914, "detail": "litestream"}
+    (root / "tico-backup-status.json").write_text(json.dumps({**status, "behind_since": "2026-10-30T11:55:00Z"}))
+    assert cs.backup_block(box, 4300, NOW)["stale"] is False and cs.backup_block(box, 4300, NOW)["behind_s"] == 300
+    (root / "tico-backup-status.json").write_text(json.dumps({**status, "behind_since": None, "unsent_files": None}))
+    assert cs.backup_block(box, 4300, NOW) == {"age_s": 9, "behind_s": None, "checked_s": None, "stale": False,
+                                               "unsent_files": None, "detail": "litestream"}
+    # A status the loop has not checked within the warning time is stale too: the copy state is then unknown.
+    (root / "tico-backup-status.json").write_text(json.dumps({**status, "behind_since": None, "checked_at": "2026-10-30T11:45:00Z"}))
+    assert cs.backup_block(box, 4300, NOW) == {"age_s": 9, "behind_s": None, "checked_s": 900, "stale": True,
+                                               "unsent_files": 27914, "detail": "litestream"}
 
 
 def test_docker_runs_once_for_every_company_and_never_reads_the_environment(box):

@@ -28,7 +28,7 @@ def long_running(run):
     end = run.end.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     long = []
     for t in run.final:
-        hours = ((run.merged_at.get(t["id"]) or run.end) - run.w.H.parse_ts(t["created"])).total_seconds() / 3600
+        hours = ((run.merged_at.get(t["id"]) or run.end) - run.w.H.parse_ts(t["created_at"])).total_seconds() / 3600
         steps = [f"{name} {span:.0f}h" for name, span in run.w.step_spans(t["id"], until=end)
                  if span > LONG_STEP_HOURS and run.w.board.step(name) and not run.w.board.step(name).merged
                  and not run.w.board.finished(name)]
@@ -104,8 +104,8 @@ def peak_doing(cap):
 def no_uncertain_runs(run):
     """No run is left 'uncertain' (its computer stopped answering partway): such a job waits for a person, and its
     ticket waits with it."""
-    rows = run.w.sql("SELECT bot, count(*) n FROM jobs WHERE state='uncertain' GROUP BY bot")
-    return not rows, ", ".join(f"{r['bot']} {r['n']}" for r in rows)
+    rows = run.w.sql("SELECT bot_id, count(*) n FROM jobs WHERE state='uncertain' GROUP BY bot_id")
+    return not rows, ", ".join(f"{r['bot_id']} {r['n']}" for r in rows)
 
 
 def no_server_error(run):
@@ -144,7 +144,7 @@ def board_keeps_moving(since, waits=(), fallback=False):
                 continue
             judged += 1
             on_fallback += bool(m["fallback"])
-            if m["started"] < min(m["free"], len(m["ready"])):
+            if m["started_at"] < min(m["free"], len(m["ready"])):
                 short.append(m)
         if not judged:
             return False, ("no claim round had a free slot and a ready bot outside the waits: nothing shows the board "
@@ -164,7 +164,7 @@ def board_keeps_moving(since, waits=(), fallback=False):
 def _round_line(m):
     """One short round for a failing check: its time, its ready bots, its turns started, and the server's reasons."""
     ready = ", ".join(m["ready"][:6]) + (f" (+{len(m['ready']) - 6})" if len(m["ready"]) > 6 else "")
-    text = f"{m['at']:%H:%M} free {m['free']}, ready {ready}, started {m['started']}"
+    text = f"{m['at']:%H:%M} free {m['free']}, ready {ready}, started {m['started_at']}"
     if m.get("why"):
         text += " [" + m["why"][:700] + "]"
     return text
@@ -173,7 +173,7 @@ def _round_line(m):
 def lead_heard_of(word):
     """Head of Engineering was told (a note or a wake) of something matching `word`."""
     def check(run):
-        rows = run.w.sql("SELECT body FROM messages WHERE to_actor='bot:engineering-lead' AND body LIKE ?",
+        rows = run.w.sql("SELECT body FROM messages WHERE recipient_id='bot:engineering-lead' AND body LIKE ?",
                          (f"%{word}%",))
         return bool(rows), f"{len(rows)} messages mention {word!r}"
     return check
@@ -184,8 +184,8 @@ def late_told(run):
     a working step, backend/step_age.LATE_HOURS) and one scheduler pass more. Sooner, a quiet ticket is its owner's
     to hear of (a status check), and a check that runs long is its timeout's."""
     from backend.step_age import LATE_HOURS
-    rows = run.w.sql("SELECT body, refs_json FROM messages WHERE to_actor='bot:engineering-lead'")
-    told = " ".join((r["body"] or "") + (r["refs_json"] or "") for r in rows)
+    rows = run.w.sql("SELECT body, refs FROM messages WHERE recipient_id='bot:engineering-lead'")
+    told = " ".join((r["body"] or "") + (r["refs"] or "") for r in rows)
     named = {tid for _, tid in run.w.stuck_told}
     slack = 2 * run.scenario.tick_minutes / 60
     late = []
@@ -203,8 +203,12 @@ def late_told(run):
 
 
 def lead_only_scheduled(run):
-    """Head of Engineering runs on its schedule (and when a person asks), never on routine notices."""
-    other = [r for r in run.t.bot("engineering-lead").turns if r["action"] is None and r["news"] != "update"]
+    """Head of Engineering runs on its schedule (and when a person asks), never on routine notices. Its task roundup is the
+    schedule's one grouped run (each profile's roundup row, rules.PROFILE_RULES), so a roundup wake is a scheduled one."""
+    from backend import rules
+    roundups = {r["id"] for found in rules.PROFILE_RULES.values() for r in found if r["event"] == "task_roundup"}
+    other = [r for r in run.t.bot("engineering-lead").turns
+             if r["action"] is None and r["news"] != "update" and r["news"] not in roundups]
     kinds = Counter(r["news"] for r in other)
     return not other, f"{len(other)} turns on routine notices: " + ", ".join(f"{k} {n}" for k, n in kinds.most_common(4))
 
@@ -238,16 +242,17 @@ def window_spend_under(cap):
         return stamp[:14] + ("00" if stamp[14:16] < "30" else "30")
 
     def check(run):
-        runs = [dict(r) for r in run.w.sql("SELECT started, finished, est_cost_usd FROM turns ORDER BY started")]
+        runs = [dict(r) for r in run.w.sql("SELECT created_at AS started_at, settled_at AS finished_at, est_cost_usd "
+                                            "FROM attempts WHERE (job_id IS NULL OR trigger IS NOT NULL) ORDER BY created_at")]
         per, late = Counter(), []
         for r in runs:
-            here = window(r["started"])
+            here = window(r["started_at"])
             per[here[11:16]] += r["est_cost_usd"] or 0
             # Finished strictly before: a run ending in the same tick as this claim may end after it.
-            spent = sum(x["est_cost_usd"] or 0 for x in runs if window(x["started"]) == here and x["finished"]
-                        and x["finished"] < r["started"] and x is not r)
+            spent = sum(x["est_cost_usd"] or 0 for x in runs if window(x["started_at"]) == here and x["finished_at"]
+                        and x["finished_at"] < r["started_at"] and x is not r)
             if spent >= cap:
-                late.append(f"{r['started'][11:16]} (${spent:.2f} spent)")
+                late.append(f"{r['started_at'][11:16]} (${spent:.2f} spent)")
         return not late, (f"peak half hour ${max(per.values() or [0]):.2f}; "
                           + (f"{len(late)} turns started past the cap: {', '.join(late[:4])}" if late
                              else "no turn started past the cap"))

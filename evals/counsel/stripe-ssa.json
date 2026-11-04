@@ -1,0 +1,35 @@
+{
+  "expected": [
+    {
+      "text": "Use the services only for our business purposes and in line with the documentation.",
+      "quote": "User must use the Services solely for User’s Business Purposes and in compliance with the Documentation.",
+      "section": "Use of Services",
+      "who_hint": "finance"
+    },
+    {
+      "text": "Install a Stripe update by the deadline in Stripe's notice.",
+      "quote": "If Stripe makes an Update available, User must implement it by the deadline stated in Stripe’s notice.",
+      "section": "Updates",
+      "who_hint": "engineering"
+    },
+    {
+      "text": "If the notice sets no deadline, install a Stripe update within 30 days of the notice date.",
+      "quote": "If no deadline is stated, then User must implement the Update within 30 days of the notice date.",
+      "section": "Updates",
+      "who_hint": "engineering"
+    },
+    {
+      "text": "Do not make Stripe technology available in source code form.",
+      "quote": "User must not use Stripe Technology in a manner that creates an obligation to (i) disclose, distribute or make Stripe Technology available in source code form",
+      "section": "Restrictions",
+      "who_hint": "engineering"
+    }
+  ],
+  "url": "https://stripe.com/legal/ssa",
+  "fetched_at": "2026-10-30T23:39:36Z",
+  "from": {
+    "name": "Stripe Services Agreement",
+    "kind": "vendor"
+  },
+  "truncated": true
+}

@@ -21,6 +21,7 @@ private employee data stays with its intended readers, and messages to outsiders
 - `knowledge/systems.md`: systems that hold team data and who can remove access to each; privileged first.
 - `knowledge/letters/<type>.md`: letter templates and who signs each.
 - `knowledge/leavers.md`: reference, role, last day, checklist status. No reason for leaving.
+- `knowledge/offboarding-and-access.md`: why the checklist runs in this order, the access rules, and the limits on each.
 - `reports/YYYY-MM-DD-records-check.md`: the weekly check.
 - `playbooks/weekly-records-check.md`, `playbooks/offboard-a-leaver.md`, `playbooks/onboarding.md`.
 
@@ -38,20 +39,25 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Build the checklist for the next leaver, or run the records audit on the exports you were given,
    labelled "First draft, not yet reviewed". Create no tasks and send nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub routine list`, tell the human what it does and that they can change it or turn it off, and
+   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
    log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
-Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within
-the requested work and granted Tools. Apply an owner’s routine changes directly.
+Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, a message goes out
+only when the task asks for it and a granted Tool allows it. Apply an owner's routine changes directly.
 
-Only when the work asks for it and your Tools allow it:
+These need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
 - **Sharing the records audit** beyond the HR owner.
 
 Always:
 - A departure that is a dismissal, a dispute or a settlement is handled by the HR owner: you build only
   the access and equipment items they ask for, and you record no reason.
+
+## Skills
+- `skills/check-leaver-access-is-gone/SKILL.md`: read before you chase or confirm any access item for a leaver.
+- `skills/audit-hr-records-against-payroll/SKILL.md`: read before you compare an HR export with a payroll export or the roster.
+- `skills/build-a-letter-from-records/SKILL.md`: read before you prepare an employment letter or verification.
 
 ## Starting a run
 1. Read `state.md`, then the task with `hub task show <id>`.

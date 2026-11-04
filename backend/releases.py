@@ -66,7 +66,7 @@ def record_start(c, now):
     """The releases this server actually ran, oldest first, written at startup when the version changes. An update
     done outside the in-app updater (a manual pull, a rollout script) leaves the updater's `from` stale; this does not."""
     current = version()
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (HISTORY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (HISTORY,)).fetchone()
     seen = json.loads(row[0]) if row else []
     if seen and seen[-1].get("version") == current:
         return seen
@@ -76,7 +76,7 @@ def record_start(c, now):
 
 
 def history(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (HISTORY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (HISTORY,)).fetchone()
     return json.loads(row[0]) if row else []
 
 
@@ -294,6 +294,24 @@ def _call(method, path, body=None):
         log.warning("Updater call %s %s failed: %s", method, path, type(exc).__name__)
         raise Problem("updater_unreachable", "The updater did not answer. Try again, or update by hand.", 502,
                       retryable=True, extra={"command": MANUAL_COMMAND}) from None
+
+
+def updater_answer(method, path, body=None):
+    """The updater's status and answer, for a caller that tells its refusals apart (sleep's 409 busy is not an outage).
+    Status 0 when it did not answer. `_call` is for the calls where any refusal is a failure."""
+    url, token = _updater()
+    if not url:
+        return 0, {}
+    try:
+        with _client(10) as http:
+            r = http.request(method, url + path, json=body, headers={"Authorization": "Bearer " + token})
+    except httpx.HTTPError:
+        return 0, {}
+    try:
+        answer = r.json()
+    except ValueError:
+        answer = {}
+    return r.status_code, answer if isinstance(answer, dict) else {}
 
 
 def status():

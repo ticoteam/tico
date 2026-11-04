@@ -24,32 +24,42 @@ from datetime import datetime, timedelta, timezone
 
 from .store import H
 from . import task_relations as TR
+from .migrations import renames
 
 
+# The trash keeps `owner` and `requester` until the second release; an audience clause names the tasks table's columns.
+READABLE = "(SELECT *, owner AS owner_id, requester AS requester_id FROM task_trash)"
 TRASH = """CREATE TABLE IF NOT EXISTS task_trash(
  task_id TEXT PRIMARY KEY, number INTEGER, title TEXT, requester TEXT, owner TEXT, status TEXT,
  private INTEGER NOT NULL DEFAULT 1, deleted_at TEXT NOT NULL, deleted_by TEXT NOT NULL,
- rows_json TEXT NOT NULL, purged_at TEXT, guest TEXT)"""
+ rows TEXT NOT NULL, purged_at TEXT, guest TEXT)"""
 # The files attached when a deleted task was made, kept past a purge: no foreign key, the task is gone.
 TRASH_ASSETS = """CREATE TABLE IF NOT EXISTS task_trash_assets(
  task_id TEXT NOT NULL, blob_id TEXT NOT NULL, PRIMARY KEY(task_id, blob_id))"""
 
 # Rows that only describe the task: kept with it in the trash.
-TASK_ROWS = ("task_events", "task_links", "task_tags", "task_delegations", "task_reminders",
+TASK_ROWS = ("history_events", "task_links", "task_tags", "task_delegations", "task_reminders",
+             "task_check_back_wakes",
              "service_key_tasks", "task_roles", "task_assets", "task_requesters", "task_milestone_waits",
-             "task_check_models", "task_run_models")
+             "task_check_models", "task_run_models", "task_holds")
+# A table whose rows name the task other than by `task_id`: its column and the rows of it that are a task's. A task's
+# history is the shared history table's task rows (backend/migrations/0064_history_events.py).
+TASK_KEYS = {"history_events": ("subject_id", "subject_type='task'")}
 # Rows that are work done on the task: any one of them refuses the run.
-TASK_WORK = ("turns", "approvals", "bot_tool_requests", "meeting_deliveries", "schedule_occurrences",
+TASK_WORK = ("attempts", "approvals", "bot_tool_requests", "meeting_deliveries", "schedule_occurrences",
              "watcher_items")
 # A file a person attached to the task itself (scope `task:<id>`) is not work; any other file touched on the task is.
+# A verdict on a file under review (`reviewed`, backend/file_reviews.py) is not work either: the file is the work, and
+# a deleted task's verdicts stop counting.
 FILE_WORK = (("bot_files", "SELECT count(*) FROM bot_files WHERE task_id IN ({}) AND scope <> 'task:' || task_id"),
-             ("bot_file_activity", "SELECT count(*) FROM bot_file_activity a WHERE a.task_id IN ({}) AND NOT EXISTS "
+             ("bot_file_activity", "SELECT count(*) FROM bot_file_activity a WHERE a.task_id IN ({}) "
+                                   "AND a.action <> 'reviewed' AND NOT EXISTS "
                                    "(SELECT 1 FROM bot_files f WHERE f.id=a.file_id AND f.scope='task:' || a.task_id)"),
              # A task file a bot made (from a run, or as itself) is work even though it sits on the task.
              ("bot_file_versions", "SELECT count(*) FROM bot_files f WHERE f.task_id IN ({}) AND f.scope='task:' || f.task_id "
                                    "AND EXISTS (SELECT 1 FROM bot_file_versions v WHERE v.file_id=f.id "
                                    "AND (v.attempt_id IS NOT NULL OR v.actor LIKE 'bot:%'))"))
-MESSAGE_WORK = ("turns", "jobs", "attempt_inputs", "approvals", "credential_requests",
+MESSAGE_WORK = ("attempts", "jobs", "attempt_inputs", "approvals", "credential_requests",
                 "bot_transition_checkpoints", "batches")
 CONVERSATION_WORK = ("attempt_conversations", "session_epochs", "assistant_actions", "chat_goals",
                      "credential_requests", "bot_transition_checkpoints")
@@ -63,6 +73,18 @@ LINKS = ("conversation_id",)
 # Trash rows written before task_relations kept a task's parent and blocker on the task row itself.
 LEGACY_LINKS = {"parent_id": ("parent", False), "blocked_by": ("blocks", True)}
 CORE = ("tasks", "conversations", "messages")
+# Keys a trashed row holds that are not columns: the rowid the snapshot read it with, and the task links kept on the
+# task row before task_relations (LEGACY_LINKS, restored as relations).
+NOT_COLUMNS = {"_rowid"}
+# A task trashed before its holds were rows (migration 0075) kept them as columns of its own row: a restore opens them
+# as task_holds rows (`_legacy_holds`). {kind: {old column: task_holds column}}, with the one that marks it open first.
+LEGACY_HOLDS = {
+    "snoozed": {"snoozed_until": "until_at", "snoozed_by_id": "by_id", "snoozed_note": "reason"},
+    "blocked": {"blocked_since": "created_at", "blocked_reason": "reason", "blocked_kind": "cause",
+                "blocked_from_step": "from_step_id", "blocked_from_status": "from_status", "blocked_gate": "gate",
+                "holds_cleared_at": "cleared_at"},
+}
+HANDLED = {"tasks": set(LEGACY_LINKS) | {k for cols in LEGACY_HOLDS.values() for k in cols}}
 
 
 def ensure(c):
@@ -74,11 +96,11 @@ def ensure(c):
     c.execute("CREATE INDEX IF NOT EXISTS task_trash_assets_blob ON task_trash_assets(blob_id)")
     # A task deleted before this table existed has its attachments only in its trash row. Only the rows that
     # mention attachments and have none listed are parsed: every delete runs this, and parsing all of the trash's
-    # rows_json grows with the trash.
+    # rows grows with the trash.
     c.execute("INSERT OR IGNORE INTO task_trash_assets(task_id, blob_id) "
               "SELECT t.task_id, json_extract(a.value, '$.blob_id') FROM task_trash t, "
-              "json_each(t.rows_json, '$.rows.task_assets') a "
-              "WHERE t.purged_at IS NULL AND instr(t.rows_json, '\"task_assets\"') > 0 "
+              "json_each(t.rows, '$.rows.task_assets') a "
+              "WHERE t.purged_at IS NULL AND instr(t.rows, '\"task_assets\"') > 0 "
               "AND NOT EXISTS (SELECT 1 FROM task_trash_assets x WHERE x.task_id=t.task_id) "
               "AND json_extract(a.value, '$.blob_id') IS NOT NULL")
 
@@ -101,27 +123,36 @@ def _parts(values):
         yield values[i:i + 500]
 
 
-def _count(c, table, column, values):
+def _task_key(table):
+    """(column, extra condition) that picks one of TASK_ROWS' tables' rows by task id."""
+    return TASK_KEYS.get(table, ("task_id", None))
+
+
+def _where(column, where, p):
+    return (f"{where} AND " if where else "") + f"{column} IN ({_marks(p)})"
+
+
+def _count(c, table, column, values, where=None):
     if not values or not _has(c, table, column):
         return 0
-    return sum(c.execute(f"SELECT count(*) FROM {table} WHERE {column} IN ({_marks(p)})", p).fetchone()[0]
+    return sum(c.execute(f"SELECT count(*) FROM {table} WHERE {_where(column, where, p)}", p).fetchone()[0]
                for p in _parts(values))
 
 
-def _rows(c, table, column, values):
+def _rows(c, table, column, values, where=None):
     """Each row of `table` whose `column` is in `values`, with its rowid, as dicts."""
     if not values or not _has(c, table, column):
         return []
     out = []
     for p in _parts(values):
-        out += [dict(r) for r in c.execute(f"SELECT rowid AS _rowid, * FROM {table} WHERE {column} IN ({_marks(p)})", p)]
+        out += [dict(r) for r in c.execute(f"SELECT rowid AS _rowid, * FROM {table} WHERE {_where(column, where, p)}", p)]
     return out
 
 
-def _delete(c, table, column, values):
+def _delete(c, table, column, values, where=None):
     if not values or not _has(c, table, column):
         return 0
-    return sum(c.execute(f"DELETE FROM {table} WHERE {column} IN ({_marks(p)})", p).rowcount for p in _parts(values))
+    return sum(c.execute(f"DELETE FROM {table} WHERE {_where(column, where, p)}", p).rowcount for p in _parts(values))
 
 
 def _column(c, sql, values):
@@ -156,7 +187,8 @@ def _snapshot(c, tid, relations=None):
                 seen.add((table, row["_rowid"]))
                 rows.setdefault(table, []).append(row)
     for table in TASK_ROWS:
-        add(table, _rows(c, table, "task_id", [tid]))
+        column, where = _task_key(table)
+        add(table, _rows(c, table, column, [tid], where))
     # Taken for the whole list before any is deleted, so each entry keeps every relation it had.
     rows["task_relations"] = TR.snapshot_rows(c, tid) if relations is None else relations
     for table, column in MESSAGE_ROWS:
@@ -197,10 +229,10 @@ def _refusals(c, ids, conversations, messages):
         refusals["delegations of another task"] = len(pointing)
     # A bot not yet woken about the task (its notice waits in a shared room) would wake to a missing task.
     # CROSS JOIN keeps jobs the outer loop: each job reads its message by primary key, where the plain JOIN
-    # scanned every message to read its refs_json.
-    waking = _column(c, "SELECT j.id FROM jobs j CROSS JOIN messages m ON m.id=j.message_id "
-                        "WHERE j.state NOT IN ('completed','cancelled','failed') "
-                        "AND json_extract(m.refs_json,'$.task') IN ({})", ids)
+    # scanned every message to read its refs.
+    waking = _column(c, "SELECT j.id FROM jobs j CROSS JOIN message_refs m ON m.id=j.message_id "
+                        "WHERE j.state NOT IN ('completed','canceled','failed') "
+                        "AND m.ref_task_id IN ({})", ids)
     if waking:
         refusals["bot work queued about the task"] = len(waking)
     return refusals
@@ -217,7 +249,7 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
     any task is unknown or carries work; the report says which and why. With keep_work=True a task that
     carries work is deleted anyway: its conversation and messages stay where they are, since turns, jobs
     and runs point at them, and no one can read them while the task is gone (task_privacy.readable needs
-    the task). Its queued bot jobs are cancelled. A restore links the conversation back."""
+    the task). Its queued bot jobs are canceled. A restore links the conversation back."""
     ids = list(dict.fromkeys(i.strip() for i in ids if i and i.strip()))
     found = set(_column(c, "SELECT id FROM tasks WHERE id IN ({})", ids))
     missing = [i for i in ids if i not in found]
@@ -226,7 +258,7 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
     refusals = _refusals(c, ids, conversations, messages)
     report = {"tasks": len(found), "missing": missing, "refused": refusals,
               "conversations": len(conversations), "messages": len(messages),
-              "rows": {t: _count(c, t, "task_id", ids) for t in TASK_ROWS},
+              "rows": {t: _count(c, t, _task_key(t)[0], ids, _task_key(t)[1]) for t in TASK_ROWS},
               "applied": False}
     if missing or (refusals and not keep_work) or not apply:
         return report
@@ -234,8 +266,8 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
     if kept:
         # A bot not yet woken about the task would wake to a missing task.
         # Queued jobs only (jobs_queued), each checked against its own message by primary key.
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND EXISTS "
-                  "(SELECT 1 FROM messages m WHERE m.id=jobs.message_id AND (json_extract(m.refs_json,'$.task') IN ({}) "
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued' AND EXISTS "
+                  "(SELECT 1 FROM message_refs m WHERE m.id=jobs.message_id AND (m.ref_task_id IN ({}) "
                   "OR m.conversation_id IN (SELECT id FROM conversations WHERE task_id IN ({}))))"
                   .format(_marks(list(kept)), _marks(list(kept))), [*kept, *kept])
     ensure(c)
@@ -251,8 +283,8 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
             convs, msgs = [], []
         task = rows["tasks"][0]
         c.execute("INSERT INTO task_trash(task_id,number,title,requester,owner,status,private,deleted_at,"
-                  "deleted_by,rows_json,guest) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                  (tid, task.get("number"), task["title"], task["requester"], task["owner"], task["status"],
+                  "deleted_by,rows,guest) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                  (tid, task.get("number"), task["title"], task["requester_id"], task["owner_id"], task["status"],
                    task.get("private", 1) if task.get("private") is not None else 1, now, actor,
                    json.dumps({"rows": rows, "pointers": pointers}, default=str), task.get("guest")))
         for table, column in MESSAGE_ROWS:
@@ -263,7 +295,8 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
             c.execute("INSERT OR IGNORE INTO task_trash_assets(task_id, blob_id) "
                       "SELECT task_id, blob_id FROM task_assets WHERE task_id=?", (tid,))
         for table in TASK_ROWS:
-            _delete(c, table, "task_id", [tid])
+            column, where = _task_key(table)
+            _delete(c, table, column, [tid], where)
         c.execute("DELETE FROM task_relations WHERE from_task=? OR to_task=?", (tid, tid))
         # Status lines and filed insights keep their own history; they only stop pointing at the task.
         if _has(c, "bot_status", "task_id"):
@@ -307,7 +340,7 @@ def trash(c, actor=None, audience=None):
     ones that person deleted or asked for."""
     ensure(c)
     sql = ("SELECT task_id AS id, number, title, requester, owner, status, deleted_at, deleted_by "
-           "FROM task_trash WHERE purged_at IS NULL")
+           f"FROM {READABLE} WHERE purged_at IS NULL")
     args = []
     if audience:
         sql += f" AND ({audience})"
@@ -321,9 +354,9 @@ def trashed(c, ref, audience=None):
     """The restorable trash row for a task id or number (`42` or `#42`) the reader may see, or None."""
     ensure(c)
     where = "purged_at IS NULL" + (f" AND ({audience})" if audience else "")
-    row = c.execute(f"SELECT * FROM task_trash WHERE task_id=? AND {where}", (ref,)).fetchone()
+    row = c.execute(f"SELECT * FROM {READABLE} WHERE task_id=? AND {where}", (ref,)).fetchone()
     if not row and str(ref).lstrip("#").isdigit():
-        row = c.execute(f"SELECT * FROM task_trash WHERE number=? AND {where}", (int(str(ref).lstrip("#")),)).fetchone()
+        row = c.execute(f"SELECT * FROM {READABLE} WHERE number=? AND {where}", (int(str(ref).lstrip("#")),)).fetchone()
     return dict(row) if row else None
 
 
@@ -335,8 +368,11 @@ def _insert(c, table, row, skip=()):
 
 
 def _try_insert(c, table, row, skipped):
-    """Bookkeeping that something newer has taken (a service key's mapping, a Slack thread, a deleted
-    label) is left out rather than failing the restore; the report counts it."""
+    """Bookkeeping that something newer has taken (a service key's mapping, a Slack thread, a deleted label) is left
+    out rather than failing the restore, and so is a row of a table a migration has dropped; the report counts both."""
+    if not _columns(c, table):
+        skipped[table] = skipped.get(table, 0) + 1
+        return
     c.execute("SAVEPOINT trash_row")
     try:
         _insert(c, table, row)
@@ -347,10 +383,68 @@ def _try_insert(c, table, row, skipped):
         skipped[table] = skipped.get(table, 0) + 1
 
 
+def _current(snap):
+    """A trash row's snapshot under this code's table and column names. It was saved with the names its rows had when
+    the task was deleted, and a release since may have renamed them (backend/migrations/renames_data.py, every wave)."""
+    pointers = {}
+    for spec, keys in (snap.get("pointers") or {}).items():
+        table, key, column = spec.split(".")
+        table = renames.current_table(table)
+        pointers[f"{table}.{renames.current_column(table, key)}.{renames.current_column(table, column)}"] = keys
+    return {**snap, "rows": _history_rows(renames.current_rows(snap.get("rows") or {})), "pointers": pointers}
+
+
+def _history_rows(rows):
+    """A snapshot saved before the task's history moved to history_events (its `task_events` rows) under the new table,
+    so a restore puts that history back rather than skipping a dropped table."""
+    old = rows.pop("task_events", None)
+    if not old:
+        return rows
+    moved = [{"_rowid": row.get("_rowid"), "id": row.get("id"), "subject_type": "task", "subject_id": row.get("task_id"),
+              "actor_id": row.get("actor_id", row.get("actor")), "kind": row.get("kind", row.get("field")) or "",
+              "old": row.get("old"), "new": row.get("new"), "note": row.get("note"), "action_id": row.get("action_id"),
+              "via": row.get("via"), "created_at": row.get("created_at") or ""} for row in old if isinstance(row, dict)]
+    return {**rows, "history_events": [*rows.get("history_events", []), *moved]}
+
+
+def _unplaced(c, snap):
+    """{table: [keys]} a snapshot holds, after the renames, that this database has no column for. Restoring it would
+    drop them, and the snapshot goes once the task is back, so a restore with any is refused and the trash row kept.
+    The relations are left out: they go back through task_relations.restore_row, which reads each by name, and so are
+    the rows of a table a migration has dropped, which the restore's report counts."""
+    out = {}
+    for table, found in snap["rows"].items():
+        if table == "task_relations" or not found:
+            continue
+        present = set(_columns(c, table))
+        if not present:
+            continue
+        keys = {k for row in found for k in row} - present - NOT_COLUMNS - HANDLED.get(table, set())
+        if keys:
+            out[table] = sorted(keys)
+    return out
+
+
+def _legacy_holds(c, task):
+    """The holds a task trashed before migration 0075 kept on its row, back as its open task_holds rows."""
+    if "snoozed_until" not in task and "blocked_since" not in task:
+        return
+    for kind, columns in LEGACY_HOLDS.items():
+        first = next(iter(columns))
+        if not task.get(first):
+            continue
+        values = {new: task.get(old) for old, new in columns.items()}
+        values.setdefault("created_at", task.get("updated_at") or H.now())
+        c.execute(f"INSERT INTO task_holds(task_id, kind, {', '.join(values)}) VALUES (?, ?, {_marks(list(values))})",
+                  (task["id"], kind, *values.values()))
+
+
 def restore_tasks(c, ids, actor=None):
     """Put trashed tasks back with every row they took. A task, conversation or message that cannot go
     back (its id in use again) refuses the whole restore with `conflict`; links to a task or room that
-    is gone come back unset, and the report says which."""
+    is gone come back unset, and the report says which. A snapshot saved before a column was renamed is read under
+    the new names; one holding a value this database has no column for refuses the whole restore with `unplaced`
+    and stays in the trash, since restoring would lose that value for good."""
     ensure(c)
     actor = actor or H.KEEPER
     entries = []
@@ -361,7 +455,10 @@ def restore_tasks(c, ids, actor=None):
         entries.append(dict(row))
     restoring = {e["task_id"] for e in entries}
     unlinked, skipped = {}, {}
-    snapshots = [(e, json.loads(e["rows_json"])) for e in entries]
+    snapshots = [(e, _current(json.loads(e["rows"]))) for e in entries]
+    unplaced = {e["task_id"]: found for e, snap in snapshots if (found := _unplaced(c, snap))}
+    if unplaced:
+        return {"restored": [], "unplaced": unplaced}
     c.execute("SAVEPOINT trash_restore")
     try:
         for e, snap in snapshots:
@@ -381,6 +478,7 @@ def restore_tasks(c, ids, actor=None):
                 task["step_id"] = None
                 task["step_rank"] = None
             _insert(c, "tasks", task, skip=LINKS)
+            _legacy_holds(c, task)
         messages = []
         for e, snap in snapshots:
             for conv in snap["rows"].get("conversations", []):
@@ -393,7 +491,8 @@ def restore_tasks(c, ids, actor=None):
         c.execute("RELEASE trash_restore")
         return {"restored": [], "conflict": str(error)}
     c.execute("RELEASE trash_restore")
-    # The messages were read long ago: putting them back must not wake a bot on them again.
+    # The messages were read long ago: putting them back must not wake a bot on them again. The insert above does not
+    # call backend/enqueue.py, so it makes no job for them; the snapshot's own jobs come back below, as they were.
     _delete(c, "jobs", "message_id", messages)
     for e, snap in snapshots:
         for table, found in snap["rows"].items():
@@ -407,12 +506,12 @@ def restore_tasks(c, ids, actor=None):
         for column, (kind, inward) in LEGACY_LINKS.items():
             if task.get(column):
                 ends = (task[column], tid) if inward else (tid, task[column])
-                relations.append({"from_task": ends[0], "to_task": ends[1], "kind": kind, "created": task.get("updated") or H.now()})
+                relations.append({"from_task": ends[0], "to_task": ends[1], "kind": kind, "created_at": task.get("updated_at") or H.now()})
         for row in snap["rows"].get("task_relations", []):
             if "related_id" in row:     # draft #110's related-only rows
                 a, b = sorted((row["task_id"], row["related_id"]))
                 relations.append({"from_task": a, "to_task": b, "kind": "related", "created_by": row.get("added_by"),
-                                  "created": row["created"]})
+                                  "created_at": row["created_at"]})
         for row in relations:
             if TR.restore_row(c, row) is False:
                 unlinked.setdefault(tid, []).append(row["kind"])
@@ -482,7 +581,7 @@ def purge_trash(c, older_than_days, apply=False, actor=None):
         return report
     now = H.now()
     for r in rows:
-        c.execute("UPDATE task_trash SET rows_json='{}', purged_at=? WHERE task_id=?", (now, r["task_id"]))
+        c.execute("UPDATE task_trash SET rows='{}', purged_at=? WHERE task_id=?", (now, r["task_id"]))
         H.event(c, actor or H.KEEPER, "task.purged", r["task_id"], {"title": r["title"], "deleted_at": r["deleted_at"],
                                                                     "files_left": left[r["task_id"]]["ids"],
                                                                     "attachments_left": left[r["task_id"]]["attachments"]})
