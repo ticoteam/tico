@@ -857,7 +857,7 @@ def test_a_backlog_named_to_a_person_reaches_no_person_through_the_roundup(api):
 def test_a_backlog_of_snoozed_tickets_lists_nothing_and_queues_no_roundup_job(api):
     store = api.app.state.store
     with store.transaction() as c:
-        typ = backlog_board(c, {"over": 3, "notify": ["owner"]})
+        typ = backlog_board(c, {"over": 3, "per": "owner", "notify": ["owner"]})
         for ticket in backlog_tickets(c, typ, "bot:ops", 4):
             H.TS.snooze(c, "human:ana", ticket["id"], H.shift(DAY, days=2))
         assert task_roundup.run(c, DAY) == {"woke": [], "listed": 0}
