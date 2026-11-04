@@ -248,7 +248,7 @@ async function pageRdOrg() {
   // Once the web font is in (or given up on), fit again: names in another face measure differently.
   document.fonts?.ready.then(() => { if (seq === RDO_SEQ && $('#rdo-cv') && !RDO.manual) rdoFit(); });
   // The groups with their leads.
-  const groups = await get('/v2/groups').catch(() => null);
+  const groups = await (RDO.ready = get('/v2/groups').catch(() => null));
   if (seq !== RDO_SEQ || !$('#rdo-cv')) return;
   if (groups) RDO.groups = Array.isArray(groups) ? groups : groups.groups || [];
   rdoDraw({refit: true});
@@ -352,7 +352,11 @@ function rdoGroupOptions(current, allowed) {
   const shown = allowed ? out.filter(([id]) => allowed.includes(id)) : [['', 'No group'], ...out];
   return shown.map(([id, label]) => `<option value="${esc(id)}"${id === current ? ' selected' : ''}>${esc(label)}</option>`).join('');
 }
-function rdoSheet(ref) {
+async function rdoSheet(ref) {
+  // Cards arrive from the roster before the lead data. A sheet needs those permissions before it opens.
+  const seq = RDO_SEQ;
+  await RDO.ready;
+  if (seq !== RDO_SEQ || !$('#rdo-cv')) return;
   const name = rdoRefName(ref), from = rdoHome(ref), led = rdoLeadOf(ref), targets = rdoMoveTargets(from);
   const may = !targets || targets.length > 0;
   const id = ref.slice(ref.indexOf(':') + 1), href = ref.startsWith('person:') ? `#/person/${encodeURIComponent(id)}` : `#/bot/${encodeURIComponent(id)}`;

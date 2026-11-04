@@ -38,8 +38,14 @@ run('redesign-e2e-org', ['org', 'toured', 'groups'], async ({hub, browser, phone
   await shot(page, `${tag}-03-moved`);
 
   // Omar (lead of Engineering, not Release): Move to… offers only what he leads; Release's teammates have none.
-  const omar = await open(browser, hub, 'omar', {phone, hash: '#/strategy/org'});
+  const omar = await open(browser, hub, 'omar', {phone});
+  let releaseGroups;
+  const groupRead = new Promise(resolve => { releaseGroups = resolve; });
+  await omar.route('**/api/v2/groups', async route => { await groupRead; await route.continue(); });
+  await omar.evaluate(() => { location.hash = '#/strategy/org'; });
   await omar.locator(card('bot:builder-openai')).click();
+  assert.equal(await omar.locator('dialog.rd-sheet[open]').count(), 0, `${tag}: wait for group permissions`);
+  releaseGroups();
   const mine = omar.locator('dialog.rd-sheet[open]');
   await mine.waitFor();
   const options = (await mine.locator('select[name="to"] option').allInnerTexts()).map(o => o.trim());
