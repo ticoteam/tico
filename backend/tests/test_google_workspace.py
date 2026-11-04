@@ -570,9 +570,10 @@ def test_me_is_null_without_a_roster_or_for_someone_not_acting_as_themselves(api
     store = api.app.state.store
     monkeypatch.setitem(store.settings.test_identities, "ana-via-test",
                         Identity("human:ana", "owner", "ana@acme.example", via="assistant"))
-    monkeypatch.setitem(store.settings.test_identities, "zed-test",
-                        Identity("human:zed", "human", "zed@acme.example"))   # not on the roster
-    no_roster = google_view(api, "zed-test")
+    def not_on_roster(c, person_id):                # auth already refuses people off the roster; this is the
+        raise Problem("not_found", "You are not on this team's roster", 404)   # view's own fallback
+    monkeypatch.setattr(google_connect, "mailbox_for", not_on_roster)
+    no_roster = google_view(api, "cara-test")
     assert no_roster["me"] is None and no_roster["can_admin"] is False
     assert google_view(api, "ana-via-test")["me"] is None        # the Assistant acting for her is not her
     assert google_view(api, "ana-test")["can_admin"] is True
