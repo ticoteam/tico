@@ -21,6 +21,8 @@ function flowProblem(steps) {
     if (s.type === 'llm' && !String(s.prompt ?? '').trim()) return `${s.id}: an llm step needs a prompt`;
     if (s.type === 'decide') for (const [id, q] of Object.entries(s.questions || {})) {
       if (q?.instructions == null || (typeof q.instructions === 'string' && !q.instructions.trim())) return `${s.id}.${id}: a question needs instructions`;
+      // clients/judge.py MAX_INSTRUCTIONS, counted in characters as Python counts them.
+      if ([...(typeof q?.instructions === 'string' ? q.instructions : JSON.stringify(q?.instructions ?? ''))].length > 8000) return `${id}: instructions over 8000 characters`;
       if (q?.type === 'choice' && (Array.isArray(q.criteria) ? q.criteria : Object.keys(q.criteria || {})).length < 2) return `${s.id}.${id}: a choice is a criteria map of at least two options`;
     }
     for (const kid of [s.steps, s.then, s.else, ...(Array.isArray(s.paths) ? s.paths.map(x => x?.steps) : [])])
@@ -29,8 +31,9 @@ function flowProblem(steps) {
   return '';
 }
 
-// The inbox templates (backend/automation_templates): the listing, and one fixed flow every template fills to (its
-// name aside). A person's or a bot's LLM is a draft turn as the owner; a group's is Sort, every option routed.
+// The inbox templates (backend/automation_templates): the listing, and a fixed flow for each. Blank is the real one's
+// shape: no rules, no questions, Sort to Me or Archive. The others fill to one flow (their names aside): a rule, a
+// question, and an LLM that is a draft turn as a person's or a bot's owner, and Sort, every option routed, for a group.
 const TEMPLATES = [{id: 'founder', name: 'Founder', destinations: ['Me', 'Legal', 'Engineering', 'Archive']},
   {id: 'support', name: 'Support desk', destinations: ['Support', 'Engineering', 'Archive']},
   {id: 'sales', name: 'Sales', destinations: ['Sales', 'Archive']}, {id: 'blank', name: 'Blank', destinations: ['Me', 'Archive']}];
@@ -39,6 +42,16 @@ function filledTemplate(tid, owner, inbox) {
     {id: 'legal', name: 'Legal', color: 'orange', then: [{do: 'create_task', args: {title: 'Legal: {{message.subject}}', owner: 'bot:support'}}]},
     {id: 'eng', name: 'Engineering', color: 'violet', then: [{do: 'create_task', args: {title: 'Bug: {{message.subject}}', owner: 'bot:eng-lead'}}]},
     {id: 'archive', name: 'Archive', color: 'gray', then: [{do: 'archive', args: {}}]}];
+  const name = TEMPLATES.find(t => t.id === tid).name, trigger = {type: 'message', inbox};
+  if (tid === 'blank') {
+    const two = [destinations[0], destinations[3]];
+    return {name, owner, enabled: false, trigger, destinations: two, steps: [
+      {id: 'rules', type: 'filter', rules: []},
+      {id: 'sort', type: 'decide', level: 'high', out: 'sort', questions: {route: {type: 'choice',
+        instructions: 'Where does this message belong? Pick the one that fits best.', criteria: {me: 'The owner should see it', archive: 'Nothing is asked of anyone'}}}},
+      {id: 'route', type: 'filter', rules: [...two.map(d => ({when: [{field: 'sort.route', op: 'is', value: d.id, min: 0.5}], to: d.id, next: 'end', stop: true})),
+        {when: [], to: 'me', next: 'end', stop: true}]}]};
+  }
   const to = destinations.map(d => d.id), [kind, id] = [owner.split(':')[0], owner.split(':').slice(1).join(':')];
   const steps = [
     {id: 'rules', type: 'filter', rules: [{when: [{field: 'message.subject', op: 'matches', value: 'subpoena|lawsuit'}], match: 'all',
@@ -52,7 +65,7 @@ function filledTemplate(tid, owner, inbox) {
       {when: [], to: 'me', next: 'end', stop: true}]});
   else steps.push({id: 'draft', type: 'llm', out: 'draft', as: (kind === 'person' ? 'assistant:' : 'bot:') + id,
     prompt: 'Route this message first. When unsure, choose me.', choose: {to, default: 'me', mode: 'draft'}});
-  return {name: TEMPLATES.find(t => t.id === tid).name, owner, enabled: false, trigger: {type: 'message', inbox}, steps, destinations};
+  return {name, owner, enabled: false, trigger, steps, destinations};
 }
 
 // A bot's draft (`draft: true` in openAutomations): off, its version 1 pending until Turn on (CONTRACT §2).
@@ -184,6 +197,8 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     }
     if (p === '/api/v2/automations' && method === 'POST') {
       // A new one (Blank, or New inbox's): version 1.
+      const bad = flowProblem(body.steps);
+      if (bad) return refuse(422, 'invalid_flow', bad);
       const a = {...clone(body), owner_id: body.owner, id: 'au_' + (db.list.length + 1), version: 1, can_edit: true};
       db.list.push(a);
       db.versions[a.id] = [{n: 1, actor: 'person:' + me.id, at: new Date().toISOString(), status: 'active', flow: flowOf(a)}];
