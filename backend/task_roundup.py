@@ -323,7 +323,10 @@ def _asks_back(c, slug, actor, at):
         # asked from a Home room names its task in refs only.
         tid = H.message_task_id({"refs": H._json(ask["refs"], {})}, H.conversation(c, ask["conversation_id"]))
         task = H.task(c, tid) if tid else None
-        if task and (not H.task_private_readable(c, actor, task) or H.task_private(c, task)):
+        # A task the bot may not read by every rule (H.bot_reads_task) is named nowhere, as the late lines are.
+        if task and not H.bot_reads_task(c, actor, task):
+            continue
+        if task and H.task_private(c, task):
             line = (f"- a private task {task['id'][:8]}: a question to a person had no answer in two business days; "
                     "ask again as a fresh question with a date, or drop it.")
             out.append((ASKS, when, _item(task["id"], line, key)))

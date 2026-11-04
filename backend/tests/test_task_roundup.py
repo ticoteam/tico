@@ -985,6 +985,27 @@ def test_a_late_ticket_its_manager_cannot_read_by_its_owner_bots_access_is_named
         assert lists(c, "coo") == [], "no title, no step, no line"
 
 
+def test_a_question_about_a_task_its_bot_no_longer_reads_names_neither_the_task_nor_the_question(api):
+    from backend import bot_access as A, bot_settings as BS
+    store = api.app.state.store
+    with store.transaction() as c:
+        mine = H.task_create(c, H.human_actor("ana"), "Confidential vendor terms", "Keep it quiet.", "bot:cpo", lint=False)
+        c.execute("UPDATE tasks SET created_at=? WHERE id=?", (DAY, mine["id"]))
+        question = H.say(c, H.bot_actor("finance"), H.human_actor("ana"), "Are the vendor terms still 40 days?",
+                         conversation_id=H.task(c, mine["id"])["conversation_id"], kind="ask", refs={"task": mine["id"]})
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (ago(days=8), question["id"]))
+        complete_jobs(c)
+        assert still_needed.sweep(c, H.shift(DAY, hours=3)) == {"bot:finance": [question["id"]]}
+        # cpo, the task's bot, now lets only Ana's people read it: finance asked about it while it could.
+        only_ana = A.audience({"people": ["ana"]})
+        c.execute("INSERT INTO bot_config(bot,owner_id,access) VALUES('cpo','ana',?) ON CONFLICT(bot) DO UPDATE SET access=excluded.access",
+                  (A.stored({"see": A.OPEN_LEVEL, "read": only_ana, "write": only_ana}),))
+        BS.write(c, "cpo", {})
+        assert not H.bot_reads_task(c, H.bot_actor("finance"), H.task(c, mine["id"]))
+        assert "finance" not in task_roundup.run(c, NOON)["woke"]
+        assert lists(c, "finance") == [], "no title, no question text, no wake"
+
+
 def test_a_reviewer_is_woken_once_by_its_roundup_and_listed_only_its_returned_question(api):
     from backend import bot_settings as BS
     store = api.app.state.store
