@@ -151,10 +151,16 @@ function auWarn(a) {
   return steps.length ? `<span class="au-warn"><span class="nav-icon" aria-hidden="true">warning</span>`
     + `${esc('Names a step its type does not have: ' + steps.join(', '))}</span>` : '';
 }
+// A saved automation's last failed run: its error and when, under its name (a built-in row shows as it did).
+function auFailedLine(a) {
+  if (a.builtin || a.last_run?.status !== 'failed') return '';
+  const when = a.last_run.finished_at || a.last_run.started_at;
+  return `<div class="au-warn"><span class="nav-icon" aria-hidden="true">error</span>${esc(`Last run failed${when ? ' ' + auRunTime(when) : ''}: ${a.last_run.error || 'failed'}`)}</div>`;
+}
 function auPill(a) {
   const st = auState(a);
   return (a.pending ? '<span class="pill">Pending</span>' : '')
-    + (st === 'paused' ? '<span class="pill waiting">Paused</span>' : st === 'off' ? '<span class="pill">Off</span>'
+    + (st === 'paused' ? `<span class="pill waiting">${esc(a.paused_reason || 'Paused')}</span>` : st === 'off' ? '<span class="pill">Off</span>'
       : st === 'hold' ? '<span class="pill waiting">On hold</span>' : '');
 }
 const AU_DOTS = {ok: 'ok', empty: 'ok', skipped: 'ok', failed: 'fail', waiting: 'wait'};
@@ -192,7 +198,7 @@ function auTableHTML() {
   // Each column: its class (widths and folding in automations.css), heading and cell. A phone leads with what is read
   // first (name, last run, runs, failed) and scrolls sideways for the rest.
   const cols = {
-    name: ['au-tn', 'Name', ({a}) => `<div><a href="${auHref(a.id)}">${auIcon(AU_KIND_ICONS[auKind(a)] || 'bolt')}<span class="au-nm">${esc(a.name || 'Untitled')}</span></a>${auPill(a)}</div>${auWarn(a)}`],
+    name: ['au-tn', 'Name', ({a}) => `<div><a href="${auHref(a.id)}">${auIcon(AU_KIND_ICONS[auKind(a)] || 'bolt')}<span class="au-nm">${esc(a.name || 'Untitled')}</span></a>${auPill(a)}</div>${auWarn(a)}${auFailedLine(a)}`],
     trigger: ['au-tt', 'Trigger', ({a}) => esc(auTrigLine(a))],
     owner: ['au-to', 'Owner', ({a}) => `<span title="${esc(auActorName(a.owner_id))}" aria-label="${esc(auActorName(a.owner_id))}">${personCircle(auActorName(a.owner_id), 18)}</span>`],
     last: ['au-cl', 'Last run', ({a}) => a.last_run ? `<span class="au-lr"><span class="au-dot ${AU_DOTS[a.last_run.status] || 'idle'}" role="img" aria-label="${esc(AU_RUN_STATUS[a.last_run.status] || a.last_run.status)}"></span>${esc(auAge(a.last_run.started_at))}</span>` : '<span class="muted">—</span>'],

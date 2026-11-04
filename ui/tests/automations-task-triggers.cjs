@@ -34,3 +34,26 @@ const TYPES = [{id: 'dev', name: 'Dev tickets', steps: [{id: 'st_review', name: 
     await browser.close();
   }
 })().catch(e => { console.error(e); process.exit(1); });
+
+// Criteria 3 and 4 (Dev 666): a failed last run shows its error and its time on the row; a paused task-event automation
+// reads "Paused: too many runs". A built-in row is not given the error line.
+(async () => {
+  const browser = await chromium.launch();
+  try {
+    const failed = {...JSON.parse(JSON.stringify(TASK_AU)), id: 'au_failed', name: 'Failed step',
+      enabled: true, last_run: {id: 'run_f', status: 'failed', started_at: '2026-11-03T10:00:00Z', finished_at: '2026-11-03T10:00:05Z',
+        error: 'The note could not be saved'}};
+    const paused = {...JSON.parse(JSON.stringify(TASK_AU)), id: 'au_paused', name: 'Paused one', enabled: false,
+      paused: true, paused_reason: 'Paused: too many runs'};
+    const o = await openAutomations(browser, {viewport: DESKTOP, hash: '#/automations',
+      tweak: fx => fx.automations.push(failed, paused)});
+    const row = o.page.locator('.au-tn', {hasText: 'Failed step'});
+    await row.waitFor();
+    assert.match(await o.page.locator('.au-tn', {hasText: 'Failed step'}).innerText(), /Last run failed.*could not be saved/);
+    assert.match(await o.page.locator('.au-tn', {hasText: 'Paused one'}).innerText(), /Paused: too many runs/);
+    assert.deepEqual(o.errors, [], 'no page errors');
+    console.log('automations task rows ok');
+  } finally {
+    await browser.close();
+  }
+})().catch(e => { console.error(e); process.exit(1); });

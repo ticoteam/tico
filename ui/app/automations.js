@@ -253,7 +253,7 @@ function auSwitch(on, label, attrs = '') {
 // The header's on/off: the switch for whoever may pause it, else whether it is off.
 function auHeadSwitch(a, name) {
   if (auMayPause(a)) return auSwitch(a.enabled !== false, name + ' on', 'data-on-cur');
-  return a.enabled === false ? `<span class="pill${a.paused ? ' waiting' : ''}">${a.paused ? 'Paused' : 'Off'}</span>` : '';
+  return a.enabled === false ? `<span class="pill${a.paused ? ' waiting' : ''}">${a.paused ? esc(a.paused_reason || 'Paused') : 'Off'}</span>` : '';
 }
 // The run guard's hold, on its own line: how many runs wait, and Release or Drop for whoever may change it.
 function auHoldLine(a) {
