@@ -279,9 +279,9 @@ TICO_TAG=vX.Y.Z                         # the release running now
 
 and run `docker compose up -d`. From then on the updater moves `TICO_TAG`.
 
-Before switching images the updater copies `hub.sqlite` with SQLite's online backup API. That copy is checked by
-opening it and confirming it has pages; a full `PRAGMA quick_check` is not used, because on multi-gigabyte databases
-it can run longer than the update window.
+Before switching images the updater copies `hub.sqlite` with SQLite's online backup API. That copy must pass
+`PRAGMA quick_check`, because rollback refuses a snapshot that fails it. On a multi-gigabyte database the copy and check
+can take minutes; set `TICO_UPDATER_SNAPSHOT_SECONDS` (default 900) in `.env` when a hub needs longer.
 
 ## The runner
 

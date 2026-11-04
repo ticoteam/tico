@@ -719,10 +719,10 @@ def copy_and_check():
     try:
         source, target = sqlite3.connect("/data/hub.sqlite", timeout=30), sqlite3.connect(part)
         source.backup(target)     # a consistent copy while the server keeps writing
-        # sqlite3.backup() already yields a consistent database. A full page walk (quick_check) is disk-bound
-        # for longer than an update can wait on multi-gigabyte hubs, so confirm the copy opened with pages.
-        pages = target.execute("PRAGMA page_count").fetchone()[0]
-        result.append("ok" if pages >= 1 else "the snapshot copy is empty")
+        # quick_check reads every page and b-tree but skips integrity_check's index-against-table cross-check. It stays:
+        # backup() copies a damaged page as it is, and rollback refuses a snapshot that fails this check. A large hub
+        # that needs longer sets TICO_UPDATER_SNAPSHOT_SECONDS.
+        result.append(target.execute("PRAGMA quick_check").fetchone()[0])
         target.close(); source.close()
     except sqlite3.Error as exc:
         result.append("the snapshot copy failed: %s" % exc)
