@@ -1,5 +1,5 @@
 """System routines 2/3 (backend/system_routines.py CONTROLS): on/off and a schedule preset for the timed jobs (those that use
-AI or reach people, the books, and the nightly auto dream), Run now, who may change them (owner and admins; Health scan only the owner; enforced on the server), the
+AI or reach people, the books, and the nightly auto dream), Run now, who may change them (owner and admins; enforced on the server), the
 flat list's WHEN/THEN rows, department tag and search words, and the stale review and Topic changed switches moved from
 Settings > General > Team. Routines spec tests 3-9 and 12, task-rules spec tests 1-3 (built-in rows). Ana owns the
 team, Ben is an admin, Cara a member (backend/tests/test_api.py). Synthetic fixtures only."""
@@ -61,15 +61,14 @@ def test_a_member_sees_the_list_with_nothing_to_change_and_the_server_refuses_th
     post(api, "learnings/run", {}, token="cara-test", expected=403)      # the Learnings API's run is the same run
 
 
-def test_health_scan_is_owner_only_an_admin_reads_it_and_the_owner_changes_it(api):
-    assert rows(api, "ben-test")["health_scan"]["can_change"] is False
-    assert rows(api, "ben-test")["health_scan"]["owner_only"] is True
-    assert "Health Monitor is off" in rows(api)["health_scan"]["note"], "its switch alone does not make it find things"
-    put(api, "system-routines/health_scan", {"on": False}, token="ben-test", expected=403)
-    post(api, "system-routines/health_scan/run", {}, token="ben-test", expected=403)
-    assert rows(api)["health_scan"]["can_change"] is True
-    job = put(api, "system-routines/health_scan", {"preset": "4h"})["job"]
-    assert job["schedule"] == "Every 4 hours"
+def test_health_scan_is_an_admin_routine_and_a_member_cannot_change_it(api):
+    assert rows(api, "ben-test")["health_scan"]["owner_only"] is False
+    assert rows(api, "ben-test")["health_scan"]["can_change"] is True
+    assert rows(api, "cara-test")["health_scan"]["can_change"] is False
+    assert rows(api)["health_scan"].get("note") is None, "its switch is the whole control: no monitor to turn on first"
+    put(api, "system-routines/health_scan", {"on": False}, token="cara-test", expected=403)
+    post(api, "system-routines/health_scan/run", {}, token="cara-test", expected=403)
+    put(api, "system-routines/health_scan", {"preset": "4h"})
     assert put(api, "system-routines/health_scan", {"on": False})["job"]["on"] is False
     assert rows(api)["health_scan"]["next"] is None, "off: no next run"
 

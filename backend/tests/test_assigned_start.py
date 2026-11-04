@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from backend import assigned_start as A, health, health_monitor, queue_refusals, task_roundup
+from backend import assigned_start as A, health, maintenance_health, queue_refusals, task_roundup
 from backend.store import H
 from backend.tests.test_api import api, claim, get, post  # noqa: F401
 from backend.tests.test_auto_tasks import deck, finish, set_cap, take
@@ -304,7 +304,7 @@ def test_running_lane_does_not_mask_other_lanes_refusal_and_twelve_hour_finding(
         online = {r['id'] for r in health._online_runners(c)}
         rows = [r for r in health._waiting(c, online, api.app.state.store.settings)[2] if r['bot'] == 'ops']
         assert [r['reason'] for r in rows] == [refusal]
-        assert 'queue_refused' in {f['check_id'] for f in health_monitor.findings(c, api.app.state.store.settings)}
+        assert 'queue_refused' in {f['check_id'] for f in maintenance_health.findings(c, api.app.state.store.settings)}
     check = next(x for x in get(api, 'health')['checks'] if x['id'] == 'queue_refused')
     assert check['items'][0]['reason'] == refusal
     # A newer claimable chat cannot hide the old refused task in the aged-job list.

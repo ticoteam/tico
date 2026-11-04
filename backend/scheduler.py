@@ -55,12 +55,12 @@ def run_kpi_asks(store, auth, at, failures=None):
 
 
 def run_health_scan(store, auth, at, failures=None):
-    # Only while the owner has the Health Monitor on (backend/health_monitor.py). Plain code; it wakes the bot only for a
-    # finding the last scan did not have.
+    # Check health (backend/maintenance_steps/check_health.py): plain code, no bot. Its timer stays until the Maintenance
+    # run replaces it. Each problem is one BotOps task; a Tico bug goes to the Tico team through the report path.
     with SR.recording(store, "health_scan", failures, "health_monitor") as run:
-        from . import health_monitor
-        woke = health_monitor.check(store, auth, store.settings)
-        run.did(SR.words_of(woke, "new finding", "No new findings"))
+        from . import maintenance_health
+        result = maintenance_health.check(store, auth, store.settings)
+        run.did(SR.words_of(result.get("woke", 0), "BotOps task", "No new BotOps tasks"))
 
 
 def run_ask_deadlines(store, auth, at, failures=None):

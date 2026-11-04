@@ -189,7 +189,7 @@ def test_a_quiet_repeat_moves_its_row_after_a_minute_and_a_busy_run_starts_a_new
 
 
 def test_each_wrapped_block_still_reports_its_old_failure_name(api, monkeypatch):
-    from backend import (approval_expiry, ask_deadlines, billing_check, go_live, goal_asks, health_monitor,
+    from backend import (approval_expiry, ask_deadlines, billing_check, go_live, goal_asks, maintenance_health,
                          still_needed)
     from backend import goals as G
     store = api.app.state.store
@@ -201,7 +201,7 @@ def test_each_wrapped_block_still_reports_its_old_failure_name(api, monkeypatch)
 
     def broken(*a, **k):
         raise RuntimeError("x")
-    for module, name in ((G, "refresh"), (goal_asks, "sync"), (health_monitor, "check"), (go_live, "expire"),
+    for module, name in ((G, "refresh"), (goal_asks, "sync"), (maintenance_health, "check"), (go_live, "expire"),
                          (ask_deadlines, "sweep"), (approval_expiry, "sweep"), (still_needed, "sweep"),
                          (billing_check, "read_later")):
         monkeypatch.setattr(module, name, broken)

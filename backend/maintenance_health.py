@@ -1,24 +1,13 @@
-"""The Health Monitor: an optional built-in helper that looks over this install once an hour, has the setup problems it
-finds fixed by BotOps, and reports Tico bugs to the Tico team (docs/health-monitor.md).
+"""Check health: what is wrong with this install right now, found by plain code (no bot, no model).
 
-It is off until the owner turns it on (Settings > Health). While its bot is active, the scheduler runs `scan` once an
-hour. The scan is plain code over what the server already knows (computers' versions and the error lines their runners
-report, turns stopped by a usage limit, bots held in setup, queued work that does not start,
-task worktrees that failed, the server's own CPU): it costs no model. Each finding has a key (what and where, on this
-install) and a signature (what, without where, the same on every install). A finding the last scan did not have opens
-one task for the Health Monitor through the same path as a watcher's events (backend/watchers.py). Seeing it again
-counts: its count and last-seen time move on the finding, and nothing runs, whether it was still there an hour later
-or went away and came back while the Health Monitor's task for it is still open (that task gets a quiet note it reads
-on its next turn). Only a finding the bot has not been told of wakes it: a new one, one whose severity rises (it is
-woken on its open task), or one back after its task was finished (done, closed or declined), which counts as new: it
-is woken on that task while it is only done, or gets a new one. The bot's own watcher, `software/health-scan`, looks at the computer it runs on (processes using
-CPU or memory while idle) the same way.
+The Maintenance run's step (backend/maintenance_steps/check_health.py) reads these checks, plus the production invariants
+and the Health page's own checks, and files each problem as a finding: one BotOps task per problem, a count on repeats,
+and a cleared comment when it passes (docs/health-monitor.md). This module holds the checks themselves, the record of
+busy processes a runner reports, and the Tico bug report path: `health_findings` -> `health_reports` dedupe -> a support
+ticket to the Tico team, or a support approval a person reads first when the team rule `health_monitor_reports` is off.
 
-A Tico bug goes to HQ as a support ticket with `report`: one ticket per signature, a message written here from the
-finding (never task or message text) and the redacted diagnostics bundle (backend/diagnostics.py). The team rule
-`health_monitor_reports` (on by default) lets it file without asking; with it off, the report is a `support` approval a
-person reads first. The ticket is the owner's: its replies show on the owner's Support page. A finding that comes back
-after its ticket was filed adds a message to that ticket instead of filing another.
+Each finding has a key (what and where, on this install: one per computer for a computer's problem) and a signature (what,
+without where: the same on every install for the same problem). The signature groups the BotOps task and the ticket.
 """
 import calendar
 import hashlib
@@ -27,19 +16,20 @@ import logging
 import re
 import time
 from datetime import timezone
+from types import SimpleNamespace
 
 from fastapi import Request
 from pydantic import Field
 
 from . import diagnostics, login_holds, models_preset, providers, runner_versions, team_rules
+from . import models as M
 from .models import Contract
 from .store import H, Problem
 from . import bot_settings as BS
 
-log = logging.getLogger("tico.health_monitor")
+log = logging.getLogger("tico.maintenance_health")
 
-SLUG = H.HEALTH_MONITOR
-NAME = "Health Monitor"
+BOTOPS = "botops"           # the bot that takes every setup finding (a task per signature), and asks a person for it
 RULE = "health_monitor_reports"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS health_findings(
@@ -124,13 +114,6 @@ TICO_PROCESSES = {"python", "python3", "uvicorn", "node", "git", "docker", "cadd
 TICO_SERVICES = {"server", "slack", "caddy", "cloudflared", "updater", "runner"}   # compose.yaml, docker/runner.compose.yaml
 
 
-class LocalFinding(Contract):
-    """A process the bot's watcher saw busy on its computer: a name and two numbers, never free text."""
-    process: str = Field(pattern=r"^(process|container):[A-Za-z0-9._-]{1,40}$")
-    cpu: float = Field(ge=0, le=100000)
-    mb: float = Field(ge=0, le=10000000)
-
-
 def public_process(process):
     """`process:<name>` or `container:<name>` as a report may name it: a known Tico name, never a local one."""
     what, name = process.split(":", 1)
@@ -138,22 +121,6 @@ def public_process(process):
         return f"process {name}" if name in TICO_PROCESSES else "a process"
     parts = [p for p in name.lower().split("-") if not p.isdigit()]    # compose: <project>-<service>-<n>
     return f"the Tico {parts[-1]} container" if parts and parts[-1] in TICO_SERVICES else "a Tico container"
-
-
-def record_local(c, body):
-    """The bot's local finding as a server finding, so `report` files it like any other. Returns its key."""
-    what, name = body.process.split(":", 1)
-    item = _finding("local_busy:" + body.process, "local_busy", BUG, f"{what.capitalize()} {name} is busy while idle",
-                    f"{what.capitalize()} {name} used {body.cpu:.0f}% CPU and {body.mb:.0f} MB of memory in two hourly "
-                    "checks in a row on a computer running Tico.",
-                    BUG_FIX["local_busy"], subject=public_process(body.process))
-    now = H.now()
-    c.execute("INSERT INTO health_findings(key,signature,check_id,kind,title,detail,fix,first_seen_at,last_seen_at,present,"
-              "occurrences) VALUES(?,?,?,?,?,?,?,?,?,0,1) ON CONFLICT(key) DO UPDATE SET detail=excluded.detail,"
-              "last_seen_at=excluded.last_seen_at,occurrences=health_findings.occurrences+1",
-              (item["key"], item["signature"], item["check_id"], item["kind"], item["title"], item["detail"],
-               item["fix"], now, now))
-    return item["key"]
 
 
 def signature(check_id, subject=""):
@@ -168,11 +135,6 @@ def _finding(key, check_id, kind, title, detail, fix, subject="", severity=WARN)
 
 def _rank(severity):
     return SEVERITY.index(severity) if severity in SEVERITY else 0
-
-
-def active(c):
-    row = H.bot(c, SLUG)
-    return bool(row) and row["state"] == "active"
 
 
 def _holding_fix(label):
@@ -555,8 +517,8 @@ def _profile_checks(c):
     from . import profiles
     say = {"reviewer_holds_tasks": (lambda name, n: (
                f"{name} is a Reviewer but owns {n} open task{'s' if n != 1 else ''} that {'are' if n != 1 else 'is'} not review or QA requests",
-               f"A Reviewer takes review and QA requests only and does not pull other open tasks by itself, so "
-               f"these wait for a person to start them.",
+               "A Reviewer takes review and QA requests only and does not pull other open tasks by itself, so "
+               "these wait for a person to start them.",
                f"BotOps: give those tasks to a bot that does the work, or change {name}'s profile to Doer.")),
            "responder_has_tasks": (lambda name, n: (
                f"{name} is a Responder but has {n} open task{'s' if n != 1 else ''}",
@@ -721,89 +683,49 @@ def findings(c, settings):
     return list(out.values())
 
 
-# ---------------------------------------------------------------------------------------------------- the scan
-def _event(item, occurrences, was=None):
-    """What the bot is told: a task for a new finding (a comment on its finished task, while that can still be woken), or
-    `was` (the severity it had) when it got worse."""
-    from .watchers import WatcherEvent
-    body = (f"{item['title']}\n\nKind: {item['kind']}\nCheck: {item['check_id']}\nSignature: {item['signature']}\n"
-            f"Severity: {item['severity']}\nSeen: {occurrences} time(s)\n\nWhat was seen:\n{item['detail']}\n\n"
-            f"Fix:\n{item['fix']}\n\nFollow playbooks/finding.md.")
-    text = (f"Worse now ({item['severity']}, was {was}; seen {occurrences} times): {item['title']}. "
-            f"Signature {item['signature']}. {item['detail']}\n\nFix:\n{item['fix']}") if was else (
-           f"Back after its task was finished (seen {occurrences} times): {item['title']}. Signature {item['signature']}. "
-           f"{item['detail']}\n\nFix:\n{item['fix']}")
-    return WatcherEvent(op="comment", key="hm:" + item["key"], ref=f"{item['key']}#{occurrences}",
-                        title=("Health: " + item["title"])[:300], body=body, text=text[:8000])
 
 
-def _open_task(c, key):
-    """The Health Monitor's task for a finding while it still works it (not done, closed or declined), else None."""
-    item = c.execute("SELECT task_id FROM watcher_items WHERE bot=? AND key=?", (SLUG, "hm:" + key)).fetchone()
-    task = H.task(c, item["task_id"]) if item else None
-    return task if task and task["status"] not in ("done", "closed", "declined") else None
+# ---------------------------------------------------------------------------------------------------- the runner's idle load
+IDLE_MAX = 50                # busy names one computer's hourly sample lists; the runner keeps the busiest
+IDLE_STALE_HOURS = 2         # a busy name not sampled this long clears: its runner stopped sampling
 
 
-def check(store, auth, settings):
-    """The scheduler's pass: `scan` in two steps. The findings are read in one read snapshot, outside the write lock,
-    and only the changes are written after it, in a short transaction. Read under the lock, the hourly scan held every
-    runner call for seven seconds on TIDY (12:26 UTC, Oct 29, 2026). Same shape as invariants.sweep."""
-    with store.read() as r:
-        if not active(r):
-            return []
-        found = findings(r, settings)
-    with store.transaction() as c:
-        return apply(c, auth, found)
+class IdleEntry(Contract):
+    """One name busy in two hourly samples in a row on a computer (runner-rs idle sampler): a name and two numbers."""
+    name: str = Field(pattern=r"^(process|container):[A-Za-z0-9._-]{1,40}$")
+    cpu: float = Field(ge=0, le=100000)
+    mb: float = Field(ge=0, le=10000000)
 
 
-def scan(c, auth, settings):
-    """One pass in one transaction. Returns the keys that opened or woke a task; nothing when the Health Monitor is off."""
-    if not active(c):
-        return []
-    return apply(c, auth, findings(c, settings))
+class IdleLoad(Contract):
+    """A computer's hourly busy list. An empty list is how the runner says nothing is busy (it clears earlier names)."""
+    sampled_at: str = Field(max_length=40)
+    busy: list[IdleEntry] = Field(default_factory=list, max_length=IDLE_MAX)
 
 
-def apply(c, auth, found):
-    """Records what `findings` found and wakes the bot for what is new. Every finding seen counts once a scan. Only a new
-    finding, one whose severity rose, or one back after its task was finished wakes the bot; seeing it again otherwise
-    moves its count and last-seen time and starts no run."""
-    if not active(c):
-        return []
-    from .watchers import deliver
-    now, woke = H.now(), []
-    keys = {item["key"] for item in found}
-    for item in found:
-        row = c.execute("SELECT * FROM health_findings WHERE key=?", (item["key"],)).fetchone()
-        occurrences = row["occurrences"] + 1 if row else 1
-        c.execute("INSERT INTO health_findings(key,signature,check_id,kind,title,detail,fix,first_seen_at,last_seen_at,present,"
-                  "occurrences,severity) VALUES(?,?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(key) DO UPDATE SET "
-                  "signature=excluded.signature,kind=excluded.kind,title=excluded.title,detail=excluded.detail,"
-                  "fix=excluded.fix,last_seen_at=excluded.last_seen_at,present=1,occurrences=excluded.occurrences,"
-                  "severity=excluded.severity",
-                  (item["key"], item["signature"], item["check_id"], item["kind"], item["title"], item["detail"],
-                   item["fix"], now, now, occurrences, item["severity"]))
-        was = row["severity"] if row and _rank(item["severity"]) > _rank(row["severity"]) else None
-        if row and not was:
-            if row["present"]:
-                continue                                     # still there: counted, already said
-            task = _open_task(c, item["key"])
-            if task:                             # back while its task is open: counted, read on the bot's next turn
-                H.task_comment(c, H.KEEPER, task["id"], f"Seen again ({occurrences} times, last {now[:16]} UTC): "
-                               f"{item['title']}. It wakes nothing while this task is open.", wake=False)
-                continue
-            # back after its task was finished: new again
-        H.hook(c, "health.finding", item["key"], lambda: {"key": item["key"], "check": item["check_id"], "kind": item["kind"],
-                                                           "severity": item["severity"], "title": item["title"]},
-               H.KEEPER, revision=f"{item['signature']}:{now}")
-        if deliver(c, auth, SLUG, _event(item, occurrences, was)):
-            c.execute("UPDATE health_findings SET last_woke_at=? WHERE key=?", (now, item["key"]))
-            woke.append(item["key"])
-    gone = [r["key"] for r in c.execute("SELECT key FROM health_findings WHERE present=1") if r["key"] not in keys]
-    for key in gone:
-        c.execute("UPDATE health_findings SET present=0 WHERE key=?", (key,))
-    if woke or gone:
-        H.event(c, H.KEEPER, "health_monitor.scan", SLUG, {"new": woke, "cleared": gone})
-    return woke
+def record_idle(c, runner_id, body):
+    """Records one computer's hourly busy list. Each name in it is a local finding for that computer, seen now; a name
+    the list no longer has clears. Returns the keys busy now. An old runner never sends this, so nothing is recorded."""
+    now, busy = H.now(), {}
+    for entry in body.busy:
+        what, name = entry.name.split(":", 1)
+        key = f"local_busy:{runner_id}:{entry.name}"
+        item = _finding(key, "local_busy", BUG, f"{what.capitalize()} {name} is busy while idle",
+                        f"{what.capitalize()} {name} used {entry.cpu:.0f}% CPU and {entry.mb:.0f} MB of memory in two hourly "
+                        "checks in a row on a computer running Tico.",
+                        BUG_FIX["local_busy"], subject=public_process(entry.name))
+        busy[key] = item
+        c.execute("INSERT INTO health_findings(key,signature,check_id,kind,title,detail,fix,first_seen_at,last_seen_at,"
+                  "present,occurrences,severity,pending) VALUES(?,?,?,?,?,?,?,?,?,1,1,?,0) ON CONFLICT(key) DO UPDATE SET "
+                  "title=excluded.title,detail=excluded.detail,last_seen_at=excluded.last_seen_at,present=1,pending=0",
+                  (key, item["signature"], item["check_id"], item["kind"], item["title"], item["detail"], item["fix"],
+                   now, now, item["severity"]))
+    # This computer's rows only: the keys between "local_busy:<runner>:" and the same prefix with ";" (the next character).
+    for row in c.execute("SELECT key FROM health_findings WHERE present=1 AND check_id='local_busy' AND key>=? AND key<?",
+                         (f"local_busy:{runner_id}:", f"local_busy:{runner_id};")).fetchall():
+        if row["key"] not in busy:
+            c.execute("UPDATE health_findings SET present=0, pending=0 WHERE key=?", (row["key"],))
+    return sorted(busy)
 
 
 # ---------------------------------------------------------------------------------------------------- reporting
@@ -914,71 +836,78 @@ def report(c_factory, support, auth, settings, who, key):
     return {"signature": row["signature"], "ticket": ticket["id"]}
 
 
+
+
+def file_reports(store, auth, settings, support, signatures):
+    """HQ calls for the Tico bugs the step found, one signature at a time, outside any transaction. The same report path as
+    the route (`report`), as KEEPER: a ticket once, a comment when it comes back worse, an approval when the team rule is
+    off, and at most REPORTS_PER_DAY tickets a day (the rest wait for the next run). Returns {signature: answer}."""
+    if support is None:
+        return {}
+    answers = {}
+    for signature in signatures:
+        try:
+            answers[signature] = report(store, support, auth, settings, SimpleNamespace(actor=H.KEEPER), signature)
+        except Problem as exc:
+            answers[signature] = {"signature": signature, "deferred": exc.code if hasattr(exc, "code") else str(exc)}
+    return answers
+
+
+def check(store, auth, settings, support=None):
+    """The scheduler's hourly pass until the Maintenance run replaces its timer: the check_health step's lifecycle in one
+    write transaction, then the Tico bug reports filed outside it. A rehearsal or demo copy checks nothing."""
+    from .maintenance_steps import check_health
+    if settings.rehearsal or settings.demo:
+        return {"status": "skipped", "reason": "rehearsal or demo copy"}
+    result = check_health.run_once(store, auth, settings)
+    support = support or getattr(store, "report_support", None)     # the scheduler's timer has no app: support.py sets it
+    file_reports(store, auth, settings, support, result["details"].get("reports_due", []))
+    return result
+
+
 # ---------------------------------------------------------------------------------------------------- the routes
-def view(c):
-    row = H.bot(c, SLUG)
+def findings_view(c):
+    """Open findings, for the Health page (Settings > Health): a finding waiting on its confirmation run is not listed."""
+    from .maintenance_steps import check_health
     rows = [dict(r) for r in c.execute(
-        "SELECT f.key,f.signature,f.check_id,f.kind,f.title,f.severity,f.first_seen_at,f.last_seen_at,f.occurrences,"
-        "r.ticket_id,r.approval_id "
-        "FROM health_findings f LEFT JOIN health_reports r ON r.signature=f.signature WHERE f.present=1 "
-        "ORDER BY f.last_seen_at DESC LIMIT 50")]
-    return {"state": row["state"] if row else "absent", "on": bool(row) and row["state"] == "active",
-            "reports_without_asking": team_rules.load(c)[RULE], "findings": rows}
+        "SELECT f.key,f.signature,f.check_id,f.kind,f.title,f.detail,f.fix,f.severity,f.first_seen_at,f.last_seen_at,"
+        "f.occurrences,r.ticket_id,r.approval_id FROM health_findings f LEFT JOIN health_reports r ON r.signature=f.signature "
+        "WHERE f.present=1 AND f.pending=0 ORDER BY f.last_seen_at DESC LIMIT 50")]
+    for row in rows:
+        row["tag"] = check_health.tag_of(row["check_id"])
+        row["task_id"] = check_health.task_of(c, row["signature"])
+    botops = (H.bot(c, BOTOPS) or {}).get("state") == "active"
+    return {"findings": rows, "botops": botops, "reports_without_asking": team_rules.load(c)[RULE]}
 
 
-def install(app, store, auth, mutate, onboarding, settings_admin, settings):
-    from . import models as M
-
-    def owner(request):
+def install(app, store, auth, mutate, settings):
+    @app.get("/api/v2/health/findings")
+    def health_findings(request: Request):
         who = request.state.identity
-        if who.role != "owner":
-            raise Problem("forbidden", "Only the owner turns the " + NAME + " on or off", 403)
-        return who
-
-    @app.get("/api/v2/health-monitor")
-    def health_monitor(request: Request):
-        who = request.state.identity
-        if who.role not in ("owner", "human") and who.actor != "bot:" + SLUG:
-            raise Problem("forbidden", "People and the " + NAME + " read this", 403)
+        if who.role not in ("owner", "human") and who.actor != "bot:" + BOTOPS:
+            raise Problem("forbidden", "People and BotOps read the health findings", 403)
         with store.read() as c:
             if who.role == "human" and not auth.bot_admin(who):
-                raise Problem("forbidden", "Owners and admins read this", 403)
-            return view(c)
+                raise Problem("forbidden", "Owners and admins read the health findings", 403)
+            return findings_view(c)
 
-    @app.post("/api/v2/health-monitor/turn-on")
-    def turn_on(request: Request, body: M.Empty):
-        who = owner(request)
-        return mutate(request, body, lambda c: onboarding.turn_on_health_monitor(c, who))
-
-    @app.post("/api/v2/health-monitor/turn-off")
-    def turn_off(request: Request, body: M.Empty):
-        who = owner(request)
-
-        def work(c):
-            row = H.bot(c, SLUG)
-            if not row or row["state"] != "active":
-                return {"bot": SLUG, "state": row["state"] if row else "absent"}
-            settings_admin.update_bot(c, who, SLUG, M.BotDefinitionUpdate(
-                status="paused", expected_revision=settings_admin._config(c, SLUG)["revision"]))
-            H.event(c, who.actor, "health_monitor.turned_off", SLUG, {})
-            return {"bot": SLUG, "state": H.bot(c, SLUG)["state"]}
-        return mutate(request, body, work)
-
-    @app.post("/api/v2/health-monitor/local-findings")
-    def local_finding(request: Request, body: LocalFinding):
-        who = request.state.identity
-        if who.actor != "bot:" + SLUG:
-            raise Problem("forbidden", "Only the " + NAME + " records what its watcher saw", 403)
-        return mutate(request, body, lambda c: {"key": record_local(c, body)})
-
-    @app.post("/api/v2/health-monitor/findings/{key}/report")
+    @app.post("/api/v2/health/findings/{key}/report")
     def report_finding(request: Request, key: str, body: M.Empty):
         who = request.state.identity
-        if who.actor != "bot:" + SLUG and who.role != "owner":
-            raise Problem("forbidden", "Only the " + NAME + " or the owner reports a finding", 403)
+        if who.actor != "bot:" + BOTOPS and who.role != "owner":
+            raise Problem("forbidden", "Only BotOps or the owner reports a finding", 403)
         support = getattr(app.state, "support", None)
         if support is None:
             raise Problem("support_off", "Contact support is not available here.", 409)
         from .support import require_on
         require_on(settings)
         return report(store, support, auth, settings, who, key)
+
+    @app.post("/api/v2/runners/idle-load")
+    def idle_load(request: Request, body: IdleLoad):
+        """The runner's hourly busy list (runner-rs idle sampler). Optional: an old server has no such route, and an old
+        runner never calls it. Off the heartbeat path, so a failed post never holds a heartbeat or a claim."""
+        who = request.state.identity
+        if who.role != "runner" or not getattr(who, "runner_id", None):
+            raise Problem("forbidden", "Only a computer running Tico reports its busy processes", 403)
+        return mutate(request, body, lambda c: {"busy": record_idle(c, who.runner_id, body)})

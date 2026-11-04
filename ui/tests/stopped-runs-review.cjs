@@ -78,7 +78,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/v2/health') return json(health);
-      if (p === '/api/v2/health-monitor') return json({state: 'active', on: true, findings: []});
+      if (p === '/api/v2/health/findings') return json({findings: [], botops: true, reports_without_asking: false});
       if (p === '/api/v2/system/metrics') return json({});
       if (p === '/api/employees' || p === '/api/issues') return json([]);
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
@@ -112,9 +112,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const stuck = await page.locator('#hl-page [data-stuck="builder"] .muted').innerText();
     assert.match(stuck, /3 behind an interrupted run · 1 held on purpose$/);
     assert.doesNotMatch(stuck, /queued/, 'nothing that can start is called queued');
-    // Health shows both BotOps checks with their own rows, and the person's dot stays dark: the checks are warn and bad
-    // (window.hlAttention), yet BotOps reviews them, so ui/app/heartbeat.js leaves them off the dot.
-    assert.deepEqual(await page.evaluate(() => window.hlAttention().map(check => check.id)), ['stopped_runs', 'quarantine']);
+    // Health shows both BotOps checks with their own rows, and the person's dot stays dark: the checks are warn and bad,
+    // yet BotOps reviews them, so ui/app/heartbeat.js never lists them.
     assert.equal(await page.locator('#hl-summary').innerText(), '2 issues to look at');
     const stoppedRow = page.locator('#hl-page [data-hl-check="stopped_runs"]'), quarantineRow = page.locator('#hl-page [data-hl-check="quarantine"]');
     assert.equal(await stoppedRow.getAttribute('data-status'), 'warn');

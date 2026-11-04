@@ -1601,7 +1601,7 @@ def stats(c, settings):
 
 
 def health_findings(c, settings):
-    """A high share of unchecked outputs in a day: the rules are not being enforced (backend/health_monitor.py)."""
+    """A high share of unchecked outputs in a day: the rules are not being enforced (backend/maintenance_health.py)."""
     try:
         if not on(c):
             return []

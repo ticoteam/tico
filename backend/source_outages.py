@@ -35,8 +35,7 @@ def observe(c, source, kind, *, waiting=0, until=None, active=True, since=None):
             f"{int(waiting)} turns waiting. Expected return: {expected}.")
     # A board can name its own Engineering manager. Never assume the company's bot slug.
     managers = {r[0] for r in c.execute("SELECT manager FROM task_types WHERE role='engineering' AND manager IS NOT NULL")}
-    from .health_monitor import SLUG
-    recipients = {H.bot_actor(x) for x in managers if x} | {H.bot_actor(SLUG)}
+    recipients = {H.bot_actor(x) for x in managers if x}
     for target in sorted(recipients):
         bot = H.bot(c, H.actor_id(target))
         if not bot or bot['state'] in ('planned', 'archived'):
