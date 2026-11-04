@@ -189,15 +189,15 @@ async function threadMembersOpen(view) {
   // On a public thread everyone reads already: its members are the bots added to it.
   const onlyBots = ['company', 'team'].includes(t.audience);
   dlg.innerHTML = `<form>${threadDialogHead('Members')}<div class="dash-form"><ul class="thd-list"><li class="muted">Loading…</li></ul>
-    ${t.me?.can_post ? '<details class="thd-add"><summary>Add</summary><div class="thd-add-body"></div></details>' : ''}</div>
+    ${t.me?.can_post ? `<details class="thd-add"><summary>${TL_ICON.plus}Add</summary><div class="thd-add-body"></div></details>` : ''}</div>
     <footer class="dash-form-foot"><span class="err" role="status" data-status></span><span class="spacer"></span><button type="button" class="ghost" data-close>Done</button>${
       t.me?.can_post ? '<button class="primary" type="submit" hidden>Add</button>' : ''}</footer></form>`;
   threadDialogWire(dlg);
   const form = dlg.querySelector('form'), status = form.querySelector('[data-status]');
   let members = [];
   const draw = () => {
-    form.querySelector('.thd-list').innerHTML = members.map(m => `<li>${actorAvatar(m.actor, 22)}<span>${esc(actorName(m.actor))}</span>${
-      m.role === 'owner' ? '<span class="muted">Owner</span>' : ''}<span class="spacer"></span>${
+    form.querySelector('.thd-list').innerHTML = members.map(m => `<li>${actorAvatar(m.actor, 22)}<span class="thd-name">${esc(actorName(m.actor))}</span>${
+      m.role === 'owner' ? '<span class="thd-tag">Owner</span>' : ''}${
       manage && m.actor !== myActor() && m.role !== 'owner' ? `<button type="button" class="ghost small" data-remove="${esc(m.actor)}">Remove</button>` : ''}</li>`).join('')
       || '<li class="muted">Nobody</li>';
     const add = form.querySelector('.thd-add-body');

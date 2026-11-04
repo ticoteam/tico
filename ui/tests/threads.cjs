@@ -636,6 +636,32 @@ let browser = null;
     await shot(page, 'new-dm-desktop');
     await page.keyboard.press('Escape');
 
+    // Members: each avatar keeps its round size (a group's initials, a bot's shape), names start in one column, and
+    // Owner or Remove sits at the row's end.
+    await page.route('**/api/v2/threads/t-plan/members*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({
+      members: [{actor: 'human:ana', role: 'owner'}, {actor: 'group:ops'}, {actor: 'bot:ops'}, {actor: 'human:bea'}], next_cursor: null})}));
+    await page.goto('https://tico-ui.test/#/thread/t-plan');
+    await page.locator('.thv-head [data-thv-members]').click();
+    const mem = page.locator('#thread-members[open]');
+    await mem.locator('.thd-list li .thd-name').nth(3).waitFor();
+    const rows = await mem.locator('.thd-list li').evaluateAll(lis => lis.map(li => {
+      const box = e => e && e.getBoundingClientRect(), r = box(li), av = box(li.querySelector('.av')), name = box(li.querySelector('.thd-name'));
+      const end = box(li.querySelector('.thd-tag, [data-remove]'));
+      return {w: av.width, h: av.height, avX: av.left, nameX: name.left, endGap: end ? r.right - end.right : null, tag: li.querySelector('.thd-tag')?.textContent || ''};
+    }));
+    for (const [i, r] of rows.entries()) assert.ok(Math.abs(r.w - r.h) < 1 && r.w <= 24, `row ${i}: the avatar is round at its size: ${r.w}x${r.h}`);
+    assert.equal(new Set(rows.map(r => Math.round(r.avX))).size, 1, 'avatars line up');
+    assert.equal(new Set(rows.map(r => Math.round(r.nameX))).size, 1, 'names start at one x');
+    assert.equal(rows[0].tag, 'Owner');
+    for (const [i, r] of rows.entries()) assert.ok(r.endGap !== null && r.endGap <= 8, `row ${i}: Owner or Remove ends the row (${r.endGap}px from its end)`);
+    // Add is a plain link, with no disclosure triangle.
+    const summary = mem.locator('.thd-add>summary');
+    assert.equal(await summary.evaluate(e => getComputedStyle(e).display), 'inline-flex');
+    assert.equal(await summary.locator('svg').count(), 1);
+    await themed(page, 'members');
+    await page.keyboard.press('Escape');
+    await page.unroute('**/api/v2/threads/t-plan/members*');
+
     assert.ok(seen.reads.includes('t-plan'), 'opening a thread marks it read');
     assert.deepEqual(seen.errors, []);
     await page.close();

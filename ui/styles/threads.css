@@ -207,8 +207,12 @@ a.th-status-act:hover{text-decoration:none}
 .thd-dialog .dash-form-foot .err a{color:inherit;text-decoration:underline}
 .thd-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
 .thd-list li{display:flex;align-items:center;gap:var(--s2);padding:5px 4px}
-.thd-list li>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.thd-add summary{cursor:pointer;color:var(--link);margin-top:var(--s2)}
+/* avatar at its own size, the name takes the rest, then Owner or Remove at the end */
+.thd-list .thd-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.thd-list .thd-tag{flex:none;color:var(--muted);font-size:var(--t-sm)}
+.thd-list li>button{flex:none}
+.thd-add>summary{display:inline-flex;align-items:center;gap:4px;list-style:none;cursor:pointer;color:var(--link);margin-top:var(--s2)}
+.thd-add>summary::-webkit-details-marker{display:none}
 .thd-add-body{margin-top:var(--s2)}
 
 @media (max-width:760px){
