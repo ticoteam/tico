@@ -254,8 +254,8 @@ release_bundle() {  # version: its bundle and SHA256SUMS where the release serve
   [ -s "$into/SHA256SUMS" ] && return 0
   mkdir -p "$into"
   if [ "$1" = "$CAND" ] && [ "$LOCAL" = 0 ]; then
-    bash scripts/ci/retry.sh -- curl -fsSL -o "$into/SHA256SUMS" "$RELEASES/download/$1/SHA256SUMS" && \
-      bash scripts/ci/retry.sh -- curl -fsSL -o "$into/tico-bundle-$1.tar.gz" "$RELEASES/download/$1/tico-bundle-$1.tar.gz" || return 1
+    bash scripts/ci/retry.sh --permanent 'curl: \(22\).* 404([^0-9]|$)' -- curl -fsSL -o "$into/SHA256SUMS" "$RELEASES/download/$1/SHA256SUMS" && \
+      bash scripts/ci/retry.sh --permanent 'curl: \(22\).* 404([^0-9]|$)' -- curl -fsSL -o "$into/tico-bundle-$1.tar.gz" "$RELEASES/download/$1/tico-bundle-$1.tar.gz" || return 1
   else
     python3 scripts/build_install_bundle.py --version "$1" --output "$into" >/dev/null || return 1
   fi
@@ -292,8 +292,8 @@ run_update() {  # version -> waits for a final state; prints it
 
 step_install() {
   local bundle="tico-bundle-$PREV.tar.gz" want got
-  bash scripts/ci/retry.sh -- curl -fsSL -o "$WORK/SHA256SUMS" "$RELEASES/download/$PREV/SHA256SUMS" && \
-    bash scripts/ci/retry.sh -- curl -fsSL -o "$WORK/$bundle" "$RELEASES/download/$PREV/$bundle" \
+  bash scripts/ci/retry.sh --permanent 'curl: \(22\).* 404([^0-9]|$)' -- curl -fsSL -o "$WORK/SHA256SUMS" "$RELEASES/download/$PREV/SHA256SUMS" && \
+    bash scripts/ci/retry.sh --permanent 'curl: \(22\).* 404([^0-9]|$)' -- curl -fsSL -o "$WORK/$bundle" "$RELEASES/download/$PREV/$bundle" \
     || { say "could not download the $PREV bundle"; return 1; }
   want="$(awk -v f="$bundle" '{n=$2; sub(/^\*/,"",n)} n==f {print $1; exit}' "$WORK/SHA256SUMS")"
   got="$(sha256_of "$WORK/$bundle")"

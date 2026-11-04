@@ -137,7 +137,8 @@ def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
     logs = ROOT / '.remote-runs' / run_id
     logs.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as scratch:
-        fetched = subprocess.run(['bash', 'scripts/ci/retry.sh', '--clear', scratch, '--', 'gh', 'run', 'download',
+        fetched = subprocess.run(['bash', 'scripts/ci/retry.sh', '--clear', scratch, '--permanent',
+                                  'HTTP (404|410)|no (valid )?artifacts? (match|found)', '--', 'gh', 'run', 'download',
                                   str(found['databaseId']), '-n', f'remote-run-{run_id}', '-D', scratch],
                                  cwd=ROOT).returncode == 0
         for name in ('command', 'output.log', 'exit-code'):
