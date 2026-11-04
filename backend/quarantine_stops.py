@@ -16,14 +16,18 @@ import json
 from .store import H
 
 
-def line(c, bot, at=None):
+def line(c, bot, at=None, hold=None):
     """What a stopped turn's end reason says: "Quarantined: <reason>, resumes about HH:MM UTC", or "until a person
     clears it" for a quarantine only a person lifts. An escape names what the safety check stopped, never the refused
     words: the end reason is read more widely than the review."""
     at = at or H.now()
-    resumes = H.quarantine_resumes(c, bot)
+    if hold is not None:
+        until = H.shift(hold["created_at"], seconds=H.QUARANTINE_COOLDOWN_S)
+        resumes = {"auto": True, "resumes_at": until}
+    else:
+        resumes = H.quarantine_resumes(c, bot)
     if resumes["auto"]:
-        why = H.quarantine_reason(c, bot)
+        why = hold["reason"] if hold is not None else H.quarantine_reason(c, bot)
     else:
         review = H.quarantine_review(c, bot) or {}
         why = f"the safety check stopped a {review['what']}" if review.get("what") else "a person must review it"
@@ -38,7 +42,9 @@ def stop(c, row):
     it, and return the attempt read again. A Stop already recorded (a person's, or this one) stands."""
     if row["stop_requested_at"]:
         return row
-    said = line(c, row["bot_id"])
+    from . import task_quarantine
+    hold = task_quarantine.for_attempt(c, row) if H.bot(c, row["bot_id"])["state"] != "quarantined" else None
+    said = line(c, row["bot_id"], hold=hold)
     c.execute("UPDATE attempts SET stop_requested_at=? WHERE id=? AND stop_requested_at IS NULL", (H.KEEPER, row["id"]))
     H.event(c, H.KEEPER, "attempt.stop", row["id"], {"bot": row["bot_id"], "quarantine": said})
     return c.execute("SELECT a.*,x.runner_id AS assigned_runner,x.generation AS assigned_generation "

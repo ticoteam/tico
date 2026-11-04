@@ -6758,9 +6758,16 @@ def create_app(settings=None):
                         {"on_behalf_of": who.actor, "message_id": body.on_behalf_of})
             if not (auth.operator(c, who, bot) or auth.bot_manager(c, who, bot)):
                 raise Problem("forbidden", "Only a person who manages this bot can clear quarantine", 403)
-            if (H.bot(c, bot) or {}).get("state") != "quarantined":
+            from . import task_quarantine
+            quarantined = (H.bot(c, bot) or {}).get("state") == "quarantined"
+            held = c.execute("SELECT 1 FROM quarantine_holds WHERE bot_id=? AND released_at IS NULL LIMIT 1", (bot,)).fetchone()
+            if not quarantined and not held:
                 raise Problem("quarantined", "This bot is not quarantined", 409)
-            settings_admin.ensure_activation(c, who, bot)
+            if quarantined:
+                settings_admin.ensure_activation(c, who, bot)
+            task_quarantine.release(c, who.actor, bot=bot)
+            if not quarantined:
+                return {"status": H.status(c, bot)}
             # Stopped runs settle on their own (execution.auto_reconcile); they no longer hold a resume.
             return {"status": H.status_set(c, who.actor, bot, state="active", focus="",
                                             reason=(body.note or "").strip() or "Resumed")}

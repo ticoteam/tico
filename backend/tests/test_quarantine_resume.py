@@ -14,22 +14,22 @@ def notes_for(api, slug):
         return H.notes_waiting(c, slug)
 
 
-def test_a_lifted_quarantine_leaves_the_bot_a_note_with_the_refusal_that_stopped_it(api):
+def test_a_lifted_task_hold_leaves_a_task_note_and_an_escape_leaves_the_bot_a_note(api):
     token = bot_token(api, "cpo")
     item = post(api, "tasks", {"owner": "cpo", "title": "Research exports", "body": "x"})
     for _ in range(H.QUARANTINE_AT + 1):
         r = api.post("/api/v2/tasks/" + item["id"], json={"version": item["version"], "number": 993}, headers=headers(token))
         assert r.status_code == 403, r.text
     with api.app.state.store.read() as c:
-        assert H.bot(c, "cpo")["state"] == "quarantined"
+        assert H.bot(c, "cpo")["state"] == "active"
+        assert c.execute("SELECT task_id FROM quarantine_holds WHERE released_at IS NULL").fetchone()[0] == item["id"]
     assert notes_for(api, "cpo") == [], "nothing until it is back"
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE events SET created_at=? WHERE action='quarantine'", (H.shift(H.now(), seconds=-3700),))
+        c.execute("UPDATE quarantine_holds SET created_at=?", (H.shift(H.now(), seconds=-3700),))
         assert H.lift_cooled_quarantines(c) == ["cpo"]
-    [note] = notes_for(api, "cpo")
-    assert note["from_actor"] == H.KEEPER
-    assert "number on a task is changed by a person" in note["body"] and "(identity)" in note["body"]
-    assert note["body"].endswith(H.QUARANTINE_LIFTED)
+        note = H.task_comments(c, item["id"])[-1]
+    assert notes_for(api, "cpo") == []
+    assert "identity rule" in note["body"] and note["body"].endswith(H.QUARANTINE_LIFTED)
     # A person clearing it leaves the same note; so does an escape, naming what the check stopped.
     with api.app.state.store.transaction() as c:
         H.quarantine(c, "cpo", "escape: a secrets path", context={"what": "task note", "found": "secrets/mail.env"})

@@ -829,6 +829,7 @@ HELD = {
                   RUNS),
     "handed_back": ("{computer} handed its last try back before starting it: it tries again in a moment", RUNS),
     "uncertain": ("An interrupted run on the same task or chat waits for review in Runs", RUNS),
+    "task_quarantine": ("This task or chat is held after repeated refusals until its cooldown or quarantine clear; other tasks can continue", RUNS),
     # A person limited the bot's claims to one task (execution.scoped_sql): the rest waits for the scope's release.
     "scoped": ("Limited to one task: its other work starts when the limit is lifted", BOT_SETTINGS),
     # The runner says the turn holding the shared login is a run Tico has no live record of (backend/login_waits.py).
@@ -2144,7 +2145,7 @@ def view(c, who, settings, auth, github, config):
     if blocking:
         items = _queue_items(blocking + busy_rows, full, kind == "bot") if full or kind == "bot" else []
         bad = any(s["reason"] not in ("slow", "updating", "restarting", "draining", "maintaining", "lane_held", "cooling_off", "task_wait", "task_next_run", "task_cap", "auto_start_off", "handed_back",
-                                      "scoped", "company_limit", "backoff", "bot_limit")
+                                      "scoped", "task_quarantine", "company_limit", "backoff", "bot_limit")
                   for s in blocking)
         checks.append(_check("queue", "Stuck bots", "bad" if bad else "warn",
                              _diagnostic_summary(f"{_plural(len(blocking), 'bot')} with work that is not starting.", items),

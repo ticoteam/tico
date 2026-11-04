@@ -223,7 +223,7 @@ HELD_QUEUE_BYTES = int(os.environ.get("TICO_HELD_QUEUE_BYTES", "2097152"))
 HELD_QUEUE_SENDER_ITEMS = int(os.environ.get("TICO_HELD_QUEUE_SENDER_ITEMS", "50"))
 HELD_QUEUE_SENDER_BYTES = int(os.environ.get("TICO_HELD_QUEUE_SENDER_BYTES", "524288"))
 REVIEW_AT = 3                   # rule 8: refusals in a day that open a review task
-QUARANTINE_AT = 10              # rule 8: repeated refusals in a day that quarantine the bot
+QUARANTINE_AT = 10              # rule 8: repeated refusals in a day that hold the task/chat or quarantine the bot
 QUARANTINE_TOTAL_AT = 3 * QUARANTINE_AT   # rule 8: any refusals in a day, repeated or not (a loop over new targets)
 NOTICE_DAYS = 14                # how long a notice stays in the inbox
 
@@ -1688,6 +1688,8 @@ PRIVATE_WRITE = contextvars.ContextVar("hub_private_write", default=False)
 # The run (attempt id) whose token made this request (backend/app.py request_guard): each write it logs is counted on
 # that run's `attempts.writes`, which says whether the run acted (backend/run_triggers.py).
 RUN = contextvars.ContextVar("hub_run", default="")
+# A task write made without a run token still attributes its refusal to the task being changed.
+REFUSAL_TASK = contextvars.ContextVar("hub_refusal_task", default=None)
 # The bulk change (backend/app.py task_bulk) a refusal came from: each task it skipped keeps its own refusal on record,
 # but one call counts once toward rule 8's quarantine, however many tasks it skipped (_escalate).
 BULK_CALL = contextvars.ContextVar("hub_bulk_call", default="")
@@ -1716,6 +1718,7 @@ def private_task_write(fn):
                             private_tasks_default(conn, actor) or private_tasks_default(conn, target))
                            or parent and task_private(conn, parent))
         token = PRIVATE_WRITE.set(PRIVATE_WRITE.get() or private)
+        task_token = REFUSAL_TASK.set((row or {}).get('id') or REFUSAL_TASK.get())
         from . import task_trigger_rules
         try:
             with task_trigger_rules.pending(conn):
@@ -1728,6 +1731,7 @@ def private_task_write(fn):
             exc.private = PRIVATE_WRITE.get()
             raise
         finally:
+            REFUSAL_TASK.reset(task_token)
             PRIVATE_WRITE.reset(token)
     return guarded
 
@@ -1792,16 +1796,19 @@ def writing_refusal(rule, detail):
         r'write a concrete human decision|write the ask in the first line|\d+ words outside the quoted draft)', detail))
 
 
-def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=None):
+def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=None, scope=None):
     """Record a refusal, escalate it (rule 8), and raise. Never returns. `context` is what a person
     reviewing the refusal reads; a private task write keeps only what was refused. `task` is the task
     a `label` refusal was about, which _escalate counts it by."""
+    from . import task_quarantine
+    scope = scope or task_quarantine.source(conn, actor, task or REFUSAL_TASK.get() or (context or {}).get("task"))
     recorded = "Private task write refused" if PRIVATE_WRITE.get() else detail
     if context and PRIVATE_WRITE.get():
         context = {"what": context.get("what")}
     row = {"id": new_id(), "created_at": now(), "actor": str(actor), "rule": rule,
            "detail": _dump({"detail": recorded, **({"context": context} if context else {}),
                                  **({"task": task} if task else {}),
+                                 **({"scope": scope} if scope else {}),
                                  **({"bulk": BULK_CALL.get()} if BULK_CALL.get() else {})}), "severity": severity}
     conn.execute("INSERT INTO refusals (id, created_at, actor, rule, detail, severity) "
                  "VALUES (:id, :created_at, :actor, :rule, :detail, :severity)", row)
@@ -1813,7 +1820,9 @@ def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=N
             pass
     if writing_refusal(rule, detail):
         detail += ". Rewrite the title/body to fix these writing errors and retry. Do not ask the human to waive formatting rules."
-    raise Refused(rule, detail, severity, task)
+    refused = Refused(rule, detail, severity, task)
+    refused.scope = scope           # survives the domain-write rollback (store.refused)
+    raise refused
 
 
 # ----------------------------------------------------------------------------- lint (rule 7)
@@ -2537,10 +2546,19 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     lifted = _one(conn, "SELECT max(created_at) AS created_at FROM events WHERE action='quarantine.lifted' AND target=?",
                   (bot_actor(slug),))
     since = max(day, (lifted or {}).get("created_at") or "")
-    counted, last, total, calls, again = [], {}, 0, set(), False
+    from . import task_quarantine
+    released = {}
+    for hold in conn.execute("SELECT task_id,conversation_id,max(released_at) AS released_at FROM quarantine_holds "
+                             "WHERE bot_id=? AND released_at IS NOT NULL GROUP BY task_id,conversation_id", (slug,)):
+        scope = "task:" + hold["task_id"] if hold["task_id"] else "chat:" + hold["conversation_id"]
+        released[scope] = hold["released_at"]
+    counted, last, total, calls, again, scopes = [], {}, 0, set(), False, set()
     for refused in _rows(conn.execute("SELECT rule, detail, created_at FROM refusals WHERE actor=? AND created_at>=? "
                                       "AND rule NOT IN ('lint','queue_full') ORDER BY created_at, id", (actor, since))):
         facts = _json(refused["detail"], {}) or {}
+        scope = facts.get("scope")
+        if scope in released and refused["created_at"] < released[scope]:
+            continue
         if refused["rule"] == "label":
             # A label refusal says who may make the change instead; retrying it is not reaching further, so
             # it counts once per task an hour (LABEL_REFUSAL_WINDOW_S). Nine in a minute quarantined a bot.
@@ -2548,7 +2566,8 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
             if about in last and parse_ts(refused["created_at"]) - last[about] < timedelta(seconds=LABEL_REFUSAL_WINDOW_S):
                 continue
             last[about] = parse_ts(refused["created_at"])
-        key = refused["detail"]
+        # Attribution does not change whether the same refused action was retried.
+        key = _dump({k: v for k, v in facts.items() if k != "scope"})
         if call := facts.get("bulk"):
             # One bulk change counts once, by its first counted refusal: a single call over 50 tasks the bot may not
             # change is one refused try, not 50. Its words count as a repeat of the same refusal made one by one.
@@ -2556,8 +2575,9 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
                 again = again or call == BULK_CALL.get()
                 continue
             calls.add(call)
-            key = _dump({k: v for k, v in facts.items() if k != "bulk"})
+            key = _dump({k: v for k, v in facts.items() if k not in ("bulk", "scope")})
         total += 1
+        scopes.add(scope)
         # The target bot is paused, quarantined or planned: the sender broke nothing, and the same words come
         # back every time, so it opens no review and is no repeat. It still counts toward the day's backstop.
         if refused["rule"] != "target_inactive":
@@ -2566,10 +2586,16 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
         # This bulk change's first refusal already counted, reviewed and quarantined as need be.
         return
     count, distinct = len(counted), len(set(counted))
+    def contain(reason, refusal):
+        if len(scopes) == 1 and None not in scopes:
+            task_quarantine.hold(conn, slug, next(iter(scopes)), reason, refusal)
+        else:
+            quarantine(conn, slug, reason, refusal=refusal)
+
     if rule == "target_inactive":
         # A sender retrying it in a loop still meets the day's backstop.
         if total >= QUARANTINE_TOTAL_AT:
-            quarantine(conn, slug, f"{total} refusals today", refusal={"rule": rule, "detail": _clip(detail)})
+            contain(f"{total} refusals today", {"rule": rule, "detail": _clip(detail)})
         return
     # Only a refusal the bot has already had (same rule, same words) counts toward the quarantine: retrying a
     # refused action is what the limit stops. A first try at something new that is refused is recorded, not counted.
@@ -2588,10 +2614,10 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     # Keep the audit, internal repeated-failure review, and quarantine enforcement.
     stopped = {"rule": rule, "detail": said}       # what the bot is told when it is back (quarantine_lifted_note)
     if repeats >= QUARANTINE_AT:
-        quarantine(conn, slug, f"{repeats} repeated refusals today", refusal=stopped)
+        contain(f"{repeats} repeated refusals today", stopped)
     elif total >= QUARANTINE_TOTAL_AT:
         # The backstop: refusals that each name a new target are no repeats, but this many still mean a loop.
-        quarantine(conn, slug, f"{total} refusals today", refusal=stopped)
+        contain(f"{total} refusals today", stopped)
 
 
 def _review_exists(conn, title, day):
@@ -2675,8 +2701,9 @@ def quarantine_resumes(conn, slug):
 def lift_cooled_quarantines(conn, cooldown=QUARANTINE_COOLDOWN_S):
     """A refusal-count quarantine is a cooldown: after an hour the bot runs again, with its count
     started over. Runs from the scheduler's tick. Returns the bots let out."""
+    from . import task_quarantine
     cutoff = shift(now(), seconds=-cooldown)
-    lifted = []
+    lifted = task_quarantine.release(conn, KEEPER, cutoff=cutoff)
     for row in _rows(conn.execute("SELECT id FROM bots WHERE state='quarantined'")):
         with isolated(conn, "lift_cooled_quarantines", row["id"]):
             slug = row["id"]
@@ -2685,7 +2712,8 @@ def lift_cooled_quarantines(conn, cooldown=QUARANTINE_COOLDOWN_S):
             if quarantine_is_escape(conn, slug) or not since or not since["created_at"] or since["created_at"] > cutoff:
                 continue
             status_set(conn, KEEPER, slug, state="active", reason="Cooldown over: the refusal count starts again.")
-            lifted.append(slug)
+            if slug not in lifted:
+                lifted.append(slug)
     return lifted
 
 
@@ -2754,6 +2782,12 @@ def _writer(conn, actor):
             at = parse_ts(timing.get("resumes_at"))
             release = "it resumes " + (at.strftime("%Y-%m-%d %H:%M UTC") if at else "after its cooldown")
         refuse(conn, actor, "quarantined", f"{actor_name(conn, actor)} is quarantined; {release}")
+    if is_bot(actor) and RUN.get():
+        from . import task_quarantine
+        hold = task_quarantine.for_attempt(conn, {"id": RUN.get()})
+        if hold:
+            refuse(conn, actor, "quarantined", "This task or chat is held after repeated refusals; it resumes after "
+                   "its cooldown or when a person clears quarantine. Other tasks can continue")
     return actor
 
 
@@ -8022,7 +8056,8 @@ def next_run_tasks(conn, bot, exclude=None):
     """The next-run tasks waiting for `bot` (a slug), oldest first."""
     return _rows(conn.execute(
         f"SELECT t.* FROM {TASKS} t WHERE t.owner_id=? AND t.id IS NOT ? AND {NEXT_RUN_WAITING_SQL} "
-        "ORDER BY t.created_at,t.id", ("bot:" + bot, exclude)))
+        "AND NOT EXISTS(SELECT 1 FROM quarantine_holds qh WHERE qh.bot_id=? AND qh.task_id=t.id "
+        "AND qh.released_at IS NULL) ORDER BY t.created_at,t.id", ("bot:" + bot, exclude, bot)))
 
 
 def chunks(values, size=500):
@@ -8738,6 +8773,9 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
     if quarantined and state == "active":
         event(conn, actor, "quarantine.lifted", bot_actor(slug), {"reason": reason})
         quarantine_lifted_note(conn, slug)
+    if state == "active" and (quarantined or is_human(actor)):
+        from . import task_quarantine
+        task_quarantine.release(conn, actor, bot=slug)
     if quarantined and state not in ("active", "quarantined"):
         # Lease expiry and completion are routine keeper updates. Neither can clear or mask
         # the human review required by quarantine.

@@ -94,8 +94,9 @@ first; the first-line check does not judge whether it is an ask. Replies to the 
 request-format lint, and so is a task on a custom type, which is a ticket on that type's board
 rather than a request ([Tasks](tasks.md)); title and Credential checks apply separately. Refusals open a
 review task at 3 a day. A refusal counts toward the pause only when it repeats one the bot already had that day (same
-rule, same words): at 10 such repeats the bot is paused for an hour and resumes by itself. A bot's first try at
-something new that is refused is recorded, not counted, until 30 refusals of any kind in a day, which also pause it
+rule, same words): at 10 such repeats the responsible task/chat, or the bot when the sources are mixed or unknown,
+is held for an hour and resumes by itself. A bot's first try at
+something new that is refused is recorded, not counted, until 30 refusals of any kind in a day, which also hold it
 for an hour (a loop over new targets). A refused label change (rule `label`, which says who may make it instead)
 counts once per task an hour, however often the bot retries it. Words that name another bot's folder or a `secrets/` path are written
 as they are: naming a path opens nothing, so it is never refused or counted, only recorded (`path.mentioned`).
@@ -313,13 +314,20 @@ A known primary login reset keeps runnable jobs queued until that reset when no 
 a new message does not start another attempt on the spent login. An interrupted fallback returns to this queue
 only when its host acknowledged the end, reported its tools completely, and recorded no output, tools or consumed
 approval. Missing telemetry or any output or possible effect keeps the safe review path.
-A quarantine stops each running turn through the runner's normal Stop response, carrying
+A refusal-count quarantine holds only the responsible task or chat when every counted refusal comes from that
+one source. Its task note or chat notice says why and when the hour's cooldown ends; other tasks of the same bot
+keep running. Two or more distinct tasks/chats in the count, or any refusal with no attributable task/chat, still
+quarantine the whole bot. A run's source takes precedence over the task its refused write names. Escape quarantines
+always stop the whole bot and require a person to clear them. The cooldown resets only the held source's count;
+`hub api POST /api/v2/bots/<bot>/quarantine/clear` also clears its task/chat holds, with the same management permission.
+The hold leaves the task's status, snooze and dependencies intact, and BotOps still receives the refused-write review.
+
+A quarantine stops each affected running turn through the runner's normal Stop response, carrying
 `stop_reason`. Its end reason says *Quarantined: <reason>, resumes about HH:MM UTC*
-(or *until a person clears it*). A run that only read, on a host that reports its tool calls,
-and used no approval returns to the queue until the quarantine lifts; the bot's activity says it
-will run again. Any other stopped run (one that used a tool that can change things, or whose host
-does not report its calls) is held for review like a lost run, so lifting the quarantine never
-repeats an outside action. An answer the run finished as the quarantine began is kept on the run,
+(or *until a person clears it*). A run returns to the queue until the quarantine lifts, with a note to check what it
+already did first. A consumed approval, a fallback whose work is unknown, or a named outside action (merge, publish,
+send or payment) instead holds it for review, so lifting the quarantine never repeats an outside action.
+An answer the run finished as the quarantine began is kept on the run,
 never posted. A real lease loss still says the computer stopped answering. Later held runs are named on the bot's existing review task, and
 closing that task while runs remain held reopens it on the next sweep.
 Other runs stay *owner review needed*, because Tico cannot see what a

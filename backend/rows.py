@@ -90,6 +90,18 @@ class TaskHoldRow(TypedDict):
     released_at: str | None
 
 
+class QuarantineHoldRow(TypedDict):
+    """One bot's refusal-count hold on a task or chat (migration 0082)."""
+    id: int
+    bot_id: str
+    task_id: str | None
+    conversation_id: str | None
+    reason: str
+    refusal: str
+    created_at: str
+    released_at: str | None
+
+
 class AttemptRow(TypedDict):
     """One `attempts` row (SELECT *): a run, its lease and its record. The lease columns are NULL together on a run
     recorded with no lease (migration 0072); the record's columns are NULL on one that failed before it had one."""
