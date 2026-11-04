@@ -358,7 +358,7 @@ def run(args, who=None):
                                                   "operation_id": os.environ.get("HUB_OPERATION_ID")})
     if args.cmd in ("chat", "replay"):
         return via_tool(client, args)
-    if fn in ("stall-triage", "audit"):
+    if fn == "audit":
         return via_tool(client, args)
     if fn and fn.startswith("task-manager "):
         from clients import hubtools

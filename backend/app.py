@@ -8521,8 +8521,9 @@ def create_app(settings=None):
     thread_catchup.install(app, store, auth, mutate)
     from . import stale_review
     stale_review.install(app, store, auth, mutate)
-    from . import system_routines
+    from . import maintenance, system_routines
     system_routines.install(app, store, auth, mutate)
+    maintenance.install(app, store, auth, mutate)
     from . import task_rules
     task_rules.install(app, store, auth, mutate)
     from . import rules as wake_rules_api

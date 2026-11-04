@@ -3157,6 +3157,26 @@ export type Locations = {
   next_cursor: string | null;
 };
 
+export type MaintenanceRunRequest = {
+  step?: "collect" | "clean_up" | "check_health" | "find_stuck" | "learn" | "suggest" | "update" | "dream" | null;
+};
+
+export type MaintenanceStepChange = {
+  custom_every?: number | null;
+  custom_unit?: "hours" | "days" | null;
+  enabled?: boolean | null;
+  frequency?: "run" | "day" | "week" | "custom" | null;
+  key: "collect" | "clean_up" | "check_health" | "find_stuck" | "learn" | "suggest" | "update" | "dream";
+  max_bots?: number | null;
+};
+
+export type MaintenanceUpdate = {
+  monthly_cap_usd?: number | null;
+  paused?: boolean | null;
+  schedule?: "hourly" | "2h" | "3h" | "6h" | "12h" | "daily" | null;
+  steps?: Array<MaintenanceStepChange> | null;
+};
+
 export type MarketAnswers = {
   buyers?: string;
   competitors?: string;
@@ -7346,6 +7366,11 @@ export type GetLocationParams = {
 export type GetLocationBody = never;
 export type GetLocationResponse = LocationOne;
 
+/** GET /api/v2/maintenance */
+export type GetMaintenanceParams = Record<string, never>;
+export type GetMaintenanceBody = never;
+export type GetMaintenanceResponse = unknown;
+
 /** GET /api/v2/me */
 export type GetMeParams = Record<string, never>;
 export type GetMeBody = never;
@@ -8441,6 +8466,14 @@ export type ListLocationsParams = {
 };
 export type ListLocationsBody = never;
 export type ListLocationsResponse = Locations;
+
+/** GET /api/v2/maintenance/runs */
+export type ListMaintenanceRunsParams = {
+  before?: string | null;
+  limit?: number;
+};
+export type ListMaintenanceRunsBody = never;
+export type ListMaintenanceRunsResponse = unknown;
 
 /** GET /api/v2/meetings */
 export type ListMeetingsParams = {
@@ -9676,6 +9709,13 @@ export type RunAutomationParams = {
 export type RunAutomationBody = RunNow | null;
 export type RunAutomationResponse = AutomationRunNow;
 
+/** POST /api/v2/maintenance/run */
+export type RunMaintenanceParams = {
+  "Idempotency-Key": string;
+};
+export type RunMaintenanceBody = MaintenanceRunRequest;
+export type RunMaintenanceResponse = MaintenanceRunRequest;
+
 /** POST /api/v2/system-routines/{key}/run */
 export type RunSystemRoutineParams = {
   "Idempotency-Key": string;
@@ -9683,6 +9723,13 @@ export type RunSystemRoutineParams = {
 };
 export type RunSystemRoutineBody = Empty;
 export type RunSystemRoutineResponse = unknown;
+
+/** PATCH /api/v2/maintenance */
+export type SaveMaintenanceParams = {
+  "Idempotency-Key": string;
+};
+export type SaveMaintenanceBody = MaintenanceUpdate;
+export type SaveMaintenanceResponse = MaintenanceUpdate;
 
 /** PUT /api/v2/places/{place} */
 export type SavePlaceParams = {

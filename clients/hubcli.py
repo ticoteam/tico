@@ -636,7 +636,11 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            when the report runs (business = hourly, weekdays 08:00 to 18:00)
     hub task-manager run                   run the department check now
     hub task-manager bot on|off            turn the Task Manager bot itself on or off (the owner)
-    hub stall-triage [--on|--off]          stalled task check: no longer run; the switch is kept so it still reads (the owner or an admin)
+    hub maintenance status                 schedule, pause, monthly judge cap, and each step's switch, frequency and last run
+    hub maintenance set [flags]            change them (owner or admin): --step KEY with --on/--off, --frequency,
+                                           --every, --unit or --max-bots for a step; --schedule, --pause/--resume, --cap
+    hub maintenance run [--step KEY]       run now, all steps or one (owner or admin)
+    hub maintenance runs [--limit N]       recent runs and each step's status
     hub service-key create --label "Billing backend"
                                            the owner or an admin: a key another system uses to file, update and close
                                            tasks (POST /api/v2/inbound/tasks, docs/service-keys.md); shown once
@@ -3882,12 +3886,31 @@ def parser():
     s = manager.add_parser("bot", help="turn the Task Manager bot itself on or off")
     s.add_argument("state", choices=["on", "off"])
     s.set_defaults(fn="task-manager bot")
-    s = sub.add_parser("stall-triage", help="stalled task check: no longer run; the switch is kept so it still reads (docs/tasks.md)")
+    maintenance = sub.add_parser("maintenance", help="Maintenance: the scheduled steps, their switches and runs (docs/maintenance.md)").add_subparsers(dest="sub")
+    maintenance.add_parser("status", help="schedule, pause, monthly judge cap, and each step's switch, frequency and last run").set_defaults(fn="maintenance status")
+    STEPS = ["collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream"]
+    s = maintenance.add_parser("set", help="change the schedule, the pause, the monthly judge cap, or a step's switch and limits")
+    s.add_argument("--schedule", choices=["hourly", "2h", "3h", "6h", "12h", "daily"], help="how often the run starts")
+    pause = s.add_mutually_exclusive_group()
+    pause.add_argument("--pause", dest="paused", action="store_true", default=None, help="pause the schedule")
+    pause.add_argument("--resume", dest="paused", action="store_false", help="resume the schedule")
+    s.add_argument("--cap", dest="monthly_cap_usd", type=float, help="monthly judge spend cap, in dollars")
+    s.add_argument("--step", choices=STEPS, help="the step the switch, frequency or limits change")
     on = s.add_mutually_exclusive_group()
-    on.add_argument("--on", dest="on", action="store_true", default=None, help="switch it on")
-    on.add_argument("--off", dest="on", action="store_false", help="switch it off; leave both out to read the switch")
-    on.add_argument("--no-on", dest="on", action="store_false", help=argparse.SUPPRESS)      # the old spelling
-    s.set_defaults(fn="stall-triage")
+    on.add_argument("--on", dest="enabled", action="store_true", default=None, help="switch the step on")
+    on.add_argument("--off", dest="enabled", action="store_false", help="switch the step off")
+    s.add_argument("--frequency", choices=["run", "day", "week", "custom"], help="run = every run; day; week; or custom")
+    s.add_argument("--every", dest="custom_every", type=int, help="custom: every N")
+    s.add_argument("--unit", dest="custom_unit", choices=["hours", "days"], help="custom: hours or days")
+    s.add_argument("--max-bots", dest="max_bots", type=int, help="find_stuck and dream: most bots per run")
+    s.set_defaults(fn="maintenance set")
+    s = maintenance.add_parser("run", help="run now: all steps, or one with --step (the owner or an admin)")
+    s.add_argument("--step", choices=STEPS)
+    s.set_defaults(fn="maintenance run")
+    s = maintenance.add_parser("runs", help="recent runs with each step's status")
+    s.add_argument("--limit", type=int)
+    s.add_argument("--before", help="the next cursor from the page before")
+    s.set_defaults(fn="maintenance runs")
     roadmap = sub.add_parser("roadmap", help="public roadmaps: ranking and company settings (docs/roadmaps.md)").add_subparsers(dest="sub")
     s = roadmap.add_parser("tasks", help="roadmap tasks ranked by requests, organization or size")
     s.add_argument("--sort", choices=["requester_count", "external_requesters", "important", "organization", "size"])

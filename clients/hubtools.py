@@ -71,6 +71,7 @@ CLI_TOOL_ALIASES = {
     "hub_task_manager_status": ("hub_task_manager",), "hub_task_manager_on": ("hub_task_manager_set",),
     "hub_task_manager_off": ("hub_task_manager_set",), "hub_task_manager_schedule": ("hub_task_manager_set",),
     "hub_task_manager_bot": ("hub_task_manager_set",),
+    "hub_maintenance_status": ("hub_maintenance",),
     "hub_task_show": ("hub_task_show", "hub_task_show_many"),      # `hub task show a b c` is one read
     "hub_market_size_accept": ("hub_market_size_decide",), "hub_market_size_reject": ("hub_market_size_decide",),
     "hub_market_size_params": ("hub_market_size_decide",),
@@ -5310,12 +5311,55 @@ def task_manager_run(api, args):
     return _as_person(api).call("POST", "system-routines/task_manager_report/run", {}, _key(args))
 
 
-@tool("hub_stall_triage", "Stalled task check: no longer run. Tico sends no stall wakes; the switch is kept so the setting still reads. Omit `on` to read the switch.",
-      {"on": {"type": "boolean", "description": "true switches it on, false off; leave out to read"}}, writes=True)
-def stall_triage(api, args):
-    if args.get("on") is None:
-        return {"job": next(job for job in _as_person(api).get("system-routines")["jobs"] if job["key"] == "stall_triage")}
-    return _as_person(api).call("PUT", "system-routines/stall_triage", {"on": bool(args["on"])}, _key(args))
+MAINTENANCE_STEPS = ["collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream"]
+
+
+@tool("hub_maintenance", "Maintenance: the schedule, the pause switch and the monthly judge spend cap, then each step's switch, "
+      "how often it runs, its bot limit and its last run. A live run comes with them.", {})
+def maintenance_status(api, args):
+    return _as_person(api).get("maintenance")
+
+
+@tool("hub_maintenance_set", "Maintenance: set the schedule (hourly, 2h, 3h, 6h, 12h or daily), pause or resume it, or set the "
+      "monthly judge spend cap in dollars. With `step`, change that step: `enabled` on or off, `frequency` (run = every run, "
+      "day, week, or custom with `custom_every` and `custom_unit`) and `max_bots` for find_stuck and dream. "
+      "The owner or an admin.",
+      {"schedule": {"type": "string", "enum": ["hourly", "2h", "3h", "6h", "12h", "daily"]},
+       "paused": {"type": "boolean", "description": "true pauses the schedule, false resumes it"},
+       "monthly_cap_usd": {"type": "number", "minimum": 0, "maximum": 100000},
+       "step": {"type": "string", "enum": MAINTENANCE_STEPS},
+       "enabled": {"type": "boolean", "description": "The step on or off"},
+       "frequency": {"type": "string", "enum": ["run", "day", "week", "custom"]},
+       "custom_every": {"type": "integer", "minimum": 1, "maximum": 999},
+       "custom_unit": {"type": "string", "enum": ["hours", "days"]},
+       "max_bots": {"type": "integer", "minimum": 0, "maximum": 500}}, writes=True)
+def maintenance_set(api, args):
+    body = {k: args[k] for k in ("schedule", "paused", "monthly_cap_usd") if args.get(k) is not None}
+    change = {k: args[k] for k in ("enabled", "frequency", "custom_every", "custom_unit", "max_bots") if args.get(k) is not None}
+    if change:
+        if not args.get("step"):
+            raise ValueError("name the step: --step KEY with --on/--off, --frequency, --every, --unit or --max-bots")
+        body["steps"] = [{"key": args["step"], **change}]
+    if not body:
+        raise ValueError("name something to change: --schedule, --pause/--resume, --cap or a step's switch")
+    return _as_person(api).call("PATCH", "maintenance", body, _key(args))
+
+
+@tool("hub_maintenance_runs", "Maintenance: recent runs, newest first: when each started, what started it (the schedule or Run now), "
+      "whether it finished, and each step's status, reason, counts and cost. Page with `before` from `next`.",
+      {"limit": {"type": "integer", "minimum": 1, "maximum": 200}, "before": _s("`next` from the page before")})
+def maintenance_runs(api, args):
+    query = {k: args[k] for k in ("limit", "before") if args.get(k) not in (None, "")}
+    return _as_person(api).call("GET", "maintenance/runs", query=query)
+
+
+@tool("hub_maintenance_run", "Maintenance: run now, all steps or only `step`. Run now is claimed and due by the same rules as the "
+      "schedule, so a step runs only when it is due and its switch is on; a run already going is returned, not a second one. "
+      "The owner or an admin.",
+      {"step": {"type": "string", "enum": MAINTENANCE_STEPS}}, writes=True)
+def maintenance_run(api, args):
+    body = {"step": args["step"]} if args.get("step") else {}
+    return _as_person(api).call("POST", "maintenance/run", body, _key(args))
 
 
 @tool("hub_audit", "Who changed what in the caps, spend, groups, automations and inboxes, newest first. "
@@ -7596,6 +7640,9 @@ AUDIENCE = {
     "hub_api": REQUESTER, "hub_credential_request": ("bot", "botops"),
     # Org changes: the Strategy Bot's owner chat makes one the person asked for, citing their words (`on_behalf_of`).
     **{name: REQUESTER + ("assistant",) for name in ("hub_group_update", "hub_group_delete", "hub_org_reports_to")},
+    # Maintenance: the owner or an admin changes it; the team reads it (backend/maintenance.py may_change).
+    "hub_maintenance": REQUESTER_READ, "hub_maintenance_runs": REQUESTER_READ,
+    "hub_maintenance_set": REQUESTER, "hub_maintenance_run": REQUESTER,
     "hub_credential_set": BOTOPS, "hub_message_redact": BOTOPS, "hub_support_file": BOTOPS,
     "hub_bot_repo_create": ("owner", "botops"),
     "hub_repo_review": ("bot", "botops"),
@@ -7605,7 +7652,7 @@ AUDIENCE = {
                                     "hub_computer_turns_at_once", "hub_agent_pair_show", "hub_agent_pair_approve",
                                     "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live",
                                     "hub_task_model",
-                                    "hub_bot_keep_tasks_going", "hub_stall_triage", "hub_bot_budget",
+                                    "hub_bot_keep_tasks_going", "hub_bot_budget",
                                     "hub_bot_profile", "hub_bot_release", "hub_bot_pause",
                                     "hub_bot_scope",
                                     "hub_bot_resume", "hub_bot_access", "hub_human_access", "hub_group_access",
