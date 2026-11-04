@@ -33,6 +33,12 @@ cloud machine" under Computer).
   prefers the plan on the shared machine, then one on another cloud machine, then the plan with the lowest known usage.
   Nothing is stopped or reset. A member's moves, and any other assignment, never give a plan. When no plan fits, nothing
   changes and the bot keeps its current message and its Gateway path.
+- When a person picks a cloud machine for a bot and the move is refused, the change is not saved. The server answers 409 with
+  `repository_unpublished`. That happens when the bot's history exists only on its current computer, GitHub does not have it,
+  and the new machine has no copy. If no cloud machine exists yet, the refusal comes before one is made, so nothing is billed.
+  The message says what to do: create the bot's repository on GitHub, and the computer then publishes its history.
+- A move waits, with no error, while a run is still going on the bot's old computer. The change is saved, and the bot moves
+  once that run ends.
 - Bots on one machine share its disk and `sudo`: they are one trust group, like bots sharing a computer today. Put a
   bot that must not see the others' files on its own machine.
 - Tico models run on a cloud machine even though its bots don't run as their own user: the runner keeps the company's
