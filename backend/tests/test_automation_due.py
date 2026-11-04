@@ -528,7 +528,7 @@ def test_one_rule_with_two_tasks_on_a_due_day_opens_two_tasks(api):
     aid = due(api, DUE_MARCH, steps=[TWO_TASKS])
     _pass_at(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
     tasks = sql(api, "SELECT title, occurrence_step FROM tasks WHERE occurrence=? ORDER BY title", (f"{aid}:2030-03-01",))
-    assert [(row["title"], row["occurrence_step"]) for row in tasks] == [("Finance review", "gate@0.1"),
+    assert [(row["title"], row["occurrence_step"]) for row in tasks] == [("Finance review", "gate@r0.1"),
                                                                        ("Legal review", "gate")]
 
 
@@ -550,6 +550,33 @@ def test_a_retry_of_one_rule_with_two_tasks_opens_no_more_tasks(api, monkeypatch
     assert sorted(run["status"] for run in get(api, f"automations/{aid}/runs")["runs"]) == ["failed", "ok"]
     tasks = sql(api, "SELECT title FROM tasks WHERE occurrence=? ORDER BY title", (f"{aid}:2030-03-01",))
     assert [row["title"] for row in tasks] == ["Finance review", "Legal review"]
+
+
+def test_a_legacy_task_pair_is_not_doubled_when_a_step_is_inserted_before_the_retry(api, monkeypatch):
+    later = {"id": "later", "type": "action", "do": "create_task", "args": {"title": "Later", "owner": "coo"}}
+    pre = {"id": "pre", "type": "filter", "rules": []}
+    aid = due(api, DUE_MARCH, steps=[TWO_TASKS, later])
+    real = hubdb.task_create
+    failed = []
+
+    def later_fails_once(*args, **kwargs):
+        if args[2] == "Later" and not failed:
+            failed.append(True)
+            raise ValueError("the later step broke")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(hubdb, "task_create", later_fails_once)
+    _pass_at(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
+    assert [run["status"] for run in get(api, f"automations/{aid}/runs")["runs"]] == ["failed"]
+    # The empty filter goes in ahead of the gate, so the gate is record 1 on the retry instead of record 0.
+    r = api.patch(f"/api/v2/automations/{aid}", json={"steps": [pre, TWO_TASKS, later]}, headers=headers("ana-test"))
+    assert r.status_code == 200, r.text
+    _pass_at(api, datetime(2030, 2, 15, 1, 10, tzinfo=timezone.utc))
+    assert sorted(run["status"] for run in get(api, f"automations/{aid}/runs")["runs"]) == ["failed", "ok"]
+    tasks = sql(api, "SELECT title, occurrence_step FROM tasks WHERE occurrence=? ORDER BY title", (f"{aid}:2030-03-01",))
+    assert [row["title"] for row in tasks] == ["Finance review", "Later", "Legal review"]
+    assert {row["title"]: row["occurrence_step"] for row in tasks}["Finance review"] == "gate@r0.1"
+    assert {row["title"]: row["occurrence_step"] for row in tasks}["Legal review"] == "gate"
 
 
 def test_the_same_occurrence_and_step_is_one_task_however_often_it_is_made(api):
