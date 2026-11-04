@@ -127,6 +127,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     if (method !== 'GET') writes.push({method, path: p, body});
 
     if (p === '/api/v2/automations/question-sets') return json({sets: fx.question_sets});
+    if (p === '/api/v2/task-types') return json({types: fx.task_types || []});
     if (p === '/api/v2/automations' && method === 'POST') {
       // A new one (Blank): the viewer's own, version 1.
       const a = {...clone(body), id: 'au_' + (db.list.length + 1), version: 1, can_edit: true};

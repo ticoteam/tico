@@ -108,7 +108,8 @@ STALE_MINUTES = 15       # a claimed run not saved by then was cut off: queued a
 MAX_RESUMES = 3          # a run cut off this often is failed: it may be what stops the server
 MAX_CHAIN = 3            # automations started by automations: at most this deep, never the same one twice
 # The five task events a saved automation may hear (the task-trigger rules, Dev 666). A task an automation makes starts
-# none of them for its creation, and a saved one that runs TASK_PAUSE_RUNS times in an hour is paused.
+# no task-trigger automation for its creation; its later changes run as they would. A saved one that runs TASK_PAUSE_RUNS
+# times in an hour is paused.
 TASK_TRIGGER_EVENTS = ("task.created", "task.step_changed", "task.done", "task.declined", "task.closed")
 TASK_PAUSE_RUNS = 50
 RUN_GUARD_MINUTES = 10                  # the window a flood is counted in
@@ -1201,7 +1202,8 @@ def fire(c, kind, payload, ref="", match=None, access=None, only=None):
             if (access and not access(row)) or not F.all_hold(trigger.get("filters") or [], payload):
                 _count(c, row["id"], "dropped")
                 continue
-            if chain and kind == "event" and not row["builtin"] and _task_trigger(trigger):
+            if chain and kind == "event" and not row["builtin"] and _task_trigger(trigger) \
+                    and trigger.get("name") == "task.created":
                 _chained_task_event(c, row, payload, chain)
                 continue
             rid = queue(c, row, payload, ref, chain=(*chain, row["id"]))

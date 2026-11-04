@@ -45,6 +45,14 @@ const TYPES = [{id: 'dev', name: 'Dev tickets', steps: [{id: 'st_review', name: 
         error: 'The note could not be saved'}};
     const paused = {...JSON.parse(JSON.stringify(TASK_AU)), id: 'au_paused', name: 'Paused one', enabled: false,
       paused: true, paused_reason: 'Paused: too many runs'};
+    // Cold open (Dev 666): the page loads the task types itself, so the step choices show with no Tasks page visited first.
+    const cold = await openAutomations(browser, {viewport: DESKTOP, hash: '#/automations/au_task',
+      tweak: fx => { fx.automations.push(JSON.parse(JSON.stringify(TASK_AU))); fx.task_types = TYPES; }});
+    await cold.page.locator('.au-trig[data-open="trigger"]').click();
+    await cold.page.waitForFunction(() => document.querySelectorAll('select[data-b="stepPick"] option').length > 1);
+    const coldSteps = await cold.page.locator('select[data-b="stepPick"] option').allInnerTexts();
+    assert.deepEqual(coldSteps.filter(Boolean), ['Review 1', 'In QA'], 'step choices on a cold open');
+    await cold.page.close();
     const o = await openAutomations(browser, {viewport: DESKTOP, hash: '#/automations',
       tweak: fx => fx.automations.push(failed, paused)});
     const row = o.page.locator('.au-tn', {hasText: 'Failed step'});

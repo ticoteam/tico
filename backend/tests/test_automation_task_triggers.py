@@ -2,6 +2,7 @@
 makes starts no task-event automation for its creation (one level deep, and its history says why), and more than 50
 task-event runs in an hour pause the automation, which its row reads as "Paused: too many runs"."""
 from backend.tests.test_api import api, get, post  # noqa: F401
+from backend import hubdb as H
 from backend.tests.test_automation_triggers import make, runs
 
 
@@ -55,3 +56,21 @@ def test_fifty_task_event_runs_an_hour_pause_the_automation(api):
     row = automation(api, aid)
     assert row["enabled"] is False and row["paused"] is True
     assert row["paused_reason"] == "Paused: too many runs"
+
+
+def test_a_task_change_made_inside_a_chain_still_runs_the_later_task_event_automations(api):
+    """Only a task's creation is held back by the chain: a done or step change made in a chained turn runs its automation."""
+    from backend.automations import CHAIN
+    done = make(api, {"type": "event", "name": "task.done"}, [NOTE])
+    post(api, "tasks", {"owner": "ops", "title": "Finish me", "body": "Please."})
+    with api.app.state.store.read() as c:
+        tid = c.execute("SELECT id FROM tasks WHERE title='Finish me'").fetchone()[0]
+    token = CHAIN.set(("auto_maker",))
+    try:
+        with api.app.state.store.transaction() as c:
+            H.task_update(c, "bot:ops", tid, status="done", note="Finished in a turn")
+        api.app.state.store.automations.drain()
+    finally:
+        CHAIN.reset(token)
+    assert len(runs(api, done)["runs"]) == 1
+    assert started(api, done) == 1

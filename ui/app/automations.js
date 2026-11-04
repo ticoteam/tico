@@ -140,6 +140,12 @@ async function pageAutomations() {
   }
   const state = AU;
   state.view = view;
+  // The step and type labels read the task types, which the Tasks pages load; this page loads them too (Dev 666).
+  void taskTypesLoad({cached: true}).then(() => {
+    if (AU !== state) return;
+    auDrawHead(); auDrawSide();
+    if (!state.ed) auDrawPane();   // an editor open on the page keeps what the person has typed
+  }, () => {});
   state.root.dataset.screen = id ? 'detail' : 'list';
   if (state.list === null) { auRangeDraw(); auDrawTable(); await auLoadList(state); }
   if (AU !== state) return;
