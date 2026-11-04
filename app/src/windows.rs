@@ -2,9 +2,9 @@
 //! follows, the window frame kept between launches, and the page's eval and reload.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashSet;
 use std::sync::Arc;
 #[cfg(not(target_os = "linux"))]
-use std::collections::HashSet;
 use std::sync::Mutex;
 use std::time::Duration;
 
