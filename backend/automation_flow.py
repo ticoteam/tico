@@ -685,7 +685,7 @@ def shape_text():
               "actions; empty means the destination only ends the thread).",
               "", "A choose (`choose` on an `llm` step, as its last step): `{\"to\": [destination ids, at most "
               f"{MAX_CHOICES}], \"default\": one of them, \"mode\": \"draft\" (save the reply as a draft) or \"reply\" (send it)}}`. "
-              "The turn answers `{\"to\": <id>, \"body\": <text>}`; the body goes out as the reply, not templated, then the "
+              "Use `sort` for routing with an empty body. Omitted mode defaults to Draft. The model answers `{\"to\": <id>, \"body\": <text>}`; the body goes out as the reply, not templated, then the "
               "chosen destination's actions run. The step's `as` is the owner's own: `assistant:<owner>` for a person, "
               "`bot:<owner>` for a bot. A group's flow has no choose.",
               "", "Actions (`{\"do\": ..., \"args\": {...}}`):"]

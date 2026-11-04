@@ -322,7 +322,7 @@ def _spend(store, label, attempts, state, questions, action="judge.spend"):
             total += cost
             H.event(c, H.KEEPER, action, label or "", {
                 "label": label, "model": model, "cost_usd": cost,
-                **({} if "answers" in attempt else {"unusable": True}),
+                **({} if "answers" in attempt or "answer" in attempt else {"unusable": True}),
                 **({} if known else {"usage": "unknown"}),
                 **({} if priced(settings, model) or _own_cost(attempt) else {"price": "ceiling"})})
     return round(total, 6)

@@ -54,7 +54,7 @@ CONTENT = {
              "title": "Pick and ship {{message.subject}}",
              "body": "Marketplace order. Check stock, pack it and mark it shipped.",
              "owner": "inventory"}}]},
-        # Ben's inbox as a board (ui/app/automations-flow.js auBoardShape): rules, a question, then Sort into the
+        # Ben's inbox as a board (ui/app/automations-flow.js auBoardShape): rules, a question, then Draft into the
         # destinations. Off, so the week's mail runs only the automations above and below.
         {"key": "inbox-board", "name": "Ben's inbox", "owner": "person:ben", "enabled": False,
          "trigger": {"type": "message", "inbox": "ben@acme.example"},
@@ -78,19 +78,9 @@ CONTENT = {
              {"id": "asked", "type": "filter", "rules": [
                  {"when": [{"field": "ask.review", "op": "is", "value": "yes", "min": 0.75}], "match": "all",
                   "then": [], "to": "support", "next": "end", "stop": True}]},
-             {"id": "sort", "type": "decide", "out": "sort", "level": "high", "questions": {
-                 "to": {"type": "choice", "instructions": "Pick where this goes. Unsure: Me.",
-                        "criteria": {"me": "Me", "orders": "Orders", "support": "Support", "archive": "Archive"}}}},
-             {"id": "route", "type": "filter", "rules": [
-                 {"when": [{"field": "sort.to", "op": "is", "value": "me", "min": 0.5}], "match": "all", "then": [],
-                  "to": "me", "next": "end", "stop": True},
-                 {"when": [{"field": "sort.to", "op": "is", "value": "orders", "min": 0.5}], "match": "all", "then": [],
-                  "to": "orders", "next": "end", "stop": True},
-                 {"when": [{"field": "sort.to", "op": "is", "value": "support", "min": 0.5}], "match": "all", "then": [],
-                  "to": "support", "next": "end", "stop": True},
-                 {"when": [{"field": "sort.to", "op": "is", "value": "archive", "min": 0.5}], "match": "all", "then": [],
-                  "to": "archive", "next": "end", "stop": True},
-                 {"when": [], "match": "all", "then": [], "to": "me", "next": "end", "stop": True}]}]},
+             {"id": "draft", "type": "llm", "as": "assistant:ben", "out": "draft",
+              "prompt": "Pick where this email goes. Unsure: Me. Draft a short reply when useful; otherwise no reply.",
+              "choose": {"to": ["me", "orders", "support", "archive"], "default": "me", "mode": "draft"}}]},
         {"key": "reviews", "name": "1-star reviews to reputation", "owner": "person:ben",
          "closer": "reputation", "note": "Reply posted.",
          "trigger": {"type": "event", "name": "custom.review.posted",
