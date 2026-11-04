@@ -199,7 +199,7 @@ async function renderTaskTypes() {
     const mover = canMove();
     host.innerHTML = TASK_TYPES.map(type => `<div class="task-type-row"><strong>${esc(type.name)}</strong>
       <div>${type.steps.map(step => `<span class="tlabel"${step.check_pool?.length ? ` title="${esc('Check pool: ' + step.check_pool.map(botSlug).join(', ') + ' · ' + (step.check_limit || 2) + ' open checks each')}"` : ''}>${esc(step.name)}${step.check_pool?.length ? ` · ${step.check_pool.length} checker${step.check_pool.length === 1 ? '' : 's'}` : ''}</span>`).join(' ')}</div>
-      <span class="spacer"></span><button class="ghost" type="button" data-add-action="${esc(type.id)}">Add action</button>
+      <span class="spacer"></span>${mover ? `<button class="ghost" type="button" data-add-action="${esc(type.id)}">Add action</button>` : ''}
       ${mover && type.id !== 'general' ? `<button class="ghost" type="button" data-edit-type="${esc(type.id)}">Edit</button>` : ''}</div>`).join('')
       + (mover ? '<button class="primary" type="button" data-new-type>New type</button>' : '');
     host.querySelectorAll('[data-edit-type]').forEach(button => button.onclick = () => taskTypeEditor(TASK_TYPES.find(type => type.id === button.dataset.editType)));

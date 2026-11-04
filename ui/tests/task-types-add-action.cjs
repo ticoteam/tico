@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
+let mover = true;   // who may change Task types (Edit and Add action show only to them)
 const types = [{id: 'dev', name: 'Dev tickets', steps: [], roles: []}, {id: 'general', name: 'General', steps: [], roles: []}];
 
 (async () => {
@@ -25,7 +26,7 @@ const types = [{id: 'dev', name: 'Dev tickets', steps: [], roles: []}, {id: 'gen
       if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const config = {version: '0.1.0', app_name: 'Tico', local: true};
-      if (p === '/api/me') return json({id: 'ana', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, role: 'owner', config});
+      if (p === '/api/me') return json({id: 'ana', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, role: 'owner', mover, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([]);
       if (p === '/api/v2/task-types') return json({types});
@@ -59,6 +60,12 @@ const types = [{id: 'dev', name: 'Dev tickets', steps: [], roles: []}, {id: 'gen
     assert.equal(posts[0].owner, 'person:ana');
     assert.deepEqual(posts[0].steps, []);
     assert.deepEqual(errors, [], 'no page errors');
+    // A person who may not change Task types sees no Add action and no Edit on the rows.
+    mover = false;
+    await page.reload();
+    await page.locator('.task-type-row', {hasText: 'Dev tickets'}).waitFor();
+    assert.equal(await page.locator('[data-add-action]').count(), 0, 'no Add action without the right');
+    assert.equal(await page.locator('[data-edit-type]').count(), 0, 'no Edit without the right');
     console.log('task-types-add-action: ok');
   } finally {
     await browser.close();
