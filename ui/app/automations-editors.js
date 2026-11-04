@@ -220,7 +220,7 @@ function auActionFields(s) {
       + auFld('Assign to', auSel('step.args.owner', [['', 'Owner'], ...auWithCur(who, a.owner, auActorName(a.owner))], a.owner || '', 'data-blank')),
     assign: () => auFld('Assign to', auSel('step.args.owner', auWithCur(who, a.owner, auActorName(a.owner)), a.owner || '')),
     wake_bot: () => auFld('Bot', auSel('step.args.bot', auWithCur(auBots(), a.bot, auActorName(a.bot)), a.bot || '')),
-    forward: () => auFld('To', auIn('step.args.to', a.to, 'name@acme.example')),
+    forward: () => auFld('To', auIn('step.args.to', auArg('forward', a), 'name@acme.example')),
     label: () => auFld('Label', auIn('step.args.name', auArg('label', a))),
     note: () => auFld('Text', auTa('step.args.text', auArg('note', a), 4)),
     post_update: () => auFld('Text', auTa('step.args.text', auArg('post_update', a), 4)),
@@ -278,6 +278,7 @@ function auEdWire(box) {
     // An action's text edited under its own name: the other names the hub reads first go, so the edit is what runs.
     const argAt = /^(.*)\.args\.([a-z_]+)$/.exec(b), act = argAt && auPathGet(ed, argAt[1]), names = AU_ARG_NAMES[act?.do];
     if (names && names.key === argAt[2] && act.args) for (const k of [...names.keys, ...(names.drop || [])]) if (k !== names.key) delete act.args[k];
+    if (argAt && act && typeof act === 'object') auArgsMark(act.args, argAt[2]);
     // Stop here changes where a rule goes: a rule that names its next gets the new one (a rule that moved on, unstopped,
     // goes to the next step); a rule that doesn't goes by stop alone.
     const stopAt = /^step\.rules\.(\d+)\.stop$/.exec(b), sr = stopAt && ed.step?.rules?.[stopAt[1]];
@@ -563,6 +564,7 @@ function auBoardOpen(key) {
   if (!item) return;
   item = auClone(item);
   if (item.then) item.then = item.then.map(x => typeof x === 'string' ? {do: x, args: {}} : {...x, args: x.args || {}});
+  for (const x of item.then || []) AU_ARGS_OPENED.add(x.args);
   auEdOpen({kind: 'board', part, i, item});
 }
 // The actions a chain offers: mail actions first on a message flow; off mail, none of them (there is no message).
@@ -581,7 +583,7 @@ function auArgRows(at, k, a) {
     assign: () => auSel(`${at}.owner`, auWithCur(who, a.owner, auActorName(a.owner)), a.owner || '', 'aria-label="Assign to"'),
     wake_bot: () => auSel(`${at}.bot`, [['', 'Owner’s bot'], ...auWithCur(auBots(), a.bot, auActorName(a.bot))], a.bot || '', 'data-blank aria-label="Bot"')
       + auIn(`${at}.text`, auArg('wake_bot', a), 'Message', 'aria-label="Message"'),
-    forward: () => auIn(`${at}.to`, a.to, 'name@acme.example', 'aria-label="Forward to"'),
+    forward: () => auIn(`${at}.to`, auArg('forward', a), 'name@acme.example', 'aria-label="Forward to"'),
     label: () => auIn(`${at}.name`, auArg('label', a), 'Label', 'aria-label="Label"'),
     draft_reply: () => auBoardTa(`${at}.body`, auArg('draft_reply', a), 'Reply'),
     send_reply: () => auBoardTa(`${at}.body`, auArg('send_reply', a), 'Reply'),
@@ -635,7 +637,7 @@ function auBoardEdHTML(ed) {
       // Sort with one destination asks nothing (everything goes there), so it has no instructions to keep.
       + (it.mode === 'sort' && it.to.length < 2 ? '' : auFld('Instructions', auTa('item.prompt', it.prompt, 6)))
       + auBox('Destinations', `<div class="au-bto">${dests.map(d => `<label class="au-chk"><input type="checkbox" data-bto="${esc(d.id)}"${it.to.includes(d.id) ? ' checked' : ''}${auDis()}>${esc(d.name || d.id)}</label>`).join('')}</div>`)
-      + (it.to.length < 2 ? '' : auFld('Unsure', auSel('item.default', it.to.map(id => [id, auDestName(id, dests)]), it.default)));
+      + (it.to.length < 2 ? '' : auFld('Unsure', auSel('item.default', [...new Set([...it.to, it.default])].filter(Boolean).map(id => [id, auDestName(id, dests)]), it.default)));
   }
   return auFrame(title, body, {del: !fresh && ed.part !== 'llm' && !(ed.part === 'dest' && dests.length < 2), delOp: 'bdel', delLabel: 'Delete'});
 }
@@ -657,8 +659,18 @@ function auBoardField(t, e, ed) {
   auDrawSide();
   return true;
 }
-// Arguments as the hub reads them: a blank field says nothing.
-const auArgsClean = a => Object.fromEntries(Object.entries(a || {}).filter(([, v]) => v != null && String(v).trim() !== ''));
+// Arguments as the hub reads them: a field the editor set and left blank says nothing. An argument nobody touched
+// stays as it was, empty or not (a webhook's data: [] is a payload); a new action's are all the editor's.
+const AU_ARGS_OPENED = new WeakSet(), AU_ARGS_SET = new WeakMap();
+function auArgsMark(args, key) {
+  if (!args || typeof args !== 'object') return;
+  const set = AU_ARGS_SET.get(args) || new Set();
+  AU_ARGS_SET.set(args, set.add(key));
+}
+const auArgsClean = a => {
+  const kept = AU_ARGS_OPENED.has(a), set = AU_ARGS_SET.get(a);
+  return Object.fromEntries(Object.entries(a || {}).filter(([k, v]) => (kept && !set?.has(k)) || (v != null && String(v).trim() !== '')));
+};
 async function auBoardEdSave(ed, button) {
   const a = AU.cur, b = auBoardShape(a);
   if (!b) return;
@@ -666,7 +678,7 @@ async function auBoardEdSave(ed, button) {
   // Mail actions queue on the message and the rest run at once, so a chain lists them first.
   const isMail = x => AU_MAIL_ACTS.includes(auActKey(x));
   if (it.then) {
-    it.then = it.then.map(x => ({do: x.do, args: auArgsClean(x.args)}));
+    it.then = ed.item.then.map(x => ({do: x.do, args: auArgsClean(x.args)}));   // ed.item's own args, which the marks know
     if (mail) it.then = [...it.then.filter(isMail), ...it.then.filter(x => !isMail(x))];
   }
   let problem = '';

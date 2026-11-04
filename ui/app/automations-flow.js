@@ -45,7 +45,9 @@ function auQuestionIds(s) {
 const AU_ARG_NAMES = {label: {keys: ['label', 'tag', 'name'], key: 'name'}, draft_reply: {keys: ['body', 'text'], key: 'body'},
   send_reply: {keys: ['body', 'text'], key: 'body'}, wake_bot: {keys: ['text', 'prompt'], key: 'text'},
   note: {keys: ['text', 'note'], key: 'text'}, post_update: {keys: ['text', 'body'], key: 'text'},
-  call_webhook: {keys: ['webhook'], key: 'webhook', drop: ['endpoint']}};
+  call_webhook: {keys: ['webhook'], key: 'webhook', drop: ['endpoint']},
+  // A forward with a webhook posts there and mails no one (backend/automation_actions.py): an address replaces it.
+  forward: {keys: ['webhook', 'to'], key: 'to'}};
 function auArg(kind, a) {
   for (const k of AU_ARG_NAMES[kind]?.keys || []) if (a?.[k]) return a[k];
   return '';
@@ -382,7 +384,9 @@ function auBoardFlow(b) {
   } else {
     const s = keep(b.src.ls, 'llm');
     used.delete(s.out);
-    Object.assign(s, {as: L.as || s.as, prompt: L.prompt || auBoardAsk(b.mail), out: outName(s, 'l'), choose: {...(s.choose || {}), to: [...L.to], default: L.default, mode: L.mode}});
+    // Sort's unsure destination need not be one of its answers; a choose's default must be one of its own.
+    const to = L.to.includes(L.default) ? [...L.to] : [...L.to, L.default];
+    Object.assign(s, {as: L.as || s.as, prompt: L.prompt || auBoardAsk(b.mail), out: outName(s, 'l'), choose: {...(s.choose || {}), to, default: L.default, mode: L.mode}});
     steps.push(s);
   }
   return {steps, destinations: copy(b.dests)};
@@ -402,7 +406,7 @@ function auActChip(x) {
   const who = k === 'create_task' || k === 'assign' ? a.owner : k === 'wake_bot' ? a.bot : '';
   if (who) return auActorName(String(who).includes(':') ? who : 'bot:' + who);
   if (k === 'label' && auArg('label', a)) return 'label ' + auArg('label', a);
-  if (k === 'forward' && a.to) return String(a.to);
+  if (k === 'forward' && auArg('forward', a)) return String(auArg('forward', a));
   if (k === 'call_webhook' && a.webhook) return String(a.webhook);
   return AU_BOARD_ACTS[k] || AU_ACTIONS[k] || k;
 }
@@ -414,7 +418,7 @@ function auActLine(x) {
   if (k === 'assign') return a.owner ? 'Assign to ' + name(a.owner) : 'Assign';
   if (k === 'wake_bot') return a.bot ? 'Message ' + name(a.bot) : 'Message the bot';
   if (k === 'label') return auArg('label', a) ? 'Label ' + auArg('label', a) : 'Label';
-  if (k === 'forward') return a.to ? 'Forward to ' + a.to : 'Forward';
+  if (k === 'forward') return auArg('forward', a) ? 'Forward to ' + auArg('forward', a) : 'Forward';
   if (k === 'post_update') return 'Post to Updates';
   return AU_BOARD_ACTS[k] || AU_ACTIONS[k] || k;
 }

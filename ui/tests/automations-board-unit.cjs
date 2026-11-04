@@ -65,6 +65,16 @@ assert.equal(nb.questions[1].min, 0.8);
 assert.equal('min' in nb.llm, false);
 assert.deepEqual(plain(flow(nb)), {steps: nomin.steps, destinations: nomin.destinations});
 
+// Sort's unsure destination outside its answers: as a draft or reply it joins choose.to (a default must be one of them).
+const outside = clone(fx.inbox);
+delete outside.steps[3].questions.to.criteria.me;
+outside.steps[4].rules.splice(0, 1);
+const os = shape(outside);
+assert.deepEqual(plain([os.llm.to, os.llm.default]), [['legal', 'eng', 'archive'], 'me']);
+assert.deepEqual(plain(flow({...os, llm: {...os.llm, mode: 'reply', as: 'assistant:dana'}}).steps.at(-1).choose),
+  {to: ['legal', 'eng', 'archive', 'me'], default: 'me', mode: 'reply'});
+assert.deepEqual(plain(flow(os)), {steps: outside.steps, destinations: outside.destinations}, 'as Sort it is unchanged');
+
 // Levels as stored: a decide with none keeps none (the engine runs it as low), and a written prompt is kept.
 const nolevel = clone(fx.inbox);
 delete nolevel.steps[1].level; delete nolevel.steps[3].level;

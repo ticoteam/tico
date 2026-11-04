@@ -224,6 +224,24 @@ async function saveAny(page) {
       await page.close();
     }
 
+    // Sort whose unsure destination isn't one of its answers, switched to a draft: the default joins choose.to, which
+    // the hub requires (and the fake refuses without).
+    {
+      const outside = fx => { tweak(fx); const a = fx.automations.find(x => x.id === 'au_board');
+        delete a.steps[3].questions.to.criteria.me; a.steps[4].rules.splice(0, 1); };
+      const {page, errors, writes} = await openAutomations(browser, {viewport: DESKTOP, hash: '#/automations/au_board', tweak: outside});
+      await page.waitForSelector('.au-board');
+      const status = await page.evaluate(async steps => (await fetch('/api/v2/automations/au_board', {method: 'PATCH',
+        headers: {'content-type': 'application/json'}, body: JSON.stringify({steps})})).status,
+        [{id: 'l1', type: 'llm', out: 'l1', prompt: 'x', choose: {to: ['legal'], default: 'me', mode: 'draft'}}]);
+      assert.equal(status, 422, 'the fake refuses a default outside to');
+      await page.locator('[data-bmode="draft"]').click();
+      await page.waitForFunction(() => document.querySelector('.au-ver')?.textContent === 'v4');
+      assert.deepEqual(writes.at(-1).body.steps.at(-1).choose, {to: ['legal', 'eng', 'archive', 'me'], default: 'me', mode: 'draft'});
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
     // The step list's Filter: Stop here reads where a rule goes (its own next, else stop), and a save keeps each next.
     {
       const rules = fx => { tweak(fx); const f = fx.automations.find(x => x.id === 'au_inbox').steps[0], w = v => [{field: 'message.subject', op: 'contains', value: v}];
@@ -285,7 +303,8 @@ async function saveAny(page) {
     {
       const aliased = fx => { tweak(fx);
         const b = fx.automations.find(x => x.id === 'au_board');
-        b.steps[0].rules[2].then = [{do: 'label', args: {label: 'Later', name: 'Unused'}}];
+        b.steps[0].rules[2].then = [{do: 'label', args: {label: 'Later', name: 'Unused'}}, {do: 'forward', args: {webhook: 'wh_1'}}];
+        b.destinations[3].then = [{do: 'call_webhook', args: {webhook: 'orders', data: []}}, {do: 'call_webhook', args: {webhook: 'refunds', data: ''}}];
         b.steps[2].rules[1].then = [{do: 'label', args: {tag: 'Old'}}, {do: 'draft_reply', args: {text: 'Hi'}}];
         fx.automations.find(x => x.id === 'au_inbox').steps.push(
           {id: 'lb1', type: 'action', enabled: true, do: 'label', args: {label: 'Later'}},
@@ -296,8 +315,11 @@ async function saveAny(page) {
       await page.locator('[data-board="rule:2"]').click();
       assert.equal(await page.inputValue('[data-b="item.then.0.args.name"]'), 'Later');
       await page.fill('[data-b="item.then.0.args.name"]', 'Receipts');
+      // A forward to a webhook shows it (it is what runs); an address replaces it.
+      assert.equal(await page.inputValue('[data-b="item.then.1.args.to"]'), 'wh_1');
+      await page.fill('[data-b="item.then.1.args.to"]', 'ops@acme.example');
       let body = await save(page, writes, 'au_board', 4);
-      assert.deepEqual(body.steps[0].rules[2].then, [{do: 'label', args: {name: 'Receipts'}}]);
+      assert.deepEqual(body.steps[0].rules[2].then, [{do: 'label', args: {name: 'Receipts'}}, {do: 'forward', args: {to: 'ops@acme.example'}}]);
       await page.locator('[data-board="q:1"]').click();
       assert.equal(await page.inputValue('[data-b="item.then.0.args.name"]'), 'Old');
       assert.equal(await page.inputValue('[data-b="item.then.1.args.body"]'), 'Hi');
@@ -305,6 +327,11 @@ async function saveAny(page) {
       await page.fill('[data-b="item.then.1.args.body"]', 'Hello');
       body = await save(page, writes, 'au_board', 5);
       assert.deepEqual(body.steps[2].rules[1].then, [{do: 'label', args: {name: 'New'}}, {do: 'draft_reply', args: {body: 'Hello'}}]);
+      // Renaming a destination keeps its webhooks' payloads, empty ones included.
+      await page.locator('[data-board="dest:3"]').click();
+      await page.fill('[data-b="item.name"]', 'Done');
+      body = await save(page, writes, 'au_board', 6);
+      assert.deepEqual(body.destinations[3].then, [{do: 'call_webhook', args: {webhook: 'orders', data: []}}, {do: 'call_webhook', args: {webhook: 'refunds', data: ''}}]);
       // The step list's Label step.
       await page.evaluate(() => { location.hash = '#/automations/au_inbox'; });
       for (const [id, was, now] of [['lb1', 'Later', 'Receipts'], ['lb2', 'Old', 'New']]) {
