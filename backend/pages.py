@@ -232,9 +232,11 @@ class Pages:
             where.append("f.bot_id=?")
             params.append(bot)
         if task:
-            where.append("f.task_id=?")
-            params.append(task)
+            where.append("(f.task_id=? OR EXISTS (SELECT 1 FROM pins WHERE place=? AND item='page:' || f.id))")
+            params += [task, "task:" + task]
         with self.store.read() as c:
+            if task:
+                self.auth.task(c, who, task)
             cache = {}
             found, nxt = scan(c, "SELECT f.*,p.cadence,p.as_of,p.replaced_by_id,p.audience,p.archived AS page_archived FROM pages p "
                               "JOIN bot_files f ON f.id=p.file_id", where, params, limit, cursor,
@@ -393,7 +395,7 @@ def install_pages(app, store, auth, files):
     def listing(request: Request, ids: str = "", bot: str = "", task: str = "", archived: bool = False,
                 limit: int = 20, cursor: str = ""):
         """Pages the caller may read. `ids` (up to 50, comma-separated) reads those pages in that order and leaves out
-        the unreadable; otherwise the newest first, filtered by bot or task."""
+        the unreadable; otherwise the newest first, filtered by bot or task (filed or pinned there)."""
         who = request.state.identity
         if ids:
             return pages.many(who, [i.strip() for i in ids.split(",")])

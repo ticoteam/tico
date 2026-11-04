@@ -222,3 +222,19 @@ def test_page_audience_migration_keeps_existing_pages_unrestricted():
         migration.up(c)
         migration.up(c)
         assert c.execute('SELECT file_id,cadence,audience FROM pages').fetchall() == [('existing', 'weekly', None)]
+
+
+def test_linking_a_restricted_page_to_a_readable_task_never_widens_it(api):
+    fid, _ = promoted(api)
+    tid = post(api, 'tasks', {'owner': 'ops', 'title': 'Linked work', 'body': 'Plan', 'private': False})['id']
+    post(api, 'pins', {'place': 'task:' + tid, 'item': 'page:' + fid})
+    assert fid in api.get('/api/v2/pages?task=' + tid, headers=headers('cara-test')).text
+    edit(api, fid, {'people': ['ben']})
+    for path in ('pages?task=' + tid, 'places/task:' + tid, 'files?task=' + tid):
+        response = api.get('/api/v2/' + path, headers=headers('cara-test'))
+        assert response.status_code == 200, response.text
+        assert fid not in response.text
+    assert read(api, fid, 'cara-test').status_code == 404
+    post(api, 'pins', {'place': 'task:' + tid, 'item': 'page:' + fid}, token='cara-test', expected=404)
+    edit(api, fid, None)
+    assert fid in api.get('/api/v2/pages?task=' + tid, headers=headers('cara-test')).text

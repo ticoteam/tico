@@ -98,7 +98,15 @@ def test_page_has_demo_data(api, name):
 
 
 def test_full_page_audience_editor_has_a_restricted_example(api):
-    pages = api.get('/api/v2/pages').json()['pages']
+    pages = api.get('/api/v2/pages?bot=marketing-lead').json()['pages']
     assert pages
     shown = api.get('/api/v2/pages/' + pages[0]['file_id']).json()
     assert shown['can_manage'] and shown['page']['audience']['people'] == ['ana']
+
+
+def test_task_pages_have_demo_data(api):
+    pages = api.get("/api/v2/pages?bot=marketing-lead").json()["pages"]
+    shown = api.get("/api/v2/pages/" + pages[0]["file_id"]).json()
+    task_place = next(p["place"] for p in shown["pinned"] if p["place"].startswith("task:"))
+    pins = api.get("/api/v2/places/" + task_place).json()["pins"]
+    assert any(p.get("page", {}).get("file_id") == pages[0]["file_id"] for p in pins)

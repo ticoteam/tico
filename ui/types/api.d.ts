@@ -3598,12 +3598,14 @@ export type PinEdit = {
 export type Place = {
   audience?: Record<string, unknown>;
   can_edit: boolean;
+  can_link?: boolean;
   group?: string;
   kind: "dashboard" | "growth" | "team" | "bot" | "task" | "person";
   month?: string;
   months?: Array<string>;
   name?: string;
   pins: Array<{
+  can_unpin?: boolean;
   card?: Card;
   id: string | null;
   item: string | null;
@@ -4939,6 +4941,17 @@ export type TaskDetail = {
   run_model?: TaskRunChoice | null;
   runs?: Array<TaskRun>;
   task: Task;
+};
+
+export type TaskEvent = {
+  actor: string | null;
+  at: string;
+  gone?: boolean;
+  id: string;
+  kind: string;
+  kinds: Array<string>;
+  seq: number;
+  task?: Task;
 };
 
 export type TaskFileList = {
@@ -9779,6 +9792,7 @@ export type SearchDocsResponse = DocSearch;
 
 /** GET /api/v2/files/search */
 export type SearchFilesParams = {
+  kind?: string;
   limit?: number;
   q?: string;
 };
