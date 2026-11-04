@@ -193,6 +193,10 @@ def test_release_qa_uses_one_classification_for_creation_pull_wake_and_health(ap
     pytest.param("Post Release QA dashboard redesign", False, id="post-qa-dashboard"),
     pytest.param("Add acceptance tests for CSV export", True, id="acceptance-implementation"),
     pytest.param("Implement production acceptance tests", True, id="production-acceptance-implementation"),
+    pytest.param("Implement production acceptance tests", False, id="production-acceptance-top-level-implementation"),
+    pytest.param("Add production acceptance tests for CSV export", False, id="production-acceptance-top-level-add"),
+    pytest.param("Write production acceptance tests for the waitlist", False,
+                 id="production-acceptance-top-level-write"),
 ])
 def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
     with api.app.state.store.transaction() as c:
