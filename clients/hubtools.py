@@ -7726,7 +7726,7 @@ ASSISTANT_TOOLS = frozenset({
     "hub_rules_retire", "hub_task_bulk",
     # Admin jobs 42-49: groups, bot owners and access, routines, budgets, inbox audience, Pending meetings.
     "hub_automation_create", "hub_bot_access", "hub_bot_owners", "hub_finance_act", "hub_inbound_audience",
-    "hub_automation_guide", "hub_automation_templates", "hub_automation_template", "hub_inbox_send",
+    "hub_automation_guide", "hub_automation_templates", "hub_automation_template", "hub_automation_inbox",
     "hub_meeting_approve", "hub_meeting_pending",
 })
 

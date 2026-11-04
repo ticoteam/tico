@@ -127,8 +127,11 @@ def prepare(c, settings, who, method, path, body):
         return body, None
     before, row = {}, None
     if match:
-        row = A.found(c, who, match.group(1), "change this automation", rule=A.may_change)
+        row = A._row(c, match.group(1))
+        if not row:
+            raise Problem("not_found", "No such automation", 404)
         before = A.flow_of(row)
+        A._require(c, who, before)
     if not (message(before) or message(body)):
         return body, None
     fields = defaults(body)
