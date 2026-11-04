@@ -817,15 +817,17 @@ def test_market_apply_refuses_a_timestamp_or_a_written_date_and_sends_nothing(mo
     monkeypatch.setenv('HUB_API_URL', 'https://api.example.invalid')
     monkeypatch.setattr(remotecli, 'Client', lambda *a, **kw: Api())
     base = ['market', 'apply', 'ins-1', '--entity-id', 'company/x', '--source', 'https://acme.example/pricing']
-    for bad in ('2026-11-03T09:00:00Z', '3 Nov 2026', '2026-11-3'):
+    for bad in ('2026-11-03T09:00:00Z', '3 Nov 2026', '2026-11-3', '2026-02-31', '2026-13-01'):
         with pytest.raises(APIError) as refused:
             remotecli.run(hubcli.parser().parse_args(base + ['--last-verified-at', bad]))
         assert refused.value.status == 422 and 'YYYY-MM-DD' in str(refused.value)
     assert sent == []
 
     api = BY_NAME['hub_market_apply']
-    with pytest.raises(ValueError):
-        api['fn'](Api(), {'id': 'ins-1', 'entity_id': 'company/x', 'last_verified_at': '2026-11-03T09:00:00Z'})
+    for bad in ('2026-11-03T09:00:00Z', '2026-02-31'):
+        with pytest.raises(ValueError):
+            api['fn'](Api(), {'id': 'ins-1', 'entity_id': 'company/x', 'last_verified_at': bad})
+    assert sent == []
 
 
 def test_thread_link_slack_runs_the_mcp_tool_for_each_of_its_three_behaviours(monkeypatch):

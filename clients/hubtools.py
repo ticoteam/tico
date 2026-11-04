@@ -25,7 +25,7 @@ import re
 import sys
 from urllib.parse import quote
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from clients import s3links
@@ -2306,11 +2306,16 @@ def market_resolve(api, args):
 
 
 def market_day(value):
-    """last_verified_at takes a plain YYYY-MM-DD. A timestamp is refused, never cut down to its date."""
+    """last_verified_at takes a real calendar date as YYYY-MM-DD. A timestamp is refused, never cut down to its
+    date, and so is a day the calendar does not have (2026-02-31): the server keeps either as written."""
     text = str(value)
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
-        raise ValueError("last_verified_at must be a date (YYYY-MM-DD)")
-    return text
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            date.fromisoformat(text)
+            return text
+    except ValueError:
+        pass
+    raise ValueError("last_verified_at must be a date (YYYY-MM-DD)")
 
 
 @tool("hub_market_apply", "Librarian (the market curator): write the evidence first, then an entity or an edge that cites it, and mark the insight applied.",
