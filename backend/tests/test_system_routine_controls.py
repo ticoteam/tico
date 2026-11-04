@@ -143,6 +143,15 @@ def test_the_task_roundup_never_run_is_next_at_its_next_company_time_not_now():
     assert SR.next_due(cfg, None, datetime(2026, 11, 3, 6, tzinfo=pt)) == datetime(2026, 11, 3, 12, tzinfo=pt)
 
 
+def _simulated_clock(api, at):
+    """A run's start is stamped with the wall clock (H.now), and the scheduler reads its last start from that row.
+    Put the tick's own time back on any run stamped later than it, so a fixed test day is not blocked by today's clock."""
+    stamp = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE system_runs SET started_at=?, finished_at=? WHERE job='task_roundup' AND started_at>?",
+                  (stamp, stamp, stamp))
+
+
 def test_the_task_roundup_first_runs_at_its_next_company_time_after_a_deploy_not_at_once(api, monkeypatch):
     from backend import task_roundup
     sent = []
@@ -150,16 +159,20 @@ def test_the_task_roundup_first_runs_at_its_next_company_time_after_a_deploy_not
     pt = SR.zone()
     # One process: the wait for the first run starts at its first tick.
     scheduler = Scheduler(api.app.state.store, api.app.state.execution)
-    scheduler.tick(datetime(2026, 11, 3, 2, tzinfo=pt))
-    scheduler.tick(datetime(2026, 11, 3, 5, 59, tzinfo=pt))
+
+    def tick(at):
+        scheduler.tick(at)
+        _simulated_clock(api, at)
+    tick(datetime(2026, 11, 3, 2, tzinfo=pt))
+    tick(datetime(2026, 11, 3, 5, 59, tzinfo=pt))
     assert sent == [], "a deploy at 2am company time does not send every bot its list at once"
-    scheduler.tick(datetime(2026, 11, 3, 6, 0, 5, tzinfo=pt))
+    tick(datetime(2026, 11, 3, 6, 0, 5, tzinfo=pt))
     assert len(sent) == 1
-    scheduler.tick(datetime(2026, 11, 3, 9, tzinfo=pt))
+    tick(datetime(2026, 11, 3, 9, tzinfo=pt))
     assert len(sent) == 1, "no second run before noon"
-    scheduler.tick(datetime(2026, 11, 3, 12, 0, 5, tzinfo=pt))
+    tick(datetime(2026, 11, 3, 12, 0, 5, tzinfo=pt))
     assert len(sent) == 2
-    scheduler.tick(datetime(2026, 11, 3, 18, 0, 5, tzinfo=pt))
+    tick(datetime(2026, 11, 3, 18, 0, 5, tzinfo=pt))
     assert len(sent) == 3
 
 
