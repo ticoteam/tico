@@ -71,8 +71,9 @@ take the last start reservation together. Codex's shared ChatGPT login does not 
 
 A starting turn reserves a place for up to **3 minutes (180 seconds)**, including active Git and runtime preparation.
 Keeping that preparation active does not extend the deadline. If the turn has not started, its place is released and
-its work returns to the queue without changing the task. After 10 missed starts for one job since the server last
-started, Tico reports a pre-start failure instead of retrying forever. Check the computer named in the failure.
+its work returns to the queue without changing the task. After 10 missed starts for one job, including starts missed
+before a server restart, Tico reports a pre-start failure instead of retrying forever. Planned pauses for updates
+do not count as missed starts. Check the computer named in the failure.
 
 CPU or memory strictly above **90% for 5 minutes** holds new starts on that computer with **waiting: computer busy**.
 Memory at **85% or more** holds them too, with **waiting: computer busy: memory N%**; they start again once memory is
