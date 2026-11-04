@@ -870,6 +870,10 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         Err(_) => None,
     };
     println!("screen relay listening on {}", listener.local_addr()?);
+    // The public port is announced as well, so a caller that binds port 0 learns the port the relay took.
+    if let Some(public) = &public {
+        println!("screen gateway listening on {}", public.local_addr()?);
+    }
     tls::announce(|line| println!("{line}"));
     if let Some(public) = public {
         let gateway = gateway::routes(app.clone());

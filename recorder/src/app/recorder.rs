@@ -259,7 +259,7 @@ pub fn record_status(record: &Summary) -> Option<(String, &'static str)> {
     {
         ("Send failed".into(), "amber")
     } else if record.live_state == "live" {
-        ("Live in Tico".into(), "accent")
+        ("Live".into(), "live")
     } else {
         return None;
     };
@@ -311,6 +311,7 @@ pub struct Recorder {
     pub meeting: Option<String>,
     pub context: Context,
     active: Option<(String, RecordingHandle)>,
+    deleting: Option<std::thread::JoinHandle<()>>,
     /// Recordings made in this session; only these are drafted automatically.
     recorded_here: BTreeSet<String>,
     refresh: Instant,
@@ -432,6 +433,7 @@ impl Recorder {
             meeting: None,
             context: Context::default(),
             active: None,
+            deleting: None,
             recorded_here: BTreeSet::new(),
             refresh: Instant::now(),
             refresh_library: Instant::now(),
@@ -515,8 +517,9 @@ impl Recorder {
         let tx = self.tx.clone();
         let store = self.store.clone();
         let background = BACKGROUND.contains(&kind);
+        let deleting = kind == "delete";
         let kind = kind.to_string();
-        std::thread::spawn(move || {
+        let worker = std::thread::spawn(move || {
             if background {
                 tico_recorder_native::qos::utility();
             }
@@ -529,6 +532,9 @@ impl Recorder {
             // Wakes the tick thread to handle the reply now.
             store.poke();
         });
+        if deleting {
+            self.deleting = Some(worker);
+        }
         true
     }
     pub fn report(&mut self, result: anyhow::Result<()>) {
@@ -677,7 +683,13 @@ impl Recorder {
         if let Some((_, handle)) = self.active.take() {
             let _ = handle.finish();
         }
+        self.join_delete();
         self.save_context();
+    }
+    fn join_delete(&mut self) {
+        if let Some(worker) = self.deleting.take() {
+            let _ = worker.join();
+        }
     }
     #[cfg(test)]
     pub fn mark_sending(&mut self, item: Option<&str>, meeting_step: Option<&str>) {
@@ -885,6 +897,9 @@ impl Recorder {
     /// drafts. Runs on its own timer whether or not the window is visible.
     pub fn tick(&mut self) {
         while let Ok(reply) = self.rx.try_recv() {
+            if reply.kind == "delete" {
+                self.join_delete();
+            }
             if reply.kind != "live" {
                 self.bump();
             }
@@ -1075,7 +1090,7 @@ impl Recorder {
                         "roster" => {
                             self.roster = serde_json::from_value(value).unwrap_or_default();
                         }
-                        "send" => self.say("Sent to Tico"),
+                        "send" => self.say("Saved to Tico"),
                         "import" => {
                             self.config =
                                 settings::read(self.store.root()).unwrap_or(self.config.clone());
@@ -1242,7 +1257,9 @@ impl Recorder {
     }
     /// Why an app update waits right now: a recording runs, or a live meeting is connected.
     pub fn update_hold(&self) -> Option<&'static str> {
-        if self.active.is_some() {
+        if self.deleting.is_some() {
+            Some("After deletion finishes")
+        } else if self.active.is_some() {
             Some("After this recording")
         } else if self.screen.view()["active"] == true {
             Some("After screen sharing stops")
@@ -1518,7 +1535,7 @@ impl Recorder {
                         .map(str::to_owned)
                         .or_else(|| (!paused_confirmed && !context.paused_windows.is_empty()
                             && context.items.iter().any(|i| i.id == item_id && (!i.quote.trim().is_empty() || !i.title.trim().is_empty())))
-                            .then(|| "This action item may quote paused speech. Review its title and quote before sending".into()));
+                            .then(|| "This task may quote paused speech. Review its title and quote, then choose Create anyway".into()));
                     if let Some(reason) = reason {
                         self.item_error = Some((item_id.to_owned(), reason));
                         return;
@@ -1771,6 +1788,87 @@ impl Recorder {
             }
         }
     }
+    /// Share live, from the sheet: nothing reaches Tico before this. Opens the meeting in
+    /// `destination` for its whole org (`team`) or only the people and bots chosen, then adds them.
+    pub fn share_live(&mut self, destination: &str, team: bool, actors: Vec<String>) {
+        let Some(meeting) = self.meeting.clone() else {
+            return;
+        };
+        if self.context.live_id.is_empty() {
+            if !self
+                .config
+                .destinations
+                .iter()
+                .any(|row| row.id == destination)
+            {
+                self.error = "Choose an org first".into();
+                return;
+            }
+            self.destination = destination.into();
+        }
+        if team && self.screen.active_for(&meeting) {
+            self.error = "Stop screen sharing before making this meeting public".into();
+            return;
+        }
+        if !self.shareable() {
+            return;
+        }
+        let actors: Vec<String> = actors
+            .into_iter()
+            .filter(|actor| actor.starts_with("bot:") || actor.starts_with("human:"))
+            .filter(|actor| {
+                !self
+                    .adding_people
+                    .iter()
+                    .any(|row| row.meeting == meeting && &row.actor == actor)
+            })
+            .collect();
+        let humans: Vec<String> = actors
+            .iter()
+            .filter(|a| a.starts_with("human:"))
+            .cloned()
+            .collect();
+        let slugs: Vec<String> = actors
+            .iter()
+            .filter_map(|a| a.strip_prefix("bot:").map(str::to_owned))
+            .collect();
+        let started = self.network_job("access", move |tico, store, id| {
+            let live_id = tico.ensure_live(&store, &id, team)?;
+            let body = json!({"add":humans,"remove":[],"visibility":if team { "team" } else { "private" }});
+            let view = tico.call(
+                &format!("/api/v2/live-meetings/{live_id}/access"),
+                Some(&body),
+                &format!("recorder:{id}:access:{}", uuid::Uuid::new_v4()),
+            )?;
+            if !slugs.is_empty() {
+                tico.call(
+                    &format!("/api/v2/live-meetings/{live_id}/bots"),
+                    Some(&json!({"bots":slugs})),
+                    &format!("recorder:{id}:attach:{}", slugs.join(",")),
+                )?;
+            }
+            Ok(json!({"message":"Shared live","view":view}))
+        });
+        if !started {
+            return;
+        }
+        self.people_error.clear();
+        for actor in actors {
+            let name = self
+                .roster
+                .iter()
+                .find(|row| row.0 == actor)
+                .map_or(actor.as_str(), |row| row.1.as_str())
+                .to_owned();
+            self.adding_people.push(Adding {
+                meeting: meeting.clone(),
+                actor,
+                name,
+                step: AddStep::Sending,
+                added: None,
+            });
+        }
+    }
     /// Someone not in Tico: the name stays with the transcript only.
     pub fn add_participant(&mut self, name: &str) {
         let name: String = name.trim().chars().take(100).collect();
@@ -1815,7 +1913,13 @@ impl Recorder {
     /// Where this recording can be sent: a meeting already open in one Tico, with its people and
     /// bots, goes only there.
     pub fn send_targets(&self, id: &str, deliveries: &[store::Delivery]) -> Vec<Value> {
-        let live = self.store.context(id).unwrap_or_default().live_destination;
+        let context = self.store.context(id).unwrap_or_default();
+        // Kept on this computer after a live share: it is a meeting recorded here again.
+        let live = if context.live_removed {
+            String::new()
+        } else {
+            context.live_destination
+        };
         self.targets(&live, deliveries)
     }
     /// `send_targets` for a meeting whose live connection is already known, without a read.
@@ -1835,6 +1939,72 @@ impl Recorder {
         self.send_meeting_confirmed(id, destination, false);
     }
     pub fn send_meeting_confirmed(&mut self, id: &str, destination: &str, paused_confirmed: bool) {
+        self.send_meeting_to(id, destination, paused_confirmed, "");
+    }
+    /// The Finish sheet's Save: `destination` is an org, or `local` to keep it on this computer
+    /// only (a live share then ends and what was said leaves Tico). `audience` is `team` or
+    /// `participants`. The title is saved first.
+    pub fn save(
+        &mut self,
+        id: &str,
+        destination: &str,
+        audience: &str,
+        title: &str,
+        paused_confirmed: bool,
+    ) {
+        let title: String = title.trim().chars().take(200).collect();
+        // A live-shared meeting is already in Tico; Save sends the new title there too.
+        if let Ok(record) = self.store.get(id)
+            && !title.is_empty()
+            && title != record.title
+            && record.deliveries.iter().all(|row| row.status != "sent")
+        {
+            let result = self.store.mutate(id, |r| {
+                r.title = title;
+                Ok(())
+            });
+            self.report(result);
+            self.reload();
+        }
+        if destination == "local" {
+            self.keep_local(id);
+            return;
+        }
+        if !["team", "participants"].contains(&audience) {
+            self.error = "Choose who can see it".into();
+            return;
+        }
+        self.send_meeting_to(id, destination, paused_confirmed, audience);
+    }
+    /// Stops the recording and keeps it on this computer; a live share ends and leaves Tico.
+    pub fn keep_local(&mut self, id: &str) {
+        self.screen.stop_meeting(id);
+        if self.active.as_ref().is_some_and(|(active, _)| active == id) {
+            self.stop();
+        }
+        let context = self.store.context(id).unwrap_or_default();
+        if context.live_id.is_empty() || context.live_removed {
+            return;
+        }
+        if self.meeting.as_deref() == Some(id) {
+            self.save_context();
+        }
+        let config = self.config.clone();
+        let store = self.store.clone();
+        let (id, destination) = (id.to_owned(), context.live_destination);
+        self.job_for("keep", Some(id.clone()), move || {
+            wait_stopped(&store, &id)?;
+            Tico::saved(&config, &destination)?.keep_local(&store, &id)?;
+            Ok(json!({"message":"Kept on this Mac"}))
+        });
+    }
+    fn send_meeting_to(
+        &mut self,
+        id: &str,
+        destination: &str,
+        paused_confirmed: bool,
+        audience: &str,
+    ) {
         if self.updating {
             self.error = UPDATING.into();
             return;
@@ -1844,7 +2014,7 @@ impl Recorder {
             return;
         };
         if let Ok(context) = self.store.context(id) {
-            if context.live_discarded {
+            if context.live_discarded && !context.live_removed {
                 self.error =
                     "This meeting was discarded; its recording stays on this computer".into();
                 return;
@@ -1854,7 +2024,9 @@ impl Recorder {
                 return;
             }
             if !paused_confirmed && tico_recorder_native::live::paused_review_required(&context) {
-                self.error = "A kept action item may quote paused speech. Review it and confirm Send in the Send menu.".into();
+                self.error =
+                    "A kept task may quote paused speech. Review it, then choose Save anyway."
+                        .into();
                 return;
             }
         }
@@ -1894,6 +2066,7 @@ impl Recorder {
             "Sending…"
         });
         let id = record.id.clone();
+        let audience = audience.to_owned();
         self.job("send", move || {
             let deadline = Instant::now() + SEND_WAIT;
             loop {
@@ -1918,15 +2091,19 @@ impl Recorder {
             }
             let record = store.get(&id)?;
             network::ready(&record)?;
-            anyhow::ensure!(paused_confirmed || !tico_recorder_native::live::paused_review_required(&store.context(&id)?),
-                "A kept action item may quote paused speech. Review it and confirm Send in the Send menu.");
+            anyhow::ensure!(
+                paused_confirmed
+                    || !tico_recorder_native::live::paused_review_required(&store.context(&id)?),
+                "A kept task may quote paused speech. Review it, then choose Save anyway."
+            );
             let tico = Tico::saved(&config, &destination)?;
-            if !store.context(&id)?.live_id.is_empty() {
+            let context = store.context(&id)?;
+            if !context.live_id.is_empty() && !context.live_removed {
                 say("Finishing…");
                 tico.finish_live(&store, &id)?;
             }
             say("Sending…");
-            tico.send(&store, &id, false)?;
+            tico.send_to(&store, &id, false, &audience)?;
             Ok(json!({}))
         });
     }
@@ -1950,7 +2127,52 @@ impl Recorder {
     }
     /// Removes the recording's audio and transcript from this Mac. The window asks first.
     pub fn delete(&mut self, id: &str) {
+        if self.busy {
+            return;
+        }
         self.screen.stop_meeting(id);
+        let context = self.store.context(id).unwrap_or_default();
+        let filed = self.store.get(id).is_ok_and(|record| {
+            record
+                .deliveries
+                .iter()
+                .any(tico_recorder_native::live::saved_in_tico)
+        });
+        let discard_live = !context.live_id.is_empty() && !context.live_removed && !filed;
+        let recording_here = self.active.as_ref().is_some_and(|(active, _)| active == id);
+        if discard_live || recording_here {
+            let capture = if recording_here {
+                self.active.take().map(|(_, handle)| {
+                    handle.stop();
+                    handle
+                })
+            } else {
+                None
+            };
+            let config = self.config.clone();
+            let store = self.store.clone();
+            let (job_id, destination) = (id.to_owned(), context.live_destination);
+            self.job_for("delete", Some(id.to_owned()), move || {
+                if let Some(handle) = capture {
+                    // Join even during startup, when the saved state can still be "stopped".
+                    // Failed capture still needs deleting after its final error writes.
+                    let _ = handle.finish();
+                } else {
+                    wait_stopped(&store, &job_id)?;
+                }
+                if discard_live {
+                    Tico::saved(&config, &destination)?.keep_local(&store, &job_id)?;
+                }
+                store.delete(&job_id)?;
+                Ok(json!({"message":"Deleted"}))
+            });
+            if self.meeting.as_deref() == Some(id) {
+                self.meeting = None;
+                self.current = None;
+                self.context = Context::default();
+            }
+            return;
+        }
         let result = self.store.delete(id);
         let deleted = result.is_ok();
         self.report(result);
@@ -2057,14 +2279,18 @@ impl Recorder {
     /// is the default when the Recorder had none). Each approval page opens in the desktop app on that org, which
     /// already has its sign-in, so the person only chooses Allow; the browser shows it when the desktop app can't.
     /// A failure goes on to the next org, except a timeout: nobody is there to choose Allow.
-    pub fn sign_in_desktop(&mut self) {
+    /// With `url`, only that org: Allow on its row.
+    pub fn sign_in_desktop(&mut self, url: Option<&str>) {
         if self.busy {
             return;
         }
-        let orgs = desktop::to_sign_in(
+        let mut orgs = desktop::to_sign_in(
             self.desktop.orgs().unwrap_or_default(),
             &self.config.destinations,
         );
+        if let Some(url) = url {
+            orgs.retain(|org| org.url == url);
+        }
         if orgs.is_empty() {
             return;
         }
@@ -2335,7 +2561,15 @@ impl Recorder {
                     Some(("Tico sync needs attention".into(), "amber"))
                 };
                 let context = self.store.context(&record.id).unwrap_or_default();
-                let status = if context.live_discarded { Some(if context.live_state == "ended" { ("Discarded · saved locally".into(), "muted") } else { ("Discard pending · saved locally".into(), "amber") }) } else { status };
+                // Kept on this Mac: its row says so; only a Tico that has not ended it yet is news.
+                let status = if context.live_discarded { (context.live_state != "ended").then(|| ("Ending in Tico".into(), "amber")) } else { status };
+                // The org it lives in: where it was saved, else where it is shared live.
+                let saved = record.deliveries.iter().find(|row| !row.meeting_id.is_empty() && row.status != "partial");
+                let home = saved.map(|row| row.destination_id.clone()).or_else(|| {
+                    (!context.live_removed && !context.live_destination.is_empty()).then(|| context.live_destination.clone())
+                });
+                let org = home.and_then(|id| self.config.destinations.iter().find(|row| row.id == id))
+                    .map(|row| json!({"id":row.id,"name":row.name,"url":row.base_url}));
                 let sent = self.sent_everywhere(&record.deliveries);
                 json!({
                     "id": record.id,
@@ -2347,8 +2581,11 @@ impl Recorder {
                     "status": status.map(|(label, tone)| json!({"label":label,"tone":tone})),
                     "sync_error": sync_error,
                     "sent": sent,
-                    "can_send": !context.live_discarded && !self.config.destinations.is_empty() && !sent && !recording && record.chunks > 0 && !self.busy,
-                    "targets": self.targets(&record.live_destination, &record.deliveries),
+                    "can_send": (!context.live_discarded || context.live_removed) && !self.config.destinations.is_empty() && !sent && !recording && record.chunks > 0 && !self.busy,
+                    "local": org.is_none(),
+                    "org": org,
+                    "live_org": (!context.live_removed).then_some(&context.live_destination).filter(|id| !id.is_empty()),
+                    "targets": self.targets(if context.live_removed { "" } else { &record.live_destination }, &record.deliveries),
                 })
             })
             .collect();
@@ -2383,7 +2620,7 @@ impl Recorder {
                     .trim_start_matches("https://")
                     .trim_end_matches('/');
                 json!({"id":row.id,"name":row.name,"host":if host == row.name { "" } else { host },
-                    "default":index == 0})
+                    "url":row.base_url,"default":index == 0})
             })
             .collect();
         json!({
@@ -2522,7 +2759,11 @@ impl Recorder {
             "sent": self.sent_everywhere(&record.deliveries),
             "connected": !self.config.destinations.is_empty(),
             "send_blocked": if self.busy { None } else { blocked },
-            "targets": self.targets(&self.context.live_destination, &record.deliveries),
+            "targets": self.targets(if self.context.live_removed { "" } else { &self.context.live_destination }, &record.deliveries),
+            // The Finish sheet: the org it was shared live to (its default), and how.
+            "live_org": if live && !self.context.live_removed { Some(router.clone()) } else { None },
+            "team": team,
+            "kept_local": self.context.live_removed,
             "live": if live { Some(match (ended, team) {
                 (true, _) => "Ended in Tico",
                 (false, true) => "Team can join",
@@ -2600,12 +2841,15 @@ impl Recorder {
                 json!({
                     "id": item.id,
                     "title": item.title,
+                    "kind": item.kind,
+                    "document": item.document,
                     "quote": item.quote,
                     "at_ms": item.at_ms,
                     "owner": chosen,
                     "owner_name": owner_name,
                     "sent": !item.task_id.is_empty(),
                     "sent_to": item.sent_to,
+                    "task_id": item.task_id,
                     "task_url": item.task_url,
                     "sending": self.sending.as_deref() == Some(item.id.as_str()),
                     "send_blocked": send_blocked,
@@ -2883,6 +3127,7 @@ impl Drop for Recorder {
         if let Some((_, handle)) = self.active.take() {
             let _ = handle.finish();
         }
+        self.join_delete();
     }
 }
 
@@ -2941,5 +3186,18 @@ pub fn seed_demo(store: &Store) -> anyhow::Result<()> {
         row.warning = "No signal was captured. Silent audio cannot produce a transcript.".into();
         Ok(())
     })?;
+    Ok(())
+}
+
+/// Waits for a recording that was just stopped to close, so it can be ended or deleted.
+fn wait_stopped(store: &Store, id: &str) -> anyhow::Result<()> {
+    let deadline = Instant::now() + SEND_WAIT;
+    while store.get(id)?.state == "recording" {
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "The recording is still stopping. Try again."
+        );
+        std::thread::sleep(Duration::from_millis(250));
+    }
     Ok(())
 }

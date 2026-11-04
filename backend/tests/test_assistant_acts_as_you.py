@@ -395,7 +395,9 @@ def _template_tools():
                 words.append(token)
             fn = fn_of(words)
             if fn:
-                tools.add(remotecli.tool_name(fn))
+                name = remotecli.tool_name(fn)
+                # The CLI's aliases dispatch to these tools, not to a tool named after the command's spelling.
+                tools.update(hubtools.CLI_TOOL_ALIASES.get(name, (name,)))
     return tools
 
 

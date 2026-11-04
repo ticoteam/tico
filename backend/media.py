@@ -231,8 +231,15 @@ def may_write(who, record):
     """Only the company owner and the person the source belongs to may change or send it."""
     if record.get("review_state", "live") != "live":
         return MS.filed_for(record, who)
-    return who.role == "owner" or (who.role == "human" and bool(who.email)
-                                   and record["owner"].lower() == who.email.lower())
+    # A meeting saved for its participants only is the recorder's, not the company owner's too.
+    owner = who.role == "owner" and not participants_only(record)
+    return owner or (who.role in ("human", "owner") and bool(who.email)
+                     and record["owner"].lower() == who.email.lower())
+
+
+def participants_only(record):
+    """Saved "Participants only" from the Recorder: readable by the people it names, owners excluded."""
+    return (record.get("metadata") or {}).get("audience") == "participants"
 
 
 def shared_meeting(record, who):
@@ -247,9 +254,11 @@ def shared_meeting(record, who):
         return False
     if meta.get("kind") != "meeting":
         return False
+    email = (who.email or "").lower()
+    if participants_only(record):
+        return bool(email) and email in {str(a).strip().lower() for a in meta.get("audience_emails") or []}
     if not meta.get("private"):
         return True
-    email = (who.email or "").lower()
     attendees = [*((meta.get("calendar") or {}).get("attendees") or []),
                  *(p.get("email", "") for p in meta.get("participants") or [] if isinstance(p, dict))]
     return bool(email) and any(str(a).strip().lower() == email for a in attendees)

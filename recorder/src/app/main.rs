@@ -91,10 +91,13 @@ commands! {
     set_chat_private(private: bool) => |app| app.set_chat_private(private);
     send_meeting(id: String, destination: String, paused_confirmed: Option<bool>) => |app| app.send_meeting_confirmed(&id, &destination, paused_confirmed.unwrap_or(false));
     delete_recording(id: String) => |app| app.delete(&id);
+    share_live(destination: String, team: bool, actors: Vec<String>) => |app| app.share_live(&destination, team, actors);
+    save_meeting(id: String, destination: String, audience: String, title: String, paused_confirmed: Option<bool>) => |app| app.save(&id, &destination, &audience, &title, paused_confirmed.unwrap_or(false));
+    keep_local(id: String) => |app| app.keep_local(&id);
     save_settings(form: SettingsForm) => |app| app.save_settings(form);
     set_audio(microphone: String, meeting: bool) => |app| app.set_audio(&microphone, meeting);
     sign_in(address: String) => |app| app.sign_in(&address);
-    sign_in_desktop() => |app| app.sign_in_desktop();
+    sign_in_desktop(url: Option<String>) => |app| app.sign_in_desktop(url.as_deref());
     make_default(id: String) => |app| app.make_default(&id);
     import_legacy(directory: String) => |app| app.import_legacy(&directory);
     confirm_connect() => |app| app.confirm_connect();
@@ -162,7 +165,7 @@ fn meeting_link(
     (|| -> anyhow::Result<Value> {
         let record = store.get(&id)?;
         let context = store.context(&id)?;
-        anyhow::ensure!(!context.live_discarded, "This meeting was discarded; its recording stays local");
+        anyhow::ensure!(!context.live_discarded || context.live_removed, "This meeting was discarded; its recording stays local");
         anyhow::ensure!(context.live_destination.is_empty() || context.live_destination == destination, "Choose this meeting's Tico");
         let tico = tico_recorder_native::network::Tico::saved(&config, &destination)?;
         let browser = tico.browser_url()?;
@@ -372,6 +375,9 @@ fn main() {
             set_chat_private,
             send_meeting,
             delete_recording,
+            share_live,
+            save_meeting,
+            keep_local,
             save_settings,
             set_audio,
             sign_in,
@@ -392,9 +398,10 @@ fn main() {
         .expect("Start Tico Recorder");
     ticker(app.handle().clone(), &recorder);
     update::start(app.handle().clone(), recorder.clone(), updates);
-    app.run(|handle, event| match event {
+    app.run(|handle: &tauri::AppHandle, event: RunEvent| match event {
         // `tico-recorder://connect?server=…` from Tico's Connect recorder button, and `tico-recorder://open?server=…`
         // from Record in the Tico desktop app, also on a cold start.
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         RunEvent::Opened { urls } => {
             let state = handle.state::<Shared>();
             for url in urls {

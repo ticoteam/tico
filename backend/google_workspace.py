@@ -17,6 +17,7 @@ import asyncio
 import collections
 import hashlib
 import json
+import logging
 import re
 import secrets
 import threading
@@ -41,6 +42,15 @@ from .store import H, Problem
 
 WORKSPACE_SCOPES = {"gmail": ["https://www.googleapis.com/auth/gmail.modify"],
                     "calendar": ["https://www.googleapis.com/auth/calendar"]}
+# A token minted while What Tico may do turns a service's writes off. Domain-wide delegation takes only scopes the admin
+# authorized by name (gmail.modify does not cover gmail.readonly there), so the authorized list carries these too.
+READ_ONLY_SCOPES = {"gmail": ["https://www.googleapis.com/auth/gmail.readonly"],
+                    "calendar": ["https://www.googleapis.com/auth/calendar.readonly"]}
+# What Tico may do in Google beyond reading (Settings > Google), one JSON row in registry_metadata. Each is on until an
+# admin turns it off. Organize mail and Send mail both need gmail.modify (Google has no narrower scope Tico uses), so
+# Send mail is also held in Tico: off, no bot sends (backend/mail_settings.py, connectors/mail/policy.py).
+PERMISSIONS_KEY = "google_permissions"
+PERMISSIONS = ("organize_mail", "send_mail", "change_calendar")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 DELEGATION_URL = "https://admin.google.com/ac/owl/domainwidedelegation"
 OAUTH_CONTEXT = "google-oauth-client"
@@ -62,7 +72,7 @@ KEY_FIELDS = ("client_email", "client_id", "private_key_id", "private_key")
 
 _VAULT = None
 _LOCK = threading.Lock()
-_CACHE = collections.OrderedDict()   # (row id, revision, mailbox, service) -> (answer, expiry in epoch seconds)
+_CACHE = collections.OrderedDict()   # (row id, revision, mailbox, service, scopes) -> (answer, expiry in epoch seconds)
 _AUDITED = {}                         # (mailbox, service, computer) -> epoch seconds of its last audit row
 
 
@@ -80,7 +90,61 @@ def _cipher():
 
 def scope_urls():
     """Every scope the Workspace grants, sorted: the link's clientScopeToAdd and the copy text, byte for byte."""
-    return sorted({scope for scopes in WORKSPACE_SCOPES.values() for scope in scopes})
+    return sorted({scope for table in (WORKSPACE_SCOPES, READ_ONLY_SCOPES) for scopes in table.values()
+                   for scope in scopes})
+
+
+def permissions(c):
+    """What the company lets Tico do in Google beyond reading: {organize_mail, send_mail, change_calendar}."""
+    from .read_cache import metadata
+    row = metadata(c, PERMISSIONS_KEY)
+    try:
+        stored = json.loads(row[0]) if row else {}
+    except ValueError:
+        stored = {}
+    stored = stored if isinstance(stored, dict) else {}
+    return {name: stored.get(name) is not False for name in PERMISSIONS}
+
+
+def acts(may=None):
+    """Per service, whether its write scope may be used: gmail.modify for Organize or Send, calendar events for
+    Change calendar. `may` None is everything (the app's or the key's whole grant)."""
+    may = may or dict.fromkeys(PERMISSIONS, True)
+    return {"gmail": bool(may["organize_mail"] or may["send_mail"]), "calendar": bool(may["change_calendar"])}
+
+
+def workspace_scopes(service, may=None):
+    """The scopes a Workspace token for `service` is minted with: the write scope, or read only when it is off."""
+    return list(WORKSPACE_SCOPES[service] if acts(may)[service] else READ_ONLY_SCOPES[service])
+
+
+# The scopes a key from before the read-only ones were authorized for (migration 0081): its row's list is null.
+LEGACY_SCOPES = sorted(scope for scopes in WORKSPACE_SCOPES.values() for scope in scopes)
+
+
+def authorized(row):
+    """The scopes `row`'s key was authorized for in Google Admin, as its last check proved them or as its upload
+    stored them; the first two for a row from before that was kept."""
+    try:
+        stored = json.loads((row or {}).get("authorized_scopes") or "null")
+    except ValueError:
+        stored = None
+    return sorted(stored) if isinstance(stored, list) and stored else list(LEGACY_SCOPES)
+
+
+def minting_scopes(service, may, row):
+    """What a token for `service` is minted with on `row`: What Tico may do narrows it only to scopes the key was
+    authorized for, since Google refuses any other (unauthorized_client). A key authorized for the write scope only
+    keeps minting it; the mail connector holds What Tico may do then (connectors/mail/oauth.py company_allows)."""
+    wanted, held = workspace_scopes(service, may), set(authorized(row))
+    if set(wanted) <= held or not set(WORKSPACE_SCOPES[service]) <= held:
+        return wanted
+    return list(WORKSPACE_SCOPES[service])
+
+
+def narrowable(row):
+    """Whether `row`'s key was authorized for every scope Tico shows, so each box of What Tico may do narrows it."""
+    return set(scope_urls()) <= set(authorized(row))
 
 
 def delegation_scopes():
@@ -228,10 +292,11 @@ def google_call(url, *, data=None, token=None):
     return status, parsed if isinstance(parsed, dict) else {}
 
 
-def _exchange(c, row, box, service, now):
-    """Google's access token for `box` and one service, from a JWT signed with the row's key. Returns (answer, epoch)."""
+def _exchange(c, row, box, scopes, now):
+    """Google's access token for `box` and one service's `scopes`, from a JWT signed with the row's key. Returns
+    (answer, epoch)."""
     creds = json.loads(_cipher().unseal(c, _context(row["id"]), row["key_sealed"]))
-    assertion = jwt.encode({"iss": creds["client_email"], "sub": box, "scope": " ".join(WORKSPACE_SCOPES[service]),
+    assertion = jwt.encode({"iss": creds["client_email"], "sub": box, "scope": " ".join(scopes),
                             "aud": TOKEN_URI, "iat": int(now), "exp": int(now) + JWT_SECONDS},
                            creds["private_key"], algorithm="RS256")
     status, body = google_call(TOKEN_URI, data={"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
@@ -243,17 +308,18 @@ def _exchange(c, row, box, service, now):
     expires = now + lifetime
     answer = {"access_token": body["access_token"],
               "expiry": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(expires)),
-              "scopes": list(WORKSPACE_SCOPES[service])}
+              "scopes": list(scopes)}
     return answer, expires
 
 
-def mint(c, mailbox, service, row=None):
+def mint(c, mailbox, service, row=None, scopes=None):
     """An access token for `mailbox` and one service ('gmail' or 'calendar'), as {access_token, expiry, scopes}.
 
     `row` is the key row to mint with; None means the active key. A refusal raises Problem 'not_connected' (403)
     with the kind in extra. Callers decide who may ask first (`authority`); this only signs. The answers are cached
     per key revision until five minutes before they expire, so a check that starts on a revision never reads
-    another revision's token. Reads only: the caller records the outcome in a write transaction (`record_mint`)."""
+    another revision's token. Reads only: the caller records the outcome in a write transaction (`record_mint`).
+    `scopes` names them outright (a check proving what the key was authorized for); None is `minting_scopes`."""
     if service not in WORKSPACE_SCOPES:
         raise Problem("scope", "A token is for gmail or calendar", 422)
     box = _address(mailbox)
@@ -261,13 +327,15 @@ def mint(c, mailbox, service, row=None):
     if not current:
         raise Problem("not_connected", "The Google Workspace connection is not set up", 403,
                       extra={"kind": "not_connected"})
-    key = (current["id"], current["revision"], box, service)
+    # Narrowed to What Tico may do. The scopes are in the cache key, so a box turned off takes effect on the next mint.
+    scopes = list(scopes) if scopes else minting_scopes(service, permissions(c), current)
+    key = (current["id"], current["revision"], box, service, tuple(scopes))
     now = time.time()
     with _LOCK:
         hit = _CACHE.get(key)
     if hit and hit[1] > now + CACHE_MARGIN:
         return dict(hit[0])
-    answer, expires = _exchange(c, current, box, service, now)
+    answer, expires = _exchange(c, current, box, scopes, now)
     with _LOCK:
         _CACHE[key] = (answer, expires)
         while len(_CACHE) > CACHE_SIZE:
@@ -336,6 +404,14 @@ KEEP_PATH = "/api/v2/google/workspace/key/keep"
 CHECK_PATH = "/api/v2/google/workspace/check"
 WORKSPACE_PATH = "/api/v2/google/workspace"
 OAUTH_PATH = "/api/v2/google/oauth-client"
+PEOPLE_PATH = "/api/v2/google/people"
+PERMISSIONS_PATH = "/api/v2/google/permissions"
+PEOPLE_MAX = 500                # the team list's rows a page; `more` says when people were left out
+PAGE_BYTES = 256 * 1024         # and its bytes a page, as JSON, so long names cannot make one page huge
+CELL_MAX = 200                  # the characters of a row's name and of its mailbox; a longer person id is left out
+# A page's JSON around its rows, with `next` at its longest (CELL_MAX characters, each escaped as \uXXXX at worst), so
+# the whole answer stays inside PAGE_BYTES.
+ENVELOPE = len(json.dumps({"people": [], "more": True, "next": "\u0000" * CELL_MAX}).encode())
 KEY_KINDS = ("unauthorized_client", "other")   # a refusal about the key itself, not about one mailbox
 _BAD = []                       # epoch seconds of recent wrong codes
 _LOCKOUT = {"until": 0.0}
@@ -459,9 +535,11 @@ def _store_pending(c, fields, domain, generation, actor):
     sealed = _cipher().seal(c, _context(row_id), json.dumps(fields, sort_keys=True))
     c.execute("INSERT INTO google_workspaces(id,domain,project_id,client_email,client_id,key_id,key_sealed,revision,"
               "status,checked_at,connected_at,last_error,probe_mailbox,created_by,created_at,updated_at,replaces_id,"
-              "generation,mint_failing_since) VALUES(?,?,?,?,?,?,?,1,'pending',NULL,NULL,NULL,NULL,?,?,?,?,?,NULL)",
+              "generation,mint_failing_since,authorized_scopes) "
+              "VALUES(?,?,?,?,?,?,?,1,'pending',NULL,NULL,NULL,NULL,?,?,?,?,?,NULL,?)",
               (row_id, domain, fields["project_id"], fields["client_email"], fields["client_id"],
-               fields["private_key_id"], sealed, actor, now, now, active_row["id"] if active_row else None, generation))
+               fields["private_key_id"], sealed, actor, now, now, active_row["id"] if active_row else None, generation,
+               json.dumps(scope_urls())))
     H.event(c, actor, "google.workspace.key", domain, {"generation": generation, "replaced_pending": bool(replaced)})
     return {"client_id": fields["client_id"], "delegation_url": delegation_url(fields["client_id"]),
             "keep_key_ids": _keep_ids(c)}
@@ -506,41 +584,52 @@ MESSAGES = {"unauthorized_client": "Google has not accepted the authorization ye
 
 
 def _probe(store, row, mailbox):
-    """Gmail's profile and Calendar's calendar list, read only, with a token minted for `row`. (ok, kind, message)."""
+    """Gmail's profile and Calendar's calendar list, read only, with a token minted for `row`. (ok, kind, message,
+    scopes): `scopes` is what Google accepted, so the row records what its key was authorized for. Each service asks
+    for its write and read-only scope together, then, refused, for the write scope alone, as a key authorized before
+    the read-only scopes is."""
+    proven = []
     for service, url in PROBES:
-        with store.read() as c:
-            try:
-                token = mint(c, mailbox, service, row=row)["access_token"]
-            except Problem as refused:
-                kind = refused.extra.get("kind", "other")
-                return False, kind, MESSAGES.get(kind, MESSAGES["other"])
+        token = None
+        for scopes in (WORKSPACE_SCOPES[service] + READ_ONLY_SCOPES[service], WORKSPACE_SCOPES[service]):
+            with store.read() as c:
+                try:
+                    token = mint(c, mailbox, service, row=row, scopes=scopes)["access_token"]
+                except Problem as refused:
+                    kind = refused.extra.get("kind", "other")
+                    if kind == "unauthorized_client" and len(scopes) > len(WORKSPACE_SCOPES[service]):
+                        continue
+                    return False, kind, MESSAGES.get(kind, MESSAGES["other"]), []
+            proven += scopes
+            break
         status, _ = google_call(url, token=token)
         if status != 200:
             kind = "not_found" if status == 404 else "other"
-            return False, kind, MESSAGES[kind]
-    return True, None, ""
+            return False, kind, MESSAGES[kind], []
+    return True, None, "", sorted(proven)
 
 
-def _settle(c, row, mailbox, ok, kind, message, actor):
+def _settle(c, row, mailbox, ok, kind, message, actor, scopes=None):
     """Record a check's result for the revision it started on. A result for a revision that has since changed (the key
     was replaced, promoted or removed) is dropped: returns False. A passing pending key becomes the active one, and the
-    active key it replaces is deleted first (promotion)."""
+    active key it replaces is deleted first (promotion). A passing check records the scopes it proved."""
     current = c.execute("SELECT * FROM google_workspaces WHERE id=? AND revision=?",
                         (row["id"], row["revision"])).fetchone()
     if current is None:
         return False
     now = H.now()
     was_pending = current["status"] == "pending"
+    proven = json.dumps(sorted(scopes)) if ok and scopes else current["authorized_scopes"]
     if ok and was_pending:
         c.execute("DELETE FROM google_workspaces WHERE status IN ('connected','failing') AND id<>?", (row["id"],))
         c.execute("UPDATE google_workspaces SET status='connected',connected_at=?,checked_at=?,last_error=NULL,"
-                  "probe_mailbox=?,mint_failing_since=NULL,replaces_id=NULL,revision=revision+1,updated_at=? "
-                  "WHERE id=? AND revision=?", (now, now, mailbox, now, row["id"], row["revision"]))
+                  "probe_mailbox=?,mint_failing_since=NULL,replaces_id=NULL,authorized_scopes=?,revision=revision+1,"
+                  "updated_at=? WHERE id=? AND revision=?", (now, now, mailbox, proven, now, row["id"], row["revision"]))
         forget_tokens()
     elif ok:
         c.execute("UPDATE google_workspaces SET status='connected',checked_at=?,last_error=NULL,probe_mailbox=?,"
-                  "mint_failing_since=NULL,revision=revision+1,updated_at=? WHERE id=? AND revision=?",
-                  (now, mailbox, now, row["id"], row["revision"]))
+                  "mint_failing_since=NULL,authorized_scopes=?,revision=revision+1,updated_at=? "
+                  "WHERE id=? AND revision=?", (now, mailbox, proven, now, row["id"], row["revision"]))
     elif was_pending:
         # A pending key that fails its check stays pending: the active key keeps working meanwhile.
         c.execute("UPDATE google_workspaces SET last_error=?,checked_at=?,probe_mailbox=?,revision=revision+1,"
@@ -561,9 +650,9 @@ def _settle(c, row, mailbox, ok, kind, message, actor):
 def run_check(store, row, mailbox, actor):
     """Probe `row` for `mailbox`, then settle the result under the revision it started on. Google is asked outside any
     write transaction. Returns (settled, ok, kind, message)."""
-    ok, kind, message = _probe(store, row, mailbox)
+    ok, kind, message, scopes = _probe(store, row, mailbox)
     with store.transaction() as c:
-        settled = _settle(c, row, mailbox, ok, kind, message, actor)
+        settled = _settle(c, row, mailbox, ok, kind, message, actor, scopes)
     return settled, ok, kind, message
 
 
@@ -630,6 +719,12 @@ class CheckBody(M.Contract):
     mailbox: str = Field(default="", max_length=320)
 
 
+class PermissionsBody(M.Contract):
+    organize_mail: bool
+    send_mail: bool
+    change_calendar: bool
+
+
 class OAuthClientBody(M.Contract):
     client_id: str = Field(min_length=1, max_length=300)
     client_secret: str = Field(min_length=1, max_length=300)
@@ -643,7 +738,7 @@ def _view(row):
             "client_id": row["client_id"], "scopes": scope_urls(), "delegation_url": delegation_url(row["client_id"]),
             "connected_at": row["connected_at"], "checked_at": row["checked_at"], "last_error": row["last_error"],
             "probe": {"mailbox": row["probe_mailbox"]} if row["probe_mailbox"] else None,
-            "generation": row["generation"]}
+            "generation": row["generation"], "narrowable": narrowable(row)}
 
 
 def _pair(c):
@@ -670,6 +765,80 @@ def _oauth_view(c, settings):
 def _reachable(settings):
     from .config import LOOPBACK
     return (urllib.parse.urlsplit(settings.runner_url).hostname or "") not in LOOPBACK
+
+
+IN_FLIGHT = ("signing_in", "ready", "finishing", "disconnecting", "revoking")
+
+
+def _person_status(mailbox, grants, attempt, row):
+    """One person's Google state for the team list, by the rule `authority` picks a credential with: any live personal
+    grant for the mailbox first, whoever made it; then the Workspace key's domain; then the person's own Connect
+    Google attempt for this mailbox, under way or failed. `grants` are the live grants for the mailbox."""
+    if grants:
+        statuses = {grant["status"] for grant in grants}
+        return "connected" if "connected" in statuses else "failing" if "failed" in statuses else "pending"
+    if row and _domain(mailbox) == row["domain"]:
+        return "workspace"
+    status = attempt["status"] if attempt and str(attempt["mailbox"] or "").lower() == mailbox else None
+    if status in IN_FLIGHT:
+        return "pending"
+    return "failing" if status == "failed" else "none"
+
+
+def team_statuses(c, after=""):
+    """Every person on the roster with a mailbox (people, never bots; nobody hidden or gone from the directory), and
+    whether their mailbox is connected. A fixed number of statements however long the roster is (the bots, their
+    declarations and google_connects each read once), and nothing asked of Google. Sorted by name, PEOPLE_MAX a page:
+    `after` is the last person id of the page before (its `next`), and `more` says another page follows."""
+    from .views import roster
+    people = roster(c)
+    boxes = routines.message_bot_mailboxes(c, people)
+    own = {}
+    for box in boxes:                   # routines.mailbox_of, indexed once: the first bot mailbox a person has
+        own.setdefault(box["person_id"], box["address"])
+    row = active(c)
+    live, attempts = {}, {}
+    for grant in c.execute("SELECT person_id,mailbox,status,holder,grant_hash FROM google_connects"):
+        if grant["holder"] and grant["grant_hash"] and grant["status"] != "disconnected":
+            live.setdefault(str(grant["mailbox"] or "").lower(), []).append(grant)
+        attempts[grant["person_id"]] = grant
+    out, order = [], {}
+    for person in people.get("people") or []:
+        order[person["id"]] = (str(person.get("name") or person["id"]).lower(), person["id"])
+        if person.get("hidden") or person.get("directory_left"):
+            continue
+        mailbox = own.get(person["id"]) or str(person.get("email") or "").strip().lower()
+        if not routines.MAILBOX.fullmatch(mailbox):
+            continue
+        if len(str(person["id"])) > CELL_MAX:
+            # The id is the page cursor and is never cut, so a row with one this long stays off the list.
+            logging.getLogger("tico.google").warning("Team list: left out a person whose id is %d characters",
+                                                     len(str(person["id"])))
+            continue
+        out.append((order[person["id"]], {
+            "person_id": person["id"], "name": str(person.get("name") or person["id"])[:CELL_MAX],
+            "mailbox": mailbox[:CELL_MAX],
+            "status": _person_status(mailbox, live.get(mailbox), attempts.get(person["id"]), row)}))
+    out.sort(key=lambda pair: pair[0])
+    if after:
+        # The cursor is a person id, placed by its name in the whole roster: one hidden or gone since keeps its place.
+        if after not in order:
+            raise Problem("after", "That person is no longer on the roster; load the list again", 422)
+        out = [pair for pair in out if pair[0] > order[after]]
+    # A page stops at PEOPLE_MAX rows or at PAGE_BYTES for the whole answer, whichever comes first, and `next` is its
+    # last row. A row that could never fit a page alone is left out, so every page holds at least one row.
+    page, size, more, budget = [], 0, False, PAGE_BYTES - ENVELOPE
+    for _, person in out:
+        cost = len(json.dumps(person, ensure_ascii=False).encode()) + 1
+        if cost > budget:
+            logging.getLogger("tico.google").warning("Team list: left out a row of %d bytes", cost)
+            continue
+        if len(page) == PEOPLE_MAX or size + cost > budget:
+            more = True
+            break
+        page.append(person)
+        size += cost
+    return {"people": page, "more": more, "next": page[-1]["person_id"] if more else None}
 
 
 def install(app, store):
@@ -725,8 +894,36 @@ def install(app, store):
             except Problem:
                 me = None
             return {"can_admin": administrator(c, who, settings.credential_admins), "workspace": workspace,
-                    "pending": waiting, "oauth": _oauth_view(c, settings), "me": me,
-                    "setup": {"base": settings.runner_url, "reachable": _reachable(settings)}}
+                    "pending": waiting, "oauth": _oauth_view(c, settings), "me": me, "permissions": permissions(c),
+                    # `newest` lets the page drop a setup command another admin's newer one superseded.
+                    "setup": {"base": settings.runner_url, "reachable": _reachable(settings), "newest": _newest(c)}}
+
+    @app.put(PERMISSIONS_PATH)
+    def set_permissions(request: Request, body: PermissionsBody):
+        """What Tico may do in Google, for the whole company: an admin acting as themselves (Send mail lets bots
+        write to outside parties, so no bot, BotOps or the Assistant sets it, as with a bot's own Mail sending)."""
+        from .mail_settings import require_person
+        who = request.state.identity
+        require_person(who)
+        chosen = {name: bool(getattr(body, name)) for name in PERMISSIONS}
+        with store.transaction() as c:
+            require_admin(c, who, settings.credential_admins)
+            c.execute("INSERT INTO registry_metadata(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
+                      "value=excluded.value", (PERMISSIONS_KEY, json.dumps(chosen)))
+            H.event(c, who.actor, "google.permissions.set", "", chosen)
+        with store.read() as c:
+            return {"permissions": permissions(c)}
+
+    @app.get(PEOPLE_PATH)
+    def team_google(request: Request, after: str = ""):
+        """Settings > Google's team list, for an admin: each person with a mailbox, and whether it is connected
+        (`connected`, `none`, `pending`, `failing`, or `workspace` when the Workspace key covers it). A page at a
+        time: `after` is the `next` of the page before."""
+        who = request.state.identity
+        with store.read() as c:
+            if not administrator(c, who, settings.credential_admins):
+                raise Problem("forbidden", "Only an admin sees the team's Google connections", 403)
+            return team_statuses(c, after.strip())
 
     @app.post(CODE_PATH)
     def make_setup_code(request: Request, body: DomainBody):

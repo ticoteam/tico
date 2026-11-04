@@ -1,6 +1,7 @@
-"""Auto dream (backend/dream_auto.py, docs/learnings.md): the nightly run starts a dream for each bot whose memory changed a
-lot since its last dream, under the gates; one scheduled run per company night; Run now ignores the clock only; the
-requester is the bot's manager, else the owner; a question from the dream reaches the requester without ask ingest.
+"""Auto dream (backend/dream_auto.py, docs/learnings.md): the Maintenance run's dream step starts a dream for each bot whose
+memory changed a lot since its last dream, under the gates, up to "Most bots per run"; a run claims its schedule bucket
+once; Run now ignores the schedule only; the requester is the bot's manager, else the owner; a question from the dream
+reaches the requester without ask ingest.
 Synthetic fixtures: the api fixture's bots (backend/tests/test_api.py; Ana owns the company, Ben is an admin). Memory is
 written as memory_history.record stores it, except the one test that reports through the route."""
 
@@ -15,12 +16,12 @@ import pytest
 from backend import dream
 from backend import dream_auto as DA
 from backend import hubdb as H
-from backend import system_routines as SR
+from backend import maintenance as M
+from backend import maintenance_limits as L
+from backend.maintenance_steps import dream as dream_step
 from backend.scheduler import Scheduler
-from backend.store import Problem
-from backend.tests.test_api import api, assign, claim, get, headers, post, put, ready, runner  # noqa: F401  (fixtures)
+from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401  (fixtures)
 from backend.tests.test_ask_ingest import gate, plate   # noqa: F401  (the ask ingest fixture)
-from backend.updates import ZONE
 
 QUESTIONS = "1. Should weekly reports go to Ana or the team? Suggested: the team"
 LEARNINGS = "memory/learnings.md"
@@ -30,15 +31,10 @@ def now():
     return datetime.now(timezone.utc)
 
 
-def night(hour=3, days=3):
-    """A company night a few days on, at `hour` company time: the bots made today are old enough by then."""
-    return (now() + timedelta(days=days)).astimezone(ZONE).replace(hour=hour, minute=0, second=0, microsecond=0)
-
-
 @contextmanager
 def settings(store, **changes):
-    """The store with some settings changed for a while. `test_identities={}` makes it a company server's (the scheduled
-    night runs on test servers only when the identities are off)."""
+    """The store with some settings changed for a while. `test_identities={}` makes it a company server's (the dream step
+    starts nothing on a test server)."""
     saved = store.settings
     store.settings = replace(saved, **changes)
     try:
@@ -94,12 +90,29 @@ def close(api, bot):
         H.task_update(c, owner, row["id"], status="done", note="Merged the release rules.")
 
 
-def routine(api, token="ben-test"):
-    return {job["key"]: job for job in get(api, "system-routines", token=token)["jobs"]}["auto_dream"]
+def five_due(api):
+    """Five bots due at once: finance, product-design, cpo, ops and coo, with 500 to 900 changed lines in 10 turns. Ops
+    reports to Ben."""
+    aged(api)
+    for bot, lines in (("finance", 50), ("product-design", 60), ("cpo", 70), ("ops", 80), ("coo", 90)):
+        remember(api, bot, 10, lines=lines)        # 500, 600, 700, 800, 900 lines in 10 turns
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
 
 
-def run(api, at=None):
-    return DA.run(api.app.state.store, api.app.state.auth, at or now())
+def run(api, at=None, report=None, limit=DA.MAX_PER_RUN):
+    return DA.run(api.app.state.store, api.app.state.auth, at or now(), limit=limit, report=report)
+
+
+def steps_by_key(run_dict):
+    return {s["step"]: s for s in run_dict["steps"]}
+
+
+def step_result(store, auth, max_bots=3):
+    """The dream step as the Maintenance run calls it: run(c, ctx) on a read connection (backend/maintenance.py)."""
+    ctx = {"store": store, "auth": auth, "now": H.now(), "settings": {"max_bots": max_bots}}
+    with store.read() as c:
+        return dream_step.run(c, ctx)
 
 
 def test_what_counts_as_memory(api):
@@ -178,6 +191,10 @@ def test_a_bot_gets_one_dream_per_48_hours_and_none_while_one_is_open(api):
     assert verdict(api, "ops", now() + timedelta(days=2)).status == "busy", "an open dream blocks a new one"
     close(api, "ops")
     assert verdict(api, "ops", now() + timedelta(hours=1)).status == "paced", "48 hours since the last dream's start"
+    # The wake limiter's ledger is real time, so the first start's wake is 49 hours old by the second start.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE events SET created_at=? WHERE actor=? AND action=?",
+                  (H.shift(H.now(), hours=-49), H.KEEPER, L.BOT_ACTION))
     later = now() + timedelta(hours=49)
     assert verdict(api, "ops", later).status == "due"
     assert len(run(api, later)) == 1
@@ -185,20 +202,26 @@ def test_a_bot_gets_one_dream_per_48_hours_and_none_while_one_is_open(api):
     assert len(dream_rows(api, "ops")) == 2
 
 
-def test_the_nightly_cap_starts_three_most_changed_first_and_says_what_it_held(api):
-    aged(api)
-    for bot, lines in (("finance", 50), ("product-design", 60), ("cpo", 70), ("ops", 80), ("coo", 90)):
-        remember(api, bot, 10, lines=lines)        # 500, 600, 700, 800, 900 lines in 10 turns
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
-    started = run(api)
+def test_the_cap_starts_three_most_changed_first_and_says_what_it_held(api):
+    five_due(api)
+    r = {}
+    started = run(api, report=r)
     assert started == [verdict(api, b, now()).name for b in ("coo", "ops", "cpo")], "most changed lines first"
     assert [b for b in ("coo", "ops", "cpo") if dream_rows(api, b)] == ["coo", "ops", "cpo"]
     assert not dream_rows(api, "product-design") and not dream_rows(api, "finance")
     assert dream_rows(api, "coo")[0]["requester_id"] == "human:ana", "no manager: the company owner"
     assert dream_rows(api, "ops")[0]["requester_id"] == "human:ben", "the nearest human manager"
-    result = routine(api)["last"]["result"]
-    assert "Started 3 dreams" in result and "2 due past the 3 a night" in result and "2 not due" in result, result
+    assert (r["started"], r["due"], r["over"], r["held"]) == (started, 5, 2, []), "two due bots over the cap, none held"
+    assert "Started 3 dreams" in r["reason"] and "2 due past the 3 this run" in r["reason"], r
+    assert "2 not due" in r["reason"], r
+
+
+def test_a_per_step_limit_of_one_starts_only_the_most_changed(api):
+    five_due(api)
+    r = {}
+    assert run(api, limit=1, report=r) == [verdict(api, "coo", now()).name]
+    assert (r["over"], r["held"]) == (4, []), r
+    assert not any(dream_rows(api, b) for b in ("ops", "cpo", "product-design", "finance"))
 
 
 def test_an_auto_dreams_question_reaches_its_manager_without_ask_ingest(gate):
@@ -217,117 +240,228 @@ def test_an_auto_dreams_question_reaches_its_manager_without_ask_ingest(gate):
         assert [a["recipient_id"] for a in H.open_task_asks(c, H.task(c, row["id"]))] == ["human:ben"]
 
 
-def test_the_scheduled_night_runs_once_and_a_restart_does_not_run_it_again(api):
+def test_the_schedule_runs_the_dream_step_once_per_bucket(api, monkeypatch):
+    """The scheduled run claims its bucket in the store: the first tick in a bucket runs the dream step, and a second
+    tick in the same bucket starts no second run. A restart keeps no memory, so it changes nothing. Collect and Clean up
+    are skipped here: they are not under test."""
     aged(api)
     store, auth = api.app.state.store, api.app.state.auth
     remember(api, "ops", 10)
-    at = night()
+    quiet = {"status": "skipped", "reason": "not under test"}
+    monkeypatch.setitem(M.LIVE, "collect", lambda c, ctx: quiet)
+    monkeypatch.setitem(M.LIVE, "clean_up", lambda c, ctx: quiet)
+    monkeypatch.setattr(M, "_start", lambda s, a, run_id, only, wait: M._execute(s, a, run_id, only))
+    at = now()
     with settings(store, test_identities={}):
-        assert len(DA.nightly(store, auth, at)) == 1
-        assert DA.nightly(store, auth, at + timedelta(minutes=1)) is None, "this process has seen the night claimed"
-        with store.read() as c:
-            assert DA.claimed(c, DA.night_of(at))
-        # A restart: this process forgets the night, the claim does not. The bot is due again by every gate.
-        close(api, "ops")
-        remember(api, "ops", 10, when=now() + timedelta(seconds=1))
-        store.__dict__.pop("auto_dream_night", None)
-        assert DA.nightly(store, auth, at + timedelta(minutes=2)) is None
+        assert M.tick(store, auth, at) is not None
+        assert M.tick(store, auth, at) is None, "the bucket has its run: no second"
     assert len(dream_rows(api, "ops")) == 1
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM registry_metadata WHERE key=?",
-                         (DA.CLAIM + DA.night_of(at),)).fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM maintenance_runs WHERE trigger='schedule'").fetchone()[0] == 1
 
 
-def test_before_the_routine_time_nothing_runs_and_nothing_is_claimed(api):
+def test_the_dream_step_runs_once_a_day_on_its_own_clock(api):
+    """There is no night any more. The dream step is "once a day" (its default), so a run that finds it started since the
+    day's 05:00 company start leaves it alone. The 05:00 boundary itself is test_maintenance's."""
     aged(api)
     store, auth = api.app.state.store, api.app.state.auth
     remember(api, "ops", 10)
     with settings(store, test_identities={}):
-        assert DA.nightly(store, auth, night(hour=1)) is None
-    with store.read() as c:
-        assert not DA.claimed(c, DA.night_of(night(hour=1)))
-    assert dream_rows(api, "ops") == []
+        first, _ = M.run_now(store, auth, "human:ana", step="dream", wait=True)
+        # A plain Run now keeps the due rule. A step-only one runs the step whether or not it is due.
+        second, _ = M.run_now(store, auth, "human:ana", wait=True)
+    assert steps_by_key(first)["dream"]["status"] == "ran" and len(dream_rows(api, "ops")) == 1
+    assert steps_by_key(second)["dream"]["status"] == "skipped"
+    assert steps_by_key(second)["dream"]["reason"] == "not due"
+    assert len(dream_rows(api, "ops")) == 1
 
 
-def test_switched_off_nothing_starts_at_night_or_by_run_now(api):
+def test_switched_off_the_dream_step_logs_off_and_starts_nothing(api):
     aged(api)
     store, auth = api.app.state.store, api.app.state.auth
     remember(api, "ops", 10)
-    put(api, "system-routines/auto_dream", {"on": False}, token="ben-test")
-    assert routine(api)["on"] is False and routine(api)["next"] is None
+    with store.transaction() as c:
+        M.save_step(c, "human:ana", {"key": "dream", "enabled": False})
+    assert [s for s in get(api, "maintenance")["steps"] if s["key"] == "dream"][0]["enabled"] is False
     with settings(store, test_identities={}):
-        assert DA.nightly(store, auth, night()) is None
-    with store.read() as c:
-        assert not DA.claimed(c, DA.night_of(night()))
-    post(api, "system-routines/auto_dream/run", {}, token="ben-test", expected=409)
-    assert dream_rows(api, "ops") == []
-    put(api, "system-routines/auto_dream", {"on": True}, token="ben-test")
-    assert routine(api)["on"] is True
+        run_dict, started = M.run_now(store, auth, "human:ana", step="dream", wait=True)
+        assert started and steps_by_key(run_dict)["dream"]["status"] == "off"
+        assert steps_by_key(run_dict)["dream"]["reason"] == "switched off"
+        assert dream_rows(api, "ops") == []
+        with store.transaction() as c:
+            M.save_step(c, "human:ana", {"key": "dream", "enabled": True})
+        run_dict, _ = M.run_now(store, auth, "human:ana", step="dream", wait=True)
+    assert steps_by_key(run_dict)["dream"]["status"] == "ran" and len(dream_rows(api, "ops")) == 1
 
 
-def test_run_now_ignores_the_clock_but_keeps_the_gates_and_claims_no_night(api):
+def test_run_now_runs_the_dream_step_without_the_schedule_but_keeps_the_gates(api):
     aged(api)
+    store, auth = api.app.state.store, api.app.state.auth
     remember(api, "ops", 10)                      # due
     remember(api, "coo", 10, lines=19)            # 190 lines: not due
-    post(api, "system-routines/auto_dream/run", {}, token="ben-test")
-    assert [d["id"] for d in dream_rows(api, "ops")] and dream_rows(api, "coo") == []
-    job = routine(api)
-    assert job["last"]["ok"] is True and job["last"]["result"].startswith("Started 1 dream (")
-    with api.app.state.store.read() as c:
-        assert not DA.claimed(c, DA.night_of(now())), "Run now claims no company night"
-    with settings(api.app.state.store, rehearsal=True):
-        with pytest.raises(Problem) as refused:
-            DA.run_now(api.app.state.store, api.app.state.auth)
-        assert refused.value.status == 409
+    with settings(store, test_identities={}):
+        run_dict, started = M.run_now(store, auth, "human:ana", step="dream", wait=True)
+    assert started and run_dict["trigger"] == "run_now" and run_dict["occurrence_key"].startswith("run_now:")
+    row = steps_by_key(run_dict)["dream"]
+    assert row["status"] == "ran" and row["details"]["started"] == [verdict(api, "ops", now()).name]
+    assert dream_rows(api, "coo") == [] and len(dream_rows(api, "ops")) == 1, "190 lines is not due"
 
 
-def test_the_scheduler_tick_hands_its_time_to_the_auto_dream_night(api, monkeypatch):
+def test_the_scheduler_tick_hands_its_time_to_the_maintenance_run(api, monkeypatch):
     seen = []
-    monkeypatch.setattr(DA, "nightly", lambda store, auth, at: seen.append(at))
+    monkeypatch.setattr(M, "tick", lambda store, auth, at, failures=None: seen.append(at))
     at = now()
     Scheduler(api.app.state.store, api.app.state.execution).tick(at)
     assert seen == [at]
 
 
-def test_a_store_with_no_app_has_no_night_and_its_tick_does_not_fail(tmp_path):
-    """A bare Scheduler (no app installed the dream route) at 02:30 skips the night quietly and claims nothing."""
+def test_a_store_with_no_app_skips_the_dream_step_quietly(tmp_path):
+    """A bare store (no app installed the dream route): the dream step skips, says why, and starts nothing."""
     from backend.auth import Auth
-    from backend.execution import Execution
     from backend.store import Store
     from backend.config import Settings
     s = Store(Settings(db_path=tmp_path / "bare.sqlite"))
     s.initialize(seed_market=False)
-    assert DA.nightly(s, Auth(s), night()) is None
-    with s.read() as c:
-        assert not DA.claimed(c, DA.night_of(night()))
-    assert not [f for f in Scheduler(s, Execution(s, Auth(s))).tick(night())["failures"] if "auto_dream" in f]
+    with settings(s, test_identities={}):
+        out = step_result(s, Auth(s))
+    assert out["status"] == "skipped" and out["reason"] == "the dream's task path is not wired on this server"
+    assert out["woke"] == 0
+
+
+def test_most_bots_per_run_of_zero_skips_the_dream_step(api):
+    aged(api)
+    remember(api, "ops", 10)
+    store = api.app.state.store
+    with settings(store, test_identities={}):
+        out = step_result(store, api.app.state.auth, max_bots=0)
+    assert out["status"] == "skipped" and out["reason"] == '"Most bots per run" is 0'
+    assert dream_rows(api, "ops") == []
+
+
+def test_the_wake_limiter_holds_a_bot_already_woken_this_run(api):
+    """A dream start is a Maintenance wake: a bot the limiter already woke this run is held, and the others still start."""
+    five_due(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        L.record(c, "ops")
+    report = {}
+    started = run(api, report=report)
+    assert "ops" in report["held"] and "ops" not in started, report
+    assert started, "the other due bots still start"
+    assert dream_rows(api, "ops") == []
+
+
+@pytest.mark.parametrize("limiter", ["bot", "fleet"])
+def test_a_dream_refused_only_by_wake_limits_retries_on_a_later_run_that_day(api, monkeypatch, limiter):
+    store, auth = api.app.state.store, api.app.state.auth
+    clock = [DA.stamp(M.day_start(now()) + timedelta(hours=2))]
+    first_at = clock[0]
+    monkeypatch.setattr(H, "now", lambda: clock[0])
+    aged(api)
+    remember(api, "ops", 10, when=H.parse_ts(first_at) - timedelta(hours=1))
+    previous = H.shift(first_at, days=-1)
+    with store.transaction() as c:
+        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key NOT IN ('find_stuck','dream')")
+        M.save_step(c, "human:ana", {"key": "find_stuck", "frequency": "run"})
+        M.save_step(c, "human:ana", {"key": "dream", "max_bots": 1})
+        c.execute("UPDATE maintenance_steps SET last_started_at=?,cursor_at=? WHERE key='dream'", (previous, previous))
+
+    def earlier_wakes(c, ctx):
+        if ctx["now"] == first_at:
+            with store.transaction() as write:
+                for bot in (["ops"] if limiter == "bot" else [f"other_{n}" for n in range(L.WAKES_PER_HOUR)]):
+                    L.record(write, bot)
+        return {"status": "ran"}
+
+    monkeypatch.setitem(M.LIVE, "find_stuck", earlier_wakes)
+    with settings(store, test_identities={}):
+        first, _ = M.run_now(store, auth, "human:ana", wait=True)
+        row = steps_by_key(first)["dream"]
+        assert row["status"] == "skipped" and row["woke"] == 0
+        assert row["details"]["limited"] == [verdict(api, "ops", H.parse_ts(clock[0])).name]
+        assert dream_rows(api, "ops") == []
+        with store.read() as c:
+            saved = c.execute("SELECT last_started_at,cursor_at FROM maintenance_steps WHERE key='dream'").fetchone()
+            assert tuple(saved) == (previous, previous), "a limiter refusal uses neither the daily attempt nor its cursor"
+        clock[0] = H.shift(first_at, hours=2)        # a later run, past the fleet's rolling hour
+        second, _ = M.run_now(store, auth, "human:ana", wait=True)
+        assert steps_by_key(second)["dream"]["woke"] == 1 and len(dream_rows(api, "ops")) == 1
+        remember(api, "coo", 10, when=H.parse_ts(first_at) - timedelta(hours=1))
+        clock[0] = H.shift(first_at, hours=4)
+        third, _ = M.run_now(store, auth, "human:ana", wait=True)
+    assert steps_by_key(third)["dream"]["reason"] == "not due", "a real start still uses the daily attempt"
+    assert dream_rows(api, "coo") == []
+
+
+@pytest.mark.parametrize("outcome", ["started", "failed"])
+def test_a_limiter_refusal_beside_another_dream_attempt_still_counts_for_the_day(api, monkeypatch, outcome):
+    store, auth = api.app.state.store, api.app.state.auth
+    clock = [DA.stamp(M.day_start(now()) + timedelta(hours=2))]
+    first_at = clock[0]
+    monkeypatch.setattr(H, "now", lambda: clock[0])
+    aged(api)
+    for bot, lines in (("ops", 80), ("coo", 30)):
+        remember(api, bot, 10, lines=lines, when=H.parse_ts(first_at) - timedelta(hours=1))
+    with store.transaction() as c:
+        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key<>'dream'")
+        M.save_step(c, "human:ana", {"key": "dream", "max_bots": 1})
+        L.record(c, "ops")
+    if outcome == "failed":
+        def refused(*args, **kwargs):
+            raise H.Refused("duplicate", "already filed")
+        monkeypatch.setattr(dream, "start", refused)
+    with settings(store, test_identities={}):
+        first, _ = M.run_now(store, auth, "human:ana", wait=True)
+        row = steps_by_key(first)["dream"]
+        assert row["status"] == "ran" and row["woke"] == int(outcome == "started")
+        assert row["details"]["limited"] == [verdict(api, "ops", H.parse_ts(clock[0])).name]
+        clock[0] = H.shift(first_at, hours=2)
+        second, _ = M.run_now(store, auth, "human:ana", wait=True)
+    assert steps_by_key(second)["dream"]["reason"] == "not due"
+    assert dream_rows(api, "ops") == []
+
+
+def test_rehearsal_and_test_servers_skip_the_dream_step(api):
+    aged(api)
+    remember(api, "ops", 10)
+    store, auth = api.app.state.store, api.app.state.auth
+    with settings(store, rehearsal=True, test_identities={}):
+        assert step_result(store, auth)["reason"] == "rehearsal and test servers start no auto dreams"
+    out = step_result(store, auth)                # the api fixture's identities make this one a test server
+    assert out["status"] == "skipped" and out["reason"] == "rehearsal and test servers start no auto dreams"
+    assert dream_rows(api, "ops") == []
+
+
+def test_no_dream_task_path_skips_the_dream_step(api, monkeypatch):
+    aged(api)
+    remember(api, "ops", 10)
+    store, auth = api.app.state.store, api.app.state.auth
+    monkeypatch.setattr(dream, "creator", lambda store: None)
+    with settings(store, test_identities={}):
+        out = step_result(store, auth)
+    assert out["status"] == "skipped" and out["reason"] == "the dream's task path is not wired on this server"
+    assert dream_rows(api, "ops") == []
 
 
 # ---- regressions from the review of 676ac34a0 -------------------------------------------------------------------------
 
-def test_an_overlapping_run_cannot_start_past_the_cap(api, monkeypatch):
-    """The cap is counted inside each start's write transaction. The first count here is stale, as a run that read it
-    before another run's writes would have it: with two dreams already started tonight, one more starts, not three."""
+def test_a_bot_no_longer_due_at_its_start_does_not_use_up_a_slot(api, monkeypatch):
+    """A run judges every bot, then judges each due one again inside its own start's write transaction. A bot that is no
+    longer due by then (a dream landed on it meanwhile) is passed over, and the next due bot takes its slot."""
     aged(api)
-    store = api.app.state.store
     for bot, lines in (("coo", 900), ("ops", 800), ("cpo", 700)):
         remember(api, bot, 10, lines=lines // 10)
-    with store.transaction() as c:
-        for n in (1, 2):
-            H.event(c, H.KEEPER, dream.AUTO_MARK, f"seed-{n}", {})
-    real = DA._started_tonight
-    reads = []
+    real = DA.verdict
 
-    def stale_first(c, at):
-        n = real(c, at)
-        reads.append(n)
-        return 0 if len(reads) == 1 else n
+    def busy_at_its_start(c, bot, at, owner=None):
+        if owner is not None and bot == "coo":
+            return DA.Verdict(bot, "coo", "busy")
+        return real(c, bot, at, owner=owner)
 
-    monkeypatch.setattr(DA, "_started_tonight", stale_first)
-    assert run(api) == [verdict(api, "coo", now()).name]
-    with store.read() as c:
-        assert c.execute("SELECT count(*) FROM events WHERE actor=? AND action=?",
-                         (H.KEEPER, dream.AUTO_MARK)).fetchone()[0] == DA.NIGHTLY_MAX
+    monkeypatch.setattr(DA, "verdict", busy_at_its_start)
+    r = {}
+    assert run(api, limit=2, report=r) == [verdict(api, "ops", now()).name, verdict(api, "cpo", now()).name]
+    assert dream_rows(api, "coo") == [] and r["held"] == [] and r["over"] == 0, r
 
 
 def test_a_dream_that_lands_on_a_branch_is_judged_on_the_branch(api):
@@ -361,29 +495,24 @@ def test_one_bot_refused_or_failing_holds_only_itself_and_the_night_goes_on(api,
         return real(c, who, owner, create, reason=reason)
 
     monkeypatch.setattr(dream, "start", flaky)
-    assert run(api) == [verdict(api, "ops", now()).name, verdict(api, "cpo", now()).name]
+    r = {}
+    assert run(api, report=r) == [verdict(api, "ops", now()).name, verdict(api, "cpo", now()).name]
     assert dream_rows(api, "coo") == [] and len(dream_rows(api, "ops")) == 1 and len(dream_rows(api, "cpo")) == 1
-    assert "1 not started" in routine(api)["last"]["result"]
+    assert r["held"] == [verdict(api, "coo", now()).name] and "1 not started" in r["reason"], r
 
 
-def test_switched_off_between_the_check_and_the_claim_claims_nothing(api, monkeypatch):
+def test_a_switch_turned_off_while_a_run_waits_stops_its_dream_step(api, monkeypatch):
+    """A run's steps are planned when it executes, not when it is claimed: a switch turned off after the claim counts."""
     aged(api)
     store, auth = api.app.state.store, api.app.state.auth
     remember(api, "ops", 10)
-    put(api, "system-routines/auto_dream", {"on": False}, token="ben-test")
-    real = SR.config_of
-    reads = []
-
-    def first_read_still_on(c, key):
-        cfg = real(c, key)
-        reads.append(1)
-        return {**cfg, "on": True} if len(reads) == 1 else cfg      # the tick's read, before the switch
-
-    monkeypatch.setattr(SR, "config_of", first_read_still_on)
-    with settings(store, test_identities={}):
-        assert DA.nightly(store, auth, night()) is None
-    with store.read() as c:
-        assert not DA.claimed(c, DA.night_of(night()))
+    monkeypatch.setattr(M, "_start", lambda *args, **kwargs: None)     # the run waits, unstarted
+    waiting, started = M.run_now(store, auth, "human:ana", step="dream")
+    assert started
+    with store.transaction() as c:
+        M.save_step(c, "human:ana", {"key": "dream", "enabled": False})
+    M._execute(store, auth, waiting["id"], "dream")
+    assert steps_by_key(M.get_run(store, waiting["id"]))["dream"]["status"] == "off"
     assert dream_rows(api, "ops") == []
 
 

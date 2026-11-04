@@ -842,6 +842,7 @@ def switch(slug, manifest=None):
     cannot read it cannot tell an onboarding bot from an Active one. `asks` / `asks_forward` are what bot.yaml
     requests, for messages."""
     if str(slug).strip().lower() == OWNER:
+        # The owner has no per-bot switch; the company's Send mail still holds its every send (oauth.company_allows).
         return {"on": True, "forward_to": [], "source": "owner", "detail": "the owner", "asks": True,
                 "asks_forward": [], "read": True, "onboarding": False}
     try:
@@ -856,6 +857,8 @@ def switch(slug, manifest=None):
     row = _server_row(slug)
     out["read"] = row is not None
     out["onboarding"] = bool((row or {}).get("onboarding"))
+    # The company's Settings > Google (What Tico may do): with Send mail off no bot sends, whatever its own switch says.
+    out["company_off"] = (row or {}).get("company_send") is False
     hint = SETTING_HINT.format(slug=slug)
     if row is None or not row.get("set"):
         out["detail"] = (("no person has turned sending on for " + slug + " in Tico yet"
@@ -870,6 +873,58 @@ def switch(slug, manifest=None):
     out["detail"] = (f"{'on' if out['on'] else 'off'} in Tico, set by {who}"
                      + ("" if out["on"] else "; " + hint))
     return out
+
+
+COMPANY_FIELDS = {"organize_mail": "company_organize", "send_mail": "company_send",
+                  "change_calendar": "company_calendar"}
+UNREAD = "unread"                                       # company(): Tico could not be asked (oauth.company_allows)
+
+
+def company(slug):
+    """The company's What Tico may do for `slug`'s run, as {organize_mail, send_mail, change_calendar}, from Tico and
+    nothing the run says itself: a bot's from its mail setting (backend/mail_settings.py), the owner's (the runner's
+    own commands, a person's run) from the runner's read (runner_company). It holds everyone who acts through Tico.
+
+    None for a server that answers without the fields (an older one). UNREAD when the setting could not be read: the
+    run's writes are refused then, and its reads go on."""
+    slug = str(slug or "").strip().lower()
+    if slug == OWNER:
+        return runner_company()
+    row = _server_row(slug)
+    if row is None:
+        return UNREAD
+    return _allowed(row)
+
+
+def _allowed(row):
+    if not any(f in row for f in COMPANY_FIELDS.values()):
+        return None
+    return {name: row.get(field) is not False for name, field in COMPANY_FIELDS.items()}
+
+
+# The runner's read of What Tico may do (GET /api/v2/connectors/mail/targets over its own registration). Tests
+# replace RUNNER_GET.
+RUNNER_GET = None
+
+
+def runner_company():
+    """What Tico may do for an owner run (an automation's mail action, a calendar booking, a person's own run): asked
+    of Tico over the runner's registration, as a bot's run asks for its own, so nothing on stdin decides it. UNREAD
+    when Tico could not be asked, a run without the registration included."""
+    try:
+        if RUNNER_GET is not None:
+            answer = RUNNER_GET("connectors/mail/targets")
+        else:
+            from . import oauth                         # noqa: PLC0415
+            answer = oauth.broker().get("connectors/mail/targets")
+    except Exception:
+        answer = None
+    if not isinstance(answer, dict):
+        return UNREAD
+    may = answer.get("company")
+    if not isinstance(may, dict):
+        return None                                     # an older server: it says nothing of What Tico may do
+    return {name: may.get(name) is not False for name in COMPANY_FIELDS}
 
 
 def outbound_send(slug, manifest=None):
@@ -1022,6 +1077,10 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
         return no("onboarding", f"this run cannot read {slug}'s mail setting from Tico, so it cannot confirm {slug} "
                                 "has finished onboarding and sends no email, with or without an approval; "
                                 "try again once Tico answers")
+    # Like onboarding, before the approval read: no approval lifts the company's own no.
+    if sw.get("company_off"):
+        return no("company", "the company turned Send mail off in Tico (Settings > Google > What Tico may do), so "
+                             f"{slug} sends no email, with or without an approval; an admin turns it back on there")
     ok("onboarding", f"{slug} is not onboarding")
 
     ext = externals(pol, to)

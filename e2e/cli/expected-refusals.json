@@ -11,6 +11,7 @@
  "assistant change restore": "not_found",
  "assistant propose": "operation",
  "automation create": "file",
+ "automation template": "not_found",
  "bot branch": "not_found",
  "bot copy": "forbidden",
  "bot go-live": "no_computer",
