@@ -69,7 +69,7 @@ const taskRules = [
     assert.match(await card.locator('[data-trigger="task.created"]').innerText(), /Trigger: a task of type Dev tickets is created/);
     assert.match(await card.innerText(), /Paused: too many runs/);
     assert.match(await card.innerText(), /Last Action failed.*2026.*The note could not be saved/);
-    await row.locator('[data-add-action="dev"]').click();
+    await card.locator('[data-task-add-action="task.created"]').click();
     await page.waitForFunction(() => location.hash === '#/automations/au_new', null, {timeout: 5000});
 
     // One automation, off, owned by the viewer, whose trigger is a task created of the Dev tickets type, and no steps yet.
