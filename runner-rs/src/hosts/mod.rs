@@ -400,60 +400,57 @@ const HUB_PATHS: &[&str] = &[
     "webhook update", "whoami",
 ];
 
-/// What a shell command does, for a tool event: `hub` and its command path when the line runs a `hub` command, else the
-/// program the line starts with, as a plain file name. Arguments, redirection targets and everything after the first
-/// program never reach the summary, and a line whose quoting does not close, or whose program is not a plain path, gives
-/// nothing.
+/// What a shell command does, for a tool event: `hub` and its command path when a run of the line plainly starts with
+/// `hub`, else the program the whole line plainly starts with. Both are read from the raw text, never from words a shell
+/// would rebuild: a program counts only when it is the first thing in its text, unquoted, after nothing but plain
+/// `NAME=value` assignments (`plain_program`). Anything else (a leading redirection, quoting, an expansion, a subshell)
+/// gives nothing, and only the line before a heredoc is read, so its body never names a step.
 pub fn command_program(command: &str) -> String {
-    // A heredoc's body is text, never a command: only the line before it is read.
+    // A `sh -c` wrapper (Codex runs every command as `/bin/bash -lc '...'`) is read as the script it runs.
+    if let Some(script) = shell_script(command) {
+        return command_program(&script);
+    }
     let command = if command.contains("<<") { command.split('\n').next().unwrap_or("") } else { command };
-    if let Some(words) = hub_run(command) {
+    if let Some(words) = command_runs(command).into_iter().find_map(hub_words) {
         return hub_summary(&words);
     }
-    let Some(words) = first_program(command) else { return String::new() };
-    if words[0] == "hub" {
-        return hub_summary(&words);
-    }
-    if program_name_ok(&words[0]) { clip(&words[0]) } else { String::new() }
+    plain_program(command).map(clip).unwrap_or_default()
 }
 
-/// The words of the line's `hub` run, from its `hub` word on: the first run whose first word after assignments and
-/// redirections is `hub`. The line is cut at its separators only here, and only the command path is read from the run
-/// (through `hub_summary`), so a mis-split can at worst name a real command path. `command_program` has already cut a
-/// heredoc's body off, so a `hub ...` line inside one is never read.
-fn hub_run(command: &str) -> Option<Vec<String>> {
-    command_runs(command).into_iter().find_map(|run| {
-        let words = shell_words(run)?;
-        let at = program_index(run, &words)?;
-        let program = words[at].rsplit('/').next().unwrap_or(&words[at]);
-        (program == "hub").then(|| words[at..].to_vec())
-    })
+/// The script of a line that is only `sh`, `bash`, `zsh` or `dash`, one `-c` flag (`-c`, `-lc`) and one script word.
+fn shell_script(command: &str) -> Option<String> {
+    if !matches!(plain_program(command)?, "sh" | "bash" | "zsh" | "dash") {
+        return None;
+    }
+    match shell_words(command)?.as_slice() {
+        [_, flag, script] if flag.starts_with('-') && flag.ends_with('c') => Some(script.clone()),
+        _ => None,
+    }
 }
 
-/// The first program of a whole line, read the way a shell reads its first command: leading assignments and redirections
-/// skipped, a `sh -c` wrapper unwrapped to its script, and nothing split. None when the quoting does not close, the program
-/// could come from an expansion, or the program word is not a plain path (`[A-Za-z0-9._+/-]`, subshell parentheses
-/// trimmed). The result is the program's file name, then the words after it.
-fn first_program(command: &str) -> Option<Vec<String>> {
-    let words = shell_words(command)?;
-    let at = program_index(command, &words)?;
-    if words[..=at].iter().any(|w| w.contains("$(") || w.contains('`') || w.contains("${")) {
+/// The program a text plainly starts with: its first word after plain assignments, when that word is a plain name or
+/// path (`[A-Za-z0-9._+/-]`) ending at whitespace, a separator or the end. The result is its file name, checked by
+/// `program_name_ok`; None for any other text.
+fn plain_program(text: &str) -> Option<&str> {
+    static START: OnceLock<Regex> = OnceLock::new();
+    let start = START.get_or_init(|| {
+        Regex::new(r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9._/:@%+,-]*\s+)*([A-Za-z0-9._+/-]+)(?:[\s;|&]|$)").unwrap()
+    });
+    let path = start.captures(text)?.get(1)?.as_str();
+    let program = path.rsplit('/').next().unwrap_or(path);
+    program_name_ok(program).then_some(program)
+}
+
+/// A run's words from its `hub` word on, when the run plainly starts with `hub` (`plain_program`). The line is cut into
+/// runs only for this, and only the command path is read from the words (`hub_summary`), so a mis-split can at worst
+/// name a real command path and an argument never reaches the summary.
+fn hub_words(run: &str) -> Option<Vec<String>> {
+    if plain_program(run)? != "hub" {
         return None;
     }
-    let raw = words[at].trim_matches(&['(', ')'][..]);
-    if raw.is_empty() || !raw.chars().all(|c| c.is_ascii_alphanumeric() || "._+/-".contains(c)) {
-        return None;
-    }
-    let program = raw.rsplit('/').next().unwrap_or(raw).to_string();
-    let shell = matches!(program.as_str(), "sh" | "bash" | "zsh" | "dash");
-    if let (true, Some(flag), Some(inner)) = (shell, words.get(at + 1), words.get(at + 2)) {
-        if flag.starts_with('-') && flag.ends_with('c') {
-            return first_program(inner);
-        }
-    }
-    let mut out = vec![program];
-    out.extend(words[at + 1..].iter().cloned());
-    Some(out)
+    let words = shell_words(run)?;
+    let at = words.iter().position(|w| !is_assignment(w))?;
+    Some(words[at..].to_vec())
 }
 
 /// A program name a summary may show: a plain file name (`npm`, `node18.x`, `g++`), never a word with an expansion or a
@@ -514,34 +511,6 @@ fn command_runs(command: &str) -> Vec<&str> {
 /// Whether the character at byte `i` starts a shell word: nothing, whitespace or an operator comes before it.
 fn starts_word(command: &str, i: usize) -> bool {
     command[..i].chars().next_back().map_or(true, |p| p.is_whitespace() || ";|&()".contains(p))
-}
-
-/// The index of a run's program word: the first word that is neither a `NAME=value` assignment nor a redirection. When a
-/// redirection's operator stands alone, its target (the next word) is skipped too. None when anything skipped was quoted
-/// or escaped in `text`: quoting hides where a redirection's target ends (`>'>' printf x`), so the program is unknown.
-fn program_index(text: &str, words: &[String]) -> Option<usize> {
-    let mut at = 0;
-    while let Some(word) = words.get(at) {
-        if is_assignment(word) {
-            at += 1;
-        } else if let Some(alone) = redirection(word) {
-            at += if alone { 2 } else { 1 };
-        } else {
-            let before = text.find(word.as_str()).map_or(text, |i| &text[..i]);
-            return (at == 0 || !before.contains(['\'', '"', '\\'])).then_some(at);
-        }
-    }
-    None
-}
-
-/// Whether a word is a redirection: `<` or `>`, or digits then one (`2>&1`). None for any other word. Some(true) when the
-/// operator stands alone, so its target is the next word (`> file`); Some(false) when the target is attached (`>/tmp/x`).
-fn redirection(word: &str) -> Option<bool> {
-    let rest = word.trim_start_matches(|c: char| c.is_ascii_digit());
-    if !(rest.starts_with('<') || rest.starts_with('>')) {
-        return None;
-    }
-    Some(rest.chars().all(|c| matches!(c, '<' | '>' | '&' | '|')))
 }
 
 /// `hub` and the command path its words name, read in order from the positional words before the first flag: the first
@@ -1171,7 +1140,7 @@ mod tests {
         assert_eq!(command_program("set -e\nnpm test | tee out.log"), "set");
         assert_eq!(command_program("cargo test 2>&1 | tail"), "cargo");
         assert_eq!(command_program("cd /tmp"), "cd");
-        assert_eq!(command_program("(cd web && npm test)"), "cd");
+        assert_eq!(command_program("(cd web && npm test)"), "");
         assert_eq!(command_program("sh -c 'cd x && cargo test'"), "cd");
         assert_eq!(command_program("hub task create --title \"a && hub task close\""), "hub task create");
         assert_eq!(command_program("hub ask botops please check the release"), "hub ask");
@@ -1197,7 +1166,7 @@ mod tests {
         }
         assert_eq!(command_program("cd /repo <<'EOF'\nprivate-token\nEOF\nnpm test"), "cd");
         assert_eq!(command_program("cd /repo && >/tmp/customer-123.json printf ok"), "cd");
-        assert_eq!(command_program(">|private-token printf ok"), "printf");
+        assert_eq!(command_program(">|private-token printf ok"), "");
         assert_eq!(command_program("cd /tmp && >|private-token printf ok"), "cd");
         assert_eq!(command_program("(( 1 || private_token ))"), "");
         assert_eq!(command_program("cd /w && hub task close 7f3a"), "hub task close");
@@ -1235,6 +1204,9 @@ mod tests {
         assert_eq!(command_program(">'>' printf customer-private"), "");
         assert_eq!(command_program("cd /w && >\\> printf customer-private"), "cd");
         assert_eq!(command_program("cd /w && >'>' hub task close customer-private"), "cd");
+        assert_eq!(command_program("TOKEN=customer-private >'>' printf customer-private"), "");
+        assert_eq!(command_program("2> >(printf customer-private) true"), "");
+        assert_eq!(command_program("/bin/zsh -lc 'cd /w && hub needs-you show'"), "hub needs-you show");
     }
 
     #[test]
