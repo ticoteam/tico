@@ -68,8 +68,8 @@ MODES = ("steer", "queue", "defer", "digest", "none")
 RETENTION_MAX_DAYS = 36500
 REOPEN_ROOTS = 200        # roots one pass of the loop guard's scheduler looks at
 ANSWER_WINDOW = 100       # messages one solicited check reads back (a person's message further back is not being answered)
-REASONS = ("dm", "mention", "ask", "assign", "addressed", "home", "sub_thread", "routing", "digest", "member",
-           "outside")
+REASONS = ("dm", "mention", "ask", "assign", "addressed", "home", "sub_thread", "reply", "routing", "digest",
+           "member", "outside")
 STATES = ("pending", "delivered", "read", "capped", "held", "failed", "moot")
 NOTIFY = ("live", "mentions", "digest", "muted")
 OUTSIDE_PREFIXES = ("slack:",)
@@ -996,10 +996,10 @@ def _ref_strings(refs):
 
 
 def restricted_for(conv, refs, in_reply_to, attachments=False, c=None):
-    """1 when the message needs the per-message check: a reply, files, a task or meeting thread, or refs that are
-    not plainly harmless (an unknown key or shape, a string that names a task, or with `c`, any task's id), the same
-    nested walk the per-message check makes (task_privacy.message_tasks)."""
-    if in_reply_to or attachments:
+    """1 when the message needs the per-message check: a reply to anything but a plain message (`_plain_parent`), files,
+    a task or meeting thread, or refs that are not plainly harmless (an unknown key or shape, a string that names a
+    task, or with `c`, any task's id), the same nested walk the per-message check makes (task_privacy.message_tasks)."""
+    if attachments or (in_reply_to and not _plain_parent(c, in_reply_to)):
         return 1
     if conv and (audience_of(conv) in ("task", "meeting") or conv.get("task_id")):
         return 1
@@ -1011,6 +1011,15 @@ def restricted_for(conv, refs, in_reply_to, attachments=False, c=None):
         if task_privacy.references(c, list(strings)):
             return 1
     return 0
+
+
+def _plain_parent(c, message_id):
+    """Whether a reply's parent is a plain message (restricted 0, no shared-room history): the reply's provenance walk
+    (task_privacy.message_tasks) finds nothing there, so a reply in its thread is read as any message is."""
+    if c is None:
+        return False
+    row = c.execute("SELECT restricted, legacy_audience, deleted_at FROM messages WHERE id=?", (message_id,)).fetchone()
+    return bool(row) and row[0] == 0 and row[1] is None and row[2] is None
 
 
 def stamp(c, row, conv, refs):
@@ -1178,6 +1187,9 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
     if thread.get("parent_id"):
         for actor in _sub_thread_posters(c, thread["id"], message["id"]):
             wanted.setdefault(actor, "sub_thread")
+    replied = _replied_bot(c, root, message)
+    if replied:
+        wanted.setdefault(replied, "reply")
     addressed_bot = any(a.startswith("bot:") and a != author for a in wanted)
     for actor in _followers(c, thread["id"], "digest"):
         wanted.setdefault(actor, "digest")
@@ -1231,6 +1243,24 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
             from . import thread_routing
             thread_routing.enqueue(c, message, thread)
     return out
+
+
+def _replied_bot(c, root, message):
+    """The bot whose message this one replies to (`in_reply_to`, a carrier read as what it carries), when that message
+    is in the same root: a reply reaches its author as an @mention does. The author's reply to itself is dropped with
+    the author's other deliveries."""
+    target = message.get("in_reply_to")
+    if not target:
+        return None
+    row = c.execute("SELECT m.sender_id, m.refs, COALESCE(t.root_id, t.id) FROM messages m JOIN conversations t "
+                    "ON t.id=m.conversation_id WHERE m.id=?", (target,)).fetchone()
+    if row and row[0] == H.KEEPER:
+        carried = (H._json(row[1], {}) or {}).get("carries") if row[1] else None
+        row = c.execute("SELECT m.sender_id, m.refs, COALESCE(t.root_id, t.id) FROM messages m JOIN conversations t "
+                        "ON t.id=m.conversation_id WHERE m.id=?", (carried,)).fetchone() if carried else None
+    if not row or row[2] != root["id"] or not str(row[0] or "").startswith("bot:"):
+        return None
+    return row[0]
 
 
 def _deliver_person(c, thread, root, message, person, reason, replay, warnings):
@@ -1437,12 +1467,13 @@ def _insert_delivery(c, message, recipient, thread, root, mode, reason, *, state
 
 def wake_mode(c, thread, message, bot, reason):
     """The thread wake rule for one bot: (mode, rule id), or (None, None) for no delivery. Precedence (contract
-    §4.3): a DM, mention, ask or assign, then the bot's Home, then a sub-thread it posted in queue a run; a digest
+    §4.3): a DM, mention, ask or assign, then the bot's Home, then a sub-thread it posted in, then a reply to its
+    message queue a run; a digest
     follower gets a digest. The existing wake engine still judges each queued delivery and may make it wait."""
     from . import rules
     if quiet_notice(message) or never_wakes(message.get("refs"), bot):
         return None, None
-    if reason in ("dm", "mention", "ask", "assign", "home", "sub_thread", "routing", "addressed"):
+    if reason in ("dm", "mention", "ask", "assign", "home", "sub_thread", "reply", "routing", "addressed"):
         mode = "queue"
     elif reason == "digest":
         return "digest", rules.THREAD_WAKE
@@ -2958,6 +2989,7 @@ def _revise(c, message, actor, *, body=None, deleted=False, revision=None, purge
         c.execute("DELETE FROM message_mentions WHERE message_id=?", (message["id"],))
         c.execute("DELETE FROM message_reactions WHERE message_id=?", (message["id"],))
         c.execute("DELETE FROM thread_routings WHERE message_id=?", (message["id"],))
+        c.execute("DELETE FROM message_routes WHERE message_id=?", (message["id"],))
         c.execute("UPDATE conversations SET subject='' WHERE parent_message_id=?", (message["id"],))
         H._withdraw_queued_comment_copies(c, message["id"])
         _rewrite_copies(c, message, None)
@@ -3231,15 +3263,131 @@ def _message_out(m):
     return out
 
 
+REPLY_EXCERPT = 120              # characters of the quoted message a reply shows
+
+
+def reply_target(c, v, thread_id, message_id):
+    """The message a post's `in_reply_to` names, or 422 reply_target_invalid: it must be a message of the same root's
+    open subtree (the root or an open sub-thread under it) that the poster reads. The reply itself goes in the thread
+    posted to, never into the target's sub-thread."""
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    thread = require(c, v, thread_id)
+    row = c.execute("SELECT m.*, COALESCE(t.root_id, t.id) AS root, t.archived_at AS thread_archived, "
+                    "t.closed_at AS thread_closed FROM messages m JOIN conversations t ON t.id=m.conversation_id "
+                    "WHERE m.id=?", (str(message_id or ""),)).fetchone()
+    message = dict(row) if row else None
+    if (message is None or message.get("seq") is None or message.get("deleted_at")
+            or message["root"] != (thread.get("root_id") or thread["id"])
+            or message.get("thread_archived") or message.get("thread_closed")
+            or not message_readable(c, v, message)):
+        raise Problem("reply_target_invalid", "Reply to a message in this thread that you can read", 422)
+    return message
+
+
+def reply_excerpt(body):
+    """A quoted message as plain text: markdown and line breaks out, clipped at a word to REPLY_EXCERPT characters
+    with "…"."""
+    text = " ".join(_MARKDOWN.sub(lambda m: m.group(2) if m.group(1) else "", str(body or "")).split())
+    if len(text) <= REPLY_EXCERPT:
+        return text
+    head = text[:REPLY_EXCERPT - 1]
+    cut = head.rsplit(" ", 1)[0] if " " in head[REPLY_EXCERPT // 2:] else head
+    return cut.rstrip(" ,.;:-") + "…"
+
+
+PERSONAL_AUDIENCES = ("personal", "participants", "home")
+
+
+def reply_quotes(c, v, items):
+    """{message id: its `reply_to`} for these shown timeline messages: the message each answers (`in_reply_to`, a
+    carrier read as what it carries), else a sub-thread message's parent. `{"id", "author", "author_name", "excerpt"}`
+    when the viewer reads it, `{"id", "hidden": true}` when not, None for no quote. A run's reply in a DM or Home quotes
+    nothing: it answers the message right above it. Two queries for the targets and one for the threads, whatever the
+    page."""
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    items = [i for i in items if i.get("id") and not i.get("hidden") and not i.get("deleted")]
+    if not items:
+        return {}
+    places = {i.get("thread_id") or i.get("conversation_id") for i in items} - {None}
+    threads_of = _rows_by_id(c, "SELECT x.id, x.parent_message_id, COALESCE(r.audience, "
+                             + _derived_audience("r").replace("%", "%%") + ") AS audience FROM conversations x "
+                             "JOIN conversations r ON r.id=COALESCE(x.root_id, x.id) WHERE x.id IN (%s)", places)
+    wanted = {}
+    for item in items:
+        place = threads_of.get(item.get("thread_id") or item.get("conversation_id")) or {}
+        refs = item.get("refs") if isinstance(item.get("refs"), dict) else {}
+        target = item.get("in_reply_to")
+        if target and refs.get("turn_id") and place.get("audience") in PERSONAL_AUDIENCES:
+            target = None
+        wanted[item["id"]] = target or place.get("parent_message_id")
+    found = _rows_by_id(c, "SELECT * FROM messages WHERE id IN (%s)", set(wanted.values()) - {None})
+    carried = {}
+    for mid, m in found.items():
+        refs = H._json(m.get("refs"), {}) or {}
+        if m.get("sender_id") == H.KEEPER and isinstance(refs, dict) and refs.get("carries"):
+            carried[mid] = refs["carries"]
+    sources = _rows_by_id(c, "SELECT * FROM messages WHERE id IN (%s)", set(carried.values()))
+    for mid, source in carried.items():
+        if mid in found:
+            found[mid] = sources.get(source) or {}
+    known = v.known(c)
+    shown = {mid: m for mid, m in found.items()
+             if m.get("id") and m.get("seq") is not None and message_readable(c, v, m)}
+    from .names import lookup
+    names = lookup(c, {known.name(m.get("sender_id") or "", m["conversation_id"]) for m in shown.values()} - {""})
+    out = {}
+    for item_id, target in wanted.items():
+        if not target:
+            out[item_id] = None
+            continue
+        m = shown.get(target)
+        if m is None:
+            out[item_id] = {"id": (found.get(target) or {}).get("id") or target, "hidden": True}
+            continue
+        author = known.name(m.get("sender_id") or "", m["conversation_id"])
+        out[item_id] = {"id": m["id"], "author": author, "author_name": names.get(author, ""),
+                        "excerpt": reply_excerpt(m.get("body"))}
+    return out
+
+
+def routed(c, message_ids):
+    """{message id: its `routed`} for those of these messages routing looked at (message_routes): `{"to": [{"actor",
+    "name"}]}`, the bots it asked (none: it asked nobody). A message routing never looked at is left out (null)."""
+    ids = sorted({i for i in message_ids if i})
+    if not ids:
+        return {}
+    found = {}
+    for start in range(0, len(ids), 500):
+        part = ids[start:start + 500]
+        found.update((r[0], [a for a in (H._json(r[1], []) or []) if isinstance(a, str)]) for r in c.execute(
+            f"SELECT message_id, bot_ids FROM message_routes WHERE message_id IN ({','.join('?' * len(part))})", part))
+    if not found:
+        return {}
+    from .names import lookup
+    names = lookup(c, {a for actors in found.values() for a in actors})
+    return {mid: {"to": [{"actor": a, "name": names.get(a) or H.actor_name(c, a)} for a in actors]}
+            for mid, actors in found.items()}
+
+
+def _rows_by_id(c, sql, ids):
+    """{id: row} for one `IN (%s)` query over these ids, 500 at a time."""
+    ids, out = sorted(i for i in ids if i), {}
+    for start in range(0, len(ids), 500):
+        part = ids[start:start + 500]
+        out.update((r["id"], dict(r)) for r in c.execute(sql % ",".join("?" * len(part)), part))
+    return out
+
+
 def _depth(row):
     """A thread's place in its tree: 0 for a root, 1 for a sub-thread, and so on (`path`)."""
     return max(0, len([p for p in str(row.get("path") or f"/{row['id']}/").split("/") if p]) - 1)
 
 
 def _timeline_rows(c, v, rows, thread_id, depth):
-    """Messages of one thread, as given, each through the per-message check: the message, its tombstone for a viewer who
-    read it before it went, or the quiet hidden row. Consecutive hidden rows of one kind collapse into one; a row that
-    stands for shared-room history the viewer's Home Read doesn't reach says so (`earlier`), the "Earlier messages" row."""
+    """Messages of one thread (`thread_id` None: of each row's own thread), as given, each through the per-message
+    check: the message, its tombstone for a viewer who read it before it went, or the quiet hidden row. Consecutive
+    hidden rows of one kind collapse into one; a row that stands for shared-room history the viewer's Home Read doesn't
+    reach says so (`earlier`), the "Earlier messages" row."""
     known = v.known(c)
     out, hidden_open = [], None
     for m in rows:
@@ -3248,7 +3396,8 @@ def _timeline_rows(c, v, rows, thread_id, depth):
         if not shown:
             kind = "earlier" if m.get("legacy_audience") and legacy_hidden(c, v, m) else "plain"
             if hidden_open != kind:
-                out.append({"id": m["id"], "seq": m["seq"], "thread_id": thread_id, "depth": depth, "hidden": True,
+                out.append({"id": m["id"], "seq": m["seq"], "thread_id": thread_id or m["conversation_id"],
+                            "depth": depth, "hidden": True,
                             **({"earlier": True} if kind == "earlier" else {})})
             hidden_open = kind
             continue
@@ -3368,12 +3517,26 @@ def _branches(c, v, tops):
     return out
 
 
-def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None):
+def _open_subtree(c, v, row):
+    """The ids of `row` and the open threads under it (not archived, not closed) the viewer reads."""
+    path = str(row.get("path") or f"/{row['id']}/")
+    ids = [row["id"]] + [r[0] for r in c.execute(
+        "SELECT id FROM conversations WHERE root_id=? AND id<>? AND substr(path, 1, ?)=? AND archived_at IS NULL "
+        "AND closed_at IS NULL", (row.get("root_id") or row["id"], row["id"], len(path), path))]
+    allowed = readable_ids(c, v, ids[1:])
+    return [i for i in ids if i == row["id"] or i in allowed]
+
+
+def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=False):
     """A thread in tree order, newest page first: `cursor` and `limit` page its own messages, and each is followed by its
     sub-thread's messages, recursively, each with its `depth`. A long branch shows its latest messages under a
     `collapsed` row ("N more", with the cursor that reads the rest). Every row passes the per-message check: hidden
     messages are one quiet row, and carriers never show. A page always ends on a whole message and its branch; a first
-    message whose branch alone is over the byte cap keeps its summary and an "N more" row in the branch's place."""
+    message whose branch alone is over the byte cap keeps its summary and an "N more" row in the branch's place.
+
+    `flat`: the thread and its whole readable open subtree in time order, every message at depth 0, paged by the same
+    cursor (a seq) and caps. Each shown message has `reply_to` (reply_quotes) in both modes; the first page also has
+    `bot_status` (thread_bot_status)."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = require(c, v, thread_id)
     limit = max(1, min(int(limit or 50), MAX_PAGE))
@@ -3382,19 +3545,30 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None):
     # An old reader of a migrated Home opens only its root, for the history they read: there is no branch for them.
     old_only = legacy_reader_only(c, v, row)
     only_old = " AND legacy_audience IS NOT NULL" if old_only else ""
-    rows = [dict(r) for r in c.execute("SELECT * FROM messages WHERE conversation_id=? AND seq IS NOT NULL AND seq<?"
-                                       f"{only_old} ORDER BY seq DESC LIMIT ?", (row["id"], below, limit + 1))]
+    places = _open_subtree(c, v, row) if flat and not old_only else [row["id"]]
+    rows = [dict(r) for r in c.execute(f"SELECT * FROM messages WHERE conversation_id IN ({','.join('?' * len(places))}) "
+                                       f"AND seq IS NOT NULL AND seq<?{only_old} ORDER BY seq DESC LIMIT ?",
+                                       (*places, below, limit + 1))]
     more = len(rows) > limit
-    tops = _timeline_rows(c, v, rows[:limit], row["id"], _depth(row))
-    branches = {} if old_only else _branches(c, v, tops)
-    shown = [r["id"] for r in tops if not r.get("hidden")] + [
-        r["id"] for b in branches.values() for r in b["rows"] if not r.get("hidden")]
+    if flat:
+        tops = _timeline_rows(c, v, rows[:limit], None, 0)
+        branches = {}
+    else:
+        tops = _timeline_rows(c, v, rows[:limit], row["id"], _depth(row))
+        branches = {} if old_only else _branches(c, v, tops)
+    every = tops + [r for b in branches.values() for r in b["rows"]]
+    shown = [r["id"] for r in every if not r.get("hidden")]
     marks = reactions(c, shown)
+    quotes = reply_quotes(c, v, every)
+    routes = routed(c, shown)
     known = v.known(c)
 
     def block(item):
         if item["id"] in marks and not item.get("deleted"):
             item["reactions"] = known.reactions(marks[item["id"]], item["thread_id"])
+        if not item.get("hidden") and "seq" in item:
+            item["reply_to"] = quotes.get(item["id"])
+            item["routed"] = routes.get(item["id"])
         found = branches.get(item["id"])
         if not found:
             return [item]
@@ -3416,8 +3590,12 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None):
         size += bytes_of
         pages.append(rows_of)
     next_cursor = pages[-1][0]["seq"] if more and pages else None
-    return {"thread": {**view(c, v, row), **_earlier(c, v, row)}, "breadcrumb": breadcrumb(c, v, row),
-            "messages": [r for rows_of in reversed(pages) for r in rows_of], "next_cursor": next_cursor}
+    out = {"thread": {**view(c, v, row), **_earlier(c, v, row)}, "breadcrumb": breadcrumb(c, v, row),
+           "messages": [r for rows_of in reversed(pages) for r in rows_of], "next_cursor": next_cursor}
+    if cursor in (None, ""):
+        from . import thread_bot_status
+        out["bot_status"] = thread_bot_status.status(c, v, row)
+    return out
 
 
 def _attention_roots(c, v):
