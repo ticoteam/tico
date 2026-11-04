@@ -142,9 +142,13 @@ def dreams(c, owner):
 
 def _dreams(c, owners, where, args=(), visible="1"):
     marks = ",".join("?" * len(owners))
-    return c.execute(f"SELECT tasks.* FROM {H.TASKS} tasks JOIN task_tags tt ON tt.task_id=tasks.id JOIN tags g ON g.id=tt.tag_id "
+    # The TASKS subquery has no rowid, so the insertion order (the tie-break for equal created_at) is read from the
+    # tasks table by a correlated subquery. No second table in FROM: `visible` names its columns without a prefix.
+    return c.execute(f"SELECT tasks.* FROM {H.TASKS} tasks JOIN task_tags tt ON tt.task_id=tasks.id "
+                     "JOIN tags g ON g.id=tt.tag_id "
                      f"WHERE g.key=? AND tasks.owner_id IN ({marks}) AND {where} AND {MARKED} AND ({visible}) "
-                     "ORDER BY tasks.created_at DESC, tasks.rowid DESC LIMIT 1", (LABEL, *owners, *args)).fetchone()
+                     "ORDER BY tasks.created_at DESC, (SELECT r.rowid FROM tasks r WHERE r.id=tasks.id) DESC LIMIT 1",
+                     (LABEL, *owners, *args)).fetchone()
 
 
 def _open(c, owners, visible="1"):
