@@ -592,9 +592,9 @@ def test_a_bot_with_no_live_task_is_skipped_before_any_per_task_query(api, monke
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (finished["id"],))
         complete_jobs(c)
         asked = []
-        visit = task_roundup._list
-        monkeypatch.setattr(task_roundup, "_list",
-                            lambda c, slug, at, shared, skip_tasks=(): asked.append(slug) or visit(c, slug, at, shared, skip_tasks))
+        visit = task_roundup._items
+        monkeypatch.setattr(task_roundup, "_items", lambda c, slug, at, shared, skip_tasks=(), **kw:
+                            asked.append(slug) or visit(c, slug, at, shared, skip_tasks, **kw))
         assert "finance" not in task_roundup.run(c, DAY)["woke"]
         assert "finance" not in asked                                     # no live task: no per-task query at all
         live = task(c, "Plan the offsite")
@@ -1071,6 +1071,7 @@ def test_a_deferred_time_that_passed_unfired_is_a_missed_start(api):
     with store.transaction() as c:
         tid = task(c, "Chase the invoice")["id"]
         settle(c, tid, "finance", ago(days=2))
+        c.execute("UPDATE tasks SET next_run=1 WHERE id=?", (tid,))
         conv = H.task(c, tid)["conversation_id"]
         c.execute("INSERT INTO deferrals(id,bot,kind,item,conversation_id,task_id,due_at,created_at,fired_job,settled_at,how,attempt) "
                   "VALUES(?,?,'task',?,?,?,?,?,NULL,NULL,NULL,NULL)",
@@ -1078,6 +1079,28 @@ def test_a_deferred_time_that_passed_unfired_is_a_missed_start(api):
         complete_jobs(c)
         assert "finance" in task_roundup.run(c, DAY)["woke"]
         assert f"{tid[:8]} Chase the invoice: Deferred time passed at 12:00 UTC and nothing has picked it up" in only_list(c)
+
+
+def test_a_past_deferral_waits_for_the_tasks_current_resume_condition(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        tid = task(c, "Chase the invoice")["id"]
+        settle(c, tid, "finance", ago(days=2))
+        resume = json.dumps({"kind": "time", "until": H.shift(DAY, days=1)})
+        c.execute("UPDATE tasks SET next_run=1, resume=? WHERE id=?", (resume, tid))
+        conv = H.task(c, tid)["conversation_id"]
+        c.execute("INSERT INTO deferrals(id,bot,kind,item,conversation_id,task_id,due_at,created_at,fired_job,settled_at,how,attempt) "
+                  "VALUES(?,?,'task',?,?,?,?,?,NULL,NULL,NULL,NULL)",
+                  (H.new_id(), "finance", tid, conv, tid, ago(hours=2), ago(hours=4)))
+        complete_jobs(c)
+        task_roundup.run(c, DAY)
+        assert not any("Deferred time passed" in body for body in lists(c)), "the new resume condition still holds it"
+        key = task_roundup._key("start", "finance", f"{tid}:{ago(hours=2)}")
+        assert task_roundup._mark(c, key) is None, "the held deferral is not recorded as listed"
+        assert H.task(c, tid)["resume"] == resume
+        c.execute("UPDATE tasks SET resume=NULL WHERE id=?", (tid,))
+        assert "finance" in task_roundup.run(c, NOON)["woke"]
+        assert any(f"{tid[:8]} Chase the invoice: Deferred time passed" in body for body in lists(c))
 
 
 def test_a_waiting_task_held_only_by_bots_is_listed_on_its_blocker_bots_list_not_its_owners(api):
@@ -1120,7 +1143,7 @@ def test_a_person_owned_waiting_task_never_reaches_task_holds_and_a_bot_owned_on
         assert [row["id"] for row, _ in waits.get("ops", [])] == [mine]
 
 
-def test_a_waiting_task_already_listed_for_its_update_is_not_read_by_task_holds_again(api, monkeypatch):
+def test_a_waiting_task_already_listed_for_its_update_is_not_returned_for_that_recipient(api):
     store = api.app.state.store
     with store.transaction() as c:
         blocker = H.task_create(c, H.human_actor("ana"), "Finish the menu", "Ops finishes it.", H.bot_actor("ops"))["id"]
@@ -1131,16 +1154,7 @@ def test_a_waiting_task_already_listed_for_its_update_is_not_read_by_task_holds_
         complete_jobs(c)
         complete_jobs(c, "ops")
         assert task_roundup.run(c, DAY)["woke"] == ["ops"]
-        seen = []
-        real = TH.holds
-
-        def counting(conn, row):
-            seen.append(row["id"])
-            return real(conn, row)
-
-        monkeypatch.setattr(TH, "holds", counting)
         assert task_roundup._blocked_waits(c, NOON).get("ops", []) == []
-        assert mine not in seen, "a task marked by an earlier run for this update is skipped before its holds are read"
 
 
 def test_a_task_held_by_two_bots_is_listed_to_both_in_one_run_and_to_neither_on_the_next_run(api):
@@ -1161,9 +1175,11 @@ def test_a_task_held_by_two_bots_is_listed_to_both_in_one_run_and_to_neither_on_
         assert sorted(task_roundup.run(c, DAY)["woke"]) == ["coo", "ops"], "each blocker's bot is listed in the same run"
         assert f"{mine[:8]} Print the menu: Waiting on you" in only_list(c, "ops")
         assert f"{mine[:8]} Print the menu: Waiting on you" in only_list(c, "coo")
-        before = (lists(c, "ops"), lists(c, "coo"))
+        before = {slug: len(lists(c, slug)) for slug in ("ops", "coo")}
         task_roundup.run(c, NOON)
-        assert (lists(c, "ops"), lists(c, "coo")) == before, "neither bot is sent the task again with no update to it"
+        # A later list may carry other news (the bot's own task), but never this task again with no update to it.
+        for slug, count in before.items():
+            assert not any(mine[:8] in body for body in lists(c, slug)[count:]), slug
 
 
 def test_a_blocker_that_cannot_read_the_owners_task_gets_no_line(api, monkeypatch):

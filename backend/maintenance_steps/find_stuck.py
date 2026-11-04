@@ -38,9 +38,16 @@ def run(c, ctx):
             if not LIMITS.allow(tx, slug):
                 refused.append(slug)            # the limiter holds this bot: it is not sent, and no list is recorded
                 continue
-            held = {tid for tid in task_roundup.line_tasks(tx, plan) if not LIMITS.allow(tx, slug, tid)}
+            held = set()
+
+            def allowed(tid):
+                if LIMITS.allow(tx, slug, tid):
+                    return True
+                held.add(tid)
+                return False
+
+            count, task_ids = task_roundup.send_detail(tx, plan, allowed=allowed)
             limited += sorted(held)
-            count, task_ids = task_roundup.send_detail(tx, plan, skip_tasks=held)
             if count:
                 LIMITS.record(tx, slug, task_ids)
                 woken.append(slug)

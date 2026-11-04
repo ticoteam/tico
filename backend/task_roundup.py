@@ -145,10 +145,10 @@ def discover(c, at=None):
         slug = bot["id"]
         if slug not in wanted or _sent_before(c, slug, at):
             continue
-        text, count, shown = _list(c, slug, at, shared)
-        if text:
-            plans.append({"slug": slug, "at": at, "lines": count,
-                          "oldest": min(item["sort"] for item in shown)})
+        items = _items(c, slug, at, shared)
+        if items:
+            plans.append({"slug": slug, "at": at, "lines": len(items),
+                          "oldest": min(item["sort"] for item in items)})
     return plans
 
 
@@ -160,16 +160,16 @@ def send(c, plan):
     return send_detail(c, plan)[0]
 
 
-def send_detail(c, plan, skip_tasks=()):
+def send_detail(c, plan, skip_tasks=(), *, allowed=None):
     """send, and the ids of the tasks its shown lines named: (lines, [task ids]), or (0, []) when nothing was sent. The
     Maintenance limiter counts a delivered list once, with these ids (backend/maintenance_steps/find_stuck.py). A task in
-    skip_tasks (the per-task limit holds it) has its lines named nowhere."""
+    skip_tasks or refused by allowed(task_id) has its lines named nowhere; allowed runs before the list is capped."""
     from . import run_triggers as RT, task_check_backs
     slug, at = plan["slug"], plan["at"]
     if _sent_before(c, slug, at) or not _active(c, slug):
         return 0, []
     built = _later(at, _built_at())        # stamped before the read: an update racing it is listed again, never missed
-    text, count, shown = _list(c, slug, at, {}, skip_tasks)
+    text, count, shown = _list(c, slug, at, {}, skip_tasks, allowed=allowed)
     if not text:
         return 0, []
     actor = H.bot_actor(slug)
@@ -198,7 +198,7 @@ def send_detail(c, plan, skip_tasks=()):
 
 
 def line_tasks(c, plan):
-    """The task ids the bot's list would name this run, before any per-task limit (find_stuck asks the limiter about each).
+    """The task ids the bot's list would name this run, before any per-task limit.
     Read only: it runs in the caller's transaction and writes nothing."""
     _, _, shown = _list(c, plan["slug"], plan["at"], {})
     return _task_ids(shown)
@@ -277,9 +277,21 @@ def _item(tid, line, key, *, due=False, event=None, also=None):
     return {"tid": tid, "line": line, "mark": key, "due": due, "event": event, "also": also}
 
 
-def _list(c, slug, at, shared, skip_tasks=()):
+def _list(c, slug, at, shared, skip_tasks=(), *, allowed=None):
     """The bot's list as one message's text, how many lines it has, and the items shown on it (each with the registry key it
-    is recorded under once sent). (None, 0, []) when nothing needs a look. A task in skip_tasks is named nowhere."""
+    is recorded under once sent). (None, 0, []) when nothing needs a look. Task limits apply before the display cap."""
+    ordered = _items(c, slug, at, shared, skip_tasks, allowed=allowed)
+    if not ordered:
+        return None, 0, []
+    shown = ordered[:MAX_LINES]
+    lines = [HEADING, *(item["line"] for item in shown)]
+    if len(ordered) > len(shown):
+        lines.append(f"- and {len(ordered) - len(shown)} more")
+    return "\n".join(lines), len(ordered), shown
+
+
+def _items(c, slug, at, shared, skip_tasks=(), *, allowed=None):
+    """All eligible lines in list order, one per task, before the display cap."""
     from . import rules, task_snooze as TS
     actor = H.bot_actor(slug)
     now = H.parse_ts(at)
@@ -329,18 +341,14 @@ def _list(c, slug, at, shared, skip_tasks=()):
     for group in range(QUIET + 1):
         for sort, item in sorted(groups[group], key=lambda found: found[0], reverse=group == MISSED):
             if item["tid"] is not None:
-                if item["tid"] in seen or item["tid"] in skip_tasks:         # a task is named once on a list
+                if item["tid"] in seen:         # a task is named once on a list
                     continue
                 seen.add(item["tid"])
+                if item["tid"] in skip_tasks or (allowed is not None and not allowed(item["tid"])):
+                    continue
             item["sort"] = _when(sort)
             ordered.append(item)
-    if not ordered:
-        return None, 0, []
-    shown = ordered[:MAX_LINES]
-    lines = [HEADING, *(item["line"] for item in shown)]
-    if len(ordered) > len(shown):
-        lines.append(f"- and {len(ordered) - len(shown)} more")
-    return "\n".join(lines), len(ordered), shown
+    return ordered
 
 
 def _when(value):
@@ -354,7 +362,8 @@ def _when(value):
 def _missed_starts(c, slug, actor, at):
     """A snooze that ended at its deadline, or a deferred time that passed, within MISSED_START_LOOKBACK and more than
     MISSED_START_GRACE before the run, on a live task the bot owns (a deferral it made on a task it owns), with no turn on the
-    task and no delivery to it since that time: one line per such time."""
+    task and no delivery to it since that time: one line per such time. A deferred task must still wait for its next run,
+    with no resume condition holding it (H.next_run_waiting)."""
     from . import task_snooze as TS
     since = H.shift(at, seconds=-int(MISSED_START_LOOKBACK.total_seconds()))
     before = H.shift(at, seconds=-int(MISSED_START_GRACE.total_seconds()))
@@ -377,6 +386,7 @@ def _missed_starts(c, slug, actor, at):
             appointment = row["appointment"]
             key = _key("start", slug, f"{row['id']}:{appointment}")
             if (_mark(c, key) is not None or TS.snoozed(row, at) or not H.task_private_readable(c, actor, row)
+                    or (what == "Deferred time passed" and not H.next_run_waiting(c, row))
                     or _turned_since(c, row, appointment, actor, external) or _running(c, slug, row) or _person_held(c, row)):
                 continue
             reason = f"{what} at {_clock(appointment)} and nothing has picked it up"
@@ -415,7 +425,7 @@ def _person_held(c, row):
 def _blocked_waits(c, at):
     """{bot id: [(task row, what)]}: each waiting task a bot owns, of an active bot, whose every hold is on a bot
     (backend/task_holds.py), under the bot it waits on. The owner and active-bot filters are in the query, so a person's
-    task never reaches task_holds; a task already marked as listed for its update is skipped before its holds are read.
+    task never reaches task_holds. Each recipient's mark suppresses only that recipient's line for this update.
     Read once per run (the shared reads of discover and of each send)."""
     from . import task_holds as TH, task_snooze as TS
     out = {}
@@ -423,7 +433,7 @@ def _blocked_waits(c, at):
                              "WHERE tasks.status='waiting' AND tasks.owner_id LIKE 'bot:%' AND b.state='active' "
                              "ORDER BY tasks.updated_at"))
     for row in rows:
-        if TS.snoozed(row, at) or _blocked_marked(c, row, at):
+        if TS.snoozed(row, at):
             continue
         found = TH.holds(c, row)
         if not found or any(h["kind"] == "private" or not h["on"] or not H.is_bot(h["on"]) for h in found):
@@ -432,17 +442,9 @@ def _blocked_waits(c, at):
         for hold in found:
             whats.setdefault(H.actor_id(hold["on"]), hold["what"])
         for slug, what in whats.items():
-            out.setdefault(slug, []).append((row, what))
+            if _mark(c, _key("blocked", slug, f"{row['id']}:{row['updated_at']}")) is None:
+                out.setdefault(slug, []).append((row, what))
     return out
-
-
-def _blocked_marked(c, row, at):
-    """True when a blocked line was marked for this task at this update by an earlier run: it was listed, so its holds are
-    not read again. A mark this run wrote carries a time at or after `at` (send_detail stamps it with _later(at, ...)), so
-    it does not count: a task held by two bots is listed to each of them in one run, since send rebuilds the waits after
-    the first bot's mark is written. Mark keys are task_roundup:blocked:<slug>:<task id>:<updated_at> (see _key)."""
-    return c.execute("SELECT 1 FROM registry_metadata WHERE instr(key, ?) = 1 AND instr(key, ?) > 0 AND value < ? LIMIT 1",
-                     (f"{SENT_KEY}blocked:", f":{row['id']}:{row['updated_at']}", at)).fetchone() is not None
 
 
 def _blocked_by(c, slug, actor, at, shared):

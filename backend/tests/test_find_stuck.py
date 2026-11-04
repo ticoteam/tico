@@ -6,12 +6,12 @@ Migration 0084 withdraws the open Still wanted questions to people, and only tho
 import importlib
 import sqlite3
 
-from backend import task_roundup
+from backend import task_check_backs, task_roundup
 from backend.store import H
 from backend.maintenance_steps import find_stuck as FS
 from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.test_task_roundup import (  # noqa: F401
-    DAY, NOON, ago, build_clock, complete_jobs, lists, named_in, only_list, settle, started, task,
+    DAY, NOON, ago, blocks, build_clock, complete_jobs, lists, named_in, only_list, settle, started, task,
 )
 
 
@@ -98,6 +98,87 @@ def test_a_task_the_limiter_holds_is_dropped_from_its_list_while_an_eligible_one
         assert named_in(body) == 1 and f"{eligible[:8]} Chase the quote" in body
         assert held[:8] not in body
         assert task_roundup._mark(c, task_roundup.LISTED_KEY + held) is None, "a held task is not recorded as listed"
+
+
+def test_replacements_past_the_display_cap_also_pass_the_task_limit_in_the_send_transaction(api, monkeypatch):
+    store = api.app.state.store
+    tids = []
+    with store.transaction() as c:
+        for n in range(28):
+            tid = task(c, f"Review invoice {n}")["id"]
+            settle(c, tid, "finance", ago(days=3, minutes=28 - n))
+            tids.append(tid)
+        complete_jobs(c)
+    daily_wakes = {tids[0]: 3, tids[25]: 3}     # one displayed task and the first replacement used their daily allowance
+    checked, recorded = [], []
+
+    def allow(c, bot_id, task_id=None):
+        assert c.write_transaction and c.in_transaction
+        checked.append((c, bot_id, task_id))
+        return daily_wakes.get(task_id, 0) < 3
+
+    def record(c, bot_id, task_ids=()):
+        assert c.write_transaction and c.in_transaction
+        assert all((c, bot_id, tid) in checked for tid in task_ids), "each delivered task passed in this transaction"
+        recorded.append((bot_id, list(task_ids)))
+
+    monkeypatch.setattr(FS.LIMITS, "allow", allow)
+    monkeypatch.setattr(FS.LIMITS, "record", record)
+    result = run_find_stuck(store)
+    delivered = [tid for tid in tids if tid not in daily_wakes][:25]
+    assert result["details"]["woken"] == ["finance"]
+    assert result["details"]["limited"] == sorted(daily_wakes)
+    assert recorded == [("finance", delivered)]
+    with store.read() as c:
+        body = only_list(c)
+        assert named_in(body) == 25
+        assert all(tid[:8] in body for tid in delivered)
+        for tid in (*daily_wakes, tids[-1]):
+            assert tid[:8] not in body
+            assert task_roundup._mark(c, task_roundup.LISTED_KEY + tid) is None
+
+
+def test_a_blocker_past_the_bot_cap_gets_its_line_on_the_next_run(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        mine = task(c, "Print the menu")["id"]
+        settle(c, mine, "finance", ago(days=1))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
+        for slug in ("coo", "ops"):
+            blocker = task(c, f"Finish the menu for {slug}", owner=H.bot_actor(slug))["id"]
+            settle(c, blocker, slug, ago(hours=2))
+            blocks(c, blocker, mine, ago(days=1))
+            complete_jobs(c, slug)
+        complete_jobs(c)
+    assert run_find_stuck(store, settings={"max_bots": 1})["details"]["woken"] == ["coo"]
+    with store.read() as c:
+        assert f"{mine[:8]} Print the menu: Waiting on you" in only_list(c, "coo")
+        assert lists(c, "ops") == [], "the second blocker waits for the next run"
+    assert run_find_stuck(store, at=NOON, settings={"max_bots": 1})["details"]["woken"] == ["ops"]
+    with store.read() as c:
+        assert f"{mine[:8]} Print the menu: Waiting on you" in only_list(c, "ops")
+        assert len(lists(c, "coo")) == 1, "the delivered recipient is not listed again"
+
+
+def test_the_oldest_eligible_line_orders_bots_even_when_it_is_past_the_display_cap(api, monkeypatch):
+    store = api.app.state.store
+    monkeypatch.setattr(task_roundup, "MAX_LINES", 1)
+    with store.transaction() as c:
+        due = task(c, "Chase the quote")["id"]
+        settle(c, due, "finance", ago(days=3))
+        task_check_backs.set_time(c, H.task(c, due), ago(hours=1), "Check the quote",
+                                  actor=H.human_actor("ana"), at=ago(hours=3))
+        oldest = task(c, "Renew the lease")["id"]
+        settle(c, oldest, "finance", ago(days=12))
+        other = task(c, "Sign the menu", owner=H.bot_actor("coo"))["id"]
+        settle(c, other, "coo", ago(days=5))
+        complete_jobs(c)
+        complete_jobs(c, "coo")
+    assert run_find_stuck(store, settings={"max_bots": 1})["details"]["woken"] == ["finance"]
+    with store.read() as c:
+        body = only_list(c)
+        assert due[:8] in body and oldest[:8] not in body, "the oldest line set priority before the display cap"
+        assert lists(c, "coo") == []
 
 
 def test_migration_0084_withdraws_only_the_keepers_open_still_wanted_questions():
