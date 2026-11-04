@@ -344,7 +344,7 @@ const HUB_PATHS: &[&str] = &[
     "message list", "message mark-read", "message redact", "message send", "needs-you", "needs-you abandon",
     "needs-you commit", "needs-you next", "needs-you respond", "needs-you show", "needs-you start", "note",
     "note create", "note delete", "note list", "notes", "notice", "notice list", "org", "org models",
-    "org order", "org reports-to", "origin", "origin show", "page", "page archive", "page list", "page publish",
+    "org order", "org reports-to", "origin", "origin show", "page", "page access", "page archive", "page list", "page publish",
     "page show", "people", "person", "pin", "pin add", "pin remove", "pin update", "pipeline", "proposal",
     "proposal create", "proposal decide", "proposal list", "queries", "question", "question answer",
     "question ask", "readers", "readers list", "recent", "relay", "relay set", "relay status", "relay wake-url",
