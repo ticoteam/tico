@@ -432,16 +432,20 @@ below.
 - **Organize mail** (label, archive, drafts), **Send mail** and **Create and change calendar events**: on until an admin
   turns them off. Each box saves on its own.
 
-Organize mail and Send mail both need Google's `gmail.modify`, so Send mail is also held in Tico: with it off, no bot
-sends mail, whatever its own **Mail sending** switch says (and no approval lifts it). With it on, each bot still needs its
-own switch (Settings > Bots > Edit > Mail sending; see [Turning sending on](#turning-sending-on)). Change calendar needs
-`calendar.events`.
+Organize mail and Send mail both need Google's `gmail.modify`, so Tico holds each box itself too: the mail connector
+refuses a label, archive or draft with Organize mail off, a send with Send mail off, and a calendar write with Change
+calendar off, whichever credential it holds (a server token, a computer's own service-account key, or a standalone
+grant). A draft is the first step of a send, so Send mail on allows one. With Send mail off no bot sends mail, whatever
+its own **Mail sending** switch says (and no approval lifts it), and an automation's send becomes a draft. With it on,
+each bot still needs its own switch (Settings > Bots > Edit > Mail sending; see [Turning sending on](#turning-sending-on)).
+A bot always acts as itself: `--as <owner handle>` from a bot's run is refused. Change calendar needs `calendar.events`.
 
 A box turned off takes effect on the next token: Connect Google asks Google only for what is ticked, each refresh leaves
 out a write turned off (the grant keeps it, so turning it back on needs no new sign-in), and Whole Workspace tokens are
 minted read only for it (`gmail.readonly`, `calendar.readonly`). Domain-wide delegation takes only scopes authorized by
-name, so step 2 below authorizes the read-only scopes too; a Workspace authorized before them needs step 2 again before a
-box is turned off. A box turned on that a person's grant lacks shows **Connect Google again** on their card. Both agent
+name, so step 2 below authorizes the read-only scopes too, and Check records which ones Google accepted. A Workspace
+authorized before them keeps minting its write scopes (Tico still holds each box off) and shows **Redo step 2 to narrow
+Google access.**; redo step 2, then click Check. A box turned on that a person's grant lacks shows **Connect Google again** on their card. Both agent
 prompts say what Tico will ask Google for. Only an admin acting as themselves changes it: never a bot, BotOps or the
 Assistant.
 

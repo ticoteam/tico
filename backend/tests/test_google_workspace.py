@@ -54,13 +54,18 @@ def fresh_state(monkeypatch):
 
 @pytest.fixture
 def google(monkeypatch):
-    """Google's answers: the token endpoint (`state["token"]`), the API probes (`state["probe"]`), and every call made."""
-    state = {"token": (200, {"access_token": "tok-1", "expires_in": 3600}), "probe": 200}
+    """Google's answers: the token endpoint (`state["token"]`), the API probes (`state["probe"]`), and every call made.
+    `state["authorized"]` is what the admin authorized in Google Admin: a token asking for any other scope is refused
+    with unauthorized_client, as Google's domain-wide delegation does. None authorizes everything."""
+    state = {"token": (200, {"access_token": "tok-1", "expires_in": 3600}), "probe": 200, "authorized": None}
     calls = []
 
     def fake(url, *, data=None, token=None):
         calls.append((url, data, token))
         if url == W.TOKEN_URI:
+            asked = set(jwt.decode(data["assertion"], options={"verify_signature": False})["scope"].split())
+            if state["authorized"] is not None and not asked <= set(state["authorized"]):
+                return 401, {"error": "unauthorized_client"}
             return state["token"]
         return state["probe"], {}
 
@@ -369,7 +374,10 @@ def test_the_check_is_signed_for_the_mailbox_with_the_key(api, private, keys, co
     assert len(exchanges) == 2
     claims = [jwt.decode(assertion, keys[1], algorithms=["RS256"], audience=W.TOKEN_URI) for assertion in exchanges]
     assert {c["sub"] for c in claims} == {MAILBOX} and {c["iss"] for c in claims} == {SA}
-    assert {c["scope"] for c in claims} == {GMAIL, CALENDAR}
+    # Each service asks for its write and read-only scope together, which proves the key was authorized for both.
+    assert {c["scope"] for c in claims} == {GMAIL + " " + GMAIL.replace("modify", "readonly"),
+                                           CALENDAR + " " + CALENDAR + ".readonly"}
+    assert json.loads(rows(api)[0]["authorized_scopes"]) == W.scope_urls()
 
 
 def test_a_failed_check_keeps_a_pending_key_pending_with_the_reason(api, private, covered, google):
@@ -432,7 +440,7 @@ def test_a_result_for_a_key_that_changed_meanwhile_is_dropped(api, private, cove
     def probe_then_change(store_, row_, mailbox):
         with store.transaction() as c:
             c.execute("UPDATE google_workspaces SET revision=revision+1 WHERE id=?", (row_["id"],))
-        return True, None, ""
+        return True, None, "", W.scope_urls()
 
     monkeypatch.setattr(W, "_probe", probe_then_change)
     settled, ok, _, _ = W.run_check(store, row, MAILBOX, "test")

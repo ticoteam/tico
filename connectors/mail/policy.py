@@ -842,6 +842,12 @@ def switch(slug, manifest=None):
     cannot read it cannot tell an onboarding bot from an Active one. `asks` / `asks_forward` are what bot.yaml
     requests, for messages."""
     if str(slug).strip().lower() == OWNER:
+        from . import access                            # noqa: PLC0415 - avoids a cycle
+        bot = access.run_bot()
+        # The owner's switch is a person's: a bot's run that reaches here as the owner gets its own bot's switch,
+        # with the company's Send mail and the bot's onboarding on it (access.employee refuses it first).
+        if bot and bot.lower() != OWNER:
+            return switch(bot.lower())
         return {"on": True, "forward_to": [], "source": "owner", "detail": "the owner", "asks": True,
                 "asks_forward": [], "read": True, "onboarding": False}
     try:
@@ -872,6 +878,27 @@ def switch(slug, manifest=None):
     out["detail"] = (f"{'on' if out['on'] else 'off'} in Tico, set by {who}"
                      + ("" if out["on"] else "; " + hint))
     return out
+
+
+COMPANY_FIELDS = {"organize_mail": "company_organize", "send_mail": "company_send",
+                  "change_calendar": "company_calendar"}
+
+
+def company(slug):
+    """The company's What Tico may do for `slug`'s run, as {organize_mail, send_mail, change_calendar}: False only
+    where Tico's mail setting for the bot says so (backend/mail_settings.py). None for a person's run and when Tico
+    said nothing (no answer, an older server): Google's scopes alone decide then. A bot's run named as the owner is
+    read as that bot (access.run_bot)."""
+    from . import access                                # noqa: PLC0415 - avoids a cycle
+    slug = str(slug or "").strip().lower()
+    if slug == OWNER:
+        slug = access.run_bot().lower()
+        if not slug or slug == OWNER:
+            return None
+    row = _server_row(slug)
+    if row is None or not any(f in row for f in COMPANY_FIELDS.values()):
+        return None
+    return {name: row.get(field) is not False for name, field in COMPANY_FIELDS.items()}
 
 
 def outbound_send(slug, manifest=None):

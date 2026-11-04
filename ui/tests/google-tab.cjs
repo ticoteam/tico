@@ -606,6 +606,58 @@ const scenarios = {
     assert.deepEqual(seen.errors, []);
   },
 
+  'typed setup fields survive a switch to the agent prompt and back, and the secret goes once saved': async browser => {
+    const fake = googleFake();
+    const {page, seen} = await open(browser, fake);
+    await pick(page, 'accounts', {self: true});
+    await page.locator('[data-oauth-project]').fill('tico-mail-a1b2c3');
+    await page.locator('[name=client_id]').fill('acme-client-id');
+    await page.locator('[name=client_secret]').fill('acme-secret');
+    await page.locator('[data-google-how=agent][data-google-path=accounts]').click();
+    await page.locator('[data-google-prompt=accounts]').waitFor();
+    assert.equal(await page.locator('[data-oauth-form]').count(), 0);
+    await bySelf(page, 'accounts');
+    assert.equal(await page.locator('[data-oauth-project]').inputValue(), 'tico-mail-a1b2c3');
+    assert.equal(await page.locator('[name=client_id]').inputValue(), 'acme-client-id');
+    assert.equal(await page.locator('[name=client_secret]').inputValue(), 'acme-secret');
+    await page.locator('button[type=submit]').click();
+    await until(() => writesTo(fake, '/api/v2/google/oauth-client', 'PUT').length === 1, 'the OAuth client save');
+    await page.locator('[data-acct-step=signin] [data-oauth-remove]').waitFor();
+    const kept = await page.locator('#set-google').evaluate(el => el._googleKeep || {});
+    assert.ok(!kept['client-secret'], 'the secret is not kept after a save');
+    assert.ok(!kept['client-id']);
+    assert.deepEqual(seen.errors, []);
+  },
+
+  'Your team: Show more reads the next page after the last person shown': async browser => {
+    const fake = googleFake();
+    fake.state.oauth = {...fake.state.oauth, configured: true, source: 'settings', client_id: 'acme-client-id'};
+    fake.peoplePage = 2;
+    const {page, seen} = await open(browser, fake);
+    await page.locator('.google-team li').first().waitFor();
+    assert.deepEqual(await page.$$eval('[data-google-person]', els => els.map(el => el.dataset.googlePerson)), ['ben']);
+    await page.locator('[data-google-people-more]').click();
+    await page.locator('[data-google-person=dan]').waitFor();
+    assert.deepEqual(await page.$$eval('[data-google-person]', els => els.map(el => el.dataset.googlePerson)), ['ben', 'cara', 'dan']);
+    assert.equal(await page.locator('[data-google-people-more]').count(), 0, 'no more after the last page');
+    assert.equal(fake.peopleReads, 2);
+    assert.deepEqual(seen.errors, []);
+  },
+
+  'a Workspace authorized before the read-only scopes says to redo step 2': async browser => {
+    const fake = googleFake();
+    fake.state.workspace = row('connected', {narrowable: false});
+    let {page, seen} = await open(browser, fake);
+    assert.equal((await page.locator('[data-google-may-narrow]').innerText()).trim(), 'Redo step 2 to narrow Google access.');
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+    fake.state.workspace = row('connected', {narrowable: true});
+    ({page, seen} = await open(browser, fake));
+    await page.locator('[data-google-may-card]').waitFor();
+    assert.equal(await page.locator('[data-google-may-narrow]').count(), 0);
+    assert.deepEqual(seen.errors, []);
+  },
+
   'phone width: the command and the steps fit with no sideways scroll': async browser => {
     const fake = googleFake();
     fake.state.workspace = row('pending');

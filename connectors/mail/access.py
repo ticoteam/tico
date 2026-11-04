@@ -57,14 +57,50 @@ def forward_to(manifest):
 
 
 def employee(slug=None, env=None):
-    """The employee this run is. --as wins, then HUB_BOT or HUB_EMPLOYEE (both set by the runner)."""
+    """The employee this run is. --as wins, then HUB_BOT or HUB_EMPLOYEE (both set by the runner).
+
+    `--as <owner handle>` holds every verb and skips the company's What Tico may do, so it is for a person only: a
+    bot's run (HUB_BOT, or a HUB_TOKEN Tico says is a bot's) that names the owner is refused."""
     env = os.environ if env is None else env
     s = (slug or hub_bot(env)).strip().lower()
     if not s:
         raise Refused("no employee: pass --as <slug>.",
                       "The runner sets HUB_BOT for every turn; outside a turn, name the "
                       "employee yourself. The owner uses --as " + OWNER + ".")
+    if s == OWNER:
+        bot = run_bot(env)
+        if bot and bot.lower() != OWNER:
+            raise Refused(f"This run is {bot}, so it may not act as the owner ({OWNER}).",
+                          f"A bot acts only as itself: drop --as {OWNER} and use the mailboxes its bot.yaml lists.")
     return s
+
+
+_ME = {}
+
+
+def run_bot(env=None):
+    """The bot this run is: HUB_BOT (older HUB_EMPLOYEE), else the bot whose token HUB_TOKEN is (GET /api/v2/me),
+    else "" for a person's run. The token counts because a bot can unset HUB_BOT; it cannot change whose token it
+    holds. One read per process and token."""
+    env = os.environ if env is None else env
+    named = hub_bot(env)
+    if named:
+        return named
+    url, token = env.get("HUB_API_URL"), env.get("HUB_TOKEN")
+    if not (url and token):
+        return ""
+    key = (url, token)
+    if key not in _ME:
+        from . import policy                            # noqa: PLC0415 - avoids a cycle
+        try:
+            me = policy.HUB_GET("me")
+        except Exception:
+            me = None
+        me = me if isinstance(me, dict) else {}
+        actor = str(me.get("actor") or "").strip()
+        _ME[key] = (str(me.get("slug") or "").strip() or actor[len("bot:"):].strip()
+                    if me.get("role") == "bot" and actor.startswith("bot:") else "")
+    return _ME[key]
 
 
 def load(slug):

@@ -296,6 +296,26 @@ def test_a_send_claimed_after_the_switch_went_off_is_a_draft(api, computer):
         assert c.execute("SELECT count(*) FROM events WHERE action='automation.send_off'").fetchone()[0] == 1
 
 
+def test_what_tico_may_do_holds_automations_a_send_is_claimed_as_a_draft_which_organize_off_refuses(api, computer):
+    """Settings > Google > What Tico may do covers automations: Send mail off claims a send as a draft, as the inbox's
+    own switch does, and each claimed action carries the setting, so with Organize mail off too the connector refuses
+    the draft and the archive before Gmail is asked."""
+    automate(api, SEND)
+    automate(api, ARCHIVE)
+    automate(api, DRAFT)
+    computer.sync()
+    r = api.put("/api/v2/google/permissions", json={"organize_mail": False, "send_mail": False, "change_calendar": True},
+                headers=headers())
+    assert r.status_code == 200, r.text
+    actions = claim(api, computer.token)["actions"]
+    assert sorted(a["action"] for a in actions) == ["archive", "draft", "draft"]     # the send became a draft
+    assert all(a["company"] == {"organize_mail": False, "send_mail": False, "change_calendar": True} for a in actions)
+    for action in actions:
+        answer = computer.action(action)
+        assert (answer["ok"], answer["retry"]) == (False, False) and "What Tico may do" in answer["detail"], answer
+    assert "INBOX" in computer.gmail.store["m1"]["labelIds"] and computer.drafts() == [] and computer.gmail.sent == []
+
+
 def test_a_send_queued_with_the_switch_off_still_says_send_off_once_drafted(api, computer):
     """The switch was off when the run queued it: a draft from the start, and the computer's report keeps send_off."""
     aid = automate(api, SEND)

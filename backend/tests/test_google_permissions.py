@@ -7,6 +7,7 @@ says. Google is never asked (`post_token` and `google_call` replaced); keys are 
 import json
 
 import jwt
+import pytest
 
 from backend import google_connect
 from backend import google_workspace as W
@@ -14,7 +15,8 @@ from backend.auth import Identity
 from backend.tests.test_api import api, get, headers, runner  # noqa: F401
 from backend.tests.test_google_connect import FakeGoogle, app, exchanged, own_app, refresh, start  # noqa: F401
 from backend.tests.test_google_workspace import (  # noqa: F401  (fixtures)
-    CALENDAR, GMAIL, MAILBOX, connected, covered, fresh_state, google, keys, private)
+    CALENDAR, GMAIL, MAILBOX, check, connected, covered, fresh_state, google, google_view, keys, private, rows)
+from backend.store import Problem
 from connectors.mail import oauth
 
 PERMISSIONS = "/api/v2/google/permissions"
@@ -138,6 +140,12 @@ def test_send_mail_off_stops_every_bot_whatever_its_own_switch(app):
     assert r.status_code == 200, r.text
     own = get(app, "bots/inbox/mail-settings", "inbox-test")
     assert own["outbound_send"] is True and own["company_send"] is True
+    assert own["company_organize"] is True and own["company_calendar"] is True
+    assert allow(app, organize_mail=False, change_calendar=False).status_code == 200
+    own = get(app, "bots/inbox/mail-settings", "inbox-test")
+    # The connector gates labels, drafts and calendar writes on these, whichever credential it holds.
+    assert (own["company_organize"], own["company_send"], own["company_calendar"]) == (False, True, False)
+    assert own["outbound_send"] is True
     assert allow(app, send_mail=False).status_code == 200
     own = get(app, "bots/inbox/mail-settings", "inbox-test")
     assert own["outbound_send"] is False and own["company_send"] is False   # the connector refuses before any approval
@@ -150,3 +158,44 @@ def test_send_mail_off_stops_every_bot_whatever_its_own_switch(app):
 def test_the_assistant_never_sets_what_tico_may_do():
     from backend import assistant
     assert any(method in (None, "PUT") and pattern.fullmatch(PERMISSIONS) for method, pattern in assistant.NEVER)
+
+
+def test_a_key_authorized_before_the_read_only_scopes_keeps_minting_what_google_accepts(api, private, covered, google):
+    covered((MAILBOX, "inbox-cara"))
+    state, _ = google
+    state["authorized"] = [GMAIL, CALENDAR]             # step 2 done before Tico listed the read-only scopes
+    connected(api, private)                             # Check: the pair is refused, the write scope alone accepted
+    (row,) = rows(api)
+    assert json.loads(row["authorized_scopes"]) == W.LEGACY_SCOPES
+    assert google_view(api)["workspace"]["narrowable"] is False
+    assert allow(api, organize_mail=False, send_mail=False, change_calendar=False).status_code == 200
+    W.forget_tokens()
+    with api.app.state.store.read() as c:
+        # Google refuses a read-only scope this key was never authorized for ...
+        with pytest.raises(Problem) as refused:
+            W.mint(c, MAILBOX, "calendar", scopes=W.READ_ONLY_SCOPES["calendar"])
+        assert refused.value.extra["kind"] == "unauthorized_client"
+        # ... so the key keeps minting its write scopes, and the mail connector holds What Tico may do.
+        assert W.mint(c, MAILBOX, "gmail")["scopes"] == [GMAIL]
+        assert W.mint(c, MAILBOX, "calendar")["scopes"] == [CALENDAR]
+    with api.app.state.store.transaction() as c:        # a row from before migration 0076: no list at all
+        c.execute("UPDATE google_workspaces SET authorized_scopes=NULL")
+    W.forget_tokens()
+    with api.app.state.store.read() as c:
+        assert W.mint(c, MAILBOX, "calendar")["scopes"] == [CALENDAR]
+    assert google_view(api)["workspace"]["narrowable"] is False
+    state["authorized"] = W.scope_urls()                # the admin redoes step 2, then Check
+    assert check(api, {"mailbox": MAILBOX})["ok"] is True
+    assert google_view(api)["workspace"]["narrowable"] is True
+    W.forget_tokens()
+    with api.app.state.store.read() as c:
+        assert W.mint(c, MAILBOX, "gmail")["scopes"] == [G + "gmail.readonly"]
+        assert W.mint(c, MAILBOX, "calendar")["scopes"] == [G + "calendar.readonly"]
+
+
+def test_a_key_stored_by_upload_lists_every_scope_tico_shows(api, private, covered, google):
+    from backend.tests.test_google_workspace import key_json, new_code, upload
+    covered((MAILBOX, "inbox-cara"))
+    upload(api, new_code(api), key_json(private))
+    (row,) = rows(api)
+    assert row["status"] == "pending" and json.loads(row["authorized_scopes"]) == W.scope_urls()

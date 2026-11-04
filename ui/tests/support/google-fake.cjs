@@ -1,7 +1,8 @@
 // A fake of the Google tab's routes (the contract in _brief-google-contract.md) for ui/tests/google-tab.cjs.
 // answer(path, url, method, body) gives the JSON a route answers, or undefined for any other path, as threadsFake does.
 // `fake.state` is what GET /v2/google sends and a test sets it directly; `fake.personal` is the person's own state, and
-// `fake.people` the team list GET /v2/google/people sends (an admin's only; `fake.peopleReads` counts its reads).
+// `fake.people` the team list GET /v2/google/people sends (an admin's only; `fake.peopleReads` counts its reads),
+// `fake.peoplePage` people a page, after the `after` person id as the server pages it.
 // Every write is kept in `fake.writes` as {method, path, body}. `fake.checks` is a queue of answers for the next
 // POST /workspace/check: 'ok', 'unauthorized' (the default when the queue is empty) or 'other'.
 // Every key view and setup code carries a `generation` (row() gives 1 unless set). A new key or code takes the next one.
@@ -20,7 +21,7 @@ const row = (status, over = {}) => ({status, domain: 'acme.example', project_id:
 exports.row = row;
 exports.googleFake = () => {
   const fake = {
-    writes: [], checks: [], codes: 0, gen: 0, personal: null, peopleReads: 0,
+    writes: [], checks: [], codes: 0, gen: 0, personal: null, peopleReads: 0, peoplePage: 500,
     people: [
       {person_id: 'ana', name: 'Ana', mailbox: 'ana@acme.example', status: 'connected'},
       {person_id: 'ben', name: 'Ben', mailbox: 'ben@acme.example', status: 'none'},
@@ -53,7 +54,12 @@ exports.googleFake = () => {
     }
     if (p === '/api/v2/google/people' && method === 'GET') {
       fake.peopleReads += 1;
-      return s.can_admin ? {people: structuredClone(fake.people), more: false} : undefined;
+      if (!s.can_admin) return undefined;
+      const after = new URL(url).searchParams.get('after');
+      const start = after ? fake.people.findIndex(person => person.person_id === after) + 1 : 0;
+      const page = fake.people.slice(start, start + fake.peoplePage);
+      const more = start + fake.peoplePage < fake.people.length;
+      return {people: structuredClone(page), more, next: more ? page[page.length - 1].person_id : null};
     }
     if (p === '/api/v2/google/workspace/setup-code' && method === 'POST') {
       fake.codes += 1;

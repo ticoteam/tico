@@ -100,17 +100,29 @@ class Ctx:
         if opened is not None:
             opened.append(self.conn)
         self._gmail, self._calendar, self._policy = None, None, None
+        self._company = ()                              # () unread; read at the first write (Ctx.company)
+        self.claimed_company = None                     # a Tico mail action's own What Tico may do (cmd_mail_action)
+
+    def company(self):
+        """What the company lets Tico do here (policy.company), read once and only when a write asks. Every Gmail and
+        Calendar write checks it, whichever credential this run holds."""
+        if self._company == ():
+            self._company = (self.claimed_company if self.claimed_company is not None
+                             else pl.company(self.slug))
+        return self._company
 
     @property
     def gmail(self):
         if self._gmail is None:
             self._gmail = open_gmail(self.mailbox)
+            self._gmail.company = self.company
         return self._gmail
 
     @property
     def calendar(self):
         if self._calendar is None:
             self._calendar = cal.Calendar(open_calendar(self.mailbox), self.mailbox)
+            self._calendar.company = self.company
         return self._calendar
 
     @property
@@ -2481,6 +2493,9 @@ def cmd_mail_action(args):
         return 2
     try:
         ctx = Ctx(args, actions.verb(request["action"]), mailbox=str(request["mailbox"]).strip().lower())
+        # The claim carries the company's What Tico may do (backend/automations.py): an automation is Tico too.
+        if isinstance(request.get("company"), dict):
+            ctx.claimed_company = {k: request["company"].get(k) is not False for k in pl.COMPANY_FIELDS}
         result = actions.perform(ctx, request)
     except Refused as e:
         print(json.dumps({"ok": False, "retry": False, "detail": e.msg[:900]}))

@@ -102,7 +102,7 @@ def test_a_reassigned_mailbox_shows_the_grant_on_it_as_the_server_picks_a_creden
                 assert person["status"] in ("connected", "failing", "pending"), person
 
 
-def people_statements(api, monkeypatch):
+def people_statements(api, monkeypatch, after=""):
     """The team list as an admin gets it, and the statements it took, from cold roster and row caches."""
     store, seen = api.app.state.store, []
     store.roster_rows = {}
@@ -120,7 +120,7 @@ def people_statements(api, monkeypatch):
                             c.set_trace_callback(None)
                 return borrowed()
             patched.setattr(store, name, traced)
-        response = api.get(PEOPLE, headers=headers("ana-test"))
+        response = api.get(PEOPLE, params={"after": after} if after else None, headers=headers("ana-test"))
     assert response.status_code == 200, response.text
     return response.json(), len(seen)
 
@@ -158,3 +158,22 @@ def test_the_team_list_takes_the_same_statements_for_two_thousand_people(api, pr
     assert got["p0001"] == ("p1@other.example", "connected")        # no declaration: the person's email
     assert got["p0003"] == ("p3@other.example", "none")             # an archived bot stands for nobody
     assert few > 0 and many == few, (few, many)
+
+
+def test_the_team_list_pages_on_to_person_501_at_the_same_statements(api, monkeypatch):
+    people = [{"id": "ana", "name": "Ana", "email": "ana@acme.example", "primary_for": ["*"]}]
+    people += [{"id": f"p{n:04d}", "name": f"P{n:04d}", "email": f"p{n}@acme.example"} for n in range(W.PEOPLE_MAX + 1)]
+    people.append({"id": "gone", "name": "P0499x", "email": "gone@acme.example", "directory_left": True})
+    set_roster(api, people)
+    first, one = people_statements(api, monkeypatch)
+    assert len(first["people"]) == W.PEOPLE_MAX and first["more"] is True
+    assert first["next"] == first["people"][-1]["person_id"] == "p0498"     # Ana sorts first
+    second, two = people_statements(api, monkeypatch, after=first["next"])
+    assert [p["person_id"] for p in second["people"]] == ["p0499", "p0500"]   # person 501 and the one after
+    assert second["more"] is False and second["next"] is None
+    assert one == two, (one, two)
+    # A cursor on someone hidden or gone since keeps its place by name; one off the roster is refused.
+    third, _ = people_statements(api, monkeypatch, after="gone")
+    assert [p["person_id"] for p in third["people"]] == ["p0500"]
+    r = api.get(PEOPLE, params={"after": "nobody"}, headers=headers("ana-test"))
+    assert r.status_code == 422 and r.json()["error"]["code"] == "after"

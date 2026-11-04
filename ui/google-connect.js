@@ -97,9 +97,13 @@
   function mayCard(g) {
     const box = ([name, label, note]) => `<label class="google-may-row"><input type="checkbox" data-google-may="${name}"${
       allows(g, name) ? ' checked' : ''}><span>${label}${note ? `<span class="muted">${note}</span>` : ''}</span></label>`;
+    // A Workspace key authorized before the read-only scopes keeps its write scopes at Google; Tico holds the boxes.
+    const ws = g.workspace;
+    const narrow = ws && ws.status !== 'pending' && ws.narrowable === false
+      ? '<p class="muted" data-google-may-narrow>Redo step 2 to narrow Google access.</p>' : '';
     return `<section class="google-card" data-google-may-card><h3>What Tico may do</h3>
       <div class="google-may-row" data-google-may-read><span class="google-may-always" aria-hidden="true"></span><span>Read mail and calendar<span class="muted">Always on.</span></span></div>
-      ${MAY.map(box).join('')}</section>`;
+      ${MAY.map(box).join('')}${narrow}</section>`;
   }
 
   function workspacePrompt(made, g) {
@@ -312,18 +316,20 @@
   const TEAM_STATUS = {connected: 'Connected', none: 'Not connected', pending: 'Connecting', failing: 'Failing',
     workspace: 'Covered by Workspace'};
   // Everyone else with a mailbox, from GET /v2/google/people. A link to this tab is all Tico gives them: nothing is sent.
-  function teamList(g, people) {
+  // `extra` is the pages Show more added after the first (host._googleExtra), until the first page changes.
+  function teamList(g, people, extra) {
     if (!people) return '<p class="muted">Loading…</p>';
     if (people.error) return `<p class="muted">${esc(people.error)}</p>`;
     const mine = g.me?.mailbox || '';
-    const rows = (people.people || []).filter(p => p.mailbox !== mine);
+    const last = extra || people;
+    const rows = [...(people.people || []), ...(extra?.people || [])].filter(p => p.mailbox !== mine);
     if (!rows.length) return '<p class="muted">No one else has a mailbox yet.</p>';
     const link = googleLink();
     return `<ul class="google-team">${rows.map(p => `<li data-google-person="${esc(p.person_id)}">
         <span class="google-team-who"><strong>${esc(p.name || p.person_id)}</strong> <span class="muted">${esc(p.mailbox)}</span></span>
         <span class="google-team-status" data-status="${esc(p.status)}">${esc(TEAM_STATUS[p.status] || p.status)}</span>
         ${p.status === 'none' || p.status === 'failing' ? `<button type="button" class="ghost" data-copy="${esc(link)}" data-copy-link>Copy link</button>` : ''}
-      </li>`).join('')}</ul>${people.more ? '<p class="muted">More people than shown.</p>' : ''}`;
+      </li>`).join('')}</ul>${last.more && last.next ? '<div class="row"><button type="button" class="ghost" data-google-people-more>Show more</button></div>' : ''}`;
   }
 
   // One account at a time, for an admin: Google sign-in for the server once, then you, then everyone else.
@@ -340,7 +346,7 @@
     return `<section class="google-card" data-google-card="account"><h3>One account at a time</h3>
       <div class="google-step" data-acct-step="signin"><h4>1 Set up Google sign-in (once)</h4>${first}</div>
       <div class="google-step${later}" data-acct-step="you"><h4>2 Connect your account</h4>${oauth.configured ? yourAccount(g, personal) : ''}</div>
-      <div class="google-step${later}" data-acct-step="team"><h4>3 Your team</h4>${oauth.configured ? teamList(g, people) : ''}</div>
+      <div class="google-step${later}" data-acct-step="team"><h4>3 Your team</h4>${oauth.configured ? teamList(g, people, host._googleExtra) : ''}</div>
       <p role="status" data-google-status></p></section>`;
   }
 
@@ -424,7 +430,9 @@
     const {g, personal, people} = host._googleState;
     const {active, pend} = rowsOf(g);
     const replacing = replacingNow(host, g);
-    const kept = {};
+    // Typed values live on the host, in memory only, so a field that leaves the page (Have my agent do it) comes back
+    // as it was. saveOAuth drops the client secret once Google sign-in is saved.
+    const kept = host._googleKeep = host._googleKeep || {};
     host.querySelectorAll('[data-keep]').forEach(el => { kept[el.dataset.keep] = el.value; });
     const flash = host._googleFlash || '';
     host._googleFlash = '';
@@ -580,6 +588,7 @@
     try {
       await put('/v2/google/oauth-client', {client_id: clientId, client_secret: clientSecret});
       form.reset();
+      if (host._googleKeep) { delete host._googleKeep['client-id']; delete host._googleKeep['client-secret']; }
       await window.mountGoogleConnect(host, {force: true});
     } catch (error) {
       button.disabled = false;
@@ -627,8 +636,26 @@
     }
   }
 
+  async function morePeople(host, button) {
+    const {people} = host._googleState;
+    const last = host._googleExtra || people;
+    if (!last?.next) return;
+    button.disabled = true;
+    try {
+      const page = await get('/v2/google/people?after=' + encodeURIComponent(last.next), {fresh: true});
+      host._googleExtra = {people: [...(host._googleExtra?.people || []), ...(page.people || [])], more: page.more,
+        next: page.next};
+      paint(host);
+    } catch (error) {
+      button.disabled = false;
+      const status = host.querySelector('[data-google-status]');
+      if (status) status.textContent = error.message;
+    }
+  }
+
   async function onClick(host, el) {
     if (el.hasAttribute('data-copy') || el.hasAttribute('data-copy-prompt')) return copy(el);
+    if (el.hasAttribute('data-google-people-more')) return morePeople(host, el);
     if (el.hasAttribute('data-google-pick')) { host._googlePick = el.dataset.googlePick; return paint(host); }
     if (el.hasAttribute('data-google-switch')) {
       const {active, pend} = rowsOf(host._googleState.g);
@@ -717,6 +744,8 @@
     const snapshot = JSON.stringify([g.can_admin, unchecked(g.workspace), unchecked(g.pending), g.oauth, g.me,
       g.setup?.reachable, g.permissions, personal, people, isLive]);
     if (force || host._googleSnap !== snapshot || !host.childElementCount) {
+      // A changed first page starts the team list over: the pages Show more added may no longer follow it.
+      if (host._googleSnap !== snapshot) host._googleExtra = null;
       host._googleSnap = snapshot;
       paint(host);
     }

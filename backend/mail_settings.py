@@ -164,10 +164,14 @@ def install(app, store, auth, mutate):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             found = view(c, bot)
-            # Send mail in Settings > Google is the company's own switch over every bot's: off, the bot's connector
-            # refuses each send before any approval (connectors/mail/policy.py), and the bot reads sending as off.
+            # What Tico may do in Settings > Google is the company's own switch over every bot's: with Send mail off
+            # the bot's connector refuses each send before any approval (connectors/mail/policy.py), and the bot reads
+            # sending as off. Organize mail and Change calendar gate the connector's other writes the same way,
+            # whichever credential it holds (connectors/mail/oauth.py company_allows).
             from .google_workspace import permissions
-            found["company_send"] = permissions(c)["send_mail"]
+            may = permissions(c)
+            found.update(company_send=may["send_mail"], company_organize=may["organize_mail"],
+                         company_calendar=may["change_calendar"])
             if who.actor == "bot:" + bot and not found["company_send"]:
                 found["outbound_send"] = False
             from . import lifecycle

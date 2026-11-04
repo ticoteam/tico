@@ -2949,7 +2949,12 @@ def install(app, store, auth, mutate):
                     break                  # the rest stay queued for the next claim
                 spent += size
                 rows.append(dict(r))
-            sending = A.send_on(c, mailbox)
+            # The company's What Tico may do (Settings > Google) covers automations too: with Send mail off a send is
+            # claimed as a draft, as with the inbox's own switch off, and the connector checks each write against
+            # `company` (connectors/mail/oauth.py company_allows).
+            from .google_workspace import permissions
+            may = permissions(c)
+            sending = A.send_on(c, mailbox) and may["send_mail"]
             out = []
             for r in rows:
                 action, result, args = r["action"], json.loads(r["result"] or "{}"), json.loads(r["args"])
@@ -2964,7 +2969,7 @@ def install(app, store, auth, mutate):
                           "attempts=attempts+1,action=?,result=? WHERE id=?",
                           (now, runner["id"], action, json.dumps(result) if result else None, r["id"]))
                 out.append({"id": r["id"], "mailbox": r["mailbox"], "msg_id": r["msg_id"], "action": action,
-                            "args": args, "attempt": r["attempts"] + 1})
+                            "args": args, "attempt": r["attempts"] + 1, "company": may})
             return {"actions": out, "lease_seconds": MAIL_LEASE_MINUTES * 60}
         return mutate(request, body, work)
 
