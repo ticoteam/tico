@@ -1181,18 +1181,69 @@ def test_a_task_filed_while_the_filter_was_off_counts_on_its_day_and_again_on_a_
 
 
 def test_a_task_filed_with_the_filter_on_is_listed_once(gate):
-    """The gate judges a task in the request that files it, so its ask row lands within PLACED_WITH_CREATE_SECONDS of
-    the creation: its day lists it once, from the ask row, not again from the task."""
+    """The gate judges a task in the request that files it, so its ask row comes before any owner change: its day lists
+    it once, from the ask row, not again from the task."""
     api, model, token = gate
     tid = file(api, token)["task"]["id"]
-    [row] = [i for i in items(api) if i["ref"] == tid]
+    assert len([i for i in items(api) if i["ref"] == tid]) == 1
     with api.app.state.store.transaction() as c:
-        task = H.task(c, tid)
-        apart = abs((H.parse_ts(row["created_at"]) - H.parse_ts(task["created_at"])).total_seconds())
-        assert apart <= A.PLACED_WITH_CREATE_SECONDS
-        day = task["created_at"][:10]
+        day = H.task(c, tid)["created_at"][:10]
         listed = A.replay_items(c, "human:ben", f"{day}T00:00:00", A._next_day(day))
     assert [i["ref"] for i in listed if i["kind"] == "task"] == [tid]
+
+
+def test_a_filing_the_gate_judged_and_a_later_handoff_each_list_once(gate):
+    """Filed for Ben on Oct 5 with the filter On (its ask row at creation), moved to the bot that evening, and handed
+    back on Oct 6 with a new ask row. Oct 5 lists the filing once, from its ask row; Oct 6 lists the handoff once."""
+    api, model, token = gate
+    tid = file(api, token)["task"]["id"]
+    [filing] = [i for i in items(api) if i["ref"] == tid]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET created_at='2026-10-05T10:00:00.000000Z' WHERE id=?", (tid,))
+        c.execute("UPDATE ask_ingest_items SET created_at='2026-10-05T10:00:00.200000Z' WHERE id=?", (filing["id"],))
+        H.history_event(c, "task", tid, "human:ben", "owner", "human:ben", "bot:ops",
+                        created_at="2026-10-05T18:00:00.000000Z")
+        c.execute("UPDATE tasks SET owner_id='bot:ops' WHERE id=?", (tid,))
+        H.history_event(c, "task", tid, "bot:ops", "owner", "bot:ops", "human:ben",
+                        created_at="2026-10-06T09:00:00.000000Z")
+        c.execute("UPDATE tasks SET owner_id='human:ben' WHERE id=?", (tid,))
+        c.execute("INSERT INTO ask_ingest_items(id,person,asker,kind,ref,mode,outcome,would,reason,load,created_at) "
+                  "VALUES('ai-handoff','human:ben','bot:ops','task',?,'on','sent_back','sent_back','',0,"
+                  "'2026-10-06T09:00:00.000000Z')", (tid,))
+        monday = A.replay_items(c, "human:ben", "2026-10-05T00:00:00", "2026-10-06T00:00:00")
+        tuesday = A.replay_items(c, "human:ben", "2026-10-06T00:00:00", "2026-10-07T00:00:00")
+    shown = [(i["ref"], i["created_at"]) for i in monday if i["kind"] == "task"]
+    assert shown == [(tid, "2026-10-05T10:00:00.200000Z")]
+    shown = [(i["ref"], i["created_at"]) for i in tuesday if i["kind"] == "task"]
+    assert shown == [(tid, "2026-10-06T09:00:00.000000Z")]
+
+
+def test_a_handoff_just_after_midnight_is_not_the_filing_from_just_before(gate):
+    """Filed for Ben at 23:59:40 on Oct 5 with the filter Off (no ask row), moved to the bot at 23:59:50, and handed
+    back on Oct 6 at 00:00:10 with its ask row. Thirty seconds apart across midnight is two placements, not one: Oct 5
+    lists the filing, Oct 6 the handoff."""
+    api, model, token = gate
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {"mode": "off", "budget": 10, "chores_budget": 5, "criteria": []})
+    tid = file(api, token, "Renew the vendor contract")["task"]["id"]
+    assert not [i for i in items(api) if i["ref"] == tid], "Off asks nothing, so the filing has no ask row"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET created_at='2026-10-05T23:59:40.000000Z' WHERE id=?", (tid,))
+        H.history_event(c, "task", tid, "human:ben", "owner", "human:ben", "bot:ops",
+                        created_at="2026-10-05T23:59:50.000000Z")
+        c.execute("UPDATE tasks SET owner_id='bot:ops' WHERE id=?", (tid,))
+        H.history_event(c, "task", tid, "bot:ops", "owner", "bot:ops", "human:ben",
+                        created_at="2026-10-06T00:00:10.000000Z")
+        c.execute("UPDATE tasks SET owner_id='human:ben' WHERE id=?", (tid,))
+        c.execute("INSERT INTO ask_ingest_items(id,person,asker,kind,ref,mode,outcome,would,reason,load,created_at) "
+                  "VALUES('ai-midnight','human:ben','bot:ops','task',?,'on','sent_back','sent_back','',0,"
+                  "'2026-10-06T00:00:10.000000Z')", (tid,))
+        monday = A.replay_items(c, "human:ben", "2026-10-05T00:00:00", "2026-10-06T00:00:00")
+        tuesday = A.replay_items(c, "human:ben", "2026-10-06T00:00:00", "2026-10-07T00:00:00")
+    shown = [(i["ref"], i["created_at"]) for i in monday if i["kind"] == "task"]
+    assert shown == [(tid, "2026-10-05T23:59:40.000000Z")]
+    shown = [(i["ref"], i["created_at"]) for i in tuesday if i["kind"] == "task"]
+    assert shown == [(tid, "2026-10-06T00:00:10.000000Z")]
 
 
 @pytest.mark.parametrize("actor,role,via,expected", [
