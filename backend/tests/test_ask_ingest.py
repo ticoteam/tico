@@ -1152,6 +1152,27 @@ def test_a_handoff_replays_on_the_day_it_was_put_on_them(gate):
     assert [(i["ref"], i["asker"]) for i in tuesday if i["kind"] == "task"] == [(kept["id"], "bot:ops"), (human["id"], "bot:ops")]
 
 
+def test_a_bot_handoff_while_the_filter_is_off_replays_but_a_human_handoff_does_not(gate):
+    """Owner history supplies an Off handoff with the same task fields as an ask-row handoff, but only for bot actors."""
+    api, model, token = gate
+    with api.app.state.store.transaction() as c:
+        bot_task = H.task_create(c, "bot:ops", "Renew the vendor contract", "Check the renewal date", "bot:ops",
+                                 lint=False)
+        human_task = H.task_create(c, "human:priya", "Review the launch plan", "Confirm the milestones",
+                                   "human:priya", lint=False)
+        for task, actor in ((bot_task, "bot:ops"), (human_task, "human:priya")):
+            c.execute("UPDATE tasks SET created_at='2026-10-05T10:00:00' WHERE id=?", (task["id"],))
+            H.history_event(c, "task", task["id"], actor, "owner", actor, "human:ben",
+                            created_at="2026-10-06T09:00:00")
+            c.execute("UPDATE tasks SET owner_id='human:ben' WHERE id=?", (task["id"],))
+        listed = A.replay_items(c, "human:ben", "2026-10-06T00:00:00", "2026-10-07T00:00:00")
+
+    tasks = [item for item in listed if item["kind"] == "task"]
+    assert tasks == [{"kind": "task", "ref": bot_task["id"], "asker": "bot:ops",
+                      "title": "Renew the vendor contract", "text": "Check the renewal date",
+                      "asked": None, "created_at": "2026-10-06T09:00:00"}]
+
+
 def test_a_task_filed_while_the_filter_was_off_counts_on_its_day_and_again_on_a_later_handoff(gate):
     """Filed for Ben on Oct 5 with the filter Off (no ask row), moved to the bot that evening, and handed back to Ben on
     Oct 6 with the filter On (an ask row). The filing still counts on Oct 5 and the handoff on Oct 6: the handoff does

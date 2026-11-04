@@ -828,13 +828,15 @@ def replay_items(c, person, start, end, assistant_bot=None):
     (`_OWNER_THEN`), today's owner where a task never changed hands. A task the filter acted on (sent back, FYI or
     merged) stays with its bot, so it is found by its ask row for this person as well: a replay counts what On would
     have kept off, not only what landed. Each ask row the filter wrote for the person is one placement, listed on its
-    own day. A question carries its structured questions (refs.questions); a task row carries none, its questions are
-    the ask messages replayed beside it."""
+    own day. Bot owner changes to the person are also placements when the filter was off and wrote no ask row. A
+    question carries its structured questions (refs.questions); a task row carries none, its questions are the ask
+    messages replayed beside it."""
     skip = H.bot_actor(assistant_bot) if assistant_bot else ""
     # A task counts on the day it was filed for them, while they owned it, unless the gate judged that filing: an ask row
     # for them written no later than the task's first owner change leaves the filing to the second branch. That branch
     # lists every ask row the filter wrote for them on its own day, so a judged filing shows once, and each handoff
-    # shows on the day it was handed back, wherever the task was created and whoever owns it now.
+    # shows on the day it was handed back, wherever the task was created and whoever owns it now. When the filter was
+    # off there is no ask row, so owner history supplies that handoff; matching timestamps keep On handoffs single.
     out = [{"kind": "task", "ref": r["id"], "asker": r["asker"], "title": r["title"] or "", "text": r["body"] or "",
             "asked": None, "created_at": r["at"]}
            for r in c.execute("SELECT t.id,t.title,t.body,t.requester_id AS asker,t.created_at AS at FROM tasks t "
@@ -844,8 +846,15 @@ def replay_items(c, person, start, end, assistant_bot=None):
                               f"AND julianday(i.created_at)<=COALESCE({_FIRST_OWNER_CHANGE}, 1e9)) "
                               "UNION ALL SELECT t.id,t.title,t.body,i.asker,i.created_at FROM ask_ingest_items i "
                               "JOIN tasks t ON t.id=i.ref WHERE i.person=? AND i.kind='task' AND i.created_at>=? "
-                              "AND i.created_at<? AND i.asker LIKE 'bot:%' AND i.asker<>?",
-                              (person, start, end, skip, person, person, start, end, skip))]
+                              "AND i.created_at<? AND i.asker LIKE 'bot:%' AND i.asker<>? "
+                              "UNION ALL SELECT t.id,t.title,t.body,h.actor_id,h.created_at FROM history_events h "
+                              "JOIN tasks t ON t.id=h.subject_id WHERE h.subject_type='task' AND h.kind='owner' "
+                              "AND h.new=? AND h.actor_id LIKE 'bot:%' AND h.actor_id<>? "
+                              "AND h.created_at>=? AND h.created_at<? AND NOT EXISTS "
+                              "(SELECT 1 FROM ask_ingest_items i WHERE i.person=? AND i.kind='task' AND i.ref=t.id "
+                              "AND i.asker=h.actor_id AND i.created_at=h.created_at)",
+                              (person, start, end, skip, person, person, start, end, skip,
+                               person, skip, start, end, person))]
     for m in H._rows(c.execute("SELECT * FROM messages WHERE recipient_id=? AND kind='ask' AND created_at>=? AND created_at<? "
                                "AND sender_id LIKE 'bot:%' AND sender_id<>?", (person, start, end, skip))):
         msg = H.message(c, m["id"]) or m
