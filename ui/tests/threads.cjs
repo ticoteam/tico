@@ -435,7 +435,7 @@ let browser = null;
     await page.evaluate(() => threadViewsLive('messages', {id: 'lv', thread_id: 't-rb', root_id: 't-tree',
       message: {id: 'lv', seq: 70, revision: 0, thread_id: 't-rb', sender_id: 'human:bea', body: 'Late reply.', created_at: new Date().toISOString()}}));
     assert.equal((await mids()).at(-1), 'lv');
-    assert.equal(await page.locator('.th-msg[data-mid="lv"].th-new').count(), 1);
+    assert.equal(await page.locator('.th-msg[data-mid="lv"].th-new').count(), 0, 'arriving at the bottom is not news, in any thread');
     assert.equal(await page.locator('.th-msg[data-mid="lv"] .th-quote').getAttribute('data-th-quote'), 'p1');
     await page.waitForTimeout(150);
     assert.ok(seen.readSeqs.includes('t-rb:70'), seen.readSeqs);
