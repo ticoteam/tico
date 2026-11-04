@@ -89,7 +89,7 @@ def test_a_tool_call_reads_as_its_work_in_plain_words():
     assert turns.tool_label({"tool": "mcp__hub__task_create"}) == "Filing a task"
     assert turns.tool_label({"tool": "Bash", "summary": "hub task close"}) == "Closing a task"
     assert turns.tool_label({"tool": "Bash", "summary": "npm"}) == "Ran npm"
-    assert turns.tool_label({"tool": "shell", "summary": "hub release now"}) == "Ran hub release now"
+    assert turns.tool_label({"tool": "shell", "summary": "hub release now"}) == "Ran hub"
     assert turns.tool_label({"tool": "Bash"}) == "Ran Bash"
     assert turns.tool_label({"tool": "mcp__peec-ai__list_brands"}) == "Ran peec ai list brands"
 
@@ -128,6 +128,7 @@ def test_a_hub_phrase_is_the_longest_command_it_starts_with():
     assert turns.tool_label({"tool": "Bash", "summary": "hub ask"}) == "Asking a teammate"
 
 
-def test_an_unmapped_hub_command_reads_as_hub_and_its_words():
-    assert turns.tool_label({"tool": "Bash", "summary": "hub release now"}) == "Ran hub release now"
-    assert turns.tool_label({"tool": "Bash", "summary": "hub webhook pause"}) == "Ran hub webhook pause"
+def test_an_unmapped_hub_command_never_shows_its_words():
+    assert turns.tool_label({"tool": "Bash", "summary": "hub release now"}) == "Ran hub"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub webhook pause"}) == "Ran hub"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub release sk-live-1"}) == "Ran hub"

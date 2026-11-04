@@ -30,7 +30,7 @@ function askPeekTidy({dismissed = [], shown = {}} = {}, now = Date.now()) {
 }
 
 // While a turn works with no words yet: its label, how long it has run and its newest tool step, e.g.
-// "Working · 4m · Closing tasks". A step is the server's tool label ("Ran hub task bulk", backend/turns.py tool_label:
+// "Working · 4m · Closing tasks". A step is the server's tool label ("Ran hub", backend/turns.py tool_label:
 // the tool's name only, never its arguments), said as a verb and what it acts on; a name it does not know stays as
 // it is. `x` is a conversation snapshot's execution.
 const ASK_TICK_MS = 15000;

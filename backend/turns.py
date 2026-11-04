@@ -106,7 +106,6 @@ SHELL_TOOLS = {"bash", "shell"}
 # its command path); a summary of any other shape, from a current or an older runner, is never shown.
 SHELL_PROGRAMS = {"awk", "cargo", "cat", "cd", "curl", "docker", "find", "gh", "git", "go", "grep", "jq", "ls", "make",
                   "node", "npm", "npx", "pnpm", "pytest", "python", "python3", "rg", "sed", "sqlite3", "wc", "yarn"}
-HUB_WORD = re.compile(r"[a-z][a-z0-9-]*")
 # A hub command's plain phrase, by its CLI words, every one a real command of clients/hubcli.py (or one of its top-level
 # aliases, the RENAMED table). A word break is a space, so `read-back` is the two words `read back`. A phrase for a
 # command's first word alone covers the rest of its group; the longest key that starts the command wins.
@@ -203,15 +202,12 @@ def tool_words(name):
 def shell_label(summary):
     """A shell call's label from its summary, or None when the summary is neither a hub command nor one program from
     SHELL_PROGRAMS. A hub command's summary is `hub` and its command path (the runner checks the path against the CLI's
-    command list): its phrase when it has one, else `Ran hub` and the words when they are all plain lowercase words."""
+    command list): its phrase when it has one, else just `Ran hub`, since an old stored summary can hold argument words."""
     words = summary.split()
     if words[:1] == ["hub"]:
         phrase = hub_phrase(hub_words(summary) or [])
         if phrase:
             return phrase
-        rest = words[1:]
-        if rest and all(HUB_WORD.fullmatch(w) for w in rest):
-            return ("Ran hub " + " ".join(rest))[:TOOL_LABEL_CHARS]
         return "Ran hub"
     if len(words) == 1 and words[0] in SHELL_PROGRAMS:
         return "Ran " + words[0]
