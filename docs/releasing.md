@@ -616,6 +616,9 @@ files, public GitHub release assets or job summaries. Each list entry has these 
 
 `runner_url` and `prefix` are optional. `prefix` must match the server's storage prefix.
 `icon_url` is an HTTPS PNG URL or a path on `url`. URLs require HTTPS except loopback HTTP.
+The URL must be reachable without authentication from GitHub's build runners and return a PNG
+of at most 1 MiB. If it is `/api/v2/team/icon`, the owner must upload a team icon on that server
+(Settings > Team, or `POST /api/v2/team/icon`); the endpoint returns 404 until one is set.
 The UUID must remain stable across renames to preserve installed preferences and login state.
 
 Company apps put nothing in the macOS menu bar; the Dock shows the company logo with the
@@ -668,6 +671,18 @@ The public release depends on no desktop build. Entries are validated within
 their own company job; a malformed company does not prevent valid companies from publishing.
 Entries without a slug produce a generic warning and cannot be dispatched. Unparseable JSON
 fails the matrix with a generic error and does not prevent the public release.
+
+Company build diagnostics name the failed operation without printing private values. Configuration
+and icon fetching run before installing build dependencies. An icon download error reports the HTTP
+status or DNS/TLS/timeout category and names `TICO_COMPANY_APPS.icon_url`; it does not indicate a
+signing or publishing failure. For a 404, verify the icon exists; for 401/403, allow unauthenticated
+icon access. Correct the entry's `icon_url` (and `url` for a relative path) in the repository's
+Settings > Secrets and variables > Actions > `TICO_COMPANY_APPS` if the address is wrong.
+Missing configuration fields and required environment variables are named explicitly. Icon generation,
+bundling, Apple certificate import, artifact encryption/decryption and publication have separate
+failure labels; private tool output and raw exception text remain suppressed. An old catch-all
+failure log cannot establish which HTTP status or network error occurred; collect the new diagnostic
+before changing credentials or assuming the icon is missing.
 
 Validate a private list locally without printing it or fetching icons:
 `python scripts/company_apps.py matrix --dry-run` with `TICO_COMPANY_APPS` supplied through
