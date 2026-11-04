@@ -464,7 +464,7 @@ function auFlowLines(flow) {
   const walk = (steps, pad) => (steps || []).forEach(s => {
     const off = s.enabled === false ? ' (off)' : '';
     if (s.type === 'filter') (s.rules || []).forEach(r => {
-      const to = r.to ? ` → ${auDestName(r.to, flow?.destinations)}` : '', next = r.to ? '' : {rule: ' · move on', step: ' · next step'}[auRuleNext(r)] || '';
+      const to = r.to ? ` → ${auDestLabel(r.to, flow?.destinations)}` : '', next = r.to ? '' : {rule: ' · move on', step: ' · next step'}[auRuleNext(r)] || '';
       out.push(`${pad}filter ${auCondsText(r.when, r.match)} → ${auThenFull(r.then).join(', ')}${to}${next}${off}`);
     });
     else if (s.type === 'decide') {
@@ -473,7 +473,7 @@ function auFlowLines(flow) {
     } else if (s.type === 'llm') {
       out.push(`${pad}llm as ${auActorName(s.as)}: ${s.prompt || ''}${off}`);
       const c = s.choose;
-      if (c) out.push(`${pad}  ${c.mode || ''} → ${(c.to || []).map(id => auDestName(id, flow?.destinations)).join(', ')} · unsure → ${auDestName(c.default, flow?.destinations)}`);
+      if (c) out.push(`${pad}  ${c.mode || ''} → ${(c.to || []).map(id => auDestLabel(id, flow?.destinations)).join(', ')} · unsure → ${auDestLabel(c.default, flow?.destinations)}`);
     }
     else if (s.type === 'bot_turn') out.push(`${pad}bot turn ${auActorName(s.bot)}: ${s.prompt || ''}${off}`);
     else if (s.type === 'find') out.push(`${pad}find ${AU_FIND[s.source] || s.source} ${s.query || ''}${off}`.trim());
@@ -614,7 +614,7 @@ function auBoardEdHTML(ed) {
   } else if (ed.part === 'q') {
     title = fresh ? 'New question' : `Question ${ed.i + 1}`;
     body = auFld('Question', auBoardTa('item.text', it.text, 'Question'))
-      + auFld('Min confidence', `<span class="au-pct"><input type="number" data-b="item.min" data-pct min="0" max="100" step="5" value="${Math.round((it.min ?? AU_Q_MIN) * 100)}" aria-label="Min confidence, percent"${auDis()}></span>`)
+      + auFld('Min confidence', `<span class="au-pct"><input type="number" data-b="item.min" data-pct min="0" max="100" step="5" value="${it.min == null || it.min === '' ? '' : Math.round(it.min * 100)}" placeholder="${Math.round(AU_NOUL_MIN * 100)}" aria-label="Min confidence, percent"${auDis()}></span>`)
       + chain(false);
   } else if (ed.part === 'dest') {
     title = fresh ? 'New destination' : it.name || it.id;
@@ -627,9 +627,10 @@ function auBoardEdHTML(ed) {
     const modes = auBoardModes(AU.cur);
     body = (modes.length < 2 ? '' : auBox('Mode', `<span class="au-bseg" role="group" aria-label="Mode">${modes.map(([k, w]) =>
         `<button type="button" data-op="bmode" data-v="${k}" aria-pressed="${it.mode === k}"${auDis()}>${esc(w)}</button>`).join('')}</span>`))
-      + auFld('Instructions', auTa('item.prompt', it.prompt, 6))
+      // Sort with one destination asks nothing (everything goes there), so it has no instructions to keep.
+      + (it.mode === 'sort' && it.to.length < 2 ? '' : auFld('Instructions', auTa('item.prompt', it.prompt, 6)))
       + auBox('Destinations', `<div class="au-bto">${dests.map(d => `<label class="au-chk"><input type="checkbox" data-bto="${esc(d.id)}"${it.to.includes(d.id) ? ' checked' : ''}${auDis()}>${esc(d.name || d.id)}</label>`).join('')}</div>`)
-      + auFld('Unsure', auSel('item.default', it.to.map(id => [id, auDestName(id, dests)]), it.default));
+      + (it.to.length < 2 ? '' : auFld('Unsure', auSel('item.default', it.to.map(id => [id, auDestName(id, dests)]), it.default)));
   }
   return auFrame(title, body, {del: !fresh && ed.part !== 'llm' && !(ed.part === 'dest' && dests.length < 2), delOp: 'bdel', delLabel: 'Delete'});
 }
@@ -678,7 +679,6 @@ async function auBoardEdSave(ed, button) {
     else b.dests[ed.i] = it;
   } else if (ed.part === 'llm') {
     if (!it.to.length) problem = 'Pick a destination';
-    else if (it.mode === 'sort' && it.to.length < 2) problem = 'Sort needs two destinations';
     b.llm = {...b.llm, ...it, prompt: String(it.prompt || '').trim()};
     if (b.llm.mode !== 'sort') b.llm.as ||= auOwnerAs(a);
   }
@@ -712,7 +712,6 @@ async function auBoardDelete(ed, button) {
 async function auBoardMode(mode) {
   const a = AU.cur, b = a?.can_edit && auBoardShape(a);
   if (!b || b.llm.mode === mode) return;
-  if (mode === 'sort' && b.llm.to.length < 2) { toast('Sort needs two destinations', true); return; }
   b.llm.mode = mode;
   if (mode !== 'sort') b.llm.as ||= auOwnerAs(a);
   await auWrite(auBoardFlow(b), x => `Saved · v${x.version}`);

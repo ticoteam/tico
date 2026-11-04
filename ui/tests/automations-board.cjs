@@ -1,7 +1,8 @@
 // The flow board (ui/app/automations-flow.js auBoardHTML) against the fake hub: an inbox with destinations shows its
 // rules, questions, LLM and destinations, a flow without them keeps the step list; a rule's pop-up adds an action and
 // saves both (with the destinations unchanged), a rule moved on saves next "rule"; a proposal's diff shows destination,
-// `to` and move-on changes; a webhook board offers Sort only and no mail actions;
+// `to` and move-on changes (by id when two destinations share a name); a webhook board offers Sort only and no mail
+// actions; deleting down to one destination saves Sort as one routing rule; a switched-off Sort keeps the step list;
 // a phone stacks the board with no sideways scroll.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -114,7 +115,7 @@ async function save(page, writes, id, n) {
       const added = await card.locator('.au-diff .add').allTextContents();
       assert.equal(added.length, 3, added.join('\n'));
       assert.ok(added.some(l => /subpoena.*STARRED.*move on/.test(l)), 'move on shows');
-      assert.ok(added.some(l => /receipt.*→ Engineering$/.test(l)), 'the new destination shows');
+      assert.ok(added.some(l => /receipt.*→ Engineering \(eng\)$/.test(l)), 'the new destination shows');
       assert.ok(added.some(l => /^\+ destination Engineering.*bot:support/.test(l)), 'the destination chain shows with its args');
       assert.equal(await card.locator('.au-diff .del').count(), 3);
       await shot(page, 'desktop-board-proposal');
@@ -155,6 +156,63 @@ async function save(page, writes, id, n) {
       assert.equal(acts[0], 'create_task', 'a new action off mail is a task');
       for (const mail of ['archive', 'label', 'star', 'leave_for_you', 'forward', 'draft_reply', 'send_reply', 'unsubscribe'])
         assert.equal(acts.includes(mail), false, mail + ' needs a message');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
+    // Deleting down to one destination: Sort saves as a single rule sending everything there, with no decide step.
+    {
+      const {page, errors, writes} = await open(browser, DESKTOP, 'au_hook');
+      await page.waitForSelector('.au-board');
+      await page.locator('[data-board="dest:1"]').click();
+      page.once('dialog', d => d.accept());
+      await page.locator('.au-ed [data-op="bdel"]').click();
+      await page.waitForFunction(() => document.querySelector('.au-ver')?.textContent === 'v3');
+      const w = writes.at(-1);
+      assert.equal(w.path, '/api/v2/automations/au_hook');
+      assert.deepEqual(w.body.destinations.map(d => d.id), ['ops']);
+      assert.deepEqual(w.body.steps.map(x => [x.id, x.type]), [['f1', 'filter'], ['sf', 'filter']]);
+      assert.deepEqual(w.body.steps[1].rules, [{when: [], match: 'all', then: [], to: 'ops', next: 'end', stop: true}]);
+      await page.waitForSelector('.au-board');
+      assert.equal(await page.locator('.au-dest:not(.au-dest-add)').count(), 1);
+      await page.locator('[data-board="llm"]').click();
+      await page.waitForSelector('#au-root.ed-pop .au-ed:not([hidden])');
+      assert.equal(await page.locator('.au-ed [data-b="item.default"]').count(), 0, 'no unsure pick with one destination');
+      assert.equal(await page.locator('.au-ed [data-b="item.prompt"]').count(), 0, 'nothing to ask with one destination');
+      await page.locator('.au-ed [data-op="close"]').click();
+      await page.locator('[data-board="dest:0"]').click();
+      assert.equal(await page.locator('.au-ed [data-op="bdel"]').count(), 0, 'the last destination stays');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
+    // A switched-off Sort keeps the step list: the board has no off switch and a save would turn it back on.
+    {
+      const off = fx => { tweak(fx); const h = fx.automations.find(x => x.id === 'au_hook'); h.steps[1].enabled = h.steps[2].enabled = false; };
+      const {page, errors} = await openAutomations(browser, {viewport: DESKTOP, hash: '#/automations/au_hook', tweak: off});
+      await page.waitForSelector('.au-card[data-open="sd"]');
+      assert.equal(await page.locator('.au-board').count(), 0);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
+    // Two destinations with one name: a proposal moving a rule from one to the other shows in the diff by id.
+    {
+      const same = fx => { tweak(fx); fx.automations.find(x => x.id === 'au_hook').destinations[1].name = 'Ops'; };
+      const {page, errors, db} = await openAutomations(browser, {viewport: DESKTOP, hash: '#/automations/au_hook', tweak: same});
+      await page.waitForSelector('.au-board');
+      const flow = JSON.parse(JSON.stringify({trigger: FX.webhook.trigger, steps: FX.webhook.steps, destinations: FX.webhook.destinations}));
+      flow.destinations[1].name = 'Ops';
+      flow.steps[0].rules[0].to = 'log';
+      db.versions.au_hook.push({n: 3, actor: 'bot:support', at: '2026-10-28T09:00:00Z', status: 'pending', summary: 'Refunds to log', flow});
+      await page.locator('.au-ver').click();
+      const card = page.locator('.au-prop[data-n="3"]');
+      await card.waitFor();
+      await card.getByRole('button', {name: 'View diff'}).click();
+      const added = await card.locator('.au-diff .add').allTextContents(), gone = await card.locator('.au-diff .del').allTextContents();
+      assert.equal(added.length, 1, added.join('\n'));
+      assert.match(added[0], /refund.*→ Ops \(log\)$/);
+      assert.match(gone[0], /refund.*→ Ops \(ops\)$/);
       assert.deepEqual(errors, []);
       await page.close();
     }
