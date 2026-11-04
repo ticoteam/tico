@@ -61,17 +61,19 @@
           <button type="button" class="ghost" data-ws-disconnect-no>Cancel</button></div>
       </div>`;
 
-  // A failing key shows step 3 (Check) under this, so the line's own Check connection is only for a working key.
-  function connectedBlock(row) {
+  // A failing key, a pending replacement or a key still to narrow shows step 3 (Check) under this, so the line's own
+  // Check connection (and its result) is only for a working key with nothing else to check.
+  function connectedBlock(row, stepped) {
     const failing = row.status === 'failing';
+    const own = !failing && !stepped;
     const checked = row.checked_at || row.connected_at;
     return `<p class="google-connected" data-ws-connected>${failing ? '<strong>Failing</strong>' : '<span class="pill ok">Connected</span>'}${
         checked ? ` <span class="muted">· checked ${esc(ago(checked))}</span>` : ''}</p>
       ${failing ? `<p role="alert">${esc(row.last_error || 'Tico could not reach Google with this key.')}</p>` : ''}
-      <div class="row">${failing ? '' : '<button type="button" class="ghost" data-ws-recheck>Check connection</button>'}
+      <div class="row">${own ? '<button type="button" class="ghost" data-ws-recheck>Check connection</button>' : ''}
         <button type="button" class="ghost" data-ws-replace>Replace key</button>
         <button type="button" class="ghost danger" data-ws-disconnect>Disconnect</button></div>
-      ${failing ? '' : '<div data-ws-check-result role="status"></div>'}
+      ${own ? '<div data-ws-check-result role="status"></div>' : ''}
       ${disconnectConfirm(row.domain, true)}`;
   }
 
@@ -199,7 +201,7 @@
     const parts = [];
     // A key authorized before the read-only scopes: step 2 again with every scope, then Check, keeping the key.
     const legacy = !!active && !pend && !replacing && active.narrowable === false;
-    if (active && !replacing) parts.push(connectedBlock(active));
+    if (active && !replacing) parts.push(connectedBlock(active, !!pend || legacy));
     if (legacy) parts.push(allowStep(active));
     if (pend && !replacing) {
       if (!active) parts.push(`<p>Key uploaded for <strong>${esc(pend.domain || '')}</strong>.</p>`);
