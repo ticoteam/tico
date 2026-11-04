@@ -245,13 +245,16 @@ def page_blob_visible(c, auth, who, bid):
 
 
 def page_event_readable(c, auth, who, target, detail):
-    row = c.execute("SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id WHERE f.id=?", (target,)).fetchone()
+    data = H._json(detail, {}) if isinstance(detail, str) else detail
+    names_audience = isinstance(data, dict) and ("before" in data or "after" in data)
+    # Hard delete keeps the file tombstone and activity, while removing the page's row.
+    row = c.execute("SELECT f.* FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id "
+                    "WHERE f.id=? AND (p.file_id IS NOT NULL OR ?)", (target, int(names_audience))).fetchone()
     if not row:
         return True
     if not (file_visible(c, auth, who, row, {}) if auth else page_audience_visible(c, auth, who, row, {})):
         return False
-    data = H._json(detail, {}) if isinstance(detail, str) else detail
-    if isinstance(data, dict) and ("before" in data or "after" in data):
+    if names_audience:
         from . import pages
         return pages.may_manage(c, auth, who, row)
     return True

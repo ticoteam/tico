@@ -175,6 +175,10 @@ def test_access_changes_record_old_and_new_but_readers_never_get_the_names(api):
     assert len(sql(api, f"SELECT detail FROM events WHERE target='{fid}' AND action='page.access_changed'", 'ben-test')) == 1
     assert sql(api, f"SELECT detail FROM bot_file_activity WHERE file_id='{fid}' AND action='page.access_changed'", 'cara-test') == []
     assert len(sql(api, f"SELECT detail FROM bot_file_activity WHERE file_id='{fid}' AND action='page.access_changed'", 'ben-test')) == 1
+    removed = api.delete('/api/v2/files/' + fid, headers=headers('ana-test'))
+    assert removed.status_code == 200, removed.text
+    assert sql(api, f"SELECT detail FROM events WHERE target='{fid}' AND action='page.access_changed'", 'cara-test') == []
+
 
 
 def test_audience_does_not_grant_inherited_access_or_constrain_managers(api):
