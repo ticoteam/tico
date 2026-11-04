@@ -45,9 +45,12 @@ journey('e2e-files-pages', async ({hub, browser, phone}) => {
   const search = reader.waitForResponse(r => new URL(r.url()).pathname === '/api/v2/files/search');
   await section.getByRole('searchbox', {name: 'Search pages'}).fill('Engineering weekly');
   assert.equal(new URL((await search).url()).searchParams.get('kind'), 'page', `${where}: the picker searches pages only`);
-  await section.getByRole('button', {name: 'Engineering weekly', exact: true}).click();
-  await section.locator('.pg-card', {hasText: 'Engineering weekly'}).waitFor({timeout: t(15000)});
-  await page.locator('[data-task-pages] .pg-card', {hasText: 'Engineering weekly'}).waitFor({timeout: t(15000)});
+  const choice = section.getByRole('button', {name: 'Engineering weekly', exact: true});
+  const linkedPage = await choice.getAttribute('data-tp-page');
+  await choice.click();
+  const card = `.pg-card[data-page="${linkedPage}"]`;
+  await section.locator(card).waitFor({timeout: t(15000)});
+  await page.locator('[data-task-pages] ' + card).waitFor({timeout: t(15000)});
   assert.equal(await section.locator('.tp-picker').isVisible(), false, `${where}: linking closes the picker`);
   assertClean(reader, `${where}: a task reader links a page`);
   const readerOverflow = await reader.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
