@@ -1916,7 +1916,9 @@ STABLE.extend([
      "The automations you may see, newest first, each with can_edit; paged by cursor", "AutomationList"),
     ("/api/v2/automations", "post", "Automations", "createAutomation",
      "Save a new automation as version 1; a flow that fails its checks is refused with where and why. BotOps saves "
-     "it off unless `enabled` is sent; a bot without rights to it saves a proposal (off, version 1 pending)",
+     "it off unless `enabled` is sent; a bot without rights to it saves a proposal (off, version 1 pending). "
+     "An Assistant Message routine saves off with action, message_id and needs_confirm; only its person's card "
+     "click enables it. A chooser without a mode defaults to Draft",
      "Automation"),
     ("/api/v2/automations/guide", "get", "Automations", "getAutomationGuide",
      "How BotOps builds and edits automations, with the flow format generated from the hub's code", "AutomationGuide"),
@@ -1971,7 +1973,9 @@ _RUN = obj({"id": "s", "automation_id": "s", "version": "i", "trigger_ref": "s",
                                                    "description": "Each step's status, outputs and cost; null after 30 days"}},
            required=["id", "automation_id", "version", "status", "steps"])
 SCHEMAS.update({
-    "Automation": obj({"id": "s", "name": "s", "owner_id": "s", "enabled": "b", "trigger": {"type": "object"},
+    "Automation": obj({"id": "s", "name": "s", "owner_id": "s", "enabled": "b",
+                       "action": {"type": "object", "description": "Assistant Message create: the pending Confirm card"},
+                       "message_id": "s", "needs_confirm": "b", "trigger": {"type": "object"},
                        "steps": items({"type": "object"}), "version": "i", "can_edit": "b", "can_pause": "b",
                        "destinations": {"type": ["array", "null"], "items": {"type": "object"},
                                         "description": "Named chains a filter rule's `to` runs (see the automation guide)"},

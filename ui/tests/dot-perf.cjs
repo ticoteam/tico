@@ -5,8 +5,7 @@
 // - Each idle variant swapped in by hand: no layout and no paint.
 // - With the CPU slowed 4x, opening Ask (the dot flies up to the panel's header), a reply (the header's dot works, then
 //   rests) and closing (it flies back down): frame gaps p95 <= 20 ms and max <= 50 ms, and no long task over 50 ms. On a loaded runner
-//   (TICO_UI_SLOWDOWN > 1) the frame budgets stretch by that factor; the counts never do. The batch runner runs this
-//   profiler alone so sibling browsers do not contend for its CPU.
+//   (TICO_UI_SLOWDOWN > 1) the frame budgets stretch by that factor; the counts never do.
 // - Opening and closing Ask, by the row, ⌘J, Escape and a peek, with a peek showing, and from a page with no heading to
 //   one with a heading (the page it sees goes and comes back), flights included: no `hidden` attribute changes anywhere
 //   and no child of <body> comes or goes (each restyles the whole page on a real hub); the flying copy is made once
