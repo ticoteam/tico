@@ -434,7 +434,7 @@ _ATTENTION_CHANGE_WHERE = ("NEW.thread_id IS NOT NULL AND NEW.recipient LIKE 'hu
 # wake a person's message gave a bot, of a run, of a bot's post where it had one, and of every open wake of a bot whose
 # claim refusal, state or pause moved. A run's step writes one only when the root had none in the last five seconds.
 _OPEN_WAKE = ("recipient LIKE 'bot:%' AND mode IN ('queue','steer') AND state IN ('pending','delivered','capped') "
-              "AND cause='human'")           # word for word migration 0065's message_deliveries_open_bots
+              "AND cause='human'")           # word for word migration 0068's message_deliveries_open_bots
 _MESSAGE_ROOT = "(SELECT COALESCE(t.root_id,t.id) FROM messages m JOIN conversations t ON t.id=m.conversation_id WHERE m.id={mid})"
 _RUN_ROOT = ("(SELECT COALESCE(t.root_id,t.id) FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m "
              "ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id WHERE a.id={aid})")

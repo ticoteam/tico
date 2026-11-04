@@ -464,7 +464,7 @@ is refused as before; a further recipient gets no delivery, the message stays in
 warning `{"rule": "unsolicited_cap", "actor": ...}`.
 
 ### 4.8 Who routing asked
-Every person's message routing looks at writes one `message_routes` row (migration 0065): `bot_ids`, the bots it asked
+Every person's message routing looks at writes one `message_routes` row (migration 0068): `bot_ids`, the bots it asked
 (`[]`: it asked nobody, had no model, hit a cap or gave up). Timelines show it as `"routed": {"to": [{"actor",
 "name"}]}`; a message routing never looked at has `"routed": null`. A change is a `threads` event `routed`
 (`message_id`, `routed`) to the message's readers. Deleting the message deletes its row.

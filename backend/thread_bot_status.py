@@ -34,7 +34,7 @@ BUSY = "Busy with other work"
 STARTING = "Starting"
 
 # The root's open wakes from a person's message: one row per bot, its oldest. A bot's post in the root after the
-# message closes it. The partial index message_deliveries_open_bots (migration 0065) holds exactly these rows.
+# message closes it. The partial index message_deliveries_open_bots (migration 0068) holds exactly these rows.
 _OPEN_SQL = (
     "SELECT d.recipient, d.state, d.carrier_id, d.message_id, d.created_at FROM message_deliveries d "
     "JOIN messages m ON m.id=d.message_id WHERE d.root_id=? AND d.recipient LIKE 'bot:%' "
