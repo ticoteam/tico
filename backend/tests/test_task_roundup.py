@@ -448,6 +448,7 @@ def test_a_step_set_later_on_a_task_that_had_none_is_news_but_its_creation_row_i
     store = api.app.state.store
     with store.transaction() as c:
         mine = task(c, "Plan the hike")
+        c.execute("UPDATE tasks SET created_at=? WHERE id=?", (ago(days=3), mine["id"]))   # created before the step below
         settle(c, mine["id"], "finance", ago(days=2))
         H._task_event(c, mine["id"], H.human_actor("ana"), "step", None, "Draft the route", "Set the step")
         c.execute("UPDATE history_events SET created_at=? WHERE subject_id=? AND kind='step' AND new='Draft the route'",
