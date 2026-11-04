@@ -40,6 +40,11 @@ def handled(c, tid):
               "(SELECT message_id FROM task_check_back_wakes WHERE task_id=?)", (tid,))
 
 
+def edited(c, tid):
+    """A person edits the task: a recorded change since the last notice, which a bare due-time move is not."""
+    H._task_event(c, tid, "human:ana", "body", "old body", "new body")
+
+
 def test_creation_defaults_human_exclusion_and_assignment_scope(followups):
     bot = post(followups, "tasks", {"owner": "ops", "title": "Inspect", "body": "x"})
     assert bot["version"] == 1  # the automatic date is part of creation, not a separate edit
@@ -406,6 +411,17 @@ def test_explicit_reparking_without_progress_reaches_one_diagnostic(followups, m
         assert CB.sweep(c)["woke"] == [row["id"]]  # an explicit person's retry is meaningful intervention
 
 
+def test_bot_set_appointment_wakes_with_no_new_activity(followups):
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        handled(c, row["id"])
+        CB.set_time(c, H.task(c, row["id"]), "45m", "Check the CI run.", actor="bot:ops")  # the bot's own appointment
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]  # nothing in Tico moved, and the bot still wakes
+        assert len(wakes(c, row["id"])) == 2
+
+
 def test_result_consumer_must_record_disposition_instead_of_reparking(followups):
     with followups.app.state.store.transaction() as c:
         row = H.task_create(c, "bot:finance", "Inspect a returned result", "x", "bot:ops", lint=False)
@@ -492,6 +508,7 @@ def test_later_due_time_wakes_again_once_the_first_notice_is_handled(followups):
         row = due(c, task(c))
         assert CB.sweep(c)["woke"] == [row["id"]]
         handled(c, row["id"])
+        edited(c, row["id"])  # the due time moves only because a person edited the task
         later = H.shift(H.now(), minutes=30)
         c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (later, row["id"]))
         assert CB.sweep(c, H.shift(H.now(), minutes=31))["woke"] == [row["id"]]
@@ -598,6 +615,7 @@ def test_moved_due_time_replaces_the_stale_notice_on_a_stopped_cloud_machine(clo
         row = due(c, H.task_create(c, "human:ana", "Inspect the moved cloud result", "x", "bot:ops", lint=False))
         assert CB.sweep(c)["woke"] == [row["id"]]
         [first] = wakes(c, row["id"])
+        edited(c, row["id"])  # the moved due time follows a person's edit, which is what makes the notice a change
         c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (H.shift(H.now(), seconds=-2), row["id"]))
         assert CB.sweep(c)["woke"] == [row["id"]]
         by_id = {w["id"]: w for w in wakes(c, row["id"])}
@@ -653,3 +671,148 @@ def test_live_receipt_probe_searches_indexes_and_never_scans_history(followups):
         plan = [r["detail"] for r in c.execute("EXPLAIN QUERY PLAN " + CB.IN_FLIGHT_SQL,
                                                 ("task", "bot:ops", *CB.LIVE_JOBS, *CB.LIVE_RUNS))]
     assert plan and not any("SCAN" in detail.split() for detail in plan), plan
+
+
+def test_repeat_wake_with_nothing_new_backs_off_and_keeps_its_note(followups):
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]  # the first inspection goes out whatever has changed
+        handled(c, row["id"])
+        CB.set_time(c, H.task(c, row["id"]), "45m", "Inspect the review.", system=True)  # a keeper-set re-park
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == []
+        after = H.task(c, row["id"])
+        assert after["check_back_at"] > H.now() and after["check_back_note"] == "Inspect the review."
+        assert len(wakes(c, row["id"])) == 1
+
+
+@pytest.mark.parametrize("change", ["message", "event"])
+def test_repeat_wake_goes_out_once_a_person_adds_a_message_or_event(followups, change):
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        handled(c, row["id"])
+        CB.set_time(c, H.task(c, row["id"]), "45m", system=True)  # a keeper-set re-park
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == []
+        if change == "message":
+            H.task_comment(c, "human:ana", row["id"], "The reviewer asked for a rename.", wake=False)
+        else:
+            edited(c, row["id"])
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        assert len(wakes(c, row["id"])) == 2
+
+
+def test_a_person_reply_on_a_bot_requested_task_wakes_the_bot_at_the_keepers_repeat(followups):
+    """A person owns a task a bot requested. Her reply is a message, not a task event, and stand() skips the owner's
+    messages, so only the conversation shows it: the keeper's re-park must still wake the requesting bot."""
+    with followups.app.state.store.transaction() as c:
+        row = due(c, H.task_create(c, "bot:ops", "Ask Ana about the rename", "Ask before renaming.", "human:ana", lint=False))
+        assert row["requester_id"] == "bot:ops" and CB.actor_for(row) == "bot:ops"
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        handled(c, row["id"])
+        H.task_comment(c, "human:ana", row["id"], "Use the new name.", wake=False)
+        CB.set_time(c, H.task(c, row["id"]), "45m", system=True)  # the keeper's repeat, nothing else moved
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        assert len(wakes(c, row["id"])) == 2
+
+
+def test_quiet_repeats_never_feed_the_stall_gate_so_a_later_reply_still_wakes(followups, monkeypatch):
+    routed = []
+    monkeypatch.setattr(H, "_no_diagnosis", lambda *a: None)
+    monkeypatch.setattr(H, "_escalate_stuck", lambda c, row, count: routed.append(row["id"]))
+    with followups.app.state.store.transaction() as c:
+        row = due(c, H.task_create(c, "bot:ops", "Ask Ana about the rename", "Ask before renaming.", "human:ana", lint=False))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        handled(c, row["id"])
+        for _ in range(3):  # nothing new: the keeper's repeats back off without waking the bot or counting as repairs
+            due(c, H.task(c, row["id"]))
+            assert CB.sweep(c)["woke"] == []
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='check_back_repair'", (row["id"],)).fetchone()[0] == 0
+        H.task_comment(c, "human:ana", row["id"], "Use the new name.", wake=False)
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        assert routed == [] and len(wakes(c, row["id"])) == 2
+
+
+def test_hourly_cap_counts_repeat_wakes_as_well_as_first_ones(followups, monkeypatch):
+    monkeypatch.setattr(CB, "WAKES_PER_BOT_HOUR", 1)
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        handled(c, row["id"])
+        H.task_comment(c, "human:ana", row["id"], "New evidence.", wake=False)
+        due(c, H.task(c, row["id"]))
+        checked = CB.sweep(c)
+        assert checked["woke"] == [] and checked["blocked"] == [row["id"]]
+        assert CB.view(H.task(c, row["id"]), c)["delivery"] == "hourly_wake_cap"
+        assert CB.sweep(c, H.shift(H.now(), hours=1, seconds=1))["woke"] == [row["id"]]
+
+
+def test_unread_result_is_never_quieted_and_escalates_through_the_repair_path(followups, monkeypatch):
+    """The requester reads a returned result, its turn ends, and it neither closes nor reopens it. Each pass still wakes
+    it, and every repair counts toward the stall gate, so the result escalates once instead of backing off forever."""
+    routed = []
+    monkeypatch.setattr(H, "_no_diagnosis", lambda *a: None)
+    monkeypatch.setattr(H, "_escalate_stuck", lambda c, row, count: routed.append(row["id"]))
+    with followups.app.state.store.transaction() as c:
+        row = H.task_create(c, "bot:ops", "Read the returned result", "Close it or reopen it.", "bot:finance", lint=False)
+        H.task_update(c, "bot:finance", row["id"], status="done")
+        for n in range(H.STALL_WAKES_PER_DAY):
+            due(c, H.task(c, row["id"]))
+            assert CB.sweep(c)["woke"] == [row["id"]]  # first wake, then one per pass: never quieted
+            handled(c, row["id"])
+            CB.finished_turn(c, f"attempt-{n}", "ops", row["id"])  # read it; the turn ends with it still done
+            assert CB._repairs(c, H.task(c, row["id"]))[0] == n + 1
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [] and routed == [row["id"]]  # the stall gate escalates it once
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='check_back_quiet'", (row["id"],)).fetchone()[0] == 0
+        assert len(wakes(c, row["id"])) == H.STALL_WAKES_PER_DAY
+
+
+@pytest.mark.parametrize("state", ["failed", "canceled"])
+def test_wake_that_never_reached_the_bot_is_repeated_not_quieted(followups, state):
+    """A notice whose job ended without the bot getting it (failed once its pre-start retries ran out, or canceled) is no
+    quiet repeat: after the repair moves the due time, the next due pass wakes the bot again instead of backing off."""
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]  # the first wake is sent
+        c.execute("UPDATE jobs SET state=? WHERE message_id IN (SELECT message_id FROM task_check_back_wakes WHERE task_id=?)",
+                  (state, row["id"]))  # its job ends without the bot ever getting it
+        assert CB.sweep(c)["repaired"] == [row["id"]]  # the same due time, already sent: the keeper moves it on
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]  # the bot never received it, so the next pass wakes it again
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='check_back_quiet'", (row["id"],)).fetchone()[0] == 0
+        assert len(wakes(c, row["id"])) == 2
+
+
+def test_parent_carrying_an_unread_child_result_is_repaired_and_escalated_not_quieted(followups, monkeypatch):
+    """An active parent owned by bot:ops carries a child result: the child is requested by bot:ops and done by another
+    owner, so its check is routed to the parent. Each routed wake's turn ends without the child closed or reopened. The
+    parent is repaired every pass and escalated once by the stall gate, never quieted."""
+    routed = []
+    monkeypatch.setattr(H, "_no_diagnosis", lambda *a: None)
+    monkeypatch.setattr(H, "_escalate_stuck", lambda c, row, count: routed.append(row["id"]))
+    with followups.app.state.store.transaction() as c:
+        parent = H.task_create(c, "human:ana", "Plan the rename", "Decide the rename plan.", "bot:ops", lint=False)
+        child = H.task_create(c, "bot:ops", "Check the returned result", "Read and dispose.", "bot:finance", lint=False)
+        c.execute("INSERT INTO task_relations VALUES(?,?,'parent','human:ana',?)", (child["id"], parent["id"], H.now()))
+        H.task_update(c, "bot:finance", child["id"], status="done")  # the routed check moves onto the parent
+        assert H.task(c, child["id"])["check_back_at"] is None and H.task(c, parent["id"])["check_back_at"]
+        for n in range(H.STALL_WAKES_PER_DAY):
+            due(c, H.task(c, parent["id"]))
+            assert CB.sweep(c)["woke"] == [parent["id"]]  # first wake, then one per pass: never quieted
+            handled(c, parent["id"])
+            CB.finished_turn(c, f"attempt-{n}", "ops", parent["id"])  # read the result; the child stays done
+            assert CB._repairs(c, H.task(c, parent["id"]))[0] == n + 1
+        due(c, H.task(c, parent["id"]))
+        assert CB.sweep(c)["woke"] == [] and routed == [parent["id"]]  # the stall gate escalates the parent once
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='check_back_quiet'", (parent["id"],)).fetchone()[0] == 0
+        assert len(wakes(c, parent["id"])) == H.STALL_WAKES_PER_DAY
+        assert H.task(c, child["id"])["status"] == "done"
