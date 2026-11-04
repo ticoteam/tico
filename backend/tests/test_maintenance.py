@@ -285,9 +285,12 @@ def test_collect_counts_a_bot_only_when_a_settled_turn_wrote_something(api):
     during = "2026-11-03T12:30:00.000000Z"
     with store.transaction() as c:
         c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,did_nothing,outcome,state) "
-                  "VALUES('att-quiet','quiet',?,?,1,'nothing_to_do','done')", (during, during))
+                  "VALUES('att-quiet','quiet',?,?,1,'nothing_to_do','completed')", (during, during))
         c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,did_nothing,outcome,state) "
-                  "VALUES('att-busy','busy',?,?,0,'acted','done')", (during, during))
+                  "VALUES('att-busy','busy',?,?,0,'acted','completed')", (during, during))
+        # a failed attempt does not count, even with a write
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,did_nothing,outcome,state) "
+                  "VALUES('att-failed','broken',?,?,0,'acted','failed')", (during, during))
         c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed_at,files,runner_id,reported_at) "
                   "VALUES('quiet','abc123','memory','quiet',?,'[]','runner',?)", (during, during))
         c.execute("INSERT INTO messages(id,sender_id,kind,body,created_at) "

@@ -263,7 +263,8 @@ def test_the_dream_step_runs_once_a_day_on_its_own_clock(api):
     remember(api, "ops", 10)
     with settings(store, test_identities={}):
         first, _ = M.run_now(store, auth, "human:ana", step="dream", wait=True)
-        second, _ = M.run_now(store, auth, "human:ana", step="dream", wait=True)
+        # A plain Run now keeps the due rule. A step-only one runs the step whether or not it is due.
+        second, _ = M.run_now(store, auth, "human:ana", wait=True)
     assert steps_by_key(first)["dream"]["status"] == "ran" and len(dream_rows(api, "ops")) == 1
     assert steps_by_key(second)["dream"]["status"] == "skipped"
     assert steps_by_key(second)["dream"]["reason"] == "not due"

@@ -18,8 +18,10 @@ WAKES_PER_TASK_DAY = 3
 WAKES_PER_HOUR = 50
 BOT_ACTION = "maintenance.wake"
 TASK_ACTION = "maintenance.wake.task"
-COUNT_TARGET = "SELECT count(*) FROM events WHERE actor=? AND action=? AND target=? AND created_at>=?"
-COUNT_FLEET = "SELECT count(*) FROM events WHERE actor=? AND action=? AND created_at>=?"
+# INDEXED BY pins events_task_origin, as backend/batch.py does: the planner otherwise takes events_action_ts.
+COUNT_TARGET = ("SELECT count(*) FROM events INDEXED BY events_task_origin "
+                "WHERE actor=? AND action=? AND target=? AND created_at>=?")
+COUNT_FLEET = "SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action=? AND created_at>=?"
 
 
 def _count(c, action, target, since):

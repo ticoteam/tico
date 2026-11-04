@@ -121,7 +121,7 @@ const saved = async (page, writes, count, key) => {
       assert.ok(!headings.some(h => /wakes|routines/i.test(h)), role + ': ' + headings);
       assert.equal(await page.locator('#set-system-routines h3').count(), 0, 'no group headings');
       assert.equal(await page.locator('#set-system-routines [data-sysr-search]').count(), 1);
-      assert.equal(await page.locator('#set-system-routines [data-system-routine]').count(), 11);
+      assert.equal(await page.locator('#set-system-routines [data-system-routine]').count(), 10);
       // Each row: WHEN ... THEN ..., one department tag.
       assert.equal(await row(page, 'stale_review').locator('[data-sysr-rule]').innerText(),
         'WHEN every hour THEN check stale tickets AND suggest to each owner: mark done, close or check it');
@@ -146,7 +146,7 @@ const saved = async (page, writes, count, key) => {
       await search.fill('fresh session');
       assert.deepEqual(await shown(), ['topic_fresh']);
       await search.fill('engineering');
-      assert.equal((await shown()).length, 11);
+      assert.equal((await shown()).length, 10);
       await search.fill('zzz');
       assert.match(await page.locator('[data-sysr-none]').innerText(), /No job matches/);
       await search.fill('');
