@@ -3049,7 +3049,7 @@ def parser():
     s = appr.add_parser("read-back", help="the Assistant: list in the person's chat the approvals it will approve")
     s.add_argument("ids", nargs="+")
     s.add_argument("--note", metavar="TEXT", default="",
-                   help="one or two lines shown above the list: the real decision you found, with its link")
+                   help="one plain line shown above the list: the real decision you found, by name")
     s.set_defaults(fn="approval read-back")
     s = appr.add_parser("approve", help="approve an approval addressed to you")
     s.add_argument("id")

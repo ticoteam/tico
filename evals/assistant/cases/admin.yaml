@@ -420,13 +420,17 @@
           - {id: mtg_tue_sync_1103, title: "Tuesday sync", started: "2026-11-03T16:00:00Z", participants: ["Dana Reyes", "Priya Shah", "Marco Lin"], review: "pending"}
         next_offset: null
     - match: '^meeting read mtg_tue_sync_1103'
-      out:
-        id: mtg_tue_sync_1103
-        title: "Tuesday sync"
-        action_items:
-          - {owner: "Priya Shah", text: "Send the revised Harbor Co pricing sheet to Dana by Friday"}
-          - {owner: "Marco Lin", text: "Book the Harbor Co call for next week"}
-        transcript_excerpt: "Dana: Harbor wants the annual price with the multi-seat discount. Priya: I'll send the revised sheet by Friday. Marco: I'll book the call."
+      exit: 1
+      out: {error: {code: not_found, message: "No meeting mtg_tue_sync_1103 you can read: a Pending meeting is read in `hub meeting pending` until it is shared"}}
+      after:
+        - when: '^meeting approve mtg_tue_sync_1103\b'
+          out:
+            id: mtg_tue_sync_1103
+            title: "Tuesday sync"
+            action_items:
+              - {owner: "Priya Shah", text: "Send the revised Harbor Co pricing sheet to Dana by Friday"}
+              - {owner: "Marco Lin", text: "Book the Harbor Co call for next week"}
+            transcript_excerpt: "Dana: Harbor wants the annual price with the multi-seat discount. Priya: I'll send the revised sheet by Friday. Marco: I'll book the call."
     - match: '^meeting approve mtg_tue_sync_1103\b'
       out: {ok: true, id: mtg_tue_sync_1103, review: "shared", shared_with: "team"}
     - match: '^task create\b'

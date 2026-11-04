@@ -971,7 +971,7 @@ class AssistantSettings(Contract):
 class AssistantReadBack(Contract):
     """The approvals the Assistant is about to approve for the person, read back in their chat first."""
     approvals: Annotated[list[Annotated[str, Field(min_length=1, max_length=64)]], Field(min_length=1, max_length=100)]
-    note: Annotated[str, Field(max_length=400)] = ""
+    note: Annotated[str, Field(max_length=300)] = ""
 
 
 class ApprovalConsume(Contract):

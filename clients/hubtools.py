@@ -5349,7 +5349,7 @@ def approval_approve(api, args):
       "approvals you are about to approve, as your reply, then end the turn. The server writes the whole message from "
       "the approvals; only the ones listed may then be approved, on the person's plain yes to it.",
       {"ids": {"type": "array", "items": {"type": "string"}, "description": "The approval ids, up to 100"},
-       "note": _s("Optional, one or two lines shown above the list: the real decision you found, with its link")},
+       "note": _s("Optional, one plain line shown above the list: the real decision you found, by name")},
       required=("ids",), writes=True)
 def approval_read_back(api, args):
     return api.post("assistant/read-back", {"approvals": args["ids"], "note": args.get("note") or ""}, key=_key(args))

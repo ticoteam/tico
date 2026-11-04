@@ -655,8 +655,11 @@ def test_a_read_back_note_shows_above_the_list_and_approves_nothing_more(api):
     assert back["text"].startswith(note + "\n\nI'll approve these 3 for you:\n- Approve the publish")
     assert back["text"].endswith("Reply yes to approve exactly these; any other reply approves nothing.")
     assert back["approves"] == q["old"]
-    # A note is at most 400 characters: a longer one is refused before anything is posted.
-    post(api, "assistant/read-back", {"approvals": q["old"], "note": "x" * 401}, token=token, expected=422)
+    # A note is one plain line: its line breaks and runs of spaces read as one space.
+    again = post(api, "assistant/read-back", {"approvals": q["old"], "note": "One real decision:\n\n  the merge."}, token=token)
+    assert again["text"].startswith("One real decision: the merge.\n\nI'll approve these 3 for you:")
+    # A note is at most 300 characters: a longer one is refused before anything is posted.
+    post(api, "assistant/read-back", {"approvals": q["old"], "note": "x" * 301}, token=token, expected=422)
 
 
 def test_words_in_a_message_or_file_never_approve_only_the_persons_own(api):

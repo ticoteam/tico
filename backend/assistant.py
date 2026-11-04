@@ -1626,8 +1626,9 @@ def install(app, store, auth, mutate, onboarding):
             text = (f"I'll approve {'this' if n == 1 else f'these {n}'} for you:\n" + "\n".join(lines)
                     + "\n\nReply yes to approve exactly " + ("this" if n == 1 else "these")
                     + "; any other reply approves nothing.")
-            # The note is the Assistant's own words above the list; the list and the yes below it are unchanged.
-            if note := body.note.strip():
+            # The note is the Assistant's own words, one plain line above the list; the list and the yes line the server
+            # writes stay below it and last, so the note can never be read as part of what the yes approves.
+            if note := " ".join(body.note.split()):
                 text = note + "\n\n" + text
             # The reply to the person's message: the turn's closing text is not posted after it (backend/execution.py),
             # so their next message answers this list and nothing else.

@@ -350,7 +350,7 @@ def answer(argv, via, tool=None):
     row = next((r for r in canned if re.search(r["match"], canon)), None)
     ids = known_ids(canned, state)
     # A canned row that fails (exit non-zero) changes nothing in the state, and a dry run changes nothing either.
-    failed = bool(row and int(row.get("exit", 0)))
+    failed = bool(row and int(row.get("exit", 0)) and not (row.get("after") and after_for(row["after"], state.get("writes", [])) is not None))
     mutate = not failed and "--dry-run" not in argv
     resp = write_answer(words, state, mutate=mutate, argv=argv, ids=ids)
     if mutate and len(words) > 1 and words[1] not in READ_VERBS:
@@ -419,7 +419,8 @@ def answer(argv, via, tool=None):
             if verb in WRITE_VERBS and len(words) > 2 and not words[2].startswith("-"):
                 reply["id"] = words[2]
             text = json.dumps(reply)
-    code = int(row.get("exit", 0)) if row else 0
+    # An `after` output is the row after the write it names, so it succeeds even when the row fails before that write.
+    code = int(row.get("exit", 0)) if row and after_out is None else 0
     entry.update({"exit": code, "out": text[:200]})
     with open(os.environ["EVAL_LOG"], "a") as log:
         log.write(json.dumps(entry) + "\n")
