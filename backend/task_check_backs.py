@@ -346,7 +346,7 @@ def _computer_out(c, bot, at):
     bot with no assigned computer is not gated."""
     from . import cloud_machines, start_places
     H = _H()
-    place = c.execute("SELECT r.id,r.last_seen_at FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?",
+    place = c.execute("SELECT r.id,r.last_seen_at FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?",
                       (bot,)).fetchone()
     if not place:
         return False

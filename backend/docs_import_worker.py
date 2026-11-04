@@ -10,7 +10,10 @@ import resource
 import sys
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).resolve().parent))  # docs_import is standard library only
+if not __package__:
+    # Run as a script (`python -I`): docs_import, standard library only, sits beside it. Imported as backend.docs_import_worker
+    # (tests), the path stays as it was: backend/ on it would shadow top-level packages such as `connectors`.
+    sys.path.append(str(Path(__file__).resolve().parent))
 
 
 def _limit_memory(limit_bytes):
@@ -23,7 +26,10 @@ def convert(work):
     root = Path(work)
     request = json.loads((root / "request.json").read_text())
     _limit_memory(request["memory_bytes"])
-    import docs_import
+    if __package__:
+        from . import docs_import
+    else:
+        import docs_import
     try:
         text, guess = docs_import.to_markdown(request["filename"], (root / "input").read_bytes())
     except ValueError as exc:

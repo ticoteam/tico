@@ -503,12 +503,12 @@ def test_sleeping_computer_takes_no_notices_and_each_task_wakes_once_it_returns(
     with followups.app.state.store.transaction() as c:
         rows = [due(c, H.task_create(c, "human:ana", "Inspect sleeping result " + str(i), "x", "bot:ops", lint=False))
                 for i in range(3)]
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.shift(H.now(), minutes=-10), r["runner_id"]))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.shift(H.now(), minutes=-10), r["runner_id"]))
         for _ in range(3):
             assert CB.sweep(c)["woke"] == []
         assert all(not wakes(c, row["id"]) for row in rows)
         assert CB.view(H.task(c, rows[0]["id"]), c)["delivery"] == "computer_unavailable"
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.now(), r["runner_id"]))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), r["runner_id"]))
         assert sorted(CB.sweep(c)["woke"]) == sorted(row["id"] for row in rows)
         assert CB.sweep(c)["woke"] == []
         assert all(len(wakes(c, row["id"])) == 1 for row in rows)
@@ -523,7 +523,7 @@ def test_idle_reachable_bot_is_woken_a_bounded_number_of_times(followups, monkey
         row = due(c, task(c))
         woke, at = [], H.now()
         for _ in range(24 * 6):  # a day of sweeps every ten minutes; every notice is handled without a next time
-            c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (at, r["runner_id"]))
+            c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (at, r["runner_id"]))
             if CB.sweep(c, at)["woke"]:
                 woke.append(at)
             handled(c, row["id"])
@@ -553,7 +553,7 @@ def test_a_stopped_cloud_machine_is_started_by_one_followup_and_gets_no_more(clo
     assert cloud.row()["state"] == "stopped"
     with store.transaction() as c:
         runner_id = CM.row(c, "ops")["runner_id"]
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.shift(H.now(), minutes=-10), runner_id))  # asleep
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.shift(H.now(), minutes=-10), runner_id))  # asleep
         row = due(c, H.task_create(c, "human:ana", "Inspect the cloud result", "x", "bot:ops", lint=False))
         assert CB.sweep(c)["woke"] == [row["id"]]
         [wake] = wakes(c, row["id"])
@@ -592,7 +592,7 @@ def test_moved_due_time_replaces_the_stale_notice_on_a_stopped_cloud_machine(clo
     assert cloud.row()["state"] == "stopped"
     with store.transaction() as c:
         runner_id = CM.row(c, "ops")["runner_id"]
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.shift(H.now(), minutes=-10), runner_id))  # asleep
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.shift(H.now(), minutes=-10), runner_id))  # asleep
         row = due(c, H.task_create(c, "human:ana", "Inspect the moved cloud result", "x", "bot:ops", lint=False))
         assert CB.sweep(c)["woke"] == [row["id"]]
         [first] = wakes(c, row["id"])
@@ -638,7 +638,7 @@ def test_memory_hold_gates_a_followup_even_when_the_computer_is_also_overloaded(
          {"samples": [point(now - 300 + i * 60, cpu=cpu, mem=mem) for i in range(6)]}, r["token"])
     with followups.app.state.store.transaction() as c:
         assert load_status(c, r["runner_id"])["overloaded"]  # the premise: the generic reason is the one that wins
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.now(), r["runner_id"]))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), r["runner_id"]))
         row = due(c, task(c))
         assert CB.sweep(c)["woke"] == ([] if gated else [row["id"]])
         if gated:
