@@ -1,6 +1,7 @@
-"""A notice that news has overtaken is dropped at claim, not run (backend/execution.obsolete_notices_sql): a status
-check of a quiet task its owner has acted on since, and a pull request's checks result for a head the pull request
-has moved past, and a step's late warning for a ticket that has left the step. A notice that is still news runs."""
+"""A notice that news has overtaken is dropped at claim, not run (backend/execution.obsolete_notices_sql): a legacy per-task
+check (check_back, step_status) still queued unstarted, which the task roundup lists instead, and a pull request's checks
+result for a head the pull request has moved past, and a step's late warning for a ticket that has left the step. A
+legacy check whose turn already started is the rest of that turn, so it runs. A notice that is still news runs."""
 import json
 
 from backend.store import H
@@ -27,7 +28,7 @@ def queued(c, message):
     return c.execute("SELECT state FROM jobs WHERE message_id=?", (message["id"],)).fetchone()[0]
 
 
-def test_a_status_check_the_owner_has_acted_on_since_is_dropped(api):
+def test_a_legacy_status_check_is_dropped_at_claim_whether_or_not_its_task_was_touched(api):
     r = fleet(api)
     with api.app.state.store.transaction() as c:
         row, other = task(c), task(c, "Fix the login")
@@ -40,7 +41,8 @@ def test_a_status_check_the_owner_has_acted_on_since_is_dropped(api):
     handed = [claim(api, r), claim(api, r)]
     with api.app.state.store.read() as c:
         assert queued(c, quiet) == "canceled"
-    assert [a["job_id"] for a in handed if a] == [job(api, kept)], "a task nobody touched still gets its check"
+        assert queued(c, kept) == "canceled", "a legacy check is obsolete whatever its task says: the task roundup lists it"
+    assert not [a for a in handed if a]
 
 
 def test_checks_news_for_a_head_the_pull_request_moved_past_is_dropped(api):
@@ -124,3 +126,26 @@ def test_a_review_gate_refusal_is_dropped_once_the_ticket_has_moved(api):
     with api.app.state.store.read() as c:
         assert queued(c, old) == "canceled"
         assert queued(c, kept) != "canceled", "a ticket still held keeps the refusal"
+
+
+def test_a_legacy_check_whose_turn_already_started_is_kept_to_finish_it(api):
+    r = fleet(api)
+    with api.app.state.store.transaction() as c:
+        under_way, unstarted = task(c), task(c, "Fix the login")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")         # the new-task notices are not this test
+        started = H._wake(c, under_way, "bot:ops", "Status check: no activity for 2 h.", {"wake": "step_status"},
+                          trigger="stall_check")
+        late = H._wake(c, unstarted, "bot:ops", "Status check: no activity for 2 h.", {"wake": "step_status"},
+                       trigger="stall_check")
+        # The first run of the started job's turn ended and yielded: its attempt started, and the job waits to continue it.
+        job_id = c.execute("SELECT id FROM jobs WHERE message_id=?", (started["id"],)).fetchone()[0]
+        runner_id = c.execute("SELECT id FROM runners LIMIT 1").fetchone()[0]
+        now = H.now()
+        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,started_at) "
+                  "VALUES('attempt-under-way',?,'ops',?,1,'hash-under-way','running',?,?,?)",
+                  (job_id, runner_id, H.shift(now, minutes=30), now, now))
+        c.execute("UPDATE jobs SET attempt_id='attempt-under-way', state='queued' WHERE id=?", (job_id,))
+    claim(api, r)
+    with api.app.state.store.read() as c:
+        assert queued(c, late) == "canceled"
+        assert queued(c, started) != "canceled", "a turn that started and yielded is the rest of its turn, not a stale check"

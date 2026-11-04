@@ -19,7 +19,7 @@ from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
 from backend.tests.test_stale_review import FakeDecide
 
 TIMED = {"stale_review", "still_wanted", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
-         "engineering_exceptions", "bookkeeper_check", "memory_tidy", "auto_dream", "daily_task_check"}   # the jobs with a schedule preset
+         "engineering_exceptions", "bookkeeper_check", "memory_tidy", "auto_dream", "task_roundup"}   # the jobs with a schedule preset
 
 
 def rows(api, token="ana-test"):
@@ -133,39 +133,45 @@ def test_daily_at_a_time_runs_once_a_day_after_that_time():
         datetime(2026, 10, 23, 9, 0, tzinfo=pt)
 
 
-def test_a_daily_utc_job_never_run_is_next_at_1400_utc_not_now():
-    cfg = {"on": True, "preset": SR.DAILY_UTC, "at": "14:00"}
-    assert SR.next_due(cfg, None, datetime(2026, 11, 3, 10, tzinfo=timezone.utc)) == \
-        datetime(2026, 11, 3, 14, tzinfo=timezone.utc)
-    assert SR.next_due(cfg, None, datetime(2026, 11, 3, 15, tzinfo=timezone.utc)) == \
-        datetime(2026, 11, 4, 14, tzinfo=timezone.utc)
+def test_the_task_roundup_never_run_is_next_at_its_next_company_time_not_now():
+    # Three times a day, at 6am, noon and 6pm company time (Pacific: PST on 3 November 2026, UTC-8).
+    cfg = {"on": True, "preset": SR.THREE_DAILY, "at": "06:00"}
+    pt = SR.zone()
+    assert SR.next_due(cfg, None, datetime(2026, 11, 3, 3, tzinfo=pt)) == datetime(2026, 11, 3, 6, tzinfo=pt)
+    assert SR.next_due(cfg, None, datetime(2026, 11, 3, 7, tzinfo=pt)) == datetime(2026, 11, 3, 12, tzinfo=pt)
+    assert SR.next_due(cfg, None, datetime(2026, 11, 3, 19, tzinfo=pt)) == datetime(2026, 11, 4, 6, tzinfo=pt)
+    assert SR.next_due(cfg, None, datetime(2026, 11, 3, 6, tzinfo=pt)) == datetime(2026, 11, 3, 12, tzinfo=pt)
 
 
-def test_the_daily_task_check_first_runs_at_1400_utc_after_a_deploy_not_at_once(api, monkeypatch):
-    from backend import daily_task_check
+def test_the_task_roundup_first_runs_at_its_next_company_time_after_a_deploy_not_at_once(api, monkeypatch):
+    from backend import task_roundup
     sent = []
-    monkeypatch.setattr(daily_task_check, "discover", lambda c, at: sent.append(at) or [])   # one call per daily run
+    monkeypatch.setattr(task_roundup, "discover", lambda c, at: sent.append(at) or [])   # one call per run
+    pt = SR.zone()
     # One process: the wait for the first run starts at its first tick.
     scheduler = Scheduler(api.app.state.store, api.app.state.execution)
-    scheduler.tick(datetime(2026, 11, 3, 10, tzinfo=timezone.utc))
-    scheduler.tick(datetime(2026, 11, 3, 13, 59, tzinfo=timezone.utc))
-    assert sent == [], "a deploy at 10:00 UTC does not send every bot its list at once"
-    scheduler.tick(datetime(2026, 11, 3, 14, 0, 5, tzinfo=timezone.utc))
+    scheduler.tick(datetime(2026, 11, 3, 2, tzinfo=pt))
+    scheduler.tick(datetime(2026, 11, 3, 5, 59, tzinfo=pt))
+    assert sent == [], "a deploy at 2am company time does not send every bot its list at once"
+    scheduler.tick(datetime(2026, 11, 3, 6, 0, 5, tzinfo=pt))
     assert len(sent) == 1
-    scheduler.tick(datetime(2026, 11, 3, 20, tzinfo=timezone.utc))
-    assert len(sent) == 1, "once a day"
-    scheduler.tick(datetime(2026, 11, 4, 14, 0, 5, tzinfo=timezone.utc))
+    scheduler.tick(datetime(2026, 11, 3, 9, tzinfo=pt))
+    assert len(sent) == 1, "no second run before noon"
+    scheduler.tick(datetime(2026, 11, 3, 12, 0, 5, tzinfo=pt))
     assert len(sent) == 2
+    scheduler.tick(datetime(2026, 11, 3, 18, 0, 5, tzinfo=pt))
+    assert len(sent) == 3
 
 
-def test_the_daily_task_check_deployed_after_1400_utc_waits_for_the_next_one(api, monkeypatch):
-    from backend import daily_task_check
+def test_the_task_roundup_deployed_after_a_company_time_waits_for_the_next_one(api, monkeypatch):
+    from backend import task_roundup
     sent = []
-    monkeypatch.setattr(daily_task_check, "discover", lambda c, at: sent.append(at) or [])   # one call per daily run
+    monkeypatch.setattr(task_roundup, "discover", lambda c, at: sent.append(at) or [])   # one call per run
+    pt = SR.zone()
     scheduler = Scheduler(api.app.state.store, api.app.state.execution)
-    scheduler.tick(datetime(2026, 11, 3, 15, tzinfo=timezone.utc))
+    scheduler.tick(datetime(2026, 11, 3, 7, tzinfo=pt))
     assert sent == []
-    scheduler.tick(datetime(2026, 11, 4, 14, 0, 5, tzinfo=timezone.utc))
+    scheduler.tick(datetime(2026, 11, 3, 12, 0, 5, tzinfo=pt))
     assert len(sent) == 1
 
 

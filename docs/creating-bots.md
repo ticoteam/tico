@@ -660,7 +660,7 @@ Levers set in **Settings → Bots**, not in the repository:
   Lead hears the same news once a day, at the hour in **Digest at**. A bot that was on **Token saver** is a Doer with a 30-minute
   window (2 hours between sweeps); **Performance** became the plain Doer. In every profile, a person's message, a question,
   an approval and a gate verdict wake the bot at once, and only once when the same event repeats before its run is over.
-  Bots with sweeps on get their quiet tasks in one daily task check a UTC day, not one wake each.
+  Bots with sweeps on get their quiet tasks in one task roundup per run (three times a day by default, 6am, noon and 6pm company time), not one wake each.
   **Custom** adds **Pulls**, **Takes** and **Sweeps**, and copies the profile's rows into the bot's **What wakes**
   automation to edit; choosing a named profile again deletes them after a confirm that
   says how many. A profile turns on no routine, hook, subscription or permission, and leaves

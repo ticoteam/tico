@@ -149,8 +149,8 @@ ACTIONS = {
                          ("turn", "start", "dead", "stuck", "free", "busy")),
     "turns_finding": ("keep one Health finding per busy-turns incident and hand what it cannot fix to BotOps",
                       ("health", "turns", "incident", "botops", "busy")),
-    "wake_daily_tasks": ("send each bot one list, once a day, of its tasks with an update it may have missed or gone quiet",
-                         ("tasks", "daily", "wake", "missed", "quiet", "update")),
+    "send_task_roundup": ("send each bot one list of its tasks with an update it may have missed or gone quiet",
+                         ("tasks", "roundup", "wake", "missed", "quiet", "update")),
     "nudge_asks": ("nudge a person once in their thread when a bot's ask to them stays unanswered for a day",
                    ("ask", "follow up", "nudge", "remind", "thread", "unanswered")),
     "wake_digest_bots": ("start one run for each bot with new messages in the threads it follows on digest",
@@ -272,18 +272,18 @@ JOBS = [
     Job("stall_checks", "Stall checks",
         "Every minute: asks for a status on long-running Dev work, nudges an owner after an idle turn, reports backlogs, "
         "allocates waiting tickets, closes timed-out checks, and drops queued work its bot can no longer read. It does not "
-        "wake a bot about one stalled task: the daily task check does that.",
+        "wake a bot about one stalled task: the task roundup does that.",
         HOUSEKEEPING, "Every minute", 60, then=("drop_unreadable",)),
-    Job("daily_task_check", "Daily task check",
-        "Once a day, sends each bot one list of its tasks that have an update it may have missed or have gone quiet. "
+    Job("task_roundup", "Task roundup",
+        "Sends each bot one list of its tasks that have an update it may have missed or have gone quiet. "
         "Plain code: no model is called, and nothing to list is a quiet run.",
-        HOUSEKEEPING, "Daily at 14:00 UTC", 86400, control=True, then=("wake_daily_tasks",)),
+        HOUSEKEEPING, "Three times a day (6am, noon, 6pm company time)", 21600, control=True, then=("send_task_roundup",)),
     Job("turn_fixer", "Turn fixer",
         "Frees turns proven dead, keeps one Health finding per busy-turns incident and hands what it cannot fix to "
         "BotOps.", HOUSEKEEPING, "Every 10 seconds", 10, then=("free_dead_starts", "turns_finding")),
     Job("waiting_checks", "Waiting checks",
         "Turns a bot's plain ask to a person into a small task. It no longer sends a waiting task back to work; a "
-        "waiting task that waits on nothing is listed on the daily task check after a day.",
+        "waiting task that waits on nothing is listed on the task roundup after a day.",
         HOUSEKEEPING, "Hourly", 3600, then=("ask_to_task",)),
     Job("snooze_ends", "Snooze ends",
         "Brings snoozed tasks back when their date comes and starts deferred runs that are due.",
@@ -351,13 +351,17 @@ BY_KEY = {job.key: job for job in JOBS}
 
 
 # ----------------------------------------------------------------------------- what a person may change
-FIFTEEN, HOURLY, FOUR_HOURS, DAILY, BUSINESS, WEEKLY, DAILY_UTC = ("15m", "hourly", "4h", "daily", "business", "weekly",
-                                                                  "daily_utc")
+FIFTEEN, HOURLY, FOUR_HOURS, DAILY, BUSINESS, WEEKLY, THREE_DAILY = ("15m", "hourly", "4h", "daily", "business", "weekly",
+                                                                  "three_daily")
 PRESETS = {FIFTEEN: ("Every 15 minutes", 900), HOURLY: ("Hourly", 3600), FOUR_HOURS: ("Every 4 hours", 4 * 3600),
            DAILY: ("Daily at {at}", None), BUSINESS: ("Hourly on weekdays, 08:00 to 18:00", 3600),
-           WEEKLY: ("Weekly", 7 * 86400), DAILY_UTC: ("Daily at {at} UTC", None)}
+           WEEKLY: ("Weekly", 7 * 86400), THREE_DAILY: ("Three times a day (6am, noon, 6pm company time)", None)}
 BUSINESS_HOURS = (clock(8), clock(18))      # company time (updates.ZONE), Monday to Friday
 EVERY_PRESET = (FIFTEEN, HOURLY, FOUR_HOURS, DAILY)
+# The company-time times of a preset that runs more than once a day: a run is due at each of them (occurrence).
+RUN_TIMES = {THREE_DAILY: ((6, 0), (12, 0), (18, 0))}
+# A never-run job on one of these waits for its next time after the scheduler first sees it on, not a run at once.
+WAITS_FOR_ANCHOR = (THREE_DAILY,)
 AI_PRESETS = (HOURLY, FOUR_HOURS, DAILY)        # a job that asks Decide is never offered every 15 minutes
 CONFIG_KEY = "system_routines"
 AT_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
@@ -391,15 +395,16 @@ CONTROLS = {
     "bookkeeper_check": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     "topic_fresh": Control(rule="topic_fresh"),
     "stall_triage": Control(rule="stall_triage"),
-    # Once a day at a UTC time, not company time: one list to each bot (backend/daily_task_check.py).
-    "daily_task_check": Control(presets=(DAILY_UTC,), preset=DAILY_UTC, at="14:00"),
+    # Three times a day in company time (6am, noon, 6pm; the time applies to Daily only): one list to each bot per run
+    # (backend/task_roundup.py).
+    "task_roundup": Control(presets=(THREE_DAILY, DAILY), preset=THREE_DAILY, at="06:00"),
 }
 
 
 QUICK_KEYS = ("still_wanted", "kpi_asks", "health_scan", "ask_deadlines", "task_manager_report",
               "engineering_exceptions", "bookkeeper_check", "bookkeeper_watch",
               "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention",
-              "daily_task_check")   # last runs read by backend/scheduler.py (QUICK and FIXED)
+              "task_roundup")   # last runs read by backend/scheduler.py (QUICK and FIXED)
 
 
 def zone():
@@ -500,12 +505,28 @@ def save_config(c, actor, key, on=None, preset=None, at=None):
 
 
 # ----------------------------------------------------------------------------- when a job is due
-def _occurrence(cfg, at):
-    """The latest HH:MM (company time) at or before `at`."""
+def _times(cfg):
+    """The company-time (hour, minute) pairs a job runs at: its preset's (RUN_TIMES), else its own "at"."""
+    if cfg.get("preset") in RUN_TIMES:
+        return RUN_TIMES[cfg["preset"]]
     hour, minute = (int(x) for x in (cfg.get("at") or "00:00").split(":"))
-    local = at.astimezone(timezone.utc if cfg.get("preset") == DAILY_UTC else zone())
-    point = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    return point if point <= local else point - timedelta(days=1)
+    return ((hour, minute),)
+
+
+def occurrence(cfg, at):
+    """The latest run time at or before `at`, in company time."""
+    local = at.astimezone(zone())
+    points = [datetime.combine(local.date() + timedelta(days=day), clock(hour, minute), zone())
+              for day in (-1, 0) for hour, minute in _times(cfg)]
+    return max(point for point in points if point <= local)
+
+
+def next_anchor(cfg, at):
+    """The first run time after `at`, in company time."""
+    local = at.astimezone(zone())
+    points = [datetime.combine(local.date() + timedelta(days=day), clock(hour, minute), zone())
+              for day in (0, 1) for hour, minute in _times(cfg)]
+    return min(point for point in points if point > local)
 
 
 def in_business_hours(at):
@@ -533,7 +554,7 @@ def due(cfg, at, last):
         return False
     if every:
         return last is None or at - last >= timedelta(seconds=every)
-    return last is None or last < _occurrence(cfg, at)
+    return last is None or last < occurrence(cfg, at)
 
 
 def next_due(cfg, last, now):
@@ -543,12 +564,12 @@ def next_due(cfg, last, now):
         return business_open(max(last + timedelta(seconds=every), now) if last else now)
     if every:
         return max(last + timedelta(seconds=every), now) if last else None
-    if last is None and cfg.get("preset") == DAILY_UTC:
-        # Never run: its first run is the first 14:00 UTC after the scheduler first sees it on (Scheduler.due), not now.
-        return _occurrence(cfg, now) + timedelta(days=1)
+    if last is None and cfg.get("preset") in WAITS_FOR_ANCHOR:
+        # Never run: its first run is its next time after the scheduler first sees it on (Scheduler.due), not now.
+        return next_anchor(cfg, now)
     if due(cfg, now, last):
         return now
-    return _occurrence(cfg, now) + timedelta(days=1)
+    return next_anchor(cfg, now)
 
 
 def last_started(c, keys):

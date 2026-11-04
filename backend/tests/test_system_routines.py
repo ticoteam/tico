@@ -26,11 +26,11 @@ def test_every_built_in_job_is_listed_with_its_group_word_and_control_availabili
     assert {k for k, j in jobs.items() if j["controllable"]} == {
         "stale_review", "still_wanted", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
         "stall_triage", "engineering_exceptions", "bookkeeper_check", "memory_tidy", "auto_dream",
-        "daily_task_check"}
+        "task_roundup"}
     assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "learnings", "stall_triage", "thread_routing", "thread_rank"}
-    # Housekeeping is always on, except the one housekeeping job a person may switch (Daily task check).
+    # Housekeeping is always on, except the one housekeeping job a person may switch (Task roundup).
     assert all(j["needed"] == (j["group"] == "housekeeping" and not j["controllable"]) for j in jobs.values())
-    assert jobs["daily_task_check"]["group"] == "housekeeping" and jobs["daily_task_check"]["needed"] is False
+    assert jobs["task_roundup"]["group"] == "housekeeping" and jobs["task_roundup"]["needed"] is False
     assert jobs["stale_review"]["schedule"] == "Hourly" and jobs["learnings"]["schedule"] == "Nightly at 03:00"
     for key in ("due_reminders", "ask_deadlines", "approval_expiry"):
         assert jobs[key]["group"] == "reminders"

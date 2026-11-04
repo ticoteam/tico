@@ -44,7 +44,7 @@ def _event(c, task_id, actor, field, old, new, note=""):
 
 
 def enabled(c):
-    """Always off. The daily task check (backend/daily_task_check.py) replaced the per-task check-back wakes, so no
+    """Always off. The task roundup (backend/task_roundup.py) replaced the per-task check-back wakes, so no
     appointment wakes a bot. Dates, moves and results are still recorded, and a notice queued before this was is stale."""
     return False
 
@@ -132,6 +132,15 @@ def clear(c, row):
         c.execute("UPDATE tasks SET check_back_at=NULL,check_back_note=NULL WHERE id=?", (row["id"],))
 
 
+def consume(c, task_id, actor):
+    """A follow-up whose time has come was listed on its owner's task roundup (backend/task_roundup.py): it is consumed,
+    so its time is cleared, and the clearing is recorded."""
+    row = _H().task(c, task_id)
+    if row and row.get("check_back_at"):
+        _event(c, task_id, actor, "check_back_at", row["check_back_at"], None, "Listed on the task roundup")
+        clear(c, row)
+
+
 def default_time(c, row, at, stagger=False):
     H = _H()
     from . import quiet_work
@@ -163,6 +172,8 @@ def default_time(c, row, at, stagger=False):
 
 
 def ensure(c, row, at=None):
+    """Clears a follow-up that no longer applies. Tico sets none: a time stays only if a person or a bot set it
+    (check_back_explicit), and nothing writes a default."""
     H = _H()
     if "version" not in row or "check_back_at" not in row:
         return
@@ -179,8 +190,6 @@ def ensure(c, row, at=None):
         if not consumer or parent and parent["status"] in ACTIVE and actor_for(parent) == consumer:
             clear(c, row)
             return
-    if not row.get("check_back_at"):
-        set_time(c, row, default_time(c, row, at), system=True, at=at)
 
 
 def moved(c, row, at=None):

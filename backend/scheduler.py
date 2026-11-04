@@ -189,27 +189,31 @@ def run_thread_retention(store, auth, at, failures=None):
         run.did(SR.words_of(purged, "message", "Nothing past its time"), quiet=not purged)
 
 
-def run_daily_task_check(store, auth, at, failures=None):
-    # Once a day, each active bot gets at most one list of its tasks with a missed update or gone quiet
-    # (backend/daily_task_check.py). Plain code: no model call, and nothing to list is a quiet run. The lists are read in
-    # one read transaction; each bot is then sent in its own short transaction that rechecks the day.
-    from . import daily_task_check
-    with SR.recording(store, "daily_task_check", failures) as run:
+def run_task_roundup(store, auth, at, failures=None):
+    # Three times a day by default (6am, noon and 6pm company time), each active bot gets at most one list of its tasks with
+    # a missed update, gone quiet or a follow-up time that has come (backend/task_roundup.py). Plain code: no model call,
+    # and nothing to list is a quiet run. The run is the schedule's time at or before this tick, and a bot already sent a
+    # list since that time gets no more. The lists are read in one read transaction; each bot is then sent in its own short
+    # transaction, which rebuilds its list from the live database.
+    from . import task_roundup
+    with SR.recording(store, "task_roundup", failures) as run:
         with store.read_transaction() as c:
-            plans = daily_task_check.discover(c, stamp(at))
+            run_at = SR.occurrence(SR.config_of(c, "task_roundup"), at)
+            plans = task_roundup.discover(c, stamp(run_at))
         woke, listed = [], 0
         for plan in plans:
             with store.transaction() as c:
-                if daily_task_check.send(c, plan):
-                    woke.append(plan["slug"])
-                    listed += plan["count"]
+                count = task_roundup.send(c, plan)
+            if count:
+                woke.append(plan["slug"])
+                listed += count
         run.did(SR.words_of({"bots woken": woke, "tasks listed": listed}, none="Nothing to list"), quiet=not woke)
 
 
 QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
          "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report,
          "engineering_exceptions": run_engineering_exceptions, "bookkeeper_check": run_bookkeeper_check,
-         "daily_task_check": run_daily_task_check}
+         "task_roundup": run_task_roundup}
 
 # The Bookkeeper's Watch (daily) and rules digest (weekly): their own cadence, not controlled jobs (CONTROLS has the
 # a person switches). The Bookkeeper's pause is their off switch.
@@ -330,12 +334,12 @@ class Scheduler:
 
     def due(self, key, at, cfgs, last):
         """Whether a controlled job (backend/system_routines.py CONTROLS) runs now: on, and due on its saved preset since
-        its last start. Marked first, so a failing job retries on its preset, not every tick. A daily-UTC job that has
-        never run waits for the first 14:00 UTC after this process first sees it on, so a deploy does not run it
-        at once."""
+        its last start. Marked first, so a failing job retries on its preset, not every tick. A job whose preset waits
+        for its own times (SR.WAITS_FOR_ANCHOR) and has never run waits for its next one after this process first sees it
+        on, so a deploy does not run it at once."""
         cfg = cfgs[key]
         mark = max([t for t in (self.marks.get(key), last.get(key)) if t], default=None)
-        if mark is None and cfg["on"] and cfg.get("preset") == SR.DAILY_UTC:
+        if mark is None and cfg["on"] and cfg.get("preset") in SR.WAITS_FOR_ANCHOR:
             mark = self.marks.setdefault(key, at)
         if not cfg["on"] or not SR.due(cfg, at, mark):
             return False
@@ -789,7 +793,7 @@ class Scheduler:
                 run.did(SR.words_of(ended, "go-live ended", "Nothing to end"), quiet=not ended)
         if self.stall_checked is None or at - self.stall_checked >= timedelta(minutes=1):
             # Every minute: the checks that stay per minute. A stalled task no longer wakes its bot here; the daily
-            # task check does that (backend/daily_task_check.py).
+            # task check does that (backend/task_roundup.py).
             self.stall_checked = at
             with SR.recording(self.store, "stall_checks") as run:
                 # Holds include person and approval waits that deliberately

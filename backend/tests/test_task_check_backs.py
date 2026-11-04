@@ -38,14 +38,14 @@ def handled(c, tid):
               "(SELECT message_id FROM task_check_back_wakes WHERE task_id=?)", (tid,))
 
 
-def test_creation_defaults_human_exclusion_and_assignment_scope(followups):
+def test_creation_sets_no_follow_up_of_its_own_and_human_exclusion_holds(followups):
     bot = post(followups, "tasks", {"owner": "ops", "title": "Inspect", "body": "x"})
-    assert bot["version"] == 1  # the automatic date is part of creation, not a separate edit
-    assert bot["check_back_at"] > H.now() and bot["check_back"]["by"] == "bot:ops"
+    assert bot["version"] == 1
+    assert bot["check_back_at"] is None  # Tico sets no follow-up time of its own: only a person or a bot does
     human = post(followups, "tasks", {"owner": "ana", "title": "Decide", "body": "x"})
     assert human["check_back_at"] is None
     moved = post(followups, "tasks/" + human["id"], {"version": human["version"], "owner": "ops"})
-    assert moved["check_back_at"] > H.now()
+    assert moved["check_back_at"] is None
     moved = post(followups, "tasks/" + moved["id"], {"version": moved["version"], "owner": "ana"})
     assert moved["check_back_at"] is None
 
@@ -66,7 +66,7 @@ def test_api_setter_dates_privacy_and_atomic_validation(followups):
 def test_legacy_date_only_deadline_cannot_break_creation_or_backfill(followups):
     with followups.app.state.store.transaction() as c:
         row = task(c, due="2030-01-01")
-        assert row["due_at"] == "2030-01-01" and row["check_back_at"] > H.now()
+        assert row["due_at"] == "2030-01-01" and row["check_back_at"] is None
         c.execute("UPDATE tasks SET check_back_at=NULL WHERE id=?", (row["id"],))
         assert CB.sweep(c)["repaired"] == [row["id"]]
         assert H.task(c, row["id"])["check_back_at"] < H.shift(H.now(), hours=2)
@@ -178,7 +178,7 @@ def test_closed_and_self_completed_work_do_not_create_consumption_loops(followup
         assert H.task(c, row["id"])["check_back_at"] is None
         assert not CB.sweep(c)["woke"]
         H.task_update(c, "bot:ops", row["id"], status="open", note="Verify the remaining result.")
-        assert H.task(c, row["id"])["check_back_at"] > H.now()
+        assert H.task(c, row["id"])["check_back_at"] is None  # reopening sets no follow-up time
 
 
 def test_private_child_context_withholds_ids_titles_and_status(followups):
@@ -194,8 +194,10 @@ def test_private_child_context_withholds_ids_titles_and_status(followups):
 def test_with_the_gate_off_no_appointment_wakes_a_bot(api):
     with api.app.state.store.transaction() as c:
         row = task(c)
-        assert row["check_back_at"]
         assert not CB.enabled(c)
+        CB.set_time(c, H.task(c, row["id"]), "2h", actor="bot:ops")
+        row = H.task(c, row["id"])
+        assert row["check_back_at"]
         assert H.recorded_wait(c, row) != "check_back"
         due(c, row)
         assert not CB.sweep(c)["woke"]
@@ -214,7 +216,7 @@ def test_reschedule_and_reassignment_make_old_queued_wakes_obsolete(followups):
         assert CB.sweep(c)["repaired"] == [row["id"]]
 
 
-def test_claim_carries_the_followup_and_successful_turn_must_leave_a_next_time(followups):
+def test_an_unstarted_check_back_wake_is_obsolete_at_claim_and_the_roundup_lists_the_task_instead(followups):
     from backend.tests.test_api import assign, claim, ready, runner
     r = runner(followups)
     assign(followups, r, "ops")
@@ -224,26 +226,9 @@ def test_claim_carries_the_followup_and_successful_turn_must_leave_a_next_time(f
         c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")
         CB.sweep(c)
         [wake] = wakes(c, row["id"])
-    attempt = claim(followups, r, "ops")
-    assert attempt, "a check-back must start even when ordinary assignment recovery would hold it"
+    assert claim(followups, r, "ops") is None, "a legacy check-back nobody has started is obsolete, whatever its task says"
     with followups.app.state.store.read() as c:
-        assert c.execute("SELECT 1 FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=? AND j.message_id=?",
-                         (attempt["id"], wake["id"])).fetchone()
-    post(followups, f"attempts/{attempt['id']}/started", {"thread_id": "follow-up-session"}, token=r["token"])
-    with followups.app.state.store.transaction() as c:
-        other = due(c, H.task_create(c, "human:ana", "Inspect the other handoff", "x", "bot:ops", lint=False, next_run=True))
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], other["id"]))
-        CB.sweep(c)
-        [other_wake] = wakes(c, other["id"])
-        c.execute("INSERT INTO attempt_inputs VALUES(?,?,?)", (attempt["id"], other_wake["id"], H.now()))
-    post(followups, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "I inspected the handoff.", "last_seq": 0}, token=r["token"])
-    with followups.app.state.store.read() as c:
-        assert H.task(c, row["id"])["check_back_at"] > H.now()
-        assert c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_back_repair'",
-                  (row["id"],)).fetchone()
-        assert H.task(c, other["id"])["check_back_at"] == other["check_back_at"]
-        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (other_wake["id"],)).fetchone()[0] == "queued"
-        assert not CB.stale(c, H.message(c, other_wake["id"]), "ops")
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (wake["id"],)).fetchone()[0] == "canceled"
 
 
 def test_due_deadline_and_followup_share_one_notice(followups):
@@ -316,24 +301,19 @@ def test_one_bad_task_does_not_rollback_another_followup(followups, monkeypatch)
         assert c.execute("SELECT 1 FROM service_health WHERE service=?", ("background:check_back:" + bad["id"],)).fetchone()
 
 
-def test_deferred_assignment_deadline_and_followup_use_one_job(followups):
+def test_deferred_assignment_fires_at_its_deadline_and_sets_no_follow_up_of_its_own(followups):
     from backend import delivery
     with followups.app.state.store.transaction() as c:
         row = task(c, next_run=True)
         deadline = delivery.defer(c, "ops", "task", row["id"], task_id=row["id"], defer_for="24h")
-        assert H.task(c, row["id"])["check_back_at"] == deadline
-        at = H.shift(deadline, seconds=1)
-        assert CB.sweep(c, at)["woke"] == [row["id"]]
-        [wake] = wakes(c, row["id"])
-        assert c.execute("SELECT fired_job FROM deferrals WHERE task_id=?", (row["id"],)).fetchone()[0] is None
-        assert not delivery.due(c, at)
-        assert len(wakes(c, row["id"])) == 1
+        assert H.task(c, row["id"])["check_back_at"] is None
+        assert delivery.due(c, H.shift(deadline, seconds=1))
 
 
 def test_generic_update_persists_date_only_and_note_only_edits(followups):
     row = post(followups, "tasks", {"owner": "ops", "title": "Inspect the update", "body": "x"})
     updated = post(followups, f"tasks/{row['id']}", {"version": row["version"], "check_back_at": "2h"})
-    assert updated["check_back_at"] > row["check_back_at"]
+    assert updated["check_back_at"] > H.now()
     note = post(followups, f"tasks/{row['id']}", {"version": updated["version"], "check_back_note": "Verify the real assignment."})
     assert note["check_back_note"] == "Verify the real assignment."
     assert note["check_back_at"] == updated["check_back_at"]
@@ -433,18 +413,15 @@ def test_disabling_followups_cancels_queued_obsolete_wakes_on_claim(followups, m
                                  (attempt["id"], wake["id"])).fetchone()
 
 
-def test_deferred_delivery_survives_an_obsolete_checkback(followups):
+def test_deferred_delivery_is_due_at_its_deadline_with_no_follow_up_to_cancel(followups):
     from backend import delivery
     with followups.app.state.store.transaction() as c:
         row = task(c, next_run=True)
         deadline = delivery.defer(c, "ops", "task", row["id"], task_id=row["id"], defer_for="24h")
         at = H.shift(deadline, seconds=1)
-        CB.sweep(c, at)
-        [wake] = wakes(c, row["id"])
-        c.execute("UPDATE jobs SET state='canceled' WHERE message_id=?", (wake["id"],))
         assert delivery.due(c, at)
-        deferred = c.execute("SELECT settled_at,fired_job FROM deferrals WHERE task_id=?", (row["id"],)).fetchone()
-        assert deferred["settled_at"] is None and deferred["fired_job"] != wake["id"]
+        settled = c.execute("SELECT settled_at FROM deferrals WHERE task_id=?", (row["id"],)).fetchone()[0]
+        assert settled is None
 
 
 def test_first_wake_fleet_cap_applies_across_bots(followups, monkeypatch):

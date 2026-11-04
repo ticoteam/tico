@@ -2157,7 +2157,9 @@ def obsolete_notices_sql(c):
     a pull request's checks result for a head no open pull request on the task is at any more (a newer push supersedes it),
     the review gate's comment on a refused move once the ticket has changed step since (Tico made the move, or someone
     moved it elsewhere), and a self-filed task's "New task" notice while the task is parked and its filing turn has ended.
-    A turn that started and yielded (a drain's time limit, a shared login's hold cap) is never one of them: it is the rest
+    The legacy per-task wakes (check_back, status_check, stalled, step_status) still queued unstarted are obsolete whatever
+    the task says: the task roundup sends one list instead. A turn that started and yielded (a drain's time limit, a shared
+    login's hold cap) is never one of them: it is the rest
     of a turn already under way, often the one that finished the task, and canceling it left the bot's status on "queued
     to continue" with nothing queued (Dev 684). The
     idle claim asks the same question: when it counted notices the claim keeps, every claim from that computer went
@@ -2174,9 +2176,10 @@ def obsolete_notices_sql(c):
             "AND EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=t.id "
             "AND e.created_at>m.created_at AND e.kind='step') "
             "OR m.kind='notice' "
-            "AND ((m.ref_wake='check_back' AND ("
+            "AND ((m.ref_wake IN ('check_back','status_check','stalled','step_status') AND NOT EXISTS "
+            "(SELECT 1 FROM attempts ya WHERE ya.id=j.attempt_id AND ya.started_at IS NOT NULL)) OR "
+            f"(m.ref_wake='check_back' AND {'' if check_backs_on else '1=0 AND '}("
             "t.check_back_at IS NOT json_extract(m.refs,'$.check_back_at') OR "
-            f"{'' if check_backs_on else '1=1 OR '}"   # check-backs off (task_check_backs.enabled): their notices are obsolete
             "(t.snoozed_until>?3 AND t.snoozed_by_id LIKE 'human:%') OR t.status='closed' OR "
             "(t.status IN ('done','declined') AND (t.requester_id NOT LIKE 'bot:%' OR t.requester_id=t.owner_id)) OR "
             "m.recipient_id<>CASE WHEN t.status IN ('done','declined') THEN t.requester_id "

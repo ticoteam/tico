@@ -114,8 +114,7 @@ Nothing closes on its own. A task with no activity for 7 days gets one **Still w
 
 ## Spot checks
 
-Tico does not check running work one task at a time. A task with no progress shows in its bot's daily task check, once a
-UTC day. A Dev ticket long at a working step is reported once to its manager.
+Tico does not check running work one task at a time. A task with no progress shows in its bot's task roundup, once per run (three times a day by default). A Dev ticket long at a working step is reported once to its manager.
 
 Human messages still wake the bot as before ([details](hub-sql.md#what-woke-each-run-and-what-it-did)).
 

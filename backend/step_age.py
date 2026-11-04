@@ -13,8 +13,8 @@ The stall watcher (backend/scheduler.py) runs one check on these tickets, at mos
   SEEN_HOURS already knows how it stands: the notice waits until then. A type whose manager reads a stuck ticket on the
   exceptions list gets no notice; that list is the manager's (backend/pipeline_exceptions.py).
 
-Owners are not woken for a quiet or idle ticket here. The daily task check lists it for its owner once a day
-(backend/daily_task_check.py), and a turn that ended with its work standing reaches the manager's exceptions list.
+Owners are not woken for a quiet or idle ticket here. The task roundup lists it for its owner with the other tasks that need a look
+(backend/task_roundup.py), and a turn that ended with its work standing reaches the manager's exceptions list.
 
 Each ticket runs in its own savepoint (batch_work.isolated). One that raises is rolled back alone: its notice and its sent
 marker go with it, the failure is logged, and it is looked at again on the next pass, while the rest of the sweep still runs."""

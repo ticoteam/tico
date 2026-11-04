@@ -1,5 +1,5 @@
 """A Dev ticket long at a working step reaches its type's manager once when it runs late (backend/step_age.py): four hours at
-the step. No owner is woken for a status: the daily task check lists quiet tasks once a day instead. Time away from work
+the step. No owner is woken for a status: the task roundup lists quiet tasks instead. Time away from work
 (waiting) is not counted."""
 
 from backend import step_age as SA

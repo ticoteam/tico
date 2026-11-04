@@ -3,9 +3,9 @@
 JOBS = {
     "assigned_tasks": ("open", 'Start assigned tasks on a free computer, up to each bot\'s "Keep N going".'),
     "stall_checks": ("open", "Every minute: drop queued work the bot can no longer read. Stalled tasks no longer wake a bot here."),
-    "daily_task_check": ("open", "Once a day, one list to each bot of its tasks with a missed update or gone quiet."),
+    "task_roundup": ("open", "One list to each bot of its tasks with a missed update, gone quiet, or a follow-up time come. Runs at 6am, noon and 6pm company time by default."),
     "waiting_checks": ("open", "Turn a bot's plain ask to a person into a small task. A waiting task that waits on "
-                       "nothing is listed on the daily task check after a day."),
+                       "nothing is listed on the task roundup after a day."),
     "due_reminders": ("open", "Tell a bot its task is due. People get no reminder."),
     "snooze_ends": ("open", "Bring snoozed tasks back on their date."),
     "still_wanted": ("open", "Ask the task's person once whether a task idle for a week is still wanted."),
@@ -27,7 +27,7 @@ def describe_job(row):
                 f"Close a done task after {hours} hours untouched; skips tasks waiting on a person, snoozed, pinned, "
                 "or with an open question or approval; at most 50 a pass."}
     metadata = JOBS.get(row["key"])
-    wakes = {"assigned_tasks", "daily_task_check", "due_reminders", "snooze_ends", "ask_deadlines", "github_sync", "repository_waits"}
+    wakes = {"assigned_tasks", "task_roundup", "due_reminders", "snooze_ends", "ask_deadlines", "github_sync", "repository_waits"}
     return {**row, "task_trigger": metadata[0] if metadata else None,
             "task_effect": "Wakes" if row["key"] in wakes else "Quiet",
             "task_action": metadata[1] if metadata else None}

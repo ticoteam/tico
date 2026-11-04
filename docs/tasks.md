@@ -376,14 +376,14 @@ A note alone wakes nobody. A bot's task waiting with no blocker, subtask, approv
 person goes back to open after two hours (unless its due date says to look later), and the update
 that parks it warns the bot.
 
-The daily task check leaves a task off its bot's list while the bot has a run queued or running on it, or while the task
+The task roundup leaves a task off its bot's list while the bot has a run queued or running on it, or while the task
 waits on something recorded: a blocker, an open subtask, a pending approval, an unanswered question, a due date, a
 snooze, a stored resume, a pull request link armed with `--wake-once` or a milestone wait. A bot whose profile has no
 stall sweeps is never listed. The Task Manager's stalled-task list does not use these skips, so a task no check lists
 still reaches its report.
 
 Tico does not wake a bot once for each stalled task, and does not escalate repeated stalls to BotOps. Each bot gets at
-most one daily task check a UTC day: one list of the tasks that have a missed update or have gone quiet (see
+most one list in each run of the task roundup (three times a day by default, at 6am, noon and 6pm company time): the tasks that have a missed update or have gone quiet (see
 [System routines](system-routines.md)).
 
 A task blocked by its own subtask is allowed (a question for a person in a subtask works that way),
@@ -1217,12 +1217,12 @@ a 422, a steer, queue or goal by someone not on the task a 403, a goal on a task
 is saved.
 
 Tico no longer spot-checks running work one task at a time. A bot's open or doing task that makes no progress appears
-in its daily task check, one list a UTC day. A Dev ticket long at a working step is reported once to its manager.
+in its task roundup, one list per run (three times a day by default). A Dev ticket long at a working step is reported once to its manager.
 
 Human messages still wake the bot as before ([details](hub-sql.md#what-woke-each-run-and-what-it-did)).
 
 The **Stalled task check** no longer runs. Tico no longer wakes a bot about one quiet task, so Decide reads none of them.
-A quiet task still shows in its bot's daily task check and in the Task Manager's report.
+A quiet task still shows in its bot's task roundup and in the Task Manager's report.
 
 `task_goal: on` on a bot (`hub bot update <slug> --task-goal on`, `hub_bot_update`, or the bot definition API; off by
 default) works each task it owns as a goal: the turn carries `task.goal` (the title and its acceptance criteria), and
@@ -1682,13 +1682,13 @@ hub task check-back <task-id> --at 2026-12-02T15:00:00-08:00 --for "Read the ret
 ```
 
 `hub_task_check_back` and `POST /api/v2/tasks/{id}/check-back` take `at` (a duration or timestamp) and `note`.
-Task create/update also accept `check_back_at` and `check_back_note`; omitted times get a provisional default.
+Task create/update also accept `check_back_at` and `check_back_note`. An omitted time stays empty: Tico sets no follow-up time of its own, only a person or a bot does (the explicit set is recorded in history as `check_back_explicit`).
 Read responses include these fields and a compact `check_back` object with the time, expected result, responsible
 bot and whether it is due. When follow-up delivery is enabled, the web, phone and desktop task properties show
 **Follow up by** and let task parties reschedule it. While disabled, the fields remain available through the API and CLI and Health shows shadow counts. Explicit bot appointments are at least five minutes ahead and within 14 days; a person's dated
 snooze can be longer. A human snooze takes precedence over an earlier inspection.
 
-Follow-up delivery is off in this build: no appointment wakes a bot, and the daily task check lists quiet tasks instead. Dates are stored, and Health reports missing or overdue follow-ups as shadow counts. The delivery rules below are kept for when it is turned back on: enabling would backfill missing appointments in bounded batches and deliver due ones through the existing task session queue. No second session starts beside a running task, and a paused, offline or limited bot keeps its queued obligation.
+Follow-up delivery is off in this build: no appointment wakes a bot. Bots and people can set a follow-up time; it shows on the bot's next task roundup (three times a day by default, 6am, noon and 6pm company time), and it is listed once, then cleared. Tico sets none on its own. Dates are stored, and Health reports missing or overdue follow-ups as shadow counts. The delivery rules below are kept for when it is turned back on: enabling would backfill missing appointments in bounded batches and deliver due ones through the existing task session queue. No second session starts beside a running task, and a paused, offline or limited bot keeps its queued obligation.
 
 On the wake, inspect the actual PR link, assignment/reservation, result and blocker. A missing readable child is
 not proof that a private child does not exist: check routing before creating a duplicate. Repair routine handoffs

@@ -241,7 +241,7 @@ Every run records what woke it (`turns.trigger_kind`), its tokens, and whether i
   merge conflict, merge or release), `stall_check` (a ticket late at its working step, a task
   not starting, a stale ask, a worktree left idle), `schedule` (a routine firing, a due date, a snooze ending,
   a next-run task, an update request), `background_done` (background commands an earlier turn left running
-  when the runner ended it on its wait have ended), `daily_task_check` (the once-a-day list of a bot's tasks with a missed update or gone quiet) or `other` (anything else: a Slack digest, a meeting turn, a worktree
+  when the runner ended it on its wait have ended), `task_roundup` (the list of a bot's tasks with a missed update, gone quiet, or a follow-up time that has come, one per run) or `other` (anything else: a Slack digest, a meeting turn, a worktree
   becoming ready). `trigger_source` names the event behind it where there is one: the message itself for
   `comment` and `person_message`, the subtask, the routine, the worktree.
 - **`writes`**: the hub writes the run made with its own run token (a task change, comment, link, message,
