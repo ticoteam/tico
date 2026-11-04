@@ -169,7 +169,7 @@ def run_thread_retention(store, auth, at, failures=None):
 
 
 def run_task_roundup(store, auth, at, failures=None):
-    # Three times a day by default (6am, noon and 6pm company time), each active bot gets at most one list of its tasks:
+    # Manual legacy roundup; scheduled lists go through Maintenance's Find stuck step. Each active bot gets one list:
     # a follow-up time that came, an unanswered question, a task to restate, a late Dev ticket, a manager's engineering
     # exceptions, a step's backlog, a missed update or a task gone quiet (backend/task_roundup.py). Plain code: no model call,
     # and nothing to list is a quiet run. The run is the schedule's time at or before this tick, and a bot already sent a
@@ -614,6 +614,8 @@ class Scheduler:
         # The controlled jobs, each on its saved preset (Settings > Routines): KPI stale asks, the Health Monitor's scan
         # (hourly by default) and ask go-ahead.
         for key, run in QUICK.items():
+            if key == "task_roundup":
+                continue     # Find stuck owns scheduled lists; QUICK keeps the legacy Run now path.
             if cfgs and self.due(key, at, cfgs, last):
                 run(self.store, self.execution.auth, at, failures)
         # The Bookkeeper's fixed-cadence jobs (FIXED): due one interval after their last start, as controlled jobs are.

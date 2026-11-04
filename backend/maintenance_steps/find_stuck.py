@@ -5,8 +5,8 @@ line so nothing is listed twice. This step runs it on Maintenance's schedule. Th
 the connection, the oldest line first, and at most the step's max_bots (DEFAULT_MAX_BOTS when it sets none) are sent per run;
 the rest keep their lines for the next run. Each bot is sent in its own short transaction under the wake limiter
 (backend/maintenance_limits.py): the bot once, and each task its list names, which the limiter may hold for the day. Those
-lines are dropped and the rest of the list is sent. Until the cutover the scheduler's roundup timer is the one that runs, so
-only one of the two sends a run's lists.
+lines are dropped and the rest of the list is sent. The scheduler's standalone roundup timer is off; Maintenance owns
+scheduled lists, while the legacy manual roundup remains available.
 """
 
 from .. import hubdb as H
@@ -40,7 +40,7 @@ def run(c, ctx):
                 continue
             held = set()
 
-            def allowed(tid):
+            def allowed(tid, tx=tx, slug=slug, held=held):
                 if LIMITS.allow(tx, slug, tid):
                     return True
                 held.add(tid)

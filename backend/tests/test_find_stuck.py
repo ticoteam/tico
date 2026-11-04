@@ -6,7 +6,7 @@ Migration 0093 withdraws the open Still wanted questions to people, and only tho
 import importlib
 import sqlite3
 
-from backend import task_check_backs, task_roundup
+from backend import maintenance, maintenance_limits, task_check_backs, task_roundup
 from backend.store import H
 from backend.maintenance_steps import find_stuck as FS
 from backend.tests.test_api import api  # noqa: F401  (fixture)
@@ -37,10 +37,10 @@ def test_the_step_reads_the_bots_on_its_connection_and_sends_each_through_the_st
         assert f"{tid[:8]} Draft the grant report: Quiet for 3 days, nothing waiting on anyone" in only_list(c)
 
 
-def test_a_bot_the_limiter_refuses_is_left_unsent_and_nothing_is_recorded_for_it(api, monkeypatch):
+def test_a_bot_the_limiter_refuses_is_left_unsent_and_nothing_is_recorded_for_it(api):
     store = api.app.state.store
-    monkeypatch.setattr(FS.LIMITS, "allow", lambda c, bot_id, task_id=None: False)
     with store.transaction() as c:
+        maintenance_limits.record(c, "finance")
         tid = task(c, "Draft the grant report")["id"]
         settle(c, tid, "finance", ago(days=3))
         complete_jobs(c)
@@ -54,17 +54,47 @@ def test_a_bot_the_limiter_refuses_is_left_unsent_and_nothing_is_recorded_for_it
 
 def test_a_delivered_list_is_recorded_once_with_every_task_it_named(api, monkeypatch):
     store = api.app.state.store
-    calls = []
-    monkeypatch.setattr(FS.LIMITS, "record", lambda c, bot_id, task_ids=(): calls.append((bot_id, list(task_ids))))
+    monkeypatch.setattr(H, "now", lambda: DAY)
     with store.transaction() as c:
         first = task(c, "Draft the grant report")["id"]
         second = task(c, "Chase the quote")["id"]
         settle(c, first, "finance", ago(days=3))
         settle(c, second, "finance", ago(days=3))
         complete_jobs(c)
-    assert run_find_stuck(store)["woke"] == 1
-    assert len(calls) == 1 and calls[0][0] == "finance"
-    assert sorted(calls[0][1]) == sorted([first, second]), "one record per delivered list, with every task it named"
+    run, started = maintenance.run_now(store, api.app.state.auth, H.human_actor("ana"), step="find_stuck", wait=True)
+    assert started and run["ok"] == 1 and run["steps"][0]["woke"] == 1, run
+    with store.read() as c:
+        assert [row[0] for row in c.execute("SELECT target FROM events WHERE action=?",
+                                           (maintenance_limits.BOT_ACTION,))] == ["finance"]
+        assert sorted(row[0] for row in c.execute("SELECT target FROM events WHERE action=?",
+                                                (maintenance_limits.TASK_ACTION,))) == sorted([first, second])
+        assert not maintenance_limits.allow(c, "finance"), "the delivered list uses the bot's wake allowance"
+
+
+def test_the_schedule_runs_find_stuck_and_then_keeps_its_due_rule(api, monkeypatch):
+    store = api.app.state.store
+    clock = [DAY]
+    monkeypatch.setattr(H, "now", lambda: clock[0])
+    monkeypatch.setattr(maintenance, "_start", lambda store, auth, run_id, only, wait:
+                        maintenance._execute(store, auth, run_id, only))
+    with store.transaction() as c:
+        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key NOT IN ('collect','find_stuck')")
+        tid = task(c, "Draft the grant report")["id"]
+        settle(c, tid, "finance", ago(days=3))
+        complete_jobs(c)
+    run_id = maintenance.tick(store, api.app.state.auth, H.parse_ts(clock[0]))
+    run = maintenance.get_run(store, run_id)
+    step = next(s for s in run["steps"] if s["step"] == "find_stuck")
+    assert step["status"] == "ran" and step["woke"] == 1, run
+    with store.read() as c:
+        assert c.execute("SELECT cursor_at FROM maintenance_steps WHERE key='find_stuck'").fetchone()[0] == DAY
+    clock[0] = H.shift(DAY, hours=1)
+    run_id = maintenance.tick(store, api.app.state.auth, H.parse_ts(clock[0]))
+    run = maintenance.get_run(store, run_id)
+    step = next(s for s in run["steps"] if s["step"] == "find_stuck")
+    assert step["status"] == "skipped" and step["reason"] == "not due", run
+    with store.read() as c:
+        assert len(lists(c)) == 1, "the hourly run respects Find stuck's own cadence"
 
 
 def test_the_step_sends_at_most_max_bots_oldest_line_first_and_the_rest_wait_for_the_next_run(api):
@@ -81,7 +111,7 @@ def test_the_step_sends_at_most_max_bots_oldest_line_first_and_the_rest_wait_for
     assert run_find_stuck(store, at=NOON, settings={"max_bots": 2})["details"]["woken"] == ["finance"]
 
 
-def test_a_task_the_limiter_holds_is_dropped_from_its_list_while_an_eligible_one_is_sent(api, monkeypatch):
+def test_a_task_the_limiter_holds_is_dropped_from_its_list_while_an_eligible_one_is_sent(api):
     store = api.app.state.store
     with store.transaction() as c:
         held = task(c, "Draft the grant report")["id"]
@@ -89,7 +119,8 @@ def test_a_task_the_limiter_holds_is_dropped_from_its_list_while_an_eligible_one
         settle(c, held, "finance", ago(days=3))
         settle(c, eligible, "finance", ago(days=3))
         complete_jobs(c)
-    monkeypatch.setattr(FS.LIMITS, "allow", lambda c, bot_id, task_id=None: task_id != held)
+        for n in range(maintenance_limits.WAKES_PER_TASK_DAY):
+            maintenance_limits.record(c, f"other_{n}", (held,))
     result = run_find_stuck(store)
     assert result["details"]["woken"] == ["finance"]
     assert result["details"]["limited"] == [held]
@@ -122,8 +153,8 @@ def test_replacements_past_the_display_cap_also_pass_the_task_limit_in_the_send_
         assert all((c, bot_id, tid) in checked for tid in task_ids), "each delivered task passed in this transaction"
         recorded.append((bot_id, list(task_ids)))
 
-    monkeypatch.setattr(FS.LIMITS, "allow", allow)
-    monkeypatch.setattr(FS.LIMITS, "record", record)
+    monkeypatch.setattr(maintenance_limits, "allow", allow)
+    monkeypatch.setattr(maintenance_limits, "record", record)
     result = run_find_stuck(store)
     delivered = [tid for tid in tids if tid not in daily_wakes][:25]
     assert result["details"]["woken"] == ["finance"]
