@@ -51,6 +51,7 @@ def settle(c, tid, slug, turned):
               (H.shift(turned, days=-1), tid))
     c.execute("INSERT INTO turns(id,bot,thread_id,started_at,finished_at,trigger,message_id,task_id,exit,summary) "
               "VALUES(?,?,NULL,?,?,'schedule',NULL,?,'done','')", (H.new_id(), slug, turned, turned, tid))
+    started(c, tid, slug, turned)                  # the turn was a run of the bot on the task
 
 
 def started(c, tid, slug, when):
@@ -365,7 +366,6 @@ def test_a_listed_task_is_news_only_after_its_listing_and_a_quiet_one_is_listed_
     with store.transaction() as c:
         idle = task(c, "Renew the parking permit")
         settle(c, idle["id"], "finance", ago(days=2))
-        started(c, idle["id"], "finance", ago(days=2))
         note(c, idle["id"], H.human_actor("ana"), ago(hours=1))     # news after the turn, before the first list
         complete_jobs(c)
         assert task_roundup.run(c, DAY)["woke"] == ["finance"]
@@ -488,7 +488,6 @@ def test_a_step_set_later_on_a_task_that_had_none_is_news_but_its_creation_row_i
         mine = task(c, "Plan the hike")
         c.execute("UPDATE tasks SET created_at=? WHERE id=?", (ago(days=3), mine["id"]))   # created before the step below
         settle(c, mine["id"], "finance", ago(days=2))
-        started(c, mine["id"], "finance", ago(days=2))
         H._task_event(c, mine["id"], H.human_actor("ana"), "step", None, "Draft the route", "Set the step")
         c.execute("UPDATE history_events SET created_at=? WHERE subject_id=? AND kind='step' AND new='Draft the route'",
                   (ago(hours=1), mine["id"]))
