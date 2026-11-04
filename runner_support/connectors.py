@@ -13,6 +13,7 @@ from .outage import Outage, log
 
 ROOT = Path(__file__).resolve().parents[1]
 MAIL_BATCH = 100
+KNOWN_SENDER_RECHECK = 600      # seconds: a hub that refused known_sender is sent the field again after this
 CALENDAR_FIELDS = ("occurrence_id", "event_id", "title", "start", "end", "attendees", "meeting_url")
 MAIL_FIELDS = ("thread_id", "epoch", "date", "from_addr", "from_header", "to", "cc", "subject",
                "snippet", "labels", "body", "body_truncated", "attachments", "list_id",
@@ -135,8 +136,8 @@ class ConnectorPublisher:
     def __init__(self, config, *, client=None, fetch=None, mail=None, event=None, google=None, action=None):
         self.config = config
         self.client = client or Client(config["url"], config["token"], timeout=35, retries=1)
-        # False once the hub has refused known_sender (a hub from before the field): mail goes to it without it.
-        self.hub_takes_known_sender = True
+        # When a hub last refused known_sender (one from before the field); None while it takes the field.
+        self.refused_known_sender_at = None
         # The script this checkout ships, not one named after a company's folder: an environment
         # whose workspace is ~/Companies/Acme has no `tico` beside it.
         self.script = ROOT / "scripts/mail.sh"
@@ -520,9 +521,12 @@ class ConnectorPublisher:
     def _post_mail(self, body):
         """Post one mail batch. Runners and hubs update on their own schedules, so a hub from before `known_sender`
         can get a batch that has it: its message model forbids fields it does not know. Such a refusal posts the
-        batch once more without the field, and this computer then sends no more until it restarts (logged once).
-        A refusal of the batch without the field too is not about the field, and it raises as before."""
-        if not self.hub_takes_known_sender:
+        batch once more without the field. For KNOWN_SENDER_RECHECK seconds after a refusal the field is left off;
+        then it is sent again, so a hub updated since takes it. The first refusal is logged. A refusal of the batch
+        without the field too is not about the field, and it raises as before."""
+        held = self.refused_known_sender_at is not None and \
+            self.clock() - self.refused_known_sender_at < KNOWN_SENDER_RECHECK
+        if held:
             body = without_known_sender(body)
         try:
             self.client.post("connectors/mail/messages", body)
@@ -530,9 +534,13 @@ class ConnectorPublisher:
             if exc.status != 422 or not any("known_sender" in m for m in body["messages"]):
                 raise
             self.client.post("connectors/mail/messages", without_known_sender(body))
-            self.hub_takes_known_sender = False
-            log("Tico connectors: this hub predates the known_sender mail field; mail goes to it without the "
-                "field, so senders show as unknown until the hub is updated")
+            if self.refused_known_sender_at is None:
+                log("Tico connectors: this hub predates the known_sender mail field; mail goes to it without the "
+                    "field, so senders show as unknown until the hub is updated")
+            self.refused_known_sender_at = self.clock()
+            return
+        if any("known_sender" in m for m in body["messages"]):
+            self.refused_known_sender_at = None     # the hub took the field: it is (now) a hub that takes it
 
     def run(self):
         cloud = Outage("Tico connectors", "refresh failed", "refresh still failing", "refresh working again")

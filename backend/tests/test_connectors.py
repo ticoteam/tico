@@ -6,7 +6,7 @@ import pytest
 
 from backend.tests.test_api import api, post, runner  # noqa: F401
 from clients.tico import APIError
-from runner_support.connectors import ConnectorPublisher
+from runner_support.connectors import KNOWN_SENDER_RECHECK, ConnectorPublisher
 from runner_support.outage import Outage
 
 
@@ -154,7 +154,7 @@ def test_mail_batches_carry_known_sender_to_a_hub_that_takes_it(tmp_path, capsys
     publisher = mail_publisher(tmp_path, hub, MailCLI([sent_row("m1", True)]))
     assert publisher._mail_mailbox("ana@acme.example", {"message_count": 3}, 100) == 1
     assert hub.accepted[0]["messages"][0]["known_sender"] is True
-    assert publisher.hub_takes_known_sender and hub.refused == 0
+    assert publisher.refused_known_sender_at is None and hub.refused == 0
     assert "known_sender" not in capsys.readouterr().out
 
 
@@ -167,7 +167,7 @@ def test_mail_to_a_hub_from_before_known_sender_drops_the_field_once(tmp_path, c
     assert hub.refused == 1
     assert [m["msg_id"] for m in hub.accepted[0]["messages"]] == ["m1"]
     assert all("known_sender" not in m for body in hub.accepted for m in body["messages"])
-    assert mail.acked == ["m1", "m2"] and not publisher.hub_takes_known_sender
+    assert mail.acked == ["m1", "m2"] and publisher.refused_known_sender_at is not None
     assert capsys.readouterr().out.count("known_sender mail field") == 1
     # The next cycle sends no field either, and the hub is not asked with it again.
     mail.batches.append([sent_row("m3", True)])
@@ -181,4 +181,34 @@ def test_a_refusal_that_is_not_about_the_field_raises_and_keeps_the_field(tmp_pa
     publisher = mail_publisher(tmp_path, hub, mail)
     with pytest.raises(APIError):
         publisher._mail_mailbox("ana@acme.example", {"message_count": 3}, 100)
-    assert publisher.hub_takes_known_sender and mail.acked == [] and hub.accepted == []
+    assert publisher.refused_known_sender_at is None and mail.acked == [] and hub.accepted == []
+
+
+def test_a_hub_upgraded_while_the_publisher_runs_takes_the_field_again(tmp_path, capsys):
+    hub = MailHub(takes_known_sender=False)
+    mail = MailCLI()
+    publisher = mail_publisher(tmp_path, hub, mail)
+    now = [1000.0]
+    publisher.clock = lambda: now[0]
+    mail.batches.append([sent_row("m1", True)])
+    assert publisher._mail_mailbox("ana@acme.example", {"message_count": 3}, 100) == 1     # refused, sent without
+    assert hub.refused == 1 and publisher.refused_known_sender_at == 1000.0
+
+    now[0] += KNOWN_SENDER_RECHECK - 1          # still held: sent without the field, the hub not asked with it
+    mail.batches.append([sent_row("m2", True)])
+    publisher._mail_mailbox("ana@acme.example", {"message_count": 3}, 100)
+    assert hub.refused == 1 and "known_sender" not in hub.accepted[-1]["messages"][0]
+
+    now[0] += 1                                 # due: asked with the field again, still an old hub, held again
+    mail.batches.append([sent_row("m3", True)])
+    publisher._mail_mailbox("ana@acme.example", {"message_count": 3}, 100)
+    assert hub.refused == 2 and publisher.refused_known_sender_at == 1000.0 + KNOWN_SENDER_RECHECK
+    assert "known_sender" not in hub.accepted[-1]["messages"][0]
+
+    hub.takes_known_sender = True               # the hub is updated while this publisher keeps running
+    now[0] += KNOWN_SENDER_RECHECK
+    mail.batches.append([sent_row("m4", True)])
+    publisher._mail_mailbox("ana@acme.example", {"message_count": 3}, 100)
+    assert hub.accepted[-1]["messages"][0]["known_sender"] is True
+    assert publisher.refused_known_sender_at is None and hub.refused == 2
+    assert capsys.readouterr().out.count("known_sender mail field") == 1     # logged at the first refusal only

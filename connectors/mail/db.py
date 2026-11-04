@@ -574,13 +574,20 @@ def unpushed(conn, mailbox=None, mailboxes=None, limit=500):
 
 
 def first_sent_epochs(conn, mailbox):
-    """{address: epoch of the first message the mailbox's owner sent it}, over To and Cc. Only the copy this database
+    """{address: epoch of the first message the mailbox's owner sent it}, over To and Cc. Only mail the provider marks
+    SENT counts: a draft, or an inbound message that claims the owner's From, does not. Only the copy this database
     holds (sync backfills 90 days, then follows history); deleted messages do not count."""
     owner = str(mailbox or "").strip().lower()
     first = {}
-    rows = conn.execute("SELECT epoch, to_json, cc_json FROM messages WHERE mailbox=? AND from_addr=? "
-                        "AND deleted_at IS NULL", (mailbox, owner)).fetchall()
+    rows = conn.execute("SELECT epoch, to_json, cc_json, labels_json FROM messages WHERE mailbox=? AND from_addr=? "
+                        "AND deleted_at IS NULL AND labels_json LIKE '%\"SENT\"%'", (mailbox, owner)).fetchall()
     for row in rows:
+        try:
+            labels = json.loads(row["labels_json"] or "[]")
+        except ValueError:
+            labels = []
+        if "SENT" not in (labels if isinstance(labels, list) else []):
+            continue
         epoch = int(row["epoch"] or 0)
         for column in ("to_json", "cc_json"):
             try:
