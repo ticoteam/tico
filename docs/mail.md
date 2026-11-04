@@ -27,7 +27,7 @@ Reading:
 
 ```bash
 $HUB_DIR/scripts/mail.sh inbox --untriaged --format brief   # inbox mail with no hub/* label; the list you work
-$HUB_DIR/scripts/mail.sh inbox --untriaged --all-mailboxes --format brief  # granted mailboxes; reports only with org_read: true
+$HUB_DIR/scripts/mail.sh inbox --untriaged --all-mailboxes --format brief  # every mailbox Tico gives this run
 $HUB_DIR/scripts/mail.sh inbox --new --since 24h      # what you have not seen in the last day (marks it seen)
 $HUB_DIR/scripts/mail.sh inbox --label hub/needs-owner --format brief
 $HUB_DIR/scripts/mail.sh thread 18f2c9a3b4d5e6f7 --format brief   # the conversation, no bodies; md when drafting
@@ -63,11 +63,23 @@ $HUB_DIR/scripts/mail.sh rules explain 18f2...        # why this message got wha
 
 Rules run before any model. Marketing (unsubscribe links), notification senders, and
 `registry/mail-rules.yaml` `skip:` addresses/domains are filed and never opened by the bot.
-Each mailbox can add its own rules under that address after `common`. A message bot for a
-human reads only its assigned mailbox by default (`org_read: false`). This boundary applies to
-Gmail and mailbox tokens; [calendar Tools](#calendar) have separate access rules, except for the token limit
-on a two-user Docker runner. The owner can deliberately
-turn on `org_read: true` to include reports' mail; only then does `--all-mailboxes` include them.
+Each mailbox can add its own rules under that address after `common`.
+
+Who may use a mailbox is Tico's answer, never the run's (backend/mailbox_access.py; Settings > Mailboxes):
+- a person has Read and write on their own mailbox, and admins on a shared inbox;
+- a person's Assistant has exactly that person's access;
+- everyone else, bots included, needs a grant: Read, or Read and write (organize, draft, send). Only the mailbox's
+  person, or an admin for a shared inbox, gives or takes one; nobody passes a grant on;
+- a mailbox whose person has not joined yet is private (Awaiting person) until they join or an admin makes it a
+  shared inbox;
+- the company's What Tico may do caps every level, and an address outside the company's domains is Read only.
+The owner has no bypass, and managers get nothing automatic on their reports' mail. Every mail command asks
+`GET /api/v2/mail/access` as its own credential (a bot's turn token, a person's own Tico token); `bot.yaml` gmail
+entries only narrow that answer (`read_only: true`, and `draft`/`send` only when `can:` lists them). `org_read` no
+longer does anything: the upgrade (migration 0082) turned each `org_read: true` into Read grants on the mailboxes
+below, so nobody lost access, and a manager's view of reports' mail is now a grant their reports give. This boundary
+applies to Gmail and mailbox tokens; [calendar Tools](#calendar) have separate access rules, except for the token
+limit on a two-user Docker runner.
 The Inbox Manager starts with one disabled weekday 07:30 Routine in America/Los_Angeles; Setup
 switches it on. Change its time zone on its automation in **Automations**.
 
@@ -261,7 +273,7 @@ reading, drafting or sending. The equivalent shell commands are `hub calendar li
 The mail-local calendar commands have a broader registry-based grant: every bot can read or create
 an event on any address in `registry/people.yaml`; Gmail permissions, including `read_only`, do not
 change that calendar access. On a Docker runner with the two-user layout a bot gets calendar tokens only for the
-mailboxes on its mail token list (a message bot's own, and its reports' only with `org_read: true`) (see [Who can read the key](#who-can-read-the-key)). An address outside the roster needs an explicit `google-calendar`
+mailboxes on its mail token list (the ones Tico gives it, Settings > Mailboxes) (see [Who can read the key](#who-can-read-the-key)). An address outside the roster needs an explicit `google-calendar`
 Tool entry with the required verbs. The private Google service-account setup must also be working
 on that computer. These commands do not expand the MCP/API rule above:
 
@@ -441,8 +453,10 @@ its own **Mail sending** switch says (and no approval lifts it), and an automati
 each bot still needs its own switch (Settings > Bots > Edit > Mail sending; see [Turning sending on](#turning-sending-on)).
 These settings apply to everyone who acts through Tico: bots, automations, the runner's own calendar bookings, people
 and the Assistant. An admin who wants Tico to send turns Send mail on. The connector reads the boxes from Tico for each
-run: a bot's from its mail setting, everything else (`--as <owner handle>`, which the runner's mail actions and calendar
-bookings use) from the runner's own read (`GET /api/v2/connectors/mail/targets`), never from the run itself. When Tico
+run: a bot's from its mail setting, a person's from their `GET /api/v2/mail/access` answer, and the runner's connector
+job's (`--as connector`, which its sync, mail actions and calendar bookings use) from the runner's own read
+(`GET /api/v2/connectors/mail/targets`), never from the run itself. The connector reads the mailboxes its computer
+syncs and writes only the actions the server leased it, each checked against the automation owner's level. When Tico
 cannot be asked, writes are refused ("Tico couldn't check the company's mail settings; try again") and reads go on; a
 run without the runner's registration can't ask, so it only reads. Change calendar needs `calendar.events`.
 
@@ -624,8 +638,9 @@ The key can act as any mailbox in the team, so bots must not be able to read it.
 - **Docker runner with the two-user layout** (the current `runner.compose.yaml`) with a key you made yourself: the key is in the runner's state directory,
   closed to the bots' user. The `connectors` job reads it there. A message bot's run gets, from the runner over its credential
   socket, a Gmail or Calendar access token that lasts an hour for one mailbox at a time. The mailboxes it may ask for are the
-  one the bot declares (its human's own email only if it declares none). Those of the humans below that human in the
-  team chart are added only when that mailbox's `gmail` entry sets `org_read: true`. Calendar tokens come from the same
+  ones it holds a level on in Tico (`mailbox_levels` on its turn; a message bot gets its grant when it is set as a
+  person's message bot). The server checks the level again on every mint, and a Read level gets the read-only scopes,
+  except on the computer that syncs the mailbox, whose connector holds the full scope. Calendar tokens come from the same
   list, so on this layout the mail-local calendar commands reach only those mailboxes' calendars. Any other bot, and any
   other mailbox, is refused.
   A bot is a message bot to the server when it is its person's `inbox_bot`, which is what the server checks before it names any

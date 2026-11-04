@@ -64,6 +64,7 @@ def team(c):
     config(c, "finance", gmail(ANA, "read", "draft", org_read=True))
     config(c, "cpo", gmail("gone@acme.example", "read", "draft"))
     automation(c, "person:ben", {"trigger": {"type": "message", "inbox": BEN}, "steps": []})
+    H.event(c, H.human_actor("ben"), "person.signed_in", "ben", {})   # ben uses Tico: his mailbox is his, not a stand-in
 
 
 def test_a_tico_team_like_company_keeps_every_access_it_has(api):
@@ -181,3 +182,51 @@ def test_a_new_database_has_nothing_to_backfill(api):
     with tx(api) as c:
         assert MA.backfill(c) == {"mailboxes": 0, "accesses": 0}
         assert rows(c) == {} and grants(c) == {}
+
+
+def test_a_roster_person_who_is_only_a_mailbox_becomes_a_shared_inbox(api):
+    """TIDY's "legal@ (mailbox)": a roster entry whose message bot reads exactly their email and who never signed in
+    stands for a mailbox. It becomes a shared inbox linked to nobody; the bot keeps its level and the person it reports
+    to gets Read and write. The roster entry stays (an admin removes it). A real person who has used Tico stays
+    personal."""
+    legal = "legal@acme.example"
+    with tx(api) as c:
+        roster(c, [{"id": "ana", "email": ANA, "primary_for": ["*"]},
+                   {"id": "legal", "name": "legal@acme.example (mailbox)", "email": legal, "reports_to": "ana",
+                    "inbox_bot": "finance"},
+                   {"id": "ben", "email": BEN, "reports_to": "ana", "inbox_bot": "inbox"}])
+        config(c, "finance", gmail(legal, "read"))
+        config(c, "inbox", gmail(BEN, "read", "draft"))
+        H.event(c, H.human_actor("ben"), "person.signed_in", "ben", {})          # ben has used Tico
+        assert MA.placeholders(c, [{"id": "legal", "email": legal, "inbox_bot": "finance"}],
+                               {"finance": MA._bot_config(c, "finance")}) == {"legal": legal}
+        MA.backfill(c)
+        got = rows(c)
+        assert got[legal] == ("shared", None, "workspace", "migration")
+        assert got[BEN][:2] == ("personal", "ben")
+        access = grants(c)
+        assert access[(legal, "bot", "finance")] == ("read", "migration")
+        assert access[(legal, "person", "ana")] == ("read_write", "migration")
+        assert not any(kind == "person" and who == "legal" for _, kind, who in access)
+        assert MA.level(c, "person:legal", legal) == "none"
+        assert MA.level(c, "person:ana", legal) == "read_write"
+        assert MA.level(c, "bot:finance", legal) == "read"
+        people = [p["id"] for p in json.loads(c.execute(
+            "SELECT value FROM registry_metadata WHERE key='people'").fetchone()["value"])["people"]]
+        assert "legal" in people                                                  # not deleted
+        assert MA.backfill(c) == {"mailboxes": 0, "accesses": 0}
+
+
+def test_a_mailbox_placeholder_with_no_manager_goes_to_its_bot_s_operator(api):
+    legal = "legal@acme.example"
+    with tx(api) as c:
+        roster(c, [{"id": "ana", "email": ANA, "primary_for": ["*"]}, {"id": "ben", "email": BEN},
+                   {"id": "legal", "email": legal, "inbox_bot": "finance"}])
+        config(c, "finance", gmail(legal, "read", "draft", "send"))
+        finance = H.resolve_bot(c, "finance")["id"]
+        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot=?", (finance,))
+        MA.backfill(c)
+        assert rows(c)[legal][:2] == ("shared", None)
+        access = grants(c)
+        assert access[(legal, "bot", "finance")] == ("read_write", "migration")
+        assert access[(legal, "person", "ben")] == ("read_write", "migration")

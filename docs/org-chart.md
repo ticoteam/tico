@@ -140,7 +140,7 @@ matching bot under **Message bots**. Shared mailboxes such as `shared@acme.examp
 
 Every Acme address is `<firstname>@acme.example`. Personal message bots come from the `inbox`
 template and read only the assigned mailbox by default. The template seeds one weekday 07:30 Routine in America/Los_Angeles, initially disabled.
-Extra passes and reading reports' mail (`org_read: true`) are optional owner choices. Each mailbox has its
+Extra passes are optional owner choices; reading a report's mail is a grant that report gives (Settings > Mailboxes). Each mailbox has its
 own rules in `registry/mail-rules.yaml`. Photos prefer a Google Workspace Directory thumbnail
 when domain-wide delegation includes `admin.directory.user.readonly`; otherwise the Slack
 profile image stored on the roster.
