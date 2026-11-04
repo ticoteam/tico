@@ -293,9 +293,9 @@ def _on_task(name):
     return act
 
 
-def _label(c, auto, run_id, args, values):
+def _label(c, auto, run_id, args, values, step=None):
     if _message(values) and not values.get("task"):
-        return _mail_or_slack("label")(c, auto, run_id, args, values)
+        return _mail_or_slack("label")(c, auto, run_id, args, values, step=step)
     if not (args.get("tag") or args.get("name")):
         return _fail("label needs a tag")
     return _on_task("label")(c, auto, run_id, args, values)
