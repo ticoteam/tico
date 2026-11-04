@@ -51,12 +51,13 @@ MATERIALISED = "profile"                # `created_by` of the rows a custom prof
 RELEASE_QA_TITLE = re.compile(
     r"^(?:(?:Post[- ](?:Release|Launch)|Release)\s+QA(?:\s+(?:pass|sweep))?|Post[- ]Release\s+checks?)\s*(?::|$)", re.I)
 ACCEPTANCE_TITLE = re.compile(r"\blive acceptance\b", re.I)
-# A top-level production acceptance run is acceptance QA work (Dev 750, engineering ruling on 34f2faaf). A top-level
-# request that builds or changes the acceptance tests is ordinary work, so its leading verb decides.
+# A top-level production acceptance run is acceptance QA work (Dev 750, engineering ruling on 34f2faaf). Only a title
+# that reads as a run counts: it opens with a run verb, or with the phrase itself. Anything else, including any
+# request that builds or changes the acceptance tests, is ordinary work.
 PRODUCTION_ACCEPTANCE_TITLE = re.compile(r"\bproduction acceptance\b", re.I)
-IMPLEMENTATION_TITLE = re.compile(
-    r"^(?:implement|add|build|write|create|fix|update|change|refactor|design|draft|plan|remove|rename|migrate|improve|"
-    r"extend|support|wire|make|set up|expand)\b", re.I)
+PRODUCTION_ACCEPTANCE_RUN_TITLE = re.compile(
+    r"^(?:(?:run|rerun|re-run|execute|perform|carry out|complete|finish|check|verify|do)\b"
+    r"|production acceptance\b)", re.I)
 # The numbers a former Token saver bot keeps.
 TOKEN_SAVER_OPTIONS = {"batch_seconds": TOKEN_SAVER_SECONDS, "batch_scope": "bot", "sweep_seconds": 2 * 3600}
 
@@ -215,7 +216,7 @@ def is_review_task(c, row, *, parent_id=None):
         return True
     parent_id = parent_id or (H.TR.parent_of(c, row["id"]) if row.get("id") else None)
     if not parent_id:
-        return bool(PRODUCTION_ACCEPTANCE_TITLE.search(title) and not IMPLEMENTATION_TITLE.match(title))
+        return bool(PRODUCTION_ACCEPTANCE_TITLE.search(title) and PRODUCTION_ACCEPTANCE_RUN_TITLE.match(title))
     return bool(_check_title(c, H.task(c, parent_id), title) or ACCEPTANCE_TITLE.search(title)
                 or auto_tasks.review(c, row, parent_id=parent_id))
 

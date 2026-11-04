@@ -193,10 +193,15 @@ def test_release_qa_uses_one_classification_for_creation_pull_wake_and_health(ap
     pytest.param("Post Release QA dashboard redesign", False, id="post-qa-dashboard"),
     pytest.param("Add acceptance tests for CSV export", True, id="acceptance-implementation"),
     pytest.param("Implement production acceptance tests", True, id="production-acceptance-implementation"),
-    pytest.param("Implement production acceptance tests", False, id="production-acceptance-top-level-implementation"),
+    pytest.param("Implement production acceptance tests", False, id="production-acceptance-top-level-implement"),
+    pytest.param("Develop production acceptance tests for the waitlist", False,
+                 id="production-acceptance-top-level-develop"),
     pytest.param("Add production acceptance tests for CSV export", False, id="production-acceptance-top-level-add"),
     pytest.param("Write production acceptance tests for the waitlist", False,
                  id="production-acceptance-top-level-write"),
+    pytest.param("Build the production acceptance suite", False, id="production-acceptance-top-level-build"),
+    pytest.param("Update the production acceptance checklist", False, id="production-acceptance-top-level-update"),
+    pytest.param("Waitlist production acceptance tests", False, id="production-acceptance-top-level-no-run-verb"),
 ])
 def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
     with api.app.state.store.transaction() as c:
@@ -211,6 +216,20 @@ def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
         with pytest.raises(H.Refused) as raised:
             H.task_update(c, "bot:ops", ordinary["id"], owner="bot:checker")
         assert raised.value.rule == "profile"
+
+
+@pytest.mark.parametrize("title", [
+    "Run waitlist production acceptance after existing release and admin gates clear",
+    "Execute production acceptance for the waitlist",
+    "Re-run production acceptance on the release candidate",
+    "Production acceptance run for the waitlist",
+])
+def test_a_top_level_production_acceptance_run_reads_as_review_work(api, title):
+    with api.app.state.store.transaction() as c:
+        add_bot(c, "checker")
+        put(c, "checker", P.REVIEWER)
+        made = H.task_create(c, "bot:ops", title, "x", "bot:checker")
+        assert P.is_review_task(c, H.task(c, made["id"]))
 
 
 def test_a_top_level_production_acceptance_run_is_review_work_for_a_reviewer_and_health_stops_counting_it(api):
