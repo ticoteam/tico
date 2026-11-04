@@ -435,14 +435,15 @@ def test_no_computer_claims_or_reports_for_a_mailbox_not_published_yet(api, comp
 def test_the_sync_carries_the_mail_fields_to_the_trigger(api, computer):
     """The real sync and publish: the owner's earlier send makes the sender known to a later message only; a category
     label, a calendar part and an .ics file come through the hub copy as the trigger reads them."""
-    now, day, person = int(time.time() * 1000), 86_400_000, "person@customer.example"
+    # The first sync acts on the last 24 hours of mail, so these times stay inside that window, in this order.
+    now, hour, person = int(time.time() * 1000), 3_600_000, "person@customer.example"
     store = computer.gmail.store
     store["sent-1"] = fake.message("sent-1", "t-person", {"From": BOX, "To": person, "Subject": "Pricing"},
-                                   body="Here it is.", labels=("SENT",), epoch_ms=now - 2 * day)
+                                   body="Here it is.", labels=("SENT",), epoch_ms=now - 10 * hour)
     store["early"] = fake.message("early", "t-early", {"From": person, "To": BOX, "Subject": "Hello"},
-                                  body="Hi.", epoch_ms=now - 3 * day)
+                                  body="Hi.", epoch_ms=now - 20 * hour)
     store["reply"] = fake.message("reply", "t-person", {"From": person, "To": BOX, "Subject": "Re: Pricing"},
-                                  body="Thanks.", epoch_ms=now - day)
+                                  body="Thanks.", epoch_ms=now - 2 * hour)
     store["promo"] = fake.message("promo", "t-promo", {"From": "Deals <deals@shop.example>", "To": BOX,
                                                        "Subject": "Sale"}, body="50% off.",
                                   labels=("INBOX", "CATEGORY_PROMOTIONS"), epoch_ms=now - 2 * 3_600_000)
