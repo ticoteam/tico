@@ -421,9 +421,14 @@ pub fn command_program(command: &str) -> String {
 fn shell_script(command: &str) -> Option<String> {
     let words = shell_words(command)?;
     let [shell, flag, script] = words.as_slice() else { return None };
-    // The line itself starts with the shell's plain path and a space, so no separator or redirection hides beside it.
+    // The line itself reads `<shell> <flag> ` as written, unquoted, so no quoting, separator or redirection changes them.
     let plain = shell.chars().all(|c| c.is_ascii_alphanumeric() || "._+/-".contains(c))
-        && command.trim_start().strip_prefix(shell.as_str()).is_some_and(|rest| rest.starts_with([' ', '\t']));
+        && command
+            .trim_start()
+            .strip_prefix(shell.as_str())
+            .filter(|rest| rest.starts_with([' ', '\t']))
+            .and_then(|rest| rest.trim_start().strip_prefix(flag.as_str()))
+            .is_some_and(|rest| rest.starts_with([' ', '\t']));
     let name = shell.rsplit('/').next().unwrap_or(shell);
     // Only flag groups whose every option takes no argument: `-o` would take the next word, and `--norc` is a long
     // option whose next word is a file.
@@ -1223,6 +1228,7 @@ mod tests {
         assert_eq!(command_program("bash -oc /tmp/customer-private.sh"), "bash");
         assert_eq!(command_program("bash;<<\\'\n-c\n'customer-private\n'"), "bash");
         assert_eq!(command_program("bash; -c /tmp/customer-private.json"), "bash");
+        assert_eq!(command_program("bash \"-\\c\" /tmp/customer-private.json"), "bash");
     }
 
     #[test]
