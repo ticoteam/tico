@@ -810,6 +810,14 @@ def operation_issues(c, who, auth):
             add("google_workspace", "The Google Workspace key is failing",
                 key["last_error"] or "Google has refused the Workspace key for too long.",
                 needs_person=True, action="Check the key in Settings > Google.")
+        sync_owners = google_workspace.workspace_sync_owners(c)
+        for box in google_workspace.workspace_mailboxes(c):
+            if box["address"] not in sync_owners:
+                add("google_workspace", box["address"] + " has no sync computer",
+                    "Mail and calendar for " + box["address"] + " are not syncing because no eligible computer is online.",
+                    needs_person=False, severity="warning",
+                    action="Bring an isolated company server online." if box["kind"] == "shared" else
+                           "Bring the person's computer, their Assistant's host or an isolated company server online.")
         labels = {row["id"]: row["label"] for row in c.execute("SELECT id,label FROM runners_with_state")}
         hosts = google_rights.inbox_hosts(c)
         for grant in c.execute("SELECT person_id,mailbox,holder FROM google_connects WHERE status='connected' "
