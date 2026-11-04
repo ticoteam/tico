@@ -363,8 +363,7 @@ async function staleDecide(button, path, body) {
   }
 }
 // Filtered for you: what the ask filter kept off your plate today (backend/ask_ingest.py), folded at the foot of Needs
-// you. In Rehearsal it lists what On would have done and changes nothing; with the filter On, Let it through puts an
-// item on your plate in one click and tells the bot that asked.
+// you. Let it through puts an item on your plate in one click and tells the bot that asked.
 const ASK_FILTER_WHY = {
   status: 'A progress note: nothing to decide', covered: 'Same as one you already have open',
   unclear: 'Doesn\u2019t say what to decide', own_work: 'Work a bot can do itself',
@@ -382,26 +381,23 @@ async function askFilteredLoad(state) {
   tasksRender(state);
 }
 function askFilteredRow(it) {
-  const rehearsal = it.mode !== 'on', done = !!it.let_through_at;
+  const done = !!it.let_through_at;
   const what = ASK_FILTER_OUTCOME[it.would] || 'Filtered';
   const title = it.task ? `<a href="#/task/${encodeURIComponent(it.task)}">${esc(it.title || 'Untitled')}</a>` : esc(it.title || 'A question');
   const act = done ? '<span class="muted">Let through</span>'
-    : rehearsal ? `<span class="muted">Would have: ${esc(what.toLowerCase())}</span>`
     : `<button type="button" class="ghost" data-let-through="${esc(it.id)}">Let it through</button>`;
   return `<div class="tl-filtered-row" role="listitem">
     <span class="tl-filtered-text"><span class="req-from">${esc(it.asker_name || actorLabel(it.asker) || 'A bot')}:</span> ${title}
-      <span class="muted">${esc(rehearsal ? '' : what + ' · ')}${esc(ASK_FILTER_WHY[it.reason] || '')} · ${esc(ago(it.created_at))}</span></span>
+      <span class="muted">${esc(what + ' · ')}${esc(ASK_FILTER_WHY[it.reason] || '')} · ${esc(ago(it.created_at))}</span></span>
     <span class="tl-filtered-act">${act}</span></div>`;
 }
 function askFilteredHTML(state) {
   const items = state?.filtered || [];
   if (!items.length) return '';
-  const rehearsal = items.every(it => it.mode !== 'on');
-  const label = rehearsal ? 'Filtered for you (rehearsal)' : 'Filtered for you';
-  return `<details class="tl-group tl-filtered" data-group="filtered"><summary class="tl-ghead"><span class="tl-gname">${esc(label)}</span>
+  return `<details class="tl-group tl-filtered" data-group="filtered"><summary class="tl-ghead"><span class="tl-gname">Filtered for you</span>
       <span class="tl-gcount tnum">${items.length}</span><span class="spacer"></span>
       <a class="tl-gchat" href="#/settings/tasks" data-ask-filter-settings>What bots may put on you</a></summary>
-    <div class="tl-rows" role="list" aria-label="${esc(label)}">${items.map(askFilteredRow).join('')}</div></details>`;
+    <div class="tl-rows" role="list" aria-label="Filtered for you">${items.map(askFilteredRow).join('')}</div></details>`;
 }
 document.addEventListener('click', async ev => {
   const button = ev.target.closest?.('[data-let-through]');
