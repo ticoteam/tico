@@ -836,7 +836,8 @@ def replay_items(c, person, start, end, assistant_bot=None):
     # for them written no later than the task's first owner change leaves the filing to the second branch. That branch
     # lists every ask row the filter wrote for them on its own day, so a judged filing shows once, and each handoff
     # shows on the day it was handed back, wherever the task was created and whoever owns it now. When the filter was
-    # off there is no ask row, so owner history supplies that handoff; matching timestamps keep On handoffs single.
+    # off there is no ask row, so owner history supplies that handoff. On writes its ask row just before the owner
+    # event in the same update, so the nearby-row check keeps that handoff single despite their slightly different times.
     out = [{"kind": "task", "ref": r["id"], "asker": r["asker"], "title": r["title"] or "", "text": r["body"] or "",
             "asked": None, "created_at": r["at"]}
            for r in c.execute("SELECT t.id,t.title,t.body,t.requester_id AS asker,t.created_at AS at FROM tasks t "
@@ -852,7 +853,7 @@ def replay_items(c, person, start, end, assistant_bot=None):
                               "AND h.new=? AND h.actor_id LIKE 'bot:%' AND h.actor_id<>? "
                               "AND h.created_at>=? AND h.created_at<? AND NOT EXISTS "
                               "(SELECT 1 FROM ask_ingest_items i WHERE i.person=? AND i.kind='task' AND i.ref=t.id "
-                              "AND i.asker=h.actor_id AND i.created_at=h.created_at)",
+                              "AND i.asker=h.actor_id AND abs(julianday(i.created_at)-julianday(h.created_at))<=1.0/86400)",
                               (person, start, end, skip, person, person, start, end, skip,
                                person, skip, start, end, person))]
     for m in H._rows(c.execute("SELECT * FROM messages WHERE recipient_id=? AND kind='ask' AND created_at>=? AND created_at<? "
