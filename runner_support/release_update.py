@@ -134,6 +134,10 @@ def instruction_backup_note(root, git_dir):
     """Recheck retained backups on every update so a late write is named in the next Health report."""
     saved = git_dir / "tico-instruction-backups"
     names = []
+    if saved.is_symlink():
+        note = "repository copy needs attention: cannot inspect instruction backups: " + os.path.relpath(saved, root)
+        print(note, file=sys.stderr)
+        return note
     try:
         for backup in saved.rglob("*.tico-backup-*"):
             relative = backup.relative_to(saved)
@@ -143,14 +147,14 @@ def instruction_backup_note(root, git_dir):
             except OSError:
                 different = True
             if different:
-                names.append(str(backup.relative_to(root)))
+                names.append(os.path.relpath(backup, root))
             else:
                 from . import git_locks
                 before = backup.lstat()
                 if stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and git_locks.unused(backup, before):
                     backup.unlink()
     except OSError:
-        names.append(str(saved.relative_to(root)))
+        names.append(os.path.relpath(saved, root))
     if names:
         note = "repository copy needs attention: bot instruction edit to review: " + ", ".join(names[:3])
         print(note, file=sys.stderr)

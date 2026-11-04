@@ -1528,6 +1528,10 @@ async fn instruction_backup_note(root: &Path, git_dir: &Path) -> Option<String> 
     let mut pending = vec![saved.clone()];
     let mut names = vec![];
     while let Some(dir) = pending.pop() {
+        if dir.symlink_metadata().is_ok() && (!real_dir(&dir) || dir.canonicalize().ok().as_ref() != Some(&dir)) {
+            names.push(dir.strip_prefix(root).unwrap_or(&dir).display().to_string());
+            continue;
+        }
         let entries = match std::fs::read_dir(&dir) {
             Ok(e) => e,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && dir == saved => continue,
@@ -1740,7 +1744,7 @@ mod tests {
             std::fs::remove_file(&path).unwrap();
             std::fs::write(path, text).unwrap();
         }
-        repair_instruction_links(&f.base, &f.env).await;
+        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
         assert_eq!(sh(&f.base, &["status", "--porcelain"]), "");
         assert!(crate::gitlocks::idle(&f.base.join(".git")).await, "an interrupted instruction repair cannot block config recovery");
         std::fs::remove_file(f.base.join("AGENTS.md")).unwrap();

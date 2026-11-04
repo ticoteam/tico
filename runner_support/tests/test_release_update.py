@@ -693,3 +693,16 @@ def test_a_raced_replacement_keeps_both_names_when_the_original_path_is_taken(tm
     assert lock.read_text() == "newly acquired"
     backups = list(tmp_path.glob("index.lock.stale-*"))
     assert len(backups) == 1 and backups[0].read_text() == "raced replacement"
+
+
+def test_instruction_backup_cleanup_never_follows_a_metadata_symlink(tmp_path):
+    checkout, outside = tmp_path / "repo", tmp_path / "outside"
+    metadata = checkout / ".git"
+    metadata.mkdir(parents=True)
+    outside.mkdir()
+    (checkout / "AGENTS.md").write_text("same bytes")
+    backup = outside / "AGENTS.md.tico-backup-1"
+    backup.write_text("same bytes")
+    (metadata / "tico-instruction-backups").symlink_to(outside)
+    assert "cannot inspect instruction backups" in ru.instruction_backup_note(checkout, metadata)
+    assert backup.read_text() == "same bytes"
