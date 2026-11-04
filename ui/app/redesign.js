@@ -13,57 +13,49 @@ const goalsBase = () => RD_GOALS;
 const helpBubble = (text, attrs = '') => `<span class="rd-help"${attrs ? ' ' + attrs : ''} tabindex="0" role="button" aria-label="${esc(text)}">?<span class="rd-help-pop" role="tooltip">${esc(text)}</span></span>`;
 
 // ----------------------------------------------------------------- the sidebar
-// The rail is rearranged in place, once, not drawn again: the links keep their own badges and handlers (sidebar.js,
-// notices.js).
-let RD_NAV_DONE = false;
-const RD_NAV_ICONS = {automations: 'bolt', library: 'local_library', strategy: 'flag', growth: 'rocket_launch', rules: 'gavel'};
-function redesignNav() {
-  const nav = $('#side .side-scroll');
-  if (!nav || RD_NAV_DONE) return;
-  RD_NAV_DONE = true;
-  const strategyLink = nav.querySelector('a[data-nav="strategy"]'), before = [...nav.children];
-  const pick = sel => nav.querySelector(sel);
-  const link = (key, href, icon, label) => {
-    const a = Object.assign(document.createElement('a'), {className: 'nav-link', href, innerHTML: `<span class="nav-icon" aria-hidden="true">${icon}</span>${label}`});
-    a.dataset.nav = key;
-    return a;
-  };
-  const automations = link('automations', RD_AUTOMATIONS, RD_NAV_ICONS.automations, 'Automations');
-  const growth = link('growth', GR_ROUTE, RD_NAV_ICONS.growth, 'Growth');   // ui/app/growth-page.js
-  const library = link('library', DOCS, RD_NAV_ICONS.library, 'Library'); library.classList.add('rd-lib-head');
-  // Library's pages fold under it: a chevron beside it, remembered in this browser (rdLibSync).
-  const libRow = document.createElement('div'); libRow.className = 'nav-row rd-lib-row';
-  const libToggle = Object.assign(document.createElement('button'), {type: 'button', className: 'rd-lib-toggle',
-    innerHTML: '<span class="section-chev" aria-hidden="true">›</span>'});
-  libToggle.setAttribute('aria-label', 'Library pages');
-  libToggle.setAttribute('aria-controls', 'rd-lib');
-  libToggle.onclick = () => { const open = rdLibOpen(); RD_LIB.inside = false; rdLibRemember(!open); rdLibSync(); };
-  libRow.append(library, libToggle);
-  const subs = document.createElement('div'); subs.className = 'rd-lib'; subs.id = 'rd-lib';
-  const tools = link('tools', RD_TOOLS, 'api', 'Tools');   // ui/app/redesign-library.js
-  const connections = link('connections', RD_CONNECTIONS, 'link', 'Connections');   // ui/app/connections.js
-  const files = link('files', RD_FILES, 'folder_shared', 'Files');   // ui/app/pages.js
-  subs.append(...[pick('a[data-nav="docs"]'), files, pick('a[data-nav="meetings"]'), tools, connections].filter(Boolean));
-  // Rules (ui/app/org-rules.js) folds the same way, its tabs under it, folded until opened.
-  const rules = link('rules', RULES_ROUTE, RD_NAV_ICONS.rules, 'Rules'); rules.classList.add('rd-lib-head');
-  const rulesRow = document.createElement('div'); rulesRow.className = 'nav-row rd-lib-row rd-rules-row';
-  const rulesToggle = Object.assign(document.createElement('button'), {type: 'button', className: 'rd-lib-toggle rd-rules-toggle',
-    innerHTML: '<span class="section-chev" aria-hidden="true">›</span>'});
-  rulesToggle.setAttribute('aria-label', 'Rules pages');
-  rulesToggle.setAttribute('aria-controls', 'rd-rules');
-  rulesToggle.onclick = () => { const open = rdRulesOpen(); RD_RULES.inside = false; rdRulesRemember(!open); rdLibSync(); };
-  rulesRow.append(rules, rulesToggle);
-  const ruleSubs = document.createElement('div'); ruleSubs.className = 'rd-lib rd-rules'; ruleSubs.id = 'rd-rules';
-  ruleSubs.append(...RU_TABS.map(([k, label]) => link('rules-' + k, ruHref(k), 'gavel', label)));
-  if (strategyLink) { strategyLink.setAttribute('href', MARKET_ROUTE); strategyLink.querySelector('.nav-icon').textContent = RD_NAV_ICONS.strategy; }
-  const order = [pick('#side-update'), pick('a[data-nav="overview"]'), pick('#nav-welcome'), strategyLink, strategyLink && growth,
-    pick('a[data-nav="updates"]'), pick('a[data-nav="tasks"]'), automations, libRow, subs,
-    rulesRow, ruleSubs, pick('#nav-pins')].filter(Boolean);
-  const rest = before.filter(el => !order.includes(el) && !subs.contains(el) && !ruleSubs.contains(el));
-  nav.append(...order, ...rest);
-  rdLibSync();
-  renderTree();   // marks the current page again: Automations and Tools did not exist when the first route drew the rail
+// The rail is drawn whole in index.html, so the first paint is the one that stays: nothing here adds or moves a row.
+// What waits on an answer starts as this browser last heard it (ui/theme.js marks <html> before the paint) and is set
+// right here once the answer is in: Finance (finance.js finNavSync) and Finish setup (notices.js renderOnboardingNav).
+// The answers are kept for whoever signed in here last (snapWho: this server, its owner, the person); /me answering as
+// anyone else drops them before the config is applied (boot.js), and so does a sign-out (boot-snap.js bootSnapDrop).
+// A kept answer only stands in until this visit's own arrives.
+const RD_NAV_KEPT = 'tico.nav.kept';
+const RD_NAV_ROWS = {finance: 'nav-finance', welcome: 'nav-welcome'};
+let RD_NAV_WHO = '';     // whose answers are kept now: '' until /me answers
+function rdNavKept() {
+  try { const kept = JSON.parse(localStorage.getItem(RD_NAV_KEPT) || 'null'); return kept && typeof kept === 'object' ? kept : {}; }
+  catch { return {}; }
 }
+// Signed out, or someone else: what was kept goes, and nothing more is kept until /me names who is here.
+function rdNavForget() {
+  RD_NAV_WHO = '';
+  try { localStorage.removeItem(RD_NAV_KEPT); } catch { /* nothing kept */ }
+}
+// The row and the mark on <html> together: the mark draws it before this file runs (styles/redesign.css), `hidden` after
+// (search.js lists only rows that are not hidden).
+function rdNavPaint(name, shown) {
+  document.documentElement.classList.toggle(RD_NAV_ROWS[name], shown);
+  const row = document.getElementById(RD_NAV_ROWS[name]);
+  if (row && row.hidden !== !shown) row.hidden = !shown;   // an unchanged `hidden` is not written again (ask-panel.js askSet)
+}
+// This visit's answer: shown as it says, and kept for the next first paint.
+function rdNavShow(name, shown) {
+  rdNavPaint(name, shown);
+  if (!RD_NAV_WHO || SESSION.out) return;
+  const kept = rdNavKept(), mine = kept.who === RD_NAV_WHO;
+  if (mine && kept[name] === shown) return;
+  try { localStorage.setItem(RD_NAV_KEPT, JSON.stringify({...(mine ? kept : {}), who: RD_NAV_WHO, [name]: shown})); } catch { /* not kept */ }
+}
+// /me answered: someone else's answers go, and their rows with them, until this person's own come in.
+function rdNavWho(me) {
+  const who = me ? snapWho(me) : '';
+  if (!who || rdNavKept().who !== who) {
+    rdNavForget();
+    for (const name of Object.keys(RD_NAV_ROWS)) rdNavPaint(name, false);
+  }
+  RD_NAV_WHO = who;
+}
+for (const name of Object.keys(RD_NAV_ROWS)) rdNavPaint(name, document.documentElement.classList.contains(RD_NAV_ROWS[name]));
 // Library open or folded: what this browser chose, opened while a Library page is showing (a fold there holds until
 // the next visit). A browser that will not store it keeps Library open.
 const RD_LIB_KEY = 'tico.nav.library';
@@ -88,6 +80,7 @@ function rdLibSync() {
   RD_LIB.was = here;
   const open = rdLibOpen();
   subs.hidden = !open;
+  document.documentElement.classList.toggle('nav-lib-shut', !open);   // ui/theme.js set it for the first paint
   toggle.setAttribute('aria-expanded', String(open));
 }
 function rdRulesSync() {
@@ -99,8 +92,12 @@ function rdRulesSync() {
   RD_RULES.was = here;
   const open = rdRulesOpen();
   subs.hidden = !open;
+  document.documentElement.classList.toggle('nav-rules-open', open);
   toggle.setAttribute('aria-expanded', String(open));
 }
+// The folds' chevrons.
+$('#side .rd-lib-toggle:not(.rd-rules-toggle)').onclick = () => { const open = rdLibOpen(); RD_LIB.inside = false; rdLibRemember(!open); rdLibSync(); };
+$('#side .rd-rules-toggle').onclick = () => { const open = rdRulesOpen(); RD_RULES.inside = false; rdRulesRemember(!open); rdLibSync(); };
 // The current page's highlight for what the redesign adds or moves (sidebar.js asks, after its own checks).
 function redesignNavCurrent(nav) {
   const r = S.route || '';
@@ -115,12 +112,6 @@ function redesignNavCurrent(nav) {
   if (nav.startsWith('rules-')) return rdUnder(r, RULES_ROUTE) && ruTabOf(r) === nav.slice(6);
   return false;
 }
-
-// Called by applyConfig (state.js) whenever config is read: boot, and the poll every two minutes.
-window.redesignApply = function redesignApply() {
-  document.documentElement.classList.add('redesign');
-  redesignNav();
-};
 
 // ----------------------------------------------------------------- routes
 // Runs before the router's own list (router.js); true when it handled the address.

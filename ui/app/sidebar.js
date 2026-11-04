@@ -5,6 +5,7 @@
 // ----------------------------------------------------------------- sidebar + heartbeat
 const NAV_COLLAPSED_KEY = 'hub.nav.collapsed';
 let navCollapsed = new Set(); try { navCollapsed = new Set(JSON.parse(localStorage.getItem(NAV_COLLAPSED_KEY) || '[]')); } catch {}
+// The Team fold shows from the first paint as ui/theme.js read it from the same key (html.nav-team-shut, sidebar.css).
 function renderNavSections() {
   document.querySelectorAll('[data-section-toggle]').forEach(button => {
     const key = button.dataset.sectionToggle, isCollapsed = navCollapsed.has(key);
@@ -12,6 +13,7 @@ function renderNavSections() {
     const body = document.querySelector(`[data-section-body="${key}"]`);
     if (body) body.hidden = isCollapsed;
   });
+  document.documentElement.classList.toggle('nav-team-shut', navCollapsed.has('organisation'));
 }
 document.querySelectorAll('[data-section-toggle]').forEach(button => button.onclick = () => {
   const key = button.dataset.sectionToggle;

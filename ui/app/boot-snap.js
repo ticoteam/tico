@@ -147,6 +147,7 @@ function snapDelete() {
 }
 // Signed out, or someone else: nothing more is kept in this page, a copy on screen goes now, and what was kept goes.
 function bootSnapDrop() {
+  if (typeof rdNavForget === 'function') rdNavForget();   // the sidebar rows kept for them, too (redesign.js)
   SNAP.who = ''; SNAP.done = true; SNAP.banned = true;
   clearTimeout(SNAP.timer);
   bootSnapRelease();
