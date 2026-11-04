@@ -796,6 +796,15 @@ def outcome_counts(c, start, end):
 REPLAY_PAGE = 25
 
 
+def _reads(auth, c, who, task):
+    """Whether `who` may read this task, by the task routes' own rule (auth.task_row)."""
+    try:
+        auth.task_row(c, who, task)
+        return True
+    except Problem:
+        return False
+
+
 def _next_day(day):
     import datetime as dt
     return (dt.date.fromisoformat(day) + dt.timedelta(days=1)).isoformat() + "T00:00:00"
@@ -810,12 +819,16 @@ def replay_items(c, person, start, end, assistant_bot=None):
     well: a replay counts what On would have kept off, not only what landed. A question carries its structured questions
     (refs.questions); a task row carries none, its questions are the ask messages replayed beside it."""
     skip = H.bot_actor(assistant_bot) if assistant_bot else ""
+    # A task filed on them counts on the day it was filed; one the filter acted on, on the day it was put on them (its
+    # ask row), wherever it was created.
     out = [{"kind": "task", "ref": r["id"], "asker": r["requester_id"], "title": r["title"] or "", "text": r["body"] or "",
-            "asked": None, "created_at": r["created_at"]}
-           for r in c.execute("SELECT id,title,body,requester_id,created_at FROM tasks WHERE (owner_id=? OR id IN "
-                              "(SELECT ref FROM ask_ingest_items WHERE person=? AND kind='task')) AND created_at>=? AND "
-                              "created_at<? AND requester_id LIKE 'bot:%' AND requester_id<>?",
-                              (person, person, start, end, skip))]
+            "asked": None, "created_at": r["at"]}
+           for r in c.execute("SELECT t.id,t.title,t.body,t.requester_id,t.created_at AS at FROM tasks t WHERE t.owner_id=? "
+                              "AND t.created_at>=? AND t.created_at<? AND t.requester_id LIKE 'bot:%' AND t.requester_id<>? "
+                              "UNION SELECT t.id,t.title,t.body,t.requester_id,MIN(i.created_at) FROM ask_ingest_items i "
+                              "JOIN tasks t ON t.id=i.ref WHERE i.person=? AND i.kind='task' AND i.created_at>=? "
+                              "AND i.created_at<? AND t.owner_id<>? AND t.requester_id LIKE 'bot:%' AND t.requester_id<>? "
+                              "GROUP BY t.id", (person, start, end, skip, person, start, end, person, skip))]
     for m in H._rows(c.execute("SELECT * FROM messages WHERE recipient_id=? AND kind='ask' AND created_at>=? AND created_at<? "
                                "AND sender_id LIKE 'bot:%' AND sender_id<>?", (person, start, end, skip))):
         msg = H.message(c, m["id"]) or m
@@ -849,19 +862,22 @@ def open_items_at(c, person, at, leave_out="", asker=""):
     return out
 
 
-def _shown(c, viewer, person, it):
+def _shown(c, viewer, person, it, can_read=None):
     """Whether `viewer` may read a replayed item's title: the person their own tasks and questions, and a task the
     filter kept with its bot only if they may read it; anyone else (an owner or admin) only a task they may read, never
-    a bot's question to the person outside any task."""
+    a bot's question to the person outside any task. `can_read(c, task)` is the full task-read policy for the viewer
+    (auth.task_row: a private task's guests, Read on every bot it involves); without it, privacy alone decides."""
     if it["kind"] == "loose":
         return viewer in (None, person)
     task = H.task(c, it["ref"])
-    # A task the filter kept with its bot may be private to it: the person sees its title only if they may read it.
-    return bool(task) and (task["owner_id"] == person and viewer in (None, person)
-                           or H.task_private_readable(c, viewer or person, task))
+    if not task:
+        return False
+    if task["owner_id"] == person and viewer in (None, person):
+        return True
+    return can_read(c, task) if can_read else H.task_private_readable(c, viewer or person, task)
 
 
-def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, viewer=None):
+def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, viewer=None, can_read=None):
     """Replay a past day: each bot item put on `person` in [start, end) judged as it would have been, with
     the person's settings now and their plate just before it, decided as if the filter were On. Writes only the
     judge.call rows; nothing on any plate moves. A `viewer` other than the person reads only the titles they may
@@ -879,7 +895,7 @@ def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, view
         person_name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
         prepared = [(it, load_at(c, person, it["created_at"]),
                      open_items_at(c, person, it["created_at"], it["ref"], it["asker"]),
-                     _bot_line(c, it["asker"]), _shown(c, viewer, person, it)) for it in page]
+                     _bot_line(c, it["asker"]), _shown(c, viewer, person, it, can_read)) for it in page]
     out = []
     for it, plate, items, asker, shown in prepared:
         answers, _, error = _judge(store, engine, qset, own, items, asker, person_name, it["title"], it["text"],
@@ -971,7 +987,8 @@ def install(app, store, auth):
         except ValueError:
             raise Problem("validation", "date is YYYY-MM-DD", 422)
         try:
-            return replay(store, app.state.judge, person, start, end, body.offset, body.limit, viewer=who.actor)
+            return replay(store, app.state.judge, person, start, end, body.offset, body.limit, viewer=who.actor,
+                          can_read=lambda c, task: _reads(auth, c, who, task))
         except LookupError as exc:
             raise Problem("state", str(exc), 409)
 

@@ -1089,6 +1089,33 @@ def test_a_replay_hides_a_private_task_the_filter_kept_with_its_bot(gate):
         assert not A._shown(c, "human:priya", "human:ben", {"kind": "loose", "ref": "m1"})
 
 
+def test_a_replay_shows_a_bot_task_only_where_the_viewer_may_read_it(gate):
+    """A company-visible task the filter kept with its bot shows its title only where the full task-read rule allows it
+    (Read on the bot): privacy alone is not enough."""
+    api, model, token = gate
+    with api.app.state.store.transaction() as c:
+        kept = H.task_create(c, "bot:ops", "Vendor margin review", "", "bot:ops", lint=False)
+        it = {"kind": "task", "ref": kept["id"]}
+        assert A._shown(c, "human:priya", "human:ben", it)                       # privacy alone: shown
+        assert not A._shown(c, "human:priya", "human:ben", it, lambda c, task: False)
+        assert A._shown(c, "human:priya", "human:ben", it, lambda c, task: True)
+
+
+def test_a_handoff_replays_on_the_day_it_was_put_on_them(gate):
+    """A task the filter acted on counts on the day its ask row was written, not the day the bot created the task."""
+    api, model, token = gate
+    with api.app.state.store.transaction() as c:
+        kept = H.task_create(c, "bot:ops", "Renew the vendor contract", "", "bot:ops", lint=False)
+        c.execute("UPDATE tasks SET created_at='2026-10-05T10:00:00' WHERE id=?", (kept["id"],))
+        c.execute("INSERT INTO ask_ingest_items(id,person,asker,kind,ref,mode,outcome,would,reason,load,created_at) "
+                  "VALUES('ai1','human:ben','bot:ops','task',?,'on','sent_back','sent_back','',0,'2026-10-06T09:00:00')",
+                  (kept["id"],))
+        monday = A.replay_items(c, "human:ben", "2026-10-05T00:00:00", "2026-10-06T00:00:00")
+        tuesday = A.replay_items(c, "human:ben", "2026-10-06T00:00:00", "2026-10-07T00:00:00")
+    assert kept["id"] not in [i["ref"] for i in monday]
+    assert [(i["ref"], i["created_at"]) for i in tuesday if i["kind"] == "task"] == [(kept["id"], "2026-10-06T09:00:00")]
+
+
 @pytest.mark.parametrize("actor,role,via,expected", [
     ("bot:ops", "bot", "botops", True),
     ("bot:ops", "bot", "assistant", False),
