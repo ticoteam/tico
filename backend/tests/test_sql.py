@@ -1147,3 +1147,27 @@ def test_a_message_whose_task_ref_is_a_list_is_visible_only_when_every_listed_ta
     visible = column(api, "SELECT id FROM messages WHERE id IN (" + ",".join(f"'{i}'" for i in ids.values()) + ")",
                      world["attempt"]["token"])
     assert visible == sorted(ids[name] for name in ('known', 'known-twice'))
+
+
+def test_an_event_or_blob_on_a_message_whose_task_list_cannot_be_read_is_hidden_and_the_query_still_runs(api, world):
+    """A message whose task list is empty or names a missing task has no readable provenance. Its event and its
+    attachment are hidden, and the query returns the other rows instead of failing on the unreadable one."""
+    store = api.app.state.store
+    public = world['coo_task']['id']
+    with store.transaction() as c:
+        empty = H.say(c, 'bot:ops', 'human:ana', 'List empty', conversation_id=world['ana_room'], refs={'task': []})['id']
+        missing = H.say(c, 'bot:ops', 'human:ana', 'List missing', conversation_id=world['ana_room'],
+                        refs={'task': [public, 'unknown-fixture-task']})['id']
+        good = H.say(c, 'bot:ops', 'human:ana', 'Scalar', conversation_id=world['ana_room'], refs={'task': public})['id']
+        for mid in (empty, missing, good):
+            H.event(c, 'human:ana', 'fixture.note', mid, {'text': 'Note on ' + mid})
+        for bid, mid in (('blob-list-empty', empty), ('blob-list-missing', missing), ('blob-scalar', good)):
+            c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
+                      (bid, 'human:ben', bid, 1, bid + '.txt', 'text/plain', '2026-11-04T00:00:00Z'))
+            c.execute("INSERT INTO message_assets(message_id,blob_id) VALUES(?,?)", (mid, bid))
+    # The owner reads the audit trail through the event gate; the three notes are the only fixture rows with that action.
+    assert column(api, "SELECT target FROM events WHERE action='fixture.note' AND target IN ('"
+                  + "','".join((empty, missing, good)) + "')") == [good]
+    assert column(api, "SELECT id FROM blobs WHERE id LIKE 'blob-%'") == ['blob-scalar']
+    # The bot reads the same rows through its own gate and reaches the scalar message's blob too.
+    assert column(api, "SELECT id FROM blobs WHERE id LIKE 'blob-%'", world["attempt"]["token"]) == ['blob-scalar']

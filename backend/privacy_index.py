@@ -383,9 +383,12 @@ class ReadIndex:
         if target in self.tags() and not self.tag(target, False):
             return False
         msg = self.target_message(target)
-        if msg and (msg.get("deleted_at") or msg.get("deleted") or self.denied.intersection(self.sources(msg))
-                    or not self.meetings.message_readable(self.principals, msg)):
-            return False
+        try:
+            if msg and (msg.get("deleted_at") or msg.get("deleted") or self.denied.intersection(self.sources(msg))
+                        or not self.meetings.message_readable(self.principals, msg)):
+                return False
+        except ValueError:
+            return False    # provenance that cannot be read (a list naming a missing task) hides this row, not the query
         if not self.conversation(target):
             return False
         meeting = self.c.execute("SELECT * FROM live_meetings WHERE id=?", (target,)).fetchone()
@@ -435,7 +438,10 @@ class ReadIndex:
             return False
         for mid in row["messages"]:
             msg = self.target_message(mid)
-            if (not msg or msg.get("deleted_at") or msg.get("deleted") or self.denied.intersection(self.sources(msg))
-                    or not self.meetings.message_readable(self.principals, msg)):
-                return False
+            try:
+                if (not msg or msg.get("deleted_at") or msg.get("deleted") or self.denied.intersection(self.sources(msg))
+                        or not self.meetings.message_readable(self.principals, msg)):
+                    return False
+            except ValueError:
+                return False    # the message's provenance cannot be read (see event): this attachment is hidden
         return all(self.attempt(aid) for aid in row["attempts"]) and all(self.blob(parent, seen) for parent in row["parents"])

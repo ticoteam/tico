@@ -714,3 +714,39 @@ def test_migration_0065_gives_the_mail_queue_its_chain_columns_and_keeps_its_row
     once = snapshot(path)
     boot(path)
     assert snapshot(path) == once
+
+
+def test_a_settled_message_whose_task_list_was_read_as_none_is_requeued_with_what_read_it(tmp_path):
+    """Migration 0076 queues each message naming a list of tasks, and every row that read it, transitively, for another
+    walk. A scalar message, a message with refs that are not JSON, and a row that read only scalars stay settled. The
+    migration runs again without changing the queue, and a database without the read tables has nothing to requeue."""
+    up = _migration("0076_requeue_list_task_refs").up
+    conn = sqlite3.connect(":memory:")
+    conn.executescript("""
+        CREATE TABLE messages(id TEXT PRIMARY KEY, refs TEXT);
+        CREATE TABLE read_index(key TEXT PRIMARY KEY) WITHOUT ROWID;
+        CREATE TABLE read_deps(dep TEXT NOT NULL, key TEXT NOT NULL, PRIMARY KEY(dep, key)) WITHOUT ROWID;
+        CREATE TABLE read_dirty(key TEXT PRIMARY KEY) WITHOUT ROWID;
+    """)
+    refs = {"list": '{"task": ["t-known", "t-missing"]}', "task-id-list": '{"task_id": []}',
+            "scalar": '{"task": "t-known"}', "broken": '{"task": [', "plain": None,
+            "reply": '{"task": "t-known"}', "deeper": '{"task": "t-known"}', "other": '{"task": "t-known"}'}
+    conn.executemany("INSERT INTO messages VALUES(?,?)", list(refs.items()))
+    settled = ["m:" + mid for mid in refs]
+    conn.executemany("INSERT INTO read_index VALUES(?)", [(key,) for key in settled])
+    # 'reply' read 'list' as a node, 'deeper' read 'reply', and 'other' read only the scalar message.
+    conn.executemany("INSERT INTO read_deps VALUES(?,?)",
+                     [("m:list", "m:reply"), ("m:reply", "m:deeper"), ("m:scalar", "m:other")])
+    up(conn)
+    index = {row[0] for row in conn.execute("SELECT key FROM read_index")}
+    dirty = {row[0] for row in conn.execute("SELECT key FROM read_dirty")}
+    assert dirty == {"m:list", "m:task-id-list", "m:reply", "m:deeper"}
+    assert index == {"m:scalar", "m:broken", "m:plain", "m:other"}
+    up(conn)
+    assert {row[0] for row in conn.execute("SELECT key FROM read_dirty")} == dirty
+    assert {row[0] for row in conn.execute("SELECT key FROM read_index")} == index
+    bare = sqlite3.connect(":memory:")
+    bare.execute("CREATE TABLE messages(id TEXT PRIMARY KEY, refs TEXT)")
+    bare.execute("INSERT INTO messages VALUES('list', '{\"task\": []}')")
+    up(bare)
+    assert _tables(bare) == {"messages"}
