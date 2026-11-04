@@ -384,3 +384,28 @@ def test_a_core_company_verified_31_days_ago_is_reported_stale_by_the_sweep(api,
         out = M.sweep(c, "bot:librarian", [{"id": "company/acme", "look_for": "pricing"},
                                           {"id": "company/brightline", "look_for": "pricing"}], today=today)
     assert [row["entity_id"] for row in out["listening_tasks"]] == ["company/acme"]
+
+
+def test_an_impossible_calendar_day_is_refused_on_apply_to_an_entity_or_a_new_one_with_nothing_written(api, tmp_path):
+    """2026-02-31 has the right shape but no such day: the server refuses it on both apply paths, and nothing is
+    written (the insight stays new, no evidence row, no entity, the existing date unchanged)."""
+    _seed(api, tmp_path)
+    _apply_insights(api, "i-feb", "i-feb-new")
+    with api.app.state.store.read() as c:
+        before = c.execute("SELECT last_verified_at FROM market_entities WHERE id='company/acme'").fetchone()[0]
+    evidence = {"source_kind": "site", "source_url": "https://acme.example/feb", "quote": "Q", "our_read": "R"}
+    r = api.post("/api/v2/market/insights/i-feb/apply", headers=headers(), json={
+        "evidence": evidence, "entity_id": "company/acme", "last_verified_at": "2026-02-31"})
+    assert r.status_code >= 400 and "calendar" in r.text, r.text
+    new_evidence = {"source_kind": "site", "source_url": "https://ghostco.example/", "quote": "Q", "our_read": "R"}
+    r = api.post("/api/v2/market/insights/i-feb-new/apply", headers=headers(), json={
+        "evidence": new_evidence, "entity": {"id": "company/ghostco", "type": "company", "name": "Ghostco",
+                                             "last_verified_at": "2026-02-31"}})
+    assert r.status_code >= 400 and "calendar" in r.text, r.text
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT status FROM market_insights WHERE id IN ('i-feb','i-feb-new') "
+                         "AND status<>'new'").fetchall() == []
+        assert c.execute("SELECT COUNT(*) FROM market_evidence WHERE source_url IN "
+                         "('https://acme.example/feb','https://ghostco.example/')").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM market_entities WHERE id='company/ghostco'").fetchone()[0] == 0
+        assert c.execute("SELECT last_verified_at FROM market_entities WHERE id='company/acme'").fetchone()[0] == before
