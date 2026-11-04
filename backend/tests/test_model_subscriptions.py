@@ -1178,11 +1178,23 @@ def usage_of(api, sid):
     return next(s for s in listed(api) if s["id"] == sid)["usage"]
 
 
-def window_reading(used, resets_in, reported_ago=timedelta(0)):
+def window_reading(used, resets_in, reported_ago=timedelta(0), origin=None, subscription_id=None):
     """A usage window as a computer reports it: `used` percent (None when the plan sends none), resetting `resets_in`
-    after the reading, which was taken `reported_ago` ago."""
+    after the reading, which was taken `reported_ago` ago, and where it came from: `origin` "subscription" for a turn that
+    signed in with plan `subscription_id`, "login" for the computer's own login, None for a runner that sends neither."""
     reported = datetime.now(timezone.utc) - reported_ago
-    return {"used_percent": used, "resets_at": (reported + resets_in).isoformat(), "reported_at": reported.isoformat()}
+    return {"used_percent": used, "resets_at": (reported + resets_in).isoformat(), "reported_at": reported.isoformat(),
+            "origin": origin, "subscription_id": subscription_id}
+
+
+def turn_window(used, resets_in, sid, reported_ago=timedelta(0)):
+    """A usage window a turn reports after it signed in with plan `sid`."""
+    return window_reading(used, resets_in, reported_ago, origin="subscription", subscription_id=sid)
+
+
+def login_window(used, resets_in, reported_ago=timedelta(0)):
+    """A usage window the computer's own login reports: a background read, or a turn that ran on that login."""
+    return window_reading(used, resets_in, reported_ago, origin="login")
 
 
 def beat(api, m, profiles, *, takes=True, logins=True, signed_in=True, runtime="claude"):
@@ -1227,7 +1239,7 @@ def usage_machine(api, label="Plan Mac"):
 
 def turn_on(api, m, sid, runtime="claude", bot="ops"):
     """A turn of `bot` on computer `m` that signs in with plan `sid` (given to `m` for `runtime` first), still running:
-    the readings `m` takes while it runs are this plan's (model_subscriptions.owned)."""
+    the readings it reports while it runs are this plan's (their origin, model_subscriptions.provenance)."""
     give(api, m, runtime, sid)
     post(api, "chat/" + bot, {"text": "Summarize the Acme account."})
     turn = claim(api, m)
@@ -1263,17 +1275,17 @@ def test_a_plan_shows_the_most_used_window_its_computer_reads_even_at_zero(api):
     sid = add(api)["id"]
     m = usage_machine(api)
     turn_on(api, m, sid)
-    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(0, timedelta(days=3))}}})
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": turn_window(0, timedelta(days=3), sid)}}})
     usage = usage_of(api, sid)
     assert (usage["window"], usage["used_pct"]) == ("week", 0) and "reason" not in usage
     # Its 5-hour window is the most used now, then its week again.
-    beat(api, m, {"own": {"claude": {"signed_in": True, "five_hour": window_reading(40, timedelta(hours=2))}}})
+    beat(api, m, {"own": {"claude": {"signed_in": True, "five_hour": turn_window(40, timedelta(hours=2), sid)}}})
     assert (usage_of(api, sid)["window"], usage_of(api, sid)["used_pct"]) == ("5h", 40)
-    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(70, timedelta(days=3))}}})
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": turn_window(70, timedelta(days=3), sid)}}})
     assert (usage_of(api, sid)["window"], usage_of(api, sid)["used_pct"]) == ("week", 70)
     # Another login on the computer is not this plan's, however used it is: its 99% is not read; the open 40% stands.
-    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(10, timedelta(days=3))}},
-                  "work": {"claude": {"signed_in": True, "weekly": window_reading(99, timedelta(days=3))}}})
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": turn_window(10, timedelta(days=3), sid)}},
+                  "work": {"claude": {"signed_in": True, "weekly": login_window(99, timedelta(days=3))}}})
     assert (usage_of(api, sid)["window"], usage_of(api, sid)["used_pct"]) == ("5h", 40)
     # A limit met on the plan holds it at 100, whatever its computers last read.
     hold_plan(api, sid)
@@ -1285,12 +1297,12 @@ def test_a_window_that_has_reset_or_sends_no_percent_is_not_a_reading(api):
     company(api)
     sid = add(api)["id"]
     m = usage_machine(api)
-    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": login_window(
         55, timedelta(days=1), reported_ago=timedelta(days=2))}}})
     turn_on(api, m, sid)
     # Its week reset a day ago, so the 55% read before it is no longer this plan's usage.
     assert usage_of(api, sid)["reason"] == "Waiting for a computer to report"
-    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(None, timedelta(days=3))}}})
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": turn_window(None, timedelta(days=3), sid)}}})
     assert usage_of(api, sid)["reason"] == "No percentage from the plan"
 
 
@@ -1302,12 +1314,12 @@ def test_only_a_computer_that_names_its_default_login_and_takes_plans_reads_usag
     assign(api, m, "ops")
     beat(api, m, {}, logins=False)
     give(api, m, "claude", sid)
-    weekly = {"own": {"claude": {"signed_in": True, "weekly": window_reading(30, timedelta(days=3))}}}
+    weekly = {"own": {"claude": {"signed_in": True, "weekly": login_window(30, timedelta(days=3))}}}
     beat(api, m, weekly, logins=False)
     assert usage_of(api, sid)["reason"] == "Update the computer to see usage"
     beat(api, m, {})
     turn_on(api, m, sid)
-    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(31, timedelta(days=3))}}})
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": turn_window(31, timedelta(days=3), sid)}}})
     assert usage_of(api, sid)["used_pct"] == 31
 
 
@@ -1318,11 +1330,11 @@ def test_a_reading_from_before_a_plan_was_given_to_the_computer_is_not_its_usage
     m = runner(api, label="Plan Mac")
     assign(api, m, "ops")
     # The computer's own login was at 88% before the plan reached it: that is not this plan's usage.
-    home_beat(api, m, claude=runtime_state(weekly=window_reading(88, timedelta(days=3))))
+    home_beat(api, m, claude=runtime_state(weekly=login_window(88, timedelta(days=3))))
     give(api, m, "claude", sid)
     assert usage_of(api, sid)["reason"] == NOT_SINCE and usage_of(api, sid)["used_pct"] is None
     turn_on(api, m, sid)
-    home_beat(api, m, claude=runtime_state(weekly=window_reading(45, timedelta(days=3))))
+    home_beat(api, m, claude=runtime_state(weekly=turn_window(45, timedelta(days=3), sid)))
     assert usage_of(api, sid)["used_pct"] == 45
 
 
@@ -1332,7 +1344,7 @@ def test_a_rename_keeps_the_readings_taken_for_a_plan_and_a_new_secret_ends_them
     sid = add(api)["id"]
     m = usage_machine(api)
     turn_on(api, m, sid)
-    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(30, timedelta(days=3))}}})
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": turn_window(30, timedelta(days=3), sid)}}})
     assert usage_of(api, sid)["used_pct"] == 30
     post(api, f"model-subscriptions/{sid}", {"name": "Renamed plan"})          # the same credential: its readings stand
     assert usage_of(api, sid)["used_pct"] == 30
@@ -1349,7 +1361,7 @@ def test_a_same_accounts_refresh_keeps_the_readings_taken_for_a_chatgpt_plan(api
     assign(api, m, "ops")
     home_beat(api, m, codex=runtime_state(account="ana@acme.example"))
     turn = turn_on(api, m, sid, runtime="codex")
-    home_beat(api, m, codex=runtime_state(account="ana@acme.example", weekly=window_reading(64, timedelta(days=3))))
+    home_beat(api, m, codex=runtime_state(account="ana@acme.example", weekly=turn_window(64, timedelta(days=3), sid)))
     assert usage_of(api, sid)["used_pct"] == 64
     # The run refreshes its file for the same account: the stored credential moves on, its readings stand.
     body = {"attempt": turn["id"], "subscription": sid, "revision": 1}
@@ -1358,7 +1370,7 @@ def test_a_same_accounts_refresh_keeps_the_readings_taken_for_a_chatgpt_plan(api
     assert usage_of(api, sid)["used_pct"] == 64
 
 
-def test_a_chatgpt_reading_on_an_ordinary_home_counts_only_for_the_account_the_plan_is_signed_in_as(api):
+def test_a_chatgpt_login_reading_on_an_ordinary_home_counts_only_for_the_account_the_plan_is_signed_in_as(api):
     setup(api)
     company(api)
     on(api, "ops", "codex", "gpt-6.1-sol")
@@ -1367,13 +1379,34 @@ def test_a_chatgpt_reading_on_an_ordinary_home_counts_only_for_the_account_the_p
     assign(api, m, "ops")
     home_beat(api, m, codex=runtime_state(account="ana@acme.example"))
     turn_on(api, m, sid, runtime="codex")
-    home_beat(api, m, codex=runtime_state(account="ana@acme.example", weekly=window_reading(64, timedelta(days=3))))
+    # The computer's own login is the plan's account, so its background read is the plan's usage.
+    home_beat(api, m, codex=runtime_state(account="ana@acme.example", weekly=login_window(64, timedelta(days=3))))
     assert usage_of(api, sid)["used_pct"] == 64
     # The same computer signed in as someone else: that account's usage is not this plan's.
-    home_beat(api, m, codex=runtime_state(account="someone@else.example", weekly=window_reading(99, timedelta(days=3))))
+    home_beat(api, m, codex=runtime_state(account="someone@else.example", weekly=login_window(99, timedelta(days=3))))
     assert usage_of(api, sid)["reason"] == NOT_SINCE
     # A reading that names no account cannot be attributed to the plan either.
-    home_beat(api, m, codex=runtime_state(weekly=window_reading(50, timedelta(days=3))))
+    home_beat(api, m, codex=runtime_state(weekly=login_window(50, timedelta(days=3))))
+    assert usage_of(api, sid)["reason"] == NOT_SINCE
+
+
+def test_a_background_login_read_during_a_subscription_turn_is_not_that_plans_usage_without_an_account(api):
+    # A ChatGPT login whose id_token names no email: nothing says whose login the plan is, so the computer's own background
+    # read taken while the plan's turn runs is no reading of the plan. Only the turn's own reading (its origin and id) is.
+    setup(api)
+    company(api)
+    on(api, "ops", "codex", "gpt-6.1-sol")
+    sid = add(api, "codex_login", codex_file(email=""), name="ChatGPT")["id"]
+    m = runner(api, label="Plan Mac")
+    assign(api, m, "ops")
+    home_beat(api, m, codex=runtime_state(account="ana@acme.example"))
+    turn_on(api, m, sid, runtime="codex")
+    home_beat(api, m, codex=runtime_state(account="ana@acme.example", weekly=login_window(30, timedelta(days=3))))
+    assert usage_of(api, sid)["reason"] == NOT_SINCE and usage_of(api, sid)["used_pct"] is None
+    home_beat(api, m, codex=runtime_state(account="ana@acme.example", weekly=turn_window(45, timedelta(days=3), sid)))
+    assert usage_of(api, sid)["used_pct"] == 45
+    # A reading that carries no origin (a runner that predates it) is no plan's either.
+    home_beat(api, m, codex=runtime_state(weekly=window_reading(60, timedelta(days=3))))
     assert usage_of(api, sid)["reason"] == NOT_SINCE
 
 
@@ -1385,8 +1418,8 @@ def test_a_computer_on_its_ordinary_home_shows_the_plan_its_turn_ran_on_not_its_
     assign(api, m, "ops")
     home_beat(api, m, claude=runtime_state())
     turn_on(api, m, sid)
-    home_beat(api, m, claude=runtime_state(five_hour=window_reading(40, timedelta(hours=2)),
-                                           weekly=window_reading(70, timedelta(days=3))))
+    home_beat(api, m, claude=runtime_state(five_hour=turn_window(40, timedelta(hours=2), sid),
+                                           weekly=turn_window(70, timedelta(days=3), sid)))
     usage = usage_of(api, sid)
     assert (usage["window"], usage["used_pct"]) == ("week", 70)
 
@@ -1402,7 +1435,7 @@ def test_a_reading_taken_on_the_computers_own_login_is_not_the_plans_when_its_ho
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
     assert turn and signed_with(api, turn) is None
-    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(88, timedelta(days=3))}}})
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": login_window(88, timedelta(days=3))}}})
     assert usage_of(api, sid)["used_pct"] == 100                              # a limit met on the plan holds it at 100
     hold_plan(api, sid, until=H.shift(H.now(), seconds=-1))                   # the hold ends: the 88% was not the plan's
     assert usage_of(api, sid)["reason"] == NOT_SINCE

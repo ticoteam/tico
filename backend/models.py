@@ -5,7 +5,6 @@ from typing import Annotated, Any, Literal
 import re
 
 from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, SecretStr, StrictBool, StrictInt, StrictStr, ValidationError, WrapValidator, model_serializer, model_validator
-from pydantic.json_schema import SkipJsonSchema
 
 Text = Annotated[str, Field(min_length=1, max_length=200_000)]
 ID = Annotated[str, Field(min_length=1, max_length=200)]
@@ -1054,10 +1053,11 @@ class SubscriptionWeekly(Contract):
     resets_at: str | None = Field(default=None, max_length=50)
     reported_at: str = Field(max_length=50)
     status: Literal["allowed", "allowed_warning", "rejected"] | None = None
-    # Whose login the reading is, stamped by the server from the turns that overlapped it (model_subscriptions.stamped): a
-    # subscription's id, "" for the computer's own login, None when that cannot be told. A computer's own value is replaced.
-    # Server-only: SkipJsonSchema keeps it out of the runner's request contract, which never carries it.
-    owner: Annotated[str | None, SkipJsonSchema()] = Field(default=None, max_length=80)
+    # Where the reading came from, as the runner tells it (runner-rs drive.rs, subscription_refresh.rs): "subscription" when a
+    # turn ran on a company subscription (`subscription_id` is its id), "login" for the computer's own login (a background
+    # read or a turn on it). Absent from a runner that predates this, which counts for no plan (model_subscriptions._plan_usage).
+    origin: Literal["subscription", "login"] | None = None
+    subscription_id: str | None = Field(default=None, max_length=80)
 
 
 # The computer's own login's usage window on its runtime row: one that fails its checks is left out, like the account.

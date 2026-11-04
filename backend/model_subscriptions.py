@@ -69,7 +69,7 @@ one.
 """
 import base64
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from pydantic import Field, SecretStr
 
@@ -453,56 +453,16 @@ def _plan_identity(sub):
     return preview if sub.get("kind") == "codex_login" and "@" in preview else ""
 
 
-# A reading is taken during a turn on its computer. The computer's clock and this server's can differ a little, so a turn
-# counts for a reading from OWNER_SKEW before its start to OWNER_SKEW after its end; a turn that began up to OWNER_RUN
-# before the reading (a turn runs for hours at most) is one that may have taken it.
-OWNER_RUN = timedelta(hours=12)
-OWNER_SKEW = timedelta(minutes=2)
-
-
-def _stamp(at):
-    return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
-
-
-def reading_owner(c, runner_id, runtime, reported):
-    """Whose a computer's reading for `runtime` is, from the turns on that computer that overlapped it: the one
-    subscription every one of them signed in with (its id), "" when each ran on the computer's own login, or None when
-    they did not agree or none overlapped it, so it cannot be told apart and is no plan's. A turn on the other runtime
-    that overlaps counts too: nothing in the report says which turn took it."""
-    at = H.parse_ts(reported)
-    if at is None or at.tzinfo is None or not H._has_table(c, "attempt_subscriptions"):
-        return None
-    owners = {row[0] for row in c.execute(
-        "SELECT coalesce(s.subscription_id,'') FROM attempts a LEFT JOIN attempt_subscriptions s "
-        "ON s.attempt_id=a.id AND s.runtime=? WHERE a.runner_id=? AND a.created_at>=? AND a.created_at<=? "
-        "AND coalesce(a.finished_at,a.lease_until)>=?",
-        (runtime, runner_id, _stamp(at - OWNER_RUN), _stamp(at + OWNER_SKEW), _stamp(at - OWNER_SKEW)))}
-    return owners.pop() if len(owners) == 1 else None
-
-
-def stamped(c, runner_id, runtime, reading, previous=None):
-    """A computer's `reading` (one usage window, or None) with its `owner`: the same report `previous` already had keeps
-    that owner, and a new one takes `reading_owner`. Whatever owner the computer sent is never kept."""
+def provenance(reading):
+    """A computer's usage window (or None) with its origin kept as the runner sent it: "subscription" with the
+    subscription's id, or "login". Anything else is dropped, so a window with no origin counts for no plan (`_plan_usage`)."""
     if not reading:
         return None
-    if previous and previous.get("reported_at") == reading.get("reported_at") and "owner" in previous:
-        owner = previous["owner"]
-    else:
-        owner = reading_owner(c, runner_id, runtime, reading.get("reported_at"))
-    return {**reading, "owner": owner}
-
-
-def stamp_readiness(c, runner_id, readiness, before):
-    """Each runtime's usage windows on a computer's readiness document (its own login's), owned (`stamped`) against the
-    document they replace (`before`)."""
-    old = (before or {}).get("runtimes") or {}
-    for runtime, row in ((readiness or {}).get("runtimes") or {}).items():
-        if not isinstance(row, dict):
-            continue
-        previous = old.get(runtime) if isinstance(old.get(runtime), dict) else {}
-        for window in ("weekly", "five_hour"):
-            if row.get(window):
-                row[window] = stamped(c, runner_id, runtime, row[window], previous.get(window))
+    if reading.get("origin") == "subscription" and reading.get("subscription_id"):
+        return reading
+    if reading.get("origin") == "login":
+        return {**reading, "subscription_id": None}
+    return {**reading, "origin": None, "subscription_id": None}
 
 
 def _plan_usage(c, sub, runtime, ctx):
@@ -511,9 +471,11 @@ def _plan_usage(c, sub, runtime, ctx):
     profile `turn_profile` picks, which the heartbeat names as readiness `computer_profile`; "" is its own home). So that
     profile's windows for `runtime` are this plan's, but only a reading that is this plan's: taken since the plan was
     given to that computer or its credential was last replaced (`credential_at`: a new value may be another account; a
-    rename, an owner change or a refresh of the same account is not), taken on a turn that signed in with this plan
-    (the reading's `owner`, `stamped`), and, where the plan names its account, reported for that account. A window whose
-    reset has passed is no longer any reading.
+    rename, an owner change or a refresh of the same account is not), and by its origin (`provenance`): a turn that signed
+    in with this plan says so (`origin` "subscription" with its `subscription_id`), and a computer's own login's reading
+    (`origin` "login", a background read or a turn on the own login) is this plan's only when the plan's account is known
+    and the reading is for that same account. A reading with no origin is no plan's. A window whose reset has passed is no
+    longer any reading.
     The most-used window wins, its freshest report breaking a tie. Otherwise the reason is what the data tells: not on a
     computer, a reconnect due, a computer too old, a plan that sends no percent, readings from before it was added,
     computers offline, or a computer yet to report."""
@@ -546,9 +508,15 @@ def _plan_usage(c, sub, runtime, ctx):
             ends = _at(reading["resets_at"]) if reading.get("resets_at") else reported + WINDOWS[window]
             if ends <= now:
                 continue
-            # Not taken on a turn that signed in with this plan (`owner`), or no turn overlapped it: not this plan's.
-            if (reported < since or reading.get("owner") != sub["id"]
-                    or (account_of_plan and account.lower() != account_of_plan.lower())):
+            # Not this plan's by its provenance: another subscription's turn, the own login with no known account for this
+            # plan, or a runner that says neither (`provenance`).
+            if reading.get("origin") == "subscription":
+                mine = reading.get("subscription_id") == sub["id"]
+            elif reading.get("origin") == "login":
+                mine = bool(account_of_plan) and account.lower() == account_of_plan.lower()
+            else:
+                mine = False
+            if reported < since or not mine:
                 outside = True
                 continue
             if reading.get("used_percent") is None:

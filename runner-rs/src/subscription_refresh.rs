@@ -78,9 +78,11 @@ pub(crate) fn remember_windows(profile: &str, reply: &Value) {
         return;
     }
     for w in [&bucket["primary"], &bucket["secondary"]].into_iter().filter(|w| w.is_object()) {
+        // The computer's own login's read, never a turn's: it counts for a plan only where the plan's account is known.
         let event = json!({"used_percent": w.get("usedPercent").cloned().unwrap_or(Value::Null),
                            "window_minutes": w.get("windowDurationMins").cloned().unwrap_or(Value::Null),
-                           "resets_at": iso(&w["resetsAt"]), "plan_type": bucket.get("planType").cloned().unwrap_or(Value::Null)});
+                           "resets_at": iso(&w["resetsAt"]), "plan_type": bucket.get("planType").cloned().unwrap_or(Value::Null),
+                           "origin": "login"});
         crate::profiles::remember_weekly(profile, "codex", &event);
     }
 }

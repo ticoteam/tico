@@ -2659,8 +2659,6 @@ class Execution:
                     row[window] = reading
                 else:
                     row.pop(window, None)
-        # Whose login each reading is (the turns that took it, backend/model_subscriptions.py), against the report it replaces.
-        model_subscriptions.stamp_readiness(c, who.runner_id, readiness, readiness_document(stored[3]))
         if readiness.get('worktrees') is None:
             readiness.pop('worktrees', None)
         if not readiness.get('harnesses'):
@@ -2756,7 +2754,7 @@ class Execution:
         if restart and restart["restart_requested_at"]:
             c.execute("UPDATE runners SET restart_requested_at=NULL WHERE id=?", (who.runner_id,))
         # The assignments are read after the commit (app.py heartbeat route), off the write lock.
-        return {"server_time": H.now(), "start_places": True, "runtime_credential_source": True, "subscription_accounts": True, "worktree_record_stamp": True, "worktree_actions": sendable,
+        return {"server_time": H.now(), "start_places": True, "runtime_credential_source": True, "subscription_accounts": True, "subscription_usage_sources": True, "worktree_record_stamp": True, "worktree_actions": sendable,
                 # Whether the runner samples its performance (backend/performance.py).
                 "performance": bool(restart) and restart["performance"] != "off",
                 # Whether this computer's owner shares its internet with bots: the runner holds its exit link open
