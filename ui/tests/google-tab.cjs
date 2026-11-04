@@ -124,6 +124,7 @@ const scenarios = {
     fake.checks = ['unauthorized', 'unauthorized', 'ok'];
     const {page, seen} = await open(browser, fake, {clock: true});
     await page.locator('[data-ws-check]').click();
+    await page.locator('.google-causes li').nth(3).waitFor();
     assert.equal(await page.locator('.google-causes li').count(), 4);
     assert.match(await page.locator('[data-ws-check-result]').innerText(), /Checking again every 20 seconds/);
     const checks = () => writesTo(fake, '/api/v2/google/workspace/check');
