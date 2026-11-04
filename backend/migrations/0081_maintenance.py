@@ -25,7 +25,8 @@ takes the step's new default:
 `stall_triage` is not copied: its switch is removed (team rule, environment, CONTROLS and the MCP tool).
 """
 import json
-from datetime import datetime, timezone
+
+from backend import hubdb as H
 
 STEP_KEYS = ("collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream")
 # key, enabled by default, frequency by default, "Most bots per run" by default, custom interval and unit by default.
@@ -90,7 +91,7 @@ SCHEMA = (
  kind TEXT NOT NULL CHECK (kind IN ({HANDOFF_KINDS})),
  created_at TEXT NOT NULL,
  delivered_at TEXT)""",
-    f"""CREATE TABLE IF NOT EXISTS maintenance_requests(
+    """CREATE TABLE IF NOT EXISTS maintenance_requests(
  actor TEXT NOT NULL,
  request_key TEXT NOT NULL,
  maintenance_run_id TEXT NOT NULL REFERENCES maintenance_runs(id) ON DELETE CASCADE,
@@ -164,7 +165,7 @@ def up(conn):
     registry = _stored(conn, "system_routines")
     chosen = switches(registry)
     cadence = cadences(registry)
-    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    stamp = H.now()
     for key, enabled, frequency, max_bots, every, unit in DEFAULTS:
         frequency, every, unit = cadence.get(key, (frequency, every, unit))
         conn.execute(
