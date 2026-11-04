@@ -8,10 +8,11 @@ The `mailboxes` and `mailbox_accesses` tables are made here, as the contract stu
 until track A's migration 0082_mailboxes.py lands (then the `tables` fixture's DDL goes)."""
 import pytest
 
-from backend import openapi_v2
+from backend import mailboxes, openapi_v2
 from backend.assistant import admits_on_turn
 from backend.auth import Identity
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
+from backend.store import Problem
 from backend.tests.test_openapi_v2 import conforms
 
 DDL = (
@@ -32,7 +33,6 @@ def mb(api):
     ids = api.app.state.store.settings.test_identities
     ids["ana-assistant"] = Identity("human:ana", "owner", "ana@acme.example", via="assistant")
     ids["cara-assistant"] = Identity("human:cara", "human", "cara@acme.example", via="assistant")
-    ids["ops-bot"] = Identity("bot:ops", "bot")
     return api
 
 
@@ -73,7 +73,6 @@ def test_connect_reads_the_address_as_a_person_s_own_a_shared_inbox_or_one_await
     connect(mb, "not an address", expected=422)
     connect(mb, "eve@acme.example", token="cara-test", expected=403)          # not an admin
     connect(mb, "eve@acme.example", token="ana-assistant", expected=403)      # nobody acting for the admin
-    connect(mb, "eve@acme.example", token="ops-bot", expected=403)
     assert events(mb, "mailbox.connect") == 4
 
 
@@ -136,7 +135,11 @@ def test_nobody_acting_for_a_person_changes_who_can_use_a_mailbox(mb):
     support = connect(mb, "support@acme.example", shared=True)["mailbox"]["id"]
     grant(mb, cara, "ben", token="cara-assistant", expected=403)
     grant(mb, support, "cara", token="ana-assistant", expected=403)
-    grant(mb, support, "cara", token="ops-bot", expected=403)
+    # A bot (its credential is a runner's lease, so the route checks the identity itself), and a task actor.
+    for who in (Identity("bot:ops", "bot"), Identity("human:ana", "owner", "ana@acme.example", task_actor="bot:ops")):
+        with pytest.raises(Problem) as refused:
+            mailboxes._person(who)
+        assert refused.value.status == 403
     assert call(mb, "POST", f"mailboxes/{support}/share", "ana-assistant").status_code == 403
     assert call(mb, "DELETE", f"mailboxes/{cara}", "cara-assistant").status_code == 403
     # And the Assistant's own turn never admits them.
