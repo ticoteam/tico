@@ -53,6 +53,21 @@ const TYPES = [{id: 'dev', name: 'Dev tickets', steps: [{id: 'st_review', name: 
     const coldSteps = await cold.page.locator('select[data-b="stepPick"] option').allInnerTexts();
     assert.deepEqual(coldSteps.filter(Boolean), ['Review 1', 'In QA'], 'step choices on a cold open');
     await cold.page.close();
+    // Switching the event away from "enters a step" drops the step filter: the saved trigger does not keep it (Dev 666).
+    const stale = {...JSON.parse(JSON.stringify(TASK_AU)), id: 'au_stale', name: 'Stale step',
+      trigger: {type: 'event', name: 'task.step_changed', filters: [{field: 'event.data.step', op: 'is', value: 'st_qa'}]}};
+    const sw = await openAutomations(browser, {viewport: DESKTOP, hash: '#/automations/au_stale',
+      tweak: fx => { fx.automations.push(stale); fx.task_types = TYPES; }});
+    await sw.page.locator('.au-trig[data-open="trigger"]').click();
+    await sw.page.waitForSelector('.au-ed:not([hidden]) select[data-b="evpick"]');
+    await sw.page.selectOption('.au-ed select[data-b="evpick"]', 'task.done');
+    await sw.page.locator('.au-save').click();
+    await sw.page.waitForFunction(() => !document.querySelector('.au-ed') || document.querySelector('.au-ed').hidden !== false);
+    const swPatch = sw.writes.filter(w => w.method === 'PATCH' && w.body?.trigger).at(-1);
+    assert.ok(swPatch, 'the switched trigger is saved');
+    assert.equal(swPatch.body.trigger.name, 'task.done');
+    assert.deepEqual(swPatch.body.trigger.filters, [], 'no step filter left on a done trigger');
+    await sw.page.close();
     const o = await openAutomations(browser, {viewport: DESKTOP, hash: '#/automations',
       tweak: fx => fx.automations.push(failed, paused)});
     const row = o.page.locator('.au-tn', {hasText: 'Failed step'});
