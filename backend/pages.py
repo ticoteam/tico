@@ -116,8 +116,10 @@ def may_manage(c, auth, who, row):
     if who.role != "human":
         return False
     if auth is None:
-        from . import teammate_access
-        return teammate_access.can(c, who, "manage", "bot:" + row["bot_id"])
+        from . import people, teammate_access, views
+        archived = {bot["id"] for bot in H.bots(c) if bot.get("state") == "archived"}
+        return teammate_access.is_admin(c, who) or people.manages(
+            H.actor_id(who.actor), "bot", row["bot_id"], views.roster(c), views.entries(c), archived, True)
     return auth.bot_admin(who) or auth.manages(c, who, "bot", row["bot_id"])
 
 

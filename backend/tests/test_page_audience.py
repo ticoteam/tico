@@ -262,3 +262,14 @@ def test_counsel_read_grant_cannot_validate_a_quote_outside_the_page_audience(ap
             counsel.check_cite(c, api.app.state.auth, Identity('bot:' + H.COUNSEL, 'bot', attempt_id='read-turn'),
                                api.app.state.blobs, {'file_id': fid, 'version': 1, 'quote': 'Pipeline grew'})
     assert refused.value.status == 404
+
+
+def test_bot_co_ownership_does_not_disclose_page_audience_history(api):
+    fid, _ = promoted(api)
+    edit(api, fid, {'people': ['ben']})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET bot_owners=? WHERE bot='ops'", (json.dumps(['cara']),))
+    assert read(api, fid, 'cara-test').status_code == 404
+    with api.app.state.store.read() as c:
+        event = dict(c.execute("SELECT * FROM events WHERE target=? AND action='page.access_changed'", (fid,)).fetchone())
+        assert not task_privacy.event_readable(c, 'human:cara', event)
