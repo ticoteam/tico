@@ -455,8 +455,8 @@ def test_two_rules_that_fire_on_a_due_day_open_two_tasks(api):
     aid = due(api, DUE_MARCH, steps=[TWO_RULES])
     _pass_at(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
     tasks = sql(api, "SELECT title, occurrence_step FROM tasks WHERE occurrence=? ORDER BY title", (f"{aid}:2030-03-01",))
-    assert [(row["title"], row["occurrence_step"]) for row in tasks] == [("Payroll", "gate"),
-                                                                       ("Payroll review", "gate@0.1")]
+    assert [(row["title"], row["occurrence_step"]) for row in tasks] == [("Payroll", "gate@r0.0"),
+                                                                       ("Payroll review", "gate@r1.0")]
 
 
 def test_a_retry_of_two_rules_that_fired_opens_no_more_tasks(api, monkeypatch):
@@ -477,6 +477,39 @@ def test_a_retry_of_two_rules_that_fired_opens_no_more_tasks(api, monkeypatch):
     assert sorted(run["status"] for run in get(api, f"automations/{aid}/runs")["runs"]) == ["failed", "ok"]
     tasks = sql(api, "SELECT title FROM tasks WHERE occurrence=? ORDER BY title", (f"{aid}:2030-03-01",))
     assert [row["title"] for row in tasks] == ["Payroll", "Payroll review"]
+
+
+DECIDES = {"id": "gate", "type": "filter", "rules": [
+    {"when": [{"field": "due.repeats", "op": "is", "value": "once"}],
+     "then": [{"do": "create_task", "args": {"title": "Payroll", "owner": "coo"}}], "next": "rule"},
+    {"when": [], "then": [{"do": "create_task", "args": {"title": "Payroll review", "owner": "coo"}}]}]}
+
+
+def test_a_retry_that_decides_differently_leaves_the_task_made_and_the_other_rule_opens_its_own(api, monkeypatch):
+    aid = due(api, DUE_MARCH, steps=[DECIDES])
+    real = hubdb.task_create
+    failed = []
+
+    def second_rule_fails_once(*args, **kwargs):
+        if args[2] == "Payroll review" and not failed:
+            failed.append(True)
+            raise ValueError("the second rule broke")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(hubdb, "task_create", second_rule_fails_once)
+    _pass_at(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
+    assert [run["status"] for run in get(api, f"automations/{aid}/runs")["runs"]] == ["failed"]
+    # The retry runs on the automation's current version: the first rule no longer holds, so the second rule's task
+    # is its own, not the first rule's (which it would share if the identities depended on what ran first).
+    steps = get(api, f"automations/{aid}")["steps"]
+    steps[0]["rules"][0]["when"] = [{"field": "due.repeats", "op": "is", "value": "weekly"}]
+    r = api.patch(f"/api/v2/automations/{aid}", json={"steps": steps}, headers=headers("ana-test"))
+    assert r.status_code == 200, r.text
+    _pass_at(api, datetime(2030, 2, 15, 1, 10, tzinfo=timezone.utc))
+    assert sorted(run["status"] for run in get(api, f"automations/{aid}/runs")["runs"]) == ["failed", "ok"]
+    tasks = sql(api, "SELECT title, occurrence_step FROM tasks WHERE occurrence=? ORDER BY title", (f"{aid}:2030-03-01",))
+    assert [(row["title"], row["occurrence_step"]) for row in tasks] == [("Payroll", "gate@r0.0"),
+                                                                       ("Payroll review", "gate@r1.0")]
 
 
 def test_a_single_rule_on_a_due_day_keeps_the_step_as_its_task_identity(api):

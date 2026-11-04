@@ -66,8 +66,8 @@ def _fail(detail):
 
 def run(c, auto, run_id, do, args, values, step=None):
     """Carry out one action for the automation `auto` ({id, flow}). Wrapped in a savepoint: a refused action writes
-    nothing but its refusal. `step` is the identity the action produces under: its step's id, or for a filter's later
-    rules and destinations the id automation_engine._chain gives it. A create_task's occurrence task is one per identity."""
+    nothing but its refusal. `step` is the identity the action produces under (automation_engine._filter gives each of
+    a filter's actions its own). A create_task's occurrence task is one per identity."""
     c.execute("SAVEPOINT automation_action")
     try:
         if do == "create_task":

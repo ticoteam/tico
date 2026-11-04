@@ -161,7 +161,7 @@ def test_the_record_lists_the_rules_that_fired_and_says_where_each_action_came_f
         ("label", "rule"), ("archive", "rule"), ("create_task", "destination")]
     assert out["actions"][0]["rule"] == 0 and out["actions"][1]["rule"] == 1
     assert out["actions"][2]["destination"] == "legal"
-    assert services.keys == ["0.0", "0.1", "0.2"]     # effect keys go on across the rules that fired
+    assert services.keys == ["0.r0.0", "0.r1.0", "0.r1.d0"]    # by rule and place: a step with destinations
 
 
 # ---------------------------------------------------------------------------------------------- decide
@@ -171,15 +171,16 @@ def test_each_rule_that_fires_produces_under_its_own_identity():
         {"when": FROM_NEWS, "then": [{"do": "create_task", "args": {"title": "A"}}], "next": "rule"},
         {"when": [], "then": [{"do": "create_task", "args": {"title": "B"}}], "to": "legal"}]}
     E.execute(flow(gate, destinations=LEGAL), MESSAGE, services)
-    assert services.producers == ["gate", "gate@0.1", "gate@0.2"]    # only the run's first task keeps the step's id
+    assert services.producers == ["gate@r0.0", "gate@r1.0", "gate@r1.d0"]    # each action has its place, none the step's id
 
 
-def test_a_single_rule_keeps_the_step_as_the_identity_of_its_first_task():
+def test_a_legacy_single_rule_keeps_the_step_as_the_identity_of_its_first_task():
     services = Services()
     gate = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [
         {"do": "create_task", "args": {"title": "A"}}, {"do": "label"}]}]}
     E.execute(flow(gate), MESSAGE, services)
-    assert services.producers == ["gate", "gate@0.1"]    # the label is not a task: it has its own effect key
+    assert services.producers == ["gate", "gate"]    # as before: the step's id, for its task and its label
+    assert services.keys == ["0.0", "0.1"]           # and the keys the step always had
 
 
 def test_two_tasks_in_one_chain_get_two_identities():
@@ -190,11 +191,11 @@ def test_two_tasks_in_one_chain_get_two_identities():
     assert services.producers == ["gate", "gate@0.1"]
 
 
-def test_a_destination_that_opens_the_run_first_task_keeps_the_step_as_its_identity():
+def test_a_destination_task_has_its_own_identity_not_the_steps():
     services = Services()
     gate = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [{"do": "label"}], "to": "legal"}]}
     E.execute(flow(gate, destinations=LEGAL), MESSAGE, services)
-    assert services.producers == ["gate@0.0", "gate"]    # the label is not a task; the destination's task is the first
+    assert services.producers == ["gate@r0.0", "gate@r0.d0"]
 
 
 def test_decide_asks_once_and_keeps_answers_under_out():
@@ -298,6 +299,26 @@ def test_a_bot_turn_a_later_step_reads_waits_for_what_the_bot_wrote():
     services = Services()
     E.execute(flow(brief, note("after", "{{briefing.text}} briefs")), MESSAGE, services)
     assert services.turns[0]["wait"] is False
+
+
+@pytest.mark.parametrize("post, text", [
+    ({"do": "post_update", "args": {"to": ["market"]}}, None),                                 # posts the briefing
+    ({"do": "post_update", "args": {"to": ["market"], "text": "{{brief.text}}"}}, "Northwind cut its price."),
+])
+def test_a_bot_turn_a_destination_reached_by_a_later_filter_waits_for_it_and_resumes_with_the_answer(post, text):
+    """The destination's actions are the later filter's own reads: its post waits for the turn and gets the answer."""
+    brief = {"id": "brief", "type": "bot_turn", "bot": "librarian", "prompt": "Write the briefing."}
+    route = {"id": "route", "type": "filter", "rules": [{"when": [], "then": [], "to": "market"}]}
+    market = [{"id": "market", "name": "Market", "color": "red", "then": [post]}]
+    services = Services()
+    f = flow(brief, route, destinations=market)
+    run = E.execute(f, MESSAGE, services)
+    assert services.turns[0]["wait"] is True and statuses(run) == [("brief", "waiting")]
+    assert not [do for do, _ in services.acted if do == "post_update"]    # nothing posted before the answer
+    assert E.answer(run, "msg_1", "Northwind cut its price.")
+    run = E.advance(f, run, services)
+    assert run["status"] == "ok" and services.acted[-1][0] == "post_update"
+    assert services.acted[-1][1].get("text") == text
 
 
 def test_a_turns_prompt_carries_what_arrived_as_quoted_data_not_as_instructions():
