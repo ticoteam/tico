@@ -1449,7 +1449,7 @@ def finished_before_start(c, row):
         return False
     msg = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0],
                     include_deleted=True)
-    if msg and H.is_human(msg.get("sender_id")):
+    if msg and H.person_sent(msg):
         return False
     task_id = H.message_task_id(msg, H.conversation(c, msg["conversation_id"])) if msg else None
     task = H.task(c, task_id) if task_id else None
@@ -1463,7 +1463,8 @@ def login_class(c, task, msg, routine):
     for the rest. A routine's or a timed wake's turn is "other" whatever its labels, so standing watches never jump the
     queue. The labels count on the task or on the work it serves (its parents, the tasks it blocks)."""
     msg = msg or {}
-    if routine or (not H.is_human(msg.get("sender_id")) and (msg.get("refs") or {}).get("wake")):
+    person = H.person_sent(msg)
+    if routine or (not person and (msg.get("refs") or {}).get("wake")):
         return "other"
     labels = set(H.task_labels(task))
     if task:
@@ -1481,7 +1482,7 @@ def login_class(c, task, msg, routine):
     for label, cls in LOGIN_CLASS_LABELS.items():
         if label in labels:
             return cls
-    return "review" if H.is_human(msg.get("sender_id")) else "other"
+    return "review" if person else "other"
 
 
 def limit_until(c, bot, since):
@@ -1613,8 +1614,9 @@ def person_wrote_since(c, bot, since):
     who writes to a limited bot has often just renewed the plan, so the bot tries once now; a
     run that hits the limit again finishes after the message and the cooldown holds."""
     last = c.execute("SELECT max(finished_at) FROM attempts WHERE bot_id=?", (bot,)).fetchone()[0]
+    # A carrier is a keeper notice; it counts as the person's own message, the notices a person did not send do not.
     return c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? AND j.state='queued' "
-                     "AND m.sender_id LIKE 'human:%' AND m.kind<>'notice' AND m.created_at>? LIMIT 1",
+                     f"AND {H.person_sent_sql()} AND (m.kind<>'notice' OR m.sender_id='keeper') AND m.created_at>? LIMIT 1",
                      (bot, max(since, last or ""))).fetchone() is not None
 
 
@@ -2026,7 +2028,7 @@ def unfenced_sql():
     bot continue, and a person's chat outside any task stays claimable so an interrupted routine cannot silence its
     owner."""
     task_sql = queued_task_sql()
-    return (f"((m.sender_id LIKE 'human:%' AND cv.kind='chat' AND {task_sql} IS NULL) "
+    return (f"(({H.person_sent_sql()} AND cv.kind='chat' AND {task_sql} IS NULL) "
             "OR NOT EXISTS(SELECT 1 FROM jobs u JOIN messages um ON um.id=u.message_id "
             "JOIN conversations uc ON uc.id=um.conversation_id WHERE u.bot_id=j.bot_id AND u.state='uncertain' "
             f"AND (({task_sql} IS NOT NULL AND "
@@ -2135,7 +2137,7 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
             c, runner, check_models.apply(followed, wanted)))
     if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
         return "check_model"
-    if wanted and not message["sender_id"].startswith("human:") and check_models.dropped(c, task_id):
+    if wanted and not H.person_sent(message) and check_models.dropped(c, task_id):
         return "check_model"                # hold_unrunnable cancels it on the scheduler's next tick
     config = check_models.apply(followed, wanted)
     if ((job["bot_id"], job_lane(c, job["bot_id"], config, message, conversation, lanes, roots)) in busy
@@ -2238,7 +2240,7 @@ def quiet_recheck(c, aid, body, task, msg):
                                cause=str(refs.get(wake_rules.CAUSED_BY) or ""), in_reply_to=msg.get("in_reply_to")):
         return False
     return c.execute("SELECT 1 FROM attempt_inputs i JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=? "
-                     "AND m.deleted_at IS NULL AND (m.sender_id LIKE 'human:%' "
+                     f"AND m.deleted_at IS NULL AND ({H.person_sent_sql()} "
                      f"OR json_extract(m.refs,'$.{wake_rules.CAUSED_BY}') LIKE 'human:%') LIMIT 1",
                      (aid,)).fetchone() is None
 
@@ -2276,11 +2278,11 @@ CLAIM_CONFIG_SQL = (f"SELECT bc.config,{DRAINING_SQL.replace('a.bot', 'bc.bot')}
 def queued_jobs_sql(bots=None):
     """A bot's queued jobs in the order its claim takes them, each with whether the interrupted-work fence and a claim
     scope let it through. With `bots`, the same rows for all of them at once (prime_claimables)."""
-    return (f"SELECT j.*,m.sender_id,{unfenced_sql()} free,{scoped_sql()} in_scope FROM jobs j "
+    return (f"SELECT j.*,m.sender_id,{H.person_sent_sql()} person_sent,{unfenced_sql()} free,{scoped_sql()} in_scope FROM jobs j "
             "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
             f"WHERE j.bot_id{'=?' if bots is None else ' IN (' + ','.join('?' * len(bots)) + ')'} "
             "AND j.state='queued' AND j.held=0 "
-            f"ORDER BY j.redirect DESC,CASE WHEN {start_places.PERSON_SQL} THEN 0 ELSE 1 END,"
+            f"ORDER BY j.redirect DESC,CASE WHEN {H.person_sent_sql()} THEN 0 ELSE 1 END,"
             f"{HANDOFF_FIRST_SQL},j.created_at,j.id")
 
 
@@ -2377,7 +2379,7 @@ def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_
     followed, refused = follow(c, bot, config), None     # refused: (created, reason) of the oldest held job
     queue = rows(c, queued_jobs_sql(), (bot,))
     for job in sorted(queue, key=lambda j: (j["created_at"], j["id"])) if oldest else queue:
-        person = str(job["sender_id"]).startswith("human:")
+        person = bool(job["person_sent"])
         if not job["in_scope"]:
             why = "scoped"
         elif not job["free"]:
@@ -2446,6 +2448,25 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, s
             why = job_refusal(c, job, followed, ready, busy, lanes, roots, live, suspect=suspect, runner=runner) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"], loads=loads) else None)
         yield job, why
+
+
+# Stop and redirect (Execution._redirect_job) reads the caller's own job in this turn's conversation. jobs.message_id is
+# UNIQUE, so each lookup is one index read. A Home or thread message reaches its bot as a keeper carrier, a job of its
+# own: the carrier is found through its delivery to the bot (message_deliveries.carrier_id, indexed by recipient and
+# message_id), then checked: a keeper notice that carries the message and is from the caller.
+REDIRECT_TURN = ("AND (m.conversation_id=(SELECT om.conversation_id FROM jobs oj JOIN messages om "
+                 "ON om.id=oj.message_id JOIN attempts oa ON oa.job_id=oj.id WHERE oa.id=?) OR m.conversation_id IN "
+                 "(SELECT conversation_id FROM attempt_conversations WHERE attempt_id=?))")
+REDIRECT_OWN_JOB = ("SELECT j.id,j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
+                    "WHERE j.message_id=? AND j.bot_id=? "
+                    "AND CASE WHEN m.sender_id='keeper' THEN json_extract(m.refs,'$.from') ELSE m.sender_id END=? "
+                    + REDIRECT_TURN)
+REDIRECT_CARRIER_JOB = ("SELECT j.id,j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
+                        "WHERE j.message_id=? AND j.bot_id=? AND m.sender_id='keeper' "
+                        "AND json_extract(m.refs,'$.carries')=? AND json_extract(m.refs,'$.from')=? "
+                        + REDIRECT_TURN)
+REDIRECT_CARRIERS = ("SELECT carrier_id FROM message_deliveries WHERE message_id=? AND recipient=? "
+                     "AND carrier_id IS NOT NULL")
 
 
 class Execution:
@@ -3204,16 +3225,15 @@ class Execution:
             # A job its wake preset holds waits for its release (backend/wake_presets.py tick).
             f"WHERE j.state='queued' AND j.held=0 AND j.bot_id IN ({marks}) AND a.runner_id=? "
             # An onboarding bot takes a person's message and its manager's, nothing else (backend/lifecycle.py).
-            "AND (m.sender_id LIKE 'human:%' OR NOT EXISTS(SELECT 1 FROM bot_config pc "
+            "AND (" + H.person_sent_sql() + " OR NOT EXISTS(SELECT 1 FROM bot_config pc "
             "WHERE pc.bot=j.bot_id AND pc.onboarding_state IN " + PARKED_SQL + " "
             "AND m.sender_id<>'bot:'||coalesce(pc.reports_to,''))) "
             f"AND {unfenced_sql()} AND {scoped_sql()} " + ("AND j.id=? " if job_id is not None else "") +
-            (f"AND {start_places.PERSON_SQL} " if people_only else "") +
-            # A redirect first (it replaces a turn just stopped); then a person's chat, or their message in a thread
-            # (start_places.PERSON_SQL); then the bot holding the fewest turns here, so a freed turn goes to another
-            # bot's waiting job before the busy bot's next one; then a builder hand-off (backend/verdict_moves.py); then
-            # task rank, then the longest waiting.
-            f"ORDER BY j.redirect DESC,CASE WHEN {start_places.PERSON_SQL} THEN 0 ELSE 1 END,"
+            ("AND " + H.person_sent_sql() + " " if people_only else "") +
+            # A redirect first (it replaces a turn just stopped); then a person's chat; then the bot holding the
+            # fewest turns here, so a freed turn goes to another bot's waiting job before the busy bot's next one;
+            # then a builder hand-off (backend/verdict_moves.py); then task rank, then the longest waiting.
+            "ORDER BY j.redirect DESC,CASE WHEN " + H.person_sent_sql() + " THEN 0 ELSE 1 END,"
             f"CASE j.bot_id {' '.join('WHEN ? THEN ?' for _ in bots)} ELSE 0 END,{HANDOFF_FIRST_SQL},"
             "(qt.rank IS NULL),qt.rank,j.created_at,j.id",
             (*bots, who.runner_id, *((job_id,) if job_id is not None else ()),
@@ -3304,12 +3324,13 @@ class Execution:
             # Share RUNNER_SQL with bot_claimable for the snapshot; skip revoked computers in Python.
             found = one(c, RUNNER_SQL, (rid,)) if remote else runner
             target = found if found and not found["revoked_at"] else None
+            gate = None if remote else body
             if (not target or (remote and not claiming(rid, CLAIMED_WAITING_FRESH))
                     or not target['last_seen_at'] or target['last_seen_at'] < H.shift(H.now(), seconds=-90)
                     or not self.awake(target['awake_since'], H.now()) or runner_versions.paused(c, rid)
                     or cloud_machines.held(c, rid)
                     or load_status(c, rid)['overloaded'] or start_places.ready_waiting(c, rid)
-                    or sum(turns_here(c, rid).values()) >= start_places.turn_limit(target)):
+                    or sum(start_places.live(c, rid).values()) >= start_places.claim_limit(target, gate)):
                 continue
             busy_bots, busy_lanes = claimed_busy(rid, CLAIMED_WAITING_FRESH)
             scope = Claim(busy_bots=list(busy_bots), busy_lanes=['|'.join(x) for x in busy_lanes]) if remote else body
@@ -3370,8 +3391,8 @@ class Execution:
         people_only, held = self.held_starts(c, who.runner_id)
         if held:
             return held
-        count = sum(turns_here(c, who.runner_id).values())
-        if count >= start_places.turn_limit(runner) or not self.awake(awake_since, now):
+        count = sum(start_places.live(c, who.runner_id).values())
+        if count >= start_places.claim_limit(runner, body) or not self.awake(awake_since, now):
             return {"attempt": None}
         row = self.candidate(c, who, body, runner, people_only=people_only, failed=failed)
         if failed:
@@ -3495,8 +3516,8 @@ class Execution:
             return held
         if people_only:
             selected, prepared = None, False     # chosen before the hold, perhaps not a person's
-        count = sum(turns_here(c, who.runner_id).values())
-        if count >= start_places.turn_limit(runner):
+        count = sum(start_places.live(c, who.runner_id).values())
+        if count >= start_places.claim_limit(runner, body):
             return {"attempt": None}
         # A machine that has only just come back cannot be trusted with a 90 s lease yet.
         # Its work keeps its place in the queue and goes out once the machine is really up.
@@ -3659,7 +3680,9 @@ class Execution:
                   "VALUES(?,?,?,?,?,?,'leased',?,?,?)",
                   (aid, row["id"], row["bot_id"], who.runner_id, row["generation"], digest(token), until, H.now(), lane))
         if body.start_places:
-            start_places.claim(c, aid)
+            # Decided now, under this write lock: granted a place while the computer holds fewer than its turn limit. A turn
+            # past the limit is leased (it counts toward live_limit) and holds no place until one frees.
+            start_places.admit(c, aid, runner, self.store.settings)
         c.execute('DELETE FROM org_turn_waits WHERE job_id=?', (row['id'],))
         from . import run_diagnostics
         run_diagnostics.touch(c, aid, "leased")
@@ -4259,6 +4282,19 @@ class Execution:
                    (wait(c, aid) or start_places.is_waiting(c, aid)) else {}),
                 **({"stop_reason": benched} if benched else {})}
 
+    def _redirect_job(self, c, bot, redirect, attempt_id, actor):
+        """The job a Stop and redirect names, when it is the caller's own: their message's job in this turn's conversation,
+        or the keeper carrier of that message. The queued one first, else the message's own job; None when there is none.
+        A carrier is found through its delivery to the bot, so no job is scanned."""
+        direct = c.execute(REDIRECT_OWN_JOB, (redirect, bot, actor, attempt_id, attempt_id)).fetchone()
+        found = [direct] if direct else []
+        if not direct or direct["state"] != "queued":
+            for (carrier,) in c.execute(REDIRECT_CARRIERS, (redirect, f"bot:{bot}")).fetchall():
+                job = c.execute(REDIRECT_CARRIER_JOB, (carrier, bot, redirect, actor, attempt_id, attempt_id)).fetchone()
+                if job:
+                    found.append(job)
+        return min(found, key=lambda job: job["state"] != "queued", default=None)
+
     def stop(self, c, who, bot, attempt_id=None, redirect=None):
         """A person who manages the bot asks its running turn to stop. The runner interrupts the turn
         when it next renews the lease, and `complete` settles it as stopped rather than held for review.
@@ -4296,12 +4332,10 @@ class Execution:
                           extra={"runs": [r["id"] for r in rows]})
         row = rows[0]
         if redirect:
-            job = c.execute("SELECT j.id,j.state,m.sender_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-                            "WHERE j.message_id=? AND j.bot_id=? AND (m.conversation_id=(SELECT om.conversation_id "
-                            "FROM jobs oj JOIN messages om ON om.id=oj.message_id JOIN attempts oa ON oa.job_id=oj.id "
-                            "WHERE oa.id=?) OR m.conversation_id IN (SELECT conversation_id FROM attempt_conversations "
-                            "WHERE attempt_id=?))", (redirect, bot, row["id"], row["id"])).fetchone()
-            if not job or job["sender_id"] != who.actor:
+            # A Home or thread message reaches the bot through its keeper carrier (threads._carrier): the queued job is
+            # the carrier, found through its delivery to the bot (_redirect_job).
+            job = self._redirect_job(c, bot, redirect, row["id"], who.actor)
+            if job is None:
                 raise Problem("not_found", "Redirect with your own message to this turn's conversation", 404)
             if job["state"] != "queued":
                 raise Problem("not_queued", "That message is already being answered", 409)
@@ -5764,7 +5798,7 @@ class Execution:
                              "WHERE r.key>='check-limited:' AND r.key<'check-limited;' "
                              f"AND t.status NOT IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
                              "AND t.owner_id LIKE 'bot:%' AND j.bot_id=substr(t.owner_id,5) AND j.state='queued' "
-                             "AND m.id=j.message_id AND m.sender_id NOT LIKE 'human:%' "
+                             "AND m.id=j.message_id AND NOT " + H.person_sent_sql() + " "
                              f"AND {H.MESSAGE_TASK_SQL}=t.id", H.ACTIVE_STATUSES).fetchall():
             with isolated(c, "hold_unrunnable", row["id"]):
                 c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))

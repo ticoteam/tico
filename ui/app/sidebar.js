@@ -5,8 +5,6 @@
 // ----------------------------------------------------------------- sidebar + heartbeat
 const NAV_COLLAPSED_KEY = 'hub.nav.collapsed';
 let navCollapsed = new Set(); try { navCollapsed = new Set(JSON.parse(localStorage.getItem(NAV_COLLAPSED_KEY) || '[]')); } catch {}
-// Inbox no longer folds: one folded before is open (and forgotten with the next fold kept).
-navCollapsed.delete('inbox');
 function renderNavSections() {
   document.querySelectorAll('[data-section-toggle]').forEach(button => {
     const key = button.dataset.sectionToggle, isCollapsed = navCollapsed.has(key);
@@ -643,11 +641,12 @@ function treeLimitMark(slug) {
   const word = esc(overLimitWord(limit));
   return `<span class="tree-limit" role="img" aria-label="${word}" title="${word}">!</span>`;
 }
-// The unread in the viewer's DM with this bot (threads.js THREADS.botDms): that DM is on the bot's page, not in Inbox.
-function treeDmBadge(slug) {
-  const n = Number((typeof THREADS !== 'undefined' && THREADS.botDms?.['bot:' + slug]) || 0);
+// The unread in the viewer's 1:1 DM with this teammate (threads.js THREADS.dms): that DM is on their page, not on the
+// Threads rail.
+function treeDmBadge(actor, name) {
+  const n = typeof threadsDmUnread === 'function' ? threadsDmUnread(actor) : 0;
   if (!n) return '';
-  const words = `${n} unread from ${esc(empName(slug))}`;
+  const words = `${n} unread from ${esc(name)}`;
   return `<span class="cnt tree-dm" role="img" aria-label="${words}" title="${words}">${n > 99 ? '99+' : n}</span>`;
 }
 function treeBadge(n, st, slug) {
@@ -856,7 +855,7 @@ function renderTree() {
       return `<li class="${kids ? 'dept' : isTop ? 'org-top' : ''}"><div class="noderow">
         ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(p.name || p.id)}">›</button>` : ''}
         <a class="node person" href="#/person/${encodeURIComponent(p.id)}" title="${esc(personTitle(p))}" data-org="p:${esc(p.id)}"${placeAttrs(key, at)}${!flat && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
-          ${personAvatar(p, depth ? 16 : 20)}<span class="nm">${esc(firstName(p.name) || p.id)}</span>
+          ${personAvatar(p, depth ? 16 : 20)}<span class="nm">${esc(firstName(p.name) || p.id)}</span>${p.id === S.me?.id ? '' : treeDmBadge('human:' + p.id, p.name || p.id)}
           ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}</a>
         ${mailPersonVisible(p) ? `<a class="person-mail-link" href="${MESSAGING}?bot=${encodeURIComponent(p.inbox_bot)}&source=${encodeURIComponent('email:' + p.email)}" title="${esc(p.name || p.id)} has a message bot" aria-label="Open ${esc(p.name || p.id)}'s message bot">forum</a>` : ''}</div>${orgConfirmHTML(key)}
         ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
@@ -871,7 +870,7 @@ function renderTree() {
         ${avatar(e.id, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
         ${e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
-        ${botPausedBadge(e.id)}${treeLimitMark(e.id)}${treeDmBadge(e.id)}${treeBadge(n, st, e.id)}</a></div>${orgConfirmHTML(key)}
+        ${botPausedBadge(e.id)}${treeLimitMark(e.id)}${treeDmBadge('bot:' + e.id, empName(e.id))}${treeBadge(n, st, e.id)}</a></div>${orgConfirmHTML(key)}
       ${own ? `<ul class="inbox-list node-sources" aria-label="${esc(e.display_name || e.slug)}: mailboxes and channels">${own.map(inboxNavLink).join('')}</ul>` : ''}
       ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
   };
@@ -946,7 +945,6 @@ function renderTree() {
       (a.dataset.nav === 'replay' && S.route.startsWith('#/replay')) ||
       (a.dataset.nav === 'updates' && (S.route === UPDATES || S.route.startsWith(UPDATES + '?'))) ||
       (a.dataset.nav === 'threads' && (S.route.startsWith(THREADS_ROUTE) || S.route.startsWith(THREAD_ROUTE))) ||
-      (a.dataset.nav === 'inbox' && (S.route === INBOX_ROUTE || S.route.startsWith(INBOX_ROUTE + '&'))) ||
       (a.dataset.nav === 'more' && !mobilePrimary) ||
       redesignNavCurrent(a.dataset.nav);
     a.classList.toggle('cur', isCurrent);

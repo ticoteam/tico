@@ -582,7 +582,7 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
         "SELECT bot_id, count(*) n, min(created_at) oldest FROM jobs WHERE state='queued' AND held=0 GROUP BY bot_id")}
     asked = {r["bot_id"]: r["oldest"] for r in c.execute(
         "SELECT j.bot_id, min(j.created_at) oldest FROM jobs j JOIN messages m ON m.id=j.message_id "
-        "WHERE j.state='queued' AND m.sender_id LIKE 'human:%' GROUP BY j.bot_id")}
+        f"WHERE j.state='queued' AND {H.person_sent_sql()} GROUP BY j.bot_id")}
     assigned = {r["bot"]: (r["runner_id"], r["label"], r["readiness"]) for r in c.execute(
         "SELECT a.bot, a.runner_id, r.label, r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
         "WHERE r.revoked_at IS NULL")}
@@ -600,11 +600,13 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
         busy.add(r["bot_id"])
         running[r["runner_id"]] = running.get(r["runner_id"], 0) + 1
         turns.setdefault(r["runner_id"], []).append(r)
-    # A computer running as many turns as it takes holds the rest back on purpose: queued, not stuck.
+    # A computer whose places are all in use, or that holds as many claimed turns as it may lease, holds the rest back on
+    # purpose: queued, not stuck.
     from . import start_places
-    held_now = start_places.held_totals(c)
+    held_now, live_now = start_places.held_totals(c), start_places.live_totals(c)
     full = {r["id"] for r in c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL")
-            if held_now.get(r["id"], 0) >= start_places.turn_limit(r)}
+            if held_now.get(r["id"], 0) >= start_places.turn_limit(r)
+            or live_now.get(r["id"], 0) >= start_places.live_limit(r)}
     # A computer due an update keeps claiming for a while, then claims nothing until its running turns end and it
     # updates (runner-rs follow.rs blocks_claims): its queued work waits on that, not on a Tico bug.
     updating = {r["runner_id"]: r["update_target"] for r in c.execute(
