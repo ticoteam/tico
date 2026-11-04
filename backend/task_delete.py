@@ -76,7 +76,7 @@ CORE = ("tasks", "conversations", "messages")
 # Keys a trashed row holds that are not columns: the rowid the snapshot read it with, and the task links kept on the
 # task row before task_relations (LEGACY_LINKS, restored as relations).
 NOT_COLUMNS = {"_rowid"}
-# A task trashed before its holds were rows (migration 0074) kept them as columns of its own row: a restore opens them
+# A task trashed before its holds were rows (migration 0075) kept them as columns of its own row: a restore opens them
 # as task_holds rows (`_legacy_holds`). {kind: {old column: task_holds column}}, with the one that marks it open first.
 LEGACY_HOLDS = {
     "snoozed": {"snoozed_until": "until_at", "snoozed_by_id": "by_id", "snoozed_note": "reason"},
@@ -426,7 +426,7 @@ def _unplaced(c, snap):
 
 
 def _legacy_holds(c, task):
-    """The holds a task trashed before migration 0074 kept on its row, back as its open task_holds rows."""
+    """The holds a task trashed before migration 0075 kept on its row, back as its open task_holds rows."""
     if "snoozed_until" not in task and "blocked_since" not in task:
         return
     for kind, columns in LEGACY_HOLDS.items():

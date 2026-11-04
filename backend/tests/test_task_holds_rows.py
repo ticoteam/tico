@@ -1,4 +1,4 @@
-"""Migration 0074: a task's holds are task_holds rows (backend/migrations/0074_task_holds.py)."""
+"""Migration 0075: a task's holds are task_holds rows (backend/migrations/0075_task_holds.py)."""
 import importlib
 import sqlite3
 
@@ -6,9 +6,9 @@ import pytest
 
 from backend import hubdb as H, runner_wire, status_values, task_delete, task_holds
 
-HOLDS = importlib.import_module("backend.migrations.0074_task_holds")
+HOLDS = importlib.import_module("backend.migrations.0075_task_holds")
 
-# The tasks table as the release before 0074 left it, cut to the columns this needs.
+# The tasks table as the release before 0075 left it, cut to the columns this needs.
 LEGACY = """
 CREATE TABLE tasks(
  id TEXT PRIMARY KEY, title TEXT, owner_id TEXT, status TEXT, created_at TEXT, updated_at TEXT, blocker_key TEXT,
@@ -138,7 +138,7 @@ def test_a_task_trashed_with_hold_columns_comes_back_with_its_holds(conn):
 
 
 def test_a_run_record_with_no_trigger_gets_the_default_and_a_bare_lease_stays_bare(conn):
-    # Migration 0072 left a run record whose turn had no trigger with a NULL trigger: 0074 gives it turn_start's
+    # Migration 0072 left a run record whose turn had no trigger with a NULL trigger: 0075 gives it turn_start's
     # default. A bare lease that never recorded anything has none, and stays NULL.
     conn.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, job_id TEXT, bot_id TEXT, trigger TEXT, settled_at TEXT, "
                  "exit TEXT, summary TEXT, outcome TEXT, input_tokens INTEGER)")

@@ -1252,7 +1252,7 @@ def backfill_credential_uses(conn):
     conn.execute("INSERT INTO registry_metadata VALUES('credential-use-backfill',?)", (json.dumps(True),))
 
 
-# A task row with its open holds (task_holds, migration 0074) under the field names the code reads: blocked_since,
+# A task row with its open holds (task_holds, migration 0075) under the field names the code reads: blocked_since,
 # blocked_reason, blocked_kind (the hold's cause), blocked_from_step, blocked_from_status, blocked_gate,
 # holds_cleared_at, snoozed_until, snoozed_by_id, snoozed_note. Read it as a table: `SELECT * FROM {TASKS} tasks`.
 TASKS = ("(SELECT t.*, b.created_at AS blocked_since, b.reason AS blocked_reason, b.cause AS blocked_kind, "
@@ -1377,11 +1377,11 @@ def ensure_market_reads(conn):
 
 def _holds_table(conn):
     """task_holds, empty, before any step runs: task reads join it (TASKS), and the numbered steps below and the code
-    after the migration files read tasks on a file migration 0074 has not reached yet. The legacy hold columns still
-    on such a file keep their names in TASKS (the joined fields come second, renamed); 0074 copies them into this
+    after the migration files read tasks on a file migration 0075 has not reached yet. The legacy hold columns still
+    on such a file keep their names in TASKS (the joined fields come second, renamed); 0075 copies them into this
     table and drops them."""
     import importlib
-    holds = importlib.import_module("backend.migrations.0074_task_holds")
+    holds = importlib.import_module("backend.migrations.0075_task_holds")
     conn.execute(holds.TABLE)
     for statement in holds.INDEXES:
         conn.execute(statement)

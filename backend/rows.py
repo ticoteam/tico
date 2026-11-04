@@ -73,7 +73,7 @@ class TaskCheckBackWakeRow(TypedDict):
     sent_at: str
     message_id: str | None
 class TaskHoldRow(TypedDict):
-    """One `task_holds` row (SELECT *): a task's move to Blocked or its snooze (migration 0074). At most one of each
+    """One `task_holds` row (SELECT *): a task's move to Blocked or its snooze (migration 0075). At most one of each
     kind per task is open (released_at NULL); a released one stays as history."""
     id: int
     task_id: str

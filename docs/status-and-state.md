@@ -129,7 +129,7 @@ should be refused is an open decision (see "Decisions").
 ### task_holds.from_status (trigger)
 
 The status a task returns to when its blocked hold clears. Same list as `tasks.status`. NULL on a snooze. It was
-`tasks.blocked_from_status` until a task's holds became `task_holds` rows (migration 0074). Written by
+`tasks.blocked_from_status` until a task's holds became `task_holds` rows (migration 0075). Written by
 `backend/task_blocked.py`, read by `hubdb.py` when a hold clears.
 
 ### jobs.state (trigger)

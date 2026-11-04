@@ -1,6 +1,6 @@
 """Tests set a task's holds as they once wrote its columns: `set_holds(c, tid, snoozed_until=..., blocked_kind=...)`.
 
-A task's move to Blocked and its snooze are task_holds rows (backend/migrations/0074_task_holds.py), one open row of
+A task's move to Blocked and its snooze are task_holds rows (backend/migrations/0075_task_holds.py), one open row of
 each kind. A field of a kind opens that kind's hold (from `blocked_since`, else now) or changes the one open;
 `snoozed_until=None` or `blocked_since=None` releases it.
 """

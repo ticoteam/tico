@@ -95,9 +95,9 @@ RUNNER_STATE = {name for name, _ in importlib.import_module("backend.migrations.
 # Moved out of its table by migration 0070 (backend/migrations/0070_bot_settings.py) into the table named here: the
 # declaration is in bot_settings, which backend/tests/test_bot_settings.py checks.
 MOVED = {("bot_config", "config_json"): "bot_settings"}
-# Dropped by backend/migrations/0074_task_holds.py: a task's hold columns became task_holds rows, and the indexes and
+# Dropped by backend/migrations/0075_task_holds.py: a task's hold columns became task_holds rows, and the indexes and
 # triggers that named them go with them.
-_HOLDS = importlib.import_module("backend.migrations.0074_task_holds")
+_HOLDS = importlib.import_module("backend.migrations.0075_task_holds")
 DROPPED = {("tasks", column) for column in _HOLDS.COLUMNS}
 DROPPED_INDEXES |= set(_HOLDS.OLD_INDEXES)
 DROPPED_TRIGGERS |= set(_HOLDS.OLD_TRIGGERS)
