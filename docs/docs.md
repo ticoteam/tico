@@ -23,7 +23,7 @@ body. The page lists them grouped by folder.
 - **First visit.** While Docs holds nothing a person wrote or linked, the Librarian asks "Where are your docs?" above
   the list: links become sources at once and it reads them and builds the map of the docs. **Skip for now** is yours
   alone; **Set up with the Librarian…** in the `...` menu asks again ([librarian.md](librarian.md#first-run-setup)).
-- Choose **Import a file…** from the `...` menu. Accepted: `.md`, `.markdown`, `.txt`, `.html`, `.docx` or `.pdf`, up to
+- Choose **Import a file…** from the `...` menu. Accepted: `.md`, `.markdown`, `.txt`, `.html`, `.htm`, `.docx` or `.pdf`, up to
   20 MB. It becomes a Markdown doc (headings, lists, links, bold and italic, and tables are kept; a PDF gives its text, and
   a scan with no text is refused). The title is the first `#` heading, else the file name. Conversion stops after 30
   seconds or when it needs more than 1 GiB of memory. The file is refused, and nothing is saved. A server converts two
