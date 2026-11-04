@@ -43,7 +43,7 @@ function flowProblem(steps) {
 }
 
 // The inbox templates (backend/automation_templates): the listing, and a fixed flow for each. Blank is the real one's
-// shape: no rules, no questions, Sort to Me or Archive. The others fill to one flow (their names aside): a rule, a
+// shape: no rules, no questions, Draft to Me or Archive. The others fill to one flow (their names aside): a rule, a
 // question, and an LLM that is a draft turn as a person's or a bot's owner, and Sort, every option routed, for a group.
 const TEMPLATES = [{id: 'founder', name: 'Founder', destinations: ['Me', 'Legal', 'Engineering', 'Archive']},
   {id: 'support', name: 'Support desk', destinations: ['Support', 'Engineering', 'Archive']},
@@ -56,6 +56,10 @@ function filledTemplate(tid, owner, inbox) {
   const name = TEMPLATES.find(t => t.id === tid).name, trigger = {type: 'message', inbox};
   if (tid === 'blank') {
     const two = [destinations[0], destinations[3]];
+    if (!owner.startsWith('group:')) return {name, owner, enabled: false, trigger, destinations: two, steps: [
+      {id: 'rules', type: 'filter', rules: []},
+      {id: 'draft', type: 'llm', out: 'draft', as: owner.replace('person:', 'assistant:'),
+        prompt: 'Route and draft the message.', choose: {to: ['me', 'archive'], default: 'me', mode: 'draft'}}]};
     return {name, owner, enabled: false, trigger, destinations: two, steps: [
       {id: 'rules', type: 'filter', rules: []},
       {id: 'sort', type: 'decide', level: 'high', out: 'sort', questions: {route: {type: 'choice',
@@ -189,6 +193,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     if (p === '/api/humans') return json({people: fx.people.map(x => ({...x, org_parent: ''})), org_groups: []});
     if (p === '/api/status') return json({active: [], employees: []});
     if (p === '/api/v2/status') return json({bots: []});
+    if (p === '/api/v2/models') return json({models: [{id: 'claude-sonnet-5-5', label: 'Sonnet', provider: 'anthropic'}]});
     if (p === '/api/v2/groups') return json({groups: fx.groups});
     const body = method === 'GET' ? null : req.postDataJSON?.() ?? null;
     let m0;

@@ -75,11 +75,8 @@ def run(flow, step, values, call, voice=""):
             cost += float(result.get("cost_usd") or 0)
             choice, error = read_choice(json.dumps(result["answer"]), step["choose"])
             if choice is not None:
-                if step["choose"]["mode"] == "sort" and choice["body"] is not None:
-                    error = "Sort must return an empty body"
-                else:
-                    return {**choice, "text": json.dumps(result["answer"]), "cost_usd": cost,
-                            "model": result.get("model") or step.get("model") or DEFAULT_MODEL}
+                return {**choice, "text": json.dumps(result["answer"]), "cost_usd": cost,
+                        "model": result.get("model") or step.get("model") or DEFAULT_MODEL}
         except J.JudgeError as exc:
             cost += float(getattr(exc, "cost_usd", 0) or 0)
             error = {"shape": "the model did not answer with valid JSON", "spend_cap": "the model spend cap was reached",

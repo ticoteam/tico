@@ -253,8 +253,7 @@ def test_a_choose_step_saves_with_its_destinations():
     (drafting(choice(to=["legal", "legal"])), "each once"),
     (drafting(choice(to=["legal", 5])), "1 to 20 destination ids"),
     (drafting(choice(to=[f"d{n}" for n in range(21)], default="d0")), "1 to 20 destination ids"),
-    (drafting(choice(mode="sort")), "draft or reply"),
-    (drafting({"to": ["legal"], "default": "legal"}), "draft or reply"),
+    (drafting(choice(mode="send")), "draft or reply"),
     (drafting(choice(confidence=0.5)), "a map with to, default and mode"),
 ])
 def test_bad_choose_steps_are_refused(step, words):

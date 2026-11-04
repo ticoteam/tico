@@ -285,7 +285,7 @@ def _check_step(step, where, seen, depth, counts, targets=frozenset()):
               where, "as is assistant:<person> or bot:<slug>")
         _text(step.get("prompt"), where, "prompt", cap=MAX_PROMPT)
         _need(isinstance(step.get("out"), str) and NAME.fullmatch(step["out"]), where, "out names the result, such as draft")
-        if step.get("model") is not None:
+        if step.get("choose") is not None and step.get("model") is not None:
             from .automation_triage import model_transport
             _need(isinstance(step["model"], str) and model_transport(step["model"]) is not None,
                   where, "model must be a catalog model with a direct API")
@@ -648,7 +648,7 @@ STEP_WORDS = {
               "set, from hub_automation_question_sets) or `questions`, never both",
     "llm": "a turn on a bot or an Assistant with the prompt; its text is `out`. On email, `choose` runs one direct "
            "structured model call (Haiku by default; optional model), no task or session. With `choose` (`{to: [destination ids], "
-           "default, mode: draft or reply}`, last in its list) the turn answers `{to, body}`: the body is saved as a draft "
+           "default, mode: sort, draft or reply}`, last in its list) the turn answers `{to, body}`: the body is saved as a draft "
            "or sent as the reply to the message (never templated), then the chosen destination's actions run. A malformed "
            "answer retries once on email, then leaves the message for Me with the reason and no reply. Other triggers use `default`",
     "find": "pulls items from a source since the last run; the steps after it run once per item. At most one, at the top",

@@ -81,6 +81,18 @@ async function openDialog(page) {
       const post = writes.find(w => w.method === 'POST');
       assert.equal(post.body.enabled, false);
       assert.equal(post.body.name, 'Blank');
+      assert.equal(post.body.steps.at(-1).choose.mode, 'draft');
+      await page.locator('[data-board="llm"]').click();
+      await page.waitForSelector('[data-b="item.model"] option[value="claude-sonnet-5-5"]');
+      await page.selectOption('[data-b="item.model"]', 'claude-sonnet-5-5');
+      await page.locator('.au-ed [data-op="save"]').click();
+      await page.waitForFunction(() => document.querySelector('.au-ed').hidden);
+      assert.equal(writes.at(-1).body.steps.at(-1).model, 'claude-sonnet-5-5');
+      await page.locator('[data-bmode="sort"]').click();
+      await page.waitForFunction(() => document.querySelector('[data-bmode="sort"]').getAttribute('aria-pressed') === 'true');
+      assert.equal(writes.at(-1).body.steps.at(-1).type, 'llm');
+      assert.equal(writes.at(-1).body.steps.at(-1).choose.mode, 'sort');
+      assert.equal(writes.at(-1).body.steps.at(-1).model, 'claude-sonnet-5-5');
       assert.deepEqual(errors, []);
       await page.close();
     }

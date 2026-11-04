@@ -35,7 +35,7 @@ function auApplyFlow(a, filled) {
     if (kept.some(s => s.id === old.id)) old.id = auNewId();
     if (kept.some(s => s.out && s.out === old.out)) delete old.out;
     delete old.choose;
-    b.llm = {mode: 'draft', prompt, to: [...L.to], default: L.default, as};
+    b.llm = {mode: 'draft', prompt, to: [...L.to], default: L.default, as, ...(old.model ? {model: old.model} : {})};
     b.src = {...b.src, ls: old};
     delete b.src.sd; delete b.src.sf; delete b.src.sq;
   } else {

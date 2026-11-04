@@ -369,7 +369,6 @@ def _owner_moved(flow, step):
     return own is None or step.get("as") != own
 
 
-
 def _choose_direct(flow, state, thread, step, services):
     from .automation_triage import fallback
     values = values_of(state, thread)
@@ -382,6 +381,7 @@ def _choose_direct(flow, state, thread, step, services):
     # Checkpoint the validated choice before any mail or destination action; retries reuse this exact answer.
     thread["choice"] = {"record": rec, "to": result["to"], "body": result["body"],
                         "fallback": result.get("fallback", False), "error": result.get("error")}
+
 
 def _choose_turn(flow, state, thread, step, services):
     """An llm step with `choose`: its turn's answer picks the destination (`_answered`). With no turn to wait for (the
@@ -434,6 +434,8 @@ def read_choice(text, choose):
     body = answer["body"]
     if not isinstance(body, str) or len(body) > F.MAX_TEXT:
         return None, f"body is not text of at most {F.MAX_TEXT} characters"
+    if choose.get("mode") == "sort" and body.strip():
+        return None, "Sort must return an empty body"
     return {"to": answer["to"], "body": body if body.strip() else None}, None
 
 
