@@ -150,10 +150,26 @@ use is taken out. A role goes to the first active bot on the chart that can take
 takes no tasks under its profile, or runs on a synced harness is passed over. A wake the owner may not tell becomes a
 task for the first bot that takes one. A destination no bot can reach goes, with the rules and questions that point at
 it. A group owner gets Sort (a choice over the destinations, one route each and a default) where a person or a bot gets
-choose. A bot gets choose only if it can run its own turn: an onboarding bot, one whose profile is Responder, or one on a
-synced harness gets Sort instead. The choose's prompt names the message (its subject and body by mail, its text in
+choose. Email choose steps need no bot turn, including for a bot whose profile or harness cannot take tasks.
+Slack still requires a bot that can run a turn; otherwise it gets Sort. The choose's prompt names the message (its subject and body by mail, its text in
 Slack), and so does each task body and wake text the template hands on. A wake's text is quoted as data; a task body is
 substituted as plain text, so the message reaches it unquoted. In Slack, a bot that cannot take a non-routine task (a
 draft is one) gets no draft actions, and its choose becomes Sort. A group with no lead to act as loses the actions that need one (tasks, replies); when nothing it would do can run
 in its Slack channel, the fill is refused with a 422. Nothing is saved: the filled flow comes back off, and `hub automation create --file -` saves it.
 The same fill is `GET /api/v2/automations/templates/{id}?owner=...&inbox=...`.
+
+New inboxes default to **Draft**, including Blank. Existing automations keep their saved Sort, Draft or Reply mode;
+choose Reply explicitly to send. For email, a Message automation's `llm` step with `choose` routes and drafts in one
+structured model call, without a task, session, files or git. The default is Haiku (`claude-haiku-5-5`); the step's
+**Model** field (`model` in the flow JSON, also through the CLI/MCP) selects another catalog model with a direct API.
+The selected provider needs its API key on the server. The call counts toward the automation's spend cap and the
+team's monthly decision cap. A missing key, cap, or unavailable provider leaves the email for Me with a reason.
+
+The model gets the routing instructions, destinations and email and returns only `{to, body}`. The server validates
+the destination and body and retries an invalid answer once. Two invalid answers leave the email for Me with the
+reason in the run, without sending a reply or executing the configured default destination's actions. Sort requires an
+empty body. Destinations can still create full tasks for bots; their actions run through the existing permission checks.
+
+Drafts can use two short lines from the owner's Assistant memory, labelled `Tone:`, `Voice:` or `Sign-off:` (optionally
+prefixed `Email`). These are read fresh and capped at 560 characters together. No other personal or company memory is
+sent; a bot-owned inbox uses no person's memory. Edit or delete these lines in **What it has learned**.

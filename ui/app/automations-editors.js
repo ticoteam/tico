@@ -22,7 +22,7 @@ function auEdOpen(ed) {
   if (ed.kind === 'versions') void auVersionsLoad(ed);
   if (ed.kind === 'step' && ed.step.type === 'decide') void auLastRun(ed);
   if (ed.kind === 'step' && ed.step.type === 'decide' && AU.sets === null) void auSetsLoad(ed);
-  if (ed.kind === 'step' && ed.step.type === 'bot_turn' && !TASK_RUN_ROWS) void auModelsLoad(ed);
+  if (((ed.kind === 'step' && ['bot_turn', 'llm'].includes(ed.step.type)) || (ed.kind === 'board' && ed.part === 'llm')) && !TASK_RUN_ROWS) void auModelsLoad(ed);
   // A phone would open its keyboard over the sheet; a computer starts in the first field.
   if (!auPhone()) AU.root.querySelector('.au-ed .au-edb :is(input,textarea,select):not([disabled])')?.focus({preventScroll: true});
   AU.root.querySelector('.au-ed .au-rb.focus')?.scrollIntoView({block: 'nearest'});
@@ -184,7 +184,8 @@ function auAnswer(qid, v, q) {
 function auLlmFields(s) {
   const mine = 'assistant:' + (S.me?.id || '');
   return auFld('Runs as', auSel('step.as', auWithCur([[mine, auActorName(mine)], ...auBots()], s.as, auActorName(s.as)), s.as))
-    + auFld('Prompt', auTa('step.prompt', s.prompt));
+    + auFld('Prompt', auTa('step.prompt', s.prompt))
+    + (s.choose ? auTriageModel(s, 'step') : '');
 }
 function auFindFields(s) {
   return auFld('Pulls', auSel('step.source', Object.entries(AU_FIND), s.source))
@@ -206,6 +207,12 @@ function auBotRunsFields(s) {
   return auFld('Runs on', auSel('step.model', models, model, 'data-blank data-redraw'))
     + (harnesses.length ? auFld('Harness', auSel('step.harness', harnesses, s.harness || row.harnesses[0], 'data-blank')) : '')
     + (row?.efforts?.length ? auFld('Effort', auSel('step.effort', [['', 'Default'], ...row.efforts.map(e => [e, e])], s.effort || '', 'data-blank')) : '');
+}
+// The direct triage call needs a server API key for the selected provider.
+function auTriageModel(s, path) {
+  const rows = (TASK_RUN_ROWS || []).filter(m => m.provider && !['cursor', 'tico'].includes(m.provider));
+  const model = s.model || '';
+  return auFld('Model', auSel(`${path}.model`, auWithCur([['', 'Haiku (default)'], ...rows.map(m => [m.id, m.label || m.id])], model, model), model, 'data-blank'));
 }
 // The models the Runs on field lists (the task picker's catalog, read once); the editor draws again when they arrive.
 async function auModelsLoad(ed) {
@@ -636,6 +643,7 @@ function auBoardEdHTML(ed) {
         `<button type="button" data-op="bmode" data-v="${k}" aria-pressed="${it.mode === k}"${auDis()}>${esc(w)}</button>`).join('')}</span>`))
       // Sort with one destination asks nothing (everything goes there), so it has no instructions to keep.
       + (it.mode === 'sort' && it.to.length < 2 ? '' : auFld('Instructions', auTa('item.prompt', it.prompt, 6)))
+      + (it.mode !== 'sort' || auBoardShape(AU.cur)?.src.ls ? auTriageModel(it, 'item') : '')
       + auBox('Destinations', `<div class="au-bto">${dests.map(d => `<label class="au-chk"><input type="checkbox" data-bto="${esc(d.id)}"${it.to.includes(d.id) ? ' checked' : ''}${auDis()}>${esc(d.name || d.id)}</label>`).join('')}</div>`)
       + (it.to.length < 2 ? '' : auFld('Unsure', auSel('item.default', [...new Set([...it.to, it.default])].filter(Boolean).map(id => [id, auDestName(id, dests)]), it.default)));
   }

@@ -336,8 +336,8 @@ function auBoardShape(flow) {
   } else if (sd?.type === 'llm' && sd.choose && typeof sd.choose === 'object') {
     const c = sd.choose;
     // A draft or a reply runs mail actions: only a message flow has one to answer.
-    if (flow.trigger?.type !== 'message' || !['draft', 'reply'].includes(c.mode) || !Array.isArray(c.to) || !c.to.length || !c.to.every(id => ids.has(id)) || !ids.has(c.default)) return null;
-    b.llm = {mode: c.mode, prompt: String(sd.prompt || ''), to: [...c.to], default: c.default, as: sd.as || ''};
+    if (flow.trigger?.type !== 'message' || !['sort', 'draft', 'reply'].includes(c.mode) || !Array.isArray(c.to) || !c.to.length || !c.to.every(id => ids.has(id)) || !ids.has(c.default)) return null;
+    b.llm = {mode: c.mode, prompt: String(sd.prompt || ''), to: [...c.to], default: c.default, as: sd.as || '', ...(sd.model ? {model: sd.model} : {})};
     b.src.ls = sd;
     i += 1;
   } else return null;
@@ -374,8 +374,8 @@ function auBoardFlow(b) {
   }
   const L = b.llm;
   // One destination needs no choice: a single rule sends everything there (a one-option choice is refused).
-  if (L.mode === 'sort' && L.to.length === 1) steps.push({...keep(b.src.sf, 'filter'), rules: [rule({when: [], match: 'all', then: [], to: L.to[0]})]});
-  else if (L.mode === 'sort') {
+  if (L.mode === 'sort' && !b.src.ls && L.to.length === 1) steps.push({...keep(b.src.sf, 'filter'), rules: [rule({when: [], match: 'all', then: [], to: L.to[0]})]});
+  else if (L.mode === 'sort' && !b.src.ls) {
     const d = keep(b.src.sd, 'decide'), f = keep(b.src.sf, 'filter'), qid = b.src.sq || 'to';
     const old = b.src.sd?.questions?.[qid] || {}, was = old.criteria && !Array.isArray(old.criteria) ? old.criteria : {};
     used.delete(d.out); delete d.set;
@@ -393,6 +393,7 @@ function auBoardFlow(b) {
     // Sort's unsure destination need not be one of its answers; a choose's default must be one of its own.
     const to = L.to.includes(L.default) ? [...L.to] : [...L.to, L.default];
     Object.assign(s, {as: L.as || s.as, prompt: L.prompt || auBoardAsk(b.mail), out: outName(s, 'l'), choose: {...(s.choose || {}), to, default: L.default, mode: L.mode}});
+    if (L.model) s.model = L.model; else delete s.model;
     steps.push(s);
   }
   return {steps, destinations: copy(b.dests)};

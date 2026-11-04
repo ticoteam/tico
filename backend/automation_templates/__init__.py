@@ -295,10 +295,10 @@ def fill(c, tid, owner, inbox, settings=None):
     if not actor and not _useful(destinations, steps):
         raise Problem("invalid", f"{owner} has no lead to act as, so the {tpl['name']} template would do nothing in its "
                       "Slack channel. Give the group a lead first.", 422)
-    # A group owns no turn. A bot owns one only if start_turn could file it: the gate a routine's task passes, asked as the
-    # bot itself (onboarding, a Responder's or a synced bot's profile). Without a turn the choose becomes Sort (plan v2.1).
-    # A bot that has a turn but no drafts (the Slack case above) gets Sort too: its choose would draft.
-    turn = kind == "person" or (kind == "bot" and _takes_task(c, "bot:" + ident, ident, tpl["name"], routine=True))
+    # Email choose uses a direct call even for a bot that cannot take tasks. Slack still needs a turn and a task
+    # to hold its draft. A group has no personal choose identity and keeps its classifier-based Sort.
+    turn = kind == "person" or (kind == "bot" and (
+        not _is_slack(inbox) or _takes_task(c, "bot:" + ident, ident, tpl["name"], routine=True)))
     if not turn or not drafts:
         steps = [kept for step in steps for kept in _as_sort(step, tpl)]
     else:

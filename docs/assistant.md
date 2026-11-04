@@ -278,7 +278,9 @@ Tell it how you like things ranked and summarised ("launches matter more than hi
 saves that as one short line in your own words and says so in its reply. **What it has learned** at the top of your DM
 (`#/assistant/learned`) lists everything it saved about you, under **About you**; edit a line or delete it there (delete
 asks once more). Only you see this layer: not the owner, not administrators, not SQL, not another person's
-Assistant, and not a bot doing other work for you, BotOps included. The audit log names an entry by id, never by its words. It goes with you: it stays yours if you become the owner, and back again.
+Assistant, and not a bot doing other work for you, BotOps included. Your own email automation can use only a short voice note
+from lines labelled `Tone:`, `Voice:` or `Sign-off:` when drafting a reply (see [inbox routines](routines.md#inbox-templates));
+it never receives your full memory. The audit log names an entry by id, never by its words. It goes with you: it stays yours if you become the owner, and back again.
 
 Each turn in your DM is handed the layer as it is when the turn starts, so a line you delete is not used from the
 next reply on. It holds up to 100 lines of up to 280 characters; saving the same line twice keeps one. The Assistant

@@ -580,7 +580,7 @@ MAX_OUTPUT_TOKENS = 4096
 LLM_OUTPUT_LIMIT = {"openai": "max_completion_tokens", "xai": "max_tokens", "openrouter": "max_tokens"}
 
 
-def llm_request(provider, api_key, model, system, user, max_output=None):
+def llm_request(provider, api_key, model, system, user, max_output=None, schema=None):
     """(request) for one provider's chat API; each takes a system prompt and one user turn. `max_output` caps the
     answer's tokens on every transport (Anthropic always needs one, so it gets 4096 when none is given)."""
     headers = {"Content-Type": "application/json"}
@@ -599,6 +599,14 @@ def llm_request(provider, api_key, model, system, user, max_output=None):
         body = {"model": model, "response_format": {"type": "json_object"},
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
                 **({LLM_OUTPUT_LIMIT[provider]: max_output} if max_output else {})}
+    if schema is not None:
+        if provider == "anthropic":
+            body["output_config"] = {"format": {"type": "json_schema", "schema": schema}}
+        elif provider == "google":
+            body["generationConfig"]["responseJsonSchema"] = schema
+        else:
+            body["response_format"] = {"type": "json_schema", "json_schema": {
+                "name": "email_triage", "strict": True, "schema": schema}}
     return urllib.request.Request(LLM_URLS[provider].format(model=model), data=json.dumps(body).encode(),
                                   method="POST", headers=headers)
 
@@ -758,6 +766,31 @@ def llm_writer(provider, api_key, model, timeout=TIMEOUT, opener=None):
     write.model = model
     return write
 
+
+
+def structured_writer(provider, api_key, model, *, timeout=30, opener=None):
+    """One schema-constrained call, with usage even for an unreadable answer. No transport retries or tools."""
+    if provider not in LLM_URLS or not api_key or not model:
+        raise JudgeError("unconfigured", "no provider key or model for email triage")
+    opener = opener or urlopen
+
+    def write(system, user, schema):
+        try:
+            with opener(llm_request(provider, api_key, model, system, user, MAX_OUTPUT_TOKENS, schema),
+                        timeout=timeout) as response:
+                payload = read_json(response)
+        except urllib.error.HTTPError as exc:
+            raise JudgeError("unavailable", f"{provider} answered {exc.code}", exc.code) from None
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as exc:
+            raise JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}") from None
+        usage = payload.get("usageMetadata" if provider == "google" else "usage") or {}
+        try:
+            answer = json.loads(llm_text(provider, payload))
+        except (ValueError, TypeError, KeyError, IndexError, RecursionError):
+            raise _paid(JudgeError("shape", "the model did not answer with JSON"), model, usage) from None
+        return {"answer": answer, "model": model, "usage": usage}
+    write.model = model
+    return write
 
 def through_hub(client):
     """The hub's `POST /api/v2/decisions` with a turn's credential (`clients.tico.Client`)."""

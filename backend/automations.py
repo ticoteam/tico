@@ -1771,6 +1771,55 @@ class HubServices:
             **audit_detail(result), "answers": J.summary(result["answers"])}))
         return result
 
+    def triage(self, step, values, ctx):
+        """A direct call outside transactions; persist its answer before running any destination effects."""
+        from . import automation_triage as T
+        from . import judge
+        from clients import judge as J
+        model = step.get("model") or T.DEFAULT_MODEL
+        key = f"{self.run_id}:{ctx['key']}:triage"
+        with self.hub.store.read() as c:
+            done = c.execute("SELECT result FROM automation_effects WHERE key=?", (key,)).fetchone()
+            if done:
+                return json.loads(done[0])
+            voice = T.voice_note(c, self.flow["owner"]) if step["choose"]["mode"] != "sort" else ""
+        values = _trim(values)
+        system, user = T.prompts(self.flow, step, values, voice)
+        cap = (self.flow.get("spend_cap") or {}).get("per_30m")
+        reserve = 2 * judge.reservation(self.hub.settings, [model], {"system": system, "user": user}, {})
+
+        def hold(c):
+            # Replace a reservation left by this call before a server restart; other calls' holds still count.
+            c.execute("DELETE FROM automation_holds WHERE ref=?", (key,))
+            if cap is not None and _spent(c, self.row["id"], self.run_id) + ctx["cost"] + reserve > float(cap):
+                return False
+            c.execute("INSERT INTO automation_holds(ref,automation_id,run_id,amount,created_at) VALUES(?,?,?,?,?)",
+                      (key, self.row["id"], self.run_id, reserve, H.now()))
+            return True
+
+        if self.hub.settings.rehearsal:
+            result = T.fallback("model calls are off in rehearsal mode")
+        elif not self._write(hold):
+            result = T.fallback("the automation spend cap was reached")
+        else:
+            try:
+                write = T.writer(model)
+
+                def call(system, user, schema):
+                    return judge.metered(self.hub.store, [write.model], {"system": system, "user": user}, schema,
+                                         "automation." + step["id"], lambda: write(system, user, schema))
+                result = T.run(self.flow, step, values, call, voice)
+            except J.JudgeError:
+                result = T.fallback("the selected triage model is not configured")
+
+        def save(c):
+            c.execute("DELETE FROM automation_holds WHERE ref=?", (key,))
+            # Other runs see the charge before the engine's checkpoint; its checkpoint then writes the same total.
+            c.execute("UPDATE automation_runs SET cost=? WHERE id=?",
+                      (ctx["cost"] + result.get("cost_usd", 0), self.run_id))
+            return result
+        return self._once({**ctx, "key": ctx["key"] + ":triage"}, save)
+
     def _screened(self, bot, values):
         """A webhook run's call, screened for prompt injection before a bot gets work from it (backend/screening.py);
         None for any other run. Outside every transaction: it may wait on the decision model."""

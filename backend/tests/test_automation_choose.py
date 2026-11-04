@@ -1,4 +1,4 @@
-"""An llm step's `choose` (backend/automation_engine.py `_choose_turn`, `read_choice`, `_answered`, `_resume`): the turn's
+"""The legacy turn path (Slack and already-waiting runs). An llm step's `choose` (backend/automation_engine.py `_choose_turn`, `read_choice`, `_answered`, `_resume`): the turn's
 strict answer picks a destination and a body, the body goes out as the reply (a draft, or a sent reply) and then the
 destination's chain runs. A malformed answer, a turn that did not finish, the spend cap or a held webhook runs the
 default destination with no reply. Each effect is keyed by the step's record, so a resumed run repeats none of them.
@@ -18,7 +18,7 @@ DESTS = [{"id": "legal", "name": "Legal", "then": [{"do": "create_task", "args":
 
 
 def flow(*steps, **extra):
-    return {"name": "Test", "owner": "person:ana", "trigger": {"type": "message", "inbox": "ana@acme.example"},
+    return {"name": "Test", "owner": "person:ana", "trigger": {"type": "message", "inbox": "slack:dm"},
             "steps": list(steps), **extra}
 
 

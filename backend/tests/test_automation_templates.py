@@ -67,6 +67,9 @@ def run_to_turn(flow, payload):
     """The filled flow run on one message until it waits for its draft turn: the turn the services were asked for."""
     services = Services(answers=NO)
     run = E.execute(flow, payload, services)
+    if "@" in flow["trigger"]["inbox"]:
+        assert run["status"] == "ok" and not services.turns, run
+        return {"prompt": F.render_prompt(services.triaged[-1]["step"]["prompt"], payload)}
     assert run["status"] == "waiting", run
     return services.turns[-1]
 
@@ -158,12 +161,12 @@ def test_a_group_owner_gets_sort_and_its_lead_runs_the_task_and_meeting_routes(a
         assert AA.acts_as(c, {"flow": {"owner": f"group:{gid}"}}) == "human:ana"    # the lead is who they run as
 
 
-def test_blank_is_a_sort_to_me_or_archive(api):
+def test_blank_defaults_to_draft_to_me_or_archive(api):
     flow = fill(api, "blank", "person:ana", "ana@acme.example")
     assert [d["id"] for d in flow["destinations"]] == ["me", "archive"]
-    assert [step["type"] for step in flow["steps"]] == ["filter", "decide", "filter"]
+    assert [step["type"] for step in flow["steps"]] == ["filter", "llm"]
     assert flow["steps"][0]["rules"] == []
-    assert set(flow["steps"][1]["questions"]["route"]["criteria"]) == {"me", "archive"}
+    assert flow["steps"][1]["choose"] == {"to": ["me", "archive"], "default": "me", "mode": "draft"}
 
 
 def test_a_person_cannot_fill_a_template_for_an_inbox_they_cannot_read(api):
@@ -328,22 +331,22 @@ def test_a_bot_that_can_run_its_own_turn_keeps_the_draft_choose(api):
     assert "{{message.subject}}" in draft["prompt"] and "{{message.body}}" in draft["prompt"]
 
 
-def test_an_onboarding_bot_owner_gets_sort_for_its_draft(api):
+def test_an_onboarding_bot_owner_can_draft_email_without_a_task(api):
     set_templates(api, STAFF)
     onboarding(api, "cpo")                                  # start_turn's task would be refused: onboarding
-    assert_sorted_draft(bot_flow(api, "cpo"))
+    assert bot_flow(api, "cpo")["steps"][-1]["choose"]["mode"] == "draft"
 
 
-def test_a_responder_bot_owner_gets_sort_for_its_draft(api):
+def test_a_responder_bot_owner_can_draft_email_without_a_task(api):
     set_templates(api, STAFF)
     set_config(api, "product-design", "profile", "responder")   # its profile takes no task, a routine's included
-    assert_sorted_draft(bot_flow(api, "product-design", "ben@acme.example"))
+    assert bot_flow(api, "product-design", "ben@acme.example")["steps"][-1]["choose"]["mode"] == "draft"
 
 
-def test_a_bot_owner_on_a_synced_harness_gets_sort_for_its_draft(api):
+def test_a_bot_owner_on_a_synced_harness_can_draft_email_without_a_task(api):
     set_templates(api, STAFF)
     set_config(api, "finance", "harness", "dots")          # works on another platform: no task reaches it
-    assert_sorted_draft(bot_flow(api, "finance"))
+    assert bot_flow(api, "finance")["steps"][-1]["choose"]["mode"] == "draft"
 
 
 def slack_bot_flow(api, bot):

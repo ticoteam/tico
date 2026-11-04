@@ -25,7 +25,7 @@ MAX_RULES = 50
 MAX_CONDS = 20
 MAX_DESTINATIONS = 20   # a flow's named chains that a filter rule's `to` may send a thread to
 MAX_DESTINATION_ACTIONS = 10
-CHOICE_MODES = ("draft", "reply")   # what a choose step's body does: a draft for review, or a reply sent
+CHOICE_MODES = ("sort", "draft", "reply")   # what a choose step's body does: a draft for review, or a reply sent
 MAX_CHOICES = 20                    # destinations one choose step picks between
 COLORS = ("amber", "orange", "violet", "green", "blue", "teal", "pink", "gray", "red")
 NEXTS = ("end", "rule", "step")   # what a filter rule does once its actions ran (rule_next)
@@ -285,6 +285,10 @@ def _check_step(step, where, seen, depth, counts, targets=frozenset()):
               where, "as is assistant:<person> or bot:<slug>")
         _text(step.get("prompt"), where, "prompt", cap=MAX_PROMPT)
         _need(isinstance(step.get("out"), str) and NAME.fullmatch(step["out"]), where, "out names the result, such as draft")
+        if step.get("model") is not None:
+            from .automation_triage import model_transport
+            _need(isinstance(step["model"], str) and model_transport(step["model"]) is not None,
+                  where, "model must be a catalog model with a direct API")
         if step.get("choose") is not None:
             _check_choose(step["choose"], where, targets)
     elif kind == "find":
@@ -355,7 +359,8 @@ def _check_choose(choose, where, targets):
           and len(set(to)) == len(to), where, f"choose.to is 1 to {MAX_CHOICES} destination ids, each once")
     _need(all(x in targets for x in to), where, "choose.to names destinations in this flow")
     _need(choose.get("default") in to, where, "choose.default is one of choose.to")
-    _need(choose.get("mode") in CHOICE_MODES, where, "choose.mode is draft or reply")
+    choose.setdefault("mode", "draft")
+    _need(choose.get("mode") in CHOICE_MODES, where, "choose.mode is sort, draft or reply")
 
 
 def choosing(steps):
@@ -641,10 +646,11 @@ STEP_WORDS = {
               "and end the thread",
     "decide": "a judge answers each question; its answers read as `<out>.<question id>`. Give `set` (a saved question "
               "set, from hub_automation_question_sets) or `questions`, never both",
-    "llm": "a turn on a bot or an Assistant with the prompt; its text is `out`. With `choose` (`{to: [destination ids], "
+    "llm": "a turn on a bot or an Assistant with the prompt; its text is `out`. On email, `choose` runs one direct "
+           "structured model call (Haiku by default; optional model), no task or session. With `choose` (`{to: [destination ids], "
            "default, mode: draft or reply}`, last in its list) the turn answers `{to, body}`: the body is saved as a draft "
            "or sent as the reply to the message (never templated), then the chosen destination's actions run. A malformed "
-           "answer, a spend cap or a held webhook runs `default` with no reply",
+           "answer retries once on email, then leaves the message for Me with the reason and no reply. Other triggers use `default`",
     "find": "pulls items from a source since the last run; the steps after it run once per item. At most one, at the top",
     "bot_turn": "a task for a bot with the prompt; the bot runs it in its own session",
     "paths": "named paths tested in order; the first whose conditions hold runs. Nothing follows a paths step in its list",

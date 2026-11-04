@@ -50,6 +50,10 @@ class Services:
             return {"ok": False, "detail": f"{do} failed"}
         return {"ok": True, "detail": f"{do} done"}
 
+    def triage(self, step, values, ctx):
+        self.triaged = [*getattr(self, "triaged", []), {"step": step, "values": values, "ctx": ctx}]
+        return {"to": step["choose"]["default"], "body": None, "text": "", "cost_usd": 0.01}
+
     def start_turn(self, who, prompt, ctx, wait):
         if "turn" in self.fail:
             raise RuntimeError("no such bot")

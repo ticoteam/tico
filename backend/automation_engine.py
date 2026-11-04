@@ -345,6 +345,8 @@ def _turn(flow, state, thread, step, services, who, prompt, wait):
 
 def _llm(flow, state, thread, step, services):
     if step.get("choose") is not None:
+        if flow.get("trigger", {}).get("type") == "message" and "@" in flow["trigger"].get("inbox", ""):
+            return _choose_direct(flow, state, thread, step, services)
         return _choose_turn(flow, state, thread, step, services)
     # Nothing after it reads the answer: the turn runs on its own and the run does not wait.
     rest = thread["next"] < len(steps_at(flow, thread["trail"]))
@@ -366,6 +368,20 @@ def _owner_moved(flow, step):
     own = {"person": f"assistant:{ident}", "bot": f"bot:{ident}"}.get(kind)
     return own is None or step.get("as") != own
 
+
+
+def _choose_direct(flow, state, thread, step, services):
+    from .automation_triage import fallback
+    values = values_of(state, thread)
+    result = (fallback("the automation owner changed") if _owner_moved(flow, step) else
+              services.triage(step, values, {"key": str(len(state["steps"])), "cost": state["cost"]}))
+    outputs = {k: v for k, v in result.items() if k not in ("body", "cost_usd", "fallback")}
+    outputs["actions"] = []
+    rec = _record(state, thread, step, "ok", outputs, float(result.get("cost_usd") or 0))
+    thread["outputs"][step["out"]] = {k: v for k, v in outputs.items() if k != "actions"}
+    # Checkpoint the validated choice before any mail or destination action; retries reuse this exact answer.
+    thread["choice"] = {"record": rec, "to": result["to"], "body": result["body"],
+                        "fallback": result.get("fallback", False), "error": result.get("error")}
 
 def _choose_turn(flow, state, thread, step, services):
     """An llm step with `choose`: its turn's answer picks the destination (`_answered`). With no turn to wait for (the
@@ -395,7 +411,8 @@ def _choice_tail(flow, choose):
     """What a choose step's turn is asked after its prompt: one JSON answer, the destinations it may pick by id, and what
     its body does in the step's mode."""
     names = {d["id"]: " ".join(str(d.get("name") or d["id"]).split()) for d in flow.get("destinations") or []}
-    what = ("saved as a draft for a person to review" if choose["mode"] == "draft"
+    what = ("always empty in Sort mode" if choose["mode"] == "sort" else
+            "saved as a draft for a person to review" if choose["mode"] == "draft"
             else "sent as the reply (a draft while the inbox's send is off)")
     listed = "\n".join(f"- {dest}: {names.get(dest, dest)}" for dest in choose["to"])
     return (f'\n\nAnswer with one JSON object and nothing else: {{"to": "<id>", "body": "<text>"}}.\n'
@@ -452,6 +469,13 @@ def _resume(flow, state, thread, step, services):
     choice = thread.pop("choice")
     rec = choice["record"]
     record, values, actions = state["steps"][rec], values_of(state, thread), []
+    if choice.get("fallback"):
+        ctx = {"values": values, "step": step["id"], "key": f"{rec}.me", "producer": f"{step['id']}@{rec}.me"}
+        action = services.act("leave_for_you", {"reason": choice["error"]}, ctx)
+        record["outputs"]["actions"] = [{"do": "leave_for_you", "from": "fallback", **action}]
+        record["status"] = "ok" if action.get("ok") else "failed"
+        thread["state"] = DONE if action.get("ok") else FAILED
+        return
     if choice["body"] is not None:
         do = REPLY[step["choose"]["mode"]]
         # The body is the model's reply as written: it is not rendered, so `{{...}}` in it goes out as text.
