@@ -2124,6 +2124,23 @@ def test_a_cloud_machine_stopped_when_idle_is_not_offline_on_health(cloud):
     assert "computer_offline" in issue_kinds(cloud)
 
 
+def test_a_cloud_machine_left_empty_is_resting_after_its_bot_moves_to_a_computer(cloud):
+    computer = enrolled(cloud)
+    other = runner(cloud.api, label="Office computer")
+    idle(cloud)
+    assign(cloud.api, other, "ops", 1)
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == ["stop"] and cloud.row()["mode"] == "computer"
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+                  (H.shift(H.now(), hours=-1), computer["runner_id"]))
+    data = get(cloud.api, "health")
+    old = next(r for r in data["computers"] if r["id"] == computer["runner_id"])
+    assert old["resting"] and not old["online"]
+    assert next(r for r in data["checks"] if r["id"] == "computers")["status"] == "ok"
+    assert "computer_offline" not in issue_kinds(cloud)
+
+
 def test_a_list_that_breaks_outside_hq_still_lets_the_looks_run_and_says_why(cloud):
     adopt(cloud)
     work(cloud)
