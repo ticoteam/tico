@@ -2,7 +2,10 @@
 
 import os
 
+import pytest
+
 from backend.tests.test_api import api, post, runner  # noqa: F401
+from clients.tico import APIError
 from runner_support.connectors import ConnectorPublisher
 from runner_support.outage import Outage
 
@@ -99,3 +102,83 @@ def test_mail_tables_are_owner_only_in_sql(api):
     assert query(api, "SELECT msg_id FROM mail_messages", "ben-test")["rows"] == []
     assert query(api, "SELECT address FROM mail_mailboxes", "ben-test")["rows"] == []
     assert query(api, "SELECT msg_id FROM mail_fts", "ben-test")["rows"] == []
+
+
+class MailHub:
+    """The hub's mail batch endpoint. A hub from before `known_sender` has a message model that forbids fields it does
+    not know, so a batch carrying the field is refused with 422 and nothing is stored."""
+
+    def __init__(self, takes_known_sender=True, refuse_all=False):
+        self.takes_known_sender, self.refuse_all = takes_known_sender, refuse_all
+        self.accepted = []
+        self.refused = 0
+
+    def post(self, path, body):
+        assert path == "connectors/mail/messages"
+        has_field = any("known_sender" in m for m in body["messages"])
+        if self.refuse_all or (has_field and not self.takes_known_sender):
+            self.refused += 1
+            detail = "body.messages.0.known_sender: Extra inputs are not permitted" if has_field else "bad batch"
+            raise APIError("invalid", detail, 422)
+        self.accepted.append(body)
+        return {"ok": True}
+
+
+class MailCLI:
+    """The local mail CLI: each export hands out the next batch of rows, and the acks are recorded."""
+
+    def __init__(self, *batches):
+        self.batches, self.acked = list(batches), []
+
+    def __call__(self, args):
+        if args[:2] == ["sync", "export"]:
+            return {"messages": self.batches.pop(0) if self.batches else []}
+        if args[:2] == ["sync", "ack"]:
+            self.acked += args[2:args.index("--as")]
+            return {}
+        return {"history_id": "h1"}
+
+
+def sent_row(msg_id, known):
+    return {"msg_id": msg_id, "epoch": 1_783_368_400, "from_addr": "pat@customer.example",
+            "subject": "Hello", "known_sender": known}
+
+
+def mail_publisher(tmp_path, hub, mail):
+    return ConnectorPublisher({"url": "http://localhost:8765", "token": "test", "projects_dir": str(tmp_path)},
+                              client=hub, mail=mail)
+
+
+def test_mail_batches_carry_known_sender_to_a_hub_that_takes_it(tmp_path, capsys):
+    hub = MailHub()
+    publisher = mail_publisher(tmp_path, hub, MailCLI([sent_row("m1", True)]))
+    assert publisher._mail_mailbox("ana@acme.example", {"message_count": 3}, 100) == 1
+    assert hub.accepted[0]["messages"][0]["known_sender"] is True
+    assert publisher.hub_takes_known_sender and hub.refused == 0
+    assert "known_sender" not in capsys.readouterr().out
+
+
+def test_mail_to_a_hub_from_before_known_sender_drops_the_field_once(tmp_path, capsys):
+    hub = MailHub(takes_known_sender=False)
+    mail = MailCLI([sent_row("m1", True)], [sent_row("m2", False)])
+    publisher = mail_publisher(tmp_path, hub, mail)
+    # The first batch is refused with the field, posted again without it and acked; the next batch goes without it.
+    assert publisher._mail_mailbox("ana@acme.example", {"message_count": 3}, 100) == 2
+    assert hub.refused == 1
+    assert [m["msg_id"] for m in hub.accepted[0]["messages"]] == ["m1"]
+    assert all("known_sender" not in m for body in hub.accepted for m in body["messages"])
+    assert mail.acked == ["m1", "m2"] and not publisher.hub_takes_known_sender
+    assert capsys.readouterr().out.count("known_sender mail field") == 1
+    # The next cycle sends no field either, and the hub is not asked with it again.
+    mail.batches.append([sent_row("m3", True)])
+    assert publisher._mail_mailbox("ana@acme.example", {"message_count": 3}, 100) == 1
+    assert hub.refused == 1 and "known_sender" not in hub.accepted[-1]["messages"][0]
+
+
+def test_a_refusal_that_is_not_about_the_field_raises_and_keeps_the_field(tmp_path):
+    hub = MailHub(refuse_all=True)
+    mail = MailCLI([sent_row("m1", True)])
+    publisher = mail_publisher(tmp_path, hub, mail)
+    with pytest.raises(APIError):
+        publisher._mail_mailbox("ana@acme.example", {"message_count": 3}, 100)
+    assert publisher.hub_takes_known_sender and mail.acked == [] and hub.accepted == []

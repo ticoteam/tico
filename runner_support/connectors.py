@@ -126,10 +126,17 @@ def mail_umask():
     return {"umask": 0o002} if isolation.enabled() else {}
 
 
+def without_known_sender(body):
+    """The mail batch with `known_sender` taken off every message."""
+    return dict(body, messages=[{k: v for k, v in m.items() if k != "known_sender"} for m in body["messages"]])
+
+
 class ConnectorPublisher:
     def __init__(self, config, *, client=None, fetch=None, mail=None, event=None, google=None, action=None):
         self.config = config
         self.client = client or Client(config["url"], config["token"], timeout=35, retries=1)
+        # False once the hub has refused known_sender (a hub from before the field): mail goes to it without it.
+        self.hub_takes_known_sender = True
         # The script this checkout ships, not one named after a company's folder: an environment
         # whose workspace is ~/Companies/Acme has no `tico` beside it.
         self.script = ROOT / "scripts/mail.sh"
@@ -497,7 +504,7 @@ class ConnectorPublisher:
                     "synced_at": datetime.now(timezone.utc).isoformat()}
             if history_id:
                 body["history_id"] = str(history_id)
-            self.client.post("connectors/mail/messages", body)
+            self._post_mail(body)
             self.run_mail(["sync", "ack", *ids, "--as", self.owner, "--mailbox", address, "--json"])
             posted += len(ids)
         return posted
@@ -509,6 +516,23 @@ class ConnectorPublisher:
             if key in row and row[key] is not None:
                 message[key] = row[key]
         return message
+
+    def _post_mail(self, body):
+        """Post one mail batch. Runners and hubs update on their own schedules, so a hub from before `known_sender`
+        can get a batch that has it: its message model forbids fields it does not know. Such a refusal posts the
+        batch once more without the field, and this computer then sends no more until it restarts (logged once).
+        A refusal of the batch without the field too is not about the field, and it raises as before."""
+        if not self.hub_takes_known_sender:
+            body = without_known_sender(body)
+        try:
+            self.client.post("connectors/mail/messages", body)
+        except APIError as exc:
+            if exc.status != 422 or not any("known_sender" in m for m in body["messages"]):
+                raise
+            self.client.post("connectors/mail/messages", without_known_sender(body))
+            self.hub_takes_known_sender = False
+            log("Tico connectors: this hub predates the known_sender mail field; mail goes to it without the "
+                "field, so senders show as unknown until the hub is updated")
 
     def run(self):
         cloud = Outage("Tico connectors", "refresh failed", "refresh still failing", "refresh working again")
