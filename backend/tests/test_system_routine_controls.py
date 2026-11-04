@@ -144,7 +144,7 @@ def test_a_daily_utc_job_never_run_is_next_at_1400_utc_not_now():
 def test_the_daily_task_check_first_runs_at_1400_utc_after_a_deploy_not_at_once(api, monkeypatch):
     from backend import daily_task_check
     sent = []
-    monkeypatch.setattr(daily_task_check, "run", lambda c, at: sent.append(at) or {"woke": [], "listed": 0})
+    monkeypatch.setattr(daily_task_check, "discover", lambda c, at: sent.append(at) or [])   # one call per daily run
     # One process: the wait for the first run starts at its first tick.
     scheduler = Scheduler(api.app.state.store, api.app.state.execution)
     scheduler.tick(datetime(2026, 11, 3, 10, tzinfo=timezone.utc))
@@ -161,7 +161,7 @@ def test_the_daily_task_check_first_runs_at_1400_utc_after_a_deploy_not_at_once(
 def test_the_daily_task_check_deployed_after_1400_utc_waits_for_the_next_one(api, monkeypatch):
     from backend import daily_task_check
     sent = []
-    monkeypatch.setattr(daily_task_check, "run", lambda c, at: sent.append(at) or {"woke": [], "listed": 0})
+    monkeypatch.setattr(daily_task_check, "discover", lambda c, at: sent.append(at) or [])   # one call per daily run
     scheduler = Scheduler(api.app.state.store, api.app.state.execution)
     scheduler.tick(datetime(2026, 11, 3, 15, tzinfo=timezone.utc))
     assert sent == []
