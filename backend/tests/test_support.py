@@ -1144,3 +1144,69 @@ def test_bots_tickets_do_not_crowd_the_persons_own_out_of_the_list(environment, 
     listed = api.get("/api/v2/support/tickets", headers=signed_in()).json()
     assert [t["id"] for t in listed["tickets"]] == [mine]
     assert listed["unread"] == 0
+
+
+def test_the_persons_own_tickets_refresh_ahead_of_newer_bot_tickets(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
+    """The refresh's limit cuts the bots' tickets first: three newer bot tickets do not stop HQ's reply on the person's own
+    ticket from being pulled."""
+    monkeypatch.setattr(support, "LISTED", 2)
+    monkeypatch.setattr(support, "FRESH_S", 0)
+    api = environment()
+    mine = file(api).json()["id"]
+    bot = as_bot(api)
+    for n in range(3):
+        assert draft(api, bot, message=f"Report {n}").json()["sent"] is True
+    with api.app.state.store.read() as c:
+        hq_id = c.execute("SELECT hq_id FROM support_tickets WHERE id=?", (mine,)).fetchone()[0]
+    hq.staff_replies(hq_id, "We have a fix.")
+    refreshed = api.post("/api/v2/support/tickets/refresh", json={}, headers=signed_in()).json()
+    assert [t["id"] for t in refreshed["tickets"]] == [mine] and refreshed["unread"] == 1
+
+
+def test_the_ticket_in_view_is_asked_about_whatever_its_place_under_the_limit(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
+    """The ticket a person has open is refreshed even when two newer tickets of theirs fill the limit."""
+    monkeypatch.setattr(support, "LISTED", 2)
+    monkeypatch.setattr(support, "FRESH_S", 0)
+    api = environment()
+    old = file(api, message="The first question").json()["id"]
+    file(api, message="A second question")
+    file(api, message="A third question")
+    with api.app.state.store.read() as c:
+        hq_id = c.execute("SELECT hq_id FROM support_tickets WHERE id=?", (old,)).fetchone()[0]
+    hq.staff_replies(hq_id, "Here is the answer.")
+    api.post("/api/v2/support/tickets/refresh", json={"ticket": old}, headers=signed_in())
+    with api.app.state.store.read() as c:
+        messages = c.execute("SELECT messages FROM support_tickets WHERE id=?", (old,)).fetchone()[0]
+    assert "Here is the answer." in messages
+
+
+def test_a_retry_across_the_upgrade_finds_the_ticket_filed_under_the_bare_key(environment, hq):  # noqa: F811  (the fixture)
+    """A ticket filed before the person's keys were kept as `idem:<key>` is the one a retry with the same key gets back."""
+    api = environment()
+    headers = {**signed_in(), "Idempotency-Key": "retry-7"}
+    first = file(api, headers=headers).json()["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE support_tickets SET request_key='retry-7' WHERE id=?", (first,))   # as an older release kept it
+    sent = len(hq.seen)
+    again = file(api, headers=headers)
+    assert again.status_code in (200, 201) and again.json()["id"] == first, again.text
+    assert len(hq.seen) == sent                                    # nothing new reached HQ
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM support_tickets").fetchone()[0] == 1
+
+
+def test_a_persons_draft_filed_before_the_upgrade_under_the_approval_key_replays_and_is_not_filed_again(environment, hq):  # noqa: F811  (the fixture)
+    api = environment()
+    riley = as_person(api, "riley")
+    approval = draft(api, riley).json()["id"]
+    assert api.post(f"/api/v2/approvals/{approval}", json={"decision": "approved"}, headers=riley).status_code == 200
+    sent = send(api, riley, approval)
+    assert sent.status_code == 200, sent.text
+    ticket = sent.json()["ticket"]["id"]
+    with api.app.state.store.transaction() as c:                   # as an older release kept it
+        c.execute("UPDATE support_tickets SET request_key=? WHERE request_key=?", ("approval:" + approval, "draft:" + approval))
+    before = len(hq.seen)
+    replay = send(api, riley, approval)
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["ticket"]["id"] == ticket and replay.json()["again"] is True
+    assert len(hq.seen) == before

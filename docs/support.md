@@ -59,7 +59,7 @@ This is redacted technical evidence, not an anonymous ticket: the message and op
 The allowlist and examples are in [PRIVACY.md](../PRIVACY.md#support-diagnostics).
 
 A reply to a request you wrote opens the chat by itself, once, with the reply in it; if you are typing in a field or a
-dialog is open, it waits until you are not. A bot's report is not in your chat at all: it is not listed there, and its
+dialog is open, or Ask's panel or its peek is up, it waits until you are not. A bot's report is not in your chat at all: it is not listed there, and its
 replies neither open the chat nor put a dot on the **?**. Having the chat open marks everything read; there is no Mark
 read or Refresh button.
 Messages are checked when you open the chat, when the app regains focus or comes back into view, and on the timer below.

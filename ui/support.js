@@ -125,18 +125,29 @@
     if (!loading && state.tickets.some(t => t.unread) && document.hasFocus()) void readVisible();
   }
   // The chat opens by itself for a new reply on one of the person's own tickets, once. Never over anything the person
-  // is in: a field they are typing in, a dialog, the Ask panel, the phone's drawer, Needs you, a hidden tab. Then it
-  // waits, and opens when that ends: focus leaving a field, a dialog closing, the tab coming back, or the next check.
+  // is in: a field they are typing in, a dialog, the Ask panel or its peek, the phone's drawer, Needs you, a hidden tab.
+  // Then it waits, and opens when that ends: focus leaving a field, a dialog closing, the peek or the panel going away,
+  // the tab coming back, or the next check. At load it also waits for Ask's first check of its peek (ask-panel.js, a few
+  // seconds on), so a peek due then is in front and the chat does not open over it.
   const typing = el => !!el && (el.matches?.('input, textarea, select') || el.isContentEditable === true);
-  const occupied = () => document.hidden || typing(document.activeElement) || !!document.querySelector('dialog[open], .needs-you')
+  const occupied = () => document.hidden || typing(document.activeElement) || !!document.querySelector('dialog[open], .needs-you, #ask-peek.ask-on')
     || document.body.classList.contains('ask-open') || document.body.classList.contains('drawer');
+  let peekChecked = false;
+  const PEEK_CHECK_MS = 6000;      // Ask checks its peek at about 3 s; where there is no Ask, the chat does not wait past this
+  document.addEventListener('tico:ask-peek-checked', () => { peekChecked = true; if (announceWaiting) announceReply(); });
   function announceReply() {
     if (!announceWaiting) return;
     if (isOpen() || !state.unread) { announceWaiting = false; return; }
     if (occupied()) return;
+    if (!peekChecked && performance.now() < PEEK_CHECK_MS) { setTimeout(announceReply, PEEK_CHECK_MS - performance.now() + 50); return; }
     announceWaiting = false;
     void open();
   }
+  // A hold ends with a class change that no event announces: the peek, the Ask panel or the drawer going away.
+  const holdEnds = () => { if (announceWaiting) announceReply(); };
+  new MutationObserver(holdEnds).observe(document.body, {attributes: true, attributeFilter: ['class']});
+  const peekEl = document.getElementById('ask-peek');
+  if (peekEl) new MutationObserver(holdEnds).observe(peekEl, {attributes: true, attributeFilter: ['class']});
   function note(message, error = false) {
     const el = pop?.querySelector('[data-connection]');
     if (el) { el.textContent = message; el.classList.toggle('err', error); }

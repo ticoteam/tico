@@ -105,8 +105,7 @@ const words = text => text.trim().split(/\s+/).length;
   try {
     // A computer. A Tico team ticket is open (it stays out of Ask), then Ben asked, BotOps left a card and asked a question, and the
     // Assistant answered after both; the launch questions came last.
-    // The team's reply is the support chat's to show, not Ask's: its count is 0 here, so the chat does not open over the peek.
-    let state = {messages: [msg('a1', 'human:ben', 'Where is the launch plan?', ago(15)), msg('a2', 'bot:coo', 'In Docs.', ago(10))], sent: [], read: [], decided: [], answers: [], unreadCount: 0,
+    let state = {messages: [msg('a1', 'human:ben', 'Where is the launch plan?', ago(15)), msg('a2', 'bot:coo', 'In Docs.', ago(10))], sent: [], read: [], decided: [], answers: [],
       tickets: [{id: 'sup_1', status: 'answered', unread: true, title: 'Board will not load', message: 'Board will not load', created_at: ago(30),
                  messages: [{body: 'Try a hard reload.', from: 'staff', created_at: ago(20)}]}],
       card: {id: 'act9', summary: 'Add Cara as an admin', method: 'POST', path: '/api/v2/people', status: 'pending', result: null,
@@ -146,9 +145,14 @@ const words = text => text.trim().split(/\s+/).length;
     assert.ok(level.dy < 2 && level.gap > 0 && level.gap < 16, `the peek sits beside the row: ${JSON.stringify(level)}`);
     assert.ok(words(said) <= 6 && !/asks/i.test(said), said);
     assert.equal(await peek.locator('[data-peek-go]').innerText(), said, 'the line is the action');
+    // A team reply waits too: the support chat waits behind the peek, and opens by itself once the peek is dismissed.
+    assert.equal(await page.evaluate(() => !!document.getElementById('support-pop')?.open), false, 'the support chat waits behind the peek');
     await peek.getByRole('button', {name: 'Dismiss'}).click();
     assert.equal(await peek.isHidden(), true);
     assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.ask.peek.ben')).dismissed), ['m9', 't4']);
+    await page.locator('#support-pop[open]').waitFor({timeout: 8000});
+    await page.keyboard.press('Escape');
+    await page.locator('#support-pop').waitFor({state: 'hidden'});
     // Open: the row's dot flies up to its place beside the panel's name and lands exactly there. The row stays, a close
     // mark in its dot's place; the panel stands straight above the row, over the sidebar, and leaves the row in view.
     // The flight is quick: under 350 ms however far it goes.

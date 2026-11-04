@@ -71,6 +71,7 @@ SOURCES = ("person", "bot_report", "botops", "health_monitor")
 # or `draft:` (their own approved draft), so no key of theirs can make a ticket a bot's.
 OWN = ("COALESCE(json_extract(sent,'$.source'),'person')='person' "
        "AND COALESCE(request_key,'') NOT LIKE 'approval:%' AND COALESCE(request_key,'') NOT LIKE 'health:%'")
+RESERVED_KEYS = ("approval:", "health:", "draft:", "idem:", "feedback:")   # request keys the server itself writes
 RULE = "bot_reports_direct"     # the team rule: a bot's report is sent without a card (send_by_rule)
 RULE_VIA = "team rule"          # approvals.decided_via of a draft the rule decided: no person decided it
 RULE_NOTE = "team rule: bots send reports without asking"   # the decision's note, in its history
@@ -402,6 +403,11 @@ class Support:
             if key:
                 again = c.execute("SELECT * FROM support_tickets WHERE actor=? AND request_key=?",
                                   (who.actor, key)).fetchone()
+                # A key the person sent before it was kept as `idem:<key>`: a retry across the upgrade finds the ticket
+                # its first send made, not a second one. A bare key that starts like a server key is never matched.
+                if not again and key.startswith("idem:") and key[5:] and not key[5:].startswith(RESERVED_KEYS):
+                    again = c.execute("SELECT * FROM support_tickets WHERE actor=? AND request_key=?",
+                                      (who.actor, key[5:])).fetchone()
                 if again:
                     return view(again)
             since = H.shift(H.now(), hours=-24)
@@ -580,21 +586,26 @@ class Support:
         if H.lint_support(payload) or not H.support_text_matches(payload):
             raise Problem("approval", "The approved message no longer matches its hash; nothing was sent.", 409)
         person = Identity(row["decided_by_id"], "human")
-        # A bot's report a person approved is the bot's (`approval:`). A report a person asked for and sent is theirs:
-        # filed as `person` under its own key (`draft:`), so their chat lists it (OWN).
+        # Who asked decides whose ticket it is. A Health Monitor report (health_reports names the approval, whoever asked)
+        # is the monitor's; a bot's report a person approved is the bot's; a report a person asked for and sent is theirs,
+        # filed as `person`. The monitor's and the bot's keep `approval:` (the monitor's "Seen again" finds its ticket by
+        # it); the person's own keeps `draft:`, so their chat lists it (OWN). A person's draft filed before this change
+        # under `approval:` is found by that key too, so a replay does not file it again.
         bot = H.is_bot(who.actor)
-        key = ("approval:" if bot else "draft:") + approval_id
-        with self.store.read() as c:      # a Health Monitor report a person approved is still the Health Monitor's
+        with self.store.read() as c:
             health = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='health_reports'").fetchone() \
                 and c.execute("SELECT 1 FROM health_reports WHERE approval_id=?", (approval_id,)).fetchone()
-        source = ("health_monitor" if health else "bot_report") if bot else "person"
-        if row["consumed_at"]:
-            with self.store.read() as c:
-                done = c.execute("SELECT * FROM support_tickets WHERE actor=? AND request_key=?",
-                                 (person.actor, key)).fetchone()
-            if not done:
-                raise Problem("approval", f"{approval_id} was already spent at {row['consumed_at']}.", 409)
-            return {"ticket": view(done), "approval": approval_id, "filed_as": person.actor, "again": True}
+        if health:
+            source, key = "health_monitor", "approval:" + approval_id
+        elif bot:
+            source, key = "bot_report", "approval:" + approval_id
+        else:
+            source, key = "person", "draft:" + approval_id
+        legacy = "approval:" + approval_id
+
+        def spent_ticket(c):
+            return c.execute("SELECT * FROM support_tickets WHERE actor=? AND request_key IN (?,?) "
+                             "ORDER BY created_at LIMIT 1", (person.actor, key, legacy)).fetchone()
 
         def spend(c, _ticket_id=None):
             spent = c.execute("UPDATE approvals SET consumed_at=? WHERE id=? AND consumed_at IS NULL",
@@ -602,6 +613,16 @@ class Support:
             if spent:
                 H.event(c, who.actor, "approval.consume", approval_id, {"kind": "support"})
 
+        with self.store.read() as c:
+            done = spent_ticket(c)
+        if row["consumed_at"]:
+            if not done:
+                raise Problem("approval", f"{approval_id} was already spent at {row['consumed_at']}.", 409)
+            return {"ticket": view(done), "approval": approval_id, "filed_as": person.actor, "again": True}
+        if done:                                 # a ticket kept before its approval was spent (an older crash): spend it
+            with self.store.transaction() as c:
+                spend(c)
+            return {"ticket": view(done), "approval": approval_id, "filed_as": person.actor, "again": True}
         ticket = self.file(person, SupportTicket(message=payload["message"],
                                                  include_ids=payload.get("include_ids", True) is not False),
                            key, on_filed=spend, source=source)
@@ -695,8 +716,13 @@ class Support:
         down (429), ends the round and keeps what was known."""
         now = H.now()
         with self.store.read() as c:
+            # The limit cuts the bots' tickets first: the person's own are ordered ahead of them in SQL, and the ticket in
+            # view is asked about whatever its place.
             rows = c.execute(f"SELECT *, ({OWN}) AS own FROM support_tickets WHERE actor=? AND status!='gone' "
-                             "ORDER BY created_at DESC LIMIT ?", (who.actor, LISTED)).fetchall()
+                             "ORDER BY own DESC, created_at DESC LIMIT ?", (who.actor, LISTED)).fetchall()
+            if ticket and all(r["id"] != ticket for r in rows):
+                rows = rows + c.execute(f"SELECT *, ({OWN}) AS own FROM support_tickets WHERE actor=? AND id=? "
+                                        "AND status!='gone'", (who.actor, ticket)).fetchall()
         active_since = H.parse_ts(now) - timedelta(seconds=ACTIVE_S)
         rows = sorted(rows, key=lambda r: (r["id"] == ticket, r["own"], _last_activity(r)), reverse=True)
         failed, asked = False, 0
