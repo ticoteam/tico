@@ -349,7 +349,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub approval show <id>
     hub approval list [--status pending|approved|declined] [--from ACTOR] [--before DATE] [--since DATE] [--limit N] [--offset N]
                                            pending is what Needs you counts; the rows you may open, newest first
-    hub approval read-back <id>...         the Assistant: the list it will approve, as its reply; the person's yes runs it
+    hub approval read-back <id>... [--note "..."]
+                                           the Assistant: the list it will approve, as its reply; the person's yes runs it
     hub approval approve <id> [--note "..."] [--on-behalf-of turn]
                                            a person approves one addressed to them (the Assistant: when they let it
                                            decide approvals and asked)
@@ -2579,6 +2580,8 @@ def parser():
     s.add_argument("--summary")
     s.add_argument("--tier", choices=["core", "lookalike", "phrase-stealer", "secondary"], help="for a new company")
     s.add_argument("--new-id", dest="new_id", help="the id for a new entity when the default type/name-slug is wrong, e.g. company/self")
+    s.add_argument("--last-verified-at", dest="last_verified_at", metavar="YYYY-MM-DD",
+                   help="the date the entity was last checked: set on --entity-id, or on a new entity; YYYY-MM-DD only, a timestamp is refused")
     s.add_argument("--edge-src", dest="edge_src")
     s.add_argument("--edge-rel", dest="edge_rel")
     s.add_argument("--edge-dst", dest="edge_dst")
@@ -3046,6 +3049,8 @@ def parser():
     s.set_defaults(fn="approval list")
     s = appr.add_parser("read-back", help="the Assistant: list in the person's chat the approvals it will approve")
     s.add_argument("ids", nargs="+")
+    s.add_argument("--note", metavar="TEXT", default="",
+                   help="one plain line shown above the list: the real decision you found, by name")
     s.set_defaults(fn="approval read-back")
     s = appr.add_parser("approve", help="approve an approval addressed to you")
     s.add_argument("id")

@@ -515,8 +515,10 @@ class World:
     # ------------------------------------------------------------------ board reads (no turn, no side effects)
     def tickets(self):
         """The Dev tickets: tasks of the Dev type, with their step names."""
-        rows = self.sql("SELECT t.id,t.title,t.owner_id,t.status,t.step_id,s.name step,t.blocked_since,t.updated_at,"
-                        "t.labels,t.created_at FROM tasks t LEFT JOIN task_steps s ON s.id=t.step_id WHERE t.type_id=?",
+        rows = self.sql("SELECT t.id,t.title,t.owner_id,t.status,t.step_id,s.name step,b.created_at blocked_since,"
+                        "t.updated_at,t.labels,t.created_at FROM tasks t LEFT JOIN task_steps s ON s.id=t.step_id "
+                        "LEFT JOIN task_holds b ON b.task_id=t.id AND b.kind='blocked' AND b.released_at IS NULL "
+                        "WHERE t.type_id=?",
                         (self.dev["id"],))
         for r in rows:
             r["labels"] = json.loads(r.pop("labels") or "[]")

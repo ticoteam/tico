@@ -238,7 +238,8 @@ def window_spend_under(cap):
         return stamp[:14] + ("00" if stamp[14:16] < "30" else "30")
 
     def check(run):
-        runs = [dict(r) for r in run.w.sql("SELECT started_at, finished_at, est_cost_usd FROM turns ORDER BY started_at")]
+        runs = [dict(r) for r in run.w.sql("SELECT created_at AS started_at, settled_at AS finished_at, est_cost_usd "
+                                            "FROM attempts WHERE (job_id IS NULL OR trigger IS NOT NULL) ORDER BY created_at")]
         per, late = Counter(), []
         for r in runs:
             here = window(r["started_at"])

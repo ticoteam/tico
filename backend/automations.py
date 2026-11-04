@@ -121,7 +121,10 @@ RUN_BYTES = 524_288
 VALUES_BYTES = 60_000    # what a judge call is shown of a run's values
 MAIL_LEASE_MINUTES = 5   # a claimed mail action not reported by then goes back to the queue
 MAIL_TRIES = 3           # claims a mail action gets before it fails
-BOTOPS = "bot:botops"            # builds automations for whoever asks it, with that asker's rights (backend/botops_act.py)
+# Mail actions safe to carry out again on any computer (Gmail label changes): an expired lease another computer held
+# goes back to the queue for these. The rest may already have run there (a sent draft, a sent unsubscribe request).
+REPEATABLE_MAIL = ("archive", "label", "leave")
+BOTOPS ="bot:botops"            # builds automations for whoever asks it, with that asker's rights (backend/botops_act.py)
 VERSIONED = ("trigger", "steps", "batch", "destinations")   # what the automation does; a change here is a new version
 # The automations a write in this context comes from: their own actions never start them again.
 CHAIN = contextvars.ContextVar("automation_chain", default=())
@@ -1349,7 +1352,7 @@ def turn_done(c, attempt, outcome, text):
         return
     # A turn the run started is its task's; a notice (wake_bot, note) is its message.
     ref = H._task_ref(refs.get("task")) if refs.get("automation_step") else msg["id"]
-    priced = c.execute("SELECT est_cost_usd FROM turns WHERE id=?", (attempt["id"],)).fetchone()
+    priced = c.execute("SELECT est_cost_usd FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
     cost, ok = float((priced and priced[0]) or 0), outcome == "completed"
     if run["status"] == "running" or (run["status"] == "skipped" and run["claimed_at"]):
         # Still being worked (a run dropped mid-step is too, until its step is saved): the save takes the answer.
@@ -1442,8 +1445,8 @@ def _spent(c, aid, rid):
 
 def _usual_cost(c, bot):
     """What a turn of `bot` usually costs: its last TURN_COST_SAMPLE priced turns' average, else TURN_COST."""
-    rows = [r[0] for r in c.execute("SELECT est_cost_usd FROM turns WHERE bot=? AND est_cost_usd IS NOT NULL "
-                                    "ORDER BY started_at DESC LIMIT ?", (bot, TURN_COST_SAMPLE))]
+    rows = [r[0] for r in c.execute("SELECT est_cost_usd FROM attempts WHERE bot_id=? AND est_cost_usd IS NOT NULL "
+                                    "ORDER BY created_at DESC LIMIT ?", (bot, TURN_COST_SAMPLE))]
     return round(sum(rows) / len(rows), 6) if rows else TURN_COST
 
 
@@ -2894,12 +2897,13 @@ def install(app, store, auth, mutate):
 
     # The computer that reads a mailbox carries out the mail actions queued for it (runner_support/connectors.py).
     def mail_computer(c, who, mailbox):
-        """Only the computer that reads this mailbox claims and reports its actions: by the check mail publishing uses
-        (backend/connectors.py `publisher`), and, once the mailbox has been published, only the runner that did."""
+        """Only the computer that may act for this mailbox claims and reports its actions (google_rights.refusal: the
+        computer hosting a Google Workspace mailbox's message bot, the one holding a person's grant, else a publisher),
+        and, once the mailbox has been published, only the runner that did."""
+        from . import google_rights
         from .connectors import human_of
-        runner = app.state.execution.runner(c, who)
-        if not runner or runner["owner_id"] not in (store.settings.processing_operators or (auth.owner_id(c),)):
-            raise Problem("forbidden", "This machine is not assigned the private app-connector capability", 403)
+        runner = google_rights.runner_of(app.state.execution, c, who)
+        google_rights.check(c, runner["id"], google_rights.publishes(store, app.state.execution, c, runner), mailbox)
         box = c.execute("SELECT runner_id FROM mail_mailboxes WHERE address=?", (mailbox,)).fetchone()
         if not box:   # not published yet: no computer has shown it reads this mailbox
             raise Problem("forbidden", "No computer has published this mailbox yet", 403)
@@ -2923,6 +2927,12 @@ def install(app, store, auth, mutate):
                 if row["attempts"] >= MAIL_TRIES:
                     _mail_report(c, row, "failed", {**json.loads(row["result"] or "{}"), "ok": False,
                                                     "detail": f"no result after {MAIL_TRIES} tries"})
+                elif row["claimed_by"] != runner["id"] and row["action"] not in REPEATABLE_MAIL:
+                    # Another computer's lease ran out: its attempt may already have run on the mailbox (a draft made,
+                    # a request sent), and the dedup it keeps is on that computer. Such an action is not run again here.
+                    _mail_report(c, row, "failed", {**json.loads(row["result"] or "{}"), "ok": False,
+                                                    "detail": "the lease ran out on another computer, which may already "
+                                                              "have carried it out; not run again"})
                 else:
                     state = _requeue(c, row)
                     c.execute("UPDATE automation_mail_actions SET state=? WHERE id=?", (state, row["id"]))
@@ -2969,7 +2979,11 @@ def install(app, store, auth, mutate):
             row = c.execute("SELECT * FROM automation_mail_actions WHERE id=?", (mid,)).fetchone()
             if not row:
                 raise Problem("not_found", "No such mail action", 404)
-            mail_computer(c, who, row["mailbox"])
+            # The computer whose lease this is reports it, even after its mailbox moved (plan v4 R): a finished action is
+            # never retried. Any other computer must pass the gate.
+            from . import google_rights
+            if row["claimed_by"] != google_rights.runner_of(app.state.execution, c, who)["id"]:
+                mail_computer(c, who, row["mailbox"])
             if row["state"] in ("done", "failed", "canceled"):
                 return {"id": mid, "state": row["state"]}
             state = ("done" if body.ok else _requeue(c, row) if body.retry and row["attempts"] < MAIL_TRIES else "failed")

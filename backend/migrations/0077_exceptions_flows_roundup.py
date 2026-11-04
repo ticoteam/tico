@@ -1,7 +1,7 @@
 """A saved rule on the retired "exceptions" event moves to the task_roundup event, in its table row and in its automation.
 
 The engineering exceptions are lines on the task roundup now (backend/task_roundup.py), and no event named "exceptions"
-is left to wake on. Migration 0072 moved the rules table's rows. A rule the redesign cutover already made into an
+is left to wake on. Migration 0076 moved the rules table's rows. A rule the redesign cutover already made into an
 automation keeps its event in the automation's flow: the step's `when` condition and the rule saved in its action's args.
 Those move too, in the current flow and in each saved version (a restored version must not bring the retired event back).
 Every other rule and flow keeps its event. Running it again changes nothing.

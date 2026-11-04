@@ -1237,7 +1237,7 @@
     },
     "/api/v2/assistant/read-back": {
       "post": {
-        "summary": "The Assistant only: post the list of approvals it is about to approve for you in your chat; only those may then be approved on your yes",
+        "summary": "The Assistant only: post the list of approvals it is about to approve for you in your chat, with an optional note of its own words above it; only the listed ones may then be approved on your yes",
         "operationId": "readBackAssistantApprovals",
         "requestBody": {
           "content": {
@@ -8251,6 +8251,75 @@
                 "schema": {
                   "$ref": "#/components/schemas/BrowserExitUsage"
                 }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Computers"
+        ]
+      }
+    },
+    "/api/v2/computers/{rid}/label": {
+      "post": {
+        "summary": "Rename a computer: 1 to 100 characters, trimmed; owners and admins",
+        "operationId": "renameComputer",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunnerLabel"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -42577,6 +42646,12 @@
             "maxItems": 100,
             "minItems": 1,
             "title": "Approvals"
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Note",
+            "default": ""
           }
         },
         "additionalProperties": false,
@@ -48177,7 +48252,7 @@
               ],
               "additionalProperties": true
             },
-            "description": "The run's pieces so far, in order, while it is leased or running (empty otherwise). `reply` and `progress` are what the bot wrote (`progress` when a tool call follows it); `tool` is a short label such as \"Ran hub task create\", never its arguments or output"
+            "description": "The run's pieces so far, in order, while it is leased or running (empty otherwise). `reply` and `progress` are what the bot wrote (`progress` when a tool call follows it); `tool` is a short label such as \"Filing a task\" or \"Ran npm\", never its arguments or output"
           }
         },
         "required": [
@@ -62267,6 +62342,24 @@
         "additionalProperties": false,
         "type": "object",
         "title": "RunNow"
+      },
+      "RunnerLabel": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+            "title": "Label",
+            "description": "The computer's name, as Settings > Computers shows it."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "title": "RunnerLabel"
       },
       "RunnerTurnsAtOnce": {
         "properties": {

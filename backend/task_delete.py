@@ -41,12 +41,12 @@ TRASH_ASSETS = """CREATE TABLE IF NOT EXISTS task_trash_assets(
 TASK_ROWS = ("history_events", "task_links", "task_tags", "task_delegations", "task_reminders",
              "task_check_back_wakes",
              "service_key_tasks", "task_roles", "task_assets", "task_requesters", "task_milestone_waits",
-             "task_check_models", "task_run_models")
+             "task_check_models", "task_run_models", "task_holds")
 # A table whose rows name the task other than by `task_id`: its column and the rows of it that are a task's. A task's
 # history is the shared history table's task rows (backend/migrations/0064_history_events.py).
 TASK_KEYS = {"history_events": ("subject_id", "subject_type='task'")}
 # Rows that are work done on the task: any one of them refuses the run.
-TASK_WORK = ("turns", "approvals", "bot_tool_requests", "meeting_deliveries", "schedule_occurrences",
+TASK_WORK = ("attempts", "approvals", "bot_tool_requests", "meeting_deliveries", "schedule_occurrences",
              "watcher_items")
 # A file a person attached to the task itself (scope `task:<id>`) is not work; any other file touched on the task is.
 # A verdict on a file under review (`reviewed`, backend/file_reviews.py) is not work either: the file is the work, and
@@ -59,7 +59,7 @@ FILE_WORK = (("bot_files", "SELECT count(*) FROM bot_files WHERE task_id IN ({})
              ("bot_file_versions", "SELECT count(*) FROM bot_files f WHERE f.task_id IN ({}) AND f.scope='task:' || f.task_id "
                                    "AND EXISTS (SELECT 1 FROM bot_file_versions v WHERE v.file_id=f.id "
                                    "AND (v.attempt_id IS NOT NULL OR v.actor LIKE 'bot:%'))"))
-MESSAGE_WORK = ("turns", "jobs", "attempt_inputs", "approvals", "credential_requests",
+MESSAGE_WORK = ("attempts", "jobs", "attempt_inputs", "approvals", "credential_requests",
                 "bot_transition_checkpoints", "batches")
 CONVERSATION_WORK = ("attempt_conversations", "session_epochs", "assistant_actions", "chat_goals",
                      "credential_requests", "bot_transition_checkpoints")
@@ -76,7 +76,15 @@ CORE = ("tasks", "conversations", "messages")
 # Keys a trashed row holds that are not columns: the rowid the snapshot read it with, and the task links kept on the
 # task row before task_relations (LEGACY_LINKS, restored as relations).
 NOT_COLUMNS = {"_rowid"}
-HANDLED = {"tasks": set(LEGACY_LINKS)}
+# A task trashed before its holds were rows (migration 0075) kept them as columns of its own row: a restore opens them
+# as task_holds rows (`_legacy_holds`). {kind: {old column: task_holds column}}, with the one that marks it open first.
+LEGACY_HOLDS = {
+    "snoozed": {"snoozed_until": "until_at", "snoozed_by_id": "by_id", "snoozed_note": "reason"},
+    "blocked": {"blocked_since": "created_at", "blocked_reason": "reason", "blocked_kind": "cause",
+                "blocked_from_step": "from_step_id", "blocked_from_status": "from_status", "blocked_gate": "gate",
+                "holds_cleared_at": "cleared_at"},
+}
+HANDLED = {"tasks": set(LEGACY_LINKS) | {k for cols in LEGACY_HOLDS.values() for k in cols}}
 
 
 def ensure(c):
@@ -417,6 +425,20 @@ def _unplaced(c, snap):
     return out
 
 
+def _legacy_holds(c, task):
+    """The holds a task trashed before migration 0075 kept on its row, back as its open task_holds rows."""
+    if "snoozed_until" not in task and "blocked_since" not in task:
+        return
+    for kind, columns in LEGACY_HOLDS.items():
+        first = next(iter(columns))
+        if not task.get(first):
+            continue
+        values = {new: task.get(old) for old, new in columns.items()}
+        values.setdefault("created_at", task.get("updated_at") or H.now())
+        c.execute(f"INSERT INTO task_holds(task_id, kind, {', '.join(values)}) VALUES (?, ?, {_marks(list(values))})",
+                  (task["id"], kind, *values.values()))
+
+
 def restore_tasks(c, ids, actor=None):
     """Put trashed tasks back with every row they took. A task, conversation or message that cannot go
     back (its id in use again) refuses the whole restore with `conflict`; links to a task or room that
@@ -456,6 +478,7 @@ def restore_tasks(c, ids, actor=None):
                 task["step_id"] = None
                 task["step_rank"] = None
             _insert(c, "tasks", task, skip=LINKS)
+            _legacy_holds(c, task)
         messages = []
         for e, snap in snapshots:
             for conv in snap["rows"].get("conversations", []):

@@ -9,6 +9,7 @@ from backend.store import H
 from backend.tests.test_api import api, get  # noqa: F401
 from backend.tests.test_dev_ticket_rules import dev_type
 from backend import bot_settings as BS
+from backend.tests.hold_rows import set_holds
 
 HEAD = "a" * 40
 
@@ -86,7 +87,7 @@ def test_a_ticket_with_no_run_for_45_minutes_is_listed_once_with_its_owner_and_s
         typ = board(c)
         quiet, fresh, snoozed = ticket(c, typ, "Fix Cursor", minutes=50), ticket(c, typ, "Fix Muse", minutes=20), \
             ticket(c, typ, "Fix Grok", minutes=50)
-        c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), hours=5), snoozed["id"]))
+        set_holds(c, snoozed["id"], snoozed_until=H.shift(H.now(), hours=5))
         [entry] = listed(c, typ, "stuck")
         assert entry["ticket"]["id"] == quiet["id"] and entry["ticket"]["owner_id"] == "cpo"
         assert "owner cpo" in entry["cause"]
@@ -316,8 +317,8 @@ def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_until_it_is_real
                             c.execute("DELETE FROM messages WHERE id=?", (m["id"],)))
 
         def snooze():
-            c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), hours=3), check["id"]))
-            return lambda: c.execute("UPDATE tasks SET snoozed_until=NULL WHERE id=?", (check["id"],))
+            set_holds(c, check["id"], snoozed_until=H.shift(H.now(), hours=3))
+            return lambda: set_holds(c, check["id"], snoozed_until=None)
 
         def approval():
             aid = H.new_id()

@@ -1,15 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "org",
-  "description": "Runtime template for one org's page: the shell copies it per org, naming that org's webview and origin. Only that page may use the native shell.",
+  "description": "Runtime template for one org's page: the shell copies it per org, naming that org's webview and origin. Only that org's pages may use the native shell. No dialog plugin: alert and confirm go through page_dialog, for the page on screen only.",
   "windows": [],
   "webviews": [],
   "permissions": [
-    "dialog:allow-ask",
-    "dialog:allow-message",
-    "dialog:allow-confirm",
     "allow-app-log",
-    "allow-bridge"
+    "allow-bridge",
+    "allow-page-dialog"
   ],
   "local": false
 }

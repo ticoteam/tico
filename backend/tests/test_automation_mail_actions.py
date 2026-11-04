@@ -13,6 +13,7 @@ from unittest import mock
 import pytest
 import time_machine
 
+from backend.store import H
 from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.test_automation_turns import finish
 from clients.tico import APIError
@@ -398,6 +399,26 @@ def test_a_lease_that_runs_out_after_its_run_failed_is_canceled_not_queued(api, 
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM automation_mail_actions WHERE id=?", (action["id"],)).fetchone()[0] == \
             "canceled"
+
+
+ARCHIVE = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [{"do": "archive"}]}]}
+
+
+def test_a_lease_another_computer_let_run_out_is_not_run_again_unless_the_action_is_repeatable(api, computer):
+    send = automate(api, SEND)
+    automate(api, ARCHIVE)
+    computer.sync()
+    claimed = {action["action"]: action for action in claim(api, computer.token)["actions"]}
+    assert set(claimed) == {"send", "archive"}                 # both leased to the first computer, which never answers
+    second = runner(api, label="Second Mac")
+    post(api, "connectors/mail/messages", {"mailbox": BOX, "messages": [], "deleted": [], "synced_at": H.now()},
+         second["token"])                                      # the second computer now reads the mailbox
+    with later(6):
+        again, = claim(api, second["token"])["actions"]
+        assert (again["action"], again["attempt"]) == ("archive", 2)   # a label change is safe to run again
+    step = last_run(api, send)["steps"][0]
+    assert step["status"] == "failed" and "not run again" in step["outputs"]["detail"]
+    assert computer.gmail.sent == []                           # the send was never carried out on either computer
 
 
 def test_no_computer_claims_or_reports_for_a_mailbox_not_published_yet(api, computer):

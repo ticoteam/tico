@@ -116,8 +116,8 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
     found = list(c.execute(
             "SELECT a.id,a.bot_id,a.started_at,a.created_at,a.finished_at,a.state,a.result,j.message_id FROM attempts a "
             "JOIN jobs j ON j.id=a.job_id WHERE a.state IN ('failed','expired') " + ("AND a.bot_id=? " if bot is not None else "") +
-            "AND (? IS NULL OR coalesce(a.finished_at,a.created_at)>=?) AND NOT EXISTS "
-            "(SELECT 1 FROM turns t WHERE t.id=a.id) ORDER BY coalesce(a.finished_at,a.created_at) DESC LIMIT ?",
+            "AND (? IS NULL OR coalesce(a.finished_at,a.created_at)>=?) AND a.trigger IS NULL "
+            "ORDER BY coalesce(a.finished_at,a.created_at) DESC LIMIT ?",
             ((bot,) if bot is not None else ()) + (since, since, limit)))
     stored = H.prime_messages(c, [row["message_id"] for row in found])
     privacy.prime_messages(c, list(stored.values()))
@@ -502,8 +502,8 @@ def updating(c):
 def operation_issues(c, who, auth):
     """Human-facing failures derived from durable state; no external alarm service.
 
-    Every issue says whether a person has to act (`needs_person`). The UI opens those in front of
-    the person wherever they are; the rest stay in Settings for quieter diagnosis or review.
+    Every issue says whether a person has to act (`needs_person`); only those light the account's status dot.
+    Stopped runs and quarantined bots are BotOps's to review, so they say no, and Settings > Health lists them.
     """
     from .agents import still_reporting
     issues, seen = [], set()
@@ -546,10 +546,11 @@ def operation_issues(c, who, auth):
         location = machine(c, slug)
         mac_offline = bool(location.get("machine") and not location.get("online") and not location.get("agent"))
         status = privacy.status(c, who, H.status(c, slug), **status_inputs[slug]) or {}
+        # A quarantine is repeated refusals (backend/hubdb.py rule 8); BotOps gets the refused-writes review for it.
         if bot["state"] == "quarantined" or status.get("state") == "quarantined":
             add("bot", bot["display_name"] + " needs attention",
                 status.get("focus") or "The bot is " + (status.get("state") or bot["state"]),
-                bot=slug, needs_person=True,
+                bot=slug, needs_person=False,
                 action="Review the refused action and interrupted work, then resume the bot on its page.")
         elif status.get("state") == "crashed" and not mac_offline:
             add("bot", bot["display_name"] + " needs attention",
@@ -653,9 +654,9 @@ def operation_issues(c, who, auth):
                     "Tico's Docker runner, then review its stopped run.")
             elif waiting or left:
                 # Work is stuck behind it (the claim's own fence), or the keeper settled the rest of its run and left
-                # it: only a review lets it go, so this one is a person's now, not a later look (Dev 280).
-                # One short line per run, with its own Try again / Don't retry, instead of a paragraph of quoted
-                # titles (Chris, Oct 26): the detail says only why they stopped and what waits; the rows name them.
+                # it: only a review lets it go. BotOps holds that review (its held-run task), so the person's status
+                # dot stays out of it and Health lists it. One short line per run, with its own Try again / Don't
+                # retry: the detail says only why they stopped and what waits; the rows name them.
                 rows, run_count = stopped_rows(c, who, auth, slug)
                 count = run_count or uncertain
                 can_review = who.actor == "bot:botops" or auth.operator(c, who, slug)
@@ -682,11 +683,11 @@ def operation_issues(c, who, auth):
                            "timeout": f"Its computer stopped answering during {these}"}[cause]
                     why += ", not a bug. "
                 add("uncertain_work", f"{bot['display_name']} has {count} stopped {noun} holding up work",
-                    why + behind, bot=slug, action="review", held_back=waiting, held_tasks=waiting_on,
+                    why + behind, bot=slug, needs_person=False, action="review", held_back=waiting, held_tasks=waiting_on,
                     runs=rows, more_runs=max(0, count - len(rows)), can_review=can_review)
             elif (late := unreviewed(c, who, slug))[0]:
-                # Two hours with no decision: a person's now, on Health and in its operator's Needs you, whoever else
-                # was asked (Dev 543). Others who read the bot still see it on Health, not in their Needs you.
+                # Two hours with no decision: Health lists it for whoever may read the bot, and BotOps's held-run review
+                # decides it. Nobody is interrupted for it, so only the operator's severity differs.
                 count, hours = late
                 them = "it" if count == 1 else "them"
                 newer = uncertain - count
@@ -700,7 +701,7 @@ def operation_issues(c, who, auth):
                 add("uncertain_work", f"{bot['display_name']} has {count} stopped run{'' if count == 1 else 's'} "
                     f"waiting {hours} h",
                     f"Nobody has decided {them} yet.{more}{queued_note} Choose Try again or Don't retry.",
-                    bot=slug, severity="error" if operator else "warning", needs_person=operator, action="review",
+                    bot=slug, severity="error" if operator else "warning", needs_person=False, action="review",
                     waiting_hours=hours, runs=rows, more_runs=max(0, run_count - len(rows)), can_review=can_review)
             else:
                 add("uncertain_work", f"{bot['display_name']} saved {uncertain} stopped {noun} for later",
@@ -801,6 +802,26 @@ def operation_issues(c, who, auth):
                 continue
             add("service", row["service"] + " needs attention", row["last_error"] or "The last check failed.",
                 needs_person=bool(detail.get("needs_person")), action=detail.get("action"))
+        # Google connections: the Workspace key that stopped working, and a person's grant held on a computer other
+        # than their message bot's (backend/google_connect.py, google_workspace.py).
+        from . import google_rights, google_workspace
+        key = google_workspace.active(c)
+        if key and key["status"] == "failing":
+            add("google_workspace", "The Google Workspace key is failing",
+                key["last_error"] or "Google has refused the Workspace key for too long.",
+                needs_person=True, action="Check the key in Settings > Google.")
+        labels = {row["id"]: row["label"] for row in c.execute("SELECT id,label FROM runners_with_state")}
+        hosts = google_rights.inbox_hosts(c)
+        for grant in c.execute("SELECT person_id,mailbox,holder FROM google_connects WHERE status='connected' "
+                               "AND holder IS NOT NULL AND grant_hash IS NOT NULL").fetchall():
+            host = (hosts.get(grant["person_id"]) or {}).get("runner")
+            if host and host != grant["holder"]:
+                holder = labels.get(grant["holder"]) or "another computer"
+                bot_computer = labels.get(host) or "the computer that runs their message bot"
+                add("google_grant", grant["mailbox"] + "'s Google grant is on " + holder,
+                    grant["mailbox"] + "'s Google grant is on " + holder + ". Reconnect in Settings > Google to move it "
+                    "to " + bot_computer + ", where their message bot runs.", machine=grant["holder"], needs_person=True,
+                    action="Open Settings > Google")
         # A connector that stopped refreshing (the Mac lost the network, or the sync hung) writes no
         # error, so its age is checked while a Mac is online: calendar refreshes every 45 s, mail
         # reports every 10 minutes.
@@ -1079,7 +1100,7 @@ KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "setup": 1, "
 # for the person to do on it until the bot restates it (its bot's task roundup lists the restate, backend/task_roundup.py).
 
 
-_VISIBLE_TASK_SQL = "SELECT * FROM tasks WHERE id=? AND (%s)"
+_VISIBLE_TASK_SQL = f"SELECT * FROM {H.TASKS} tasks WHERE id=? AND (%s)"
 
 
 def _prime_person_origins(c, visible_sql, ids):
@@ -2243,10 +2264,10 @@ def install_views(app, store, auth, mutate, task_view):
         from . import cloud_machines
         # Each bot's cloud machine, own or shared, Tico Cloud only (backend/cloud_machines.py): one read for every bot.
         cloud_rows = cloud_machines.rows(c) if cloud_machines.offered(c, store.settings) else None
-        # Each bot's last finished run, one turns_bot_finished seek per bot rather than a sort of every run there is.
+        # Each bot's last finished run, one attempts_bot_settled seek per bot rather than a sort of every run there is.
         latest_run = {slug: tid for slug, tid in c.execute(
-            "SELECT b.id,(SELECT t.id FROM turns t WHERE t.bot=b.id AND t.finished_at IS NOT NULL "
-            "ORDER BY t.finished_at DESC,t.id DESC LIMIT 1) FROM bots b") if tid}
+            "SELECT b.id,(SELECT t.id FROM attempts t WHERE t.bot_id=b.id AND t.settled_at IS NOT NULL "
+            "ORDER BY t.settled_at DESC,t.id DESC LIMIT 1) FROM bots b") if tid}
         from .usage_records import ran_on
         run_views = ran_on(c, list(latest_run.values()))
         latest_models = {}
@@ -2270,7 +2291,7 @@ def install_views(app, store, auth, mutate, task_view):
         open_tasks = {}
         read_now = [slug for slug in shown if access.get(slug, auth.FULL)["read"]]
         for part in H.chunks(read_now):
-            for task in H._rows(c.execute("SELECT * FROM tasks WHERE owner_id IN (" + ",".join("?" * len(part)) +
+            for task in H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE owner_id IN (" + ",".join("?" * len(part)) +
                                           ") AND status IN ('open','doing')", ["bot:" + slug for slug in part])):
                 open_tasks.setdefault(H.actor_id(task["owner_id"]), []).append(task)
         # Each bot's task flow counts, all bots at once: the wait and step checks are read once for every task.
@@ -2748,7 +2769,7 @@ def install_views(app, store, auth, mutate, task_view):
         who = request.state.identity
         human_only(who)
         with store.read() as c:
-            turn = c.execute("SELECT * FROM turns WHERE id=?", (run_id,)).fetchone()
+            turn = H.turn(c, run_id)
             if not turn:
                 turn = next((r for r in failed_attempts(c, who, auth) if r["id"] == run_id), None)
             if not turn:

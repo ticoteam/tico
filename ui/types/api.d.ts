@@ -102,6 +102,7 @@ export type AssistantPage = {
 
 export type AssistantReadBack = {
   approvals: Array<string>;
+  note?: string;
 };
 
 export type AssistantSent = {
@@ -4074,6 +4075,10 @@ export type RulesByTeammate = {
 
 export type RunNow = {
   input?: Record<string, unknown>;
+};
+
+export type RunnerLabel = {
+  label: string;
 };
 
 export type RunnerTurnsAtOnce = {
@@ -9350,6 +9355,14 @@ export type RemoveThreadMemberParams = {
 };
 export type RemoveThreadMemberBody = never;
 export type RemoveThreadMemberResponse = ThreadMemberChange;
+
+/** POST /api/v2/computers/{rid}/label */
+export type RenameComputerParams = {
+  "Idempotency-Key": string;
+  rid: string;
+};
+export type RenameComputerBody = RunnerLabel;
+export type RenameComputerResponse = unknown;
 
 /** PUT /api/v2/subscriptions/name */
 export type RenameSubscriptionParams = Record<string, never>;

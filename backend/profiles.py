@@ -53,6 +53,18 @@ MATERIALISED = "profile"                # `created_by` of the rows a custom prof
 RELEASE_QA_TITLE = re.compile(
     r"^(?:(?:Post[- ](?:Release|Launch)|Release)\s+QA(?:\s+(?:pass|sweep))?|Post[- ]Release\s+checks?)\s*(?::|$)", re.I)
 ACCEPTANCE_TITLE = re.compile(r"\blive acceptance\b", re.I)
+# A top-level production acceptance run is acceptance QA work (Dev 750, engineering ruling on 34f2faaf). Only a title
+# that reads as a run counts: it opens with a run verb, or with the phrase itself. Anything else, including any
+# request that builds or changes the acceptance tests, is ordinary work.
+PRODUCTION_ACCEPTANCE_TITLE = re.compile(r"\bproduction acceptance\b", re.I)
+#   A run verb names the acceptance itself (optionally one word such as the feature), and what follows is a run's
+#   object or a preposition, not a checklist, plan or note about it.
+_ACCEPTANCE_RUN_AFTER = (
+    r"(?=\s*$|\s*[:,(]|\s+(?:for|after|on|against|in|at|with|from|to|before|during|of|and|through|across"
+    r"|tests?|suite|run|pass|sweep|checks?|again|now|today|as|once)\b)")
+PRODUCTION_ACCEPTANCE_RUN_TITLE = re.compile(
+    r"^(?:(?:run|rerun|re-run|execute|perform|carry out|complete|finish|check|verify|do)\b(?:\s+[\w-]+){0,2}?"
+    r"\s+production acceptance\b" + _ACCEPTANCE_RUN_AFTER + r"|production acceptance run\b)", re.I)
 # The numbers a former Token saver bot keeps.
 TOKEN_SAVER_OPTIONS = {"batch_seconds": TOKEN_SAVER_SECONDS, "batch_scope": "bot", "sweep_seconds": 2 * 3600}
 
@@ -202,8 +214,8 @@ def sweeps_on(c, bot):
 def is_review_task(c, row, *, parent_id=None):
     """One classification for creation, assignment, pull, wakes and Health.
 
-    Explicit release QA may be top-level. Gate and acceptance requests need a parent;
-    an untitled delegated child also qualifies while its parent is in a review/QA step.
+    Explicit release QA and a top-level production acceptance run may be top-level. Gate and live acceptance requests
+    need a parent; an untitled delegated child also qualifies while its parent is in a review/QA step.
     `parent_id` lets creation check the same rule before the child row exists.
     """
     from . import auto_tasks
@@ -212,7 +224,7 @@ def is_review_task(c, row, *, parent_id=None):
         return True
     parent_id = parent_id or (H.TR.parent_of(c, row["id"]) if row.get("id") else None)
     if not parent_id:
-        return False
+        return bool(PRODUCTION_ACCEPTANCE_TITLE.search(title) and PRODUCTION_ACCEPTANCE_RUN_TITLE.match(title))
     return bool(_check_title(c, H.task(c, parent_id), title) or ACCEPTANCE_TITLE.search(title)
                 or auto_tasks.review(c, row, parent_id=parent_id))
 
@@ -526,7 +538,7 @@ def mismatches(c):
         declared = H._json(row["config"], {}) or {}
         name, bot = name_of(declared), row["bot"]
         if name == REVIEWER:
-            tasks = H._rows(c.execute(f"SELECT * FROM tasks WHERE owner_id=? AND status IN {OPEN} LIMIT 200",
+            tasks = H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE owner_id=? AND status IN {OPEN} LIMIT 200",
                                       ("bot:" + bot,)))
             other = sum(1 for t in tasks if not is_review_task(c, t))
             if other:
@@ -537,8 +549,8 @@ def mismatches(c):
             if n:
                 out.append(("responder_has_tasks", bot, n))
         elif name == DOER:
-            seen = c.execute("SELECT count(*) AS n, sum(coalesce(did_nothing,0)=1) AS idle FROM turns WHERE bot=? "
-                             "AND started_at>? AND finished_at IS NOT NULL", (bot, since)).fetchone()
+            seen = c.execute("SELECT count(*) AS n, sum(coalesce(did_nothing,0)=1) AS idle FROM attempts WHERE bot_id=? "
+                             "AND created_at>? AND settled_at IS NOT NULL", (bot, since)).fetchone()
             created = c.execute("SELECT created_at FROM bots WHERE id=?", (bot,)).fetchone()
             if (seen["n"] >= IDLE_MIN_RUNS and seen["idle"] == seen["n"]
                     and not (created and created[0] and created[0] > since)):

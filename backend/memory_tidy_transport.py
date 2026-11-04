@@ -144,8 +144,9 @@ def complete(c, aid, body, who, files, blobs):
 def install(app, store, execution, mutate):
     def owned(c, who, aid):
         attempt = execution.attempt(c, who, aid)
-        row = c.execute('SELECT p.* FROM memory_tidy_passes p JOIN turns t ON t.task_id=p.check_task_id '
-                        'WHERE t.id=? AND p.bot=?', (aid, attempt['bot_id'])).fetchone()
+        row = c.execute('SELECT p.* FROM memory_tidy_passes p JOIN attempts t ON t.task_id=p.check_task_id '
+                        'WHERE t.id=? AND p.bot=? AND (t.job_id IS NULL OR t.trigger IS NOT NULL)',
+                        (aid, attempt['bot_id'])).fetchone()
         if not row or row['status'] != 'filed' or row['deadline'] <= H.now():
             raise Problem('conflict', 'Nightly memory tidy pass is no longer active', 409)
         return row

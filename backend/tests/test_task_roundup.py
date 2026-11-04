@@ -16,6 +16,7 @@ from backend import scheduler, still_needed, task_check_backs, task_roundup
 from backend import step_backlog as SB
 from backend import task_relations as TR
 from backend.store import H
+from backend.tests.hold_rows import set_holds
 from backend.tests.test_api import api  # noqa: F401
 from backend.tests.test_dev_ticket_rules import dev_type
 from backend.tests.test_step_backlog import board as backlog_board, tickets as backlog_tickets
@@ -49,8 +50,8 @@ def settle(c, tid, slug, turned):
     c.execute("UPDATE messages SET created_at=? WHERE conversation_id=?", (H.shift(turned, days=-1), conv))
     c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?",
               (H.shift(turned, days=-1), tid))
-    c.execute("INSERT INTO turns(id,bot,thread_id,started_at,finished_at,trigger,message_id,task_id,exit,summary) "
-              "VALUES(?,?,NULL,?,?,'schedule',NULL,?,'done','')", (H.new_id(), slug, turned, turned, tid))
+    c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,trigger,message_id,task_id,exit,summary) "
+              "VALUES(?,?,?,?,'schedule',NULL,?,'done','')", (H.new_id(), slug, turned, turned, tid))
     started(c, tid, slug, turned)                  # the turn was a run of the bot on the task
 
 
@@ -674,8 +675,7 @@ def test_a_date_a_snooze_left_behind_holds_nothing_while_a_snooze_in_force_or_an
         task_check_backs.set_time(c, H.task(c, left["id"]), H.shift(DAY, hours=2), "Look again", at=DAY, system=True)
         settle(c, left["id"], "finance", ago(days=2))            # a date nobody set, as a snooze leaves it: it holds nothing
         snoozed = task(c, "Plan the offsite")
-        c.execute("UPDATE tasks SET snoozed_until=?, snoozed_by_id='human:ana' WHERE id=?",
-                  (H.shift(DAY, hours=2), snoozed["id"]))
+        set_holds(c, snoozed["id"], snoozed_until=H.shift(DAY, hours=2), snoozed_by_id="human:ana")
         settle(c, snoozed["id"], "finance", ago(days=2))         # a snooze in force hides the task
         explicit = task(c, "Chase the quote")
         task_check_backs.set_time(c, H.task(c, explicit["id"]), H.shift(DAY, hours=2), "Check the quote",

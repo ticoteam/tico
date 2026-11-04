@@ -448,4 +448,6 @@ document.addEventListener('click', ev => {
   if (ASK?.open && askPhone() && ev.target.closest?.('#mobile-nav .mobile-nav-item:not(#mobile-ask)')) askToggle(false, false);
 }, true);
 addEventListener('resize', () => { if (ASK?.open) askFoot(askFootNow()); askSync(); });
-setTimeout(askPeek, ASK_PEEK_WAIT_MS + 100);
+// Its first check, a few seconds after load, is announced: a support reply waiting at load opens its chat only after it
+// (ui/support.js), so the chat never opens over a peek that is due.
+setTimeout(() => { askPeek(); document.dispatchEvent(new CustomEvent('tico:ask-peek-checked')); }, ASK_PEEK_WAIT_MS + 100);

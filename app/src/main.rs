@@ -14,10 +14,11 @@ mod orgs;
 mod visual_origin;
 mod bridge;
 mod signin;
+mod timing;
 mod windows;
 
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -34,7 +35,7 @@ use hub::{Client, HubStatus};
 use orgs::{Document, Org, Orgs};
 #[cfg(target_os = "macos")]
 use windows::clear_store;
-use windows::{build_server_window, build_window, eval, forget_owned, layout, main_window, open_search, org_label, reload, show_window, switch_to, sync_rail, take_owned, RAIL};
+use windows::{active_webview, build_server_window, build_window, eval, forget_owned, layout, main_window, open_search, org_page, reload, show_window, switch_to, sync_rail, take_owned, RAIL};
 
 const USER_AGENT: &str = "TicoHub/2.0 Tauri";
 const MIN_WIDTH: u32 = 360;
@@ -42,7 +43,8 @@ const MIN_HEIGHT: u32 = 400;
 // Lines of the shell's log a Support diagnostics bundle carries.
 pub(crate) const LOG_LINES: usize = 200;
 
-/// The shell's state. When more than one lock is held, they are taken in this order: orgs, connection, visual_origin.
+/// The shell's state. When more than one lock is held, they are taken in this order: changing, orgs, prefetch,
+/// connection, visual_origin, parked_visual.
 struct AppState {
     connection: Mutex<Option<Config>>,
     visual_origin: Mutex<Option<visual_origin::VisualOrigin>>,
@@ -51,11 +53,23 @@ struct AppState {
     orgs: Mutex<Orgs>,
     // The windows an org opened (hub files, meetings) as (window label, org id): removing the org closes them.
     owned: Mutex<Vec<(String, String)>>,
-    // The orgs whose page capability is granted. Ids are never reused, so a grant never has to be taken back.
+    // The org capabilities granted this run, by identifier: one per org (see windows::server_capability). Org ids
+    // are never reused, so a grant never has to be taken back.
     granted: Mutex<HashSet<String>>,
     // Held while the open org changes or an org goes, so a switch and a removal never interleave. Never taken on
     // the main thread: a switch waits on it for webview work.
     pub(crate) changing: Mutex<()>,
+    // The orgs whose pages are open, least recently shown first (windows::KEEP_ALIVE of them).
+    shown: Mutex<Vec<String>>,
+    // The page built hidden for the org the pointer rests on in the rail, and the visual allowance it sent while
+    // hidden, which becomes the open one when it is shown.
+    prefetch: Mutex<windows::Prefetch>,
+    parked_visual: Mutex<Option<visual_origin::VisualOrigin>>,
+    // Switches being timed, for the log.
+    traces: Mutex<Vec<timing::Trace>>,
+    // When each org page's webview was built, by its label: its first `bootTiming` report says how long the open
+    // took from there (bridge.rs). Taken last: no other lock is taken while it is held.
+    page_opened: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 impl AppState {
@@ -68,6 +82,11 @@ impl AppState {
             owned: Mutex::new(Vec::new()),
             granted: Mutex::new(HashSet::new()),
             changing: Mutex::new(()),
+            shown: Mutex::new(Vec::new()),
+            prefetch: Mutex::new(windows::Prefetch::default()),
+            parked_visual: Mutex::new(None),
+            traces: Mutex::new(Vec::new()),
+            page_opened: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -109,7 +128,7 @@ fn main() {
         .plugin(autostart_plugin(identifier))
         // The real list is read in setup, once the app's folders are known.
         .manage(AppState::new(Orgs::new(Document::default(), None), None))
-        .invoke_handler(tauri::generate_handler![app_log, bridge, connect_server, server_address, setup_info, cancel_setup, rail_orgs, rail_switch, rail_add, rail_menu, signin::tico_signin])
+        .invoke_handler(tauri::generate_handler![app_log, bridge, bridge::page_dialog, connect_server, server_address, setup_info, cancel_setup, rail_orgs, rail_switch, rail_hover, rail_add, rail_menu, signin::tico_signin])
         .setup(move |app| {
             match applog::attach(log_dir(app.handle()).as_deref()) {
                 Some(path) => log::info!("{} {} starting; this log is {}", config::app_name(), app.package_info().version, applog::shown(&path)),
@@ -148,7 +167,8 @@ fn main() {
             }
             start_polling(app.handle().clone());
             start_updates(app.handle().clone());
-            show_window(app.handle());
+            // Once the org page has painted, so the window never shows blank first.
+            windows::show_when_painted(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -223,7 +243,7 @@ pub(crate) fn org_count(app: &App) -> usize {
 
 /// The label of the open org's page, or "" with none (no webview has that label).
 fn active_label(app: &App) -> String {
-    active_org(app).map(|org| org_label(&org.id)).unwrap_or_default()
+    active_webview(app).map(|page| page.label().to_string()).unwrap_or_default()
 }
 
 #[tauri::command]
@@ -368,9 +388,14 @@ fn ask_remove(app: &App, org: &Org) {
 /// Removes an org: its windows and page close, its data store is deleted, and the list is saved. Removing the open
 /// org opens the first one left, or the setup window when none is left.
 async fn remove_org(app: &App, id: &str) {
+    // A session being renewed into the org's store finishes first (see signin::RENEWING); one that starts after this
+    // finds the org gone.
+    let renewing = signin::RENEWING.lock().await;
     let (removed, was_open) = {
         let state = app.state::<AppState>();
         let _changing = state.changing.lock().unwrap();
+        // A dialog the org's page has open is answered first.
+        bridge::DIALOGS.wait_closed();
         let (removed, was_open) = {
             let mut list = state.orgs.lock().unwrap();
             let was_open = list.active().is_some_and(|org| org.id == id);
@@ -381,39 +406,24 @@ async fn remove_org(app: &App, id: &str) {
                 let _ = window.close();
             }
         }
-        if let Some(page) = app.get_webview(&org_label(id)) {
+        windows::forget_page(app, id);
+        if let Some(page) = org_page(app, id) {
             let _ = page.close();
         }
         (removed, was_open)
     };
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     let Some(removed) = removed else { return };
+    // Its page is closed. Its store is noted for deletion before anything else, so a deletion that fails (or a quit
+    // first) is retried at the next launch; the org is no longer in the list, so nothing keeps the store.
     #[cfg(target_os = "macos")]
-    {
-        match removed.store_id() {
-            Some(store) => {
-                // A store Tico sign-in filled for an org that never opened is still held: let go of it first.
-                signin::release_store(app, store);
-                // A page that just closed holds its store for a moment, so try again a few times before clearing.
-                let mut removed_store = app.remove_data_store(*store.as_bytes()).await;
-                for _ in 0..6 {
-                    if removed_store.is_ok() { break; }
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    removed_store = app.remove_data_store(*store.as_bytes()).await;
-                }
-                if let Err(e) = removed_store {
-                    // The store is still in use: its data is cleared at least, and the list no longer names it.
-                    log::warn!("could not delete an org's data store, so clearing it instead: {e}");
-                    if let Err(e) = clear_store(app, &removed) { log::warn!("could not clear an org's data store: {e}"); }
-                }
-            }
-            // The org moved over from server.txt uses the default store, which cannot be deleted: clear it, so its
-            // sign-in goes too. Every other org has a store of its own, so nothing of theirs is in it.
-            None => {
-                if let Err(e) = clear_store(app, &removed) { log::warn!("could not clear the default data store: {e}"); }
-            }
-        }
+    let store = removed.store_id();
+    #[cfg(target_os = "macos")]
+    if let Some(store) = store {
+        signin::note_removed_store(app, store);
     }
+    drop(renewing);
+    // The next org opens (and the rail drops the removed one) before the store is deleted, which can take seconds.
     if was_open {
         match active_org(app) {
             Some(next) => {
@@ -425,18 +435,31 @@ async fn remove_org(app: &App, id: &str) {
                 let state = app.state::<AppState>();
                 // Checked again under the lock: an org added meanwhile opens through its own switch, which waits on it.
                 let _changing = state.changing.lock().unwrap();
-                if active_org(app).is_some() { return refresh_chrome(app); }
-                select_connection(&state, None);
-                *state.status.lock().unwrap() = HubStatus::default();
-                // The setup window first, so that the app keeps a window while the main one goes.
-                let _ = build_server_window(app);
-                if let Some(window) = main_window(app) {
-                    let _ = window.destroy();
+                if active_org(app).is_none() {
+                    select_connection(&state, None);
+                    *state.status.lock().unwrap() = HubStatus::default();
+                    state.shown.lock().unwrap().clear();
+                    // The setup window first, so that the app keeps a window while the main one goes.
+                    let _ = build_server_window(app);
+                    if let Some(window) = main_window(app) {
+                        let _ = window.destroy();
+                    }
                 }
             }
         }
     }
     refresh_chrome(app);
+    #[cfg(target_os = "macos")]
+    match store {
+        // The org moved over from server.txt uses the default store, which cannot be deleted: cleared, so its sign-in
+        // goes too. Every other org has a store of its own, so nothing of theirs is in it.
+        None => if let Err(e) = clear_store(app, &removed).await { log::warn!("could not clear the default data store: {e}"); },
+        Some(store) => if !signin::delete_store(app, store).await {
+            // Still in use: its data is cleared at least, and the next launch deletes it.
+            log::warn!("could not delete an org's data store, so clearing it now; the next launch deletes it");
+            if let Err(e) = clear_store(app, &removed).await { log::warn!("could not clear an org's data store: {e}"); }
+        }
+    }
 }
 
 #[tauri::command]
@@ -445,10 +468,30 @@ fn rail_orgs(app: App, webview: tauri::Webview) -> Result<Value, String> {
     Ok(rail_list(&app))
 }
 
+/// A click on an org in the rail, sent for every click (the rail's own idea of the open org can be a draw behind).
+/// Not async, so it runs on the main thread in the order the clicks came, and numbers each one there; the switch
+/// itself runs apart, and a click that a later one overtook does nothing (`windows::switch_for_click`).
 #[tauri::command]
-async fn rail_switch(app: App, webview: tauri::Webview, id: String) -> Result<(), String> {
+fn rail_switch(app: App, webview: tauri::Webview, id: String) -> Result<(), String> {
     only_rail(&webview)?;
-    switch_to(&app, &id).map_err(|e| e.to_string())
+    timing::click(&app, &id, "click");
+    let click = windows::next_click();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = windows::switch_for_click(&app, &id, click) {
+            log::warn!("could not switch organization: {e}");
+        }
+    });
+    Ok(())
+}
+
+/// The pointer rested on an org in the rail (`id`), or left it (none): its page is built hidden ahead of a click.
+#[tauri::command]
+async fn rail_hover(app: App, webview: tauri::Webview, id: Option<String>) -> Result<(), String> {
+    only_rail(&webview)?;
+    match id {
+        Some(id) => windows::prefetch(&app, &id).map_err(|e| e.to_string()),
+        None => Ok(windows::leave(&app)),
+    }
 }
 
 #[tauri::command]
@@ -559,6 +602,7 @@ fn menu_event(app: &App, id: &str) {
     }
     if let Some(org) = id.strip_prefix("org-switch:") {
         let (app, org) = (app.clone(), org.to_string());
+        timing::click(&app, &org, "menu");
         tauri::async_runtime::spawn(async move {
             if let Err(e) = switch_to(&app, &org) {
                 log::warn!("could not open the org: {e}");

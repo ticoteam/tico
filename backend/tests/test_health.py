@@ -516,8 +516,8 @@ def test_a_bot_over_the_daily_token_threshold_is_flagged(environment):
     add_bot(api, "loop")
     api.app.state.store.settings.token_alert_input = 1000
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started_at) VALUES('t1','loop',?)", (H.now(),))
-        c.execute("INSERT INTO turns(id,bot,started_at) VALUES('t0','loop',?)", (H.shift(H.now(), hours=-30),))
+        c.execute("INSERT INTO attempts(id,bot_id,created_at) VALUES('t1','loop',?)", (H.now(),))
+        c.execute("INSERT INTO attempts(id,bot_id,created_at) VALUES('t0','loop',?)", (H.shift(H.now(), hours=-30),))
         segment(c, "t1", input_tokens=1100, cached_tokens=90000)
         segment(c, "t0", input_tokens=9000)
     checks = health_of(api)[1]
@@ -832,10 +832,16 @@ def test_refusal_quarantine_explains_the_claim_hold_and_matches_bot_status(envir
     assert "Refused write (identity): " + words in held["why"]
     assert "BotOps must review" not in held["why"]
     assert "a person who manages it can clear it sooner" in held["why"]
-    # Both the summary report and its diagnostic items must exclude manager-only refused words.
-    assert "Quarantined" in checks["queue"]["summary"]
-    assert words not in json.dumps(checks["queue"])
-    assert "Refused write" not in json.dumps(checks["queue"])
+    # Both the summary report and its diagnostic items must exclude manager-only refused words. The quarantine is its
+    # own Health check, not part of the queue check.
+    assert checks["quarantine"]["status"] == "bad" and "Quarantined" in checks["quarantine"]["summary"]
+    assert words not in json.dumps(checks["quarantine"])
+    assert "Refused write" not in json.dumps(checks["quarantine"])
+    assert "Quarantined" not in json.dumps(checks["queue"])
+    # BotOps reviews a quarantine, so it stays on Health and never turns the person's status dot red.
+    issue = next(row for row in api.get("/api/v2/operations", headers=signed_in()).json()["issues"]
+                 if row["bot"] == "helper" and row["kind"] == "bot")
+    assert issue["needs_person"] is False
 
 
 def test_manual_quarantine_has_no_lift_promise_and_other_holds_keep_their_explanation(environment):

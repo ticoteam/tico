@@ -1,6 +1,8 @@
-"""Settings > Inbox > Connect Google: a person connects their own mailbox, read only, through Tico's own Google app.
+"""Settings > Inbox > Connect Google: a person connects their own mailbox through a Google app the server uses.
 
-The browser comes back to the server; the computer that syncs mail finishes the sign-in and keeps the grant.
+Tico's shared app (the server's environment) asks for read only. The company's own app (Settings > Google) also asks for
+the act scopes the mail CLI gates labels, drafts and calendar writes on. The browser comes back to the server; the
+computer that syncs mail finishes the sign-in and keeps the grant.
 No Workspace admin, no service account, no domain-wide delegation, and nobody connects anyone else's mailbox.
 """
 
@@ -32,6 +34,19 @@ def app(api):
                   "'human:ana')", (H.now(),))
     settings.test_identities["inbox-test"] = Identity("bot:inbox", "bot", agent="hermes")
     return api
+
+
+@pytest.fixture
+def own_app(app, monkeypatch):
+    """The company's own Google app, set in Settings > Google, signs people in: the environment's client is cleared so
+    that it is the one a connect uses now (oauth_client prefers the environment)."""
+    settings = app.app.state.store.settings
+    monkeypatch.setattr(settings, "google_oauth_client_id", None)
+    monkeypatch.setattr(settings, "google_oauth_client_secret", None)
+    r = app.put("/api/v2/google/oauth-client", json={"client_id": "own-client", "client_secret": "own-secret"},
+                headers=headers("ana-test"))
+    assert r.status_code == 200, r.text
+    return app
 
 
 def start(api, token="cara-test"):
@@ -122,7 +137,7 @@ def test_the_mail_computer_finishes_it_and_the_code_is_cleared(app):
     assert r.status_code == 403                                      # a person never sees the code again
     machine = runner(app)
     with app.app.state.store.transaction() as c:
-        assert google_connect.pending(c, machine["runner_id"])
+        assert google_connect.pending(c, machine["runner_id"], named=True)   # the owner's computer publishes
     assert get(app, "runners/connectors", machine["token"])["connectors"] == ["mail"]
     claimed = post(app, "connectors/mail/google/claim", {}, machine["token"])["connect"]
     assert claimed == {"id": "cara", "action": "connect", "mailbox": "cara@acme.example", "client_id": CLIENT,
@@ -142,20 +157,32 @@ def test_the_mail_computer_finishes_it_and_the_code_is_cleared(app):
 
 
 class FakeGoogle:
-    """Google's token endpoint as google_connect.post_token sees it."""
+    """Google's OAuth endpoints as google_connect.post_token sees them: `calls` and `uris`, in the order asked."""
 
     def __init__(self, answer=None, error=None, status=400):
-        self.calls, self.answer, self.error, self.status = [], answer, error, status
+        self.calls, self.uris, self.answer, self.error, self.status = [], [], answer, error, status
 
-    def __call__(self, fields):
+    def __call__(self, fields, uri=google_connect.TOKEN_URI):
         self.calls.append(dict(fields))
+        self.uris.append(uri)
         if isinstance(self.error, OSError) and not hasattr(self.error, "code"):
             raise self.error
         if self.error:
-            raise urllib.error.HTTPError(google_connect.TOKEN_URI, self.status, "Refused", {},
+            raise urllib.error.HTTPError(uri, self.status, "Refused", {},
                                          io.BytesIO(json.dumps({"error": self.error}).encode()))
         return dict(self.answer or {"access_token": "ya29.fresh", "expires_in": 3599,
                                     "scope": oauth.G + "gmail.readonly"})
+
+
+class RevokeDown(FakeGoogle):
+    """Google answers the exchange but cannot be reached to revoke the grant it made."""
+
+    def __call__(self, fields, uri=google_connect.TOKEN_URI):
+        if uri != google_connect.REVOKE_URI:
+            return super().__call__(fields, uri)
+        self.calls.append(dict(fields))
+        self.uris.append(uri)
+        raise OSError("unreachable")
 
 
 def claimed_connect(app, machine):
@@ -196,12 +223,15 @@ def test_a_refused_exchange_names_google_s_reason_only(app, monkeypatch):
     assert "tico-secret" not in r.text and "c-1" not in r.text
 
 
-def exchanged(app, machine, refresh_token="1//grant", status="connected", kind=""):
-    """A connect claimed, exchanged at the server for a grant with `refresh_token`, and answered by `machine`."""
+def exchanged(app, machine, refresh_token="1//grant", status="connected", kind="", scope=None):
+    """A connect claimed, exchanged at the server for a grant with `refresh_token` (granted `scope`, when given), and
+    answered by `machine`."""
     claimed = claimed_connect(app, machine)
+    answer = {"access_token": "ya29.first", "expires_in": 3599, "refresh_token": refresh_token}
+    if scope is not None:
+        answer["scope"] = scope
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(google_connect, "post_token", FakeGoogle({"access_token": "ya29.first", "expires_in": 3599,
-                                                                "refresh_token": refresh_token}))
+        patch.setattr(google_connect, "post_token", FakeGoogle(answer))
         post(app, f"connectors/mail/google/{claimed['id']}/exchange", {}, machine["token"])
     post(app, f"connectors/mail/google/{claimed['id']}/result",
          {"status": status, "can": ["read"]} if status == "connected" else {"status": status, "kind": kind},
@@ -304,7 +334,8 @@ def test_an_older_google_connects_table_gets_the_fingerprint_columns():
               "holder TEXT, started_at REAL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
     google_connect.ensure_schema(c)
     google_connect.ensure_schema(c)
-    assert {"pending_hash", "grant_hash"} <= {r[1] for r in c.execute("PRAGMA table_info(google_connects)")}
+    assert {"pending_hash", "grant_hash", "pending_scopes", "grant_scopes"} <= \
+        {r[1] for r in c.execute("PRAGMA table_info(google_connects)")}
 
 
 @pytest.mark.parametrize("error,kind", [("invalid_grant", "signin"), ("admin_policy_enforced", "admin_policy"),
@@ -331,6 +362,152 @@ def test_an_answer_wider_than_asked_is_refused_not_passed_on(app, monkeypatch):
                                                        "scope": oauth.G + "gmail.readonly " + oauth.G + "gmail.modify"}))
     r = refresh(app, machine["token"])
     assert r.status_code == 409 and "ya29.wide" not in r.text
+
+
+def test_the_act_scopes_are_what_the_mail_cli_needs_for_labels_drafts_and_calendar_writes():
+    assert google_connect.ACT_SCOPES == [oauth.G + "gmail.modify", oauth.G + "calendar.events"]
+    assert set(google_connect.ACT_SCOPES) <= set().union(*oauth.CAPABILITIES.values())
+    assert not set(google_connect.ACT_SCOPES) & set(google_connect.READ_SCOPES)
+    for capability, needs in oauth.NEEDS.items():           # each capability passes with the act grant
+        assert needs & set(google_connect.ACT_SCOPES), capability
+
+
+def test_the_company_s_own_app_signs_in_for_the_act_scopes_too(own_app):
+    _, query = start(own_app)
+    assert query["client_id"] == "own-client"
+    assert query["scope"].split() == google_connect.READ_SCOPES + google_connect.ACT_SCOPES
+    seen = get(own_app, "mail/google", "cara-test")
+    assert seen["app"] == "own" and seen["scopes"] == google_connect.READ_SCOPES + google_connect.ACT_SCOPES
+
+
+def test_the_shared_app_asks_for_read_only(app):
+    _, query = start(app)
+    assert query["scope"].split() == google_connect.READ_SCOPES
+    seen = get(app, "mail/google", "cara-test")
+    assert seen["app"] == "shared" and seen["scopes"] == google_connect.READ_SCOPES
+
+
+def test_an_own_app_grant_keeps_the_scopes_google_gave_and_refreshes_only_those(own_app, monkeypatch):
+    scopes = google_connect.READ_SCOPES + google_connect.ACT_SCOPES
+    machine = runner(own_app)
+    exchanged(own_app, machine, scope=" ".join(scopes))
+    seen = get(own_app, "mail/google", "cara-test")
+    assert seen["acts"] == {"mail": True, "calendar": True} and seen["message"] is None
+    assert set(seen["scopes"]) == set(scopes)
+    google = FakeGoogle({"access_token": "ya29.mail", "expires_in": 3599,
+                         "scope": oauth.G + "gmail.modify " + oauth.G + "gmail.readonly"})
+    monkeypatch.setattr(google_connect, "post_token", google)
+    r = refresh(own_app, machine["token"], scopes=[oauth.G + "gmail.modify", oauth.G + "gmail.readonly"])
+    assert r.status_code == 200 and r.json()["scopes"] == [oauth.G + "gmail.modify", oauth.G + "gmail.readonly"]
+    sent = google.calls[-1]
+    assert sent["scope"] == oauth.G + "gmail.modify " + oauth.G + "gmail.readonly"     # exactly what was asked
+    assert sent["client_id"] == "own-client" and sent["client_secret"] == "own-secret"
+    google.answer = {"access_token": "ya29.cal", "expires_in": 3599, "scope": oauth.G + "calendar.events"}
+    r = refresh(own_app, machine["token"], service="calendar", scopes=[oauth.G + "calendar.events"])
+    assert r.status_code == 200 and r.json()["scopes"] == [oauth.G + "calendar.events"]
+    count = len(google.calls)
+    assert refresh(own_app, machine["token"], scopes=[oauth.G + "gmail.compose"]).status_code == 422   # never granted
+    assert len(google.calls) == count
+
+
+def test_a_read_only_own_app_grant_or_a_legacy_one_never_refreshes_act_scopes(own_app, monkeypatch):
+    machine = runner(own_app)
+    exchanged(own_app, machine, scope=" ".join(google_connect.READ_SCOPES))     # the write boxes were not ticked
+    seen = get(own_app, "mail/google", "cara-test")
+    assert seen["status"] == "connected" and seen["app"] == "own" and seen["acts"] == {"mail": False, "calendar": False}
+    assert seen["message"] == google_connect.UPGRADE["both"][0]     # a reconnect would add them; nothing forces it
+    assert seen["hint"] == google_connect.UPGRADE["both"][1]
+    google = FakeGoogle()
+    monkeypatch.setattr(google_connect, "post_token", google)
+    assert refresh(own_app, machine["token"], scopes=[oauth.G + "gmail.modify"]).status_code == 422
+    assert refresh(own_app, machine["token"], service="calendar", scopes=[oauth.G + "calendar.events"]).status_code == 422
+    assert google.calls == []
+    with own_app.app.state.store.transaction() as c:        # a grant from before the scopes were recorded
+        c.execute("UPDATE google_connects SET grant_scopes=NULL WHERE person_id='cara'")
+    assert get(own_app, "mail/google", "cara-test")["acts"] == {"mail": False, "calendar": False}
+    assert refresh(own_app, machine["token"], scopes=[oauth.G + "gmail.modify"]).status_code == 422
+    assert google.calls == []
+
+
+def test_the_company_s_app_says_which_write_access_a_grant_has_for_each_service(own_app):
+    machine = runner(own_app)
+    exchanged(own_app, machine, scope=" ".join(google_connect.READ_SCOPES + [oauth.G + "gmail.modify"]))
+    seen = get(own_app, "mail/google", "cara-test")
+    assert seen["acts"] == {"mail": True, "calendar": False}
+    assert seen["message"] == google_connect.UPGRADE["calendar"][0]
+    assert seen["hint"] == "Connect Google again to let Tico also add calendar events."
+    exchanged(own_app, machine, refresh_token="1//cal",
+              scope=" ".join(google_connect.READ_SCOPES + [oauth.G + "calendar.events"]))
+    seen = get(own_app, "mail/google", "cara-test")
+    assert seen["acts"] == {"mail": False, "calendar": True}
+    assert seen["message"] == google_connect.UPGRADE["mail"][0]
+    assert seen["hint"] == "Connect Google again to let Tico also label, archive and draft mail."
+
+
+def test_the_shared_app_refuses_an_answer_with_the_act_scopes_revokes_it_and_keeps_no_grant(app, monkeypatch):
+    wide = {"access_token": "ya29.wide", "refresh_token": "1//wide", "expires_in": 3599,
+            "scope": " ".join(google_connect.READ_SCOPES + google_connect.ACT_SCOPES)}
+    google = FakeGoogle(wide)
+    monkeypatch.setattr(google_connect, "post_token", google)
+    machine = runner(app)
+    claimed = claimed_connect(app, machine)
+    r = app.post(f"/api/v2/connectors/mail/google/{claimed['id']}/exchange", json={}, headers=headers(machine["token"]))
+    assert r.status_code == 409 and r.json()["error"]["kind"] == "scope"
+    assert "ya29.wide" not in r.text and "1//wide" not in r.text          # no token reaches the computer
+    assert google.uris == [google_connect.TOKEN_URI, google_connect.REVOKE_URI]   # and Google is asked to revoke it
+    assert google.calls[-1] == {"token": "1//wide"}
+    stored = row(app)
+    assert stored["pending_hash"] is None and stored["pending_scopes"] is None and stored["grant_hash"] is None
+    # The computer reports the refusal: nothing is connected, and no refresh can use the revoked grant.
+    post(app, f"connectors/mail/google/{claimed['id']}/result",
+         {"status": "failed", "kind": "error", "message": "Google granted more access than Tico asks for",
+          "hint": "Start the sign-in again."}, machine["token"])
+    assert get(app, "mail/google", "cara-test")["status"] == "failed"
+    assert refresh(app, machine["token"], refresh_token="1//wide").status_code == 403
+    assert len(google.calls) == 2
+
+
+def test_the_company_s_app_refuses_an_answer_wider_than_it_may_grant_even_if_the_revoke_cannot_be_sent(own_app,
+                                                                                                       monkeypatch):
+    google = RevokeDown({"access_token": "ya29.wide", "refresh_token": "1//wide", "expires_in": 3599,
+                         "scope": " ".join(google_connect.READ_SCOPES + google_connect.ACT_SCOPES
+                                           + [oauth.G + "gmail.compose"])})
+    monkeypatch.setattr(google_connect, "post_token", google)
+    machine = runner(own_app)
+    claimed = claimed_connect(own_app, machine)
+    r = own_app.post(f"/api/v2/connectors/mail/google/{claimed['id']}/exchange", json={},
+                     headers=headers(machine["token"]))
+    assert r.status_code == 409 and r.json()["error"]["kind"] == "scope"
+    assert "ya29.wide" not in r.text and "1//wide" not in r.text
+    assert google.uris == [google_connect.TOKEN_URI, google_connect.REVOKE_URI]
+    assert row(own_app)["pending_hash"] is None and row(own_app)["grant_hash"] is None
+
+
+def test_an_answer_naming_the_identity_scopes_in_full_is_not_refused(app, monkeypatch):
+    google = FakeGoogle({"access_token": "ya29.first", "refresh_token": "1//grant", "expires_in": 3599,
+                         "scope": " ".join(["openid", oauth.G + "userinfo.email", oauth.G + "gmail.readonly"])})
+    monkeypatch.setattr(google_connect, "post_token", google)
+    machine = runner(app)
+    claimed = claimed_connect(app, machine)
+    r = app.post(f"/api/v2/connectors/mail/google/{claimed['id']}/exchange", json={}, headers=headers(machine["token"]))
+    assert r.status_code == 200 and google.uris == [google_connect.TOKEN_URI]
+    assert json.loads(row(app)["pending_scopes"]) == sorted(["openid", oauth.G + "gmail.readonly"])
+
+
+def test_a_failed_own_app_reconnect_keeps_the_act_grant_and_a_read_only_one_replaces_it(own_app, monkeypatch):
+    machine = runner(own_app)
+    exchanged(own_app, machine, scope=" ".join(google_connect.READ_SCOPES + google_connect.ACT_SCOPES))
+    exchanged(own_app, machine, refresh_token="1//stray", status="failed", kind="identity_mismatch",
+              scope=" ".join(google_connect.READ_SCOPES))
+    google = FakeGoogle({"access_token": "ya29.kept", "expires_in": 3599, "scope": oauth.G + "gmail.modify"})
+    monkeypatch.setattr(google_connect, "post_token", google)
+    assert refresh(own_app, machine["token"], scopes=[oauth.G + "gmail.modify"]).status_code == 200
+    assert refresh(own_app, machine["token"], refresh_token="1//stray",
+                   scopes=[oauth.G + "gmail.modify"]).status_code == 403
+    exchanged(own_app, machine, refresh_token="1//second", scope=" ".join(google_connect.READ_SCOPES))
+    assert get(own_app, "mail/google", "cara-test")["acts"] == {"mail": False, "calendar": False}
+    assert refresh(own_app, machine["token"], refresh_token="1//second",
+                   scopes=[oauth.G + "gmail.modify"]).status_code == 422
 
 
 def test_another_account_signing_in_is_shown_as_refused(app):

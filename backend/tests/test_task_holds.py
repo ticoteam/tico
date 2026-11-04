@@ -3,6 +3,7 @@ person lives and dies with its own task, and its asker hears when it is withdraw
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.store import H
 from backend import approval_expiry, still_needed, task_holds
+from backend.tests.hold_rows import set_holds
 
 
 def bot_task(c, title, owner="bot:ops", parent=None, actor="human:ben"):
@@ -154,8 +155,7 @@ def test_a_person_s_task_stays_put_and_an_owner_s_own_hold_is_kept(api):
         manual = bot_task(c, "Hold the newsletter")
         sub = bot_task(c, "Proofread it", owner="bot:cpo", parent=manual, actor="bot:ops")
         wait(c, manual)
-        c.execute("UPDATE tasks SET blocked_kind='manual', blocked_reason='Held until the legal review' WHERE id=?",
-                  (manual,))
+        set_holds(c, manual, blocked_kind='manual', blocked_reason='Held until the legal review')
         H.task_update(c, "bot:cpo", sub, status="done", note="Proofread")
         row = H.task(c, manual)
         assert row["status"] == "waiting" and row["blocked_reason"] == "Held until the legal review"
@@ -168,15 +168,15 @@ def test_backfill_puts_every_waiting_task_right_once_with_one_wake_per_bot(api):
         stale = [bot_task(c, f"Stale wait {n}") for n in range(3)]
         for tid in stale:
             wait(c, tid)
-        c.execute(f"UPDATE tasks SET blocked_reason='Waiting on Chris Hawkins', blocked_kind='dependency' "
-                  f"WHERE id IN ({','.join('?' * len(stale))})", stale)
+        for tid in stale:
+            set_holds(c, tid, blocked_reason='Waiting on Chris Hawkins', blocked_kind='dependency')
         held = bot_task(c, "Really waiting")
         ask(c, held, "Which plan?")
         wait(c, held)
-        c.execute("UPDATE tasks SET blocked_reason='Waiting on Chris Hawkins' WHERE id=?", (held,))
+        set_holds(c, held, blocked_reason='Waiting on Chris Hawkins')
         person = bot_task(c, "Ana's own wait", owner="human:ana", actor="human:ana")
         wait(c, person, owner="human:ana")
-        c.execute("UPDATE tasks SET blocked_reason='Waiting on Chris Hawkins' WHERE id=?", (person,))
+        set_holds(c, person, blocked_reason='Waiting on Chris Hawkins')
         before = len(notices(c, "bot:ops", news="assignment"))
         result = task_holds.backfill(c)
         assert result == {"fixed": 2, "opened": 3, "woken": 1}
@@ -185,7 +185,7 @@ def test_backfill_puts_every_waiting_task_right_once_with_one_wake_per_bot(api):
         assert H.task(c, person)["blocked_reason"] == task_holds.NOTHING
         assert len(notices(c, "bot:ops", news="assignment")) == before + 1
         assert task_holds.backfill(c) is None
-        waiting = H._rows(c.execute("SELECT blocked_reason FROM tasks WHERE status='waiting'"))
+        waiting = H._rows(c.execute(f"SELECT blocked_reason FROM {H.TASKS} tasks WHERE status='waiting'"))
         assert not [r for r in waiting if "Chris Hawkins" in (r["blocked_reason"] or "")]
 
 
@@ -406,7 +406,8 @@ def test_a_person_s_plain_reply_ends_a_wait_with_no_question_open(api):
         tid = bot_task(c, "Report month")
         wait(c, tid, note="Which month should the report use?")
         # Legacy waits can name a person without an ask card. This task still has a tracked dependency hold.
-        c.execute("UPDATE tasks SET waiting_on='human:ana', blocked_kind='dependency' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (tid,))
+        set_holds(c, tid, blocked_kind='dependency')
         task_holds.refresh(c, tid)
         assert H.task(c, tid)["blocked_reason"] == f"Waiting on {task_holds.name(c, 'human:ana')}"
         assert not H.open_task_asks(c, H.task(c, tid))

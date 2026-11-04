@@ -6,6 +6,7 @@ import pytest
 from backend import hubdb as H, task_blocked, task_relations as TR
 from backend.tests.test_review_gate import api, ticket, move, get
 from backend.tests.test_github import post
+from backend.tests.hold_rows import set_holds
 
 
 def _park_step(api, task):
@@ -65,7 +66,7 @@ def test_deleting_a_waiting_step_sends_a_ticket_whose_return_step_is_gone_to_on_
         deck = next(s['id'] for s in H.type_get(c, typ['id'])['steps'] if s['name'] == 'On Deck')
     assert move(api, parked, 'Waiting On Dependency').status_code == 200
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET blocked_from_step='a step long gone' WHERE id=?", (parked['id'],))
+        set_holds(c, parked['id'], blocked_from_step='a step long gone')
     _without_step(api, parked, step)
     with api.app.state.store.transaction() as c:
         row = H.task(c, parked['id'])
@@ -103,7 +104,7 @@ def test_a_return_step_an_upgrade_made_resumes_at_on_deck_and_a_chosen_one_is_ke
     H.migrate(c)
     assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task'").fetchone()[0] == events
     for ident in ('retired', 'chosen'):
-        c.execute("UPDATE tasks SET blocked_kind='dependency' WHERE id=?", (ident,))
+        set_holds(c, ident, blocked_kind='dependency')
         task_blocked.reconcile(c, ident)
     assert H.task(c, 'retired')['step_id'] == 'deck'
     assert H.task(c, 'chosen')['step_id'] == 'staging'

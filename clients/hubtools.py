@@ -25,7 +25,7 @@ import re
 import sys
 from urllib.parse import quote
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from clients import s3links
@@ -2305,6 +2305,19 @@ def market_resolve(api, args):
                      "applied_events": args.get("applied_events") or []}, key=_key(args))
 
 
+def market_day(value):
+    """last_verified_at takes a real calendar date as YYYY-MM-DD. A timestamp is refused, never cut down to its
+    date, and so is a day the calendar does not have (2026-02-31): the server keeps either as written."""
+    text = str(value)
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            date.fromisoformat(text)
+            return text
+    except ValueError:
+        pass
+    raise ValueError("last_verified_at must be a date (YYYY-MM-DD)")
+
+
 @tool("hub_market_apply", "Librarian (the market curator): write the evidence first, then an entity or an edge that cites it, and mark the insight applied.",
       {"id": _s("Insight id"), "source_url": _s("Source URL", default=""),
        "source_kind": _s("reddit, x, news, site, other", default="other"),
@@ -2313,10 +2326,12 @@ def market_resolve(api, args):
        "entity_id": _s("Existing entity to update"), "summary": _s("New summary"),
        "tier": _s("core, lookalike, phrase-stealer or secondary, for a new company", default=""),
        "new_id": _s("Id for a new entity when type/name-slug is wrong, e.g. company/self", default=""),
+       "last_verified_at": _s("Date the entity was last checked, YYYY-MM-DD: set on entity_id, or on a new entity", default=""),
        "edge_src": _s("Edge source entity"), "edge_rel": _s("One of the sixteen relations"),
        "edge_dst": _s("Edge destination entity")},
       required=("id",), writes=True)
 def market_apply(api, args):
+    verified = market_day(args["last_verified_at"]) if args.get("last_verified_at") else None
     body = {"evidence": {"source_url": args.get("source_url") or "", "source_kind": args.get("source_kind") or "other",
                          "quote": args.get("quote") or "", "our_read": args.get("our_read") or ""}}
     if args.get("entity_type") and args.get("entity_name"):
@@ -2325,10 +2340,16 @@ def market_apply(api, args):
             body["entity"]["tier"] = args["tier"]
         if args.get("new_id"):
             body["entity"]["id"] = args["new_id"]
+        if verified:
+            body["entity"]["last_verified_at"] = verified
     if args.get("entity_id"):
         body["entity_id"] = args["entity_id"]
         if args.get("summary") is not None:
             body["summary"] = args["summary"]
+        if verified:
+            body["last_verified_at"] = verified
+    if verified and "entity" not in body and "entity_id" not in body:
+        raise ValueError("last_verified_at needs entity_id, or entity_type and entity_name for a new entity")
     if args.get("edge_src") and args.get("edge_rel") and args.get("edge_dst"):
         body["edge"] = {"src": args["edge_src"], "rel": args["edge_rel"], "dst": args["edge_dst"]}
     return api.post(f"market/insights/{args['id']}/apply", body, key=_key(args))
@@ -5346,10 +5367,11 @@ def approval_approve(api, args):
 @tool("hub_approval_read_back", "Assistant only, before approving for the person: post in their chat the list of "
       "approvals you are about to approve, as your reply, then end the turn. The server writes the whole message from "
       "the approvals; only the ones listed may then be approved, on the person's plain yes to it.",
-      {"ids": {"type": "array", "items": {"type": "string"}, "description": "The approval ids, up to 100"}},
+      {"ids": {"type": "array", "items": {"type": "string"}, "description": "The approval ids, up to 100"},
+       "note": _s("Optional, one plain line shown above the list: the real decision you found, by name")},
       required=("ids",), writes=True)
 def approval_read_back(api, args):
-    return api.post("assistant/read-back", {"approvals": args["ids"]}, key=_key(args))
+    return api.post("assistant/read-back", {"approvals": args["ids"], "note": args.get("note") or ""}, key=_key(args))
 
 
 @tool("hub_approval_decline", "Decline an approval addressed to you (a send, spend, publish or merge), with a short reason "
@@ -7697,6 +7719,9 @@ ASSISTANT_TOOLS = frozenset({
     "hub_task_update", "hub_team_show",
     "hub_automation_restore", "hub_automation_versions", "hub_bot_model", "hub_bot_pause", "hub_bot_resume",
     "hub_rules_retire", "hub_task_bulk",
+    # Admin jobs 42-49: groups, bot owners and access, routines, budgets, inbox audience, Pending meetings.
+    "hub_automation_create", "hub_bot_access", "hub_bot_owners", "hub_finance_act", "hub_inbound_audience",
+    "hub_meeting_approve", "hub_meeting_pending",
 })
 
 

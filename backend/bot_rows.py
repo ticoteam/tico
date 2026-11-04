@@ -43,7 +43,7 @@ class BotRows:
         self.notes = H.notes_waiting_counts(c, read, limit=500)
         tasks = {}
         for part in H.chunks(read):
-            for task in H._rows(c.execute("SELECT * FROM tasks WHERE owner_id IN (" + ','.join('?' * len(part)) +
+            for task in H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE owner_id IN (" + ','.join('?' * len(part)) +
                                           ") AND status IN ('open','doing')", ['bot:' + slug for slug in part])):
                 tasks.setdefault(H.actor_id(task['owner_id']), []).append(task)
         # Every task the rows below look at is read once, with its tags, so each privacy check and lookup of it reads none.

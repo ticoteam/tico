@@ -971,6 +971,7 @@ class AssistantSettings(Contract):
 class AssistantReadBack(Contract):
     """The approvals the Assistant is about to approve for the person, read back in their chat first."""
     approvals: Annotated[list[Annotated[str, Field(min_length=1, max_length=64)]], Field(min_length=1, max_length=100)]
+    note: Annotated[str, Field(max_length=300)] = ""
 
 
 class ApprovalConsume(Contract):
@@ -1485,6 +1486,12 @@ Heartbeat.model_rebuild()
 
 class RunnerMemberBots(Contract):
     accepts: bool
+
+
+class RunnerLabel(Contract):
+    # Trimmed first (Contract strips), then 1 to 100 characters on one line.
+    label: StrictStr = Field(min_length=1, max_length=100, pattern=r"^[^\x00-\x1f\x7f]+$",
+                             description="The computer's name, as Settings > Computers shows it.")
 
 
 class RunnerTurnsAtOnce(Contract):
@@ -2376,7 +2383,7 @@ class RunUsagePart(Contract):
     `requests` is the same three per model request, sent when the runner saw every request, so a model whose
     long prompts cost more (providers.LONG_PROMPT) is priced request by request. A fourth count, when the runner
     sends one, marks the bot's own requests (1) from its subagents' (0): the newest of its own is the session's
-    context size (`turns.prompt_tokens`)."""
+    context size (`attempts.prompt_tokens`)."""
     input_tokens: int = Field(default=0, ge=0, le=10**12)
     cached_tokens: int = Field(default=0, ge=0, le=10**12)
     output_tokens: int = Field(default=0, ge=0, le=10**12)

@@ -192,6 +192,23 @@ def test_release_qa_uses_one_classification_for_creation_pull_wake_and_health(ap
     pytest.param("Release QA checklist planning", False, id="qa-planning"),
     pytest.param("Post Release QA dashboard redesign", False, id="post-qa-dashboard"),
     pytest.param("Add acceptance tests for CSV export", True, id="acceptance-implementation"),
+    pytest.param("Implement production acceptance tests", True, id="production-acceptance-implementation"),
+    pytest.param("Implement production acceptance tests", False, id="production-acceptance-top-level-implement"),
+    pytest.param("Develop production acceptance tests for the waitlist", False,
+                 id="production-acceptance-top-level-develop"),
+    pytest.param("Add production acceptance tests for CSV export", False, id="production-acceptance-top-level-add"),
+    pytest.param("Write production acceptance tests for the waitlist", False,
+                 id="production-acceptance-top-level-write"),
+    pytest.param("Build the production acceptance suite", False, id="production-acceptance-top-level-build"),
+    pytest.param("Update the production acceptance checklist", False, id="production-acceptance-top-level-update"),
+    pytest.param("Waitlist production acceptance tests", False, id="production-acceptance-top-level-no-run-verb"),
+    pytest.param("Production acceptance checklist update", False, id="production-acceptance-top-level-prefix-update"),
+    pytest.param("Production acceptance tests for the waitlist", False,
+                 id="production-acceptance-top-level-prefix-tests"),
+    pytest.param("Check the production acceptance checklist", False, id="production-acceptance-top-level-check-list"),
+    pytest.param("Verify production acceptance checklist", False, id="production-acceptance-top-level-verify-list"),
+    pytest.param("Complete the production acceptance plan", False, id="production-acceptance-top-level-complete-plan"),
+    pytest.param("Run production acceptance dashboard", False, id="production-acceptance-top-level-run-dashboard"),
 ])
 def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
     with api.app.state.store.transaction() as c:
@@ -206,6 +223,43 @@ def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
         with pytest.raises(H.Refused) as raised:
             H.task_update(c, "bot:ops", ordinary["id"], owner="bot:checker")
         assert raised.value.rule == "profile"
+
+
+@pytest.mark.parametrize("title", [
+    "Run waitlist production acceptance after existing release and admin gates clear",
+    "Execute production acceptance for the waitlist",
+    "Re-run production acceptance on the release candidate",
+    "Production acceptance run for the waitlist",
+    "Production acceptance run: waitlist release",
+    "Run production acceptance tests for the waitlist",
+    "Run the production acceptance suite",
+])
+def test_a_top_level_production_acceptance_run_reads_as_review_work(api, title):
+    with api.app.state.store.transaction() as c:
+        add_bot(c, "checker")
+        put(c, "checker", P.REVIEWER)
+        made = H.task_create(c, "bot:ops", title, "x", "bot:checker")
+        assert P.is_review_task(c, H.task(c, made["id"]))
+
+
+def test_a_top_level_production_acceptance_run_is_review_work_for_a_reviewer_and_health_stops_counting_it(api):
+    """Task 17112188 (QA (GPT), Reviewer profile) was counted by Health as non-review work (Dev 750, finding 34f2faaf).
+    A top-level production acceptance run is acceptance QA: the reviewer takes it, and the same classification clears
+    the finding for Health."""
+    with api.app.state.store.transaction() as c:
+        add_bot(c, "checker")
+        put(c, "checker", P.REVIEWER)
+        config = profile_of(c, "checker")
+        c.execute("DELETE FROM jobs")
+        made = H.task_create(c, "bot:ops",
+                             "Run waitlist production acceptance after existing release and admin gates clear",
+                             "x", "bot:checker")
+        row = H.task(c, made["id"])
+        assert made["type_id"] == H.GENERAL_TYPE and P.is_review_task(c, row)
+        assert P.pull_refusal(c, row, config) is None
+        assert last_to(c, "checker")["rule"] == "profile_reviewer_request"
+        assert jobs(c, "checker") == 1
+        assert P.mismatches(c) == []
 
 
 def test_health_counts_a_keepers_ordinary_task_for_a_reviewer_but_not_its_pool_review(api):

@@ -65,7 +65,7 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
     # Checked per candidate task (a key lookup), so the reader's rule keeps its own column names. As
     # `t.id IN (SELECT id FROM tasks WHERE ...)` SQLite listed every task the rule allows first: 55 ms a call on TIDY.
     visibility = f" AND EXISTS(SELECT 1 FROM tasks v WHERE v.id=t.id AND ({visible}))" if visible != "1" else ""
-    rows = H._rows(c.execute("SELECT t.* FROM tasks t JOIN bots b ON t.owner_id='bot:'||b.id "
+    rows = H._rows(c.execute(f"SELECT t.* FROM {H.TASKS} t JOIN bots b ON t.owner_id='bot:'||b.id "
                              "WHERE t.status='open' AND b.state IN ('active','paused','quarantined') AND t.created_at<=? "
                              + scope + visibility + " ORDER BY t.id LIMIT ?",
                              (*params, SCAN_LIMIT)))

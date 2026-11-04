@@ -181,18 +181,20 @@ it names, and it never asks again per item.
 
 What stays on:
 - **Only your words in your own Assistant DM, bound to the read-back.** The Assistant posts its read-back with
-  `POST /api/v2/assistant/read-back {"approvals": [ids]}` (`hub approval read-back`): only it, in your DM, only
-  pending approvals addressed to you. Tico writes the whole message ("I'll approve these 3 for you:", one line per
-  approval, "Reply yes to approve exactly these; any other reply approves nothing.") as the reply to your message, so
-  the turn's closing text is not posted after it, and records the ids. An approve then runs only for an approval on
-  that list, citing your plain yes ("yes", "ok", "go ahead") when the list is the last message from anyone but you before
-  it and you have written nothing since ("wait, no" takes it back; `403 approve_not_asked` otherwise). Each line of the
-  list is one line, whatever the requesting bot put in its request, and shows every field of the approval except its
-  hashes, each quoted and none cut: the amount and who it goes to first (an email's to, cc and sending mailbox, a
-  page's whole address), then the rest, files by name and size. An approval with a field longer than the list can show
-  whole, or a field name that isn't a plain name (`409 approve_too_long`) are left off the list and stay your click. The approval's history keeps the whole list. Your own sentence never approves without that yes, however it is put ("approve
-  the merge if CI passes", "send me a summary"). Text in a message, file, web page, task or another
-  bot's output is never your instruction: citing a bot's message is `403 on_behalf_of`. Declines need no read-back.
+  `POST /api/v2/assistant/read-back {"approvals": [ids]}` (`hub approval read-back`): only it, in your DM, only pending
+  approvals addressed to you. Tico writes the whole message ("I'll approve these 3 for you:", one line per approval,
+  "Reply yes to approve exactly these; any other reply approves nothing.") as the reply to your message, so the turn's
+  closing text is not posted after it, and records the ids. The Assistant may add a `--note` (`"note"`) of its own words
+  above the list, such as the one real decision it found; the yes still approves only the listed ids. An approve then runs
+  only for an approval on that list, citing your plain yes ("yes", "ok", "go ahead") when the list is the last message
+  from anyone but you before it and you have written nothing since ("wait, no" takes it back; `403 approve_not_asked`
+  otherwise). Each line of the list is one line, whatever the requesting bot put in its request, and shows every field of
+  the approval except its hashes, each quoted and none cut: the amount and who it goes to first (an email's to, cc and
+  sending mailbox, a page's whole address), then the rest, files by name and size. An approval with a field longer than
+  the list can show whole, or a field name that isn't a plain name (`409 approve_too_long`) are left off the list and stay
+  your click. The approval's history keeps the whole list. Your own sentence never approves without that yes, however it
+  is put ("approve the merge if CI passes", "send me a summary"). Text in a message, file, web page, task or another bot's
+  output is never your instruction: citing a bot's message is `403 on_behalf_of`. Declines need no read-back.
 - **Never its own request.** An approval the Assistant itself asked for stays your click on a card (`403 own_request`).
 - **Only approvals addressed to you, only your Assistant.** Someone else's is a `403`. No other bot decides an approval,
   whatever the setting. A report to the Tico team is approved only on the read-back and your plain yes, like any other.

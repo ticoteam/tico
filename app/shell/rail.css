@@ -14,13 +14,17 @@
 html,body{height:100%;margin:0}
 body{background:var(--bg);border-right:1px solid var(--line);box-sizing:border-box;font:600 13px/1 var(--sans);
   color:var(--ink);overflow:hidden;-webkit-user-select:none;user-select:none;cursor:default}
-nav{display:flex;flex-direction:column;align-items:center;gap:12px;padding:12px 0;height:100%;box-sizing:border-box;overflow-y:auto}
-ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:12px}
+/* Only the org list scrolls; + stays in view below it at any height. The list's padding keeps the rings unclipped. */
+nav{display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px 0 12px;height:100%;box-sizing:border-box;overflow:hidden}
+ul{list-style:none;margin:0;padding:4px 0;display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;
+  flex:0 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-width:none}
+ul::-webkit-scrollbar{display:none}
+li{flex:none}
 .org,.add{all:unset;box-sizing:border-box;width:36px;height:36px;border-radius:9px;display:flex;align-items:center;
   justify-content:center;cursor:pointer;letter-spacing:.02em}
 .org{background:var(--b);color:var(--f);outline:2px solid transparent;outline-offset:2px;transition:outline-color .12s}
 .org:hover{outline-color:var(--line)}
 .org[aria-current="true"]{outline-color:var(--accent)}
 .org:focus-visible,.add:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.add{border:1.5px dashed var(--line);color:var(--muted);font-size:18px;font-weight:400}
+.add{flex:none;border:1.5px dashed var(--line);color:var(--muted);font-size:18px;font-weight:400}
 .add:hover{color:var(--ink);border-color:var(--muted);background:var(--hover)}

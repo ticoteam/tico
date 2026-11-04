@@ -52,7 +52,10 @@ OWNER = "human:dana"
 FILL = {"{{app_name}}": "Tico", "{{assistant_name}}": "Tico Assistant", "{{company_name}}": "Acme",
         "{{mailbox}}": "ops@acme.example"}
 
-FAKE_CORE = r'''import json, os, re
+FAKE_CORE = r'''import json, os, re, sys
+
+JSON_FILE_COMMANDS = {("automation", "create"), ("automation", "update"), ("listening", "save"), ("grokbot", "sync"),
+                      ("external", "sync")}
 
 WRITE_VERBS = {"update", "delete", "archive", "restore", "label", "withdraw", "answer", "approve", "decline", "done",
                "close", "cancel", "set", "remove", "add", "bulk"}
@@ -330,13 +333,36 @@ def answer(argv, via, tool=None):
     line = " ".join(argv)
     canon = re.sub(r" --on-behalf-of \S+", "", line)
     words = canon.split()
-    files = {}
-    for i, a in enumerate(argv[:-1]):
+    files, bad = {}, None
+    # `--file=-` is `--file -`, and `--f` or `--fi` is `--file` (the real parser takes a unique prefix; the commands
+    # in JSON_FILE_COMMANDS have no other `--f…` option).
+    split = [w for a in argv for w in (a.split("=", 1) if a.startswith("--") and "=" in a else [a])]
+    if tuple(words[:2]) in JSON_FILE_COMMANDS:
+        split = ["--file" if len(w) >= 3 and "--file".startswith(w) else w for w in split]
+    for i, a in enumerate(split[:-1]):
         if a.endswith("-file") or a == "--file":
+            path = split[i + 1]
             try:
-                files[argv[i + 1]] = open(argv[i + 1]).read()[:1500]
+                # `-` is stdin, as the real CLI reads it. The MCP server's stdin is its protocol, so never there.
+                body = (sys.stdin.read() if via == "cli" and not sys.stdin.isatty() else "") if path == "-" else open(path).read()
             except Exception:
-                pass
+                if a == "--file" and tuple(words[:2]) in JSON_FILE_COMMANDS:
+                    bad = bad or f"{path}: cannot read"
+                continue
+            files[path] = body[:1500]
+            # Only a JSON command's `--file` (a flow or payload) or a .json file must be JSON: `--body-file -`,
+            # `classify --file` and `support report --file` are plain text.
+            if (a == "--file" and tuple(words[:2]) in JSON_FILE_COMMANDS) or path.endswith(".json"):
+                try:
+                    json.loads(body)
+                except ValueError:
+                    bad = bad or f"{path}: not JSON"
+    if bad:  # the real CLI refuses a payload it cannot read: nothing is written
+        text = json.dumps({"error": "validation", "detail": bad})
+        with open(os.environ["EVAL_LOG"], "a") as log:
+            log.write(json.dumps({"argv": line, "via": via, "matched": None, "files": files, "exit": 1,
+                                  "out": text[:200]}) + "\n")
+        return text, 1
     # State: what the writes in this run changed, so later reads show it (the real hub does the same).
     state_path = os.environ["EVAL_STATE"]
     try:
@@ -350,7 +376,7 @@ def answer(argv, via, tool=None):
     row = next((r for r in canned if re.search(r["match"], canon)), None)
     ids = known_ids(canned, state)
     # A canned row that fails (exit non-zero) changes nothing in the state, and a dry run changes nothing either.
-    failed = bool(row and int(row.get("exit", 0)))
+    failed = bool(row and int(row.get("exit", 0)) and not (row.get("after") and after_for(row["after"], state.get("writes", [])) is not None))
     mutate = not failed and "--dry-run" not in argv
     resp = write_answer(words, state, mutate=mutate, argv=argv, ids=ids)
     if mutate and len(words) > 1 and words[1] not in READ_VERBS:
@@ -419,7 +445,8 @@ def answer(argv, via, tool=None):
             if verb in WRITE_VERBS and len(words) > 2 and not words[2].startswith("-"):
                 reply["id"] = words[2]
             text = json.dumps(reply)
-    code = int(row.get("exit", 0)) if row else 0
+    # An `after` output is the row after the write it names, so it succeeds even when the row fails before that write.
+    code = int(row.get("exit", 0)) if row and after_out is None else 0
     entry.update({"exit": code, "out": text[:200]})
     with open(os.environ["EVAL_LOG"], "a") as log:
         log.write(json.dumps(entry) + "\n")

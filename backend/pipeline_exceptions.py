@@ -347,7 +347,7 @@ def build(c, typ, rows=None, at=None, reader=None):
         return []
     if rows is None:
         rows = [r for r in H._rows(c.execute(
-            f"SELECT * FROM tasks WHERE type_id=? AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
+            f"SELECT * FROM {H.TASKS} tasks WHERE type_id=? AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
             "ORDER BY created_at", (typ["id"], *H.ACTIVE_STATUSES))) if H.bot_reads_task(c, reader, r)][:5000]
     rows = [dict(r) for r in rows if r["status"] in H.ACTIVE_STATUSES]
     out = _List()

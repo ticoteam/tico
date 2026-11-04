@@ -109,7 +109,8 @@ is the bare id, without the prefix.
 
 | Table | Columns | Holds |
 |---|---|---|
-| `tasks` | `requester_id, owner_id, closed_by_id, checkpoint_by_id, snoozed_by_id` | actor string |
+| `tasks` | `requester_id, owner_id, closed_by_id, checkpoint_by_id` | actor string |
+| `task_holds` | `by_id` | actor string (who snoozed it) |
 | `messages` | `sender_id, recipient_id, answered_by_id` | actor string |
 | `conversations` | `owner_id` | actor string |
 | `goals` | `owner_id, status_by_id, last_read_by_id, why_by_id, created_by_id` | actor string (`owner_id` can also be `company`) |
@@ -146,6 +147,7 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `messages` | `id, conversation_id, sender_id, recipient_id, kind, body, refs, in_reply_to, created_at, delivered_at, read_at, wait_s` | `kind`: say, ask, answer, notice, steer |
 | `tasks` | `id, title, body, requester_id, owner_id, status, due_at, goal_id, conversation_id, created_at, updated_at, done_at, closed_at, closed_by_id, note, version, acceptance, type_id, step_id, number, step_rank, waiting_on` | `status`: open, doing, waiting, review, ready, done, closed, declined; `waiting_on` the person a waiting task waits on; `number` is the team-wide ticket number a numbered type gives (NULL until one does), `step_rank` the task's place within its step, lower first ([Tasks](tasks.md)) |
 | `task_relations` | `from_task, to_task, kind, created_by, created_at` | every task-to-task relationship, read only when both tasks are; `kind`: `parent` (from is a subtask of to), `blocks` (from blocks to), `related` (stored once, lower id first), `duplicate_of`, `follow_up` (from was split off or followed up from to). It replaces the old `tasks.parent_id` and `tasks.blocked_by`: a task's parent is `SELECT to_task FROM task_relations WHERE from_task=:task AND kind='parent'`, its subtasks `SELECT from_task ... WHERE to_task=:task AND kind='parent'`, its blockers `SELECT from_task ... WHERE to_task=:task AND kind='blocks'` |
+| `task_holds` | `id, task_id, kind, cause, reason, by_id, until_at, from_step_id, from_status, gate, cleared_at, created_at, released_at` | a task's own holds, read with their task: `kind` `blocked` (moved to Blocked; `cause`: manual, dependency, stranded, gate, check, worktree; `from_step_id`/`from_status` where clearing it returns the task) or `snoozed` (`until_at`, `by_id`). A task has at most one open hold of each kind (`released_at` NULL); a released one stays as history. It replaces the old `tasks.snoozed_*`, `tasks.blocked_*` and `tasks.holds_cleared_at` columns: the tasks snoozed now are `SELECT task_id FROM task_holds WHERE kind='snoozed' AND released_at IS NULL` |
 | `task_types` | `id, name, numbered, created_at, updated_at` | types and, in `task_steps(id, type_id, name, position, status)`, their steps; `numbered` is 1 when the type numbers its tasks |
 | `history_events` | `subject_type, subject_id, created_at, actor_id, kind, old, new, note, action_id, via, data` | every change to a task, goal, the company profile, the strategy or the market graph, one row each: `subject_type` is `task`, `goal`, `company`, `strategy` or `market_entity`/`market_edge`/`market_evidence`/`market_document`; `subject_id` the task, goal or market row (`company` and `strategy` for those two); `kind` the field that changed. A goal's `status` row has `data` `{"status_by": ..., "status_source": ...}` (who set the colour and how); a market row may carry `{"insight_id": ...}`; a strategy row's `data` is the change. You see a task's rows when you can see the task, a goal's when you can see the goal, the strategy's when you own the install |
 | `task_roles` | `task_id, role, actor, added_by, created_at` | who is on a task, by role (a short name the team chooses: `developer`, `reviewer`, `qa` ...); one actor may hold several roles on a task |
@@ -160,10 +162,9 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `task_delegations` | `task_id, delegate, requested_by, message_id, expires_at` | |
 | `approvals` | `id, kind, task_id, message_id, payload, requested_by_id, decided_by_id, decision, decided_at, consumed_at, created_at` | `kind`: send, spend, publish, merge |
 | `jobs` | `id, message_id, bot_id, state, created_at, attempt_id` | one per message a bot has to act on; `state`: queued, leased, running, input, completed, failed, uncertain, canceled |
-| `attempts` | `id, job_id, bot_id, runner_id, state, lease_until, created_at, started_at, finished_at, result, final_text` | a run (`state`: leased, running, input, completed, failed, interrupted, expired); its streamed output is `attempt_events(attempt_id, seq, kind, payload, created_at)` |
-| `turns` | `id, bot, started_at, finished_at, trigger, message_id, task_id, exit, summary, input_tokens, cached_tokens, output_tokens, model, provider, est_cost_usd, usage_reason, billing, trigger_kind, trigger_source, purpose, writes, outcome, did_nothing, rotated, session_kind, session_why, rule_id` | one per run (`id` = the run's attempt id); `exit` is null while running. **Sum `input_tokens`, `cached_tokens`, `output_tokens` and `est_cost_usd`** (input = `input_tokens` + `cached_tokens`); every run finished from this change on, failed, interrupted or usage-limited, has them set (older runs keep what they had, and some have none). A run whose runner counted nothing reads 0 tokens and $0, and `usage_reason` says why (`usage_unreported`, `usage_limited`, `no_result`); `cost_unpriced` means tokens were counted but the model has no list price, so `est_cost_usd` is null. On a run finished from this change on, a null `usage_reason` means usage was measured; an older run has a null reason whether or not it was. The older one-number `tokens_in`, `tokens_out` and `cost` columns are gone: their values moved into `input_tokens`, `output_tokens` and `est_cost_usd` where those were empty (`backend/migrations/0009_drop_turns_legacy_usage.py`). `trigger_kind`, `writes` and `outcome` are explained under [What woke each run](#what-woke-each-run-and-what-it-did) |
+| `attempts` | `id, job_id, bot_id, runner_id, state, lease_until, created_at, started_at, finished_at, settled_at, result, final_text, trigger, message_id, task_id, exit, summary, input_tokens, cached_tokens, output_tokens, prompt_tokens, usage_model, provider, est_cost_usd, usage_reason, billing, trigger_kind, trigger_source, purpose, writes, outcome, did_nothing, rotated, session_kind, session_why, rule_id` | one per run (`state`: leased, running, input, completed, failed, interrupted, expired); its streamed output is `attempt_events(attempt_id, seq, kind, payload, created_at)`. `created_at` is when the run was claimed; `settled_at` when its record was closed (exit, summary and usage written), null while it runs; `exit` is null while running. A run recorded with no lease (the demo seed, a run from before leases) has a null `job_id` and `state`. An attempt with a `job_id` and a null `trigger` failed before its run record was written (old history); filter `job_id IS NULL OR trigger IS NOT NULL` for runs with a record. `usage_model` is the model its usage was reported for (`model` is the model record the claim handed out). Until migration 0060 the run record was a separate `turns` table with the same id: its `finished_at` is now `settled_at`, its `model` `usage_model`, `started_at` `created_at` and `bot` `bot_id`. **Sum `input_tokens`, `cached_tokens`, `output_tokens` and `est_cost_usd`** (input = `input_tokens` + `cached_tokens`); every run finished from this change on, failed, interrupted or usage-limited, has them set (older runs keep what they had, and some have none). A run whose runner counted nothing reads 0 tokens and $0, and `usage_reason` says why (`usage_unreported`, `usage_limited`, `no_result`); `cost_unpriced` means tokens were counted but the model has no list price, so `est_cost_usd` is null. On a run finished from this change on, a null `usage_reason` means usage was measured; an older run has a null reason whether or not it was. The older one-number `tokens_in`, `tokens_out` and `cost` columns are gone: their values moved into `input_tokens`, `output_tokens` and `est_cost_usd` where those were empty (`backend/migrations/0009_drop_turns_legacy_usage.py`). `trigger_kind`, `writes` and `outcome` are explained under [What woke each run](#what-woke-each-run-and-what-it-did) |
 | `run_weekly` | `week, bot, trigger, purpose, runs, input_tokens, cached_input_tokens, output_tokens, acted, no_change, nothing_to_do, unknown, did_nothing, rotated, acted_pct, no_change_pct, nothing_to_do_pct, unknown_pct` | a read-only view: runs per week, bot, trigger and purpose, every attempt counted ([below](#what-woke-each-run-and-what-it-did)) |
-| `rule_weekly` | `week, bot, rule, runs, input_tokens, cached_input_tokens, output_tokens, acted, did_nothing, did_nothing_pct` | a read-only view: runs per week, bot and [wake rule](how-it-works.md#what-happens-when) (`turns.rule_id`, the rule that woke the run; `unknown` for a run before rules), with tokens and the share that did nothing |
+| `rule_weekly` | `week, bot, rule, runs, input_tokens, cached_input_tokens, output_tokens, acted, did_nothing, did_nothing_pct` | a read-only view: runs per week, bot and [wake rule](how-it-works.md#what-happens-when) (`attempts.rule_id`, the rule that woke the run; `unknown` for a run before rules), with tokens and the share that did nothing |
 | `schedules` | `id, bot, routine_key, title, cron, event_name, playbook, last_fired_at, next_due_at, deleted_at` (`timezone` and `enabled` are in `schedule_config(schedule_id, timezone, enabled)`) | routines from before Automations, kept but no longer fired (`docs/routines.md`); `schedule_occurrences(schedule_id, occurrence, task_id, outcome)` says what each firing did |
 | `automations` | `id, name, owner_id, trigger_type, enabled, builtin, flow, version, created_at, created_by_id, updated_at, deleted_at` | a routine or automation. `trigger_type` says what starts it; `flow` holds its steps as JSON; `version` is the current version in `automation_versions` |
 | `automation_runs` | `id, automation_id, version, trigger_ref, started_at, finished_at, status, cost, saved_state, claimed_at, wake_at, chain` | one run of an automation. `status` is its outcome ([Status and state columns](status-and-state.md)); `state` is its saved JSON working data, not a step; `version` is the automation version it ran |
@@ -220,21 +221,21 @@ WHERE t.status='waiting' ORDER BY t.updated_at
 The last run of every bot, with the week's count and failures:
 
 ```sql
-SELECT bot, max(started_at) AS last_turn, count(*) AS turns,
+SELECT bot_id, max(created_at) AS last_run, count(*) AS runs,
        sum(exit IN ('failed', 'expired')) AS failed
-FROM turns WHERE started_at > strftime('%Y-%m-%dT%H:%M:%S', 'now', '-7 days')
-GROUP BY bot ORDER BY last_turn DESC
+FROM attempts WHERE (job_id IS NULL OR trigger IS NOT NULL) AND created_at > strftime('%Y-%m-%dT%H:%M:%S', 'now', '-7 days')
+GROUP BY bot_id ORDER BY last_run DESC
 ```
 
 Successful runs finish with `completed`. `failed` and `expired` are terminal errors;
 a bot reporting blocked work can still complete its run successfully. Health counts failed and
-expired attempts in the last 24 hours. Runs includes those attempts even when no turn was recorded,
-with the attempt ID and reason. Query `attempts` when counting all execution attempts.
+expired attempts in the last 24 hours. Runs includes those attempts even when no run record was written
+(a job and a null `trigger`), with the attempt ID and reason. Drop the `trigger` filter when counting all execution attempts.
 
 ### What woke each run, and what it did
 
-Every run records what woke it (`turns.trigger_kind`), its tokens, and whether it changed anything
-(`turns.outcome`). All three come from plain code, not from asking a model:
+Every run records what woke it (`attempts.trigger_kind`), its tokens, and whether it changed anything
+(`attempts.outcome`). All three come from plain code, not from asking a model:
 
 - **`trigger_kind`**: `comment` (a bot wrote to it: a task comment or a message), `person_message` (a person
   wrote to it, or pressed Run now), `status_or_relation` (a task of its moved: assigned, done, unblocked, a
@@ -255,7 +256,7 @@ Every run records what woke it (`turns.trigger_kind`), its tokens, and whether i
   as it ends (it looked, and nothing had moved) and `nothing_to_do` when there was no open task to act on (no
   task, or one already done, closed or declined).
 - **What became of it**: when a bot's task sits at `done` or `review` and someone other than the bot or the keeper
-  moves it on, the run that delivered it gets one `turn.outcome` event (`target` the turn id, `detail`
+  moves it on, the run that delivered it gets one `turn.outcome` event (`target` the run's attempt id, `detail`
   `{task_id, outcome, from, to}`): `accepted` (closed, or `review` moved to `done`), `edited` (its title or body
   rewritten) or `overridden` (sent back to work, declined or handed to another owner). The first is the run's outcome;
   later moves add none. `SELECT json_extract(detail,'$.outcome') o, count(*) FROM events WHERE
@@ -274,14 +275,14 @@ Every run records what woke it (`turns.trigger_kind`), its tokens, and whether i
   `interrupted`, `fallback_side` (a fallback model keeps a session of its own), or `prompt_too_long_after_compact`
   (the run failed on a prompt too large to send even after compacting, so Tico cleared the session for the next
   run); `resumed` may carry `compacted`. NULL from an older runner. A new session for any reason but `none_saved` is
-  also a line in its task's history (a `history_events` row of `kind = 'session'`). Unusual: `SELECT bot, count(*) FROM turns
-  WHERE session_kind = 'new' AND session_why <> 'none_saved' AND started_at > date('now', '-1 day') GROUP BY bot`.
+  also a line in its task's history (a `history_events` row of `kind = 'session'`). Unusual: `SELECT bot_id, count(*) FROM attempts
+  WHERE session_kind = 'new' AND session_why <> 'none_saved' AND created_at > date('now', '-1 day') GROUP BY bot_id`.
 
 `purpose` is a short label for what the run was for (`review PR`, `answer person message`): the place that wakes the bot may name it, otherwise it is the default for that bot and trigger, and runs from before it existed were filled the same way. A wake the map does not know reads `unknown`. Group by it: `SELECT purpose, sum(runs), sum(input_tokens) FROM run_weekly GROUP BY purpose`.
 
-A run from before this was recorded has none of these, and reads `unknown`; so does an attempt that never got
-a `turns` row (one that failed or expired before it started), counted with no tokens and no outcome. `run_weekly` adds them up per week
-(starting Monday, UTC), bot, trigger and purpose, over exactly the runs you may read in `turns` and `attempts`: a run on a
+A run from before this was recorded has none of these, and reads `unknown`; so does an attempt with no run record
+(a job and a null `trigger`: one that failed or expired before it started), counted with no tokens and no outcome. `run_weekly` adds them up per week
+(starting Monday, UTC), bot, trigger and purpose, over exactly the runs you may read in `attempts`: a run on a
 private task, in someone else's thread, or one you no longer have access to is left out of your totals. Its `input_tokens` is the run's measured usage (`input_tokens` + `cached_tokens`, every
 fallback segment included); a run with no usage recorded reads 0.
 Last week's numbers, biggest input first:

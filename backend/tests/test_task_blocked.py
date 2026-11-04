@@ -7,6 +7,7 @@ from backend import hubdb as H, task_snooze as TS
 from backend.tests.test_review_gate import api, ticket, move, HEAD, get
 from backend.tests.test_github import post
 from backend.tests.test_api import hold
+from backend.tests.hold_rows import set_holds
 
 
 def _team_blocked(api, task):
@@ -219,8 +220,8 @@ def test_note_only_wait_is_stranded_and_explicit_owner_hold_stays(api):
         H.task_update(c, task['owner_id'], task['id'], status='waiting', note='Waiting on a vendor reply')
         row = H.task(c, task['id'])
         assert row['blocked_kind'] == 'stranded'
-        # Startup migration keeps a legacy note-only wait stranded too.
-        c.execute('UPDATE tasks SET blocked_since=NULL,blocked_kind=NULL WHERE id=?', (task['id'],))
+        # Startup migration must preserve recovery for legacy note-only waits too.
+        set_holds(c, task['id'], blocked_since=None)
         task_blocked.backfill(c)
         assert H.task(c, task['id'])['blocked_kind'] == 'stranded'
         H.task_update(c, task['owner_id'], task['id'], step='Blocked', note='Waiting for a machine')
@@ -565,7 +566,7 @@ def test_a_ticket_an_old_version_parked_in_blocked_returns_to_its_step_and_stays
         from_step = held['step_id']
         assert held['blocked_kind'] == 'dependency' and held['blocked_from_step'] == from_step
         c.execute("UPDATE tasks SET step_id=? WHERE id IN (?,?)", (steps['Blocked'], dependency['id'], stale['id']))
-        c.execute("UPDATE tasks SET blocked_from_step=? WHERE id=?", (steps['Done'], stale['id']))
+        set_holds(c, stale['id'], blocked_from_step=steps['Done'])
         task_blocked.leave_retired_blocked(c)
         back = H.task(c, dependency['id'])
         assert (back['step_id'], back['status'], back['blocked_kind'], back['blocked_since'], back['blocked_reason']) == (
@@ -603,7 +604,8 @@ def _held_in_blocked_from(api, task, came_from):
     with api.app.state.store.transaction() as c:
         TR.relate(c, H.KEEPER, task['id'], blocker['id'], 'blocked_by')
         blocked = next(s['id'] for s in H.type_get(c, task['type_id'])['steps'] if s['name'] == 'Blocked')
-        c.execute("UPDATE tasks SET step_id=?,blocked_from_step=NULL WHERE id=?", (blocked, task['id']))
+        c.execute("UPDATE tasks SET step_id=? WHERE id=?", (blocked, task['id']))
+        set_holds(c, task['id'], blocked_from_step=None)
         H._task_event(c, task['id'], H.KEEPER, 'step', came_from, blocked, 'Waiting')
 
 

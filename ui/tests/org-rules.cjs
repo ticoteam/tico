@@ -292,8 +292,6 @@ async function shots(browser, hub, bot, {ruleId, dueId}) {
       try {
         await ready(page);
         await page.evaluate(v => window.ticoTheme.set(v), theme);
-        // The scenario's runner notice would cover the rail in every picture.
-        await page.locator('.needs-you [data-snooze]').click({timeout: t(3000)}).catch(() => {});
         for (const [name, hash, wait, act] of screens) {
           await go(page, '#/overview');
           await go(page, hash);

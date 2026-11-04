@@ -335,6 +335,8 @@ REVIEWED = {
     "PUT /api/v2/access/rules": "refused by the keys on its body (credential and Assistant rules, in admits_on_turn); the walk sends no body",
     "PUT /api/v2/usage/limits": "a spend cap, not a credential; the person sets it on their own word",
     "POST /api/v2/assistant/actions": "the Assistant's own card route: a proposal the person confirms",
+    "POST /api/v2/computers/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
+    "POST /api/v2/runners/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
 }
 
 
@@ -399,7 +401,7 @@ def _template_tools():
 
 def test_the_assistant_turn_is_offered_the_tools_its_template_runs_and_never_the_hidden_ones():
     """The Assistant's MCP listing: every tool its template runs is offered, the NEVER tools are not, and the listing stays
-    small enough for the model (about 165 KB today; the cliff is past 200 KB)."""
+    small enough for the model (about 185 KB today; the cliff is past 200 KB)."""
     everything = {t["name"] for t in hubtools.TOOLS}
     offered = hubtools.listing(local=True, kind="assistant")
     names = {t["name"] for t in offered}

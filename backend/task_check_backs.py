@@ -67,6 +67,8 @@ def timestamp(value, at):
 
 def set_time(c, row, value, note=None, *, actor=None, at=None, system=False):
     H = _H()
+    from . import task_holds
+    row = task_holds.with_holds(c, row)     # its snooze, when the row came from plain `tasks`
     if system and ("version" not in row or "check_back_at" not in row):
         return row  # legacy upgrade helpers create tasks before the file migrations finish
     at = at or H.now()
