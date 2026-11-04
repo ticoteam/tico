@@ -183,3 +183,59 @@ def test_an_llm_step_without_choose_keeps_its_outputs_and_runs_on():
     run = E.advance(f, run, services)
     assert run["steps"][0]["outputs"] == {"ref": "msg_1", "text": "Thanks, noted."}
     assert services.acted == [("note", {"text": "hi"})] and run["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------------------------- a brief a choice reads
+def test_a_bot_turn_a_chosen_destination_reads_waits_for_it_and_that_destination_gets_its_text():
+    """`_reads` counts a choose step's destinations: the brief's turn waits, and the destination's note gets what the bot
+    wrote, while the reply is drafted from the turn's own answer."""
+    brief = {"id": "brief", "type": "bot_turn", "bot": "librarian", "prompt": "Write the briefing."}
+    dests = [{"id": "legal", "name": "Legal", "then": [{"do": "note", "args": {"text": "Brief: {{brief.text}}"}}]},
+             {"id": "sales", "name": "Sales", "then": []}]
+    services = Services()
+    f = flow(brief, llm(choosing()), destinations=dests)
+    run = E.execute(f, MESSAGE, services)
+    assert services.turns[0]["wait"] is True and statuses(run) == [("brief", "waiting")]
+    assert E.answer(run, "msg_1", "Northwind cut its price.")
+    run = E.advance(f, run, services)
+    assert statuses(run) == [("brief", "ok"), ("draft", "waiting")]
+    assert E.answer(run, "msg_2", json.dumps({"to": "legal", "body": "Sending."}), cost=0.02)
+    run = E.advance(f, run, services)
+    assert services.acted == [("draft_reply", {"body": "Sending."}),
+                              ("note", {"text": "Brief: Northwind cut its price."})]
+    assert run["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------------------------- the owner at run time
+def test_a_choose_turn_runs_as_the_owner_it_was_saved_for():
+    step = {**llm(choosing()), "as": "bot:ops"}
+    services = Services()
+    run = E.execute({**flow(step, destinations=DESTS), "owner": "bot:ops"}, MESSAGE, services)
+    assert run["status"] == "waiting" and services.turns[0]["who"] == "bot:ops"
+
+
+@pytest.mark.parametrize("owner, who", [("bot:other", "bot:ops"), ("person:bob", "assistant:ana"),
+                                       ("group:legal-team", "assistant:ana")])
+def test_a_queued_choose_run_takes_its_owner_as_it_is_now_and_starts_no_turn_as_the_old_one(owner, who):
+    step = {**llm(choosing()), "as": who}
+    services = Services()
+    run = E.execute({**flow(step, destinations=DESTS), "owner": owner}, MESSAGE, services)
+    assert services.turns == [] and services.acted == [("label", {"name": "Sales"})]
+    out = run["steps"][0]["outputs"]
+    assert out["skipped"] == "owner changed" and out["error"] and out["to"] == "sales"
+    assert run["status"] == "ok" and run["threads"][0]["state"] == "done"
+
+
+@pytest.mark.parametrize("owner", ["group:legal-team", "bot:other"])
+def test_a_waiting_choose_run_whose_owner_changed_sends_no_reply_and_runs_only_the_default(owner):
+    step = {**llm(choosing()), "as": "bot:ops"}
+    f = {**flow(step, destinations=DESTS), "owner": "bot:ops"}
+    services = Services()
+    run = E.execute(f, MESSAGE, services)
+    assert run["status"] == "waiting" and services.turns[0]["who"] == "bot:ops"
+    assert E.answer(run, "msg_1", json.dumps({"to": "legal", "body": "Sending the deck today."}))
+    run = E.advance({**f, "owner": owner}, run, services)
+    assert services.acted == [("label", {"name": "Sales"})]
+    out = run["steps"][0]["outputs"]
+    assert out["skipped"] == "owner changed" and out["error"] and out["to"] == "sales"
+    assert run["status"] == "ok" and run["threads"][0]["state"] == "done"
