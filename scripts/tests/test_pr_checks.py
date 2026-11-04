@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -465,3 +466,59 @@ def test_a_pr_merge_ref_is_checked_against_current_main_not_the_older_event_base
     monkeypatch.setattr(checks, "ROOT", tmp_path)
     monkeypatch.setattr(checks, "collect", lambda: Counter({"scripts/tests/test_pr_checks.py": 1}))
     checks.prepare("pull_request", stale, tmp_path / "plan.json")
+
+
+def receipt_job(name, url, status="completed", conclusion="success"):
+    return {"name": name, "html_url": url, "status": status, "conclusion": conclusion,
+            "started_at": "2026-11-04T17:00:00Z", "completed_at": "2026-11-04T17:01:30Z"}
+
+
+def run_receipt(stdin):
+    """The receipt action as the timings job runs it: gh's output on stdin, the summary and exit code back."""
+    result = subprocess.run([sys.executable, str(ROOT / "scripts" / "pr_checks.py"), "receipt"], input=stdin,
+                            capture_output=True, timeout=60)
+    return result.returncode, result.stdout.decode()
+
+
+JOBS = [receipt_job("tests (1)", "https://github.com/ticoteam/tico/actions/runs/1/job/11"),
+        receipt_job("static", "https://github.com/ticoteam/tico/actions/runs/1/job/12", conclusion="failure")]
+ERROR_PAGE = {"message": "Server Error", "documentation_url": "https://docs.github.com/rest"}
+
+
+def test_a_receipt_of_jobs_pages_is_the_table_without_a_note():
+    code, out = run_receipt(json.dumps([{"total_count": 2, "jobs": JOBS}]).encode())
+    assert code == 0
+    assert out == checks.receipt(JOBS) + "\n" and checks.RECEIPT_INCOMPLETE not in out
+
+
+def test_an_error_page_beside_a_jobs_page_keeps_the_jobs_and_says_the_receipt_is_incomplete():
+    code, out = run_receipt(json.dumps([ERROR_PAGE, {"total_count": 2, "jobs": JOBS}]).encode())
+    assert code == 0
+    assert "| [tests (1)](https://github.com/ticoteam/tico/actions/runs/1/job/11) | success | 90.0 |" in out
+    assert "| [static](https://github.com/ticoteam/tico/actions/runs/1/job/12) | failure | 90.0 |" in out
+    assert "Server Error" not in out and out.rstrip().endswith(checks.RECEIPT_INCOMPLETE)
+
+
+@pytest.mark.parametrize("stdin", [
+    json.dumps([ERROR_PAGE]).encode(),                    # an error-only response
+    b'[{"total_count": 2, "jobs": [',                     # invalid JSON
+    b"",                                                  # no output at all
+    b"\xff",                                              # not UTF-8
+    json.dumps(ERROR_PAGE).encode(),                      # a top level that is not a list
+    json.dumps([{"jobs": "not a list"}]).encode(),        # jobs that are not a list
+    json.dumps([{"jobs": [{"name": "half"}]}]).encode(),  # a job without its fields
+])
+def test_a_receipt_that_cannot_read_its_pages_exits_zero_and_says_so(stdin):
+    code, out = run_receipt(stdin)
+    assert code == 0
+    assert out.startswith("| Job | Result | Seconds |") and out.rstrip().endswith(checks.RECEIPT_INCOMPLETE)
+
+
+def test_the_receipt_step_cannot_fail_or_cancel_the_timings_gate():
+    import yaml
+    job = yaml.safe_load((ROOT / ".github" / "workflows" / "pr-checks.yml").read_text())["jobs"]["timings"]
+    steps = {step.get("name"): step for step in job["steps"]}
+    receipt_step = steps["Per-job timings linked from the PR check"]
+    assert receipt_step["continue-on-error"] is True
+    assert receipt_step["timeout-minutes"] * 2 <= job["timeout-minutes"]
+    assert steps["Required checks passed"]["if"] == "always()"

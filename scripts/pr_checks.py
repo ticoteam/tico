@@ -784,6 +784,32 @@ def receipt(jobs):
     return "\n".join(rows) + "\n"
 
 
+RECEIPT_INCOMPLETE = "The GitHub API returned an error for part of this receipt, so it may be incomplete."
+JOB_FIELDS = ("name", "html_url", "status")
+
+
+def receipt_jobs(text):
+    """The jobs on the pages of `gh api --paginate --slurp` output that are jobs pages, and whether any page was not.
+
+    An error object (GitHub's body for a 502), a page without a list of well-formed jobs, a top level that is not a
+    list, and empty or invalid JSON are pages that were not read. The receipt is cosmetic: it never fails the gate.
+    """
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return [], True
+    pages = data if isinstance(data, list) else [data]
+    jobs, incomplete = [], False
+    for page in pages:
+        page_jobs = page.get("jobs") if isinstance(page, dict) else None
+        if isinstance(page_jobs, list) and all(isinstance(j, dict) and all(f in j for f in JOB_FIELDS)
+                                               for j in page_jobs):
+            jobs += page_jobs
+        else:
+            incomplete = True
+    return jobs, incomplete
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
@@ -808,9 +834,11 @@ def main():
             raise RuntimeError("No Python timings were collected")
         Path("durations.json").write_text(json.dumps(measured, indent=2))
     else:
-        data = json.load(sys.stdin)
         # gh --paginate --slurp emits one jobs response per page.
-        print(receipt([j for page in data for j in page["jobs"]]))
+        jobs, incomplete = receipt_jobs(sys.stdin.buffer.read())
+        print(receipt(jobs))
+        if incomplete:
+            print(RECEIPT_INCOMPLETE)
     return 0
 
 
