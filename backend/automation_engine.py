@@ -13,9 +13,10 @@ cap is recorded as `spend_cap` and the thread goes on without it; a decision wit
 (`{{brief.text}}`, or a `post_update` with no text of its own; `answer` fills it, a bot turn's under its step id) and,
 with `batch` times, the next batch time once the leading filters ran (`advance` picks it up when the time comes).
 
-Every effect (an action, a turn) gets `ctx["key"]`, the index its step record will have (`<n>.<m>` for a filter
-rule's m-th action): with the run's id it is the effect's idempotency key, the same when a resumed run repeats the
-step. `checkpoint(state)` follows every step, so the hub saves the run before the next step starts.
+Every effect (an action, a turn) gets `ctx["key"]`, its place in its step's record: `<n>.<m>` for a filter's m-th action
+in a step shaped as before (`_legacy`), and `<n>.r<r>.<i>` or `<n>.r<r>.d<i>` (rule r's i-th action, or that rule's
+destination's) in any other. With the run's id it is the effect's idempotency key, the same when a resumed run repeats
+the step. `checkpoint(state)` follows every step, so the hub saves the run before the next step starts.
 
 services:
   judge(state, questions, label, level) -> {"answers": {...}, "cost_usd": n}, or None while Decide is off
@@ -170,47 +171,64 @@ def _step(flow, state, thread, services):
         thread["state"] = FAILED
 
 
-def _chain(services, chain, values, step, key, first):
-    """Run one chain of actions in order, each as an effect keyed `<key>.<m>` where m counts from `first` across the
-    step. A refused action ends the chain (what follows it may depend on it); the list keeps it as the last entry.
-    Each entry is (action, source, plain). A plain action produces under the step's own id, as every task always has:
-    a due-date run opens one task per identity, so only the run's first create_task is plain (`_filter` marks it). Any
-    other action produces under `<step>@<key>.<m>`, so a later task in the same run never shares the first one's row."""
+def _chain(services, chain, values, step, key):
+    """Run one chain of actions in order. Each entry is (action, source, effect, producer): the action's effect key is
+    `<key>.<effect>`, and `producer` is the identity a task it opens is deduplicated under (`_filter` gives both). A
+    refused action ends the chain (what follows it may depend on it); the list keeps it as the last entry."""
     done = []
-    for action, source, plain in chain:
-        m = first + len(done)
-        producer = step["id"] if plain else f"{step['id']}@{key}.{m}"
-        result = _act(services, action["do"], action.get("args") or {}, values, step, f"{key}.{m}", producer)
+    for action, source, effect, producer in chain:
+        result = _act(services, action["do"], action.get("args") or {}, values, step, f"{key}.{effect}", producer)
         done.append({**result, **source})
         if not result.get("ok"):
             break
     return done
 
 
+def _legacy(flow, step):
+    """A filter step shaped as before destinations and `next` existed: no destination in the flow, and no rule of the
+    step with `to` or a `next` other than the default. Its effects keep their keys (`<key>.<m>`, m counting across the
+    step), so a run in flight resumes on the same keys."""
+    return not flow.get("destinations") and all(
+        rule.get("to") is None and rule.get("next") in (None, "step") for rule in step.get("rules") or [])
+
+
 def _filter(flow, state, thread, step, services):
     """The rules in order. A rule that holds runs its actions and, with `to`, its destination's chain. What it does
     after that is its `next` (F.rule_next): `end` ends the thread, `rule` moves on to the rules after it, `step` goes on
-    to the next step. A refused action fails the thread and the step's record says which."""
+    to the next step. A refused action fails the thread and the step's record says which.
+
+    Identities come from where an action is in the flow, never from what ran first, so a retry whose rules match
+    differently cannot hand one rule's task to another. In a step shaped as before (`_legacy`) the step's own id is the
+    identity of its first task, as it always was, and a later task of the run is `<step>@<key>.<m>`. In any other step
+    rule r's i-th action is `r<r>.<i>`, and the i-th action of the destination that rule reaches is `r<r>.d<i>`: the
+    effect key is `<key>.<slot>` and the producer `<step>@<slot>`."""
     values = values_of(state, thread)
     destinations = {d["id"]: d for d in flow.get("destinations") or []}
+    legacy = _legacy(flow, step)
     key, actions, fired, failed, ended = len(state["steps"]), [], [], False, False
-    taken = False   # a create_task in this run has taken the step's own id (`_chain`)
+    tasked = False   # legacy: a create_task of this run has taken the step's own id
     for n, rule in enumerate(step.get("rules") or []):
         if not F.all_hold(rule.get("when") or [], values, rule.get("match", "all")):
             continue
         fired.append(n)
-        chain = [(action, {"from": "rule", "rule": n}) for action in rule.get("then") or []]
+        chain = [(action, {"from": "rule", "rule": n}, f"r{n}.{i}")
+                 for i, action in enumerate(rule.get("then") or [])]
         if rule.get("to") is not None:
             if rule["to"] not in destinations:   # check() refuses a flow that names none; a run never reaches this
                 raise ValueError(f"no destination named {rule['to']}")
             dest = destinations[rule["to"]]
-            chain += [(action, {"from": "destination", "destination": dest["id"]}) for action in dest.get("then") or []]
+            chain += [(action, {"from": "destination", "destination": dest["id"]}, f"r{n}.d{i}")
+                      for i, action in enumerate(dest.get("then") or [])]
         marked = []
-        for action, source in chain:   # in run order, so the first create_task of the run is the plain one
-            plain = action["do"] == "create_task" and not taken
-            taken = taken or plain
-            marked.append((action, source, plain))
-        actions += _chain(services, marked, values, step, key, len(actions))
+        for action, source, slot in chain:
+            if legacy:
+                m = len(actions) + len(marked)
+                again = action["do"] == "create_task" and tasked
+                tasked = tasked or action["do"] == "create_task"
+                marked.append((action, source, str(m), f"{step['id']}@{key}.{m}" if again else step["id"]))
+            else:
+                marked.append((action, source, slot, f"{step['id']}@{slot}"))
+        actions += _chain(services, marked, values, step, key)
         if any(not action.get("ok") for action in actions):
             failed = True
             break
@@ -308,25 +326,33 @@ def _bot_turn(flow, state, thread, step, services):
     # A bot's turn is its own work and the run goes on, unless a later step reads what it wrote (a briefing to post).
     bot = step["bot"]
     later = steps_at(flow, thread["trail"])[thread["next"]:]
+    destinations = {d["id"]: d for d in flow.get("destinations") or []}
     _turn(flow, state, thread, step, services, bot if bot.startswith("bot:") else "bot:" + bot, step["prompt"],
-          _reads(later, step["id"]))
+          _reads(later, step["id"], destinations))
 
 
-def _reads(steps, name):
+def _reads(steps, name, destinations=None):
     """Whether one of these steps (or a step on a path under them) reads step `name`'s answer: names `name.<field>`,
-    or posts an update with no text of its own, which posts what the turn before wrote."""
+    or posts an update with no text of its own, which posts what the turn before wrote. A filter rule's `to` runs its
+    destination's actions too, so they count as the rule's own; `destinations` is the flow's, by id."""
     used = re.compile(r"(?<![A-Za-z0-9_.-])" + re.escape(name) + r"\.")
+    destinations = destinations or {}
     for step in steps:
-        args = step.get("args") or {}
-        if step.get("do") == "post_update" and not (args.get("text") or args.get("body")):
-            return True
         if step.get("type") == "paths":
             nested = [p.get("steps") or [] for p in step.get("paths") or []]
-            if any(_reads(s, name) for s in nested + [(step.get("otherwise") or {}).get("steps") or []]):
+            if any(_reads(s, name, destinations)
+                   for s in nested + [(step.get("otherwise") or {}).get("steps") or []]):
                 return True
             step = {k: v for k, v in step.items() if k not in ("paths", "otherwise")} | {
                 "when": [p.get("when") for p in step.get("paths") or []]}
-        if used.search(json.dumps(step, default=str)):
+        rules = step.get("rules") or []
+        reached = [action for rule in rules if rule.get("to") in destinations
+                   for action in destinations[rule["to"]].get("then") or []]
+        for action in [step] + [a for rule in rules for a in rule.get("then") or []] + reached:
+            args = action.get("args") or {}
+            if action.get("do") == "post_update" and not (args.get("text") or args.get("body")):
+                return True
+        if used.search(json.dumps([step, *reached], default=str)):
             return True
     return False
 
