@@ -64,8 +64,9 @@ a side topic under one message. `hub thread list` shows them, `hub thread show <
 - One progress message per task. Post it once with `hub thread post <thread> "..."`, then keep it current with
   `hub thread edit <message-id> "..."` as the work moves. Never post a line per step: a run's output is already in its
   run view.
-- A side topic goes in a sub-thread: `hub thread reply <thread> <message-id> "..."`. Use it sparingly; the main work
-  stays in the thread.
+- To answer one message, reply to it in the thread: `hub thread post <thread> "..." --reply-to <message-id>`. Your
+  message stays in the thread, quoting the one it answers. A separate side topic can still go in a sub-thread
+  (`hub thread reply <thread> <message-id> "..."`); use it rarely.
 - Acknowledge a request with a one-word `✅` in its thread, not a sentence.
 - Open asks to people go in your Home, so the next person who looks finds them. Answer them there. A DM is for what
   only the two of you need.

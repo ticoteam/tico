@@ -22,7 +22,7 @@ MAX_BOTS = 5
 STEP_EVENTS = 60          # a run's newest events read for its current step
 STEP_CHARS = 80
 LIVE_JOBS = ("queued", "leased", "running", "input")
-SIGN_IN_REASONS = ("not_ready", "readiness_unknown", "sign_in_rejected", "login_upgrade", "profile")
+SIGN_IN_REASONS = ("not_ready", "readiness_unknown", "sign_in_rejected", "sign_in_missing", "login_upgrade", "profile")
 BUDGET_REASONS = ("limit", "out_of_credit", "cooling_off", "budget", "cloud_locked")
 BUSY_REASONS = ("bot_limit", "lane_held", "maintaining", "no_slot", "busy", "handed_back")
 SIGN_IN_STATES = ("missing", "failed", "rejected", "unknown")
@@ -146,7 +146,7 @@ def _elsewhere(c, v, bot_id, root_id):
         try:
             if task and task_privacy.readable(c, task_privacy.actor(v.who), [task_id]):
                 return "Finishing " + str(task.get("title") or "a task")
-        except Exception:  # noqa: BLE001 - an unreadable task is said as other work
+        except Exception:  # noqa: BLE001, S110 - an unreadable task is said as other work
             pass
         return BUSY
     root = row.get("thread_root")
@@ -192,7 +192,7 @@ def _blocked(c, bot, location, refusal):
     if reason in SIGN_IN_REASONS:
         check = location.get("readiness") or {}
         runtime = check.get("runtime") or ""
-        if str(check.get("sign_in") or "") in SIGN_IN_STATES or reason == "sign_in_rejected":
+        if str(check.get("sign_in") or "") in SIGN_IN_STATES or reason in ("sign_in_rejected", "sign_in_missing"):
             name = LOGIN_NAMES.get(runtime) or str(runtime or "Model").title()
             return f"{name} sign-in needed on {label}", _fix(computer_href)
     words, where = HELD.get(reason, ("Its computer can't start it", COMPUTERS))

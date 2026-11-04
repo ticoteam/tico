@@ -24,7 +24,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            its next_before reads it. The run's prompt names it
     hub thread list [--with ACTOR] [--cursor C] [--limit N]   your threads: needs attention, then unread, then recent;
                                                DMs apart; --with: only the threads shared with that actor
-    hub thread show <thread> [--cursor C]      one thread in tree order: a message's sub-thread sits under it
+    hub thread show <thread> [--cursor C] [--flat]   one thread in tree order: a message's sub-thread sits under it
+                                               (--flat: it and its open sub-threads as one list in time order)
     hub thread home <actor>                    a teammate's Home thread, made on first use (needs Read on them)
     hub thread dm <actor>                      your DM with one person or bot: the open one, or a new one (needs Write)
     hub thread dm-group <actor> <actor> [...] [--body "<text>"] [--title T]   a group DM with these people or bots;
@@ -1149,6 +1150,8 @@ def parser():
     s = thread.add_parser("show", help="one thread in tree order: each message, then the sub-threads under it")
     s.add_argument("thread")
     thread_page_flags(s)
+    s.add_argument("--flat", action="store_true", default=None,
+                   help="the thread and its open sub-threads as one list in time order")
     s.set_defaults(fn="thread show")
     s = thread.add_parser("home", help="a teammate's Home thread, made on first use (needs Read on them)")
     s.add_argument("actor", help="bot:<slug>, human:<id> or group:<id>")
