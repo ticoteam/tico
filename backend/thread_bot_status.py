@@ -33,15 +33,18 @@ CAPPED = "Waiting: too many bot turns this hour"
 BUSY = "Busy with other work"
 STARTING = "Starting"
 
-# The root's open wakes from a person's message: one row per bot, its oldest. A bot's post in the root after the
-# message closes it. The partial index message_deliveries_open_bots (migration 0068) holds exactly these rows.
+# The root's open wakes from a person's message. A bot's post in the root after the message closes it. The partial
+# index message_deliveries_open_bots (migration 0068) holds exactly these rows. Each bot keeps its newest
+# OPEN_PER_BOT, so one bot's old wakes never crowd out another's.
+OPEN_PER_BOT = 50
 _OPEN_SQL = (
-    "SELECT d.recipient, d.state, d.carrier_id, d.message_id, d.created_at FROM message_deliveries d "
-    "JOIN messages m ON m.id=d.message_id WHERE d.root_id=? AND d.recipient LIKE 'bot:%' "
+    "SELECT recipient, state, carrier_id, message_id, created_at FROM (SELECT d.recipient, d.state, d.carrier_id, "
+    "d.message_id, d.created_at, ROW_NUMBER() OVER (PARTITION BY d.recipient ORDER BY d.created_at DESC) AS n "
+    "FROM message_deliveries d JOIN messages m ON m.id=d.message_id WHERE d.root_id=? AND d.recipient LIKE 'bot:%' "
     "AND d.mode IN ('queue','steer') AND d.state IN ('pending','delivered','capped') AND d.cause='human' "
     "AND NOT EXISTS (SELECT 1 FROM messages p WHERE p.conversation_id IN "
-    "(SELECT id FROM conversations WHERE root_id=d.root_id) AND p.sender_id=d.recipient AND p.seq>m.seq) "
-    "ORDER BY d.created_at LIMIT 200")
+    "(SELECT id FROM conversations WHERE root_id=d.root_id) AND p.sender_id=d.recipient AND p.seq>m.seq)) "
+    "WHERE n<=? ORDER BY created_at")
 _RUNS_SQL = (
     "SELECT a.id, a.bot_id, a.runner_id, a.state, COALESCE(a.started_at, a.created_at) AS since FROM attempts a "
     "JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id "
@@ -66,31 +69,34 @@ def _job_live(c, message_ids):
 
 
 def _inputs_live(c, message_ids):
-    """The messages a running turn took in (a steer): {message id: attempt id}."""
+    """The messages a running turn took in (a steer): {(message id, bot actor): attempt id}. Keyed by the bot too: a
+    message to one bot that names another is one bot's input, never the other's run."""
     ids = sorted({i for i in message_ids if i})
     out = {}
     for start in range(0, len(ids), 500):
         part = ids[start:start + 500]
-        for r in c.execute("SELECT i.message_id, a.id FROM attempt_inputs i JOIN attempts a ON a.id=i.attempt_id "
+        for r in c.execute("SELECT i.message_id, a.bot_id, a.id FROM attempt_inputs i JOIN attempts a ON a.id=i.attempt_id "
                            f"WHERE i.message_id IN ({','.join('?' * len(part))}) AND a.state IN ('leased','running')",
                            part):
-            out[r[0]] = r[1]
+            out[(r[0], "bot:" + str(r[1]))] = r[2]
     return out
 
 
 def candidates(c, root_id):
     """{bot actor: {"since", "capped", "run"}} for the bots this root waits on, before they are explained."""
     found = {}
-    rows = [dict(r) for r in c.execute(_OPEN_SQL, (root_id,))]
+    rows = [dict(r) for r in c.execute(_OPEN_SQL, (root_id, OPEN_PER_BOT))]
     keys = [r["carrier_id"] or r["message_id"] for r in rows]
     jobs = _job_live(c, keys)
     inputs = _inputs_live(c, keys + [r["message_id"] for r in rows])
+    outside = {}
     for r in rows:
         key = r["carrier_id"] or r["message_id"]
         job = jobs.get(key)
-        run = inputs.get(key) or inputs.get(r["message_id"]) or (job[1] if job and job[0] in ("leased", "running")
-                                                                  else None)
-        if r["state"] != "capped" and not run and not (job and job[0] in LIVE_JOBS):
+        bot = r["recipient"]
+        run = (inputs.get((key, bot)) or inputs.get((r["message_id"], bot))
+               or (job[1] if job and job[0] in ("leased", "running") else None))
+        if r["state"] != "capped" and not run and not (job and job[0] in LIVE_JOBS) and not _outside(c, bot, outside):
             continue                     # its turn ended without a post here: nothing waits any more
         at = found.setdefault(r["recipient"], {"since": r["created_at"], "capped": False, "run": None})
         at["capped"] = at["capped"] or r["state"] == "capped"
@@ -102,6 +108,15 @@ def candidates(c, root_id):
         at = found.setdefault(actor, {"since": r["since"], "capped": False, "run": None})
         at["run"] = at["run"] or r["id"]
     return found
+
+
+def _outside(c, actor, seen):
+    """Whether the bot is an outside agent (agents.presence): it takes its work with no job here, so its wake stays open
+    until it posts. `seen` caches the answer per bot."""
+    if actor not in seen:
+        from .agents import external_harness
+        seen[actor] = bool(external_harness(c, H.actor_id(actor)))
+    return seen[actor]
 
 
 def _step(c, attempt_id):
@@ -220,10 +235,14 @@ def _location(c, bot):
 
 
 def status(c, v, root):
-    """The bot status rows of this root for viewer `v`, who reads it (the caller checked)."""
-    from . import queue_refusals
+    """The bot status rows of this root for viewer `v`, who reads it (the caller checked). Nothing for one who reads
+    only a migrated Home's old history: what its bots do now is not theirs to see."""
+    from . import queue_refusals, threads
     root_id = _root(c, root)
     if not root_id:
+        return []
+    row = root if isinstance(root, dict) and root.get("id") == root_id else H.conversation(c, root_id)
+    if row and threads.legacy_reader_only(c, threads.viewer(None, v), row):
         return []
     found = candidates(c, root_id)
     if not found:

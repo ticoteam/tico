@@ -1376,8 +1376,12 @@ def _threads(view, rows):
             if threads.legacy_reader_only(view.c, view.reader, found):
                 continue
         elif kind == "bot_status":
-            # The root's status rows as this reader reads them (backend/thread_bot_status.py), read for this one root.
+            # The root's status rows as this reader reads them (backend/thread_bot_status.py), read for this one root;
+            # nothing to one who reads only a migrated Home's old history.
             from . import thread_bot_status
+            root = found if not found.get("root_id") or found["root_id"] == tid else threads.thread_row(view.c, found["root_id"])
+            if root is None or threads.legacy_reader_only(view.c, view.reader, root):
+                continue
             entry["thread_id"] = entry["root_id"]
             entry["bots"] = thread_bot_status.status(view.c, view.reader, found)
         elif kind == "routed":
