@@ -155,6 +155,27 @@ def test_failed_reply_text_never_becomes_list_reason(api):
     assert listed(api, a['id'])['end_reason'] == 'Process failed (no exit status reported)'
 
 
+def test_a_restart_report_on_an_expired_run_is_not_reported_as_a_lost_heartbeat(api):
+    machine, _, a = start(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='expired',finished_at=?,result=? WHERE id=?",
+                  (H.now(), json.dumps({'text': run_diagnostics.RESTART_TEXT}), a['id']))
+        run_diagnostics.finish(c, a['id'], 'interrupted')
+    assert listed(api, a['id'])['end_reason'] == run_diagnostics.RESTART_TEXT
+
+
+def test_a_planned_pause_reason_is_scrubbed_and_never_taken_from_reply_text(api):
+    machine, _, a = start(api)
+    secret = 'sk-test_abcdefghijklmnopqrstuvwxyz0123456789'
+    post(api, f"attempts/{a['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'yielded': 'Paused ' + secret + ' ' + 'x' * 600}}]}, machine['token'])
+    post(api, f"attempts/{a['id']}/complete", {'outcome': 'interrupted', 'yielded': True, 'last_seq': 1,
+         'text': 'private partial reply'}, machine['token'])
+    reason = listed(api, a['id'])['end_reason']
+    assert reason.startswith('Paused ') and len(reason) <= 500
+    assert secret not in reason and 'private partial reply' not in reason
+
+
 def silent_since(api, aid, started):
     """A run started at `started_at`, with no heartbeat and no event since: its computer went quiet at that moment."""
     with api.app.state.store.transaction() as c:

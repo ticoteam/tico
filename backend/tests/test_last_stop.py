@@ -81,6 +81,8 @@ def test_a_computer_hands_back_a_run_it_could_not_start_at_once(api):
     line = status(api)
     assert line["state"] == "idle" and line["last_stop"]["tone"] == "soft"
     assert line["last_stop"]["reason"].startswith(HANDED_BACK)
+    turn = next(t for t in get(api, "bots/ops/turns") if t["id"] == attempt["id"])
+    assert turn["end_reason"] == HANDED_BACK and turn["failure_reason"] == HANDED_BACK
     # Back in seconds, not at the lease's 90: a short wait, then the same job again.
     ready(api, machine, ["ops"])
     assert claim(api, machine) is None

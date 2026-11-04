@@ -109,7 +109,8 @@ If Tico retries the upload, the line adds **trying again**.
 The thread goes *Saved — queued* → *Starting* → *Working* → the reply. When the bot marks
 a task done, the task shows under **Tasks → Done** with the bot's note.
 Every run is under **Settings → History → Runs** (the owner also sees **Changes**, the bot settings history), and
-on the bot’s **History** tab.
+on the bot’s **History** tab. The end reason distinguishes a planned pause for a computer update or shared login,
+a run handed back before starting, a reported runner restart, and a lost heartbeat.
 
 **What does *waiting* mean, and the other states?**
 *Waiting*: the bot is parked on something — a bot, a child task, or an answer from you.
