@@ -145,37 +145,67 @@ def report(c, service, runner_id, now, *, failing=None, ok=(), reportable_set=No
     derive(c, service, now)
 
 
-def failing_accounts(c, service, now):
-    """The accounts some fresh computer still reports failing for `service` (its rows with an error, as `derive` reads
-    them): an account one computer reads again does not recover while another still fails it."""
+def counted(c, service, now):
+    """The failing rows that count for `service`, each with its computer's heartbeat (`beat`) and whether that is `stale`.
+
+    A row counts while its computer is fresh (heartbeat within FRESH_SECONDS). The row's own age never decides it: a
+    computer that reads one account again keeps its other failing accounts failing (plan v5 T). A computer gone quiet
+    still counts for the covered accounts it owns, because its last failure is unknown, not over. Its rows for accounts
+    it no longer owns, and rows of a revoked computer, count nowhere."""
     stamp = H.shift(now, seconds=-FRESH_SECONDS)
-    return {row["account"] for row in c.execute(
-        "SELECT account FROM connector_reports WHERE service=? AND account<>'' AND error<>'' AND reported_at>?",
-        (service, stamp)).fetchall()}
+    beats = {row["runner_id"]: row["reported_at"] for row in c.execute(
+        "SELECT runner_id, reported_at FROM connector_reports WHERE service=? AND account=''", (service,))}
+    revoked = {row["id"] for row in c.execute("SELECT id FROM runners_with_state WHERE revoked_at IS NOT NULL")}
+    owned, out = {}, []
+    for row in c.execute("SELECT runner_id, account, error, failing_json FROM connector_reports WHERE service=? "
+                         "AND account<>'' AND error<>'' ORDER BY account", (service,)).fetchall():
+        beat = beats.get(row["runner_id"])
+        if beat is None:
+            continue
+        stale = beat <= stamp
+        if stale:
+            if row["runner_id"] in revoked:
+                continue
+            if row["runner_id"] not in owned:
+                owned[row["runner_id"]] = {box.lower() for box in workspace.owned_mailboxes(c, row["runner_id"])}
+            if row["account"].lower() not in owned[row["runner_id"]]:
+                continue
+        out.append(dict(row, beat=beat, stale=stale))
+    return out
+
+
+def failing_accounts(c, service, now):
+    """The accounts `counted` says are failing for `service`. An account one computer reads again does not recover while
+    another still fails it, and it is judged by the same rule `derive` uses, so the two never disagree."""
+    return {row["account"] for row in counted(c, service, now)}
 
 
 def derive(c, service, now):
-    """service_health for `service`, from every computer's rows (plan v5 T). It is an error while a fresh computer
-    (heartbeat within FRESH_SECONDS) still has accounts failing, and is stamped with the newest heartbeat. An older
-    computer's failures show nowhere but its own rows. Its readers (views, health) are unchanged."""
+    """service_health for `service`, from every computer's rows (`counted`). It is an error while any counted account is
+    failing: a fresh computer's own message, or, for a computer gone quiet, that it has not reported since its last
+    heartbeat. It is stamped with the newest heartbeat. Its readers (views, health) are unchanged."""
     name = "connector:" + service
     beats = c.execute("SELECT runner_id, reported_at FROM connector_reports WHERE service=? AND account=''",
                       (service,)).fetchall()
     if not beats:
         c.execute("DELETE FROM service_health WHERE service=?", (name,))
         return
-    stamp = H.shift(now, seconds=-FRESH_SECONDS)
-    fresh = {row["runner_id"] for row in beats if row["reported_at"] > stamp}
     newest = max(beats, key=lambda row: row["reported_at"])
-    failing = [dict(row) for row in c.execute(
-        "SELECT runner_id, account, error, failing_json FROM connector_reports WHERE service=? AND account<>'' "
-        "AND error<>'' ORDER BY account", (service,)).fetchall() if row["runner_id"] in fresh]
+    failing = counted(c, service, now)
     if failing:
+        labels = {row["id"]: row["label"] for row in c.execute("SELECT id,label FROM runners_with_state")}
         signin = [row["account"] for row in failing if json.loads(row["failing_json"]).get("reason") == "signin"]
         detail = {"runner_id": failing[0]["runner_id"], "needs_person": bool(signin), "signin": signin}
         if signin:
             detail["action"] = "Reconnect the Google account for " + ", ".join(signin)
-        error = "; ".join(row["error"] for row in failing)[:1000]
+        messages = []
+        for row in failing:
+            if row["stale"]:
+                computer = labels.get(row["runner_id"]) or "A computer"
+                messages.append(f"{computer} has not reported since {row['beat'][:16].replace('T', ' ')} UTC")
+            else:
+                messages.append(row["error"])
+        error = "; ".join(dict.fromkeys(messages))[:1000]
     else:
         detail, error = {"runner_id": newest["runner_id"]}, None
     c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,?,?) "

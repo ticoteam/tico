@@ -11,10 +11,11 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+from backend import google_connect, google_rights
 from backend import google_workspace as workspace
 from backend.store import H
 from backend.tests import test_google_connect as connect
-from backend.tests.test_api import api, get, post, runner  # noqa: F401
+from backend.tests.test_api import api, get, post, ready, runner  # noqa: F401
 from backend.tests.test_mail_api import seed_org
 from backend.tests.test_mail_targets import declare
 
@@ -80,6 +81,34 @@ def stored_error(api, service="connector:mail"):
     with api.app.state.store.read() as c:
         row = c.execute("SELECT last_error FROM service_health WHERE service=?", (service,)).fetchone()
     return row["last_error"] if row else "no row"
+
+
+def age_reports(api, machine, minutes=120, account=None):
+    """This computer's reports, as if they were `minutes` old: its heartbeat, or only the row of one account."""
+    stamp = H.shift(H.now(), minutes=-minutes)
+    with api.app.state.store.transaction() as c:
+        if account is None:
+            c.execute("UPDATE connector_reports SET reported_at=? WHERE runner_id=?", (stamp, machine["runner_id"]))
+        else:
+            c.execute("UPDATE connector_reports SET reported_at=? WHERE runner_id=? AND account=?",
+                      (stamp, machine["runner_id"], account))
+
+
+def begin_ana(api):
+    """Ana starts Connect Google, and Google sends her back with a code."""
+    _, query = connect.start(api, "ana-test")
+    connect.back(api, "ana-test", state=query["state"], code="c-1")
+
+
+def finish_ana(api, machine, monkeypatch, refresh_token):
+    """`machine` takes the connect Ana started, exchanges its code for a grant with `refresh_token`, and answers it."""
+    claimed = post(api, "connectors/mail/google/claim", {"holds_mail": True}, machine["token"])["connect"]
+    assert claimed and claimed["action"] == "connect"
+    monkeypatch.setattr(google_connect, "post_token", connect.FakeGoogle(
+        {"access_token": "ya29.ana", "expires_in": 3599, "refresh_token": refresh_token}))
+    post(api, f"connectors/mail/google/{claimed['id']}/exchange", {}, machine["token"])
+    post(api, f"connectors/mail/google/{claimed['id']}/result", {"status": "connected", "can": ["read"]},
+         machine["token"])
 
 
 def test_a_workspace_mailbox_is_read_by_the_computer_running_its_bot(api, workspace_key):
@@ -188,3 +217,72 @@ def test_a_computer_reports_only_the_accounts_it_may_act_for(api, workspace_key)
     health(api, bot_mac["token"], failing=[(BOX, "error")])
     assert health(api, office["token"], failing=[(BOX, "error")], expected=403)["error"]["kind"] == "workspace_owned"
     assert health(api, office["token"], ok=[BOX], expected=403)["error"]["kind"] == "workspace_owned"
+
+
+def test_a_computer_gone_quiet_still_fails_the_accounts_it_owns(api, workspace_key):
+    seed_org(api)
+    declare(api, BOX)
+    bot_mac = runner(api, operator="ben", label="Bot Mac")
+    office = runner(api, label="Office Mac")
+    place(api, bot_mac)
+    health(api, bot_mac["token"], failing=[(BOX, "error")])
+    age_reports(api, bot_mac)                                    # Bot Mac has not reported for two hours
+    health(api, office["token"])                                 # any computer's report recomputes the health
+    assert "Bot Mac has not reported since" in stored_error(api)
+    place(api, office)                                           # the bot moves and the new computer reads the account
+    health(api, office["token"], ok=[BOX])
+    assert stored_error(api) is None                             # the quiet computer no longer owns it
+
+
+def test_a_fresh_computer_still_fails_an_account_whose_row_is_old(api, workspace_key):
+    seed_org(api)
+    declare(api, BOX)
+    bot_mac = runner(api, operator="ben", label="Bot Mac")
+    place(api, bot_mac)
+    health(api, bot_mac["token"], failing=[(BOX, "error")])
+    age_reports(api, bot_mac, account=BOX)                       # the account was not read lately; the computer reports
+    health(api, bot_mac["token"], ok=[])
+    assert "can't refresh for " + BOX in stored_error(api)
+    with api.app.state.store.read() as c:
+        assert BOX in google_rights.failing_accounts(c, "mail", H.now())
+
+
+def test_a_holder_whose_bot_moved_away_cannot_refresh_its_grant(api, google, monkeypatch):
+    seed_org(api)
+    declare(api, BOX)
+    old = runner(api, operator="ben", label="Old Mac")          # not a publisher
+    new = runner(api, operator="ben", label="New Mac")
+    place(api, old)
+    ready(api, old, [])
+    begin_ana(api)
+    finish_ana(api, old, monkeypatch, "1//grant")
+    google_calls = connect.FakeGoogle()
+    monkeypatch.setattr(google_connect, "post_token", google_calls)
+    assert connect.refresh(api, old["token"], mailbox=BOX).status_code == 200
+    place(api, new)                                             # the bot moves; the grant stays on the old computer
+    r = connect.refresh(api, old["token"], mailbox=BOX)
+    assert r.status_code == 403 and r.json()["error"]["code"] == "not_this_grant"
+    assert len(google_calls.calls) == 1                         # only the refresh before the move reached Google
+
+
+def test_a_reconnect_moves_the_grant_to_the_bot_s_computer_and_the_old_holder_keeps_nothing(api, google, monkeypatch):
+    seed_org(api)
+    declare(api, BOX)
+    old = runner(api, operator="ben", label="Old Mac")
+    new = runner(api, operator="ben", label="New Mac")
+    place(api, old)
+    ready(api, old, [])
+    begin_ana(api)
+    finish_ana(api, old, monkeypatch, "1//first")
+    place(api, new)                                             # the bot moves; Ana reconnects
+    ready(api, new, [])
+    begin_ana(api)
+    assert post(api, "connectors/mail/google/claim", {"holds_mail": True}, old["token"])["connect"] is None
+    assert get(api, "runners/connectors", old["token"])["connectors"] == []
+    finish_ana(api, new, monkeypatch, "1//second")                 # the new computer takes and finishes it
+    monkeypatch.setattr(google_connect, "post_token", connect.FakeGoogle())
+    assert connect.refresh(api, new["token"], mailbox=BOX, refresh_token="1//second").status_code == 200
+    r = connect.refresh(api, old["token"], mailbox=BOX, refresh_token="1//first")
+    assert r.status_code == 403 and r.json()["error"]["code"] == "not_this_grant"
+    assert post(api, "connectors/mail/google/claim", {"holds_mail": True}, old["token"])["connect"] is None
+    assert get(api, "runners/connectors", old["token"])["connectors"] == []
