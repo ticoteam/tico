@@ -165,6 +165,7 @@ def test_the_team_list_pages_on_to_person_501_at_the_same_statements(api, monkey
     people += [{"id": f"p{n:04d}", "name": f"P{n:04d}", "email": f"p{n}@acme.example"} for n in range(W.PEOPLE_MAX + 1)]
     people.append({"id": "gone", "name": "P0499x", "email": "gone@acme.example", "directory_left": True})
     set_roster(api, people)
+    people_statements(api, monkeypatch)             # the first request also sets up the admin's sign-in
     first, one = people_statements(api, monkeypatch)
     assert len(first["people"]) == W.PEOPLE_MAX and first["more"] is True
     assert first["next"] == first["people"][-1]["person_id"] == "p0498"     # Ana sorts first
