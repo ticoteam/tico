@@ -193,7 +193,7 @@ def grantable(source, may=None):
     if source != "settings":
         return READ_SCOPES
     allowed = acts_allowed(may)
-    return READ_SCOPES + [scope for scope, service in zip(ACT_SCOPES, ("gmail", "calendar")) if allowed[service]]
+    return READ_SCOPES + [scope for scope, service in zip(ACT_SCOPES, ("gmail", "calendar"), strict=True) if allowed[service]]
 
 
 def overbroad(answer, source):
