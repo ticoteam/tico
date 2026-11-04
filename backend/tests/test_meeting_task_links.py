@@ -67,7 +67,7 @@ def test_an_assistant_links_as_its_person(api):
 def test_a_bot_is_refused_the_person_only_link_routes(api):
     rid, t = record(api), task(api, private=False)
     _, _, claimed = setup_attempt(api)
-    token = claimed['attempt']['token']
+    token = claimed['token']
     get(api, f'meetings/{rid}/tasks', token, expected=403)
     link(api, rid, [t['id']], token, expected=403)
     remove(api, rid, t['id'], token, expected=403)
