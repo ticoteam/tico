@@ -107,8 +107,10 @@ def populate(store, attempt, seed=7, tasks_n=TASKS, rooms_n=ROOMS, messages_n=ME
         c.executemany("INSERT INTO jobs(id,message_id,bot_id,state,created_at,attempt_id) VALUES(?,?,?,?,?,?)", jobs)
         c.executemany("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,"
                       "started_at,finished_at) VALUES(?1,?2,substr(?3,5),?4,0,'synthetic-'||?1,'done',?5,?5,?5,?5)", attempts)
-        c.executemany("INSERT INTO attempts(id,bot_id,created_at,settled_at,message_id,task_id,trigger_kind,outcome) "
-                      "VALUES(?,?,?,?3,?,?,'message','acted')", turns)
+        # A run's record goes on the attempts row its lease made: one row per run.
+        c.executemany("UPDATE attempts SET message_id=?, task_id=?, settled_at=?, trigger='message', "
+                      "trigger_kind='message', outcome='acted' WHERE id=?",
+                      [(mid, task, created, aid) for aid, _, created, mid, task in turns])
         c.executemany("INSERT OR IGNORE INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", inputs)
         c.executemany("INSERT INTO events(id,created_at,actor,action,target,detail) VALUES"
                       "(lower(hex(randomblob(16))),'2026-01-01T00:00:00.000000Z','keeper','task.next-run.carried',?,?)",
