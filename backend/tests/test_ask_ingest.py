@@ -194,7 +194,7 @@ def test_a_status_line_is_fyi_and_stays_with_the_bot(gate):
 
 
 def test_a_stored_rehearsal_reads_and_acts_as_on(gate):
-    """Rehearsal is gone: a setting still stored as 'rehearsal' (before migration 0063 moved it) reads as On, and the item
+    """Rehearsal is gone: a setting still stored as 'rehearsal' (before migration 0066 moved it) reads as On, and the item
     acts as On does."""
     api, model, token = gate
     with api.app.state.store.transaction() as c:
@@ -208,10 +208,10 @@ def test_a_stored_rehearsal_reads_and_acts_as_on(gate):
     assert (item["mode"], item["outcome"], item["would"]) == ("on", A.SENT_BACK, A.SENT_BACK)
 
 
-def test_migration_0063_moves_a_stored_rehearsal_to_on_and_leaves_the_rest():
-    """backend/migrations/0063_ask_filter_no_rehearsal.py: a person's or the team default's 'rehearsal' becomes 'on'; the
+def test_migration_0066_moves_a_stored_rehearsal_to_on_and_leaves_the_rest():
+    """backend/migrations/0066_ask_filter_no_rehearsal.py: a person's or the team default's 'rehearsal' becomes 'on'; the
     other modes stay. A database without the table (a new one) is left alone."""
-    migration = importlib.import_module("backend.migrations.0063_ask_filter_no_rehearsal")
+    migration = importlib.import_module("backend.migrations.0066_ask_filter_no_rehearsal")
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE ask_ingest_settings(person TEXT PRIMARY KEY, mode TEXT NOT NULL)")
     conn.executemany("INSERT INTO ask_ingest_settings VALUES(?,?)",

@@ -96,7 +96,7 @@ def _row_settings(row):
         criteria = [str(x) for x in json.loads(row["criteria"] or "[]")][:MAX_CRITERIA]
     except (TypeError, ValueError):
         criteria = list(DEFAULTS["criteria"])
-    # A stored mode that is not Off or On reads as the default, On: a retired 'rehearsal' (migration 0063 moves it).
+    # A stored mode that is not Off or On reads as the default, On: a retired 'rehearsal' (migration 0066 moves it).
     return {"mode": row["mode"] if row["mode"] in MODES else DEFAULTS["mode"], "budget": int(row["budget"]),
             "chores_budget": int(row["chores_budget"]), "criteria": criteria}
 
