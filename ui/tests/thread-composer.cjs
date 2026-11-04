@@ -156,6 +156,11 @@ async function pick(page, way) {
   assert.equal(await menuOf(page).isHidden(), true, 'a pick closes the menu');
 }
 const shows = page => page.locator('#bot-thread .p-send').getAttribute('data-shows');
+// The kept way is saved by a request the page sends after its timer clears: wait for the saved value itself. A value
+// that never lands is still a failure, at the assertion that follows.
+async function keptWay(api, way) {
+  for (let i = 0; i < 400 && api.prefs['compose.send_way'] !== way; i++) await new Promise(done => setTimeout(done, 25));
+}
 
 async function goalMode(browser) {
   const api = await open(browser, {width: 1280}), {page} = api;
@@ -210,7 +215,7 @@ async function goalMode(browser) {
   await page.waitForFunction(() => !document.querySelector('#bot-thread .th-pending'));
   assert.deepEqual(api.sent, [{text: 'Plain words', delivery: 'queue'}]);
   assert.equal(api.goalPosts.length, 3);
-  await page.waitForFunction(() => !SEND_WAY_TIMER);
+  await keptWay(api, 'queue');
   assert.equal(api.prefs['compose.send_way'], 'queue', 'goal is never kept');
   // In goal mode a file goes as a message, the kept way: never a delivery of "goal".
   await pick(page, 'goal');
@@ -258,7 +263,7 @@ async function ways(browser) {
   assert.equal(await send.getAttribute('aria-label'), 'Send, queue');
   assert.deepEqual(await say('After this run'), {text: 'After this run', delivery: 'queue'});
   assert.equal(await shows(page), 'queue:', 'the pick sticks after a send');
-  await page.waitForFunction(() => !SEND_WAY_TIMER);
+  await keptWay(api, 'queue');
   assert.equal(api.prefs['compose.send_way'], 'queue');
 
   // A right-click on Send opens the ways and sends nothing; Escape closes them and puts focus on the caret; a press
@@ -280,7 +285,7 @@ async function ways(browser) {
   await page.evaluate(async () => { const read = sendWaySync(); sendWayPick('defer:2d'); await read; });
   api.slowRead = false;
   assert.equal(await shows(page), 'defer:2d', 'a late read loses to the pick');
-  await page.waitForFunction(() => !SEND_WAY_TIMER);
+  await keptWay(api, 'defer:2d');
   assert.equal(api.prefs['compose.send_way'], 'defer:2d');
   // A reload reads the kept way back.
   await page.reload();

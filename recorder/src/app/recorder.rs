@@ -312,6 +312,7 @@ pub struct Recorder {
     pub meeting: Option<String>,
     pub context: Context,
     active: Option<(String, RecordingHandle)>,
+    deleting: Option<std::thread::JoinHandle<()>>,
     /// Recordings made in this session; only these are drafted automatically.
     recorded_here: BTreeSet<String>,
     refresh: Instant,
@@ -439,6 +440,7 @@ impl Recorder {
             meeting: None,
             context: Context::default(),
             active: None,
+            deleting: None,
             recorded_here: BTreeSet::new(),
             refresh: Instant::now(),
             refresh_library: Instant::now(),
@@ -528,8 +530,9 @@ impl Recorder {
         let tx = self.tx.clone();
         let store = self.store.clone();
         let background = BACKGROUND.contains(&kind);
+        let deleting = kind == "delete";
         let kind = kind.to_string();
-        std::thread::spawn(move || {
+        let worker = std::thread::spawn(move || {
             if background {
                 tico_recorder_native::qos::utility();
             }
@@ -542,6 +545,9 @@ impl Recorder {
             // Wakes the tick thread to handle the reply now.
             store.poke();
         });
+        if deleting {
+            self.deleting = Some(worker);
+        }
         true
     }
     pub fn report(&mut self, result: anyhow::Result<()>) {
@@ -695,7 +701,13 @@ impl Recorder {
         if let Some((_, handle)) = self.active.take() {
             let _ = handle.finish();
         }
+        self.join_delete();
         self.save_context();
+    }
+    fn join_delete(&mut self) {
+        if let Some(worker) = self.deleting.take() {
+            let _ = worker.join();
+        }
     }
     #[cfg(test)]
     pub fn mark_sending(&mut self, item: Option<&str>, meeting_step: Option<&str>) {
@@ -981,6 +993,9 @@ impl Recorder {
     /// drafts. Runs on its own timer whether or not the window is visible.
     pub fn tick(&mut self) {
         while let Ok(reply) = self.rx.try_recv() {
+            if reply.kind == "delete" {
+                self.join_delete();
+            }
             if reply.kind != "live" {
                 self.bump();
             }
@@ -1357,7 +1372,9 @@ impl Recorder {
     }
     /// Why an app update waits right now: a recording runs, or a live meeting is connected.
     pub fn update_hold(&self) -> Option<&'static str> {
-        if self.active.is_some() {
+        if self.deleting.is_some() {
+            Some("After deletion finishes")
+        } else if self.active.is_some() {
             Some("After this recording")
         } else if self.screen.view()["active"] == true {
             Some("After screen sharing stops")
@@ -2225,6 +2242,9 @@ impl Recorder {
     }
     /// Removes the recording's audio and transcript from this Mac. The window asks first.
     pub fn delete(&mut self, id: &str) {
+        if self.busy {
+            return;
+        }
         self.screen.stop_meeting(id);
         let context = self.store.context(id).unwrap_or_default();
         let filed = self.store.get(id).is_ok_and(|record| {
@@ -2233,44 +2253,31 @@ impl Recorder {
                 .iter()
                 .any(tico_recorder_native::live::saved_in_tico)
         });
-        // The capture thread may not have written "recording" yet. Join its handle before deleting,
-        // rather than treating that initial database state as proof that all audio writes have stopped.
-        let capture = if self.active.as_ref().is_some_and(|(active, _)| active == id) {
-            self.active.take().map(|(_, handle)| {
-                handle.stop();
-                handle
-            })
-        } else {
-            None
-        };
-        // Shared live and not saved: it leaves Tico too. A meeting saved to Tico stays there.
-        if !context.live_id.is_empty() && !context.live_removed && !filed {
+        let discard_live = !context.live_id.is_empty() && !context.live_removed && !filed;
+        let recording_here = self.active.as_ref().is_some_and(|(active, _)| active == id);
+        if discard_live || recording_here {
+            let capture = if recording_here {
+                self.active.take().map(|(_, handle)| {
+                    handle.stop();
+                    handle
+                })
+            } else {
+                None
+            };
             let config = self.config.clone();
             let store = self.store.clone();
             let (job_id, destination) = (id.to_owned(), context.live_destination);
             self.job_for("delete", Some(id.to_owned()), move || {
                 if let Some(handle) = capture {
-                    // A capture failure does not prevent an explicit discard; finish still joins the worker.
+                    // Join even during startup, when the saved state can still be "stopped".
+                    // Failed capture still needs deleting after its final error writes.
                     let _ = handle.finish();
+                } else {
+                    wait_stopped(&store, &job_id)?;
                 }
-                wait_stopped(&store, &job_id)?;
-                Tico::saved(&config, &destination)?.keep_local(&store, &job_id)?;
-                store.delete(&job_id)?;
-                Ok(json!({"message":"Deleted"}))
-            });
-            if self.meeting.as_deref() == Some(id) {
-                self.meeting = None;
-                self.current = None;
-                self.context = Context::default();
-            }
-            return;
-        }
-        // Recording here: capture stops and its last audio lands before the files go.
-        if let Some(handle) = capture {
-            let store = self.store.clone();
-            let job_id = id.to_owned();
-            self.job_for("delete", Some(id.to_owned()), move || {
-                let _ = handle.finish();
+                if discard_live {
+                    Tico::saved(&config, &destination)?.keep_local(&store, &job_id)?;
+                }
                 store.delete(&job_id)?;
                 Ok(json!({"message":"Deleted"}))
             });
@@ -3255,6 +3262,7 @@ impl Drop for Recorder {
         if let Some((_, handle)) = self.active.take() {
             let _ = handle.finish();
         }
+        self.join_delete();
     }
 }
 
