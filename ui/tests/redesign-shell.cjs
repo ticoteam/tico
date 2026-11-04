@@ -29,7 +29,7 @@ const shownRail = page => page.$$eval('#side .side-scroll a.nav-link, #side .sid
     return c.textContent.replace(/\s+/g, ' ').trim();
   }));
 
-async function open(browser, {route = '#/updates', viewport = PHONE, goalsDelay = 0} = {}) {
+async function open(browser, {route = '#/updates', viewport = PHONE, goalsDelay = 0, messageBot = false} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
   const errors = [], sent = [], goals = {asked: 0};
   page.on('pageerror', e => errors.push(e.message));
@@ -45,6 +45,17 @@ async function open(browser, {route = '#/updates', viewport = PHONE, goalsDelay 
     });
   });
   const config = {};
+  const employees = [...roster.employees], humans = structuredClone(roster.humans);
+  const messaging = {bots: []};
+  if (messageBot) {
+    employees.push(
+      {name: 'counsel', display_name: 'Counsel', reports_to: 'eng-lead', org_parent: 'b:eng-lead', team: 'eng', status: 'active', can_chat: true},
+      {name: 'tico-counsel', display_name: 'Built-in Counsel', org_parent: 'b:eng-lead', status: 'active'},
+    );
+    humans.people.push({id: 'legal-mailbox', name: 'Legal mailbox', email: 'legal@acme.example', inbox_bot: 'counsel', org_parent: ''});
+    messaging.bots.push({bot: 'counsel', name: 'Counsel', sources: [{kind: 'slack', id: 'slack:CLEGAL', name: '#legal'}]},
+      {bot: 'builder', name: 'Builder', sources: [{kind: 'slack', id: 'slack:CBUILD', name: '#build'}]});
+  }
   await page.route('**/*', async r => {
     const req = r.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => r.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -55,9 +66,10 @@ async function open(browser, {route = '#/updates', viewport = PHONE, goalsDelay 
     if (p === '/api/v2/events') return;
     if (method !== 'GET') sent.push([method, p + url.search, req.postData() ? req.postDataJSON() : null]);
     if (p === '/api/v2/config') return json(config);
-    if (p === '/api/employees') return json(roster.employees);
+    if (p === '/api/employees') return json(employees);
     if (p === '/api/me') return json({id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'owner', company_role: 'owner', cloud: true, config});
-    if (p === '/api/humans') return json(roster.humans);
+    if (p === '/api/humans') return json(humans);
+    if (p === '/api/v2/messaging/bots') return json(messaging);
     if (p === '/api/status') return json({active: [], employees: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/goals/tree') goals.asked++;
@@ -86,6 +98,46 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
+    // A custom mailbox bot is an employee: keep its reporting line and nest its sources beneath it on both widths.
+    for (const [tag, viewport] of [['phone', PHONE], ['desktop', DESKTOP]]) {
+      const {page, errors} = await open(browser, {viewport, messageBot: true});
+      if (tag === 'phone') await page.locator('#mobile-more').click();
+      const counsel = page.locator('#tree [data-org="b:counsel"]');
+      await counsel.waitFor({state: 'visible'});
+      const manager = page.locator('#tree [data-org="b:eng-lead"]').locator('xpath=ancestor::li[1]');
+      assert.equal(await manager.locator(':scope > ul > li > .noderow > [data-org="b:counsel"]').count(), 1, tag + ': Counsel reports to its manager');
+      assert.equal(await counsel.getAttribute('data-helper'), null, tag + ': reading mail does not make Counsel a helper');
+      const sources = counsel.locator('xpath=ancestor::li[1]').locator(':scope > .node-sources');
+      await sources.getByText('#legal', {exact: true}).waitFor();
+      assert.deepEqual(await sources.locator('a').allTextContents().then(rows => rows.map(s => s.replace(/^mail/, '').trim())),
+        ['legal@acme.example', '#legal'], tag + ': mailbox and channel nest under Counsel');
+      assert.equal(await sources.locator('a').first().getAttribute('href'), '#/messaging?bot=counsel&source=email%3Alegal%40acme.example');
+      assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, tag + ': sources are not duplicated in a separate section');
+      assert.equal(await page.locator('#tree a[href*="slack%3ACBUILD"]').count(), 0, tag + ': other chart bots keep Slack in Tools');
+      for (const helper of ['botops', 'tico-counsel', 'mail-sorter'])
+        assert.equal(await page.locator(`#tree [data-org="b:${helper}"]`).count(), 0, tag + ': built-in and explicit helpers stay off Team');
+      assert.deepEqual(await page.evaluate(() => ({
+        recruiting: recruitPlaces().some(([id]) => id === 'counsel'),
+        audience: cpSourceChoices().some(([id]) => id === 'counsel'),
+        financeHelper: finHelper('bot:counsel'),
+        budgetParent: budgetTree({bots: {}}).nodes.get('bot:counsel')?.parent.key,
+      })), {recruiting: true, audience: true, financeHelper: false, budgetParent: 'bot:eng-lead'}, tag + ': chart pickers and spending keep Counsel on the team');
+      await page.evaluate(() => { location.hash = '#/strategy/org'; });
+      await page.locator('.rd-org [data-rdo-ref="bot:counsel"]').waitFor();
+      assert.equal(await page.locator('.rd-org [data-rdo-ref="bot:tico-counsel"]').count(), 0);
+      await page.evaluate(() => { location.hash = '#/strategy/goals'; });
+      await page.locator('#goal-tree [data-owner="bot:counsel"]').waitFor();
+      assert.equal(await page.locator('#goal-tree [data-owner="bot:tico-counsel"]').count(), 0);
+      // Removing the manager leaves the bot at the root, still with its mailbox beneath it.
+      await page.evaluate(() => {
+        const bot = botRow('counsel'); bot.reports_to = ''; bot.org_parent = ''; bot.team = ''; renderTree();
+      });
+      assert.equal(await page.locator('#tree > li > .noderow > [data-org="b:counsel"]').count(), 1, tag + ': no manager means top level');
+      assert.equal(await counsel.locator('xpath=ancestor::li[1]').locator(':scope > .node-sources a').count(), 2);
+      assert.deepEqual(errors, [], tag + ': no page errors with a custom message bot');
+      await page.close();
+    }
+
     // Phone first: the rail, old addresses redirected, the Strategy tabs with no Strategy Bot.
     {
       const tag = 'phone';
