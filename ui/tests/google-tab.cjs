@@ -123,6 +123,8 @@ const scenarios = {
     assert.ok(prompt.includes('https://tico-ui.test/api/v2/mail/google/callback'), prompt);
     assert.ok(prompt.includes(LINK), prompt);
     assert.match(prompt, /acme\.example/);
+    assert.ok(prompt.includes('gmail.googleapis.com') && prompt.includes('calendar-json.googleapis.com'), 'both APIs are turned on');
+    assert.match(prompt, /ask me before you agree/);
     await page.locator('[data-google-prompt=accounts] [data-copy-prompt]').click();
     await page.waitForFunction(text => window.__copied.at(-1) === text, prompt);
     await bySelf(page, 'accounts');
@@ -322,6 +324,10 @@ const scenarios = {
       'https://console.cloud.google.com/auth/overview?project=tico-mail-a1b2c3');
     assert.equal(await page.locator('[data-oauth-link=clients]').getAttribute('href'),
       'https://console.cloud.google.com/auth/clients/create?project=tico-mail-a1b2c3');
+    assert.equal(await page.locator('[data-oauth-link=gmail]').getAttribute('href'),
+      'https://console.cloud.google.com/apis/library/gmail.googleapis.com?project=tico-mail-a1b2c3');
+    assert.equal(await page.locator('[data-oauth-link=calendar]').getAttribute('href'),
+      'https://console.cloud.google.com/apis/library/calendar-json.googleapis.com?project=tico-mail-a1b2c3');
     await page.locator('[name=client_id]').fill('acme-client-id');
     await page.locator('[name=client_secret]').fill('acme-secret');
     await page.locator('button[type=submit]').click();

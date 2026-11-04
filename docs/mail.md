@@ -436,10 +436,11 @@ To change the key later, click **Replace key**. **Disconnect** stops Tico readin
 
 **One account at a time** lets each person connect their own mailbox ([Connect your Google account](#connect-your-google-account)), in three steps:
 
-1. **Set up Google sign-in (once)**, for everyone on the server. The agent prompt names the redirect URI and this page; Google has no `gcloud` command for these OAuth web clients, so the agent needs a browser. By hand:
-   1. Enter the Google Cloud project ID, then open **Auth overview** and fill in the app name, support email and audience.
-   2. Open **Create a client**, choose Web application, and add the redirect URI that Tico shows.
-   3. Paste the client ID and client secret, then click **Save**.
+1. **Set up Google sign-in (once)**, for everyone on the server. The agent prompt names the redirect URI and this page, and has the agent ask you before it agrees to Google's API Services User Data Policy; Google has no `gcloud` command for these OAuth web clients, so the agent needs a browser. By hand:
+   1. Enter the Google Cloud project ID (a project under your Google organization, for the Internal audience), then turn on the **Gmail API** and the **Google Calendar API** in it. Without them, Google's calls fail.
+   2. Open **Auth overview** and fill in the app name, support email and audience.
+   3. Open **Create a client**, choose Web application, and add the redirect URI that Tico shows.
+   4. Copy the client ID and client secret from the dialog Google shows after Create (it shows the secret only once), paste them, then click **Save**.
 2. **Connect your account**: **Connect Google** for your own mailbox.
 3. **Your team**: everyone else with a mailbox, as Connected, Not connected, Connecting, Failing or Covered by Workspace. **Copy link** copies the link to Settings > Google to send them yourself; Tico sends nothing. Each person connects their own mailbox.
 

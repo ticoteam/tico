@@ -103,13 +103,15 @@
     return [
       `Set up Google sign-in for Tico. Use a browser signed in to Google Cloud as an admin of ${domain}.`,
       '',
-      '1. Create or pick a Google Cloud project.',
-      '2. Google Auth Platform > Branding (or Overview > Get started): app name "Tico", a support email, audience Internal.',
-      '3. Clients > Create client > Web application. Add this authorized redirect URI, exactly:',
+      `1. Create or pick a Google Cloud project under ${domain}'s Google organization (the Internal audience needs one).`,
+      '2. Turn on the Gmail API (gmail.googleapis.com) and the Google Calendar API (calendar-json.googleapis.com) in it: APIs & Services > Library, or gcloud services enable gmail.googleapis.com calendar-json.googleapis.com --project <project>.',
+      '3. Google Auth Platform > Branding (or Overview > Get started): app name "Tico", a support email, audience Internal. The last step asks to agree to Google\'s API Services User Data Policy: ask me before you agree.',
+      '4. Clients > Create client > Web application. Add this authorized redirect URI, exactly:',
       `   ${g.oauth?.redirect_uri || ''}`,
-      `4. Put the client ID and client secret into Tico at ${googleLink()} (One account at a time > Set it up myself > Client ID, Client secret > Save), in my signed-in browser. If you can't use my browser, print them once for me to paste. Never write the secret to a file or anywhere else.`,
+      '   Google shows the client secret once, in the dialog after Create: copy it then.',
+      `5. Put the client ID and client secret into Tico at ${googleLink()} (One account at a time > Set it up myself > Client ID, Client secret > Save), in my signed-in browser. If you can't use my browser, print them once for me to paste. Never write the secret to a file or anywhere else.`,
       '',
-      'Google has no gcloud command for these OAuth web clients, so this needs the browser.',
+      'Google has no gcloud command for these OAuth web clients, so steps 3 and 4 need the browser.',
       'Then tell me to click Connect Google.',
     ].join('\n');
   }
@@ -192,13 +194,15 @@
       <label class="google-field"><span>Google Cloud project ID</span>
         <input type="text" data-keep="project" data-oauth-project value="${esc(project)}" autocomplete="off" spellcheck="false"></label>
       <ol class="google-steps">
+        <li>Turn on the <a class="ghost" data-oauth-link="gmail" target="_blank" rel="noopener" aria-disabled="true">Gmail API</a>
+          and the <a class="ghost" data-oauth-link="calendar" target="_blank" rel="noopener" aria-disabled="true">Google Calendar API</a>.</li>
         <li>Open <a class="ghost" data-oauth-link="overview" target="_blank" rel="noopener" aria-disabled="true">Auth overview</a>
           and fill in the app name, support email and audience.</li>
         <li>Open <a class="ghost" data-oauth-link="clients" target="_blank" rel="noopener" aria-disabled="true">Create a client</a>,
           choose Web application, and add this redirect URI:
           <div class="machine-command google-copy"><code>${esc(g.oauth?.redirect_uri || '')}</code>
             <button type="button" class="ghost" data-copy="${esc(g.oauth?.redirect_uri || '')}">Copy</button></div></li>
-        <li>Paste its client ID and client secret below.</li>
+        <li>Copy the client ID and client secret Google shows after Create (it shows the secret once) and paste them below.</li>
       </ol>
       <p class="muted"><strong>Internal</strong>: only accounts in your domain. Gmail needs no Google verification. It needs a project in your organization.</p>
       <p class="muted"><strong>External</strong>: any Google account, but Gmail is a restricted scope, so Google's verification applies.</p>
@@ -368,6 +372,8 @@
     const urls = {
       overview: `https://console.cloud.google.com/auth/overview?project=${id}`,
       clients: `https://console.cloud.google.com/auth/clients/create?project=${id}`,
+      gmail: `https://console.cloud.google.com/apis/library/gmail.googleapis.com?project=${id}`,
+      calendar: `https://console.cloud.google.com/apis/library/calendar-json.googleapis.com?project=${id}`,
     };
     host.querySelectorAll('[data-oauth-link]').forEach(link => {
       if (valid) { link.href = urls[link.dataset.oauthLink]; link.removeAttribute('aria-disabled'); }
