@@ -202,6 +202,9 @@ def test_release_qa_uses_one_classification_for_creation_pull_wake_and_health(ap
     pytest.param("Build the production acceptance suite", False, id="production-acceptance-top-level-build"),
     pytest.param("Update the production acceptance checklist", False, id="production-acceptance-top-level-update"),
     pytest.param("Waitlist production acceptance tests", False, id="production-acceptance-top-level-no-run-verb"),
+    pytest.param("Production acceptance checklist update", False, id="production-acceptance-top-level-prefix-update"),
+    pytest.param("Production acceptance tests for the waitlist", False,
+                 id="production-acceptance-top-level-prefix-tests"),
 ])
 def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
     with api.app.state.store.transaction() as c:
@@ -223,6 +226,7 @@ def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
     "Execute production acceptance for the waitlist",
     "Re-run production acceptance on the release candidate",
     "Production acceptance run for the waitlist",
+    "Production acceptance run: waitlist release",
 ])
 def test_a_top_level_production_acceptance_run_reads_as_review_work(api, title):
     with api.app.state.store.transaction() as c:

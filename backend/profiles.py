@@ -57,7 +57,7 @@ ACCEPTANCE_TITLE = re.compile(r"\blive acceptance\b", re.I)
 PRODUCTION_ACCEPTANCE_TITLE = re.compile(r"\bproduction acceptance\b", re.I)
 PRODUCTION_ACCEPTANCE_RUN_TITLE = re.compile(
     r"^(?:(?:run|rerun|re-run|execute|perform|carry out|complete|finish|check|verify|do)\b"
-    r"|production acceptance\b)", re.I)
+    r"|production acceptance run\b)", re.I)
 # The numbers a former Token saver bot keeps.
 TOKEN_SAVER_OPTIONS = {"batch_seconds": TOKEN_SAVER_SECONDS, "batch_scope": "bot", "sweep_seconds": 2 * 3600}
 
