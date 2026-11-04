@@ -5,10 +5,12 @@
 // a time, so a slow rename is not undone by a later change. A row the viewer may not use is left out: a reader who
 // does not manage the thread, and a one-to-one DM (a group DM keeps its name). At desktop and at a phone's 390px,
 // where the panel takes the screen. The panel's size is checked in WebKit too (the desktop app's engine, and Safari's):
-// there a dialog's own `flex:1` child had a 0 basis and drew no panel at all, only the dimmed screen.
+// in WebKit 26 a dialog's own `flex:1` child had a 0 basis and drew no panel at all, only the dimmed screen.
 // TICO_UI_ENGINES (chromium,webkit) picks the engines for that check.
 // TICO_SCREENSHOT_DIR=<dir> also saves thread-settings-<desktop|phone>-<dark|light>.png.
-const {chromium, webkit} = require('playwright');
+const {chromium} = require('playwright');
+// TICO_WEBKIT_PLAYWRIGHT=<path to another playwright package> runs the size check in that one's WebKit (1.55 has WebKit 26).
+const {webkit} = require(process.env.TICO_WEBKIT_PLAYWRIGHT || 'playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -139,13 +141,11 @@ async function fits(browser, engine, phone) {
   });
   const sizes = await measure();
   console.log(`${engine} ${where}: ${JSON.stringify(sizes)}`);
-  // TEMP diagnostic: the same measure with each candidate rule swapped in.
-  for (const [name, css] of [['form auto', '.ths-dialog>form{flex:1 1 auto}'], ['ths auto', '.ths.dash-form{flex:1 1 auto}'],
-    ['both auto', '.ths-dialog>form{flex:1 1 auto}.ths.dash-form{flex:1 1 auto}']]) {
-    await page.evaluate(c => { const s = document.createElement('style'); s.id = 'diag'; s.textContent = c; document.head.append(s); }, css);
-    console.log(`${engine} ${where} with ${name}: ${JSON.stringify(await measure())}`);
-    await page.evaluate(() => document.getElementById('diag').remove());
-  }
+  // WebKit 26 (Safari 26, the macOS app's webview) gives a growing child of the content-sized dialog with a 0 basis no
+  // height at all; WebKit 27 and Chromium size it. So no growing part of the panel may start from 0.
+  const zero = await dlg.evaluate(d => [d.querySelector('form'), d.querySelector('.ths')].map(e => getComputedStyle(e))
+    .filter(cs => Number(cs.flexGrow) > 0 && parseFloat(cs.flexBasis) === 0).map(cs => cs.flex));
+  assert.deepEqual(zero, [], `${engine} ${where}: the panel's form and body grow from their content, not from 0`);
   assert.ok(sizes.dialog > 200 && sizes.form > 200, `${engine} ${where}: the panel has its height: ${JSON.stringify(sizes)}`);
   // On screen: the point in its middle is it (or inside it), not clipped away by a body with no height.
   const shows = loc => loc.evaluate(e => {
