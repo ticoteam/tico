@@ -1,11 +1,10 @@
-"""An upgraded database boots: code that runs before the server's lifespan (create_app's installs, docker/entrypoint.sh's
+"""An upgraded database boots: code that runs before the server's lifespan (create_app's installs, backend.boot's
 environment_identity) must not read a renamed column before the cleanup migrations have run.
 
 The old database is a fresh one with every rename reversed and the rename migrations marked not applied."""
 import os
 import re
 import sqlite3
-import shutil
 import subprocess
 import sys
 from contextlib import closing
@@ -70,17 +69,11 @@ def test_create_app_on_a_pre_rename_database(tmp_path, old_db):
 
 
 def environment_identity(tmp_path, db, **extra):
-    script = (ROOT / "docker/entrypoint.sh").read_text()
-    function = re.search(r"^environment_identity\(\) \{\n.*?^\}\n", script, re.S | re.M).group(0)
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir(parents=True)
-    (bin_dir / "python").write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')      # a symlink would leave the venv
-    (bin_dir / "python").chmod(0o755)
-    env = {**os.environ, "PATH": f"{bin_dir}:/usr/bin:/bin", "TICO_DB": str(db), "PYTHONPATH": str(ROOT), **extra}
+    env = {**os.environ, "TICO_DB": str(db), "PYTHONPATH": str(ROOT), **extra}
     for name in ("TICO_ENVIRONMENT_ID", "TICO_TEAM_NAME", "TICO_COMPANY_NAME"):
         if name not in extra:
             env.pop(name, None)
-    result = subprocess.run([shutil.which("bash"), "-c", 'set -e\n' + function + 'environment_identity\necho "$TICO_ENVIRONMENT_ID"'],
+    result = subprocess.run([sys.executable, "-c", "from backend.boot import environment_identity; print(environment_identity())"],
                             env=env, capture_output=True, text=True, cwd=ROOT, timeout=120)
     assert result.returncode == 0, result.stderr
     assert re.fullmatch(r"[a-z0-9-]+", result.stdout.strip()), result.stdout
@@ -104,3 +97,20 @@ def test_entrypoint_environment_identity_opens_a_renamed_database_as_before(tmp_
     first = environment_identity(tmp_path, db)
     assert environment_identity(tmp_path / "again", db) == first        # the id is kept
     assert sorted(p.name for p in tmp_path.iterdir() if p.name.startswith("hub")) == ["hub.sqlite"]
+
+
+def test_environment_identity_preserves_the_wal_and_skips_an_unchanged_id(tmp_path):
+    from backend.hubdb import leave_wal_for_litestream
+
+    db = tmp_path / "hub.sqlite"
+    with closing(leave_wal_for_litestream(sqlite3.connect(db))) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.commit()
+    first = environment_identity(tmp_path, db)
+    wal = tmp_path / "hub.sqlite-wal"
+    content, modified = wal.read_bytes(), wal.stat().st_mtime_ns
+    assert environment_identity(tmp_path, db) == first
+    assert wal.read_bytes() == content and wal.stat().st_mtime_ns == modified
+    assert environment_identity(tmp_path, db, TICO_ENVIRONMENT_ID="acme-restored") == "acme-restored"
+    assert environment_identity(tmp_path, db) == "acme-restored"

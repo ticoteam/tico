@@ -37,6 +37,8 @@ from .hubdb import now, shift
 
 # Emptied, never pruned: one surviving row is one thing the copy could do.
 EMPTY = (
+    # Maintenance's working state: its listings, its handoffs, and the Idempotency-Key receipts of its runs
+    "maintenance_listings", "maintenance_handoffs", "maintenance_requests",
     # queued work
     "job_recovery", "service_jobs", "doc_source_jobs", "update_queue", "task_reminders", "task_check_back_wakes", "calendar_actions",
     "meeting_deliveries", "worktree_waits", "check_waits", "check_head_provenance", "idempotency",   # bindings too
@@ -116,9 +118,12 @@ AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhoo
                "automation_versions")
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
 HISTORY = {"attempts": "created_at", "jobs": "created_at", "messages": "created_at", "events": "created_at", "deltas": "created_at",
-           "bot_status_history": "started_at", "audit_log": "created_at", "browser_exit_usage": "day"}
+           "bot_status_history": "started_at", "audit_log": "created_at", "browser_exit_usage": "day",
+           # Run steps before their runs: a step row points at its run.
+           "maintenance_run_steps": "started_at", "maintenance_runs": "started_at"}
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
+    "maintenance_steps",   # each step's switch, "How often" and cursor: a copy keeps the team's settings
     "agents", "approvals", "archives", "assistant_actions", "attempt_conversations", "attempt_events", "attempt_load_snapshots",
     "attempt_inputs", "backup_verified_blobs", "batches", "blob_locations", "blob_media", "blobs",
     "bot_agent_instructions", "bot_budget", "bot_config", "bot_settings", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files",

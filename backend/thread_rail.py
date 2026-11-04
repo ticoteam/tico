@@ -118,13 +118,13 @@ def _fits(rows, budget):
     return out, False
 
 
-def _views(c, v, rows):
+def _views(c, v, rows, *, summaries=None):
     """Each root row as a list shows it: its whole subtree's unread and activity, its DM title, the reader's pin."""
     ids = [r["id"] for r in rows]
     if v._members is None:
         v._members = {}
     v._members.update(T._prefetch_members(c, v, ids))
-    summaries = T.subtree_summaries(c, v, ids)
+    summaries = T.subtree_summaries(c, v, ids) if summaries is None else summaries
     followers = T._followers_of(c, v, ids)
     dms = T.dm_with(c, v, rows)
     pins = T.pin_rows(c, v.actor, ids)
@@ -222,7 +222,7 @@ def _title_page(c, v, where, args, after, limit):
         sql = (f"SELECT * FROM (SELECT r.*, {_TITLE_ORDER[0]} AS t_blank, {_TITLE_ORDER[1]} AS t_key FROM conversations r "
                f"WHERE {where}){cond} ORDER BY t_blank, t_key, id LIMIT :fetch")
         found = [T.thread_row(c, dict(r)) for r in c.execute(sql, {**args, **at, "fetch": fetch})]
-        T.prime_members(c, v, [r["id"] for r in found])
+        T.prime_members(c, v, [r["id"] for r in found], roots=[r["id"] for r in found])
         dms, members = [r["id"] for r in found if T.audience_of(r) in ("personal", "participants")], {}
         if dms:
             members = T._member_rows(c, v, dms)
@@ -275,7 +275,10 @@ def rail(c, v, *, cursor=None, limit=RAIL_LIMIT):
             c, v, " AND ".join([*base, PINNED_SQL]), args, pinned_at, PINNED_MAX)
         threads_rows, threads_more = ([], False) if threads_at == DONE else _title_page(
             c, v, " AND ".join([*base, _in(marks), f"NOT {PINNED_SQL}"]), args, threads_at, limit)
-        shown = _views(c, v, pinned_rows + threads_rows)
+        rows = pinned_rows + threads_rows
+        pairs = T._one_dm_pairs(c, v) if first else {}
+        summaries = T.subtree_summaries(c, v, list(dict.fromkeys([r["id"] for r in rows] + list(pairs))))
+        shown = _views(c, v, rows, summaries=summaries)
     finally:
         v._members = None
     pinned_items, pinned_cut = _fits([shown[r["id"]] for r in pinned_rows], T.MAX_PAGE_BYTES // 4)
@@ -284,7 +287,7 @@ def rail(c, v, *, cursor=None, limit=RAIL_LIMIT):
                 _rail_next(threads_rows, thread_items, threads_more or threads_cut)]
     count, ids = catch_up_count(c, v) if first else (None, [])
     return {"pinned": pinned_items, "threads": thread_items, "catch_up": count, "catch_up_ids": ids,
-            "dms": T.one_dm_unread(c, v) if first else {},
+            "dms": T.one_dm_unread(c, v, pairs=pairs, summaries=summaries) if first else {},
             "next_cursor": None if position == [DONE, DONE] else _encode(position)}
 
 
@@ -434,13 +437,12 @@ def _readable_new(c, v, roots):
     mark, subtree, legacy = T._subtree_mark(c, v), T._SUBTREE.format(me="?"), T._legacy_homes(c)
     groups = []
     for part in H.chunks(list(roots)):
-        marks = ",".join("?" * len(part))
+        unread_sql, args = T._subtree_unread_sql(c, v, part)
         groups += [dict(r) for r in c.execute(
-            f"SELECT root, thread, plain, n FROM (SELECT s.root_id AS root, s.id AS thread, SUM({PLAIN}) AS plain, "
-            f"COUNT(*) AS n, ROW_NUMBER() OVER (PARTITION BY s.root_id ORDER BY s.last_unread_seq DESC) AS k "
-            f"FROM {subtree}JOIN messages m ON m.conversation_id=s.id AND m.seq>{mark} WHERE s.root_id IN ({marks}) "
-            f"AND {T._SUBTREE_OPEN} AND s.last_unread_seq>{mark} AND {T.unread_message_sql()} GROUP BY s.id) "
-            "WHERE k<=?", (v.actor, *part, v.actor, v.actor, CATCH_UP_THREADS))]
+            f"WITH unread AS ({unread_sql}) SELECT root, thread, plain, n FROM ("
+            "SELECT root, thread, SUM(plain) AS plain, COUNT(*) AS n, "
+            "ROW_NUMBER() OVER (PARTITION BY root ORDER BY last_unread_seq DESC) AS k "
+            "FROM unread GROUP BY thread) WHERE k<=:cap", {**args, "cap": CATCH_UP_THREADS})]
     found, _ = T.read_threads(c, v, [g["thread"] for g in groups if g["thread"] != g["root"]])
     out, hidden = {}, []
     for g in groups:
@@ -501,7 +503,7 @@ def _walk(c, v, flags, after=None):
                 f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM conversations r WHERE "
                 f"{' AND '.join([*where, phase])}){cond} ORDER BY activity DESC, id DESC LIMIT :batch",
                 {**args, **at, "batch": batch})]
-            T.prime_members(c, v, [r["id"] for r in found])
+            T.prime_members(c, v, [r["id"] for r in found], roots=[r["id"] for r in found])
             readable = {r["id"] for r in found if T.thread_readable(c, v, r)}
             counts = _readable_new(c, v, [i for i in readable if i not in history])
             for r in found:

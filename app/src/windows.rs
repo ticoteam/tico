@@ -479,7 +479,7 @@ fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<bool
         (sign_in, last)
     };
     let start = opening_page(config.start_url(), &home.hub, sign_in, last.as_deref());
-    let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), Some(home.id.clone()));
+    let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), Some(label.clone()));
     #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut builder = WebviewBuilder::new(&label, WebviewUrl::External(start))
         .user_agent(USER_AGENT)
@@ -491,7 +491,7 @@ fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<bool
         // stop loading until shown. Throttling slows its timers, which the hub's boot runs on, so neither is used.
         .background_throttling(BackgroundThrottlingPolicy::Disabled)
         .initialization_script(&bridge_script(app))
-        .on_new_window(new_window_handler(app, home.clone(), true))
+        .on_new_window(new_window_handler(app, home.clone(), Some(label.clone())))
         .on_navigation(navigate)
         .on_page_load(move |webview, payload| {
             if payload.event() == PageLoadEvent::Started {
@@ -557,6 +557,28 @@ pub(crate) fn page_on_screen(app: &App, id: &str) -> bool {
     let shown = state.shown.lock().unwrap();
     let kept = state.kept.lock().unwrap();
     on_screen(&shown, prefetched.as_deref(), &kept, id)
+}
+
+/// The exact webview shown, independent of the selected org: adding/removing an org changes that selection before
+/// its page is shown. A fresh webview of the same org has a different label, so a closing page cannot stand in for it.
+fn shown_page_label(app: &App) -> Option<String> {
+    let state = app.state::<AppState>();
+    let id = {
+        let prefetched = state.prefetch.lock().unwrap();
+        let shown = state.shown.lock().unwrap();
+        let kept = state.kept.lock().unwrap();
+        shown.last().filter(|id| on_screen(&shown, prefetched.org.as_deref(), &kept, id)).cloned()
+    }?;
+    org_page(app, &id).map(|page| page.label().to_string())
+}
+
+/// Auxiliary windows follow their own org even after a switch. An org page must be the exact webview shown.
+fn source_is_shown(source: Option<&str>, shown: Option<&str>) -> bool {
+    source.is_none() || source.is_some_and(|source| Some(source) == shown)
+}
+
+fn may_open_from(app: &App, source: Option<&str>) -> bool {
+    source.is_none() || source_is_shown(source, shown_page_label(app).as_deref())
 }
 
 /// How many org pages stay open: the open one and up to two kept hidden after a switch away (`Kept`), so clicking
@@ -1834,18 +1856,19 @@ pub(crate) fn clear_label(id: &str) -> String {
 /// browser. Each webview keeps its own `signing_in` and its own hub, so a window opened for one org keeps
 /// following that org after the person switches to another. Embedded frames navigate through the same
 /// handler with nothing to tell them apart, so only the top-level page ends a sign-in, by committing on the
-/// hub origin; and only the hub's own logins start one. `page_org` is the org of an org page (the main window's
+/// hub origin; and only the hub's own logins start one. `page_label` identifies an org page (the main window's
 /// children, which also follow visual links); other windows have none.
-fn sign_in_hooks(app: &App, hub: Option<url::Url>, page_org: Option<String>) -> (impl Fn(&url::Url) -> bool + Send + 'static, impl Fn(PageLoadPayload<'_>) + Send + Sync + 'static) {
+fn sign_in_hooks(app: &App, hub: Option<url::Url>, page_label: Option<String>) -> (impl Fn(&url::Url) -> bool + Send + 'static, impl Fn(PageLoadPayload<'_>) + Send + Sync + 'static) {
     let signing_in = Arc::new(AtomicBool::new(false));
-    let visuals = page_org.is_some();
+    let visuals = page_label.is_some();
     let (opener, page_app) = (app.clone(), app.clone());
+    let page_org = page_label.as_deref().and_then(org_of).map(str::to_string);
     let (committed, page_hub, loaded_org) = (signing_in.clone(), hub.clone(), page_org.clone());
     let navigate = move |url: &url::Url| {
         if let Some(org) = &page_org {
             timing::mark(&opener, org, &format!("nav {}", url.host_str().unwrap_or(url.scheme())));
         }
-        stays_in_app(&opener, &signing_in, page_org.as_deref(), hub.as_ref(), url)
+        stays_in_app(&opener, &signing_in, page_label.as_deref(), hub.as_ref(), url)
     };
     // `Started` is the top-level page committing, with its address; frames never send it.
     let page = move |payload: PageLoadPayload<'_>| {
@@ -1873,13 +1896,19 @@ fn sign_in_hooks(app: &App, hub: Option<url::Url>, page_org: Option<String>) -> 
 
 /// Whether a window follows a navigation; one it does not follow opens in the default browser, except from a page
 /// that is not on screen (a prefetch), which opens nothing.
-fn stays_in_app(opener: &App, signing_in: &AtomicBool, page_org: Option<&str>, hub: Option<&url::Url>, url: &url::Url) -> bool {
-    let stays = follow_window(&opener.state::<AppState>(), signing_in, page_org.is_some(), hub, url);
-    let on_screen = page_org.is_none_or(|org| active_org(opener).is_some_and(|open| open.id == org));
-    if !stays && on_screen {
-        let _ = opener.opener().open_url(url.as_str(), None::<&str>);
+fn stays_in_app(opener: &App, signing_in: &AtomicBool, page_label: Option<&str>, hub: Option<&url::Url>, url: &url::Url) -> bool {
+    let stays = follow_window(&opener.state::<AppState>(), signing_in, page_label.is_some(), hub, url);
+    if !stays && may_open_from(opener, page_label) {
+        open_in_browser(opener, url);
     }
     stays
+}
+
+pub(crate) fn open_in_browser(app: &App, url: &url::Url) {
+    if let Err(error) = app.opener().open_url(url.as_str(), None::<&str>) {
+        // Links can carry sign-in codes or signed downloads; the log needs the failure, not those credentials.
+        log::warn!("could not open {} link in the default browser: {}", url.scheme(), error.to_string().replace(url.as_str(), "[URL]"));
+    }
 }
 
 /// The visual allowance of the page on `hub`: the open page's, the prefetched page's while it is hidden, or a kept
@@ -2000,11 +2029,14 @@ enum NewWindow {
     Hub,
     /// A new tab in the default browser, as a browser would open it.
     Browser,
-    /// Nothing the browser could open (`about:blank`, `javascript:`, `data:`, `blob:`, `file:`).
+    /// A hidden source page, or nothing the browser could open (`about:blank`, `javascript:`, `data:`, `blob:`, `file:`).
     Ignore,
 }
 
-fn new_window_target(hub: Option<&url::Url>, url: &url::Url) -> NewWindow {
+fn new_window_target(hub: Option<&url::Url>, url: &url::Url, source_shown: bool) -> NewWindow {
+    if !source_shown {
+        return NewWindow::Ignore;
+    }
     match url.scheme() {
         "http" | "https" if hub.is_some_and(|hub| url.origin() == hub.origin()) && url.path().starts_with("/api/") => NewWindow::Hub,
         "http" | "https" | "mailto" | "tel" | "sms" => NewWindow::Browser,
@@ -2013,20 +2045,17 @@ fn new_window_target(hub: Option<&url::Url>, url: &url::Url) -> NewWindow {
 }
 
 /// Where a page's new window goes: a hub file opens in a window of its own, on the page's org; other links open in
-/// the default browser. An org page (`org_page`) that is not on screen (a prefetch) opens nothing.
-fn new_window_handler(app: &App, home: Home, org_page: bool) -> impl Fn(url::Url, NewWindowFeatures) -> NewWindowResponse<tauri::Wry> + Send + 'static {
+/// the default browser. An org page (`page_label`) that is not on screen (prefetched or kept) opens nothing.
+fn new_window_handler(app: &App, home: Home, page_label: Option<String>) -> impl Fn(url::Url, NewWindowFeatures) -> NewWindowResponse<tauri::Wry> + Send + 'static {
     let opener = app.clone();
     move |url, _| {
-        if org_page && !active_org(&opener).is_some_and(|open| open.id == home.id) {
-            return NewWindowResponse::Deny;
-        }
-        match new_window_target(Some(&home.hub), &url) {
+        match new_window_target(Some(&home.hub), &url, may_open_from(&opener, page_label.as_deref())) {
             NewWindow::Hub => {
                 // Built off the web view's own callback, which may not block on a new window.
                 let (app, home) = (opener.clone(), home.clone());
                 tauri::async_runtime::spawn(async move { open_hub_window(&app, url, &home) });
             }
-            NewWindow::Browser => { let _ = opener.opener().open_url(url.as_str(), None::<&str>); }
+            NewWindow::Browser => open_in_browser(&opener, &url),
             NewWindow::Ignore => {}
         }
         NewWindowResponse::Deny
@@ -2048,7 +2077,7 @@ fn open_hub_window(app: &App, url: url::Url, home: &Home) {
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
         .user_agent(USER_AGENT)
         .disable_drag_drop_handler()
-        .on_new_window(new_window_handler(app, home.clone(), false))
+        .on_new_window(new_window_handler(app, home.clone(), None))
         .on_navigation(navigate)
         .on_page_load(move |_, payload| page(payload));
     #[cfg(target_os = "macos")]
@@ -2125,6 +2154,43 @@ mod new_window_tests {
     use super::*;
 
     #[test]
+    fn cloud_shell_follows_the_shown_webview_through_switches_and_recreation() {
+        let hub = url::Url::parse("https://acme.example/").unwrap();
+        let cloud_shell = url::Url::parse("https://shell.cloud.google.com/?show=terminal").unwrap();
+        let (a, b) = (new_page_label("o_aaaaaaaa"), new_page_label("o_bbbbbbbb"));
+        let target = |source: &str, shown: Option<&str>| {
+            new_window_target(Some(&hub), &cloud_shell, source_is_shown(Some(source), shown))
+        };
+        // A is shown, B is prefetched. Selection can already name B (an org was just added), but A still owns clicks.
+        assert_eq!(target(&a, Some(&a)), NewWindow::Browser);
+        assert_eq!(target(&b, Some(&a)), NewWindow::Ignore);
+        // B is shown, A is kept hidden; switching back restores the same A webview's ability to open links.
+        assert_eq!(target(&b, Some(&b)), NewWindow::Browser);
+        assert_eq!(target(&a, Some(&b)), NewWindow::Ignore);
+        assert_eq!(target(&a, Some(&a)), NewWindow::Browser);
+        assert_eq!(target(&b, Some(&a)), NewWindow::Ignore);
+        // A recreated page does not authorize callbacks from the old instance of the same org.
+        let replacement = new_page_label("o_aaaaaaaa");
+        assert_eq!(target(&a, Some(&replacement)), NewWindow::Ignore);
+        assert_eq!(target(&replacement, Some(&replacement)), NewWindow::Browser);
+        assert_eq!(target(&replacement, None), NewWindow::Ignore);
+    }
+
+    #[test]
+    fn hidden_pages_open_neither_browser_links_nor_authenticated_hub_files() {
+        let hub = url::Url::parse("https://acme.example/").unwrap();
+        for address in ["https://shell.cloud.google.com/?show=terminal", "https://acme.example/api/v2/files/f1"] {
+            let url = url::Url::parse(address).unwrap();
+            assert_eq!(new_window_target(Some(&hub), &url, false), NewWindow::Ignore);
+        }
+        // An independent hub/meeting window keeps following its own org after the main window switches or closes.
+        let file = hub.join("api/v2/files/f1").unwrap();
+        for shown in [None, Some("org-o_bbbbbbbb-1")] {
+            assert_eq!(new_window_target(Some(&hub), &file, source_is_shown(None, shown)), NewWindow::Hub);
+        }
+    }
+
+    #[test]
     fn new_windows_open_in_the_browser_except_hub_files() {
         for hub in ["https://team.example.com/", "https://team.example.com/tico/"] {
             let hub = url::Url::parse(hub).unwrap();
@@ -2148,10 +2214,10 @@ mod new_window_tests {
                 ("blob:https://team.example.com/0b1c", NewWindow::Ignore),
                 ("file:///etc/passwd", NewWindow::Ignore),
             ] {
-                assert_eq!(new_window_target(Some(&hub), &url::Url::parse(address).unwrap()), expected, "{hub} {address}");
+                assert_eq!(new_window_target(Some(&hub), &url::Url::parse(address).unwrap(), true), expected, "{hub} {address}");
             }
         }
-        assert_eq!(new_window_target(None, &url::Url::parse("https://team.example.com/api/x").unwrap()), NewWindow::Browser);
+        assert_eq!(new_window_target(None, &url::Url::parse("https://team.example.com/api/x").unwrap(), true), NewWindow::Browser);
     }
 
     const HUB: &str = "https://team.example.com/";
@@ -2302,7 +2368,7 @@ pub(crate) fn open_meeting_window(app: &App, home: &Home, id: &str) {
         .resizable(true)
         .user_agent(USER_AGENT)
         .disable_drag_drop_handler()
-        .on_new_window(new_window_handler(app, home.clone(), false))
+        .on_new_window(new_window_handler(app, home.clone(), None))
         .on_navigation(navigate)
         .on_page_load(move |_, payload| page(payload));
     #[cfg(target_os = "macos")]
@@ -2331,7 +2397,7 @@ pub(crate) fn open_approval_window(app: &App, home: &Home, label: &str, url: url
         .focused(true)
         .user_agent(USER_AGENT)
         .disable_drag_drop_handler()
-        .on_new_window(new_window_handler(app, home.clone(), false))
+        .on_new_window(new_window_handler(app, home.clone(), None))
         .on_navigation(move |url| !crate::recorder::deliver(&opener, &own, url) && navigate(url))
         .on_page_load(move |_, payload| page(payload));
     #[cfg(target_os = "macos")]

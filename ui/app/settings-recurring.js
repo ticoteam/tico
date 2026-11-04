@@ -11,7 +11,7 @@
 let SYSTEM_ROUTINES = null, SYSTEM_ROUTINES_AT = 0, SYSTEM_ROUTINES_Q = '', SYSTEM_ROUTINES_HELD = false;
 const SYSTEM_ROUTINE_BUSY = new Set();
 // Jobs a happening starts, not a clock: they keep no run log, so the row says so in place of a last run.
-const SYSTEM_ROUTINE_ON_EVENT = new Set(['topic_fresh', 'stall_triage']);
+const SYSTEM_ROUTINE_ON_EVENT = new Set(['topic_fresh']);
 function systemRoutineLastHTML(j) {
   if (!j.records) return SYSTEM_ROUTINE_ON_EVENT.has(j.key) ? '<span class="muted">Runs when it happens</span>' : '<span class="muted">Each connection shows its own</span>';
   if (!j.last) return '<span class="muted">Not run yet</span>';
@@ -33,10 +33,10 @@ const systemRoutineHours = text => String(text || '').replace(/(\d\d:\d\d) to (\
 function systemRoutineScheduleHTML(j) {
   const busy = SYSTEM_ROUTINE_BUSY.has(j.key);
   if (!(j.presets || []).length || !j.can_change) return `<span data-sysr-schedule>${esc(systemRoutineHours(j.schedule))}</span>`;
-  const options = j.presets.map(p => `<option value="${esc(p.key)}"${p.key === j.preset ? ' selected' : ''}>${esc(p.key === 'daily' ? (['learnings', 'memory_tidy', 'auto_dream'].includes(j.key) ? 'Nightly at' : 'Daily at') : systemRoutineHours(p.label))}</option>`).join('');
+  const options = j.presets.map(p => `<option value="${esc(p.key)}"${p.key === j.preset ? ' selected' : ''}>${esc(p.key === 'daily' ? (['learnings', 'memory_tidy'].includes(j.key) ? 'Nightly at' : 'Daily at') : systemRoutineHours(p.label))}</option>`).join('');
   // One choice is no choice: its words alone (Nightly at with the time box, or Weekly).
   const one = j.presets[0], pick = j.presets.length === 1
-    ? `<span>${esc(one.key !== 'daily' ? systemRoutineHours(one.label) : ['learnings', 'memory_tidy', 'auto_dream'].includes(j.key) ? 'Nightly at' : 'Daily at')}</span>`
+    ? `<span>${esc(one.key !== 'daily' ? systemRoutineHours(one.label) : ['learnings', 'memory_tidy'].includes(j.key) ? 'Nightly at' : 'Daily at')}</span>`
     : `<select class="settings-inline-select" data-sysr-preset aria-label="${esc(j.name)} schedule"${busy ? ' disabled' : ''}>${options}</select>`;
   return `${pick}
     ${j.preset === 'daily' ? `<input type="time" step="60" data-sysr-at value="${esc(j.at || '')}" aria-label="${esc(j.name)} time (Pacific)" title="Pacific time"${busy ? ' disabled' : ''}>` : ''}`;
