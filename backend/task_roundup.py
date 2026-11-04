@@ -1,13 +1,16 @@
 """The task roundup (Settings > Routines, "Task roundup"): each run gives each active bot at most one wake, with one grouped
 list of the tasks it needs to look at. Plain code: no model is called and no BotOps diagnostic is filed. It is the one
 place Tico tells a bot about its tasks on a schedule: the per-task wakes of the stall watcher, the check-backs, the late
-notices, the backlog warnings, the exceptions wake, the restate asks and the still-needed batch are all lines here now.
+notices, the backlog warnings, the exceptions wake, the restate asks, the still-needed batch and the assigned-start recovery
+are all lines here now.
 Its schedule is a setting; the default is three times a day, at 6am, noon and 6pm company time.
 
 A bot's list has these lines, in this order, MAX_LINES in all (the rest are counted), one line per task:
 - a follow-up time that has come, set by a person or a bot (below);
 - a question the bot asked a person that had no answer in two business days: it went back to the bot (backend/still_needed.py),
   listed once;
+- an assignment the bot has not started an hour after it was given (backend/assigned_start.py): "Assigned, not started", listed
+  once, its ledger row written when it is sent;
 - a task the bot owns that waits on a person with no plain ask (H.lint_person_ask): asked to restate it, relisted after
   RELIST_DAYS until it is restated;
 - a Dev ticket late at its step, on its manager's list (backend/step_age.py): "Late in <step>: N days", relisted after
@@ -77,7 +80,7 @@ ASK_CHARS = 120                        # a question's text on its line, trimmed 
 ASK_DAYS = 30                          # an unanswered question is looked for this far back
 CREATED_WITHIN = 1                     # seconds: a status or step row this close to its task's creation is the creation
 # The lines' order on a list (a group sorts its own lines; a missed update newest first).
-DUE, ASKS, RESTATE, LATE, EXCEPTIONS, BACKLOG, MISSED, QUIET = range(8)
+DUE, ASKS, ASSIGNED, RESTATE, LATE, EXCEPTIONS, BACKLOG, MISSED, QUIET = range(9)
 # The changes to a task itself. Anything else a history row records (check-backs, rank, checkpoints) is bookkeeping.
 TASK_KINDS = ("status", "owner", "step", "waiting_on", "due", "title", "body", "acceptance")
 _TASK_KINDS_SQL = ",".join(f"'{kind}'" for kind in TASK_KINDS)
@@ -280,7 +283,7 @@ def _list(c, slug, at, shared):
             reason = (f"Waiting on nothing for {span}" if row["status"] == "waiting"
                       else f"Quiet for {span}, nothing waiting on anyone")
             groups[QUIET].append((quiet_since, _item(row["id"], _line(row, reason, private), LISTED_KEY + row["id"])))
-    sweep_lines = (_late(c, slug, actor, at, shared) + _exceptions(c, slug, actor, at, shared)
+    sweep_lines = (_assigned(c, slug, actor, at) + _late(c, slug, actor, at, shared) + _exceptions(c, slug, actor, at, shared)
                    + _backlogs(c, slug, actor, at, shared)) if sweeping else []
     for group, sort, item in _asks_back(c, slug, actor, at) + sweep_lines:
         groups[group].append((sort, item))
@@ -351,6 +354,21 @@ def _restate_reason(row, person, private):
     return (f"Waiting on {who} with no plain ask. Restate it in one or two plain sentences, at most {H.LINT_ASK_WORDS} words: "
             f"what you need from {who} and what happens after. Set it with: hub task update {row['id']} --status waiting "
             f"--on {who} --note \"<your ask>\".")
+
+
+def _assigned(c, slug, actor, at):
+    """The bot's open assignments no run has started and no list has named (backend/assigned_start.py), one line each, listed
+    once. The line writes the assignment's ledger row when it is sent, so the health check's "not started" still reads it."""
+    from . import assigned_start, task_snooze as TS
+    out = []
+    for row, key, since, _ in assigned_start.unstarted(c, at, owner=actor):
+        if not H.task_private_readable(c, actor, row) or TS.snoozed(row, at) or _running(c, slug, row):
+            continue
+        private = H.task_private(c, row)
+        event = (assigned_start.EVENT, row["id"], {"assignment": key, "assigned_at": since, "rewoken_at": at, "refusal": None})
+        out.append((ASSIGNED, since, _item(row["id"], _line(row, "Assigned, not started", private), LISTED_KEY + row["id"],
+                                           event=event)))
+    return out
 
 
 def _late(c, slug, actor, at, shared):
