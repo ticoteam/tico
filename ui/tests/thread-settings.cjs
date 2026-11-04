@@ -4,9 +4,13 @@
 // as Off), pin for everyone and how long messages are kept, then Summarize, Mark all read and Archive. Saves go one at
 // a time, so a slow rename is not undone by a later change. A row the viewer may not use is left out: a reader who
 // does not manage the thread, and a one-to-one DM (a group DM keeps its name). At desktop and at a phone's 390px,
-// where the panel takes the screen.
+// where the panel takes the screen. The panel's size is checked in WebKit too (the desktop app's engine, and Safari's):
+// in WebKit 26 a dialog's own `flex:1` child had a 0 basis and drew no panel at all, only the dimmed screen.
+// TICO_UI_ENGINES (chromium,webkit) picks the engines for that check.
 // TICO_SCREENSHOT_DIR=<dir> also saves thread-settings-<desktop|phone>-<dark|light>.png.
 const {chromium} = require('playwright');
+// TICO_WEBKIT_PLAYWRIGHT=<path to another playwright package> runs the size check in that one's WebKit (1.55 has WebKit 26).
+const {webkit} = require(process.env.TICO_WEBKIT_PLAYWRIGHT || 'playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -14,6 +18,7 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 const shots = process.env.TICO_SCREENSHOT_DIR;
+const engines = (process.env.TICO_UI_ENGINES || 'chromium,webkit').split(',');
 const at = min => new Date(Date.now() - min * 60000).toISOString();
 const me = (extra = {}) => ({member: true, following: true, notify: 'live', last_read_seq: 4, unread: 0, activity: false, can_post: true, can_manage: false, pinned: false, ...extra});
 const thread = (id, title, extra = {}) => ({id, title, audience: 'team', audience_group_id: 'ops', last_seq: 4, last_unread_seq: 0, last_message_at: at(5),
@@ -122,6 +127,47 @@ const until = async (page, check, what) => {
   for (let i = 0; i < 60; i++) { if (check()) return; await page.waitForTimeout(50); }
   assert.fail('timed out: ' + what);
 };
+
+// The panel has its size in each engine: taller than its head and foot, Notifications and Done on screen, and with a
+// long body the foot stays on screen while the body scrolls (on a phone the panel still fills the screen).
+async function fits(browser, engine, phone) {
+  const {page, seen} = await open(browser, {phone});
+  const dlg = await openPanel(page, 't-plan', phone);
+  const where = phone ? 'phone' : 'desktop';
+  const measure = () => dlg.evaluate(d => {
+    const h = e => Math.round(e.getBoundingClientRect().height), body = d.querySelector('.ths');
+    return {dialog: h(d), form: h(d.querySelector('form')), body: h(body), scroll: body.scrollHeight, foot: Math.round(d.querySelector('footer').getBoundingClientRect().bottom),
+      viewport: innerHeight};
+  });
+  const sizes = await measure();
+  console.log(`${engine} ${where}: ${JSON.stringify(sizes)}`);
+  // WebKit 26 (Safari 26, the macOS app's webview) gives a growing child of the content-sized dialog with a 0 basis no
+  // height at all; WebKit 27 and Chromium size it. So no growing part of the panel may start from 0.
+  const zero = await dlg.evaluate(d => [d.querySelector('form'), d.querySelector('.ths')].map(e => getComputedStyle(e))
+    .filter(cs => Number(cs.flexGrow) > 0 && parseFloat(cs.flexBasis) === 0).map(cs => cs.flex));
+  assert.deepEqual(zero, [], `${engine} ${where}: the panel's form and body grow from their content, not from 0`);
+  assert.ok(sizes.dialog > 200 && sizes.form > 200, `${engine} ${where}: the panel has its height: ${JSON.stringify(sizes)}`);
+  // On screen: the point in its middle is it (or inside it), not clipped away by a body with no height.
+  const shows = loc => loc.evaluate(e => {
+    e.scrollIntoView({block: 'nearest'});
+    const b = e.getBoundingClientRect(), x = b.left + b.width / 2, y = b.top + b.height / 2;
+    return b.height > 0 && b.top >= 0 && b.bottom <= innerHeight && e.contains(document.elementFromPoint(x, y));
+  });
+  const notify = dlg.locator('.ths-row', {has: page.locator('.ths-lbl', {hasText: 'Notifications'})});
+  assert.ok(await shows(notify), `${engine} ${where}: Notifications on screen`);
+  assert.ok(await shows(dlg.locator('footer [data-close]')), `${engine} ${where}: Done on screen`);
+  if (phone) assert.ok(Math.abs(sizes.dialog - 844) <= 1 && Math.abs(sizes.form - 844) <= 1, `${engine} phone: full screen: ${JSON.stringify(sizes)}`);
+  // A long body scrolls inside the panel; the panel stays within the screen and Done stays on it.
+  await dlg.evaluate(d => { const tall = document.createElement('div'); tall.style.cssText = 'flex:none;height:2000px'; tall.dataset.tall = ''; d.querySelector('.ths').append(tall); });
+  const long = await measure();
+  console.log(`${engine} ${where} long: ${JSON.stringify(long)}`);
+  assert.ok(long.scroll > long.body && long.dialog <= long.viewport && long.foot <= long.viewport, `${engine} ${where}: a long body scrolls: ${JSON.stringify(long)}`);
+  if (phone) assert.ok(Math.abs(long.dialog - 844) <= 1, `${engine} phone: still full screen: ${JSON.stringify(long)}`);
+  assert.ok(await shows(dlg.locator('footer [data-close]')), `${engine} ${where}: Done on screen with a long body`);
+  await dlg.evaluate(d => d.querySelector('[data-tall]').remove());
+  assert.deepEqual(seen.errors, []);
+  await page.close();
+}
 
 let browser = null;
 (async () => {
@@ -322,5 +368,10 @@ let browser = null;
     assert.deepEqual(seen.errors, []);
     await page.close();
   }
-  console.log('PASS: Thread settings: the ⋯ opens one panel; name, who can read, members, notifications (Off mutes, muted reads as Off), a slow rename kept, pin for everyone and keep messages save as they change; Summarize, Mark all read and Archive close it; A team waits for a chosen team; a reader and a one-to-one DM get only their rows, a group DM its name; full screen on a phone');
+
+  for (const engine of engines) {
+    const b = engine === 'chromium' ? browser : await ({webkit}[engine]).launch();
+    try { await fits(b, engine, false); await fits(b, engine, true); } finally { if (b !== browser) await b.close(); }
+  }
+  console.log('PASS: Thread settings: the ⋯ opens one panel; name, who can read, members, notifications (Off mutes, muted reads as Off), a slow rename kept, pin for everyone and keep messages save as they change; Summarize, Mark all read and Archive close it; A team waits for a chosen team; a reader and a one-to-one DM get only their rows, a group DM its name; full screen on a phone; the panel has its height and a long body scrolls in ' + engines.join(' and ') + '');
 })().catch(e => { console.error(e); process.exitCode = 1; }).finally(() => browser?.close());
