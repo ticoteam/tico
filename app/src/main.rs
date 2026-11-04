@@ -127,6 +127,9 @@ fn main() {
             let state: State<AppState> = app.state();
             *state.orgs.lock().unwrap() = found;
             select_connection(&state, connection);
+            // Data stores a run that quit left behind: a sign-in window open at Cmd-Q, or orgs it was adding.
+            #[cfg(target_os = "macos")]
+            signin::clean_up_last_run(app.handle());
             build_window(app.handle())?;
             build_menu(app.handle())?;
             #[cfg(not(target_os = "macos"))]

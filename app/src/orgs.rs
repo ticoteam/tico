@@ -228,18 +228,25 @@ impl Orgs {
     /// Adds an org for `hub`, on a store of its own, and makes it the open one. Nothing changes if the file cannot
     /// be written, so the caller can show the error. Only a list that is kept can add.
     pub fn add(&mut self, hub: &Url) -> Result<Org, String> {
-        let mut added = self.add_all(&[(hub.clone(), Uuid::new_v4())])?;
-        Ok(added.remove(0))
+        match self.add_all(&[(hub.clone(), Uuid::new_v4())])?.pop() {
+            Some(org) => Ok(org),
+            None => self.find_hub(hub).cloned().ok_or_else(|| SAVE_FAILED.to_string()),
+        }
     }
 
     /// Adds an org for each `(server, store)`, on the store given (Tico sign-in puts the session in it first), in one
-    /// write, and makes the first of them the open one. Nothing changes if the file cannot be written.
+    /// write, and makes the first one added the open one. A server whose origin is already an org (or earlier in
+    /// `hubs`) is left out. Returns the orgs added; nothing changes if none is, or if the file cannot be written.
     pub fn add_all(&mut self, hubs: &[(Url, Uuid)]) -> Result<Vec<Org>, String> {
         if !self.is_multi() {
             return Err(SAVE_FAILED.to_string());
         }
         let (mut next, mut issued, mut added) = (self.doc.clone(), self.issued.clone(), Vec::new());
+        let mut origins: HashSet<String> = self.doc.orgs.iter().filter_map(Org::hub).map(|hub| hub.origin().ascii_serialization()).collect();
         for (hub, store) in hubs {
+            if !origins.insert(hub.origin().ascii_serialization()) {
+                continue;
+            }
             let org = new_org(hub, Some(*store), &issued);
             issued.insert(org.id.clone());
             next.orgs.push(org.clone());
@@ -456,7 +463,16 @@ mod tests {
         assert_eq!(saved.orgs.len(), 3);
         assert_eq!(saved.active.as_deref(), Some(added[0].id.as_str()));
         assert!(orgs.add_all(&[]).unwrap().is_empty());
-        assert_eq!(orgs.active().map(|org| org.id.clone()), Some(added[0].id.clone()), "nothing added, nothing changes");
+        // A server that became an org meanwhile (added by address) is left out, and so is a repeat within the picks.
+        let (c, d, e) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let late = orgs.add_all(&[(hub("https://acme.example.com/other/"), c), (hub("https://new.example.com"), d),
+                                  (hub("https://NEW.example.com/x/"), e)]).unwrap();
+        assert_eq!(late.len(), 1);
+        assert_eq!((late[0].store_id(), late[0].hub().unwrap().host_str()), (Some(d), Some("new.example.com")));
+        assert_eq!(orgs.orgs().len(), 4);
+        assert!(orgs.add_all(&[(hub("https://tidy.example.com"), c)]).unwrap().is_empty(), "nothing new, nothing written");
+        assert_eq!(orgs.active().map(|org| org.id.clone()), Some(late[0].id.clone()));
+        assert_eq!(orgs.add(&hub("https://kept.example.com/")).unwrap().id, kept.id, "adding a known server gives that org");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

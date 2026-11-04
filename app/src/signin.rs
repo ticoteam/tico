@@ -8,11 +8,11 @@
 //! store before its page loads. The org's server then redirects to the issuer, which finds that session and sends the
 //! page back signed in. The sign-in window and its store go once it is done or closed.
 
-use std::collections::HashSet;
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(target_os = "macos")]
-use std::sync::Mutex;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(target_os = "macos")]
 use std::time::Duration;
 
@@ -24,21 +24,38 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::config;
+use crate::orgs::Org;
 use crate::windows::{show_window, switch_to};
 use crate::{orgs, App, AppState, MIN_HEIGHT, MIN_WIDTH, USER_AGENT};
 
-/// The sign-in window's label. No capability names it, so its pages get no IPC.
-pub(crate) const SIGNIN: &str = "tico-signin";
+/// The start of every sign-in window's label: `tico-signin-` and its store id. No capability names one, so its pages
+/// get no IPC. Each sign-in has a label of its own, so a sign-in that is finishing never touches a later one's window.
+pub(crate) const SIGNIN: &str = "tico-signin-";
 const DEFAULT_PORTAL: &str = "https://app.tico.dev";
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+/// Store ids that may be on disk with nobody to remove them: a sign-in window's, and new orgs' stores until the org is
+/// saved. A run that quits (Cmd-Q) before they go leaves them here, and the next launch removes them.
+const PENDING_FILE: &str = "signin-stores.txt";
 /// How long the cookie copy may take before the orgs are added anyway (their pages then ask to sign in again).
 #[cfg(target_os = "macos")]
 const COPY_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Set once a sign-in's picks are being handled, so a second submit is ignored. Cleared when a sign-in window opens.
-static HANDLED: AtomicBool = AtomicBool::new(false);
-/// The open sign-in window's data store, removed when the window goes.
-#[cfg(target_os = "macos")]
-static STORE: Mutex<Option<Uuid>> = Mutex::new(None);
+/// One sign-in window: its label, its own data store (macOS), whether its picks are being handled (so a second submit
+/// is ignored), and whether its window has gone (so its picks are dropped).
+struct Session {
+    label: String,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    store: Uuid,
+    handled: AtomicBool,
+    cancelled: AtomicBool,
+}
+
+/// The sign-in windows that are open, by label.
+static SESSIONS: Mutex<Option<HashMap<String, Arc<Session>>>> = Mutex::new(None);
+
+fn sessions<T>(f: impl FnOnce(&mut HashMap<String, Arc<Session>>) -> T) -> T {
+    f(SESSIONS.lock().unwrap().get_or_insert_with(HashMap::new))
+}
 
 /// Tico Cloud's portal: `TICO_PORTAL_URL` (tests, development) or app.tico.dev. Read once.
 pub(crate) fn portal() -> &'static Url {
@@ -126,18 +143,29 @@ pub(crate) async fn tico_signin(app: App) -> Result<(), String> {
     open_window(&app).map_err(|e| e.to_string())
 }
 
+/// Whether a window label is a sign-in window's.
+pub(crate) fn is_signin(label: &str) -> bool {
+    label.starts_with(SIGNIN)
+}
+
 fn open_window(app: &App) -> tauri::Result<()> {
-    if let Some(window) = app.get_webview_window(SIGNIN) {
+    if let Some(window) = app.webview_windows().into_iter().find(|(label, _)| is_signin(label)).map(|(_, window)| window) {
         let _ = window.unminimize();
         window.show()?;
         window.set_focus()?;
         return Ok(());
     }
     let portal = portal().clone();
-    HANDLED.store(false, Ordering::SeqCst);
-    let handler = app.clone();
+    let store = Uuid::new_v4();
+    let session = Arc::new(Session {
+        label: format!("{SIGNIN}{}", store.simple()),
+        store,
+        handled: AtomicBool::new(false),
+        cancelled: AtomicBool::new(false),
+    });
+    let (handler, mine) = (app.clone(), session.clone());
     #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
-    let mut builder = WebviewWindowBuilder::new(app, SIGNIN, WebviewUrl::External(orgs_page(&portal)))
+    let mut builder = WebviewWindowBuilder::new(app, &session.label, WebviewUrl::External(orgs_page(&portal)))
         .title("Sign in to Tico")
         .inner_size(480.0, 680.0)
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
@@ -149,23 +177,23 @@ fn open_window(app: &App) -> tauri::Result<()> {
             if !is_done(&portal, url) {
                 return true;
             }
-            if !HANDLED.swap(true, Ordering::SeqCst) {
-                let (app, picks) = (handler.clone(), picks(&portal, url));
+            if !mine.handled.swap(true, Ordering::SeqCst) {
+                let (app, session, picks) = (handler.clone(), mine.clone(), picks(&portal, url));
                 // Off the navigation callback, which runs on the main thread: reading and copying cookies is waited on.
-                tauri::async_runtime::spawn(async move { finish(&app, picks).await });
+                tauri::async_runtime::spawn(async move { finish(&app, &session, picks).await });
             }
             false
         });
     #[cfg(target_os = "macos")]
-    let store = Uuid::new_v4();
-    #[cfg(target_os = "macos")]
     {
+        // Noted before the store exists, so a quit while the window is open still lets the next launch remove it.
+        note_pending(app, &[store], &[]);
         builder = builder.data_store_identifier(*store.as_bytes());
     }
-    builder.build()?;
-    #[cfg(target_os = "macos")]
-    {
-        *STORE.lock().unwrap() = Some(store);
+    sessions(|open| open.insert(session.label.clone(), session.clone()));
+    if let Err(e) = builder.build() {
+        sessions(|open| open.remove(&session.label));
+        return Err(e);
     }
     Ok(())
 }
@@ -181,94 +209,217 @@ fn new_window_handler(app: &App) -> impl Fn(Url, NewWindowFeatures) -> NewWindow
     }
 }
 
-/// The sign-in window closed (done, cancelled or closed by the person): its data store goes. A page that just closed
-/// holds its store for a moment, so removal is tried a few times.
+/// A sign-in window closed (done, cancelled or closed by the person): a finish still running for it drops its picks,
+/// and its data store goes.
 pub(crate) fn closed(app: &App, label: &str) {
-    if label != SIGNIN {
+    if !is_signin(label) {
         return;
     }
+    let Some(session) = sessions(|open| open.remove(label)) else { return };
+    session.cancelled.store(true, Ordering::SeqCst);
     #[cfg(target_os = "macos")]
     {
-        let Some(store) = STORE.lock().unwrap().take() else { return };
         let app = app.clone();
-        tauri::async_runtime::spawn(async move { remove_store(&app, store).await });
+        tauri::async_runtime::spawn(async move { discard(&app, &[session.store]).await });
     }
     #[cfg(not(target_os = "macos"))]
     let _ = app;
 }
 
+/// Closes every sign-in window (Cancel on the setup page).
+pub(crate) fn close(app: &App) {
+    for (label, window) in app.webview_windows() {
+        if is_signin(&label) {
+            let _ = window.close();
+        }
+    }
+}
+
+/// Removes stores nobody uses (a sign-in's, or ones prepared for orgs that were not added), and forgets them once gone.
+/// A page that just closed holds its store for a moment, so removal is tried a few times.
+#[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+async fn discard(app: &App, stores: &[Uuid]) {
+    #[cfg(target_os = "macos")]
+    for store in stores {
+        release_store(app, *store);
+        if remove_store(app, *store).await {
+            note_pending(app, &[], &[*store]);
+        } else {
+            log::warn!("could not delete a data store that is no longer used; the next launch tries again");
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
-async fn remove_store(app: &App, store: Uuid) {
+async fn remove_store(app: &App, store: Uuid) -> bool {
     for _ in 0..8 {
         if app.remove_data_store(*store.as_bytes()).await.is_ok() {
-            return;
+            return true;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    log::warn!("could not delete a data store that is no longer used");
-}
-
-/// Closes the sign-in window, if it is open.
-pub(crate) fn close(app: &App) {
-    if let Some(window) = app.get_webview_window(SIGNIN) {
-        let _ = window.close();
-    }
+    false
 }
 
 /// Adds the picked servers as orgs, signed in through the issuer's session, and opens the first new one (or, when
-/// every pick is already an org, the first of those).
-async fn finish(app: &App, picks: Option<Picks>) {
+/// every pick is already an org, the first of those). Only this sign-in's own window is used or closed, and if that
+/// window goes before the orgs are added, nothing is added.
+async fn finish(app: &App, session: &Session, picks: Option<Picks>) {
+    let done = || {
+        if let Some(window) = app.get_webview_window(&session.label) {
+            let _ = window.close();
+        }
+    };
     let Some(picks) = picks.filter(|picks| !picks.orgs.is_empty()) else {
         log::warn!("Tico sign-in finished with no usable organization");
-        return close(app);
+        return done();
     };
-    // Which picks are new. Each new one gets its store id now, so the session is in the store before the org exists.
-    let (fresh, existing): (Vec<(Url, Uuid)>, Option<String>) = {
+    // A store for each pick that is not an org yet, so the session is in the store before the org exists. Whether a
+    // pick is new is decided again when the orgs are added.
+    let fresh: Vec<(Url, Uuid)> = {
         let state = app.state::<AppState>();
         let list = state.orgs.lock().unwrap();
-        let existing = picks.orgs.iter().find_map(|hub| list.find_hub(hub).map(|org| org.id.clone()));
-        let fresh = picks.orgs.iter().filter(|hub| list.find_hub(hub).is_none()).map(|hub| (hub.clone(), Uuid::new_v4())).collect();
-        (fresh, existing)
+        picks.orgs.iter().filter(|hub| list.find_hub(hub).is_none()).map(|hub| (hub.clone(), Uuid::new_v4())).collect()
     };
+    let prepared: Vec<Uuid> = fresh.iter().map(|(_, store)| *store).collect();
     #[cfg(target_os = "macos")]
     if !fresh.is_empty() {
+        note_pending(app, &prepared, &[]);
         let host = picks.issuer.host_str().unwrap_or_default().to_string();
-        let stores: Vec<Uuid> = fresh.iter().map(|(_, store)| *store).collect();
-        match app.get_webview_window(SIGNIN) {
-            Some(window) => match copy_cookies(&window, host, stores).await {
+        match app.get_webview_window(&session.label) {
+            Some(window) => match copy_cookies(&window, host, prepared.clone()).await {
                 Some(count) => log::info!("Tico sign-in: {count} session cookie(s) copied to {} new organization(s)", fresh.len()),
                 None => log::warn!("Tico sign-in: the session could not be copied; the new organizations ask to sign in"),
             },
             None => log::warn!("Tico sign-in: the window closed before its session was copied"),
         }
     }
-    let open = if fresh.is_empty() {
-        existing
-    } else {
-        let added = app.state::<AppState>().orgs.lock().unwrap().add_all(&fresh);
-        match added {
-            Ok(added) => added.first().map(|org| org.id.clone()),
-            Err(e) => {
-                #[cfg(target_os = "macos")]
-                for (_, store) in &fresh {
-                    release_store(app, *store);
-                    remove_store(app, *store).await;
-                }
-                app.dialog().message(e).title("Add organization").show(|_| {});
-                return close(app);
-            }
+    // Added under the list's lock, after checking once more that this sign-in was not cancelled meanwhile, and leaving
+    // out any server that became an org meanwhile (added by address, say).
+    let committed = {
+        let state = app.state::<AppState>();
+        let mut list = state.orgs.lock().unwrap();
+        if session.cancelled.load(Ordering::SeqCst) {
+            None
+        } else {
+            Some(list.add_all(&fresh).map(|added| {
+                let open = added.first().map(|org| org.id.clone())
+                    .or_else(|| picks.orgs.iter().find_map(|hub| list.find_hub(hub).map(|org| org.id.clone())));
+                (added, open)
+            }))
         }
     };
-    if let Some(id) = open {
-        if let Err(e) = switch_to(app, &id) {
-            log::warn!("could not open the organization: {e}");
+    match committed {
+        None => {
+            log::info!("Tico sign-in was closed before its organizations were added; nothing was added");
+            discard(app, &prepared).await;
         }
-        show_window(app);
-        if let Some(setup) = app.get_webview_window("server") {
-            let _ = setup.close();
+        Some(Err(e)) => {
+            discard(app, &prepared).await;
+            app.dialog().message(e).title("Add organization").show(|_| {});
+            done();
+        }
+        Some(Ok((added, open))) => {
+            let (kept, unused) = split_stores(&prepared, &added);
+            // A saved org owns its store from here on: removing the org removes it.
+            #[cfg(target_os = "macos")]
+            note_pending(app, &[], &kept);
+            #[cfg(not(target_os = "macos"))]
+            let _ = kept;
+            discard(app, &unused).await;
+            if let Some(id) = open {
+                if let Err(e) = switch_to(app, &id) {
+                    log::warn!("could not open the organization: {e}");
+                }
+                show_window(app);
+                if let Some(setup) = app.get_webview_window("server") {
+                    let _ = setup.close();
+                }
+            }
+            done();
         }
     }
-    close(app);
+}
+
+/// The prepared stores that orgs were added on, and the ones left unused.
+fn split_stores(prepared: &[Uuid], added: &[Org]) -> (Vec<Uuid>, Vec<Uuid>) {
+    let used: HashSet<Uuid> = added.iter().filter_map(Org::store_id).collect();
+    prepared.iter().copied().partition(|store| used.contains(store))
+}
+
+// ----------------------------------------------------------------------------- stores left by a run that quit
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn pending_path(app: &App) -> Option<PathBuf> {
+    app.path().app_data_dir().ok().map(|dir| dir.join(PENDING_FILE))
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+static PENDING: Mutex<()> = Mutex::new(());
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+/// The store ids in the pending file; lines that are not one are ignored.
+fn read_pending(path: &Path) -> Vec<Uuid> {
+    std::fs::read_to_string(path).unwrap_or_default().lines().filter_map(|line| Uuid::parse_str(line.trim()).ok()).collect()
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+/// Adds and removes store ids in the pending file; the file goes when none is left.
+fn update_pending(path: &Path, add: &[Uuid], remove: &[Uuid]) -> std::io::Result<()> {
+    let _lock = PENDING.lock().unwrap();
+    let mut stores = read_pending(path);
+    stores.retain(|store| !remove.contains(store));
+    for store in add {
+        if !stores.contains(store) && !remove.contains(store) {
+            stores.push(*store);
+        }
+    }
+    if stores.is_empty() {
+        return match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        };
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let text: String = stores.iter().map(|store| format!("{store}\n")).collect();
+    let temporary = path.with_extension("tmp");
+    std::fs::write(&temporary, text).and_then(|_| std::fs::rename(&temporary, path))
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn note_pending(app: &App, add: &[Uuid], remove: &[Uuid]) {
+    let Some(path) = pending_path(app) else { return };
+    if let Err(e) = update_pending(&path, add, remove) {
+        log::warn!("could not note the sign-in's data stores: {e}");
+    }
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+/// The pending stores no org uses: those are safe to remove. A store an org was saved on is never one of them, even
+/// if the run quit before forgetting it.
+fn stale_stores(pending: &[Uuid], orgs: &[Org]) -> Vec<Uuid> {
+    let owned: HashSet<Uuid> = orgs.iter().filter_map(Org::store_id).collect();
+    pending.iter().copied().filter(|store| !owned.contains(store)).collect()
+}
+
+/// At launch: removes the stores a run that quit left behind (a sign-in window open at Cmd-Q, or orgs being added).
+#[cfg(target_os = "macos")]
+pub(crate) fn clean_up_last_run(app: &App) {
+    let Some(path) = pending_path(app) else { return };
+    let pending = read_pending(&path);
+    if pending.is_empty() {
+        return;
+    }
+    let stale = {
+        let state = app.state::<AppState>();
+        let list = state.orgs.lock().unwrap();
+        stale_stores(&pending, list.orgs())
+    };
+    let owned: Vec<Uuid> = pending.iter().copied().filter(|store| !stale.contains(store)).collect();
+    note_pending(app, &[], &owned);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move { discard(&app, &stale).await });
 }
 
 // The stores cookies were copied into, held on the main thread until each org's page has opened on its store: WebKit
@@ -288,9 +439,10 @@ pub(crate) fn release_store(app: &App, store: Uuid) {
 }
 
 /// Copies the sign-in window's cookies for `host` into each of `stores`, as the same NSHTTPCookie objects (they are
-/// HttpOnly, so they are not rebuilt). The count of cookies copied, or None when WebKit did not finish in time.
-/// Everything WebKit runs on the main thread, which hands each call to a callback and returns at once; only the
-/// answer is awaited here (see cookies.rs for why the main thread never waits).
+/// HttpOnly, so they are not rebuilt). The count of cookies copied, or None when WebKit did not finish in time; a
+/// WebKit answer that comes after that does nothing. Everything WebKit runs on the main thread, which hands each call
+/// to a callback and returns at once; only the answer is awaited here (see cookies.rs for why the main thread never
+/// waits).
 #[cfg(target_os = "macos")]
 async fn copy_cookies(window: &tauri::WebviewWindow, host: String, stores: Vec<Uuid>) -> Option<usize> {
     use block2::RcBlock;
@@ -302,12 +454,19 @@ async fn copy_cookies(window: &tauri::WebviewWindow, host: String, stores: Vec<U
     use std::rc::Rc;
 
     let (sender, mut answer) = tokio::sync::mpsc::unbounded_channel::<usize>();
+    let late = Arc::new(AtomicBool::new(false));
+    let too_late = late.clone();
     window.with_webview(move |platform| unsafe {
         let Some(mtm) = MainThreadMarker::new() else { return };
         // `inner` is the sign-in page's live WKWebView while this closure runs; its store is the sign-in's own.
         let view = &*platform.inner().cast::<WKWebView>();
         let source = view.configuration().websiteDataStore().httpCookieStore();
         let reply = RcBlock::new(move |cookies: NonNull<NSArray<NSHTTPCookie>>| {
+            // After the timeout the orgs are added without the session, and their pages may already have let go of
+            // their stores: nothing is copied or held then.
+            if too_late.load(Ordering::SeqCst) {
+                return;
+            }
             let picked: Vec<_> = cookies.as_ref().to_vec().into_iter()
                 .filter(|cookie| issuer_cookie(&cookie.domain().to_string(), &host))
                 .collect();
@@ -335,7 +494,11 @@ async fn copy_cookies(window: &tauri::WebviewWindow, host: String, stores: Vec<U
         });
         source.getAllCookies(&reply);
     }).ok()?;
-    tokio::time::timeout(COPY_TIMEOUT, answer.recv()).await.ok()?
+    let copied = tokio::time::timeout(COPY_TIMEOUT, answer.recv()).await.ok().flatten();
+    if copied.is_none() {
+        late.store(true, Ordering::SeqCst);
+    }
+    copied
 }
 
 #[cfg(test)]
@@ -447,11 +610,53 @@ mod tests {
             let capability: serde_json::Value = serde_json::from_str(text).unwrap();
             for key in ["windows", "webviews"] {
                 let labels = capability[key].as_array().cloned().unwrap_or_default();
-                assert!(labels.iter().all(|label| label.as_str().is_some_and(|label| label != SIGNIN && !label.contains('*'))),
+                assert!(labels.iter().all(|label| label.as_str().is_some_and(|label| !is_signin(label) && !label.contains('*'))),
                         "{key}: {labels:?}");
             }
         }
         // Org pages' runtime grants name `org-<id>` webviews only, and switching closes only those.
         assert!(!SIGNIN.starts_with("org-"));
+        assert!(is_signin("tico-signin-0f3a") && !is_signin("server") && !is_signin("org-o_7f3a0001") && !is_signin("tico-signin"));
+    }
+
+    fn org(id: &str, store: Option<Uuid>) -> Org {
+        Org { id: id.into(), url: "https://acme.example.com/".into(), store: store.map(|store| store.to_string()),
+              name: String::new(), email: String::new(), added_at: String::new() }
+    }
+
+    #[test]
+    fn stores_left_by_a_run_that_quit_are_noted_and_forgotten() {
+        let dir = std::env::temp_dir().join(format!("tico-signin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join(PENDING_FILE);
+        let (a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        assert!(read_pending(&path).is_empty(), "no file, nothing pending");
+        update_pending(&path, &[a, b], &[]).unwrap();
+        update_pending(&path, &[b, c], &[]).unwrap();
+        assert_eq!(read_pending(&path), [a, b, c], "each store once, in order");
+        update_pending(&path, &[], &[b]).unwrap();
+        assert_eq!(read_pending(&path), [a, c]);
+        std::fs::write(&path, format!("{a}\nnot a store\n\n  {c}  \n")).unwrap();
+        assert_eq!(read_pending(&path), [a, c], "other lines are ignored");
+        update_pending(&path, &[], &[a, c]).unwrap();
+        assert!(!path.exists(), "the file goes with the last store");
+        update_pending(&path, &[], &[a]).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_store_an_org_was_saved_on_is_never_removed_at_launch() {
+        let (signin, saved, prepared) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let orgs = [org("o_aaaaaaaa", Some(saved)), org("o_bbbbbbbb", None)];
+        assert_eq!(stale_stores(&[signin, saved, prepared], &orgs), [signin, prepared]);
+        assert!(stale_stores(&[], &orgs).is_empty());
+    }
+
+    #[test]
+    fn prepared_stores_no_org_was_added_on_are_the_ones_discarded() {
+        let (a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let (kept, unused) = split_stores(&[a, b, c], &[org("o_aaaaaaaa", Some(c)), org("o_bbbbbbbb", Some(a))]);
+        assert_eq!((kept, unused), (vec![a, c], vec![b]));
+        assert_eq!(split_stores(&[a], &[]), (vec![], vec![a]));
     }
 }
