@@ -589,8 +589,9 @@ class Support:
         # Who asked decides whose ticket it is. A Health Monitor report (health_reports names the approval, whoever asked)
         # is the monitor's; a bot's report a person approved is the bot's; a report a person asked for and sent is theirs,
         # filed as `person`. The monitor's and the bot's keep `approval:` (the monitor's "Seen again" finds its ticket by
-        # it); the person's own keeps `draft:`, so their chat lists it (OWN). A person's draft filed before this change
-        # under `approval:` is found by that key too, so a replay does not file it again.
+        # it); the person's own keeps `draft:`, so their chat lists it (OWN). A person's draft filed under `approval:` (an
+        # older release, after migration 0072) is found by that key too, so a replay does not file it again, and moves
+        # it to `draft:` so the chat lists it.
         bot = H.is_bot(who.actor)
         with self.store.read() as c:
             health = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='health_reports'").fetchone() \
@@ -615,6 +616,11 @@ class Support:
 
         with self.store.read() as c:
             done = spent_ticket(c)
+        if done and source == "person" and done["request_key"] == legacy:
+            with self.store.transaction() as c:
+                c.execute("UPDATE support_tickets SET request_key=? WHERE id=? AND request_key=?", (key, done["id"], legacy))
+            with self.store.read() as c:
+                done = c.execute("SELECT * FROM support_tickets WHERE id=?", (done["id"],)).fetchone()
         if row["consumed_at"]:
             if not done:
                 raise Problem("approval", f"{approval_id} was already spent at {row['consumed_at']}.", 409)

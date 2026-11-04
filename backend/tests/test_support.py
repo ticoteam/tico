@@ -1,6 +1,7 @@
 """Contact support (PRIVACY.md, "Support tickets"): the form's request is forwarded to HQ, only on submit and never in demo
 mode, and a person sees their own tickets and HQ's replies, and no one else's."""
 
+import importlib
 import json
 import logging
 import re
@@ -1210,3 +1211,39 @@ def test_a_persons_draft_filed_before_the_upgrade_under_the_approval_key_replays
     assert replay.status_code == 200, replay.text
     assert replay.json()["ticket"]["id"] == ticket and replay.json()["again"] is True
     assert len(hq.seen) == before
+    with api.app.state.store.read() as c:                       # the replay moved the row to the key a draft has now
+        assert c.execute("SELECT request_key FROM support_tickets WHERE id=?", (ticket,)).fetchone()[0] == "draft:" + approval
+    assert [t["id"] for t in api.get("/api/v2/support/tickets", headers=riley).json()["tickets"]] == [ticket]
+
+
+def test_a_request_a_person_sent_under_approval_before_the_upgrade_is_back_in_their_chat(environment, hq):  # noqa: F811  (the fixture)
+    """Before this change a person's approved request was filed under `approval:<id>`, where their chat does not list it.
+    Migration 0072 moves each such ticket to `draft:<id>`, the key a draft gets now, so the chat lists it again. A bot's
+    report under `approval:` stays the bot's, and a report the Health Monitor filed (health_reports) keeps its key."""
+    api = environment()
+    riley = as_person(api, "riley")
+    bot = as_bot(api)
+    asked = draft(api, riley).json()["id"]
+    monitored = draft(api, riley, message="Sync stalled since 0.3.47").json()["id"]
+    for approval in (asked, monitored):
+        assert api.post(f"/api/v2/approvals/{approval}", json={"decision": "approved"}, headers=riley).status_code == 200
+    mine = send(api, riley, asked).json()["ticket"]["id"]
+    watched = send(api, riley, monitored).json()["ticket"]["id"]
+    filed = draft(api, bot, message="The checkout button does nothing").json()     # sent at once, filed as the bot's
+    with api.app.state.store.transaction() as c:                  # as the release before this change filed them
+        c.execute("UPDATE support_tickets SET request_key=? WHERE id=?", ("approval:" + asked, mine))
+        c.execute("UPDATE support_tickets SET request_key=? WHERE id=?", ("approval:" + monitored, watched))
+        c.execute("INSERT INTO health_reports(signature, ticket_id, approval_id, created_at) VALUES('sig-sync', ?, ?, ?)",
+                  (watched, monitored, "2026-01-01T00:00:00Z"))
+    assert api.get("/api/v2/support/tickets", headers=riley).json()["tickets"] == []      # under approval: , so unlisted
+    migration = importlib.import_module("backend.migrations.0072_person_draft_keys")
+    with api.app.state.store.transaction() as c:
+        migration.up(c)
+        migration.up(c)                                           # a second run changes nothing
+    listed = api.get("/api/v2/support/tickets", headers=riley).json()["tickets"]
+    assert [(t["id"], t["source"]) for t in listed] == [(mine, "person")]
+    with api.app.state.store.read() as c:
+        keys = {r["id"]: r["request_key"] for r in c.execute("SELECT id, request_key FROM support_tickets")}
+    assert keys[mine] == "draft:" + asked
+    assert keys[watched] == "approval:" + monitored
+    assert keys[filed["ticket"]["id"]] == "approval:" + filed["id"]
