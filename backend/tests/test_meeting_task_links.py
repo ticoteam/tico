@@ -9,7 +9,7 @@ from backend.tests.test_meeting_items import add, change, items, record
 
 def task(api, title='Review the plan', requester='human:ana', owner='human:ben', **kw):
     with api.app.state.store.transaction() as c:
-        return H.task_create(c, requester, title, 'Review the plan and report back.', owner, lint=False, deduplicate=False, **kw)
+        return H.task_create(c, requester, title, 'Review the plan and report back.', owner, lint=False, **kw)
 
 
 def link(api, rid, ids, token='ana-test', kind='linked', expected=200, key=None):
@@ -157,7 +157,7 @@ def collect(api, path, key, limit=50):
 
 def test_both_lists_page_past_fifty_with_ties_and_truncated_titles(api):
     rid = record(api)
-    ids = [task(api, title='計' * 300)['id'] for _ in range(55)]
+    ids = [task(api, title=f'Review plan {n} ' + '計' * 280)['id'] for n in range(55)]
     for offset in range(0, len(ids), 20):
         link(api, rid, ids[offset:offset + 20])
     first = get(api, f'meetings/{rid}/tasks')
@@ -181,7 +181,7 @@ def test_both_lists_page_past_fifty_with_ties_and_truncated_titles(api):
 
 def test_byte_cap_keeps_the_remaining_links_on_the_next_page(api):
     rid = record(api)
-    ids = [task(api)['id'] for _ in range(20)]
+    ids = [task(api, title=f'Review budget {n}')['id'] for n in range(20)]
     link(api, rid, ids)
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE meeting_task_links SET created_by=? WHERE meeting_id=?', ('人' * 2000, rid))
