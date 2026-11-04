@@ -55,13 +55,16 @@ def fixed(clock):
     def digest():
         return hashlib.sha256(f"{NAMESPACE}:{next(counter)}".encode()).hexdigest()
 
-    from . import inbound, threads
+    from . import inbound, threads, usage_limits
     saved = (hubdb.now, hubdb.new_id, hubdb.uuid7, threads.uuid7, secrets.token_urlsafe, secrets.token_hex, uuid.uuid4,
-             inbound.now)
+             inbound.now, usage_limits.clock)
     hubdb.now = clock
     # Inbound keeps a message's body for 90 days from when it arrived, counted on the demo's clock: a demo built months
     # after its dates keeps every body.
     inbound.now = lambda: clock.at.timestamp()
+    # Spend windows (30 minutes, hour, day...) are read at the demo's moment too; the real clock would put a build that
+    # straddles a window boundary on the other side of it from its twin.
+    usage_limits.clock = lambda: clock.at
     hubdb.new_id = lambda: str(uuid.uuid5(NAMESPACE, str(next(counter))))
     # Time-ordered ids (messages, deliveries) and the product's own random ids for threads and calls.
     hubdb.uuid7 = threads.uuid7 = lambda: str(uuid.UUID(hex=digest()[:32]))
@@ -72,7 +75,7 @@ def fixed(clock):
         yield
     finally:
         (hubdb.now, hubdb.new_id, hubdb.uuid7, threads.uuid7, secrets.token_urlsafe, secrets.token_hex, uuid.uuid4,
-         inbound.now) = saved
+         inbound.now, usage_limits.clock) = saved
 
 
 def write_registry(settings):

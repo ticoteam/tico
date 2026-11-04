@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import demo, hubdb
+from backend import demo, demo_seed, hubdb
 from backend import demo_content as D
 from backend import usage_limits as U
 from backend.demo_sections import budgets as B
@@ -236,6 +236,15 @@ def test_the_team_has_closed_tasks_every_week_for_two_months(built):
         done = datetime.strptime(day, "%Y-%m-%d").date()
         weeks[7 - (monday - (done - timedelta(days=done.weekday()))).days // 7] += 1
     assert all(n >= 20 for n in weeks[:-1]) and weeks[0] < weeks[-2], weeks
+
+
+def test_the_demo_clock_also_reads_the_spend_windows(built):
+    """The spend windows (30 minutes, hour, day...) are read at the build's own moment, not the real clock: a build that
+    straddles a window boundary would otherwise store different spend from its twin (the same-date test's failure)."""
+    clock = demo_seed.Clock(NOW)
+    with demo_seed.fixed(clock):
+        assert U.clock() == NOW
+    assert U.clock() != NOW
 
 
 def test_the_same_date_builds_the_same_company(built):
