@@ -7,6 +7,8 @@
   "permissions": [
     "core:default",
     "allow-connect-server",
-    "allow-server-address"
+    "allow-server-address",
+    "allow-setup-info",
+    "allow-cancel-setup"
   ]
 }
