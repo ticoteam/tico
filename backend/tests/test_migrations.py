@@ -72,6 +72,7 @@ def test_every_migration_adopts_a_database_that_already_has_its_change(tmp_path)
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
         c.execute("INSERT INTO audit_log VALUES('a1','2026-01-01T00:00:00.000000Z','human:ana','task_cap:1',NULL,NULL,NULL)")
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
@@ -109,6 +110,7 @@ def test_a_rename_lands_before_startup_code_that_uses_the_new_name(tmp_path):
         c.execute("CREATE UNIQUE INDEX google_connects_state ON google_connects(state) WHERE state IS NOT NULL")
         c.execute("INSERT INTO google_connects(person_id,mailbox,status,state,created_at,updated_at) "
                   "VALUES('p1','ana@acme.example','signing_in','nonce-1','t','t')")
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0003' AND version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
@@ -126,6 +128,7 @@ def test_an_existing_database_loses_the_redundant_task_indexes_once(tmp_path):
         c.execute("CREATE INDEX tasks_requester_status ON tasks(requester_id, status)")
         c.execute("CREATE INDEX tasks_private ON tasks(id) WHERE private IS NOT 0")
         # 0011 and every file after it run again (each is safe to repeat), as on a file that never had them
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0011' AND version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
@@ -144,6 +147,7 @@ def test_an_existing_database_loses_the_two_duplicate_indexes_once(tmp_path):
     with sqlite3.connect(path) as c:
         c.execute("CREATE INDEX invariants_lease ON attempts(lease_until) WHERE state IN ('leased','running')")
         c.execute("CREATE INDEX invariants_open_approvals ON approvals(created_at) WHERE decision IS NULL")
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0042' AND version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
@@ -164,6 +168,7 @@ def test_an_existing_database_loses_the_private_parties_index_and_the_parties_re
     with sqlite3.connect(path) as c:
         c.execute("CREATE INDEX tasks_private_parties ON tasks(id, requester_id, owner_id, guest, private) "
                   "WHERE private IS NOT 0")
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0042' AND version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
@@ -295,18 +300,26 @@ def test_cloud_version_is_the_newest_cloud_step_store_writes():
     assert migrations.CLOUD_VERSION == newest
 
 
+def restore_config(c):
+    """Before migration 0068, the migrations 0043 and 0061 read bot_config.config, which 0068 drops: a rerun of them from
+    before 0068 needs the column back, each declaration copied into it from bot_settings. A no-op while it is there."""
+    if "config" in {row[1] for row in c.execute("PRAGMA table_info(bot_config)")}:
+        return
+    c.execute("ALTER TABLE bot_config ADD COLUMN config TEXT NOT NULL DEFAULT '{}'")
+    c.execute(f"UPDATE bot_config SET config=coalesce((SELECT {BS.CONFIG} FROM bot_settings s "
+              "WHERE s.bot_id=bot_config.bot), '{}')")
+
+
 def _config_restored(path):
-    """The file with bot_config.config back, each declaration copied into it from bot_settings: a database from before
-    0068, for the migrations that read the column (0043, 0061) to run on again."""
     with sqlite3.connect(path) as c:
-        c.execute("ALTER TABLE bot_config ADD COLUMN config TEXT NOT NULL DEFAULT '{}'")
-        c.execute(f"UPDATE bot_config SET config=coalesce((SELECT {BS.CONFIG} FROM bot_settings s "
-                  "WHERE s.bot_id=bot_config.bot), '{}')")
+        restore_config(c)
 
 
 def _back_to_before(path, version):
     """The file as it was before `version` ran: the migration rows from it on are forgotten, so the next boot runs them."""
     with sqlite3.connect(path) as c:
+        if version <= "0068":
+            restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy_%'", (version,))
 
 
@@ -593,6 +606,7 @@ def test_a_populated_legacy_database_moves_each_row_and_keeps_its_behaviour(tmp_
             ("rev-pending", "r1", None), ("rev-done", "r2", '{"id": 1}'),
         ])
         before = dict(c.execute("SELECT key, rowid FROM idempotency").fetchall())
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0050' AND version NOT LIKE 'legacy_%'")
     boot(path)
 

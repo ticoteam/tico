@@ -4,6 +4,7 @@ The migration that moves an older file's rows across is tested in test_migration
 
 import pytest
 
+from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0068
 from backend import invites
 from backend.store import sweep_idempotency
 from backend.tests.test_api import api, headers  # noqa: F401  (the api fixture)
@@ -91,6 +92,7 @@ def test_an_answer_stored_before_the_upgrade_replays_after_it(api):  # noqa: F81
         c.execute("DROP TABLE idempotency")
         c.execute("ALTER TABLE idempotency_legacy RENAME TO idempotency")
         c.execute("CREATE INDEX idempotency_by_created ON idempotency(created_at)")
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0050' AND version NOT LIKE 'legacy_%'")
         tasks = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
     with TestClient(create_app(settings), follow_redirects=False) as upgraded:

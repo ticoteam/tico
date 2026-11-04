@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0068
 from backend import automation_flow as F
 from backend import hubdb as H
 from backend import redesign_migration as M
@@ -353,6 +354,7 @@ def test_the_upgrade_drops_the_cutover_record_and_accepts_tables_and_holds_still
                      "accepted_at TEXT NOT NULL)")
         conn.execute("INSERT INTO redesign_migrated(kind, id, migration, automation) VALUES('routine','sch_1','mig_1','a1')")
         # As a file from before 0007 has it: that migration and every later one not run yet.
+        restore_config(conn)
         conn.execute("DELETE FROM schema_migrations WHERE version>='0007' AND version NOT LIKE 'legacy_%'")
     store.initialize(seed_market=False)
     with store.read() as conn:

@@ -8,6 +8,7 @@ from unittest import mock
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0068
 from backend import company_file as C
 from backend import market_spend as MS
 from backend import people_remove, views
@@ -300,6 +301,7 @@ def an_older_releases_roster_add_retries_after_the_upgrade(api):
                   (actor, url, key, digest(encode(body)), encode({"id": ben["id"]}), H.now()))
         c.execute("DROP TABLE idempotency")
         c.execute("ALTER TABLE idempotency_legacy RENAME TO idempotency")
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0050' AND version NOT LIKE 'legacy_%'")
 
     class Issuer:

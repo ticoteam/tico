@@ -6,6 +6,7 @@ from contextlib import closing
 
 import pytest
 
+from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0068
 from backend.finance import actions as FA
 from backend.finance.store import schema
 from backend.tests.test_finance_fixtures import (  # noqa: F401
@@ -256,6 +257,7 @@ def test_migration_0037_adds_its_tables_and_columns_to_an_install_from_main(stor
     history, prepaid lines and their postings, the refund link, invoice reminders, invoice email delivery, the payment
     cancel ask, the card's merchant and the re-read mark. A second start changes nothing."""
     with store.transaction() as c:
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy%'", (MIGRATION,))
         c.execute("DROP INDEX fin_feed_txns_refund")
         c.execute("ALTER TABLE fin_feed_txns DROP COLUMN refund_of")
@@ -300,6 +302,7 @@ def _rewind(c: sqlite3.Connection, version: int, *, refund_of: bool) -> None:
     ran this branch's step 77 before 0037 existed has it)."""
     for later in range(version + 1, 78):
         c.execute("DELETE FROM cloud_migrations WHERE version=?", (later,))
+    restore_config(c)
     c.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy%'", (MIGRATION,))
     c.execute("DROP TABLE IF EXISTS fin_prepaid_postings")
     c.execute("DROP TABLE IF EXISTS fin_invoice_reminders")
