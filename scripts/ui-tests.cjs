@@ -278,7 +278,9 @@ async function main() {
     }
   };
 
-  const queue = [...files];
+  // CPU-throttled frame measurements need the box to themselves; sibling browsers distort their budgets.
+  for (const file of files.filter(file => file === 'dot-perf.cjs')) await run(file);
+  const queue = files.filter(file => file !== 'dot-perf.cjs');
   await Promise.all(Array.from({length: Math.min(jobs, queue.length)}, async () => {
     while (queue.length) await run(queue.shift());
   }));
