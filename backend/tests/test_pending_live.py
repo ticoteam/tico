@@ -166,3 +166,53 @@ def test_doc_feature_and_bot_manager_are_inside_the_audience(api):
         result = push(api, rid, iid, token='ben-test', expected=409 if section == 'doc' else 200)
         if section == 'feature':
             assert get(api, 'tasks/' + result['item']['result_ref'], 'ben-test')['task']['private']
+
+
+def test_task_access_invalidates_items_and_deleted_meeting_emits_one_gone(api):
+    rid = record(api)
+    iid = add(api, rid, {'section': 'task', 'text': 'Team followup', 'detail': {'owner': 'human:ben'}})['item']['id']
+    tid = push(api, rid, iid)['item']['result_ref']
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.read() as c:
+        who = auth.identity_for_actor(c, 'human:cara')
+        after = events.latest(c)
+    watch = events.Watch(store, auth, who, meetings=[rid])
+    watch()
+    with store.transaction() as c:
+        c.execute('UPDATE tasks SET private=1 WHERE id=?', (tid,))
+    with store.read() as c:
+        changes = events.read(c, auth, who, after, topics=('meeting_items',), meetings=(rid,), watch=watch)
+    assert any(data['kind'] == 'links' and data['meeting_id'] == rid for _, _, data in changes[0])
+    assert items(api, rid, 'cara-test')['sections']['task'][0]['result_ref'] is None
+    with store.transaction() as c:
+        c.execute('UPDATE media_control SET deleted_at=? WHERE meeting_id=?', (events.H.now(), rid))
+    with store.read() as c:
+        events.read(c, auth, who, changes[1], topics=('meeting_items',), meetings=(rid,), watch=watch)
+    assert watch.drain() == [('meeting_items', {'meeting_id': rid, 'gone': True})]
+    with store.transaction() as c:
+        c.execute('UPDATE media_control SET deleted_at=NULL WHERE meeting_id=?', (rid,))
+    watch.checked_at = None
+    watch()
+    assert watch.drain() == []
+    fresh = events.Watch(store, auth, who, meetings=[rid])
+    fresh()
+    assert fresh.drain() == []
+    assert items(api, rid, 'cara-test')['id'] == rid
+
+
+def test_future_link_proposal_column_is_redacted_at_every_boundary(api):
+    rid = record(api)
+    secret = add(api, rid, {'section': 'task', 'text': 'Mail task', 'detail': {'owner': 'bot:inbox'}})['item']['id']
+    tid = push(api, rid, secret)['item']['result_ref']
+    iid = add(api, rid, {'section': 'task', 'text': 'Follow up'})['item']['id']
+    with api.app.state.store.transaction() as c:
+        # The proposal migration is built separately; exercise its column when present.
+        events.H.add_column(c, 'meeting_items', 'proposed_task_id', 'TEXT')
+        c.execute('UPDATE meeting_items SET proposed_task_id=? WHERE id=?', (tid, iid))
+    proposal = next(i for i in items(api, rid, 'cara-test')['sections']['task'] if i['id'] == iid)
+    assert proposal['proposed_task_id'] is None
+    for _ in range(2):
+        result = change(api, rid, iid, {'text': 'Reviewed'}, 'cara-test', key='proposal-edit')
+        assert result['item']['proposed_task_id'] is None
+    outbox = api.get('/api/meetings/' + rid, headers=headers('cara-test')).json()['outbox']['task']
+    assert all(i['proposed_task_id'] is None for i in outbox)

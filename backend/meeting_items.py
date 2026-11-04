@@ -423,7 +423,8 @@ def install_meeting_items(app, store, mutate, task_create, auth):
                     body = body.model_copy(update={"private": True})
                 created = task_create(c, who, body, **kwargs)
                 actual = H.task(c, created['task']['id'])
-                meeting_audience.check(c, auth, who, actual['owner_id'], record=record, guest=actual.get('guest'))
+                meeting_audience.check(c, auth, who, actual['owner_id'], record=record, guest=actual.get('guest'),
+                                       requester=actual['requester_id'])
                 meeting_audience.grant(c, actual['id'], participants, who.actor)
                 meeting_audience.record_sent_link(c, rid, actual['id'], who.actor)
                 return created

@@ -2675,7 +2675,10 @@ impl Recorder {
         // Bots first: most action items go to one.
         let mut owners = self.roster.clone();
         owners.sort_by_key(|row| !row.0.starts_with("bot:"));
-        if !self.context.live_id.is_empty() && self.live["visibility"] == "private" {
+        if self.saved_target().is_none()
+            && !self.context.live_id.is_empty()
+            && self.live["visibility"] != "team"
+        {
             owners.retain(|row| {
                 self.live["owner_actor"] == row.0
                     || self.live["access"]
@@ -2733,6 +2736,7 @@ impl Recorder {
             })
             .collect();
         json!({
+            "actor": self.config.destinations.iter().find(|d| d.id == self.router()).map(|d| &d.actor),
             "saved": self.saved_target().is_some(),
             "shared": self.saved_items,
             "mode": mode,

@@ -388,7 +388,7 @@
   function sharedActions(a) {
     const data = a.shared;
     if (!data || !data.sections) return '<section class="section"><h2>Tasks</h2>' + (data?.gone ? '' : '<span>Loading…</span>') + '</section>';
-    const here = (data.presence?.actors || []).map(p => p.name);
+    const here = (data.presence?.actors || []).filter(p => p.actor !== a.actor).map(p => p.name);
     return `<section class="section"><div class="section-head"><h2>Tasks</h2><span class="aside">${here.length ? esc(here.join(', ') + (here.length === 1 ? ' is here' : ' are here')) : ''}</span></div>` +
       Object.values(data.sections).flat().filter(i => i.status !== 'dismissed').map(it => {
         if (it.status === 'pushed') return `<div class="item sent">${esc(it.text)} · Sent</div>`;
@@ -429,7 +429,7 @@
   async function sharedFinish(button, send) {
     const id = button.dataset.id, draft = sharedDraft(id), node = button.closest('[data-shared-item]');
     if (draft.sending) return;
-    draft.sending = true; clearTimeout(draft.timer); button.disabled = true;
+    draft.sending = true; clearTimeout(draft.timer); node.querySelectorAll('button,input,textarea,select').forEach(f => f.disabled = true);
     const body = {detail:{}};
     for (const f of node.querySelectorAll('[data-shared-field]')) {
       if (f.dataset.sharedField === 'text') body.text = f.value;
@@ -440,7 +440,7 @@
       await invoke('shared_item', {id, action:send ? 'send' : null, body:send ? body : {status:'dismissed'}});
       draft.patch = {}; draft.error = '';
     } catch (e) { draft.error = String(e); }
-    finally { draft.sending = false; button.disabled = false; }
+    finally { draft.sending = false; node.querySelectorAll('button,input,textarea,select').forEach(f => f.disabled = false); }
     await poll(); render();
   }
   function item(it) {
@@ -1484,7 +1484,7 @@
   });
   document.addEventListener('change', (event) => {
     const el = event.target;
-    if (el.dataset.sharedField) { sharedChanged(el); sharedSave(el.closest('[data-shared-item]').dataset.sharedItem); }
+    if (el.dataset.sharedField) { const id = el.closest('[data-shared-item]').dataset.sharedItem; if (!sharedDraft(id).error) sharedSave(id); }
     if (el.dataset.check) {
       S.ui.form[el.dataset.check] = el.checked;
       render();
@@ -1498,7 +1498,7 @@
   }, true);
   document.addEventListener('focusout', async (event) => {
     const el = event.target;
-    if (el.dataset.sharedField) await sharedSave(el.closest('[data-shared-item]').dataset.sharedItem);
+    if (el.dataset.sharedField) { const id = el.closest('[data-shared-item]').dataset.sharedItem; if (!sharedDraft(id).error) await sharedSave(id); }
     if (el.dataset?.blur === 'rename' && S.ui.titleDraft !== null) {
       const title = S.ui.titleDraft;
       S.ui.titleDraft = null;

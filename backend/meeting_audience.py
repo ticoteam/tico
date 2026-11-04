@@ -35,7 +35,7 @@ def audience(c, auth, *, record=None, live=None):
     return allowed
 
 
-def check(c, auth, who, owner, *, record=None, live_id=None, roles=None, guest=None):
+def check(c, auth, who, owner, *, record=None, live_id=None, roles=None, guest=None, requester=None):
     live = None
     if live_id:
         live = c.execute("SELECT * FROM live_meetings WHERE id=?", (live_id,)).fetchone()
@@ -45,11 +45,12 @@ def check(c, auth, who, owner, *, record=None, live_id=None, roles=None, guest=N
     if not private:
         return None
     allowed = audience(c, auth, record=record, live=live)
-    readers = {owner, who.actor, *[a for role, values in (roles or {}).items()
+    requester = requester or who.actor
+    readers = {owner, requester, *[a for role, values in (roles or {}).items()
                                   if role.strip().lower() == 'participant' for a in values]}
     if guest:
         readers.add(guest)
-    parties = {owner, who.actor}
+    parties = {owner, requester}
     readers.update(actor for actor, _ in actors(c, auth)
                    if task_rights.private_subjects(c, actor) & parties)
     if not readers <= allowed:

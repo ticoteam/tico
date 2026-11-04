@@ -4400,6 +4400,8 @@ def create_app(settings=None):
         meeting_participants = meeting_audience.check(
             c, auth, who, owner, live_id=body.live_meeting_id, roles=body.roles) if body.live_meeting_id else None
         if meeting_participants is not None:
+            if body.visibility == "public":
+                raise Problem("meeting_audience", meeting_audience.REFUSAL, 409)
             body = body.model_copy(update={"private": True})
         task_caps.check(c, who.actor, owner)      # the first hub check on a send (CONTRACT §1): nothing is written
         # A bot's task for a teammate out of its reach, or its question to one (docs/reach.md), is refused next.
@@ -4625,7 +4627,8 @@ def create_app(settings=None):
             own_subtask.append(TR.own_subtask_warning(c, row["id"], other, kind))
         if body.live_meeting_id:
             meeting_audience.check(c, auth, who, owner, live_id=body.live_meeting_id,
-                                   roles=body.roles, guest=H.task(c, row["id"]).get("guest"))
+                                   roles=body.roles, guest=H.task(c, row["id"]).get("guest"),
+                                   requester=H.task(c, row["id"])["requester_id"])
             c.execute("UPDATE tasks SET live_meeting_id=? WHERE id=?", (body.live_meeting_id, row["id"]))
             meeting_audience.grant(c, row["id"], meeting_participants, who.actor)
         if body.roles:

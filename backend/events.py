@@ -153,6 +153,12 @@ def _meeting_links(task):
             f"FROM meeting_task_links WHERE task_id={task};")
 
 
+def _item_task_refs(task, column="result_ref"):
+    return ("INSERT INTO changes(topic,kind,subject_id,ref,created_at) "
+            f"SELECT DISTINCT 'meeting_items','links',meeting_id,meeting_id,{_NOW} "
+            f"FROM meeting_items WHERE {column}={task};")
+
+
 _MEETING_ACCESS = ("OLD.review_state IS NOT NEW.review_state OR OLD.owner IS NOT NEW.owner OR "
                    + " OR ".join(f"json_extract(OLD.metadata,'$.{key}') IS NOT json_extract(NEW.metadata,'$.{key}')"
                                  for key in ('private', 'participants', 'calendar')))
@@ -195,6 +201,14 @@ TRIGGERS = [
      _meeting_links("NEW.id")),
     ("changes_roles_meeting_insert", "INSERT", "task_roles", None, _meeting_links("NEW.task_id")),
     ("changes_roles_meeting_delete", "DELETE", "task_roles", None, _meeting_links("OLD.task_id")),
+    ("changes_item_task_access", "UPDATE", "tasks", _changed("owner_id", "requester_id", "private", "guest"),
+     _item_task_refs("NEW.id")),
+    ("changes_item_roles_insert", "INSERT", "task_roles", None, _item_task_refs("NEW.task_id")),
+    ("changes_item_roles_delete", "DELETE", "task_roles", None, _item_task_refs("OLD.task_id")),
+    ("changes_proposal_task_access", "UPDATE", "tasks", _changed("owner_id", "requester_id", "private", "guest"),
+     _item_task_refs("NEW.id", "proposed_task_id")),
+    ("changes_proposal_roles_insert", "INSERT", "task_roles", None, _item_task_refs("NEW.task_id", "proposed_task_id")),
+    ("changes_proposal_roles_delete", "DELETE", "task_roles", None, _item_task_refs("OLD.task_id", "proposed_task_id")),
     ("changes_presences_insert", "INSERT", "presences", None,
      _row("presence", "changed", "NEW.place", ref="NEW.place")),
     ("changes_presences_delete", "DELETE", "presences", None,
@@ -634,6 +648,12 @@ def _trigger_sql(name, event, table, when, body):
 for _name in ("changes_meetings_link_access", "changes_media_link_access", "changes_task_meeting_access",
               "changes_roles_meeting_insert", "changes_roles_meeting_delete"):
     NEEDS[_name] = (*NEEDS.get(_name, ()), "meeting_task_links")
+
+
+for _name in ("changes_proposal_task_access", "changes_proposal_roles_insert", "changes_proposal_roles_delete"):
+    NEEDS[_name] = ("meeting_items.proposed_task_id",)
+for _name in ("changes_item_task_access", "changes_item_roles_insert", "changes_item_roles_delete"):
+    NEEDS[_name] = ("meeting_items",)
 
 
 def ensure(c):

@@ -331,9 +331,11 @@ def test_every_source_writes_its_topic(api):
     # Every trigger defined is installed, so a source cannot quietly drop out.
     with store.read() as c:
         installed = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'changes_%'")}
-        tables = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        tables = {row[0]: {r[1] for r in c.execute(f"PRAGMA table_info({row[0]})")}
+                  for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert installed == {name for name, _, table, *_ in E.TRIGGERS if table in tables
-                         and all(need.split('.')[0] in tables for need in E.NEEDS.get(name, ()))}
+                         and all(need.split('.')[0] in tables and ('.' not in need or need.split('.')[1] in tables[need.split('.')[0]])
+                                 for need in E.NEEDS.get(name, ()))}
 
 
 def test_the_log_is_installed_idempotently_and_follows_its_definitions(api, monkeypatch):

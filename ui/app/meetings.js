@@ -1112,14 +1112,14 @@ function meetPendingRender(state, rec, data) {
           if (!draft.error) draft.timer = setTimeout(() => meetPendingSave(state, rec.id, item.id), 700);
         };
         field.oninput = changed;
-        field.onchange = () => { changed(); meetPendingSave(state, rec.id, item.id); };
+        field.onchange = () => { if (!draft.error) meetPendingSave(state, rec.id, item.id); };
         field.onblur = () => { if (!draft.error) meetPendingSave(state, rec.id, item.id); };
       }
       node.querySelector('[data-retry]').onclick = () => meetPendingSave(state, rec.id, item.id);
       const finish = async (send, force = false) => {
         if (draft.sending) return;
         draft.sending = true; clearTimeout(draft.timer);
-        node.querySelectorAll('button').forEach(button => button.disabled = true);
+        node.querySelectorAll('button, input, textarea, select').forEach(field => field.disabled = true);
         try {
           if (draft.flight) { try { await draft.flight; } catch {} }
           // Read the fields after the queued write settles: these are the final words on screen.
@@ -1143,7 +1143,7 @@ function meetPendingRender(state, rec, data) {
             box.querySelector('button').onclick = () => finish(true, true);
           } else toast(e.message, true);
         }
-        finally { draft.sending = false; node.querySelectorAll('button').forEach(button => button.disabled = false); }
+        finally { draft.sending = false; node.querySelectorAll('button, input, textarea, select').forEach(field => field.disabled = false); }
         node.querySelector('[data-save-error]').hidden = !draft.error;
       };
       node.querySelector('[data-send]').onclick = () => finish(true);
