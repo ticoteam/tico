@@ -67,6 +67,10 @@ def started(c, tid, slug, when):
               "VALUES(?,?,?,?,'task','',?,?)",
               (mid, conv, H.human_actor("ana"), H.bot_actor(slug), json.dumps({"task": tid}), H.shift(when, days=-1)))
     enqueue_stored(c, mid)
+    if not c.execute("SELECT 1 FROM jobs WHERE message_id=?", (mid,)).fetchone():
+        # An external inbox gets no job (backend/enqueue.py): its run still needs one to attach to.
+        c.execute("INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,?,'completed',?)",
+                  (mid, mid, slug, when))
     job = c.execute("SELECT id FROM jobs WHERE message_id=?", (mid,)).fetchone()[0]
     c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job,))
     c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
