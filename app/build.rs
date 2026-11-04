@@ -5,7 +5,7 @@ fn main() {
     }
     // Info.plist beside tauri.conf.json is merged into the bundle by tauri-build itself.
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
-        tauri_build::AppManifest::new().commands(&["app_log", "bridge", "connect_server", "server_address"]),
+        tauri_build::AppManifest::new().commands(&["app_log", "bridge", "connect_server", "server_address", "rail_orgs", "rail_switch", "rail_add", "rail_menu"]),
     ))
     .expect("the app manifest could not be built");
 }

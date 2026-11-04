@@ -13,7 +13,8 @@
     "security": {
       "csp": null,
       "capabilities": [
-        "server"
+        "server",
+        "rail"
       ]
     }
   },

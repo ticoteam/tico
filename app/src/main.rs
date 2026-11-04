@@ -2,7 +2,8 @@
 // A bundled first-run page selects the server, then one ordinary window shows the hub's own page. No
 // menu-bar item: on macOS the Dock icon reopens a hidden window and carries the Needs you count. One
 // source builds every company's app on macOS, Windows and Linux: the name, icon, identifier and server
-// URL come in at build time (scripts/app.sh).
+// URL come in at build time (scripts/app.sh). A generic macOS build keeps a list of servers (orgs): each
+// org's page is a child of the main window on its own data store, and a rail on the left switches them.
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 mod applog;
@@ -14,18 +15,21 @@ mod bridge;
 mod windows;
 
 
+use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use serde_json::Value;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Manager, RunEvent, State, WebviewWindow, WindowEvent};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::{AppHandle, Emitter, EventTarget, LogicalPosition, Manager, RunEvent, State, WindowEvent};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
 use bridge::{app_log, bridge};
 use config::Config;
 use hub::{Client, HubStatus};
-use windows::{build_server_window, build_window, eval, main_window, open_search, remember_frame, reload, restore_frame, server_capability, show_window};
+use orgs::{Document, Org, Orgs};
+use windows::{build_server_window, build_window, clear_store, eval, forget_owned, layout, main_window, open_search, org_label, remember_frame, reload, show_window, switch_to, sync_rail, take_owned, RAIL};
 
 const USER_AGENT: &str = "TicoHub/2.0 Tauri";
 const MIN_WIDTH: u32 = 360;
@@ -33,25 +37,39 @@ const MIN_HEIGHT: u32 = 400;
 // Lines of the shell's log a Support diagnostics bundle carries.
 pub(crate) const LOG_LINES: usize = 200;
 
+/// The shell's state. When more than one lock is held, they are taken in this order: orgs, connection, visual_origin.
 struct AppState {
     connection: Mutex<Option<Config>>,
     visual_origin: Mutex<Option<visual_origin::VisualOrigin>>,
     status: Mutex<HubStatus>,
     // Set while the shell itself places the window, so that placement is not saved as the person's.
     applying_frame: AtomicBool,
+    // The orgs this run shows, and which one is open. The open one's server is `connection`.
+    orgs: Mutex<Orgs>,
+    // The windows an org opened (hub files, meetings) as (window label, org id): removing the org closes them.
+    owned: Mutex<Vec<(String, String)>>,
+    // The orgs whose page capability is granted. Ids are never reused, so a grant never has to be taken back.
+    granted: Mutex<HashSet<String>>,
+}
+
+impl AppState {
+    fn new(orgs: Orgs, connection: Option<Config>) -> AppState {
+        AppState {
+            connection: Mutex::new(connection),
+            visual_origin: Mutex::new(None),
+            status: Mutex::new(HubStatus::default()),
+            applying_frame: AtomicBool::new(false),
+            orgs: Mutex::new(orgs),
+            owned: Mutex::new(Vec::new()),
+            granted: Mutex::new(HashSet::new()),
+        }
+    }
 }
 
 type App = AppHandle<tauri::Wry>;
 
 fn main() {
     applog::init();
-    let state = AppState {
-        connection: Mutex::new(None),
-        visual_origin: Mutex::new(None),
-        status: Mutex::new(HubStatus::default()),
-        applying_frame: AtomicBool::new(false),
-    };
-
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -62,22 +80,27 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_window(app);
         }))
-        .manage(state)
-        .invoke_handler(tauri::generate_handler![app_log, bridge, connect_server, server_address])
+        // The real list is read in setup, once the app's folders are known.
+        .manage(AppState::new(Orgs::new(Document::default(), None), None))
+        .invoke_handler(tauri::generate_handler![app_log, bridge, connect_server, server_address, rail_orgs, rail_switch, rail_add, rail_menu])
         .setup(move |app| {
             match applog::attach(log_dir(app.handle()).as_deref()) {
                 Some(path) => log::info!("{} {} starting; this log is {}", config::app_name(), app.package_info().version, applog::shown(&path)),
                 None => log::warn!("{} {} starting; no log file, so this log goes to stderr only", config::app_name(), app.package_info().version),
             }
-            let path = server_path(app.handle())?;
-            let config = Config::load(&path).map_err(std::io::Error::other)?;
-            if let Some(config) = &config {
-                app.add_capability(server_capability(&config.hub).to_string())?;
-            }
+            // The orgs this run shows: orgs.json on a build that keeps a list, otherwise the one server the app
+            // has always used (server.txt, or the build's own address).
+            let file = if orgs::multi_org_build() { Some(app.path().app_config_dir()?.join(orgs::FILE_NAME)) } else { None };
+            let legacy = || -> Result<Option<url::Url>, String> {
+                let path = server_path(app.handle()).map_err(|e| e.to_string())?;
+                Ok(Config::load(&path)?.map(|config| config.hub))
+            };
+            let found = orgs::startup(file, legacy).map_err(std::io::Error::other)?;
+            let connection = found.active().and_then(|org| org.hub()).map(Config::new);
             let state: State<AppState> = app.state();
-            select_connection(&state, config);
-            if connection(app.handle()).is_some() { build_window(app.handle())?; }
-            else { build_server_window(app.handle())?; }
+            *state.orgs.lock().unwrap() = found;
+            select_connection(&state, connection);
+            build_window(app.handle())?;
             build_menu(app.handle())?;
             #[cfg(not(target_os = "macos"))]
             {
@@ -95,12 +118,15 @@ fn main() {
             }
             start_polling(app.handle().clone());
             start_updates(app.handle().clone());
-            restore_frame(app.handle());
             show_window(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
             if window.label() != "main" {
+                // A window an org opened belongs to that org only while it is open.
+                if let WindowEvent::Destroyed = event {
+                    forget_owned(window.app_handle(), window.label());
+                }
                 return;
             }
             match event {
@@ -114,7 +140,12 @@ fn main() {
                 // A meeting window left open must not keep the app running with no main window.
                 #[cfg(not(target_os = "macos"))]
                 WindowEvent::Destroyed => window.app_handle().exit(0),
-                WindowEvent::Moved(_) | WindowEvent::Resized(_) => remember_frame(window.app_handle()),
+                // The rail and the org's page are placed by the shell, so both follow the window's size.
+                WindowEvent::Resized(_) => {
+                    layout(window.app_handle());
+                    remember_frame(window.app_handle());
+                }
+                WindowEvent::Moved(_) => remember_frame(window.app_handle()),
                 _ => {}
             }
         })
@@ -153,6 +184,21 @@ fn server_path(app: &App) -> tauri::Result<std::path::PathBuf> {
     Ok(app.path().app_config_dir()?.join("server.txt"))
 }
 
+/// The open org, if there is one.
+pub(crate) fn active_org(app: &App) -> Option<Org> {
+    app.state::<AppState>().orgs.lock().unwrap().active().cloned()
+}
+
+/// How many orgs this run shows.
+pub(crate) fn org_count(app: &App) -> usize {
+    app.state::<AppState>().orgs.lock().unwrap().orgs().len()
+}
+
+/// The label of the open org's page, or "" with none (no webview has that label).
+fn active_label(app: &App) -> String {
+    active_org(app).map(|org| org_label(&org.id)).unwrap_or_default()
+}
+
 #[tauri::command]
 fn server_address(app: App) -> String {
     connection(&app).map(|c| c.hub.to_string()).unwrap_or_default()
@@ -162,6 +208,24 @@ fn server_address(app: App) -> String {
 async fn connect_server(app: App, address: String) -> Result<(), String> {
     if !config::is_generic() { return Err("This app uses its built-in server.".into()); }
     let hub = config::validate_server(&address).await?;
+    if orgs::multi_org_build() {
+        // An org already on this server is opened; otherwise the server is added as an org on a store of its own.
+        let id = {
+            let state = app.state::<AppState>();
+            let mut list = state.orgs.lock().unwrap();
+            let existing = list.find_hub(&hub).map(|org| org.id.clone());
+            let id = match existing {
+                Some(id) => id,
+                None => list.add(&hub)?.id,
+            };
+            id
+        };
+        switch_to(&app, &id).map_err(|e| e.to_string())?;
+        // The main window may be hidden (macOS keeps it so when closed): the org must be seen once the setup window goes.
+        show_window(&app);
+        close_setup_later(&app);
+        return Ok(());
+    }
     let path = server_path(&app).map_err(|_| "Could not open the app's settings folder.")?;
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|_| "Could not create the app's settings folder.")?;
     let temporary = path.with_extension("tmp");
@@ -172,6 +236,183 @@ async fn connect_server(app: App, address: String) -> Result<(), String> {
     select_connection(&app.state::<AppState>(), None);
     app.request_restart();
     Ok(())
+}
+
+/// Closes the setup window a moment after it has asked for a server: closing a window from its own call would tear
+/// down the page that is still waiting for the answer.
+fn close_setup_later(app: &App) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        if let Some(window) = app.get_webview_window("server") {
+            let _ = window.close();
+        }
+    });
+}
+
+// ----------------------------------------------------------------------------- orgs
+/// Brings the menu, the rail and the open org's place up to date after the orgs or the open one change. It runs as
+/// its own task, because a menu cannot be rebuilt inside the menu event that asked for the change.
+pub(crate) fn refresh_chrome(app: &App) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = build_menu(&app);
+        let _ = sync_rail(&app);
+        layout(&app);
+        emit_orgs(&app);
+    });
+}
+
+/// What the rail shows: each org's id and title, and which one is open. Nothing else of an org leaves the shell.
+fn rail_list(app: &App) -> Value {
+    let state = app.state::<AppState>();
+    let list = state.orgs.lock().unwrap();
+    let open = list.active().map(|org| org.id.clone());
+    let items: Vec<Value> = list.orgs().iter().map(|org| serde_json::json!({
+        "id": org.id,
+        "title": org.title(),
+        "active": open.as_deref() == Some(org.id.as_str()),
+    })).collect();
+    Value::Array(items)
+}
+
+/// Tells the rail that the list changed. Only the rail hears it: an org's page must not learn of the other orgs.
+fn emit_orgs(app: &App) {
+    let _ = app.emit_to(EventTarget::webview(RAIL), "orgs-changed", rail_list(app));
+}
+
+/// The setup window, to add an org: from the rail, the menu, or the bridge. Spawned, as window creation is.
+pub(crate) fn add_org(app: &App) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = build_server_window(&app);
+    });
+}
+
+/// The org menu, shown at a point in the main window: the orgs, then add and remove. Spawned, because a popup cannot
+/// run inside the call that asked for it.
+pub(crate) fn popup_orgs(app: &App, x: f64, y: f64) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let (Some(window), Ok(menu)) = (main_window(&app), org_menu(&app)) else { return };
+        let _ = window.popup_menu_at(&menu, LogicalPosition::new(x, y));
+    });
+}
+
+fn org_menu(app: &App) -> tauri::Result<Menu<tauri::Wry>> {
+    let (list, open) = {
+        let state = app.state::<AppState>();
+        let orgs = state.orgs.lock().unwrap();
+        let open = orgs.active().cloned();
+        (orgs.orgs().to_vec(), open)
+    };
+    let menu = Menu::new(app)?;
+    for org in &list {
+        let checked = open.as_ref().is_some_and(|open| open.id == org.id);
+        menu.append(&CheckMenuItem::with_id(app, format!("org-switch:{}", org.id), org.title(), true, checked, None::<&str>)?)?;
+    }
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    menu.append(&MenuItem::with_id(app, "org-add", "Add Organization…", true, None::<&str>)?)?;
+    if let Some(open) = &open {
+        menu.append(&MenuItem::with_id(app, "org-remove", format!("Remove {}…", open.title()), true, None::<&str>)?)?;
+    }
+    Ok(menu)
+}
+
+/// Asks before an org is removed. Its sign-in and its data on this Mac go with it; the other orgs are not touched.
+fn ask_remove(app: &App, org: &Org) {
+    let (handle, id) = (app.clone(), org.id.clone());
+    app.dialog()
+        .message(format!("Remove {}? Its sign-in and its data on this Mac are deleted. Other organizations are not affected.", org.title()))
+        .title("Remove organization")
+        .buttons(MessageDialogButtons::OkCancelCustom("Remove".into(), "Cancel".into()))
+        .show(move |confirmed| {
+            if confirmed {
+                tauri::async_runtime::spawn(async move { remove_org(&handle, &id).await });
+            }
+        });
+}
+
+/// Removes an org: its windows and page close, its data store is deleted, and the list is saved. Removing the open
+/// org opens the first one left, or the setup window when none is left.
+async fn remove_org(app: &App, id: &str) {
+    let (removed, was_open) = {
+        let state = app.state::<AppState>();
+        let mut list = state.orgs.lock().unwrap();
+        let was_open = list.active().is_some_and(|org| org.id == id);
+        let removed = list.remove(id);
+        (removed, was_open)
+    };
+    let Some(removed) = removed else { return };
+    for label in take_owned(app, id) {
+        if let Some(window) = app.get_webview_window(&label) {
+            let _ = window.close();
+        }
+    }
+    if let Some(page) = app.get_webview(&org_label(id)) {
+        let _ = page.close();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(store) = removed.store_id() {
+            if let Err(e) = app.remove_data_store(*store.as_bytes()).await {
+                // The store is still in use: its data is cleared at least, and the list no longer names it.
+                log::warn!("could not delete an org's data store, so clearing it instead: {e}");
+                let _ = clear_store(app, &removed);
+            }
+        }
+    }
+    if was_open {
+        match active_org(app) {
+            Some(next) => {
+                if let Err(e) = switch_to(app, &next.id) {
+                    log::warn!("could not open the next org: {e}");
+                }
+            }
+            None => {
+                let state = app.state::<AppState>();
+                select_connection(&state, None);
+                *state.status.lock().unwrap() = HubStatus::default();
+                // The setup window first, so that the app keeps a window while the main one goes.
+                let _ = build_server_window(app);
+                if let Some(window) = main_window(app) {
+                    let _ = window.destroy();
+                }
+            }
+        }
+    }
+    refresh_chrome(app);
+}
+
+#[tauri::command]
+fn rail_orgs(app: App, webview: tauri::Webview) -> Result<Value, String> {
+    only_rail(&webview)?;
+    Ok(rail_list(&app))
+}
+
+#[tauri::command]
+async fn rail_switch(app: App, webview: tauri::Webview, id: String) -> Result<(), String> {
+    only_rail(&webview)?;
+    switch_to(&app, &id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn rail_add(app: App, webview: tauri::Webview) -> Result<(), String> {
+    only_rail(&webview)?;
+    add_org(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn rail_menu(app: App, webview: tauri::Webview, x: f64, y: f64) -> Result<(), String> {
+    only_rail(&webview)?;
+    popup_orgs(&app, x, y);
+    Ok(())
+}
+
+/// The org commands are the rail's alone; the org pages have no use for them.
+fn only_rail(webview: &tauri::Webview) -> Result<(), String> {
+    if webview.label() == RAIL { Ok(()) } else { Err("Only the org list may call this.".into()) }
 }
 
 // ----------------------------------------------------------------------------- deep links
@@ -193,7 +434,12 @@ fn build_menu(app: &App) -> tauri::Result<()> {
     let app_menu = Submenu::new(app, &name, true)?;
     app_menu.append(&PredefinedMenuItem::about(app, Some(&format!("About {name}")), None)?)?;
     app_menu.append(&MenuItem::with_id(app, "updates", "Check for Updates…", true, None::<&str>)?)?;
-    if config::is_generic() {
+    if orgs::multi_org_build() {
+        app_menu.append(&MenuItem::with_id(app, "org-add", "Add Organization…", true, None::<&str>)?)?;
+        if let Some(open) = active_org(app) {
+            app_menu.append(&MenuItem::with_id(app, "org-remove", format!("Remove {}…", open.title()), true, None::<&str>)?)?;
+        }
+    } else if config::is_generic() {
         app_menu.append(&MenuItem::with_id(app, "server", "Change server…", true, None::<&str>)?)?;
     }
     app_menu.append_items(&[
@@ -219,8 +465,24 @@ fn build_menu(app: &App) -> tauri::Result<()> {
 }
 
 fn menu_event(app: &App, id: &str) {
+    // Switching runs as its own task: it opens a page, which a menu event should not wait for.
+    if let Some(org) = id.strip_prefix("org-switch:") {
+        let (app, org) = (app.clone(), org.to_string());
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = switch_to(&app, &org) {
+                log::warn!("could not open the org: {e}");
+            }
+        });
+        return;
+    }
     match id {
-        "server" if config::is_generic() => { let _ = build_server_window(app); }
+        "server" => { let _ = build_server_window(app); }
+        "org-add" => add_org(app),
+        "org-remove" => {
+            if let Some(open) = active_org(app) {
+                ask_remove(app, &open);
+            }
+        }
         "search" => open_search(app),
         "reload" => reload(app),
         "updates" => update_now(app),
@@ -230,25 +492,37 @@ fn menu_event(app: &App, id: &str) {
 
 // ----------------------------------------------------------------------------- Dock badge
 /// The Needs you count on the Dock icon (macOS), cleared at zero or when the hub cannot be read. Signed out of
-/// Cloudflare Access, it shows "!" instead: the count is unknown, and the window says to sign in again.
+/// Cloudflare Access, it shows "!" instead: the count is unknown, and the window says to sign in again. With 2+ orgs
+/// there is no one count to show, so the badge is cleared.
 fn render_badge(app: &App) {
+    let several = !polls_status(org_count(app));
     let HubStatus { needs, signed_out, .. } = app.state::<AppState>().status.lock().unwrap().clone();
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
-        if let Some(window) = main_window(&handle) {
-            if signed_out { badge_signed_out(&window) } else { let _ = window.set_badge_count(badge_count(needs)); }
+        let Some(window) = main_window(&handle) else { return };
+        if several {
+            let _ = window.set_badge_count(None);
+        } else if signed_out {
+            badge_signed_out(&window);
+        } else {
+            let _ = window.set_badge_count(badge_count(needs));
         }
     });
 }
 
+/// Whether the Needs you count is polled. One server has one count, so with 2+ orgs nothing is polled.
+fn polls_status(count: usize) -> bool {
+    count < 2
+}
+
 #[cfg(target_os = "macos")]
-fn badge_signed_out(window: &WebviewWindow) {
+fn badge_signed_out(window: &tauri::Window) {
     let _ = window.set_badge_label(Some("!".into()));
 }
 
 // A label is macOS only; elsewhere the unknown count is cleared.
 #[cfg(not(target_os = "macos"))]
-fn badge_signed_out(window: &WebviewWindow) {
+fn badge_signed_out(window: &tauri::Window) {
     let _ = window.set_badge_count(None);
 }
 
@@ -262,6 +536,14 @@ mod badge_tests {
     fn the_dock_badge_shows_needs_you_and_clears_at_zero() {
         assert_eq!(super::badge_count(0), None);
         assert_eq!(super::badge_count(7), Some(7));
+    }
+
+    #[test]
+    fn needs_you_is_polled_only_while_there_is_one_org() {
+        assert!(super::polls_status(0));
+        assert!(super::polls_status(1));
+        assert!(!super::polls_status(2));
+        assert!(!super::polls_status(3));
     }
 }
 
@@ -336,7 +618,7 @@ async fn check_for_update_once(app: &App) {
             Err(_) => { report_update(app, "failed", "the update feed address is invalid"); return; }
         };
         let cookie = if hub::same_origin(&connection.hub, &endpoint) {
-            Client::new(connection.clone()).cookie_header(app, &endpoint)
+            Client::new(connection.clone(), active_label(app)).cookie_header(app, &endpoint)
         } else {
             None
         };
@@ -399,8 +681,13 @@ fn start_polling(app: App) {
 
 async fn refresh_status(app: &App) {
     let state: State<AppState> = app.state();
+    // With 2+ orgs the Needs you count is off, so nothing is requested from any hub.
+    if !polls_status(org_count(app)) {
+        render_badge(app);
+        return;
+    }
     let Some(config) = connection(app) else { return };
-    let fresh = Client::new(config.clone()).status(app).await;
+    let fresh = Client::new(config.clone(), active_label(app)).status(app).await;
     // A status request for the previous server may finish after someone changes the address.
     if connection(app).map(|c| c.hub) != Some(config.hub) { return; }
     *state.status.lock().unwrap() = fresh;

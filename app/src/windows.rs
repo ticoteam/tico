@@ -6,13 +6,17 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::webview::{NewWindowFeatures, NewWindowResponse, PageLoadEvent, PageLoadPayload, Webview, WebviewBuilder};
+use tauri::window::{Window, WindowBuilder};
+use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Rect, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
+use uuid::Uuid;
 
 use crate::bridge::bridge_script;
-use crate::config;
+use crate::config::{self, Config};
+use crate::orgs::Org;
 use crate::visual_origin;
-use crate::{connection, App, AppState, MIN_HEIGHT, MIN_WIDTH, USER_AGENT};
+use crate::{active_org, connection, refresh_chrome, select_connection, App, AppState, MIN_HEIGHT, MIN_WIDTH, USER_AGENT};
 
 /// The main window's last outer frame (x, y, width, height) in `frame` units: points on macOS,
 /// where one point space spans every display whatever its scale, and physical pixels elsewhere,
@@ -61,8 +65,14 @@ pub(crate) fn build_server_window(app: &App) -> tauri::Result<()> {
     Ok(())
 }
 
-pub(crate) fn server_capability(hub: &url::Url) -> Value {
+/// The runtime capability for one org's page. It names that page's webview and no window: a window grant would
+/// match every child webview in "main", so one org's grant would reach the others. The remote URL confines it to
+/// the org's own origin.
+pub(crate) fn server_capability(hub: &url::Url, label: &str) -> Value {
     let mut capability: Value = serde_json::from_str(include_str!("../capabilities/main.json")).unwrap();
+    capability["identifier"] = Value::from(label);
+    capability["windows"] = serde_json::json!([]);
+    capability["webviews"] = serde_json::json!([label]);
     // Explicit port also confines default-port URLs: URLPattern otherwise treats an
     // omitted port as a wildcard. Host characters must stay literal in URLPattern.
     let mut host = String::new();
@@ -79,8 +89,10 @@ pub(crate) fn server_capability(hub: &url::Url) -> Value {
 mod capability_tests {
     use super::*;
 
+    const ORG: &str = "org-o_7f3a0001";
+
     #[test]
-    fn ipc_is_confined_to_selected_origin_and_main_window() {
+    fn ipc_is_confined_to_selected_origin_and_its_own_webview() {
         for (address, pattern) in [
             ("https://team.example.com/tico/", "https://team.example.com:443/*"),
             ("http://localhost:8765/", "http://localhost:8765/*"),
@@ -88,7 +100,7 @@ mod capability_tests {
             ("https://[::1]:8765/", r"https://[\:\:1]:8765/*"),
             ("https://*.example.com/", r"https://\*.example.com:443/*"),
         ] {
-            let capability = server_capability(&url::Url::parse(address).unwrap());
+            let capability = server_capability(&url::Url::parse(address).unwrap(), ORG);
             assert_eq!(capability["remote"]["urls"], serde_json::json!([pattern]));
             let matcher: tauri::utils::acl::RemoteUrlPattern = pattern.parse().unwrap();
             assert!(matcher.test(&url::Url::parse(address).unwrap()));
@@ -100,72 +112,259 @@ mod capability_tests {
                           "blob:https://team.example.com/opaque"] {
                 assert!(!matcher.test(&url::Url::parse(other).unwrap()), "{pattern} accepted {other}");
             }
-            assert_eq!(capability["windows"], serde_json::json!(["main"]));
+            assert_eq!(capability["identifier"], ORG);
+            assert_eq!(capability["windows"], serde_json::json!([]));
+            assert_eq!(capability["webviews"], serde_json::json!([ORG]));
             assert_eq!(capability["local"], false);
         }
         let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        assert_eq!(config["app"]["security"]["capabilities"], serde_json::json!(["server"]));
+        assert_eq!(config["app"]["security"]["capabilities"], serde_json::json!(["server", "rail"]));
+    }
+    #[test]
+    fn two_orgs_pages_cannot_reach_each_other() {
+        let (acme, tidy) = (url::Url::parse("https://acme.example.com/").unwrap(), url::Url::parse("https://tidy.example.com/").unwrap());
+        let (a, b) = (server_capability(&acme, "org-o_aaaaaaaa"), server_capability(&tidy, "org-o_bbbbbbbb"));
+        assert_eq!(a["webviews"], serde_json::json!(["org-o_aaaaaaaa"]));
+        assert_eq!(b["webviews"], serde_json::json!(["org-o_bbbbbbbb"]));
+        let own: tauri::utils::acl::RemoteUrlPattern = a["remote"]["urls"][0].as_str().unwrap().parse().unwrap();
+        let other: tauri::utils::acl::RemoteUrlPattern = b["remote"]["urls"][0].as_str().unwrap().parse().unwrap();
+        assert!(own.test(&acme) && !own.test(&tidy));
+        assert!(other.test(&tidy) && !other.test(&acme));
+    }
+
+    #[test]
+    fn the_rail_capability_names_only_the_rail_and_its_own_commands() {
+        let rail: Value = serde_json::from_str(include_str!("../capabilities/rail.json")).unwrap();
+        assert_eq!(rail["webviews"], serde_json::json!(["rail"]));
+        assert_eq!(rail["windows"], serde_json::json!([]));
+        assert_eq!(rail["local"], true);
+        let permissions = rail["permissions"].as_array().unwrap();
+        for permission in permissions {
+            let permission = permission.as_str().unwrap();
+            assert!(!permission.contains("bridge") && !permission.contains("app-log") && !permission.contains("dialog"), "{permission}");
+        }
     }
 }
 
 // ----------------------------------------------------------------------------- window
 pub(crate) fn build_window(app: &App) -> tauri::Result<()> {
-    let Some(config) = connection(app) else { return build_server_window(app) };
-    let start = config.start_url();
-    // Files dropped on a page reach it (chat composers, task files): Tauri's own drop handler would swallow them on macOS.
-    let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(start))
+    let Some(org) = active_org(app) else { return build_server_window(app) };
+    if main_window(app).is_none() {
+        build_main(app)?;
+        restore_frame(app);
+    }
+    if active_webview(app).is_none() {
+        open_org_webview(app, &org)?;
+    }
+    sync_rail(app)?;
+    layout(app);
+    Ok(())
+}
+
+/// The window itself, hidden until its frame is restored. Its content is child webviews, placed by `layout`.
+fn build_main(app: &App) -> tauri::Result<Window> {
+    let builder = WindowBuilder::new(app, "main")
         .title(config::app_name())
         .inner_size(1240.0, 820.0)
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
+        .visible(false);
+    // The native title bar drags the window on every page, including sign-in pages that are
+    // not ours; an overlay title bar would leave dragging to each page.
+    #[cfg(target_os = "macos")]
+    let builder = builder.title_bar_style(tauri::TitleBarStyle::Visible);
+    builder.build()
+}
+
+/// The label of an org's page webview. Ids are never reused, so a label never names two orgs.
+pub(crate) fn org_label(id: &str) -> String {
+    format!("org-{id}")
+}
+
+/// The open org's page, if its webview is open.
+pub(crate) fn active_webview(app: &App) -> Option<Webview> {
+    let org = active_org(app)?;
+    app.get_webview(&org_label(&org.id))
+}
+
+/// The org list down the left of the window, shown with 2+ orgs.
+pub(crate) const RAIL: &str = "rail";
+pub(crate) const RAIL_WIDTH: f64 = 60.0;
+
+/// The org a window belongs to: its id, the address its navigation follows, and its own data store (macOS 14+).
+#[derive(Clone, Debug)]
+pub(crate) struct Home {
+    pub id: String,
+    pub hub: url::Url,
+    pub store: Option<Uuid>,
+}
+
+impl Home {
+    pub(crate) fn of(org: &Org) -> Option<Home> {
+        Some(Home { id: org.id.clone(), hub: org.hub()?, store: org.store_id() })
+    }
+}
+
+fn bounds(x: f64, y: f64, width: f64, height: f64) -> Rect {
+    Rect { position: LogicalPosition::new(x, y).into(), size: LogicalSize::new(width, height).into() }
+}
+
+/// Places the rail and the open org's page side by side, filling the window. Logical units throughout.
+pub(crate) fn layout(app: &App) {
+    let Some(window) = main_window(app) else { return };
+    let (Ok(size), Ok(scale)) = (window.inner_size(), window.scale_factor()) else { return };
+    let (width, height) = (size.width as f64 / scale, size.height as f64 / scale);
+    let rail = app.get_webview(RAIL);
+    let left = if rail.is_some() { RAIL_WIDTH } else { 0.0 };
+    if let Some(rail) = rail {
+        let _ = rail.set_bounds(bounds(0.0, 0.0, RAIL_WIDTH, height));
+    }
+    if let Some(page) = active_webview(app) {
+        let _ = page.set_bounds(bounds(left, 0.0, (width - left).max(1.0), height));
+    }
+}
+
+/// Shows the rail with 2+ orgs and removes it below that. Callers run `layout` afterwards.
+pub(crate) fn sync_rail(app: &App) -> tauri::Result<()> {
+    let several = app.state::<AppState>().orgs.lock().unwrap().orgs().len() >= 2;
+    match (several, app.get_webview(RAIL)) {
+        (true, None) => {
+            if let Some(window) = main_window(app) {
+                let builder = WebviewBuilder::new(RAIL, WebviewUrl::App("rail.html".into()))
+                    .on_navigation(|url| local_page(url));
+                window.add_child(builder, LogicalPosition::new(0.0, 0.0), LogicalSize::new(RAIL_WIDTH, 820.0))?;
+            }
+        }
+        (false, Some(rail)) => rail.close()?,
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The app's own pages: `tauri:` and the local page server.
+pub(crate) fn local_page(url: &url::Url) -> bool {
+    url.scheme() == "tauri" || matches!(url.host_str(), Some("tauri.localhost") | Some("localhost"))
+}
+
+/// Opens an org's page as a child of the main window, on the org's own data store (macOS 14+).
+fn open_org_webview(app: &App, org: &Org) -> tauri::Result<()> {
+    let (Some(window), Some(home)) = (main_window(app), Home::of(org)) else { return Ok(()) };
+    grant_org(app, &home)?;
+    let config = Config::new(home.hub.clone());
+    let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), true);
+    let mut builder = WebviewBuilder::new(org_label(&home.id), WebviewUrl::External(config.start_url()))
         .user_agent(USER_AGENT)
+        // Files dropped on a page reach it (chat composers, task files): Tauri's own drop handler would swallow them on macOS.
         .disable_drag_drop_handler()
         .devtools(true)
-        .visible(false)
         .initialization_script(&bridge_script(app))
-        .on_new_window(new_window_handler(app));
-    // A sign-in's whole redirect chain stays in this web view, so the resulting cookie belongs to the
-    // app, not the browser.
-    builder = follow_sign_in(app, builder, true);
+        .on_new_window(new_window_handler(app, home.clone()))
+        .on_navigation(navigate)
+        .on_page_load(move |_, payload| page(payload));
     #[cfg(target_os = "macos")]
     {
-        // The native title bar drags the window on every page, including sign-in pages that are
-        // not ours; an overlay title bar would leave dragging to each page.
-        builder = builder.title_bar_style(tauri::TitleBarStyle::Visible);
+        if let Some(store) = home.store {
+            builder = builder.data_store_identifier(*store.as_bytes());
+        }
     }
-    builder.build()?;
+    window.add_child(builder, LogicalPosition::new(0.0, 0.0), LogicalSize::new(1240.0, 820.0))?;
     Ok(())
+}
+
+/// Adds the page capability for an org's webview, once per org id. Ids are never reused, so a removed org's grant
+/// cannot match a live webview.
+fn grant_org(app: &App, home: &Home) -> tauri::Result<()> {
+    let state = app.state::<AppState>();
+    let mut granted = state.granted.lock().unwrap();
+    if !granted.contains(&home.id) {
+        app.add_capability(server_capability(&home.hub, &org_label(&home.id)).to_string())?;
+        granted.insert(home.id.clone());
+    }
+    Ok(())
+}
+
+/// Makes another org the open one: its page replaces the old one in the main window. The old page closes first,
+/// so the two never run at once. No restart and no new sign-in: the org's own store keeps its sign-in.
+pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
+    let state = app.state::<AppState>();
+    let org = {
+        let mut orgs = state.orgs.lock().unwrap();
+        if orgs.get(id).is_none() {
+            return Ok(());
+        }
+        orgs.set_active(id);
+        orgs.active().cloned()
+    };
+    let Some(org) = org else { return Ok(()) };
+    if app.get_webview(&org_label(&org.id)).is_some() {
+        refresh_chrome(app);
+        return Ok(());
+    }
+    let Some(home) = Home::of(&org) else { return Ok(()) };
+    // The connection follows the open org before its page opens, and the status starts over.
+    select_connection(&state, Some(Config::new(home.hub.clone())));
+    *state.status.lock().unwrap() = crate::hub::HubStatus::default();
+    if main_window(app).is_none() {
+        build_window(app)?;
+        show_window(app);
+    } else {
+        for (label, webview) in app.webviews() {
+            if label.starts_with("org-") {
+                let _ = webview.close();
+            }
+        }
+        open_org_webview(app, &org)?;
+        layout(app);
+    }
+    refresh_chrome(app);
+    Ok(())
+}
+
+/// Clears one org's cookies and storage when its page is not open: through a hidden 1x1 webview on its store.
+pub(crate) fn clear_store(app: &App, org: &Org) -> tauri::Result<()> {
+    let (Some(window), Some(home)) = (main_window(app), Home::of(org)) else { return Ok(()) };
+    let mut builder = WebviewBuilder::new(format!("clear-{}", home.id), WebviewUrl::External("about:blank".parse().unwrap()));
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(store) = home.store {
+            builder = builder.data_store_identifier(*store.as_bytes());
+        }
+    }
+    let webview = window.add_child(builder, LogicalPosition::new(0.0, 0.0), LogicalSize::new(1.0, 1.0))?;
+    let cleared = webview.clear_all_browsing_data();
+    let _ = webview.close();
+    cleared
 }
 
 /// Anything that is not the hub opens in the default browser, except during a sign-in: from the hub's
 /// own Cloudflare Access login, or the hub's own sign-in, the whole redirect chain stays in the window
 /// whatever identity provider it passes through, so the resulting cookie belongs to the app, not the
-/// browser. Each window keeps its own `signing_in`. Embedded frames navigate through the same handler
-/// with nothing to tell them apart, so only the top-level page ends a sign-in, by committing on the hub
-/// origin; and only the hub's own logins start one.
-fn follow_sign_in<'a>(app: &App, builder: WebviewWindowBuilder<'a, tauri::Wry, App>, visuals: bool) -> WebviewWindowBuilder<'a, tauri::Wry, App> {
+/// browser. Each webview keeps its own `signing_in` and its own hub, so a window opened for one org keeps
+/// following that org after the person switches to another. Embedded frames navigate through the same
+/// handler with nothing to tell them apart, so only the top-level page ends a sign-in, by committing on the
+/// hub origin; and only the hub's own logins start one.
+fn sign_in_hooks(app: &App, hub: Option<url::Url>, visuals: bool) -> (impl Fn(&url::Url) -> bool + Send + 'static, impl Fn(PageLoadPayload<'_>) + Send + Sync + 'static) {
     let signing_in = Arc::new(AtomicBool::new(false));
-    let (opener, page, committed) = (app.clone(), app.clone(), signing_in.clone());
-    builder
-        .on_navigation(move |url| stays_in_app(&opener, &signing_in, visuals, url))
-        // `Started` is the top-level page committing, with its address; frames never send it.
-        .on_page_load(move |_, payload| {
-            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
-                top_level_window(&page.state::<AppState>(), &committed, visuals, payload.url());
-            }
-        })
+    let (opener, page_app) = (app.clone(), app.clone());
+    let (committed, page_hub) = (signing_in.clone(), hub.clone());
+    let navigate = move |url: &url::Url| stays_in_app(&opener, &signing_in, visuals, hub.as_ref(), url);
+    // `Started` is the top-level page committing, with its address; frames never send it.
+    let page = move |payload: PageLoadPayload<'_>| {
+        if matches!(payload.event(), PageLoadEvent::Started) {
+            top_level_window(&page_app.state::<AppState>(), &committed, visuals, page_hub.as_ref(), payload.url());
+        }
+    };
+    (navigate, page)
 }
 
-fn stays_in_app(opener: &App, signing_in: &AtomicBool, visuals: bool, url: &url::Url) -> bool {
-    let stays = follow_window(&opener.state::<AppState>(), signing_in, visuals, url);
+fn stays_in_app(opener: &App, signing_in: &AtomicBool, visuals: bool, hub: Option<&url::Url>, url: &url::Url) -> bool {
+    let stays = follow_window(&opener.state::<AppState>(), signing_in, visuals, hub, url);
     if !stays {
         let _ = opener.opener().open_url(url.as_str(), None::<&str>);
     }
     stays
 }
 
-pub(crate) fn follow_window(state: &AppState, signing_in: &AtomicBool, visuals: bool, url: &url::Url) -> bool {
-    let connection = state.connection.lock().unwrap();
-    let hub = connection.as_ref().map(|c| &c.hub);
+pub(crate) fn follow_window(state: &AppState, signing_in: &AtomicBool, visuals: bool, hub: Option<&url::Url>, url: &url::Url) -> bool {
     let mut visual = state.visual_origin.lock().unwrap();
     let allowed = if visuals { visual.as_ref() } else { None };
     let stays = follow(hub, allowed, signing_in, url);
@@ -175,9 +374,7 @@ pub(crate) fn follow_window(state: &AppState, signing_in: &AtomicBool, visuals: 
     stays
 }
 
-pub(crate) fn top_level_window(state: &AppState, signing_in: &AtomicBool, visuals: bool, url: &url::Url) {
-    let connection = state.connection.lock().unwrap();
-    let hub = connection.as_ref().map(|c| &c.hub);
+pub(crate) fn top_level_window(state: &AppState, signing_in: &AtomicBool, visuals: bool, hub: Option<&url::Url>, url: &url::Url) {
     if visuals {
         let mut visual = state.visual_origin.lock().unwrap();
         // A new top-level Hub page must authenticate and send its config again. A permitted
@@ -276,37 +473,48 @@ fn new_window_target(hub: Option<&url::Url>, url: &url::Url) -> NewWindow {
     }
 }
 
-fn new_window_handler(app: &App) -> impl Fn(url::Url, tauri::webview::NewWindowFeatures) -> tauri::webview::NewWindowResponse<tauri::Wry> + Send + 'static {
+/// Where a page's new window goes: a hub file opens in a window of its own, on the page's org; other links open in
+/// the default browser.
+fn new_window_handler(app: &App, home: Home) -> impl Fn(url::Url, NewWindowFeatures) -> NewWindowResponse<tauri::Wry> + Send + 'static {
     let opener = app.clone();
     move |url, _| {
-        match new_window_target(connection(&opener).map(|c| c.hub).as_ref(), &url) {
+        match new_window_target(Some(&home.hub), &url) {
             NewWindow::Hub => {
                 // Built off the web view's own callback, which may not block on a new window.
-                let app = opener.clone();
-                tauri::async_runtime::spawn(async move { open_hub_window(&app, url) });
+                let (app, home) = (opener.clone(), home.clone());
+                tauri::async_runtime::spawn(async move { open_hub_window(&app, url, &home) });
             }
             NewWindow::Browser => { let _ = opener.opener().open_url(url.as_str(), None::<&str>); }
             NewWindow::Ignore => {}
         }
-        tauri::webview::NewWindowResponse::Deny
+        NewWindowResponse::Deny
     }
 }
 
-/// An ordinary window on one of the hub's files or logs. It shares the app's sign-in, but like a
-/// meeting window it is not `main`, so the page gets no native permissions.
-fn open_hub_window(app: &App, url: url::Url) {
+/// An ordinary window on one of the hub's files or logs. It shares the org's sign-in, but like a meeting window it
+/// is not `main`, so the page gets no native permissions.
+fn open_hub_window(app: &App, url: url::Url, home: &Home) {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
     let label = format!("hub-{}", NEXT.fetch_add(1, Ordering::Relaxed));
     #[cfg(not(target_os = "linux"))]
     let opened = url.clone();
+    let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), false);
     #[allow(unused_mut)]
-    let mut builder = follow_sign_in(app, WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
+    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
         .title(config::app_name())
         .inner_size(1000.0, 800.0)
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
         .user_agent(USER_AGENT)
         .disable_drag_drop_handler()
-        .on_new_window(new_window_handler(app)), false);
+        .on_new_window(new_window_handler(app, home.clone()))
+        .on_navigation(navigate)
+        .on_page_load(move |_, payload| page(payload));
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(store) = home.store {
+            builder = builder.data_store_identifier(*store.as_bytes());
+        }
+    }
     // A file the web view cannot show (Word, Excel, zip) downloads, leaving this window empty: save
     // it to Downloads, show it there and close the window. Only the file this window opened on
     // counts, so a window that showed its file stays open for later downloads from it. Not on
@@ -333,7 +541,28 @@ fn open_hub_window(app: &App, url: url::Url) {
             true
         });
     }
-    let _ = builder.build();
+    if builder.build().is_ok() {
+        owned_by(app, &label, &home.id);
+    }
+}
+
+/// Remembers which org a window belongs to, so removing the org closes it.
+fn owned_by(app: &App, label: &str, org: &str) {
+    app.state::<AppState>().owned.lock().unwrap().push((label.to_string(), org.to_string()));
+}
+
+/// Forgets a window that has closed.
+pub(crate) fn forget_owned(app: &App, label: &str) {
+    app.state::<AppState>().owned.lock().unwrap().retain(|(window, _)| window != label);
+}
+
+/// Takes the labels of the windows an org opened (hub files and meetings) off the list.
+pub(crate) fn take_owned(app: &App, org: &str) -> Vec<String> {
+    let state = app.state::<AppState>();
+    let mut owned = state.owned.lock().unwrap();
+    let (mine, rest): (Vec<_>, Vec<_>) = owned.drain(..).partition(|(_, id)| id == org);
+    *owned = rest;
+    mine.into_iter().map(|(label, _)| label).collect()
 }
 
 /// The same file, whatever its fragment.
@@ -500,39 +729,50 @@ mod new_window_tests {
     }
 }
 
-/// One ordinary, resizable window per meeting, showing only that meeting (`&window=1`); asking
-/// again for the same one brings it to the front.
-pub(crate) fn open_meeting_window(app: &App, id: &str) {
+/// One ordinary, resizable window per meeting, showing only that meeting (`&window=1`); asking again for the same
+/// one brings it to the front. It belongs to the org that asked: it follows that org's address and data store.
+pub(crate) fn open_meeting_window(app: &App, home: &Home, id: &str) {
     if id.is_empty() || id.len() > 64 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return;
     }
-    let label = format!("meeting-{id}");
+    let label = format!("meeting-{}-{id}", home.id);
     if let Some(window) = app.get_webview_window(&label) {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
         return;
     }
-    let Some(config) = connection(app) else { return };
-    let mut url = config.hub.clone();
+    let mut url = home.hub.clone();
     url.set_fragment(Some(&format!("/meetings?meeting={id}&window=1")));
-    let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
+    let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), false);
+    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
         .title("Meeting")
         .inner_size(1100.0, 820.0)
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
         .resizable(true)
         .user_agent(USER_AGENT)
         .disable_drag_drop_handler()
-        .on_new_window(new_window_handler(app));
-    let _ = follow_sign_in(app, builder, false).build();
+        .on_new_window(new_window_handler(app, home.clone()))
+        .on_navigation(navigate)
+        .on_page_load(move |_, payload| page(payload));
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(store) = home.store {
+            builder = builder.data_store_identifier(*store.as_bytes());
+        }
+    }
+    if builder.build().is_ok() {
+        owned_by(app, &label, &home.id);
+    }
 }
 
-pub(crate) fn main_window(app: &App) -> Option<WebviewWindow> {
-    app.get_webview_window("main")
+/// The main window: the rail and the open org's page.
+pub(crate) fn main_window(app: &App) -> Option<Window> {
+    app.get_window("main")
 }
 
 pub(crate) fn show_window(app: &App) {
-    if let Some(window) = main_window(app).or_else(|| app.get_webview_window("server")) {
+    if let Some(window) = main_window(app).or_else(|| app.get_window("server")) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -707,15 +947,15 @@ pub(crate) fn open_search(app: &App) {
 }
 
 pub(crate) fn eval(app: &App, js: &str) {
-    match main_window(app) {
-        Some(window) => { if let Err(e) = window.eval(js) { log::warn!("eval failed: {e}"); } }
-        None => log::warn!("eval: no main window"),
+    match active_webview(app) {
+        Some(page) => { if let Err(e) = page.eval(js) { log::warn!("eval failed: {e}"); } }
+        None => log::warn!("eval: no org page is open"),
     }
 }
 
 // Cmd+R reaches this through the View menu too.
 pub(crate) fn reload(app: &App) {
-    if let (Some(config), Some(window)) = (connection(app), main_window(app)) {
-        let _ = window.navigate(config.start_url());
+    if let (Some(config), Some(page)) = (connection(app), active_webview(app)) {
+        let _ = page.navigate(config.start_url());
     }
 }
