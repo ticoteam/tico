@@ -8,8 +8,7 @@ image: how the base snapshot is made and refreshed, and how a new machine become
 
 A bot in cloud mode is either on the company's **shared** cloud machine or on its **own**. Light bots (marketing,
 ops, most roles) share one machine per company, so a company pays for one machine and its starts, not one per bot.
-Heavy bots get their own: a bot made from the `video-producer` template, or a Builder (named "Builder" or
-"Builder (...)"), starts on its own machine; every other bot starts on the shared one, the rest of Engineering included
+Heavy bots get their own: a bot made from the `video-producer` template, or a Builder (made from the `builder` template, a copy of one, or named "Builder", "Builder 2" or "Builder (...)"), starts on its own machine; every other bot starts on the shared one, the rest of Engineering included
 (leads, reviewers and QA run short turns). That default is read once, when the
 bot first gets a cloud machine row; after that a person switches it in the bot editor ("Shared cloud machine" / "Own
 cloud machine" under Computer).

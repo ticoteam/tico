@@ -156,6 +156,7 @@ export type Automation = {
   runs: number;
 };
 };
+  destinations?: Array<Record<string, unknown>> | null;
   enabled?: boolean;
   hold?: {
   dropped: number;
@@ -205,6 +206,7 @@ export type AutomationHeld = {
   runs: number;
 };
 };
+  destinations?: Array<Record<string, unknown>> | null;
   enabled?: boolean;
   hold?: {
   dropped: number;
@@ -239,6 +241,7 @@ export type AutomationHeld = {
 export type AutomationIn = {
   batch?: Record<string, unknown> | null;
   builtin?: boolean;
+  destinations?: Array<unknown> | null;
   enabled?: boolean;
   group?: string | null;
   name: string;
@@ -275,6 +278,7 @@ export type AutomationOverviewRuns = {
 
 export type AutomationPatch = {
   batch?: Record<string, unknown> | null;
+  destinations?: Array<unknown> | null;
   enabled?: boolean | null;
   group?: string | null;
   name?: string | null;

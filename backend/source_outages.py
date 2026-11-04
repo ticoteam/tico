@@ -145,7 +145,7 @@ def batch_waiters(c, bot):
         refs = H._json(row['refs'], {}) or {}
         if refs.get('caused_by', '').startswith('human:') or refs.get('wake_digest'):
             continue
-        groups.setdefault((row['conversation_id'], refs.get('task')), []).append(dict(row))
+        groups.setdefault((row['conversation_id'], H._task_ref(refs.get('task'))), []).append(dict(row))
     for jobs in groups.values():
         if len(jobs) > 1:
             wake_presets._release(c, bot, jobs)

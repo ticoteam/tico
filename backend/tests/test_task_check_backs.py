@@ -7,6 +7,7 @@ from backend import task_check_backs as CB
 from backend import wake_rules as W
 from backend.store import H
 from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.test_cloud_machines import cloud  # noqa: F401
 
 
 @pytest.fixture
@@ -31,6 +32,17 @@ def wakes(c, tid):
     return c.execute("SELECT m.*,j.state job_state FROM messages m LEFT JOIN jobs j ON j.message_id=m.id "
                      "WHERE json_extract(m.refs,'$.task')=? AND json_extract(m.refs,'$.wake')='check_back'",
                      (tid,)).fetchall()
+
+
+def handled(c, tid):
+    """The bot's turn for these notices ran and ended, so none of them is still in flight."""
+    c.execute("UPDATE jobs SET state='completed' WHERE state='queued' AND message_id IN "
+              "(SELECT message_id FROM task_check_back_wakes WHERE task_id=?)", (tid,))
+
+
+def edited(c, tid):
+    """A person edits the task: a recorded change since the last notice, which a bare due-time move is not."""
+    H._task_event(c, tid, "human:ana", "body", "old body", "new body")
 
 
 def test_creation_defaults_human_exclusion_and_assignment_scope(followups):
@@ -385,6 +397,7 @@ def test_explicit_reparking_without_progress_reaches_one_diagnostic(followups, m
         for _ in range(3):
             due(c, H.task(c, row["id"]))
             assert CB.sweep(c)["woke"] == [row["id"]]
+            handled(c, row["id"])  # the bot's turn ran and ended before the next explicit re-park
             CB.set_time(c, H.task(c, row["id"]), "5m", actor="bot:ops")
         due(c, H.task(c, row["id"]))
         assert CB.sweep(c)["woke"] == [] and routed == [row["id"]]
@@ -396,6 +409,17 @@ def test_explicit_reparking_without_progress_reaches_one_diagnostic(followups, m
         CB.set_time(c, H.task(c, row["id"]), "2h", actor="human:ana")
         due(c, H.task(c, row["id"]))
         assert CB.sweep(c)["woke"] == [row["id"]]  # an explicit person's retry is meaningful intervention
+
+
+def test_bot_set_appointment_wakes_with_no_new_activity(followups):
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        handled(c, row["id"])
+        CB.set_time(c, H.task(c, row["id"]), "45m", "Check the CI run.", actor="bot:ops")  # the bot's own appointment
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]  # nothing in Tico moved, and the bot still wakes
+        assert len(wakes(c, row["id"])) == 2
 
 
 def test_result_consumer_must_record_disposition_instead_of_reparking(followups):
@@ -464,3 +488,331 @@ def test_results_returned_while_disabled_remain_audit_only_after_enable(followup
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('system_routines',?)", (json.dumps({CB.KEY: {"on": True}}),))
         assert CB.sweep(c)["woke"] == []
         assert CB.coverage(c)["results"] == 2
+
+
+def test_due_moving_while_a_notice_is_queued_replaces_it_with_one_live_notice(followups):
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        # The due time moves again while the first notice still waits (a snooze end, a deferral, a repair). That
+        # notice is for a time that no longer holds: it is canceled, the current one queued, and nothing more follows.
+        c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (H.shift(H.now(), seconds=-2), row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        assert CB.sweep(c)["woke"] == []
+        assert c.execute("SELECT count(*) FROM task_check_back_wakes WHERE task_id=?", (row["id"],)).fetchone()[0] == 2
+        assert sorted(w["job_state"] for w in wakes(c, row["id"])) == ["canceled", "queued"]
+
+
+def test_later_due_time_wakes_again_once_the_first_notice_is_handled(followups):
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        handled(c, row["id"])
+        edited(c, row["id"])  # the due time moves only because a person edited the task
+        later = H.shift(H.now(), minutes=30)
+        c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (later, row["id"]))
+        assert CB.sweep(c, H.shift(H.now(), minutes=31))["woke"] == [row["id"]]
+        assert len(wakes(c, row["id"])) == 2
+
+
+def test_sleeping_computer_takes_no_notices_and_each_task_wakes_once_it_returns(followups):
+    from backend.tests.test_api import assign, runner
+    r = runner(followups)
+    assign(followups, r, "ops")
+    with followups.app.state.store.transaction() as c:
+        rows = [due(c, H.task_create(c, "human:ana", "Inspect sleeping result " + str(i), "x", "bot:ops", lint=False))
+                for i in range(3)]
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.shift(H.now(), minutes=-10), r["runner_id"]))
+        for _ in range(3):
+            assert CB.sweep(c)["woke"] == []
+        assert all(not wakes(c, row["id"]) for row in rows)
+        assert CB.view(H.task(c, rows[0]["id"]), c)["delivery"] == "computer_unavailable"
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), r["runner_id"]))
+        assert sorted(CB.sweep(c)["woke"]) == sorted(row["id"] for row in rows)
+        assert CB.sweep(c)["woke"] == []
+        assert all(len(wakes(c, row["id"])) == 1 for row in rows)
+
+
+def test_idle_reachable_bot_is_woken_a_bounded_number_of_times(followups, monkeypatch):
+    from backend.tests.test_api import assign, runner
+    monkeypatch.setattr(H, "_no_diagnosis", lambda *a: True)  # no diagnostic task: the guard only blocks further wakes
+    r = runner(followups)
+    assign(followups, r, "ops")
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        woke, at = [], H.now()
+        for _ in range(24 * 6):  # a day of sweeps every ten minutes; every notice is handled without a next time
+            c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (at, r["runner_id"]))
+            if CB.sweep(c, at)["woke"]:
+                woke.append(at)
+            handled(c, row["id"])
+            at = H.shift(at, minutes=10)
+        assert 1 <= len(woke) <= 3
+        gaps = [(H.parse_ts(b) - H.parse_ts(a)).total_seconds() for a, b in zip(woke, woke[1:])]
+        assert all(gap >= 30 * 60 for gap in gaps)
+
+
+def test_a_stopped_cloud_machine_is_started_by_one_followup_and_gets_no_more(cloud):  # noqa: F811
+    """A cloud machine sleeps when idle and is started by queued work for its bot. Its silence must not hold the
+    follow-up: the one notice queues, the machine's want sees it and starts the machine, and a later sweep adds none."""
+    from backend import cloud_machines as CM
+    from backend.tests.test_cloud_machines import enrolled
+    store = cloud.store
+    with store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('system_routines',?)", (json.dumps({CB.KEY: {"on": True}}),))
+    enrolled(cloud)
+    cloud.hq.calls.clear()
+    cloud.manager.synced = None
+    cloud.tick()
+    with store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")  # the enrolling chat is not why it stays on
+    cloud.at[0] = cloud.row()["active_at"] + 299
+    cloud.tick()
+    cloud.tick(1)
+    assert cloud.row()["state"] == "stopped"
+    with store.transaction() as c:
+        runner_id = CM.row(c, "ops")["runner_id"]
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.shift(H.now(), minutes=-10), runner_id))  # asleep
+        row = due(c, H.task_create(c, "human:ana", "Inspect the cloud result", "x", "bot:ops", lint=False))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        [wake] = wakes(c, row["id"])
+        job = c.execute("SELECT id,state FROM jobs WHERE message_id=?", (wake["id"],)).fetchone()
+        assert job["state"] == "queued"
+        assert CM.bot_want(c, store.settings, "ops", runner_id, cloud.at[0])[1] == "job:" + job["id"]
+    cloud.hq.calls.clear()
+    assert "start" in cloud.tick()
+    with store.transaction() as c:
+        assert CB.sweep(c)["woke"] == []
+        queued = c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued' "
+                           "AND json_extract(m.refs,'$.wake')='check_back' AND json_extract(m.refs,'$.task')=?",
+                           (row["id"],)).fetchone()[0]
+        assert queued == 1
+        assert len(wakes(c, row["id"])) == 1
+
+
+def test_moved_due_time_replaces_the_stale_notice_on_a_stopped_cloud_machine(cloud):  # noqa: F811
+    """The due time moves while the one notice waits on a stopped cloud machine. That notice is now obsolete, and
+    cloud_machines.bot_want starts no machine for an obsolete notice, so left queued it would hold the dedupe and the
+    follow-up would never be sent. The sweep cancels it, queues the current one, and that one starts the machine."""
+    from backend import cloud_machines as CM
+    from backend.tests.test_cloud_machines import enrolled
+    store = cloud.store
+    with store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('system_routines',?)", (json.dumps({CB.KEY: {"on": True}}),))
+    enrolled(cloud)
+    cloud.hq.calls.clear()
+    cloud.manager.synced = None
+    cloud.tick()
+    with store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
+    cloud.at[0] = cloud.row()["active_at"] + 299
+    cloud.tick()
+    cloud.tick(1)
+    assert cloud.row()["state"] == "stopped"
+    with store.transaction() as c:
+        runner_id = CM.row(c, "ops")["runner_id"]
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.shift(H.now(), minutes=-10), runner_id))  # asleep
+        row = due(c, H.task_create(c, "human:ana", "Inspect the moved cloud result", "x", "bot:ops", lint=False))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        [first] = wakes(c, row["id"])
+        edited(c, row["id"])  # the moved due time follows a person's edit, which is what makes the notice a change
+        c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (H.shift(H.now(), seconds=-2), row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        by_id = {w["id"]: w for w in wakes(c, row["id"])}
+        assert len(by_id) == 2 and by_id[first["id"]]["job_state"] == "canceled"
+        [current] = [w for mid, w in by_id.items() if mid != first["id"]]
+        job = c.execute("SELECT id,state FROM jobs WHERE message_id=?", (current["id"],)).fetchone()
+        assert job["state"] == "queued"
+        assert CM.bot_want(c, store.settings, "ops", runner_id, cloud.at[0])[1] == "job:" + job["id"]
+    cloud.hq.calls.clear()
+    assert "start" in cloud.tick()
+    with store.transaction() as c:
+        assert CB.sweep(c)["woke"] == []
+        assert len(wakes(c, row["id"])) == 2
+
+
+def test_a_notice_a_live_run_took_still_holds_the_dedupe_when_the_due_time_moves(followups):
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        [wake] = wakes(c, row["id"])
+        c.execute("UPDATE jobs SET state='running' WHERE message_id=?", (wake["id"],))
+        c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (H.shift(H.now(), seconds=-2), row["id"]))
+        assert CB.sweep(c)["woke"] == []
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (wake["id"],)).fetchone()[0] == "running"
+
+
+@pytest.mark.parametrize("cpu,mem,gated", [(10, .95, True), (95, .2, False)])
+def test_memory_hold_gates_a_followup_even_when_the_computer_is_also_overloaded(followups, cpu, mem, gated):
+    """Six one-minute samples over 90% make the computer overloaded, and start_places.computer_hold then names only the
+    generic "computer busy". Memory at 95% still holds the follow-up. CPU alone does not: that is the overload's own rule."""
+    import time
+    from backend.performance import load_status
+    from backend.tests.test_api import assign, ready, runner
+    from backend.tests.test_runner_load import point
+    r = runner(followups)
+    assign(followups, r, "ops")
+    ready(followups, r, ["ops"])
+    now = int(time.time()) // 60 * 60
+    post(followups, "runners/performance",
+         {"samples": [point(now - 300 + i * 60, cpu=cpu, mem=mem) for i in range(6)]}, r["token"])
+    with followups.app.state.store.transaction() as c:
+        assert load_status(c, r["runner_id"])["overloaded"]  # the premise: the generic reason is the one that wins
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), r["runner_id"]))
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == ([] if gated else [row["id"]])
+        if gated:
+            assert CB.view(H.task(c, row["id"]), c)["delivery"] == "computer_unavailable"
+            assert not wakes(c, row["id"])
+
+
+def test_live_receipt_probe_searches_indexes_and_never_scans_history(followups):
+    with followups.app.state.store.transaction() as c:
+        plan = [r["detail"] for r in c.execute("EXPLAIN QUERY PLAN " + CB.IN_FLIGHT_SQL,
+                                                ("task", "bot:ops", *CB.LIVE_JOBS, *CB.LIVE_RUNS))]
+    assert plan and not any("SCAN" in detail.split() for detail in plan), plan
+
+
+def test_repeat_wake_with_nothing_new_backs_off_and_keeps_its_note(followups):
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]  # the first inspection goes out whatever has changed
+        handled(c, row["id"])
+        CB.set_time(c, H.task(c, row["id"]), "45m", "Inspect the review.", system=True)  # a keeper-set re-park
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == []
+        after = H.task(c, row["id"])
+        assert after["check_back_at"] > H.now() and after["check_back_note"] == "Inspect the review."
+        assert len(wakes(c, row["id"])) == 1
+
+
+@pytest.mark.parametrize("change", ["message", "event"])
+def test_repeat_wake_goes_out_once_a_person_adds_a_message_or_event(followups, change):
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        handled(c, row["id"])
+        CB.set_time(c, H.task(c, row["id"]), "45m", system=True)  # a keeper-set re-park
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == []
+        if change == "message":
+            H.task_comment(c, "human:ana", row["id"], "The reviewer asked for a rename.", wake=False)
+        else:
+            edited(c, row["id"])
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        assert len(wakes(c, row["id"])) == 2
+
+
+def test_a_person_reply_on_a_bot_requested_task_wakes_the_bot_at_the_keepers_repeat(followups):
+    """A person owns a task a bot requested. Her reply is a message, not a task event, and stand() skips the owner's
+    messages, so only the conversation shows it: the keeper's re-park must still wake the requesting bot."""
+    with followups.app.state.store.transaction() as c:
+        row = due(c, H.task_create(c, "bot:ops", "Ask Ana about the rename", "Ask before renaming.", "human:ana", lint=False))
+        assert row["requester_id"] == "bot:ops" and CB.actor_for(row) == "bot:ops"
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        handled(c, row["id"])
+        H.task_comment(c, "human:ana", row["id"], "Use the new name.", wake=False)
+        CB.set_time(c, H.task(c, row["id"]), "45m", system=True)  # the keeper's repeat, nothing else moved
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        assert len(wakes(c, row["id"])) == 2
+
+
+def test_quiet_repeats_never_feed_the_stall_gate_so_a_later_reply_still_wakes(followups, monkeypatch):
+    routed = []
+    monkeypatch.setattr(H, "_no_diagnosis", lambda *a: None)
+    monkeypatch.setattr(H, "_escalate_stuck", lambda c, row, count: routed.append(row["id"]))
+    with followups.app.state.store.transaction() as c:
+        row = due(c, H.task_create(c, "bot:ops", "Ask Ana about the rename", "Ask before renaming.", "human:ana", lint=False))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        handled(c, row["id"])
+        for _ in range(3):  # nothing new: the keeper's repeats back off without waking the bot or counting as repairs
+            due(c, H.task(c, row["id"]))
+            assert CB.sweep(c)["woke"] == []
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='check_back_repair'", (row["id"],)).fetchone()[0] == 0
+        H.task_comment(c, "human:ana", row["id"], "Use the new name.", wake=False)
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        assert routed == [] and len(wakes(c, row["id"])) == 2
+
+
+def test_hourly_cap_counts_repeat_wakes_as_well_as_first_ones(followups, monkeypatch):
+    monkeypatch.setattr(CB, "WAKES_PER_BOT_HOUR", 1)
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        handled(c, row["id"])
+        H.task_comment(c, "human:ana", row["id"], "New evidence.", wake=False)
+        due(c, H.task(c, row["id"]))
+        checked = CB.sweep(c)
+        assert checked["woke"] == [] and checked["blocked"] == [row["id"]]
+        assert CB.view(H.task(c, row["id"]), c)["delivery"] == "hourly_wake_cap"
+        assert CB.sweep(c, H.shift(H.now(), hours=1, seconds=1))["woke"] == [row["id"]]
+
+
+def test_unread_result_is_never_quieted_and_escalates_through_the_repair_path(followups, monkeypatch):
+    """The requester reads a returned result, its turn ends, and it neither closes nor reopens it. Each pass still wakes
+    it, and every repair counts toward the stall gate, so the result escalates once instead of backing off forever."""
+    routed = []
+    monkeypatch.setattr(H, "_no_diagnosis", lambda *a: None)
+    monkeypatch.setattr(H, "_escalate_stuck", lambda c, row, count: routed.append(row["id"]))
+    with followups.app.state.store.transaction() as c:
+        row = H.task_create(c, "bot:ops", "Read the returned result", "Close it or reopen it.", "bot:finance", lint=False)
+        H.task_update(c, "bot:finance", row["id"], status="done")
+        for n in range(H.STALL_WAKES_PER_DAY):
+            due(c, H.task(c, row["id"]))
+            assert CB.sweep(c)["woke"] == [row["id"]]  # first wake, then one per pass: never quieted
+            handled(c, row["id"])
+            CB.finished_turn(c, f"attempt-{n}", "ops", row["id"])  # read it; the turn ends with it still done
+            assert CB._repairs(c, H.task(c, row["id"]))[0] == n + 1
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [] and routed == [row["id"]]  # the stall gate escalates it once
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='check_back_quiet'", (row["id"],)).fetchone()[0] == 0
+        assert len(wakes(c, row["id"])) == H.STALL_WAKES_PER_DAY
+
+
+@pytest.mark.parametrize("state", ["failed", "canceled"])
+def test_wake_that_never_reached_the_bot_is_repeated_not_quieted(followups, state):
+    """A notice whose job ended without the bot getting it (failed once its pre-start retries ran out, or canceled) is no
+    quiet repeat: after the repair moves the due time, the next due pass wakes the bot again instead of backing off."""
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]  # the first wake is sent
+        c.execute("UPDATE jobs SET state=? WHERE message_id IN (SELECT message_id FROM task_check_back_wakes WHERE task_id=?)",
+                  (state, row["id"]))  # its job ends without the bot ever getting it
+        assert CB.sweep(c)["repaired"] == [row["id"]]  # the same due time, already sent: the keeper moves it on
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]  # the bot never received it, so the next pass wakes it again
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='check_back_quiet'", (row["id"],)).fetchone()[0] == 0
+        assert len(wakes(c, row["id"])) == 2
+
+
+def test_parent_carrying_an_unread_child_result_is_repaired_and_escalated_not_quieted(followups, monkeypatch):
+    """An active parent owned by bot:ops carries a child result: the child is requested by bot:ops and done by another
+    owner, so its check is routed to the parent. Each routed wake's turn ends without the child closed or reopened. The
+    parent is repaired every pass and escalated once by the stall gate, never quieted."""
+    routed = []
+    monkeypatch.setattr(H, "_no_diagnosis", lambda *a: None)
+    monkeypatch.setattr(H, "_escalate_stuck", lambda c, row, count: routed.append(row["id"]))
+    with followups.app.state.store.transaction() as c:
+        parent = H.task_create(c, "human:ana", "Plan the rename", "Decide the rename plan.", "bot:ops", lint=False)
+        child = H.task_create(c, "bot:ops", "Check the returned result", "Read and dispose.", "bot:finance", lint=False)
+        c.execute("INSERT INTO task_relations VALUES(?,?,'parent','human:ana',?)", (child["id"], parent["id"], H.now()))
+        H.task_update(c, "bot:finance", child["id"], status="done")  # the routed check moves onto the parent
+        assert H.task(c, child["id"])["check_back_at"] is None and H.task(c, parent["id"])["check_back_at"]
+        for n in range(H.STALL_WAKES_PER_DAY):
+            due(c, H.task(c, parent["id"]))
+            assert CB.sweep(c)["woke"] == [parent["id"]]  # first wake, then one per pass: never quieted
+            handled(c, parent["id"])
+            CB.finished_turn(c, f"attempt-{n}", "ops", parent["id"])  # read the result; the child stays done
+            assert CB._repairs(c, H.task(c, parent["id"]))[0] == n + 1
+        due(c, H.task(c, parent["id"]))
+        assert CB.sweep(c)["woke"] == [] and routed == [parent["id"]]  # the stall gate escalates the parent once
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='check_back_quiet'", (parent["id"],)).fetchone()[0] == 0
+        assert len(wakes(c, parent["id"])) == H.STALL_WAKES_PER_DAY
+        assert H.task(c, child["id"])["status"] == "done"

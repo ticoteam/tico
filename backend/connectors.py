@@ -178,6 +178,8 @@ class MailMessage(M.Contract):
     is_internal: bool = False
     has_unsubscribe: bool = False
     rule_hits: list = Field(default_factory=list, max_length=100)
+    # Set by the computer from its copy of the owner's sends (connectors/mail/db.py). None from a computer that predates it.
+    known_sender: bool | None = None
 
     # A field over its cap is cut, not refused: the batch is never acknowledged, so one refused
     # message came back first on every retry and stopped its mailbox's copy for hours. Only the

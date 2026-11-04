@@ -152,9 +152,11 @@ def _derived_owner(r):
 
 
 def _backfill_sql(r):
-    """SQL: a message written as history (`refs.import`, `refs.replay`), which is never unread."""
+    """SQL: a message written as history (`refs.import`, `refs.replay`), or moved into a Home from a room
+    (`refs.moved_home`, backend/bot_home_merge.py): never unread."""
     refs = f"CASE WHEN json_valid({r}.refs) THEN {r}.refs END"
-    return f"(json_extract({refs},'$.import') IS NOT NULL OR json_extract({refs},'$.replay') IS NOT NULL)"
+    return (f"(json_extract({refs},'$.import') IS NOT NULL OR json_extract({refs},'$.replay') IS NOT NULL "
+            f"OR json_extract({refs},'$.moved_home') IS NOT NULL)")
 
 
 def ensure(c):
@@ -1944,6 +1946,10 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
     actor, v = _actor_of(principal)
     if origin and origin.get("origin_id") and start is not None:
         raise Problem("start", "A replicated message posts into a linked thread", 422)
+    if thread_id:
+        # A person's old chat with a bot is now part of the bot's Home (backend/bot_home_merge.py).
+        from . import bot_home_merge
+        thread_id = bot_home_merge.home_for(c, thread_id) or thread_id
     if start is not None or (parent_message_id and not c.execute(
             "SELECT 1 FROM conversations WHERE parent_message_id=?", (parent_message_id,)).fetchone()):
         made = _post_making(c, principal, thread_id, body, start, parent_message_id, checked,

@@ -40,9 +40,10 @@ def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api
             add_bot(c, slug)
         add_bot(c, "saver", wake_preset="token_saver")
         add_bot(c, "grok-designer", harness="grokbot")
-        # The starter factory's Builder is called pr-reviewer and owns the Dev tickets: it stays a doer.
+        # The starter's pr-reviewer was the Builder before the builder template: an install that kept it stays a doer.
         add_bot(c, "pr-reviewer")
         add_bot(c, "pr-reviewer-2")
+        add_bot(c, "builder")
         kind = c.execute("SELECT id FROM task_types WHERE name='Dev tickets'").fetchone()
         if kind is None:
             c.execute("INSERT INTO task_types(id,name,created_at,updated_at) VALUES('dev','Dev tickets',?,?)", (H.now(), H.now()))
@@ -53,6 +54,7 @@ def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api
         assert {slug: got[slug]["profile"] for slug in slugs} == slugs
         assert got["grok-designer"]["profile"] == P.RESPONDER and got["cpo"]["profile"] == "doer"
         assert got["pr-reviewer"]["profile"] == P.DOER and profile_of(c, "pr-reviewer-2")["profile"] == P.REVIEWER
+        assert profile_of(c, "builder")["profile"] == P.DOER
         # A former Token saver bot keeps its 30-minute window as a value of its own; Performance is the Doer's.
         assert got["saver"]["profile"] == P.DOER and got["saver"]["wake_preset"] == "token_saver"
         assert got["saver"]["profile_options"]["batch_seconds"] == 1800 and got["writer"]["wake_preset"] == "performance"

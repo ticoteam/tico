@@ -377,8 +377,10 @@ request may succeed later. Some carry one extra fact beside them (a `sign_in` pa
 | 413 | `too_large` | Over 2 MB (uploads 20 MB). |
 | 422 | `idempotency_key` | A write without an `Idempotency-Key`. |
 | 422 | `lint`, `date`, `hierarchy`... | A rule of the product refused the request. `detail` says what to change. |
+| 422 | `import_failed` | A file import was refused. `detail` says why: the file took over 30 seconds, needed over 1 GiB of memory, converted to over 1,000,000 characters, or could not be converted. |
 | 429 | `cap`, `budget` | A daily allowance is used. |
 | 503 | `busy` | The database was busy. Wait for `Retry-After` seconds and retry with the same `Idempotency-Key`. |
+| 503 | `imports_busy` | Two file imports are converting already. Wait a minute and send the import again (`retryable: true`). |
 | 503 | `storage_unavailable` | Try again shortly (`retryable: true`); back off. |
 
 Request validation (a missing field, a wrong type or an unknown field) uses the same envelope:

@@ -17,8 +17,18 @@ LIMIT = 50
 NOTE_MAX = 500
 FIRST_WAKES_PER_HOUR = max(1, int(os.environ.get("TICO_TASK_CHECK_BACKS_PER_BOT_HOUR", "12")))
 FLEET_FIRST_WAKES_PER_HOUR = max(1, int(os.environ.get("TICO_TASK_CHECK_BACKS_FLEET_HOUR", "50")))
+WAKES_PER_BOT_HOUR = max(1, int(os.environ.get("TICO_TASK_CHECK_BACKS_WAKES_PER_BOT_HOUR", "24")))  # first and repeat wakes
 WAKES_PER_TASK_DAY = 12
-ACTIVE = ("open", "doing", "waiting", "review", "ready")
+REACHABLE_SECONDS = 90  # a computer heard from this recently can take a start: execution.company_waiter's bar
+INFLIGHT_JOBS = ("queued", "held", "leased", "running", "uncertain")
+# Live receipts only, for the dedupe: a notice's job not yet handled, or a run still going that took its input.
+LIVE_JOBS = INFLIGHT_JOBS + ("input",)
+LIVE_RUNS = ("leased", "running", "input", "uncertain")
+# Job states that mean the bot got a check-back notice: its turn took it (input, running), ran it (uncertain) or finished
+# it (completed). Any other end never reached the bot: canceled, or failed once its pre-start retries ran out
+# (execution.PRE_START_TRIES). changed() only judges a wake _notice_in_flight found no live notice for.
+DELIVERED_JOBS = ("input", "running", "uncertain", "completed")
+ACTIVE =("open", "doing", "waiting", "review", "ready")
 RESULT = ("done", "declined")
 STATUSES = ACTIVE + RESULT
 PREDICATE = ("(status IN ('open','doing','waiting','review','ready') OR "
@@ -156,6 +166,26 @@ def default_time(c, row, at, stagger=False):
     return H.shift(at, minutes=30, seconds=seconds)
 
 
+def routed_to(c, result):
+    """The row a returned result's check goes to: its parent while the parent is active and its consumer is the same bot,
+    else the result itself. ensure(), moved() and carries_result() all route by this one rule."""
+    H = _H()
+    consumer = actor_for(result)
+    parent = H.task(c, H.TR.parent_of(c, result["id"]) or "")
+    return parent if consumer and parent and parent["status"] in ACTIVE and actor_for(parent) == consumer else result
+
+
+def carries_result(c, row):
+    """Whether a returned child result, not yet disposed of (still done or declined), has its check routed to this row.
+    The row's quiet repeats would back off a result nobody has read or disposed of, so it keeps the repair path."""
+    H = _H()
+    for cid in H.TR.child_ids(c, row["id"]):
+        child = H.task(c, cid)
+        if child and child["status"] in RESULT and routed_to(c, child)["id"] == row["id"]:
+            return True
+    return False
+
+
 def ensure(c, row, at=None):
     H = _H()
     if "version" not in row or "check_back_at" not in row:
@@ -168,10 +198,8 @@ def ensure(c, row, at=None):
         if not enabled(c):
             clear(c, row)
             return  # results returned during shadow mode belong to the historical audit, not an enable-time queue
-        consumer = actor_for(row)
-        parent = H.task(c, H.TR.parent_of(c, row["id"]) or "")
-        if not consumer or parent and parent["status"] in ACTIVE and actor_for(parent) == consumer:
-            clear(c, row)
+        if not actor_for(row) or routed_to(c, row)["id"] != row["id"]:
+            clear(c, row)  # no consumer, or the check is routed to the parent
             return
     if not row.get("check_back_at"):
         set_time(c, row, default_time(c, row, at), system=True, at=at)
@@ -184,12 +212,10 @@ def moved(c, row, at=None):
     ensure(c, row, at)
     if row["status"] not in RESULT or not enabled(c):
         return
-    consumer = actor_for(row)
-    if not consumer:
+    if not actor_for(row):
         clear(c, H.task(c, row["id"]))  # human acceptance uses its existing question; self-work is finished
         return
-    parent = H.task(c, H.TR.parent_of(c, row["id"]) or "")
-    target = parent if parent and parent["status"] in ACTIVE and actor_for(parent) == consumer else row
+    target = routed_to(c, row)
     now = H.shift(at, seconds=5)
     until = target.get("check_back_at")
     set_time(c, target, min(until, now) if until and until > at else now,
@@ -285,7 +311,7 @@ def _delivery(c, record):
     if not record or not record["message_id"]:
         return "missing"
     job = c.execute("SELECT state FROM jobs WHERE message_id=?", (record["message_id"],)).fetchone()
-    if job and job[0] in ("queued", "held", "leased", "running", "uncertain"):
+    if job and job[0] in INFLIGHT_JOBS:
         return job[0]  # a retry can be queued after an earlier attempt failed
     # Inputs are the receipt, including a check-back joined into a previously queued run.
     received = c.execute("SELECT a.state,a.created_at FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE j.message_id=? "
@@ -294,6 +320,70 @@ def _delivery(c, record):
     if received:
         return received[0]
     return job[0] if job else "missing"
+
+
+# One set-based probe of the live receipts: a job not yet handled, or a live run that took the notice as input. Keyed
+# by the ledger's (task_id, check_back_at) primary key, the message's primary key, jobs' unique message_id and
+# attempt_inputs' message_id key, so completed history is never read.
+IN_FLIGHT_SQL = ("SELECT 1 FROM task_check_back_wakes w JOIN messages m ON m.id=w.message_id "
+                 "WHERE w.task_id=? AND m.recipient_id=? AND (EXISTS (SELECT 1 FROM jobs j WHERE j.message_id=w.message_id "
+                 f"AND j.state IN ({','.join('?' * len(LIVE_JOBS))})) OR EXISTS (SELECT 1 FROM attempt_inputs i "
+                 "JOIN attempts a ON a.id=i.attempt_id WHERE i.message_id=w.message_id "
+                 f"AND a.state IN ({','.join('?' * len(LIVE_RUNS))}))) LIMIT 1")
+
+
+def _notice_in_flight(c, task_id, target):
+    """Whether a check-back notice for this task, to this bot, is still queued, held, leased, running or uncertain, or
+    a run still going took it. Any due time that moves while one waits (a snooze end, a deferral, a repair) must not
+    queue a second one."""
+    return c.execute(IN_FLIGHT_SQL, (task_id, target, *LIVE_JOBS, *LIVE_RUNS)).fetchone() is not None
+
+
+def _cancel_moved(c, row, target):
+    """Cancel this task's queued notices to this bot that no longer match the task (`stale`): its due time moved while
+    one waited. A claim cancels those, but only on a computer that wakes, and a stopped cloud machine is not started for
+    an obsolete notice (cloud_machines.bot_want). Left queued, it would hold the dedupe and nothing would be sent. A
+    notice a run already took is live, and stays, as does one a run started and yielded on."""
+    from .execution import suppress_notice
+    H = _H()
+    queued = c.execute("SELECT j.id,j.bot_id,j.attempt_id,j.message_id FROM task_check_back_wakes w "
+                       "JOIN messages m ON m.id=w.message_id JOIN jobs j ON j.message_id=m.id "
+                       "WHERE w.task_id=? AND m.recipient_id=? AND j.state='queued' "
+                       "AND NOT EXISTS (SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id "
+                       "AND r.decision='resume') "
+                       # A run that started and yielded continues on this job (execution.obsolete_notices_sql): keep it.
+                       "AND NOT EXISTS (SELECT 1 FROM attempts ya WHERE ya.id=j.attempt_id AND ya.started_at IS NOT NULL "
+                       "AND ya.state='interrupted' AND json_extract(ya.result,'$.yielded'))", (row["id"], target)).fetchall()
+    for job in queued:
+        if stale(c, H.message(c, job["message_id"]), job["bot_id"]):
+            suppress_notice(c, job, row["id"], "Check-back moved before its notice was delivered")
+
+
+def _computer_out(c, bot, at):
+    """Whether the bot's assigned computer should take no new notice now.
+
+    A cloud machine sleeps when idle and is started by queued work for its bot (cloud_machines.bot_want), so its silence
+    never gates: the notice queues and wakes it. Only its memory gates, and only while it is running and reporting.
+    Any other computer is out while silent past REACHABLE_SECONDS (asleep, offline), or while it holds new starts for a
+    stale sample (start_places.computer_hold). Memory is read on its own (start_places.memory_held): at 90%+ the computer
+    is also overloaded, and computer_hold then reports only "computer busy". CPU overload alone is not held here, and a
+    bot with no assigned computer is not gated."""
+    from . import cloud_machines, start_places
+    H = _H()
+    place = c.execute("SELECT r.id,r.last_seen_at FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?",
+                      (bot,)).fetchone()
+    if not place:
+        return False
+    reporting = bool(place["last_seen_at"]) and place["last_seen_at"] >= H.shift(at, seconds=-REACHABLE_SECONDS)
+    machine = cloud_machines.home(c, bot)
+    if machine is not None:
+        if machine["state"] != "running" or not reporting:
+            return False  # a stopped or starting machine takes the notice in its queue, and its want starts it
+        return start_places.memory_held(c, place["id"])  # reads the real clock, as every other caller does
+    if not reporting:
+        return True
+    hold = start_places.computer_hold(c, place["id"])
+    return (bool(hold) and hold[0] == start_places.NOT_REPORTING) or start_places.memory_held(c, place["id"])
 
 
 def stand(c, row):
@@ -340,6 +430,55 @@ def _unchanged_wakes(c, row):
             break
         count += 1
     return count
+
+
+def explicit(c, row):
+    """Whether a person or bot set the current due time itself; the keeper's defaults, repairs and re-parks are not."""
+    last = c.execute("SELECT actor_id AS actor FROM history_events WHERE subject_type='task' AND subject_id=? "
+                     "AND kind='check_back_at' ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
+    return bool(last) and last["actor"] != _H().KEEPER
+
+
+def changed(c, row):
+    """Whether anyone but the bot moved the task since its last delivered check-back wake. No recorded wake counts as
+    changed, and so does a notice that never reached the bot: one a moved due time canceled before delivery, or one whose
+    job failed once its pre-start retries ran out (only DELIVERED_JOBS count as delivered). A message on the task counts
+    too, even a comment: stand() skips the owner's messages, and a comment writes no task event. The sweep skips a task
+    whose notice is still in flight before it asks (_notice_in_flight), so a queued, held, leased or running wake is never
+    judged here and no second notice goes out while one waits."""
+    H = _H()
+    seen = c.execute("SELECT created_at,new FROM history_events WHERE subject_type='task' AND subject_id=? "
+                     "AND kind='check_back_wake' ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
+    if not seen or seen["new"] != stand(c, row):
+        return True
+    last = c.execute("SELECT j.state FROM task_check_back_wakes w JOIN jobs j ON j.message_id=w.message_id "
+                     "WHERE w.task_id=? ORDER BY w.sent_at DESC LIMIT 1", (row["id"],)).fetchone()
+    if not last or last["state"] not in DELIVERED_JOBS:
+        return True  # never reached the bot: canceled, or failed on its pre-start retries
+    if c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND created_at>=? AND deleted_at IS NULL "
+                 "AND sender_id NOT IN (?,?) LIMIT 1", (row["conversation_id"], seen["created_at"], actor_for(row), H.KEEPER)).fetchone():
+        return True
+    return bool(c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND created_at>=? "
+                          "AND kind NOT LIKE 'check_back%' AND actor_id IS NOT ? LIMIT 1",
+                          (row["id"], seen["created_at"], actor_for(row))).fetchone())
+
+
+def quiet(c, row, at):
+    """A keeper-set repeat with nothing new: check later on a doubling back-off from 30 minutes, capped at the 8h repair
+    cap, keeping the expected note. It is not a repair, so it never feeds the stall count that escalates work nothing moves.
+    Never for a result (done or declined): a result the bot read but did not dispose of keeps the repair path, which counts
+    and escalates, so reading it cannot end its follow-up. Never for a row carrying an unresolved child result
+    (carries_result): that result's check was routed here, so the same rule holds for the parent that receives it."""
+    H = _H()
+    state = stand(c, row)
+    count = 0
+    for r in c.execute("SELECT kind AS field,new FROM history_events WHERE subject_type='task' AND subject_id=? "
+                       "AND kind IN ('check_back_quiet','check_back_wake') ORDER BY created_at DESC,rowid DESC LIMIT 12", (row["id"],)):
+        if r["field"] == "check_back_wake" or r["new"] != state:
+            break
+        count += 1
+    set_time(c, row, H.shift(at, minutes=min(30 * 2 ** min(count, 4), 480)), system=True, at=at)
+    _event(c, row["id"], H.KEEPER, "check_back_quiet", None, state, "Nothing moved since the last check-back")
 
 
 def repair(c, row, at):
@@ -449,13 +588,17 @@ def sweep(c, at=None, failures=None, task_ids=None):
                 # Pausing is deliberate, not a failed follow-up. Keep debt due without spending retries while paused.
                 result["blocked"].append(row["id"])
                 continue
+            _cancel_moved(c, row, target)  # before the dedupe: a moved notice must not hold it and strand the follow-up
+            if _notice_in_flight(c, row["id"], target):
+                continue  # one notice per task and bot: the queued one carries this inspection until it is handled
+            if _computer_out(c, bot["id"], at):
+                # A silent or memory-held computer takes no notice; the due time waits for it instead of piling up.
+                blocked(c, row, "computer_unavailable")
+                result["blocked"].append(row["id"])
+                continue
             record = c.execute("SELECT * FROM task_check_back_wakes WHERE task_id=? AND check_back_at=?",
                                 (row["id"], row["check_back_at"])).fetchone()
             if record:
-                msg = H.message(c, record["message_id"]) if record["message_id"] else None
-                state = _delivery(c, record) if msg and msg["recipient_id"] == target else "missing"
-                if state in ("queued", "held", "leased", "running", "uncertain"):
-                    continue
                 repair(c, row, at)
                 result["repaired"].append(row["id"])
                 continue
@@ -481,7 +624,12 @@ def sweep(c, at=None, failures=None, task_ids=None):
                 repair(c, row, at)
                 result["blocked"].append(row["id"])
                 continue
-            if not c.execute("SELECT 1 FROM task_check_back_wakes WHERE task_id=? LIMIT 1", (row["id"],)).fetchone():
+            first = not c.execute("SELECT 1 FROM task_check_back_wakes WHERE task_id=? LIMIT 1", (row["id"],)).fetchone()
+            if not first and row["status"] not in RESULT and not carries_result(c, row) and not explicit(c, row) and not changed(c, row):
+                # keeper-set, carrying no unread result, and nothing moved: back off without counting as a repair
+                quiet(c, row, at)
+                continue
+            if first:
                 firsts = c.execute("SELECT count(*) FROM task_check_back_wakes w JOIN messages m ON m.id=w.message_id "
                                    "WHERE w.sent_at>=? AND m.recipient_id=? AND NOT EXISTS "
                                    "(SELECT 1 FROM task_check_back_wakes older WHERE older.task_id=w.task_id AND older.sent_at<w.sent_at)",
@@ -493,6 +641,12 @@ def sweep(c, at=None, failures=None, task_ids=None):
                     blocked(c, row, "hourly_first_wake_cap")
                     result["blocked"].append(row["id"])
                     continue  # retain visible due debt; a later pass owns delivery
+            hourly = c.execute("SELECT count(*) FROM task_check_back_wakes w JOIN messages m ON m.id=w.message_id "
+                               "WHERE w.sent_at>=? AND m.recipient_id=?", (H.shift(at, hours=-1), target)).fetchone()[0]
+            if hourly >= WAKES_PER_BOT_HOUR:
+                blocked(c, row, "hourly_wake_cap")
+                result["blocked"].append(row["id"])
+                continue  # retain visible due debt; a later pass owns delivery
             message = H._wake(c, row, target, context(c, row, target),
                               {"wake": "check_back", "check_back_at": row["check_back_at"], "delivery": "queue"},
                               trigger="check_back")
@@ -533,7 +687,7 @@ def stale(c, message, bot):
     refs = message.get("refs") or {}
     if message.get("sender_id") != H.KEEPER or refs.get("wake") != "check_back":
         return False
-    row = H.task(c, refs.get("task") or "")
+    row = H.task(c, H._task_ref(refs.get("task")) or "")
     return (not row or not enabled(c) or row.get("check_back_at") != refs.get("check_back_at")
             or actor_for(row) != "bot:" + bot or bool(human_snooze(row, H.now())))
 

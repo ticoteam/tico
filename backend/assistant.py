@@ -159,11 +159,12 @@ DECIDES_KEY = "assistant.decides_approvals"
 
 
 def decides(c, actor):
-    """Whether this person's own Assistant may decide approvals addressed to them: their own switch in Settings, which
-    only they turn on, and the team's rule (backend/team_rules.py), on unless the owner turned it off."""
+    """Whether this person's own Assistant may decide approvals addressed to them: their own switch in Settings, on by
+    default and turned off by them (an explicit off row stays off), and the team's rule (backend/team_rules.py), on
+    unless the owner turned it off."""
     from . import team_rules
     row = c.execute("SELECT value FROM preferences WHERE actor=? AND key=?", (actor, DECIDES_KEY)).fetchone()
-    on = bool(row) and json.loads(row[0]) is True
+    on = json.loads(row[0]) is True if row else True
     allowed = team_rules.load(c)["assistant_approvals"]
     return {"decides_approvals": on, "team_allows": allowed, "active": on and allowed}
 
@@ -1615,9 +1616,6 @@ def install(app, store, auth, mutate, onboarding):
                     raise Problem("own_request", "You asked for this approval yourself, so it stays the person's "
                                   "click: propose it on a card (`hub assistant propose`)", 403)
                 refuse_own_click(row)
-                if row["kind"] == "support":
-                    raise Problem("approve_support", "A report to the Tico team is sent only on the person's own "
-                                  "click, so leave it out of the read-back", 403)
                 if cut := too_long(row.get("payload") or {}):
                     raise Problem("approve_too_long", f"Approval {aid} has more in {', '.join(field_value(k, 40) for k in cut)} "
                                   "than the read-back can show in full, so it stays the person's click: leave it out", 409)
