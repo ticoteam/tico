@@ -14,7 +14,7 @@ In order:
 
 | Step | What it does | How often |
 | --- | --- | --- |
-| Collect | Records which bots did work in the window: a turn that changed something, a message, or a memory commit. Always on. | Every run |
+| Collect | Records which bots did work in the window: a settled turn that wrote something. Messages and memory commits do not count. Always on. | Every run |
 | Clean up | Prunes old rows: events, mail, retry keys, recorder data, finished webhook and automation runs, and Maintenance's own runs older than 30 days. Deadline work stays in the server's hourly check. | Every run |
 | Check health | The health scan. Still on its own timer for now. | Every run |
 | Find stuck | The task round-up. Still on its own timer for now. | Every run |
@@ -34,7 +34,7 @@ A step that is not moved here yet shows "on its old timer".
 
 ## Run now
 
-`POST /api/v2/maintenance/run`, or `hub maintenance run [--step KEY]`. Run now uses the same claim and due rules as the schedule, so a step runs only when it is due. A run that is already going is returned instead of a second one.
+`POST /api/v2/maintenance/run`, or `hub maintenance run [--step KEY]`. A plain Run now uses the same claim and due rules as the schedule, so a step runs only when it is due. `--step` runs that one step even when it is not due; a switched off step stays off, and a step on its old timer is skipped. A run that is already going is returned instead of a second one.
 
 ## Recording and recovery
 
@@ -51,14 +51,16 @@ The monthly judge spend cap is saved here as `monthly_cap_usd`. When it is saved
 
 Anyone signed in can read the settings, the steps and the runs. Only an owner or an admin can change the schedule, the pause, the spend cap or a step, or run it.
 
-Maintenance wakes share one limiter: one wake per bot per run, three per task a day, and fifty across the fleet an hour.
+Maintenance wakes share one limiter: one wake per bot per run, three per task a day, and fifty across the fleet an hour. A wake that names several tasks counts once toward the fleet and once against
+each of its tasks.
 
 ## Switches moved from the old jobs
 
 - Learnings became Learn.
 - Auto dream became Dream.
 - Health scan became Check health.
-- Task roundup, or else the stale review rule, became Find stuck.
+- Task roundup became Find stuck. The stale review rule does not: it defaults off, so a saved off stale review says
+  nothing about Find stuck and does not turn it off.
 
 A switch you chose keeps its value. A switch you never chose takes the new default. The stalled task check switch was removed.
 

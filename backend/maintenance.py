@@ -172,8 +172,8 @@ def tick(store, auth, at, failures=None):
 
 
 def run_now(store, auth, actor, step=None, wait=False):
-    """Run now (POST /api/v2/maintenance/run, `hub maintenance run`): one run, claimed like a scheduled one and due by the same rules. `step` runs only
-    that step. A run already live is returned as it is, so Run now and the schedule give one run. Returns (run, started)."""
+    """Run now (POST /api/v2/maintenance/run, `hub maintenance run`): one run, claimed like a scheduled one. A plain run keeps the due rules. `step` runs only
+    that step, due or not (a switched off step stays off, and a step on its old timer is skipped). A run already live is returned as it is, so Run now and the schedule give one run. Returns (run, started)."""
     if step is not None and step not in ORDER:
         raise Problem("invalid", f"No such Maintenance step: {step}", 422)
     now = H.now()
@@ -223,7 +223,7 @@ def _steps(store, auth, run_id, only, tally):
             plan[key] = ("off", "switched off")
         elif key in OLD_TIMER:
             plan[key] = ("skipped", OLD_TIMER_REASON)
-        elif not due(row, at):
+        elif only is None and not due(row, at):  # a step-only Run now runs that step whether or not it is due
             plan[key] = ("skipped", "not due")
         else:
             plan[key] = ("run", None)
@@ -501,7 +501,7 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/maintenance/run")
     def maintenance_run(request: Request, body: M.MaintenanceRunRequest):
-        """Run now: one run, due by the same rules as a scheduled one. `step` runs only that step. A run already live is
+        """Run now: one run, due by the same rules as a scheduled one. `step` runs only that step, even when it is not due. A run already live is
         returned instead of a second. `started` is false in that case. An owner or an admin."""
         who = request.state.identity
         may_change(auth, who)

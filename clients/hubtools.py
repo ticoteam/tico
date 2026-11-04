@@ -5353,8 +5353,9 @@ def maintenance_runs(api, args):
     return _as_person(api).call("GET", "maintenance/runs", query=query)
 
 
-@tool("hub_maintenance_run", "Maintenance: run now, all steps or only `step`. Run now is claimed and due by the same rules as the "
-      "schedule, so a step runs only when it is due and its switch is on; a run already going is returned, not a second one. "
+@tool("hub_maintenance_run", "Maintenance: run now, all steps or only `step`. A plain run is claimed and due by the same rules as the "
+      "schedule, so a step runs only when it is due and its switch is on; `step` runs that step even when it is not due. "
+      "A run already going is returned, not a second one. "
       "The owner or an admin.",
       {"step": {"type": "string", "enum": MAINTENANCE_STEPS}}, writes=True)
 def maintenance_run(api, args):

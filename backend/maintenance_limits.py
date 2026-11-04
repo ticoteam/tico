@@ -5,8 +5,11 @@ The limits, enforced together:
 - three wakes per task a day (a rolling 24 hours);
 - fifty wakes across the fleet an hour (a rolling hour).
 
-A wake is written as an events row when it is recorded: `maintenance.wake` against the bot, and `maintenance.wake.task`
-against the task. The events are the ledger, so a restart or a second process sees the same counts.
+A wake is written as events rows when it is recorded. One wake is one list: a `maintenance.wake` event against the bot,
+however many tasks the list names, and one `maintenance.wake.task` event against each distinct task in it. So a list of
+ten tasks is one wake toward the fleet cap and one wake against each of its tasks. The events are the ledger, so a restart
+or a second process sees the same counts. Every count is by actor (Keeper), so each one reads the events_task_origin index
+(actor, action, target, created_at).
 """
 from .store import H
 
@@ -15,11 +18,12 @@ WAKES_PER_TASK_DAY = 3
 WAKES_PER_HOUR = 50
 BOT_ACTION = "maintenance.wake"
 TASK_ACTION = "maintenance.wake.task"
+COUNT_TARGET = "SELECT count(*) FROM events WHERE actor=? AND action=? AND target=? AND created_at>=?"
+COUNT_FLEET = "SELECT count(*) FROM events WHERE actor=? AND action=? AND created_at>=?"
 
 
 def _count(c, action, target, since):
-    return c.execute("SELECT count(*) FROM events WHERE action=? AND target=? AND created_at>=?",
-                     (action, target, since)).fetchone()[0]
+    return c.execute(COUNT_TARGET, (H.KEEPER, action, target, since)).fetchone()[0]
 
 
 def allow(c, bot_id, task_id=None):
@@ -32,13 +36,14 @@ def allow(c, bot_id, task_id=None):
         return False
     if task_id and _count(c, TASK_ACTION, task_id, H.shift(now, days=-1)) >= WAKES_PER_TASK_DAY:
         return False
-    fleet = c.execute("SELECT count(*) FROM events WHERE action=? AND created_at>=?",
-                      (BOT_ACTION, H.shift(now, hours=-1))).fetchone()[0]
+    fleet = c.execute(COUNT_FLEET, (H.KEEPER, BOT_ACTION, H.shift(now, hours=-1))).fetchone()[0]
     return fleet < WAKES_PER_HOUR
 
 
-def record(c, bot_id, task_id=None):
-    """Write down one Maintenance wake to a bot, and to its task when it has one."""
-    H.event(c, H.KEEPER, BOT_ACTION, bot_id, {"task_id": task_id} if task_id else None)
-    if task_id:
+def record(c, bot_id, task_ids=()):
+    """Write down one Maintenance wake: one `maintenance.wake` event against the bot (one wake, however many tasks it
+    names), and one `maintenance.wake.task` event per distinct task id, so each task's own cap counts its wakes."""
+    task_ids = list(dict.fromkeys(task_ids))
+    H.event(c, H.KEEPER, BOT_ACTION, bot_id, {"task_ids": task_ids} if task_ids else None)
+    for task_id in task_ids:
         H.event(c, H.KEEPER, TASK_ACTION, task_id, {"bot_id": bot_id})

@@ -5,11 +5,14 @@ Synthetic fixtures: the api fixture's people (backend/tests/test_api.py; Ana own
 member)."""
 
 import importlib
+import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from backend import hubdb as H
 from backend import maintenance as M
 from backend import maintenance_limits as L
+from backend.maintenance_steps import collect
 from backend.tests.test_api import api, get, headers  # noqa: F401  (fixtures and helpers)
 
 mig = importlib.import_module("backend.migrations.0077_maintenance")
@@ -161,17 +164,35 @@ def test_a_failing_step_is_recorded_and_the_run_goes_on(api, monkeypatch):
 
 
 def test_the_switch_migration_keeps_an_explicit_choice_and_gives_an_inherited_one_the_new_default():
-    assert mig.switches({}, {}, {}) == {}, "nothing chosen: every step takes its default, and Learn's default is off"
-    assert mig.switches({"learnings": {"on": False}}, {}, {}) == {"learn": False}
-    assert mig.switches({"learnings": {"on": True}}, {}, {}) == {"learn": True}
-    assert mig.switches({"auto_dream": {"on": False}, "health_scan": {"on": True}}, {}, {}) == {
+    assert mig.switches({}) == {}, "nothing chosen: every step takes its default, and Learn's default is off"
+    assert mig.switches({"learnings": {"on": False}}) == {"learn": False}
+    assert mig.switches({"learnings": {"on": True}}) == {"learn": True}
+    assert mig.switches({"auto_dream": {"on": False}, "health_scan": {"on": True}}) == {
         "dream": False, "check_health": True}
-    assert mig.switches({"task_roundup": {"on": False}}, {"stale_review": True}, {}) == {"find_stuck": False}
-    assert mig.switches({}, {"stale_review": False}, {}) == {"find_stuck": False}
-    assert mig.switches({}, {}, {"TICO_STALE_REVIEW": "0"}) == {"find_stuck": False}
-    assert mig.switches({}, {"stale_review": True}, {"TICO_STALE_REVIEW": "0"}) == {"find_stuck": True}, \
-        "a saved rule beats the environment"
-    assert mig.switches({"stall_triage": {"on": False}}, {"stall_triage": False}, {}) == {}, "stall_triage is gone"
+    assert mig.switches({"task_roundup": {"on": False}}) == {"find_stuck": False}
+    assert mig.switches({"task_roundup": {"on": True}}) == {"find_stuck": True}
+    assert mig.switches({"stall_triage": {"on": False}}) == {}, "stall_triage is gone"
+
+
+def _migrated(registry, rules):
+    """The step switches after the migration runs on a bare database holding these two registry rows."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT)")
+    conn.executemany("INSERT INTO registry_metadata VALUES(?,?)",
+                     [("system_routines", json.dumps(registry)), ("rules", json.dumps(rules))])
+    mig.up(conn)
+    return dict(conn.execute("SELECT key, enabled FROM maintenance_steps").fetchall())
+
+
+def test_only_an_explicit_roundup_switch_sets_find_stuck_and_stale_review_never_does(monkeypatch):
+    """Stale review defaults off, so a saved off stale review, or TICO_STALE_REVIEW=0, must not turn Find stuck off."""
+    monkeypatch.setenv("TICO_STALE_REVIEW", "0")
+    assert _migrated({}, {"stale_review": False})["find_stuck"] == 1, "Find stuck keeps its default (on)"
+    assert _migrated({}, {})["find_stuck"] == 1
+    assert _migrated({}, {"stale_review": True})["find_stuck"] == 1
+    assert _migrated({"task_roundup": {"on": False}}, {"stale_review": True})["find_stuck"] == 0
+    assert _migrated({"task_roundup": {"on": True}}, {"stale_review": False})["find_stuck"] == 1
+    assert _migrated({"learnings": {"on": True}}, {})["learn"] == 1, "a saved Learn switch carries over"
 
 
 def test_replaying_the_migration_changes_nothing(api):
@@ -191,16 +212,36 @@ def test_the_limiter_allows_one_wake_per_bot_per_run_three_per_task_a_day_and_fi
     store = api.app.state.store
     with store.transaction() as c:
         assert L.allow(c, "bot_a", "task_1")
-        L.record(c, "bot_a", "task_1")
+        L.record(c, "bot_a", ("task_1",))
         assert not L.allow(c, "bot_a", "task_2"), "one Maintenance wake per bot per run"
         assert L.allow(c, "bot_b", "task_1")
-        L.record(c, "bot_b", "task_1")
-        L.record(c, "bot_c", "task_1")
+        L.record(c, "bot_b", ("task_1",))
+        L.record(c, "bot_c", ("task_1",))
         assert not L.allow(c, "bot_d", "task_1"), "three wakes per task a day"
         assert L.allow(c, "bot_d"), "a wake with no task is not counted against a task"
         for i in range(47):
             L.record(c, f"fleet_{i}")
         assert not L.allow(c, "bot_new"), "fifty wakes across the fleet an hour"
+
+
+def test_a_wake_that_names_a_list_of_tasks_is_one_fleet_wake_and_one_per_task(api):
+    store = api.app.state.store
+    day_ago, hour_ago = H.shift(H.now(), days=-1), H.shift(H.now(), hours=-1)
+    tasks = [f"list_task_{n}" for n in range(10)]
+    with store.transaction() as c:
+        L.record(c, "bot_list", tasks)
+        assert c.execute(L.COUNT_FLEET, (H.KEEPER, L.BOT_ACTION, hour_ago)).fetchone()[0] == 1, \
+            "ten tasks in one list are one wake toward the fleet cap"
+        assert all(c.execute(L.COUNT_TARGET, (H.KEEPER, L.TASK_ACTION, task, day_ago)).fetchone()[0] == 1
+                   for task in tasks), "each task counts its one wake"
+        assert not L.allow(c, "bot_list"), "the bot's one wake for this run is used"
+        L.record(c, "bot_dup", ["dup_task", "dup_task"])
+        assert c.execute(L.COUNT_TARGET, (H.KEEPER, L.TASK_ACTION, "dup_task", day_ago)).fetchone()[0] == 1, \
+            "a task named twice in one wake counts once"
+        L.record(c, "bot_more", ["list_task_0"])
+        L.record(c, "bot_more_2", ["list_task_0"])
+        assert not L.allow(c, "bot_three", "list_task_0"), "three wakes per task a day, across lists"
+        assert L.allow(c, "bot_three", "list_task_1"), "the other tasks are not used up"
 
 
 def test_only_an_owner_or_an_admin_changes_maintenance_and_everyone_reads_it(api, monkeypatch):
@@ -227,10 +268,70 @@ def test_the_api_saves_the_schedule_cap_and_steps_and_refuses_bad_ones(api, monk
     assert steps["learn"]["custom_every"] == 3 and steps["learn"]["custom_unit"] == "hours"
     assert steps["dream"]["max_bots"] == 5
     patch(api, "maintenance", {"steps": [{"key": "find_stuck", "frequency": "day"}]}, expected=422)
-    patch(api, "maintenance", {"steps": [{"key": "learn", "frequency": "custom"}]}, expected=422)
+    # suggest has no custom interval saved (learn kept the 3 hours above, so a frequency-only change to it is valid)
+    patch(api, "maintenance", {"steps": [{"key": "suggest", "frequency": "custom"}]}, expected=422)
     patch(api, "maintenance", {"steps": [{"key": "learn", "max_bots": 2}]}, expected=422)
     patch(api, "maintenance", {"schedule": "weekly"}, expected=422)
     run = api.post("/api/v2/maintenance/run", json={"step": "learn"}, headers=headers("ana-test")).json()
     assert run["started"] is True and run["run"]["step"] == "learn"
     listed = get(api, "maintenance/runs")
     assert "runs" in listed and "next" in listed
+
+
+def test_collect_counts_a_bot_only_when_a_settled_turn_wrote_something(api):
+    """Update's zero-work skip reads Collect. A "nothing new" wake that committed memory and posted a reply wrote nothing
+    Tico counts, so its bot does not count as having done work."""
+    store, _ = stores(api)
+    during = "2026-11-03T12:30:00.000000Z"
+    with store.transaction() as c:
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,did_nothing,outcome,state) "
+                  "VALUES('att-quiet','quiet',?,?,1,'nothing_to_do','done')", (during, during))
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,did_nothing,outcome,state) "
+                  "VALUES('att-busy','busy',?,?,0,'acted','done')", (during, during))
+        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed_at,files,runner_id,reported_at) "
+                  "VALUES('quiet','abc123','memory','quiet',?,'[]','runner',?)", (during, during))
+        c.execute("INSERT INTO messages(id,sender_id,kind,body,created_at) "
+                  "VALUES('msg-quiet','bot:quiet','say','Nothing new.',?)", (during,))
+    with store.read() as c:
+        counted = collect.did_work(c, "2026-11-03T12:00:00.000000Z", "2026-11-03T13:00:00.000000Z")
+    assert counted == {"busy"}, "only the turn that wrote something counts"
+
+
+def test_the_limiter_counts_read_the_events_index(api):
+    """Every limiter count is by actor (Keeper), so each one reads events_task_origin instead of scanning events."""
+    store, _ = stores(api)
+    since = "2026-11-03T00:00:00.000000Z"
+    with store.read() as c:
+        for sql, params in ((L.COUNT_TARGET, (H.KEEPER, L.BOT_ACTION, "bot", since)),
+                            (L.COUNT_FLEET, (H.KEEPER, L.BOT_ACTION, since))):
+            plan = " ".join(str(row[3]) for row in c.execute("EXPLAIN QUERY PLAN " + sql, params))
+            assert "events_task_origin" in plan, plan
+
+
+def _dream_started_now(store):
+    """Dream ran a moment ago, so on its own clock it is not due."""
+    with store.transaction() as c:
+        c.execute("UPDATE maintenance_steps SET last_started_at=? WHERE key='dream'",
+                  (M._stamp(datetime.now(timezone.utc)),))
+
+
+def test_a_step_only_run_now_runs_that_step_even_when_it_is_not_due(api, monkeypatch):
+    store, auth = stores(api)
+    monkeypatch.setitem(M.LIVE, "dream", lambda c, ctx: result("ran", "stubbed"))
+    _dream_started_now(store)
+    run, started = M.run_now(store, auth, "human:ana", step="dream", wait=True)
+    assert started and [s["step"] for s in run["steps"]] == ["dream"]
+    assert run["steps"][0]["status"] == "ran" and run["steps"][0]["reason"] == "stubbed", "not due, but Run now runs it"
+    run, _ = M.run_now(store, auth, "human:ana", step="learn", wait=True)
+    assert run["steps"][0]["status"] == "off", "a step switched off stays off"
+    run, _ = M.run_now(store, auth, "human:ana", step="suggest", wait=True)
+    assert run["steps"][0]["status"] == "skipped" and run["steps"][0]["reason"] == "on its old timer"
+
+
+def test_a_plain_run_now_keeps_the_due_rules(api, monkeypatch):
+    store, auth = stores(api)
+    monkeypatch.setitem(M.LIVE, "dream", lambda c, ctx: result("ran", "stubbed"))
+    _dream_started_now(store)
+    run, started = M.run_now(store, auth, "human:ana", wait=True)
+    steps = {s["step"]: s for s in run["steps"]}
+    assert started and steps["dream"]["status"] == "skipped" and steps["dream"]["reason"] == "not due"

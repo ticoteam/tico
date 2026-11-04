@@ -16,13 +16,12 @@ with INSERT OR IGNORE, so a replay of this file changes nothing. An explicit cho
 takes the step's new default:
 - Learn (`learnings` in Settings > Routines): Learn is off by default now, so an inherited Learn is off.
 - Dream (`auto_dream`), Check health (`health_scan`) and Find stuck (`task_roundup`): an on or off the customer saved.
-- Find stuck also takes the team rule `stale_review`, when it was saved as on or off and the roundup switch was not saved.
-- The `TICO_STALE_REVIEW` environment setting counts as a choice when the team rule was not saved.
+- The team rule `stale_review` and the `TICO_STALE_REVIEW` environment setting do not map to Find stuck. Stale review
+  defaults off, so a saved off stale review says nothing about Find stuck, and it must not turn Find stuck off.
 
 `stall_triage` is not copied: its switch is removed (team rule, environment, CONTROLS and the MCP tool).
 """
 import json
-import os
 from datetime import datetime, timezone
 
 STEP_KEYS = ("collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream")
@@ -113,30 +112,21 @@ def _flag(entry, name):
     return value if isinstance(value, bool) else None
 
 
-def switches(registry, rules, environ):
+def switches(registry):
     """{step key: on or off} for every step with an explicit choice. A step not in the result takes its default."""
     out = {}
-    for control, step in (("learnings", "learn"), ("auto_dream", "dream"), ("health_scan", "check_health")):
+    for control, step in (("learnings", "learn"), ("auto_dream", "dream"), ("health_scan", "check_health"),
+                          ("task_roundup", "find_stuck")):
         value = _flag(registry, control)
         if value is not None:
             out[step] = value
-    # Find stuck: the roundup switch first; otherwise the stale review's team rule (or its environment setting, which
-    # counts only when the rule was never saved) when either was chosen.
-    roundup = _flag(registry, "task_roundup")
-    stale = rules.get("stale_review") if isinstance(rules.get("stale_review"), bool) else None
-    if stale is None and environ.get("TICO_STALE_REVIEW", "").strip() in ("0", "1"):
-        stale = environ["TICO_STALE_REVIEW"].strip() == "1"
-    if roundup is not None:
-        out["find_stuck"] = roundup
-    elif stale is not None:
-        out["find_stuck"] = stale
     return out
 
 
 def up(conn):
     for statement in SCHEMA:
         conn.execute(statement)
-    chosen = switches(_stored(conn, "system_routines"), _stored(conn, "rules"), os.environ)
+    chosen = switches(_stored(conn, "system_routines"))
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     for key, enabled, frequency, max_bots in DEFAULTS:
         conn.execute(
