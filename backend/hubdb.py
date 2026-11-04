@@ -2928,7 +2928,7 @@ def _learner(conn, actor):
                "your manager in chat; a person above you marks onboarding complete when you are ready.")
 
 
-# The retired Health Monitor's slug (archived by backend/migrations/0078_retire_health_monitor.py). Its id is its slug, so its actor is bot:health-monitor.
+# The retired Health Monitor's slug (archived by backend/migrations/0082_retire_health_monitor.py). Its id is its slug, so its actor is bot:health-monitor.
 HEALTH_MONITOR = "health-monitor"
 
 

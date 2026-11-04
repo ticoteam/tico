@@ -31,8 +31,8 @@ from backend.tests.test_goal_manager import BASE
 from backend.tests.test_onboarding import draft, environment, machine, signed_in  # noqa: F401
 from backend.tests.test_support import FakeHQ
 
-MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "0078_retire_health_monitor.py"
-HM_SLUG = "health-monitor"      # the retired Health Monitor's slug: migration 0078 archives its row
+MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "0082_retire_health_monitor.py"
+HM_SLUG = "health-monitor"      # the retired Health Monitor's slug: migration 0082 archives its row
 CANARY = "Acme Payroll Mac"     # a computer's label: local, never in a report
 SECRET_BOT = "acme-payroll-bot"
 

@@ -62,6 +62,7 @@ TAGS = {
     "owner_unreachable": "noisy", "refused_again": "noisy", "webhook_stuck": "noisy", "automation_overdue": "noisy",
     "relay_silent": "noisy", "recorder_drops": "noisy", "queue": "noisy", "computer_logins": "noisy", "tokens": "noisy",
     "slow": "noisy", "runner_load": "noisy", "performance": "noisy", "disk": "noisy", "turns": "noisy",
+    "stalled_tasks": "noisy",                  # main's "Tasks not progressing" (hubdb.stalled_tasks): a task that may move on its own
     MAIL_CHECK: "noisy",
 }
 # Health page checks this step files another way, so the page reader leaves them out: the mail reader files mail_sending
