@@ -5697,10 +5697,13 @@ def thread_list(api, args):
 @tool("hub_thread_show", "One thread in tree order: each message is followed by the sub-thread that branched from it, "
       "with its depth. A long sub-thread shows its latest messages under a collapsed row: hub_thread_show on that thread "
       "with the row's cursor reads the rest. Also its title and breadcrumb. Paged over the thread's own messages; "
-      "next_cursor reads on.",
-      {"thread": THREAD_ID, "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT}, required=("thread",))
+      "next_cursor reads on. flat: the thread and its open sub-threads as one list in time order, each message with the "
+      "reply_to it answers.",
+      {"thread": THREAD_ID, "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT,
+       "flat": {"type": "boolean", "default": False, "description": "One list in time order"}}, required=("thread",))
 def thread_show(api, args):
-    return api.get(_thread_path(args["thread"], "timeline"), cursor=args.get("cursor"), limit=args.get("limit"))
+    return api.get(_thread_path(args["thread"], "timeline"), cursor=args.get("cursor"), limit=args.get("limit"),
+                   **({"flat": 1} if args.get("flat") else {}))
 
 
 @tool("hub_thread_create", "Start a thread. Its audience decides who reads it: members (the people and bots you add; "
@@ -5944,7 +5947,8 @@ def thread_delete(api, args):
       {"thread": THREAD_ID, "path": _s("A local file on this computer"), "text": _s("The message's text, optional"),
        "kind": {"type": "string", "enum": ["say", "ask"], "default": "say", "description": "say, or ask for an answer"},
        "to": _s("The person or bot an ask is for"),
-       "under": _s("The message whose sub-thread the file goes under (optional)")},
+       "under": _s("The message whose sub-thread the file goes under (optional)"),
+       "reply_to": _s("The id of the message this answers (optional): the file stays in the thread, quoting it")},
       required=("thread", "path"), writes=True)
 def thread_upload(api, args):
     if not hasattr(api, "post_multipart"):
@@ -5952,7 +5956,7 @@ def thread_upload(api, args):
     from . import bot_files as BF
     path, _ = BF.local_file(BF.checkout_root(), args["path"])
     fields = {"text": args.get("text"), "kind": args.get("kind"), "to": args.get("to"),
-              "parent_message_id": args.get("under")}
+              "parent_message_id": args.get("under"), "in_reply_to": args.get("reply_to")}
     fields = {name: value for name, value in fields.items() if value is not None}
     return api.post_multipart("uploads/threads/" + quote(str(args["thread"]), safe="") + "/messages", {"file": path},
                               fields, key=_key(args))

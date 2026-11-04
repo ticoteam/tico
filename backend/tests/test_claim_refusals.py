@@ -230,6 +230,16 @@ def test_a_rejected_sign_in(api):
     says(api, machine, "sign_in_rejected")
 
 
+def test_a_sign_in_read_as_ready_for_a_plan_that_no_longer_covers_it(api):
+    # The runner counts a missing sign-in as ready while its assignments say a plan signs the runtime in; with no plan
+    # covering it now, the bot waits for a sign-in instead of starting a turn that fails on the missing login.
+    machine = task_bot(api, lanes=True)
+    new_task(api, "first")
+    readiness(api, machine, {"schema_version": 1, "runtimes": {"codex": {"installed": True, "authenticated": "missing"}},
+                             "bots": {"ops": {"ready": True, "runtime": "codex", "profile": "", "sign_in": "ready"}}})
+    says(api, machine, "sign_in_missing")
+
+
 def test_the_report_names_the_bot_and_computer_by_their_bundle_labels(api):
     machine = task_bot(api, lanes=True)
     new_task(api, "first")
