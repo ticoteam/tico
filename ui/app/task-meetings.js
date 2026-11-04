@@ -68,10 +68,14 @@ function taskMeetingsAdopt(d, task) {
   const id = String(task.id);
   if (d.tmEl?.dataset.task === id && d.tmRead) {
     if (d.tmEl !== slot) slot.replaceWith(d.tmEl);
+    if (d.tmRead.opening !== d.taskOpening) {
+      d.tmRead = {...d.tmRead, opening: d.taskOpening, changes: new Map(), loading: false};
+      taskMeetingsLoad(d).catch(() => {});
+    }
     return;
   }
   d.tmEl = slot; slot.dataset.task = id;
-  d.tmRead = {rows: [], next: null, changes: new Map(), loading: false};
+  d.tmRead = {rows: [], next: null, changes: new Map(), loading: false, opening: d.taskOpening};
   taskMeetingsLoad(d).catch(() => {});
 }
 
