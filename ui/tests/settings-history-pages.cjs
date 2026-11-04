@@ -14,6 +14,7 @@ const {unrouted} = require('./support/routes.cjs');
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
     const errors = [], calls = [], undos = [], logCalls = [], csvCalls = [];
+    let csvRows = 0;
     page.on('pageerror', error => errors.push(error.message));
     const at = minutes => new Date(Date.parse('2026-10-28T12:00:00Z') - minutes * 60000).toISOString();
     // Newest first, as the server sends them. Ana renamed both bots; the owner's list holds both, the card one only.
@@ -73,6 +74,12 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/v2/history.csv') {
         const q = Object.fromEntries(url.searchParams), head = 'time,actor,kind,subject,result,link\r\n';
         csvCalls.push(q);
+        if (csvRows) {
+          const start = Number(q.before || 0), count = Math.min(5000, csvRows - start);
+          return route.fulfill({contentType: 'text/csv', body: head + Array.from({length: count}, (_, i) =>
+            `${at(5)},human:ana,decision,Row ${start + i + 1},Send it Monday,\r\n`).join(''),
+          headers: start + count < csvRows ? {'X-Next': String(start + count)} : {}});
+        }
         return route.fulfill({contentType: 'text/csv', body: q.before ? `${head}${at(30)},human:ana,decision,Ship it,Wait a week,\r\n`
           : `${head}${at(5)},human:ana,decision,Ship it,Send it Monday,\r\n`,
         headers: q.before ? {} : {'X-Next': `${at(5)}|decision:m3`}});
@@ -104,12 +111,33 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await page.locator('#set-log .log-row:not(.log-head) .log-result').innerText(), 'Send it Monday');
     assert.equal(await page.locator('#set-log .log-subject a').getAttribute('href'), '#/task/t1');
     assert.equal(await page.evaluate(() => location.hash), '#/settings/history?kind=decision&bot=ops');
-    // Export CSV walks every page of the same filters and saves one file, with the header row once.
+    // Export CSV keeps the same filters and the header row once.
     const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#log-csv').click()]);
     assert.equal(download.suggestedFilename(), 'tico-history.csv');
     assert.equal(fs.readFileSync(await download.path(), 'utf8'), 'time,actor,kind,subject,result,link\r\n'
       + `${at(5)},human:ana,decision,Ship it,Send it Monday,\r\n${at(30)},human:ana,decision,Ship it,Wait a week,\r\n`);
     assert.deepEqual(csvCalls, [{kind: 'decision', bot: 'ops'}, {kind: 'decision', bot: 'ops', before: `${at(5)}|decision:m3`}]);
+    // Four full server pages stop at the newest 20,000, even when the server offers another page.
+    csvRows = 25000;
+    csvCalls.length = 0;
+    const [capped] = await Promise.all([page.waitForEvent('download'), page.locator('#log-csv').click()]);
+    const cappedText = fs.readFileSync(await capped.path(), 'utf8');
+    assert.equal(cappedText.trim().split('\n').length, 20001);
+    assert.equal(cappedText.split('time,actor,kind,subject,result,link').length, 2);
+    assert.ok(cappedText.includes(',Row 1,') && cappedText.includes(',Row 20000,') && !cappedText.includes(',Row 20001,'));
+    assert.deepEqual(csvCalls, ['', '5000', '10000', '15000'].map(before =>
+      ({kind: 'decision', bot: 'ops', ...(before ? {before} : {})})));
+    await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some(el =>
+      el.textContent === 'Exported the newest 20,000. Narrow the dates for more.'));
+    assert.equal(await page.locator('#log-csv').isEnabled(), true);
+    // Exactly 20,000 completes without a truncation notice.
+    await page.locator('.toast').evaluateAll(els => els.forEach(el => el.remove()));
+    csvRows = 20000;
+    csvCalls.length = 0;
+    const [complete] = await Promise.all([page.waitForEvent('download'), page.locator('#log-csv').click()]);
+    assert.equal(fs.readFileSync(await complete.path(), 'utf8').trim().split('\n').length, 20001);
+    assert.equal(csvCalls.length, 4);
+    assert.equal(await page.locator('.toast').count(), 0);
     await page.locator('#set-log [data-log-older]').click();
     await page.waitForFunction(() => document.querySelectorAll('#set-log .log-row:not(.log-head)').length === 2);
     assert.deepEqual(logCalls.at(-1), {bot: 'ops', kind: 'decision', before: `${at(5)}|decision:m3`});

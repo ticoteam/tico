@@ -36,6 +36,7 @@ KINDS = {"run": "Run", "task": "Task", "approval.asked": "Approval asked", "appr
 REVEALS = {"credential.revealed": "revealed", "credential.sent_to_computer": "sent to its computer"}
 # What each permission event changed, in words.
 PERMISSIONS = {"person.access_edited": "access", "bot.access_changed": "who sees its work", "bot.owners_changed": "owners",
+               "person.access_changed": "who sees them", "group.access_changed": "who sees the group",
                "bot.co_owners_changed": "co-owners", "access.limits_updated": "bot limit per member",
                "access.allow_updated": "who may sign in", "access.rules_updated": "team rules",
                "credential.granted": "granted", "credential.revoked": "revoked"}
@@ -76,14 +77,6 @@ def moment(value):
         raise Problem("range", "from and to are out of range", 422) from None
 
 
-def _detail(raw):
-    try:
-        value = json.loads(raw or "{}")
-    except ValueError:
-        return {}
-    return value if isinstance(value, dict) else {}
-
-
 def _sources(kinds):
     """(kind, SELECT, its time column, its actor and its about expressions) for each kind asked for. Each SELECT names
     `rid` (unique across kinds, the cursor's tie-break), `at`, `actor` and `about`; `read` adds the window, the cursor
@@ -95,24 +88,27 @@ def _sources(kinds):
 
     if "run" in kinds:
         add("run", "SELECT 'run:'||t.id AS rid, t.created_at AS at, 'bot:'||t.bot_id AS actor, NULL AS about, t.id AS ref, "
-                   "t.exit AS exit, t.task_id AS task_id, k.title AS title FROM attempts t "
+                   "substr(t.exit,1,:text_n) AS exit, t.task_id AS task_id, substr(k.title,1,:text_n) AS title FROM attempts t "
                    "LEFT JOIN tasks k ON k.id=t.task_id WHERE (t.job_id IS NULL OR t.trigger IS NOT NULL)",
             "t.created_at", "'bot:'||t.bot_id", None)
     if "task" in kinds:
         add("task", "SELECT 'task:'||e.id AS rid, e.created_at AS at, e.actor_id AS actor, k.owner_id AS about, k.id AS task_id, "
-                    "k.title AS title, e.old AS old, e.new AS new FROM history_events e JOIN tasks k ON k.id=e.subject_id "
+                    "substr(k.title,1,:text_n) AS title, substr(e.old,1,:text_n) AS old, substr(e.new,1,:text_n) AS new "
+                    "FROM history_events e JOIN tasks k ON k.id=e.subject_id "
                     "WHERE e.subject_type='task' AND e.kind='status' AND e.created_at IS NOT NULL",
             "e.created_at", "e.actor_id", "k.owner_id")
     if "approval.asked" in kinds:
         add("approval.asked", "SELECT 'approval.asked:'||a.id AS rid, a.created_at AS at, a.requested_by_id AS actor, "
-                              "a.decision_owner AS about, a.kind AS what, a.decision AS decision, a.task_id AS task_id, "
-                              "k.title AS title FROM approvals a LEFT JOIN tasks k ON k.id=a.task_id "
+                              "a.decision_owner AS about, substr(a.kind,1,:text_n) AS what, "
+                              "substr(a.decision,1,:text_n) AS decision, a.task_id AS task_id, "
+                              "substr(k.title,1,:text_n) AS title FROM approvals a LEFT JOIN tasks k ON k.id=a.task_id "
                               "WHERE a.created_at IS NOT NULL", "a.created_at", "a.requested_by_id", "a.decision_owner")
     for kind, decision in (("approval.granted", "approved"), ("approval.denied", "declined")):
         if kind in kinds:
             add(kind, f"SELECT '{kind}:'||a.id AS rid, a.decided_at AS at, a.decided_by_id AS actor, "
-                      "a.requested_by_id AS about, a.kind AS what, a.decision AS decision, a.task_id AS task_id, "
-                      "k.title AS title FROM approvals a LEFT JOIN tasks k ON k.id=a.task_id "
+                      "a.requested_by_id AS about, substr(a.kind,1,:text_n) AS what, "
+                      "substr(a.decision,1,:text_n) AS decision, a.task_id AS task_id, "
+                      "substr(k.title,1,:text_n) AS title FROM approvals a LEFT JOIN tasks k ON k.id=a.task_id "
                       f"WHERE a.decision='{decision}' AND a.decided_at IS NOT NULL",
                 "a.decided_at", "a.decided_by_id", "a.requested_by_id")
     events = {"outbound.blocked": f"e.action='{SEND_OFF}'",
@@ -123,21 +119,49 @@ def _sources(kinds):
             about = ("CASE WHEN e.action IN ('credential.granted','credential.revoked') "
                      "THEN json_extract(e.detail,'$.subject') "
                      "WHEN e.action LIKE 'bot.%' THEN 'bot:'||e.target "
-                     "WHEN e.action='person.access_edited' THEN 'human:'||e.target "
+                     "WHEN e.action IN ('person.access_edited','person.access_changed') THEN 'human:'||e.target "
+                     "WHEN e.action='group.access_changed' THEN 'group:'||e.target "
                      "WHEN json_extract(e.detail,'$.bot') IS NOT NULL THEN 'bot:'||json_extract(e.detail,'$.bot') END")
             # Read by action (the store's events_action_target index), never by scanning events since a time.
             add(kind, f"SELECT '{kind}:'||e.id AS rid, e.created_at AS at, e.actor AS actor, {about} AS about, "
-                      "e.action AS action, e.target AS target, e.detail AS detail FROM events e "
+                      "e.action AS action, e.target AS target, substr(json_extract(e.detail,'$.subject'),1,:text_n) AS subject_actor, "
+                      "CASE WHEN e.action='person.access_edited' THEN (SELECT substr(group_concat(key, ', '),1,:text_n) "
+                      "FROM json_each(e.detail) WHERE key NOT IN ('via','delegation')) END AS changed FROM events e "
                       f"WHERE {which}", "e.created_at", "e.actor", about)
     if "decision" in kinds:
         # A person's answer to a question: the answers of people only, never a bot's reply to a person's ask.
         add("decision", "SELECT 'decision:'||m.id AS rid, m.created_at AS at, m.sender_id AS actor, m.recipient_id AS about, "
-                        "m.body AS answer, q.body AS asked, k.id AS task_id, k.title AS title FROM messages m "
+                        "substr(m.body,1,:text_n) AS answer, substr(q.body,1,:text_n) AS asked, k.id AS task_id, "
+                        "substr(k.title,1,:text_n) AS title FROM messages m "
                         "LEFT JOIN messages q ON q.id=m.in_reply_to "
                         "LEFT JOIN tasks k ON k.id=coalesce(json_extract(m.refs,'$.task'),json_extract(q.refs,'$.task')) "
-                        "WHERE m.kind='answer' AND m.sender_id IN (SELECT value FROM json_each(:people))",
+                        "WHERE m.kind='answer' AND m.created_at IS NOT NULL "
+                        "AND m.sender_id IN (SELECT value FROM json_each(:people))",
             "m.created_at", "m.sender_id", "m.recipient_id")
     return out
+
+
+def _query(source, actors, first, last, before, limit, people):
+    """Order a source by its indexed time and id; the prefixed id only breaks ties across sources."""
+    _, select, column, actor, about = source
+    at, rid = cursor_of(before)
+    where = []
+    if first:
+        where.append(f"{column}>=:first")
+    if last:
+        where.append(f"{column}<:last")
+    if at:
+        # The separate upper bound gives SQLite a range seek even across kinds with different id prefixes.
+        where.append(f"{column}<=:at AND ({column}<:at OR rid<:rid)")
+    if actors is not None:
+        match = f"{actor} IN (SELECT value FROM json_each(:actors))"
+        if about:
+            match = f"({match} OR {about} IN (SELECT value FROM json_each(:actors)))"
+        where.append(match)
+    ident = column.rsplit(".", 1)[0] + ".id"
+    statement = select + "".join(" AND " + w for w in where) + f" ORDER BY {column} DESC, {ident} DESC LIMIT :n"
+    return statement, {"first": first, "last": last, "at": at, "rid": rid, "n": limit + 1, "text_n": TEXT_MAX + 1,
+                       "actors": json.dumps(sorted(actors or ())), "people": json.dumps(people)}
 
 
 def install(app, store, auth):
@@ -149,12 +173,12 @@ def install(app, store, auth):
             return {}
         own = V.owned(c, who)
         return {row["id"]: row["name"] for row in c.execute(
-            "SELECT id,name FROM credentials WHERE id IN (%s)" % ",".join("?" * len(ids)), list(ids))
+            f"SELECT id,substr(name,1,{TEXT_MAX + 1}) AS name FROM credentials WHERE id IN (%s)" % ",".join("?" * len(ids)), list(ids))
             if row["id"] in own or V.permitted(c, who, row["id"], vault.admins)}
 
     def read(c, who, kinds, actors, first, last, before, limit):
         """Up to `limit` rows newest first, and whether more were left (each source reads `limit + 1`)."""
-        at, rid = cursor_of(before)
+        cursor_of(before)
         _, seconds = sql.LIMITS[who.role if who.role in sql.LIMITS else "human"]
         deadline = time.monotonic() + seconds
         people = ["human:" + row["id"] for row in c.execute("SELECT id FROM humans")]
@@ -162,23 +186,9 @@ def install(app, store, auth):
         rows = []
         try:
             conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 2000)
-            for kind, select, column, actor, about in _sources(kinds):
-                where = []
-                if first:
-                    where.append(f"{column}>=:first")
-                if last:
-                    where.append(f"{column}<:last")
-                if at:
-                    where.append(f"({column}<:at OR ({column}=:at AND rid<:rid))")
-                if actors is not None:
-                    match = f"{actor} IN (SELECT value FROM json_each(:actors))"
-                    if about:
-                        match = f"({match} OR {about} IN (SELECT value FROM json_each(:actors)))"
-                    where.append(match)
-                statement = select + "".join(" AND " + w for w in where) + f" ORDER BY {column} DESC, rid DESC LIMIT :n"
-                args = {"first": first, "last": last, "at": at, "rid": rid, "n": limit + 1,
-                        "actors": json.dumps(sorted(actors or ())), "people": json.dumps(people)}
-                rows += [{**dict(row), "kind": kind} for row in conn.execute(statement, args)]
+            for source in _sources(kinds):
+                statement, args = _query(source, actors, first, last, before, limit, people)
+                rows += [{**dict(row), "kind": source[0]} for row in conn.execute(statement, args)]
         except sqlite3.Error as exc:
             if time.monotonic() > deadline or "interrupted" in str(exc):
                 raise Problem("timeout", f"History stopped after {seconds:g} s; filter it or page with before", 422) from exc
@@ -190,13 +200,18 @@ def install(app, store, auth):
 
     def view(c, who, rows):
         """Each source row in the Log's one shape, and the names of everyone in them."""
+        from . import automations
         creds = readable_credentials(c, who, {r["target"] for r in rows if r["kind"] in ("credential.revealed",)
                                               or r.get("action") in ("credential.granted", "credential.revoked")})
         autos = {r["target"] for r in rows if r["kind"] == "outbound.blocked"}
         autos = {row["id"]: row["name"] for row in c.execute(
-            "SELECT id,name FROM automations WHERE id IN (%s)" % ",".join("?" * len(autos)), list(autos))} if autos else {}
-        bots = {row["slug"]: row.get("display_name") or row["slug"] for row in H.bots(c)}
-        people = {row["id"]: row["name"] or row["id"] for row in c.execute("SELECT id,name FROM humans")}
+            f"SELECT id,substr(name,1,{TEXT_MAX + 1}) AS name,owner_id,group_id FROM automations "
+            "WHERE deleted_at IS NULL AND id IN (%s)" % ",".join("?" * len(autos)), list(autos))
+            if automations.may_see(c, who, {"owner": row["owner_id"], "group": row["group_id"]})} if autos else {}
+        bots = {row["id"]: row["display_name"] or row["slug"] for row in c.execute(
+            f"SELECT id,slug,substr(display_name,1,{TEXT_MAX + 1}) AS display_name FROM bots")}
+        people = {row["id"]: row["name"] or row["id"] for row in c.execute(
+            f"SELECT id,substr(name,1,{TEXT_MAX + 1}) AS name FROM humans")}
 
         def name(actor):
             ident = H.actor_id(actor)
@@ -232,16 +247,20 @@ def install(app, store, auth):
                 result = REVEALS.get(r["action"], r["action"])
                 link = "#/credentials"
             elif kind == "permission.changed":
-                action, target, detail = r["action"], r["target"] or "", _detail(r["detail"])
+                action, target = r["action"], r["target"] or ""
                 if action in ("credential.granted", "credential.revoked"):
                     subject = creds.get(target) or "A credential"
-                    result = PERMISSIONS[action] + (" to " if action == "credential.granted" else " from ") + name(detail.get("subject"))
+                    result = PERMISSIONS[action] + (" to " if action == "credential.granted" else " from ") + name(r["subject_actor"])
                     link = "#/credentials"
                 elif action.startswith("bot."):
                     subject, result, link = name("bot:" + target), PERMISSIONS[action], "#/bot/" + target
                 elif action == "person.access_edited":
-                    changed = ", ".join(k for k in detail if k not in ("via", "delegation"))
+                    changed = r["changed"]
                     subject, result, link = name("human:" + target), PERMISSIONS[action] + (f": {changed}" if changed else ""), "#/person/" + target
+                elif action == "person.access_changed":
+                    subject, result, link = name("human:" + target), PERMISSIONS[action], "#/person/" + target
+                elif action == "group.access_changed":
+                    subject, result, link = target, PERMISSIONS[action], "#/team/" + target
                 else:
                     subject, result, link = "Org", PERMISSIONS.get(action, action), "#/settings/people"
             else:   # decision
@@ -261,6 +280,11 @@ def install(app, store, auth):
         kind, ident = replay.scope_of(q.get("bot"), q.get("person"), q.get("team"))
         return kinds, kind, ident, moment(q.get("from")), moment(q.get("to"))
 
+    def actors_for(c, who, kind, ident):
+        if kind == "bot":
+            ident = (H.resolve_bot(c, ident) or {}).get("id", ident)
+        return replay.members(c, auth, who, kind, ident)
+
     @app.get("/api/v2/history")
     def history(request: Request, before: str | None = None, limit: int = LIMIT):
         """The Log, newest first: `limit` rows (at most 200) and `next`, the `before` that continues it, under 256 KB a
@@ -270,7 +294,7 @@ def install(app, store, auth):
         kinds, kind, ident, first, last = params(request)
         limit = max(1, min(int(limit or LIMIT), 200))
         with store.read() as c:
-            actors = replay.members(c, auth, who, kind, ident)
+            actors = actors_for(c, who, kind, ident)
             rows, more = read(c, who, kinds, actors, first, last, before, limit)
             items, names = view(c, who, rows)
         shown, used = [], 256
@@ -294,7 +318,7 @@ def install(app, store, auth):
             raise Problem("forbidden", "The owner and the Admins export History", 403)
         kinds, kind, ident, first, last = params(request)
         with store.read() as c:
-            actors = replay.members(c, auth, who, kind, ident)
+            actors = actors_for(c, who, kind, ident)
             rows, more = read(c, who, kinds, actors, first, last, before, CSV_MAX)
             items, names = view(c, who, rows)
         base = store.settings.public_url.rstrip("/")

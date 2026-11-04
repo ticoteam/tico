@@ -121,23 +121,24 @@ async function renderSettingsLog() {
   };
   try { await draw('', {items: [], names: {}}); } catch (e) { if (el._logDrawn === drawn) rows.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
-// The Log's filters as one CSV. A page holds 5,000 rows and X-Next says where the next one starts, so every page is
-// fetched in turn and the file is saved whole; the header row is kept once.
+// A CSV holds at most four 5,000-row server pages; the header row is kept once.
 async function settingsLogCsv(button, filters) {
   button.disabled = true;
   try {
-    let text = '', before = '';
+    let text = '', before = '', pages = 0;
     do {
       const q = new URLSearchParams(filters); if (before) q.set('before', before);
       const r = await fetch(`${API}/v2/history.csv?${q}`, {cache: 'no-store'}), body = await r.text();
       if (!r.ok) { let j; try { j = JSON.parse(body); } catch { j = {}; } throw apiFailure(j, r); }
       text = text ? text + body.slice(body.indexOf('\n') + 1) : body;
       before = r.headers.get('X-Next') || '';
-    } while (before);
+      pages++;
+    } while (before && pages < 4);
     const url = URL.createObjectURL(new Blob([text], {type: 'text/csv'})), link = document.createElement('a');
     link.href = url; link.download = 'tico-history.csv';
     document.body.appendChild(link); link.click(); link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+    if (before) toast('Exported the newest 20,000. Narrow the dates for more.');
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; }
 }
