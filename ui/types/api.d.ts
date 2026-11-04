@@ -148,6 +148,7 @@ export type AuditPage = {
 };
 
 export type Automation = {
+  action?: Record<string, unknown>;
   batch?: Record<string, unknown> | null;
   can_edit: boolean;
   can_pause?: boolean;
@@ -169,7 +170,9 @@ export type Automation = {
   id: string;
   kind?: string;
   last_run?: Record<string, unknown> | null;
+  message_id?: string;
   name?: string;
+  needs_confirm?: boolean;
   next_due_at?: string | null;
   next_run?: string | null;
   owner_id?: string;
@@ -198,6 +201,7 @@ export type AutomationGuide = {
 };
 
 export type AutomationHeld = {
+  action?: Record<string, unknown>;
   batch?: Record<string, unknown> | null;
   can_edit: boolean;
   can_pause?: boolean;
@@ -219,8 +223,10 @@ export type AutomationHeld = {
   id: string;
   kind?: string;
   last_run?: Record<string, unknown> | null;
+  message_id?: string;
   moved?: number;
   name?: string;
+  needs_confirm?: boolean;
   next_due_at?: string | null;
   next_run?: string | null;
   owner_id?: string;
