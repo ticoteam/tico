@@ -250,7 +250,8 @@ def owned_mailboxes(c, runner_id):
             address = box["address"]
             if box["bot"] in hosted and _decide(address, row, live) == "workspace":
                 owned.add(address)
-    return owned
+    from . import mailbox_access
+    return owned - mailbox_access.stopped(c)
 
 
 def _fail(status, body):
