@@ -476,8 +476,8 @@ def test_same_day_runs_are_not_lost_between_pages_and_stats_cover_seven_days(api
     assert first["nights"][0]["id"] != second["nights"][0]["id"]
 
 
-def test_migration_0085_is_idempotent_and_keeps_old_rows_and_indexes():
-    path = Path(__file__).resolve().parents[1] / "migrations" / "0085_learn_beta.py"
+def test_migration_0094_is_idempotent_and_keeps_old_rows_and_indexes():
+    path = Path(__file__).resolve().parents[1] / "migrations" / "0094_learn_beta.py"
     spec = importlib.util.spec_from_file_location("learn_beta", path)
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
