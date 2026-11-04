@@ -335,7 +335,7 @@ def test_local_memory_wait_is_visible_with_diagnostics_off_and_clears_on_start(a
     assert post(api, f'attempts/{aid}/start-place', {}, machine['token'])['reserved']
     assert get(api, f'tasks/{tid}')['execution']['label'] == 'Starting'
     post(api, f'attempts/{aid}/started', {'thread_id': 'memory-recovered'}, machine['token'])
-    assert get(api, f'tasks/{tid}')['execution']['waiting'] is None
+    assert 'waiting' not in get(api, f'tasks/{tid}')['execution']
     assert get(api, f'tasks/{tid}/run-view')['runs'][0]['waiting'] is None
     assert not any(c['id'] == 'runner_load:' + rid for c in get(api, 'health')['checks'])
 
