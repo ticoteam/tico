@@ -100,9 +100,9 @@ def test_doer_assignment_is_one_roundup_line_and_writes_its_ledger_row_once(api,
 def test_reviewer_is_not_listed_assigned_not_started(api, clock):
     """A profile whose roundup lists only its questions and follow-ups gets no assignment line."""
     task_bot(api, lanes=True)
+    new_task(api, 'Review-only bot')
     with api.app.state.store.transaction() as c:
         put(c, 'ops', 'reviewer')
-    new_task(api, 'Review-only bot')
     cancel(api)
     advance(api, clock, 1)
     assert sweep(api) == []

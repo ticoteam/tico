@@ -70,6 +70,8 @@ def legacy_ask(api, task):
 
 def test_an_idle_task_is_not_asked_about_and_its_bot_lists_it_on_the_roundup(api):
     stale = idle(api, "Old idea")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")     # the creation wake ran: nothing is queued
     with api.app.state.store.read() as c:
         text, _, _ = task_roundup._list(c, "ops", H.now(), {})
     assert "Old idea" in text

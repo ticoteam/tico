@@ -931,7 +931,7 @@ def test_a_question_about_a_private_task_asked_from_a_home_room_names_neither_th
         settle(c, private["id"], "finance", ago(days=8))
         home = H.open_conversation(c, H.human_actor("ana"), [H.human_actor("ana"), H.bot_actor("finance")], kind="chat")
         question = H.say(c, H.bot_actor("finance"), H.human_actor("ana"), "Is the merger price still 40 million?",
-                         conversation_id=home, kind="ask", refs={"task": private["id"]})
+                         conversation_id=home["id"], kind="ask", refs={"task": private["id"]})
         c.execute("UPDATE messages SET created_at=? WHERE id=?", (ago(days=8), question["id"]))
         complete_jobs(c)
         assert still_needed.sweep(c, H.shift(DAY, hours=3)) == {"bot:finance": [question["id"]]}
@@ -960,8 +960,8 @@ def test_a_reviewer_is_woken_once_by_its_roundup_and_listed_only_its_returned_qu
     from backend import bot_settings as BS
     store = api.app.state.store
     with store.transaction() as c:
+        mine = task(c, "Renew the parking permit")      # before the profile: a reviewer takes no ordinary task
         BS.write(c, "finance", {"profile": "reviewer"})
-        mine = task(c, "Renew the parking permit")
         settle(c, mine["id"], "finance", ago(days=8))
         question = H.say(c, "bot:finance", "human:ana", "Which permit number do I use?", kind="ask",
                          conversation_id=H.task(c, mine["id"])["conversation_id"], refs={"task": mine["id"]})
