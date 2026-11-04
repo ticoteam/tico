@@ -32,6 +32,7 @@ and each card and page there is still read with their own rights.
 
 import json
 import re
+import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Request
@@ -1002,14 +1003,46 @@ def pin_view(ctx, pin, files_cache):
     return {**out, "page": page_read(ctx, row, files_cache)}
 
 
-def place_view(ctx, place):
+def place_timing(timings):
+    entries = [f"{kind};dur={timings[kind]:.1f}" for kind in ("prep", "cards")]
+    for kind, ms in sorted(timings["kinds"].items(), key=lambda item: -item[1])[:8]:
+        entry = f"card-{kind};dur={ms:.1f}"
+        # Leave room for the separator the middleware adds to the existing timings.
+        if len(", ".join([*entries, entry])) > 298:
+            break
+        entries.append(entry)
+    return ", ".join(entries)
+
+
+def place_view(ctx, place, timings=None):
+    started = time.perf_counter()
     kind, ident = require_view(ctx, place)
     place = canonical(kind, ident)
     saved = kind not in DEFAULTS or bool(place_row(ctx.c, place))
     pins = pins_at(ctx.c, place) if saved else default_pins(kind, ident)
     prime_pins(ctx, pins)
     cache = ctx.memo("file_cache", dict)
-    shown = [v for v in (pin_view(ctx, p, cache) for p in pins) if v]
+    prep = (time.perf_counter() - started) * 1000
+    shown, costs = [], {}
+    for pin in pins:
+        began = time.perf_counter()
+        view = pin_view(ctx, pin, cache)
+        ms = (time.perf_counter() - began) * 1000
+        if not view:
+            # A pin the caller can't read still costs its access check.
+            name = "hidden"
+        elif "card" in view:
+            template = view["card"]["template"]
+            # Only built-in kinds enter the header, never a card's title or id.
+            template = template if template in TEMPLATES else "unknown"
+            name = re.sub(r"[^a-z0-9-]+", "-", template.lower()).strip("-") or "unknown"
+        else:
+            name = "page"
+        if view:
+            shown.append(view)
+        costs[name] = costs.get(name, 0) + ms
+    if timings is not None:
+        timings.update(prep=prep, cards=sum(costs.values()), kinds=costs)
     if kind == "task":
         by_id = {p["id"]: p for p in pins}
         for pin in shown:
@@ -1396,8 +1429,11 @@ def install(app, store, auth, mutate, settings, task_view):
         """A place's pins in order, each card with what it shows the caller; pages the caller may not read are left
         out. A Dashboard, team page or My dashboard nobody saved shows its default cards, pins without ids (`saved`
         false). The Growth page takes `month` (YYYY-MM): the month its cards read, and the months it may pick from."""
+        timings = {}
         with store.read_transaction() as c:
-            return place_view(context(c, request, month_of(month)), place)
+            out = place_view(context(c, request, month_of(month)), place, timings)
+        request.state.server_timing = place_timing(timings)
+        return out
 
     @app.put("/api/v2/places/{place}")
     def place_save(request: Request, place: str, body: PlaceSave):

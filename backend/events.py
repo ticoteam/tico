@@ -20,8 +20,9 @@ signed-in person as they commit, filtered to what that person may read:
   `needs=changes` is sent its `count`, `version`, and the ids `changed` and `removed` since `base` instead (both
   null when more than NEEDS_CHANGES_MAX moved: read the list whole), and reads only those items
   (`GET /api/v2/needs-you?ids=`). The stream keeps the marks of the list it last described, from its start; a page
-  whose held version is not `base` reads the list whole. Without `needs=changes` a page gets the whole list, as
-  before, so an older page keeps working.
+  whose held version is not `base` reads the list whole. Folded task ids are sent, whole, only when their set
+  changes, and share NEEDS_CHANGES_MAX with `changed` and `removed`: past it, null reads the list whole.
+  Without `needs=changes` a page gets the whole list, as before, so an older page keeps working.
 
 `after` (or the browser's `Last-Event-ID`) resumes from the last change number seen, so a
 reconnect misses nothing; a client further behind than the log keeps (24 h), or more than BACKLOG_MAX changes behind
@@ -1529,17 +1530,20 @@ NEEDS_CHANGES_MAX = 100   # ids named in one `needs` event; more than this reads
 
 def needs_baseline(c, auth, who, task_view):
     """What a `needs=changes` stream describes its first change against: the list's marks as the stream starts."""
-    from .views import needs_items, needs_marks
-    marks, version = needs_marks(needs_items(c, auth, who, task_view))
-    return {"marks": marks, "version": version}
+    from .views import needs_folded_ids, needs_items, needs_marks
+    items = needs_items(c, auth, who, task_view)
+    marks, version = needs_marks(items)
+    return {"marks": marks, "version": version, "folded_task_ids": needs_folded_ids(items)}
 
 
 def _needs_list(view, rows, task_view, held=None):
-    from .views import needs_bots, needs_items, needs_marks, went_away
+    from .views import needs_bots, needs_folded_ids, needs_items, needs_kinds, needs_marks, went_away
     items = needs_items(view.c, view.auth, view.who, task_view)
+    folded = needs_folded_ids(items)
     away = went_away(view.c, view.who.actor)
     if held is None:
-        return [(rows[-1], {"count": len(items), "items": items, "went_away": away})]
+        return [(rows[-1], {"count": len(items), "items": items, "went_away": away,
+                            "folded_task_ids": folded})]
     marks, version = needs_marks(items)
     before = held.get("marks") or {}
     changed = [k for k, mark in marks.items() if before.get(k) != mark]
@@ -1547,8 +1551,14 @@ def _needs_list(view, rows, task_view, held=None):
     many = len(changed) + len(removed) > NEEDS_CHANGES_MAX
     entry = {"count": len(items), "version": version, "base": held.get("version"),
              "changed": None if many else changed, "removed": None if many else removed, "went_away": away,
-             "bots": needs_bots(items, view.who.actor)}     # each bot's count, for a page that holds only some items
-    held.update(marks=marks, version=version)
+             "bots": needs_bots(items, view.who.actor), "by_kind": needs_kinds(items)}   # whole-list facts, even on a page
+    before_folded = held.get("folded_task_ids") or []
+    if folded != before_folded:
+        # The set is sent whole, and it shares one cap with the changed and removed ids: together they could pass the
+        # live event's budget. Past it, null reads the list whole.
+        named = 0 if many else len(changed) + len(removed)
+        entry["folded_task_ids"] = None if many or named + len(folded) > NEEDS_CHANGES_MAX else folded
+    held.update(marks=marks, version=version, folded_task_ids=folded)
     return [(rows[-1], entry)]
 
 

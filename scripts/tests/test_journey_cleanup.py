@@ -19,11 +19,19 @@ def test_cleanup_leaves_resources_this_run_did_not_make(tmp_path):
     fake = bin_dir / 'docker'
     fake.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$DOCKER_LOG"\n[ "$1" = info ]\n')
     fake.chmod(0o755)
+    sleep_log = tmp_path / 'sleeps'
+    sleep = bin_dir / 'sleep'
+    sleep.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$SLEEP_LOG"\n')
+    sleep.chmod(0o755)
     env = {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}', 'DOCKER_LOG': str(log),
+           'SLEEP_LOG': str(sleep_log),
            'TICO_JOURNEY_RELEASES_URL': (tmp_path / 'no-releases').as_uri()}
     result = subprocess.run(['bash', 'scripts/journey-test.sh', '--previous', 'v0.0.1'], cwd=ROOT, env=env,
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 1 and 'FAIL' in result.stdout, result.stdout + result.stderr
+    assert sleep_log.read_text().splitlines() == ['30', '60', '90', '120', '120', '120', '120']
+    assert result.stdout.count('::warning::') == 7
+    assert '::error::attempt 8/8 failed' in result.stdout
 
     removed = []
     for line in log.read_text().splitlines():

@@ -125,7 +125,7 @@ jobs:
             local names name platform sums
             names="$(gh release view "$1" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null)" || return 1
             sums="$(mktemp -d)"
-            gh release download "$1" -R "$GITHUB_REPOSITORY" -D "$sums" -p tico-runner-SHA256SUMS -p tico-screen-relay-SHA256SUMS 2>/dev/null || return 1
+            bash scripts/ci/retry.sh --clear "$sums" --permanent 'HTTP (404|410)|no assets match|release not found' -- gh release download "$1" -R "$GITHUB_REPOSITORY" -D "$sums" -p tico-runner-SHA256SUMS -p tico-screen-relay-SHA256SUMS || return 1
             for platform in macos-arm64 macos-x86_64; do
               for name in tico-runner tico-screen-relay; do
                 grep -qx "$name-$platform.gz" <<<"$names" || return 1

@@ -19,7 +19,7 @@ from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
 from backend.tests.test_stale_review import FakeDecide
 
 TIMED = {"stale_review", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
-         "bookkeeper_check", "memory_tidy", "task_roundup"}   # the jobs with a schedule preset
+         "bookkeeper_check", "memory_tidy"}   # the jobs with a schedule preset
 
 
 def rows(api, token="ana-test"):
@@ -47,7 +47,7 @@ def test_ai_jobs_are_never_offered_every_15_minutes_and_the_server_refuses_it(ap
     assert [p["key"] for p in jobs["kpi_asks"]["presets"]] == ["15m", "hourly", "4h", "daily"]
     put(api, "system-routines/stale_review", {"preset": "15m"}, expected=422)
     put(api, "system-routines/learnings", {"preset": "hourly"}, expected=422)
-    put(api, "system-routines/task_roundup", {"preset": "daily", "at": "25:00"}, expected=422)
+    put(api, "system-routines/kpi_asks", {"preset": "daily", "at": "25:00"}, expected=422)
     put(api, "system-routines/cleanup", {"on": False}, expected=404)        # housekeeping has no controls
 
 
@@ -132,7 +132,7 @@ def test_daily_at_a_time_runs_once_a_day_after_that_time():
         datetime(2026, 10, 23, 9, 0, tzinfo=pt)
 
 
-def test_the_task_roundup_never_run_is_next_at_its_next_company_time_not_now():
+def test_three_daily_presets_anchor_to_the_next_company_time():
     # Three times a day, at 6am, noon and 6pm company time (Pacific: PST on 3 November 2026, UTC-8).
     cfg = {"on": True, "preset": SR.THREE_DAILY, "at": "06:00"}
     pt = SR.zone()
@@ -142,49 +142,49 @@ def test_the_task_roundup_never_run_is_next_at_its_next_company_time_not_now():
     assert SR.next_due(cfg, None, datetime(2026, 11, 3, 6, tzinfo=pt)) == datetime(2026, 11, 3, 12, tzinfo=pt)
 
 
-def _simulated_clock(api, at):
-    """A run's start is stamped with the wall clock (H.now), and the scheduler reads its last start from that row.
-    Put the tick's own time back on any run stamped later than it, so a fixed test day is not blocked by today's clock."""
-    stamp = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE system_runs SET started_at=?, finished_at=? WHERE job='task_roundup' AND started_at>?",
-                  (stamp, stamp, stamp))
-
-
-def test_the_task_roundup_first_runs_at_its_next_company_time_after_a_deploy_not_at_once(api, monkeypatch):
-    from backend import task_roundup
+def test_the_old_roundup_timer_stays_off_even_with_its_saved_switch_on(api, monkeypatch):
+    from backend import maintenance, task_roundup
     sent = []
-    monkeypatch.setattr(task_roundup, "discover", lambda c, at: sent.append(at) or [])   # one call per run
+    monkeypatch.setattr(task_roundup, "discover", lambda c, at: sent.append(at) or [])
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("INSERT INTO registry_metadata VALUES('system_routines',?) ON CONFLICT(key) DO UPDATE SET "
+                  "value=excluded.value", (json.dumps({"task_roundup": {"on": True, "preset": "three_daily"}}),))
+        maintenance.save_settings(c, H.human_actor("ana"), paused=True)
     pt = SR.zone()
-    # One process: the wait for the first run starts at its first tick.
-    scheduler = Scheduler(api.app.state.store, api.app.state.execution)
-
-    def tick(at):
-        scheduler.tick(at)
-        _simulated_clock(api, at)
-    tick(datetime(2026, 11, 3, 2, tzinfo=pt))
-    tick(datetime(2026, 11, 3, 5, 59, tzinfo=pt))
-    assert sent == [], "a deploy at 2am company time does not send every bot its list at once"
-    tick(datetime(2026, 11, 3, 6, 0, 5, tzinfo=pt))
-    assert len(sent) == 1
-    tick(datetime(2026, 11, 3, 9, tzinfo=pt))
-    assert len(sent) == 1, "no second run before noon"
-    tick(datetime(2026, 11, 3, 12, 0, 5, tzinfo=pt))
-    assert len(sent) == 2
-    tick(datetime(2026, 11, 3, 18, 0, 5, tzinfo=pt))
-    assert len(sent) == 3
+    scheduler = Scheduler(store, api.app.state.execution)
+    for hour in (2, 6, 9, 12, 18):
+        scheduler.tick(datetime(2026, 11, 3, hour, 0, 5, tzinfo=pt))
+    # A fresh scheduler cannot revive the retired timer, even when Maintenance is paused.
+    scheduler = Scheduler(store, api.app.state.execution)
+    for hour in (7, 12, 18):
+        scheduler.tick(datetime(2026, 11, 4, hour, 0, 5, tzinfo=pt))
+    assert sent == [], "the saved legacy schedule sends no lists"
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM system_runs WHERE job='task_roundup'").fetchone()[0] == 0
 
 
-def test_the_task_roundup_deployed_after_a_company_time_waits_for_the_next_one(api, monkeypatch):
-    from backend import task_roundup
-    sent = []
-    monkeypatch.setattr(task_roundup, "discover", lambda c, at: sent.append(at) or [])   # one call per run
-    pt = SR.zone()
-    scheduler = Scheduler(api.app.state.store, api.app.state.execution)
-    scheduler.tick(datetime(2026, 11, 3, 7, tzinfo=pt))
-    assert sent == []
-    scheduler.tick(datetime(2026, 11, 3, 12, 0, 5, tzinfo=pt))
-    assert len(sent) == 1
+def test_the_retired_roundup_control_redirects_run_now_to_find_stuck_and_keeps_its_switch(api, monkeypatch):
+    from backend import maintenance
+    store = api.app.state.store
+    monkeypatch.setattr(maintenance, "_start", lambda s, a, run_id, only, wait: maintenance._execute(s, a, run_id, only))
+    assert "task_roundup" not in rows(api)
+    put(api, "system-routines/task_roundup", {"on": False}, expected=404)
+    put(api, "system-routines/task_roundup", {"preset": "daily"}, expected=404)
+    post(api, "system-routines/task_roundup/run", {}, token="cara-test", expected=403)
+    with store.transaction() as c:
+        maintenance.save_step(c, "human:ana", {"key": "find_stuck", "enabled": False})
+    reply = post(api, "system-routines/task_roundup/run", {}, token="ben-test")
+    assert reply["started"] and reply["run"]["step"] == "find_stuck"
+    [step] = reply["run"]["steps"]
+    assert step["step"] == "find_stuck" and step["status"] == "off"
+    with store.transaction() as c:
+        maintenance.save_step(c, "human:ana", {"key": "find_stuck", "enabled": True})
+    reply = post(api, "system-routines/task_roundup/run", {}, token="ben-test")
+    [step] = reply["run"]["steps"]
+    assert step["step"] == "find_stuck" and step["status"] == "ran"
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM system_runs WHERE job='task_roundup'").fetchone()[0] == 0
 
 
 def test_nightly_learnings_has_an_off_switch_on_by_default_and_off_means_no_run_that_night(api, monkeypatch):

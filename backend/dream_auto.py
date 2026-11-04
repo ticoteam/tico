@@ -202,7 +202,7 @@ def run(store, auth, at, limit=MAX_PER_RUN, report=None):
     with store.read() as c:
         judged = [verdict(c, row["id"], at) for row in c.execute("SELECT id FROM bots WHERE state='active' ORDER BY id")]
     due = sorted((v for v in judged if v.status == "due"), key=lambda v: (-v.lines, v.bot))
-    started, held, over = [], [], 0
+    started, held, limited, over = [], [], [], 0
     for v in due:
         if len(started) >= limit:
             over += 1
@@ -222,6 +222,7 @@ def run(store, auth, at, limit=MAX_PER_RUN, report=None):
                     continue
                 if not L.allow(c, v.bot):          # the Maintenance wake limits (maintenance_limits.py)
                     held.append(v.name)
+                    limited.append(v.name)
                     continue
                 row, _ = dream.start(c, auth.identity_for_actor(c, actor), landing, create, reason=reason(again))
                 if row is None:
@@ -236,5 +237,5 @@ def run(store, auth, at, limit=MAX_PER_RUN, report=None):
             held.append(v.name)
     if report is not None:
         report.update(reason=_words(started, held, over, len(judged) - len(due), limit), judged=len(judged),
-                      due=len(due), started=started, held=held, over=over)
+                      due=len(due), started=started, held=held, limited=limited, over=over)
     return started

@@ -747,16 +747,10 @@ def owner_person(c, owner):
 
 
 def owner_mailboxes(c, owner):
-    """The mailboxes the owner's person reads: their message bot's declared mailbox and their own email."""
-    from . import routines
-    person = owner_person(c, owner)
-    if not person:
-        return []
-    roster = routines._roster(c)
-    found = P.person(person, roster) or {}
-    boxes = [b["address"] for b in routines.message_bot_mailboxes(c, roster) if b["person_id"] == person]
-    email = str(found.get("email") or "").strip().lower()
-    return list(dict.fromkeys(boxes + ([email] if "@" in email else [])))
+    """The mailboxes the owner holds a level on (backend/mailbox_access.py): a person's, or a bot's own grants. A
+    group owns none."""
+    from . import mailbox_access
+    return [box["address"] for box in mailbox_access.mailboxes_for(c, F.owner_ref(owner))]
 
 
 def _channel_readable(c, owner, name, settings):
@@ -771,12 +765,13 @@ def _channel_readable(c, owner, name, settings):
 
 
 def may_read_inbox(c, owner, inbox, *, sender=None, settings=None):
-    """Whether an automation of `owner` may hear `inbox`: an email address only when the owner is that mailbox's
-    person (or a bot that person operates), `slack:dm` only the owner's own direct messages (`sender`, when a message
+    """Whether an automation of `owner` may hear `inbox`: an email address the owner holds a level on
+    (backend/mailbox_access.py: a person's own mailbox, a shared inbox they hold, a grant; a bot only by its grant), `slack:dm` only the owner's own direct messages (`sender`, when a message
     is in hand), `slack:#<channel>` a channel the owner reads."""
     inbox = str(inbox or "").strip().lower()
     if "@" in inbox:
-        return inbox in owner_mailboxes(c, owner)
+        from . import mailbox_access
+        return mailbox_access.level(c, F.owner_ref(owner), inbox) != "none"
     if inbox == "slack:dm":
         person = owner_person(c, owner)
         return bool(person) and (sender is None or F.owner_ref(sender) == "person:" + person)
@@ -3032,9 +3027,13 @@ def install(app, store, auth, mutate):
             # GET /connectors/mail/targets (connectors/mail/policy.py runner_company), not from the action.
             from .google_workspace import permissions
             sending = A.send_on(c, mailbox) and permissions(c)["send_mail"]
-            out = []
+            out, owners = [], {}
+            from . import mailbox_access
             for r in rows:
                 action, result, args = r["action"], json.loads(r["result"] or "{}"), json.loads(r["args"])
+                if r["automation_id"] not in owners:
+                    found = c.execute("SELECT owner_id FROM automations WHERE id=?", (r["automation_id"],)).fetchone()
+                    owners[r["automation_id"]] = found["owner_id"] if found else ""
                 if action in ("send", "forward") and not sending:
                     # Both send mail out: a reply becomes a draft reply, a forward a draft to its target.
                     action, result = "draft" if action == "send" else action, {**result, "send_off": True}
@@ -3042,6 +3041,12 @@ def install(app, store, auth, mutate):
                     owner = c.execute("SELECT owner_id FROM automations WHERE id=?", (r["automation_id"],)).fetchone()
                     H.event(c, A.actor_of(owner["owner_id"] if owner else ""), "automation.send_off", r["automation_id"],
                             {"run": r["run_id"], "mailbox": mailbox, "msg_id": r["msg_id"]})
+                # The owner's level now, not when it was queued (backend/mailbox_access.py): an owner who lost the
+                # mailbox, or holds it read only, has nothing carried out on it.
+                refused = mailbox_access.action_refusal(c, owners[r["automation_id"]], mailbox, action, args)
+                if refused:
+                    _mail_report(c, r, "failed", {**result, "ok": False, "detail": refused, "retry": False})
+                    continue
                 c.execute("UPDATE automation_mail_actions SET state='claimed',claimed_at=?,claimed_by=?,"
                           "attempts=attempts+1,action=?,result=? WHERE id=?",
                           (now, runner["id"], action, json.dumps(result) if result else None, r["id"]))
