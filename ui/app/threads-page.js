@@ -334,36 +334,3 @@ function threadKeepOpen(view) {
   };
   dlg.showModal();
 }
-
-// ----------------------------------------------------------------- make task
-// A task from a message: the server copies the message, keeps its privacy and links back; the viewer picks the title
-// and an owner they may give work to.
-function threadMakeTask(m, view) {
-  const dlg = threadDialog('thread-task', 'Make task');
-  const first = v2Firstline(m.body).slice(0, 120);
-  const owners = [['human:' + (S.me?.id || ''), 'Me'], ...shownEmps().filter(e => e.can_chat !== false && (!e.my_access || e.my_access.write))
-    .map(e => [e.name, e.display_name || e.name])];
-  dlg.innerHTML = `<form>${threadDialogHead('Make task')}<div class="dash-form">
-      <label>Title<input name="title" maxlength="300" required value="${esc(first)}"></label>
-      <label>Owner<select name="owner">${owners.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select></label></div>
-    ${threadDialogFoot('Make task')}</form>`;
-  threadDialogWire(dlg);
-  const form = dlg.querySelector('form');
-  form.onsubmit = async ev => {
-    ev.preventDefault();
-    const title = form.elements.namedItem('title').value.trim(); if (!title) return;
-    try {
-      const r = await post('/v2/threads/messages/' + encodeURIComponent(m.id) + '/task', {title, owner: form.elements.namedItem('owner').value});
-      dlg.close();
-      const id = r?.task?.id || r?.id;
-      toast('Task made', false, id ? {label: 'Open', run: () => { location.hash = '#/task/' + id; }} : undefined);
-    } catch (e) {
-      const status = form.querySelector('[data-status]'), dup = e.body?.error?.code === 'duplicate', twin = dup && e.body.error.task_id;
-      status.textContent = dup ? 'A task already asks for this' : e.message;
-      if (twin) status.innerHTML = `<a href="#/task/${encodeURIComponent(twin)}" data-close>A task already asks for this</a>`;
-      threadDialogWire(dlg);
-    }
-  };
-  dlg.showModal();
-  form.elements.namedItem('title').select();
-}

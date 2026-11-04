@@ -213,6 +213,7 @@
  "hub_task_type_update": "422 not-found",
  "hub_task_wait": "422 milestone",
  "hub_task_waive_qa": "422 validation",
+ "hub_thread_bot_status": "404 not_found",
  "hub_thread_catchup": "404 not_found",
  "hub_thread_delete": "404 not_found",
  "hub_thread_dm": "404 not_found",
