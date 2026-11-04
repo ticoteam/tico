@@ -352,18 +352,17 @@ def test_redo_completion_cannot_settle_the_original_delivery(install, http, api)
     with install.transaction() as c:
         batch = queue(c)
         original = updates.send_request(c, batch)
-        c.execute("UPDATE jobs SET state='held' WHERE message_id=?", (original["id"],))
+        # A canceled request stays unfinished and cannot be coalesced into the redo's turn.
+        c.execute("UPDATE jobs SET state='canceled' WHERE message_id=?", (original["id"],))
         c.execute("UPDATE update_queue SET redo=1 WHERE id=?", (batch["id"],))
         batch = c.execute("SELECT * FROM update_queue WHERE id=?", (batch["id"],)).fetchone()
         redo = updates.send_request(c, batch)
         sent = c.execute("SELECT * FROM update_queue WHERE id=?", (batch["id"],)).fetchone()
         assert original["id"] != redo["id"]
     turn = start(api, sent)
-    # start() clears other wakes; the original delivery remains unfinished.
-    with install.transaction() as c:
-        c.execute("UPDATE jobs SET state='held' WHERE message_id=?", (original["id"],))
     complete(api, turn, "No update posted")
     with install.transaction() as c:
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (original["id"],)).fetchone()[0] == "canceled"
         updates.settle_sent(c, sent)
         updates.settle_learnings(c)
     assert receipt(install)["message_id"] == original["id"]
