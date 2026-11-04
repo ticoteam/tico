@@ -63,8 +63,8 @@ removes a thing.
   may be each. × removes a segment (its sub-segments move up to its parent) and **Add a segment** adds one by name
   (defining the market first, as "<company> market", when there is none). These are the market graph's own rows: Us is
   `company/self` `operates_in` the segment, Next is `next: true` on the segment, as the company file's import writes
-  them. They are also the buyers the company sells to: Us are the segments it sells to now, and Next is the one it
-  enters after. Only a person marks Us or Next here; a removed segment loses its Next, so adding it again does not
+  them. They are also the buyers the company sells to: Us are the segments it sells to now, and Next are the ones it
+  enters after. A company file may mark several segments Us and several Next. Only a person marks Us or Next here; a removed segment loses its Next, so adding it again does not
   bring it back.
 - **Competitors.** Every company or product with a current `competes_with` edge to `company/self`, as chips that link
   to their sites. × ends those edges (the company stays in the graph); **Add a competitor or its site** finds the
