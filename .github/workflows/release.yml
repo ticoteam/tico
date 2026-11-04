@@ -3,7 +3,7 @@
 # workflow publishes those binaries and points the version tags at those image digests, after checking each image says
 # it is this version. The server release never waits for Mac or desktop builds.
 # The Mac runner and relay (no gate part runs on a Mac) are carried forward from the previous release when their sources
-# did not change, and published with it. When they did change they are built here, beside the publication, and added to
+# did not change, and published with it. When they did change they are built here, after the publication, and added to
 # the published release with the checksum files rewritten after them; until then a Mac checkout's update waits
 # (runner_support/release_update.py) instead of failing.
 # The desktop app follows: built only when the shell changed since the previous release, otherwise the previous release's
@@ -11,8 +11,9 @@
 # and a desktop failure leaves the server release in place. Tico Recorder (recorder.yml) follows the same way, with
 # its own updater manifest (recorder-latest.json). See docs/releasing.md.
 # Linux jobs run on RunsOn in Tico's own AWS account, on-demand rather than Spot: an interruption must never leave
-# a release half-published. The two jobs between the tag and the published release (validated, release) run on
+# a release half-published. The three jobs between the tag and the published release (validated, runner-changes, release) run on
 # GitHub-hosted Ubuntu, which starts faster and is never interrupted either. macOS builds stay on GitHub-hosted runners.
+# Optional build fan-out starts after publication so it cannot compete for job slots with the core release.
 name: Release
 
 on:
@@ -259,11 +260,14 @@ jobs:
           case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
           gh release create "$VERSION" "${files[@]}" --title "$VERSION" --notes "" --verify-tag "${flags[@]}"
 
-  # The Mac runner and relay, built from the tag when runner-changes says so, beside the publication. A GitHub-hosted
+  # The Mac runner and relay, built from the tag when runner-changes says so, after the publication. A GitHub-hosted
   # macOS runner can take 5-15 minutes to start; nothing waits for it but macos-assets.
   macos:
-    needs: [validated, runner-changes]
-    if: needs.validated.outputs.dry_run != 'true' && needs.runner-changes.outputs.build == 'true'
+    needs: [validated, runner-changes, release]
+    if: >-
+      ${{ !cancelled() && needs.validated.result == 'success' && needs.runner-changes.result == 'success'
+      && (needs.release.result == 'success' || needs.release.result == 'skipped')
+      && needs.validated.outputs.dry_run != 'true' && needs.runner-changes.outputs.build == 'true' }}
     strategy:
       matrix:
         include:
@@ -310,7 +314,7 @@ jobs:
   macos-assets:
     needs: [validated, release, macos]
     if: >-
-      ${{ !cancelled() && needs.macos.result == 'success'
+      ${{ !cancelled() && needs.validated.result == 'success' && needs.macos.result == 'success'
       && (needs.release.result == 'success' || needs.release.result == 'skipped') }}
     runs-on: ubuntu-24.04
     permissions:
@@ -347,8 +351,11 @@ jobs:
 
   # Does this tag need new desktop apps? Only when what the shell is built from changed since the previous release.
   desktop-changes:
-    needs: validated
-    if: needs.validated.outputs.dry_run != 'true'
+    needs: [validated, release]
+    if: >-
+      ${{ !cancelled() && needs.validated.result == 'success'
+      && (needs.release.result == 'success' || needs.release.result == 'skipped')
+      && needs.validated.outputs.dry_run != 'true' }}
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       contents: read
@@ -380,7 +387,9 @@ jobs:
 
   desktop:
     needs: desktop-changes
-    if: needs.desktop-changes.outputs.build == 'true'
+    if: >-
+      ${{ !cancelled() && needs.desktop-changes.result == 'success'
+      && needs.desktop-changes.outputs.build == 'true' }}
     uses: ./.github/workflows/app.yml
     # inherit + id-token as main's app.yml expects (it declares no secrets and asks for id-token). Narrowing these
     # needs app.yml and company-app.yml to declare them first: the follow-up hardening batch, not this one.
@@ -447,8 +456,11 @@ jobs:
   # previous release, otherwise its files are carried forward. Its own jobs, so a failure here never touches the
   # desktop or server release.
   recorder-changes:
-    needs: validated
-    if: needs.validated.outputs.dry_run != 'true'
+    needs: [validated, release]
+    if: >-
+      ${{ !cancelled() && needs.validated.result == 'success'
+      && (needs.release.result == 'success' || needs.release.result == 'skipped')
+      && needs.validated.outputs.dry_run != 'true' }}
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       contents: read
@@ -479,7 +491,9 @@ jobs:
 
   recorder:
     needs: recorder-changes
-    if: needs.recorder-changes.outputs.build == 'true'
+    if: >-
+      ${{ !cancelled() && needs.recorder-changes.result == 'success'
+      && needs.recorder-changes.outputs.build == 'true' }}
     uses: ./.github/workflows/recorder.yml
     secrets: inherit   # recorder.yml reads the desktop app's signing secrets (see the desktop job)
     permissions:
@@ -535,7 +549,9 @@ jobs:
 
   company-matrix:
     needs: desktop-changes
-    if: needs.desktop-changes.outputs.build == 'true'
+    if: >-
+      ${{ !cancelled() && needs.desktop-changes.result == 'success'
+      && needs.desktop-changes.outputs.build == 'true' }}
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       contents: read
@@ -556,7 +572,9 @@ jobs:
   # keeps its current latest.json, so installed company apps stay on their version.
   companies:
     needs: company-matrix
-    if: needs.company-matrix.outputs.enabled == 'true'
+    if: >-
+      ${{ !cancelled() && needs.company-matrix.result == 'success'
+      && needs.company-matrix.outputs.enabled == 'true' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.company-matrix.outputs.matrix) }}

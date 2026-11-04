@@ -10,6 +10,12 @@ ENTRY = {"slug": "acme", "id": "12345678-1234-4234-8234-123456789abc", "app_name
          "deploy_role_arn": "arn:aws:iam::123456789012:role/publisher", "bucket": "acme-files"}
 
 
+@pytest.fixture(autouse=True)
+def no_icon_retry_waits(monkeypatch):
+    from scripts import company_apps
+    monkeypatch.setattr(company_apps.time, "sleep", lambda seconds: None)
+
+
 def test_private_matrix_and_all_dry_runs_expose_only_hashes(monkeypatch, capsys):
     monkeypatch.setenv("TICO_COMPANY_APPS", json.dumps([ENTRY]))
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
@@ -98,6 +104,96 @@ def test_invalid_company_isolated_and_publishing_does_not_fetch_icon(tmp_path, m
     assert main(["configure", "--publishing", "--company", key(other)]) == 1
     assert main(["configure", "--publishing", "--company", key(ENTRY)]) == 0
     assert "TRAY_LABEL" not in (tmp_path / "env").read_text()
+
+
+def test_icon_download_recovers_from_restart_and_interrupted_body(monkeypatch, capsys):
+    from http.client import IncompleteRead
+    from urllib.error import HTTPError, URLError
+    from scripts import company_apps
+
+    icon_url = ENTRY["url"] + ENTRY["icon_url"]
+    icon = b"\x89PNG\r\n\x1a\nlogo"
+    responses = iter([HTTPError(icon_url, 408, "private request timeout", {}, None),
+                      HTTPError(icon_url, 429, "private rate limit", {}, None),
+                      HTTPError(icon_url, 503, "private server unavailable", {}, None),
+                      URLError(icon_url), TimeoutError(icon_url), ConnectionError(icon_url),
+                      IncompleteRead(icon_url.encode(), 100), icon])
+    delays = []
+
+    class Body:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def read(self, size):
+            assert size == 1024 * 1024 + 1
+            value = next(responses)
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+    class Opener:
+        def open(self, request, timeout):
+            assert request.full_url == icon_url
+            assert timeout == 30
+            return Body()
+
+    monkeypatch.setattr(company_apps, "build_opener", lambda *args: Opener())
+    monkeypatch.setattr(company_apps.time, "sleep", delays.append)
+    assert company_apps.download_icon(icon_url) == icon
+    assert delays == [30, 60, 90, 120, 120, 120, 120]
+    output = capsys.readouterr()
+    assert icon_url not in output.out + output.err
+    assert "private server unavailable" not in output.out + output.err
+
+
+@pytest.mark.parametrize("failure,diagnostic", [("network", "network request failed"), ("http", "HTTP 503")])
+def test_icon_outage_is_bounded_and_keeps_private_errors_out_of_logs(
+        failure, diagnostic, tmp_path, monkeypatch, capsys):
+    from urllib.error import HTTPError, URLError
+    from scripts import company_apps
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "app").mkdir()
+    monkeypatch.setenv("TICO_COMPANY_APPS", json.dumps([ENTRY]))
+    monkeypatch.setenv("GITHUB_ENV", str(tmp_path / "env"))
+    monkeypatch.setenv("GITHUB_REF_NAME", "v0.5.131")
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    attempts, delays = [], []
+
+    class Opener:
+        def open(self, request, timeout):
+            attempts.append(request.full_url)
+            if failure == "http":
+                raise HTTPError(request.full_url, 503, "private server unavailable", {}, None)
+            raise URLError(ENTRY["url"])
+
+    monkeypatch.setattr(company_apps, "build_opener", lambda *args: Opener())
+    monkeypatch.setattr(company_apps.time, "sleep", delays.append)
+    assert main(["configure", "--company", key(ENTRY)]) == 1
+    assert len(attempts) == 8
+    assert delays == [30, 60, 90, 120, 120, 120, 120]
+    assert not (tmp_path / "app/company-icon.png").exists()
+    assert not (tmp_path / "app/company-config.json").exists()
+    output = capsys.readouterr()
+    assert "icon download (TICO_COMPANY_APPS.icon_url)" in output.err
+    assert diagnostic in output.err
+    assert "private server unavailable" not in output.out + output.err
+    assert all(value not in output.out + output.err for value in ENTRY.values())
+
+
+def test_icon_permission_error_fails_without_retry(monkeypatch):
+    from urllib.error import HTTPError
+    from scripts import company_apps
+
+    class Opener:
+        def open(self, request, timeout):
+            raise HTTPError(request.full_url, 403, "Forbidden", {}, None)
+
+    monkeypatch.setattr(company_apps, "build_opener", lambda *args: Opener())
+    monkeypatch.setattr(company_apps.time, "sleep", lambda *args: pytest.fail("Permanent errors must not retry"))
+    with pytest.raises(HTTPError):
+        company_apps.download_icon(ENTRY["url"] + ENTRY["icon_url"])
 
 
 @pytest.mark.parametrize("failure,diagnostic", [
@@ -258,3 +354,22 @@ def test_public_workflow_and_company_ciphertext_artifact_boundary():
     assert "release" in release["jobs"]["macos-assets"]["needs"]
     assert "release" in release["jobs"]["desktop-assets"]["needs"]
     assert release["jobs"]["companies"]["strategy"]["fail-fast"] is False
+
+
+def test_optional_release_branches_start_after_core_publication():
+    from pathlib import Path
+    import yaml
+
+    root = Path(__file__).resolve().parents[2]
+    jobs = yaml.safe_load((root / ".github/workflows/release.yml").read_text())["jobs"]
+
+    def ancestors(job):
+        needs = jobs[job].get("needs", [])
+        if isinstance(needs, str):
+            needs = [needs]
+        return set(needs).union(*(ancestors(parent) for parent in needs))
+
+    core = {"validated", "runner-changes", "release"}
+    assert ancestors("release") == core - {"release"}
+    for job in jobs.keys() - core:
+        assert "release" in ancestors(job), f"{job} competes with core publication for job slots"

@@ -2656,7 +2656,7 @@
         ]
       },
       "post": {
-        "summary": "Save a new automation as version 1; a flow that fails its checks is refused with where and why. BotOps saves it off unless `enabled` is sent; a bot without rights to it saves a proposal (off, version 1 pending)",
+        "summary": "Save a new automation as version 1; a flow that fails its checks is refused with where and why. BotOps saves it off unless `enabled` is sent; a bot without rights to it saves a proposal (off, version 1 pending). An Assistant Message routine saves off with action, message_id and needs_confirm; only its person's card click enables it. A chooser without a mode defaults to Draft",
         "operationId": "createAutomation",
         "requestBody": {
           "required": true,
@@ -43669,6 +43669,16 @@
           "enabled": {
             "type": "boolean"
           },
+          "action": {
+            "type": "object",
+            "description": "Assistant Message create: the pending Confirm card"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "needs_confirm": {
+            "type": "boolean"
+          },
           "trigger": {
             "type": "object"
           },
@@ -43878,6 +43888,16 @@
             "type": "string"
           },
           "enabled": {
+            "type": "boolean"
+          },
+          "action": {
+            "type": "object",
+            "description": "Assistant Message create: the pending Confirm card"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "needs_confirm": {
             "type": "boolean"
           },
           "trigger": {
