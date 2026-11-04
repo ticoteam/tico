@@ -104,6 +104,18 @@ def test_an_assistant_turn_is_only_on_the_owners_own_assistant(api):
     post(api, "automations", flow(owner="person:ben", steps=[step]), token="ben-test")
 
 
+def test_a_choose_step_runs_its_turn_as_its_owner_only(api):
+    dests = [{"id": "legal", "name": "Legal", "then": []}, {"id": "sales", "name": "Sales", "then": []}]
+    choose = {"to": ["legal", "sales"], "default": "sales", "mode": "draft"}
+    draft = lambda who: {"id": "draft", "type": "llm", "as": who, "prompt": "Reply.", "out": "d",  # noqa: E731
+                         "choose": choose}
+    post(api, "automations", {**flow(steps=[draft("assistant:ana")]), "destinations": dests})
+    post(api, "automations", {**flow(owner="bot:ops", steps=[draft("bot:ops")]), "destinations": dests})
+    refused = post(api, "automations", {**flow(steps=[draft("assistant:ben")]), "destinations": dests}, expected=403)
+    assert "draft runs its turn as assistant:ana" in refused["error"]["detail"]
+    post(api, "automations", {**flow(owner="bot:ops", steps=[draft("bot:cpo")]), "destinations": dests}, expected=403)
+
+
 def test_mail_payload_carries_what_the_connector_has(api):
     aid = post(api, "automations", flow(trigger={"type": "message", "inbox": "ana@acme.example"}))["id"]
     message = mail()

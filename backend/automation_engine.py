@@ -18,6 +18,10 @@ in a step shaped as before (`_legacy`), and `<n>.r<r>.<i>` or `<n>.r<r>.d<i>` (r
 destination's) in any other. With the run's id it is the effect's idempotency key, the same when a resumed run repeats
 the step. `checkpoint(state)` follows every step, so the hub saves the run before the next step starts.
 
+A choose step (an `llm` step with `choose`) reads its answer when it comes in (`answer`, `read_choice`), and its reply
+and the chosen destination's chain run as the thread's next step (`_resume`): the reply is keyed `<record>.0`, the chain
+`<record>.1` on, so a resumed run repeats none of them.
+
 services:
   judge(state, questions, label, level) -> {"answers": {...}, "cost_usd": n}, or None while Decide is off
   question_set(ref) -> questions, and state_fields(ref) -> the set's `state` fields
@@ -74,10 +78,14 @@ def values_of(state, thread):
 
 def answer(state, ref, text, cost=0.0, ok=True):
     """An `llm` turn finished: its thread gets the text as the step's output and is ready again; a turn that did not
-    finish (`ok` false) fails the thread. Returns whether a waiting thread had that ref."""
+    finish (`ok` false) fails the thread. A choose step's turn is read by `_answered` instead. Returns whether a waiting
+    thread had that ref."""
     for thread in state["threads"]:
         wait = thread.get("wait") or {}
         if thread["state"] == WAITING and wait.get("kind") == "turn" and wait.get("ref") == ref:
+            if wait.get("choose"):
+                _answered(state, thread, wait, text, cost, ok)
+                return True
             record = state["steps"][wait["record"]]
             outputs = ({**record["outputs"], "text": text} if ok
                        else {**record["outputs"], "error": str(text or "the turn did not finish")[:300]})
@@ -149,23 +157,28 @@ def _record(state, thread, step, status, outputs=None, cost=0.0):
 
 
 def _step(flow, state, thread, services):
-    """Run the thread's next step, or end it at the end of its list."""
+    """Run the thread's next step, or end it at the end of its list. A thread whose choose step was answered runs that
+    step's effects first (`_resume`); the step is the one before its cursor, and nothing after it runs."""
     steps = steps_at(flow, thread["trail"])
-    if thread["next"] >= len(steps):
-        thread["state"] = DONE
-        return
-    step = steps[thread["next"]]
-    if (flow.get("batch") and not state["manual"] and not thread["batched"] and not thread["trail"]
-            and step["type"] != "filter"):
-        # Filter on receipt, the rest at the next batch time.
-        thread.update(state=WAITING, wait={"kind": "batch", "until": services.next_batch()}, batched=True)
-        return
-    thread["next"] += 1
-    if step.get("enabled", True) is False:
-        _record(state, thread, step, "skipped")
-        return
+    if thread.get("choice") is not None:
+        step, run = steps[thread["next"] - 1], _resume
+    else:
+        if thread["next"] >= len(steps):
+            thread["state"] = DONE
+            return
+        step = steps[thread["next"]]
+        if (flow.get("batch") and not state["manual"] and not thread["batched"] and not thread["trail"]
+                and step["type"] != "filter"):
+            # Filter on receipt, the rest at the next batch time.
+            thread.update(state=WAITING, wait={"kind": "batch", "until": services.next_batch()}, batched=True)
+            return
+        thread["next"] += 1
+        if step.get("enabled", True) is False:
+            _record(state, thread, step, "skipped")
+            return
+        run = RUN[step["type"]]
     try:
-        RUN[step["type"]](flow, state, thread, step, services)
+        run(flow, state, thread, step, services)
     except Exception as exc:  # noqa: BLE001 - a service's failure is the step's, recorded on the run
         _record(state, thread, step, "failed", {"error": (str(exc) or type(exc).__name__)[:300]})
         thread["state"] = FAILED
@@ -288,17 +301,27 @@ def _turn_label(thread):
     return own or f"item {thread['item'] + 1}"
 
 
-def _turn(flow, state, thread, step, services, who, prompt, wait):
-    # The service checks the cap (`ctx["cap"]` against what was spent, `ctx["cost"]` of it this run's) after its
-    # effect key: a resumed run whose turn already started gets that turn back, never its own hold's refusal.
+def _start(flow, state, thread, step, services, who, prompt, wait, tail=""):
+    """Starts the step's turn. The service checks the cap (`ctx["cap"]` against what was spent, `ctx["cost"]` of it this
+    run's) after its effect key: a resumed run whose turn already started gets that turn back, never its own hold's
+    refusal. `tail` is added after the prompt is rendered, so it is never templated. Returns the service's answer, or
+    None when the cap stops it."""
     values = values_of(state, thread)
     cap = (flow.get("spend_cap") or {}).get("per_30m")
     # A bot_turn step's model, effort and harness are the model its task runs on (backend/task_run_models.py).
     run_model = ({k: step[k] for k in ("model", "effort", "harness") if step.get(k)}
                  if step.get("type") == "bot_turn" else {})
-    started = services.start_turn(who, F.render_prompt(prompt, values, cap=F.MAX_PROMPT), {
+    return services.start_turn(who, F.render_prompt(prompt, values, cap=F.MAX_PROMPT) + tail, {
         "values": values, "step": step["id"], "key": str(len(state["steps"])), "cost": state["cost"],
         "cap": None if cap is None else float(cap), "label": _turn_label(thread), "run_model": run_model or None}, wait)
+
+
+def _turn_outputs(started):
+    return {"ref": started["ref"], **({"turn": started["turn"]} if started.get("turn") else {})}
+
+
+def _turn(flow, state, thread, step, services, who, prompt, wait):
+    started = _start(flow, state, thread, step, services, who, prompt, wait)
     if started is None:
         # The cap stops spending, not the run: later filters, decisions and actions still go.
         _record(state, thread, step, "spend_cap")
@@ -308,7 +331,7 @@ def _turn(flow, state, thread, step, services, who, prompt, wait):
         # Screening held the webhook's text for a person (backend/screening.py): no turn, and the run goes on.
         _record(state, thread, step, "held", {"ref": ref})
         return
-    outputs = {"ref": ref, **({"turn": started["turn"]} if started.get("turn") else {})}
+    outputs = _turn_outputs(started)
     if not wait:
         _record(state, thread, step, "ok", outputs)
         return
@@ -318,9 +341,104 @@ def _turn(flow, state, thread, step, services, who, prompt, wait):
 
 
 def _llm(flow, state, thread, step, services):
+    if step.get("choose") is not None:
+        return _choose_turn(flow, state, thread, step, services)
     # Nothing after it reads the answer: the turn runs on its own and the run does not wait.
     rest = thread["next"] < len(steps_at(flow, thread["trail"]))
     _turn(flow, state, thread, step, services, step["as"], step["prompt"], rest)
+
+
+REPLY = {"draft": "draft_reply", "reply": "send_reply"}   # what a choose step's body does (`_resume`)
+
+
+def _choose_turn(flow, state, thread, step, services):
+    """An llm step with `choose`: its turn's answer picks the destination (`_answered`). With no turn to wait for (the
+    spend cap stops it, or a webhook's screening holds it) the default destination's chain runs at once, with no reply.
+    The turn's effect key is the record's index, which the reply and the chain extend (`_resume`)."""
+    choose, rec = step["choose"], len(state["steps"])
+    started = _start(flow, state, thread, step, services, step["as"], step["prompt"], True, _choice_tail(flow, choose))
+    if started is None or started.get("held"):
+        # No turn ran: the record says why, and the default destination runs with no reply.
+        _record(state, thread, step, "ok", {"skipped": "spend_cap" if started is None else "held",
+                                            **({} if started is None else {"ref": started["ref"]})})
+        thread["choice"] = {"record": rec, "to": choose["default"], "body": None}
+        _resume(flow, state, thread, step, services)
+        return
+    record = _record(state, thread, step, "waiting", _turn_outputs(started))
+    thread.update(state=WAITING, wait={"kind": "turn", "ref": started["ref"], "out": step.get("out") or step["id"],
+                                       "record": record, "choose": choose})
+
+
+def _choice_tail(flow, choose):
+    """What a choose step's turn is asked after its prompt: one JSON answer, the destinations it may pick by id, and what
+    its body does in the step's mode."""
+    names = {d["id"]: " ".join(str(d.get("name") or d["id"]).split()) for d in flow.get("destinations") or []}
+    what = ("saved as a draft for a person to review" if choose["mode"] == "draft"
+            else "sent as the reply (a draft while the inbox's send is off)")
+    listed = "\n".join(f"- {dest}: {names.get(dest, dest)}" for dest in choose["to"])
+    return (f'\n\nAnswer with one JSON object and nothing else: {{"to": "<id>", "body": "<text>"}}.\n'
+            f'"to" is one of these destination ids:\n{listed}\n'
+            f'"body" is the reply to the message, {what}. Use "" for no reply.')
+
+
+def read_choice(text, choose):
+    """A choose step's answer: one JSON object with exactly `to` (one of choose.to) and `body`, text of at most
+    F.MAX_TEXT characters (a blank body means no reply). Returns ({"to", "body"}, None), or (None, why) for any other."""
+    try:
+        answer = json.loads(text) if isinstance(text, str) else None
+    except (ValueError, RecursionError):
+        answer = None
+    if not isinstance(answer, dict) or set(answer) != {"to", "body"}:
+        return None, "the answer is not one JSON object with to and body"
+    if not isinstance(answer["to"], str) or answer["to"] not in choose["to"]:
+        return None, "to is not one of the destinations the step may choose"
+    body = answer["body"]
+    if not isinstance(body, str) or len(body) > F.MAX_TEXT:
+        return None, f"body is not text of at most {F.MAX_TEXT} characters"
+    return {"to": answer["to"], "body": body if body.strip() else None}, None
+
+
+def _answered(state, thread, wait, text, cost, ok):
+    """A choose step's turn finished. Its answer picks the destination and the body (`read_choice`); an answer that does
+    not fit, or a turn that did not finish, picks the default destination with no body, and the record says why. The
+    thread is ready for `_resume`, which runs the reply and the chain."""
+    choose, record = wait["choose"], state["steps"][wait["record"]]
+    choice, error = read_choice(text, choose) if ok else (None, str(text or "the turn did not finish")[:300])
+    if choice is None:
+        choice = {"to": choose["default"], "body": None}
+    outputs = {**record["outputs"], "to": choice["to"], "actions": []}
+    if ok:
+        outputs["text"] = text
+        thread["outputs"][wait["out"]] = {k: v for k, v in outputs.items() if k != "actions"}
+    if error:
+        outputs["error"] = error
+    record.update(status="ok", outputs=outputs, cost=round(record["cost"] + cost, 6))
+    state["cost"] = round(state["cost"] + cost, 6)
+    thread.update(state=READY, wait=None, choice={"record": wait["record"], **choice})
+
+
+def _resume(flow, state, thread, step, services):
+    """A choose step's effects, once its answer was read (`_answered`): the reply when the body is not blank, then the
+    chosen destination's chain. The reply is keyed `<record>.0` and the chain's effects follow it (`<record>.1` on), so a
+    run resumed after a crash repeats none of them (`_once`). A refused reply ends the step without its chain."""
+    choice = thread.pop("choice")
+    rec = choice["record"]
+    record, values, actions = state["steps"][rec], values_of(state, thread), []
+    if choice["body"] is not None:
+        do = REPLY[step["choose"]["mode"]]
+        # The body is the model's reply as written: it is not rendered, so `{{...}}` in it goes out as text.
+        ctx = {"values": values, "step": step["id"], "key": f"{rec}.0", "producer": f"{step['id']}@{rec}.0"}
+        actions.append({"do": do, "from": "reply", **services.act(do, {"body": choice["body"]}, ctx)})
+    if all(action.get("ok") for action in actions):
+        dest = {d["id"]: d for d in flow.get("destinations") or []}[choice["to"]]
+        chain = [(action, {"from": "destination", "destination": dest["id"]}, False)
+                 for action in dest.get("then") or []]
+        actions += _chain(services, chain, values, step, str(rec), len(actions))
+    failed = not all(action.get("ok") for action in actions)
+    record["outputs"] = {**record["outputs"], "to": choice["to"], "actions": actions}
+    if failed:
+        record["status"] = "failed"
+    thread["state"] = FAILED if failed else DONE
 
 
 def _bot_turn(flow, state, thread, step, services):

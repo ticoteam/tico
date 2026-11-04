@@ -226,3 +226,56 @@ def test_a_rule_key_outside_the_list_is_still_refused():
 ])
 def test_bad_destinations_are_refused(dests, words):
     refused(flow(act("a"), destinations=dests), words)
+
+
+# ---------------------------------------------------------------------------------------------- choose (an llm step)
+TWO = LEGAL + [{"id": "sales", "name": "Sales", "then": []}]
+
+
+def drafting(choose, **extra):
+    return {"id": "draft", "type": "llm", "enabled": True, "as": "assistant:ana", "prompt": "Reply to the sender.",
+            "out": "draft", "choose": choose, **extra}
+
+
+def choice(**extra):
+    return {"to": ["legal", "sales"], "default": "sales", "mode": "draft", **extra}
+
+
+def test_a_choose_step_saves_with_its_destinations():
+    assert check(flow(drafting(choice()), destinations=TWO))["steps"][0]["choose"] == choice()
+    check(flow(drafting(choice(mode="reply")), destinations=TWO))
+
+
+@pytest.mark.parametrize("step, words", [
+    (drafting(choice(to=["legal", "nope"])), "names destinations in this flow"),
+    (drafting(choice(default="legal", to=["sales"])), "default is one of choose.to"),
+    (drafting(choice(to=[])), "1 to 20 destination ids"),
+    (drafting(choice(to=["legal", "legal"])), "each once"),
+    (drafting(choice(to=["legal", 5])), "1 to 20 destination ids"),
+    (drafting(choice(to=[f"d{n}" for n in range(21)], default="d0")), "1 to 20 destination ids"),
+    (drafting(choice(mode="sort")), "draft or reply"),
+    (drafting({"to": ["legal"], "default": "legal"}), "draft or reply"),
+    (drafting(choice(confidence=0.5)), "a map with to, default and mode"),
+])
+def test_bad_choose_steps_are_refused(step, words):
+    refused(flow(step, destinations=TWO), words)
+
+
+def test_choose_needs_destinations_in_the_flow():
+    refused(flow(drafting(choice())), "names destinations in this flow")
+
+
+def test_choose_is_on_an_llm_step_only():
+    refused(flow({**act("a"), "choose": choice()}, destinations=TWO), "choose is on an llm step")
+
+
+def test_a_choose_step_is_the_last_in_its_list():
+    refused(flow(drafting(choice()), act("after"), destinations=TWO), "a choose step is the last step in its list")
+    check(flow(fork("f", 2, inner=[drafting(choice())]), destinations=TWO))
+
+
+def test_a_group_owns_no_choose_step_even_nested():
+    refused(flow(drafting(choice()), owner="group:sales", destinations=TWO), "a group's flow has no turn to choose with")
+    refused(flow(fork("f", 1, inner=[drafting(choice())]), owner="group:sales", destinations=TWO),
+            "a group's flow has no turn to choose with")
+    check(flow(drafting(choice()), owner="bot:support", destinations=TWO))
