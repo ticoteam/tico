@@ -29,6 +29,11 @@ def promoted(api):
     return fid, attempt
 
 
+def finance_token(api):
+    api.app.state.store.settings.test_identities['finance-test'] = Identity('bot:finance', 'bot')
+    return 'finance-test'
+
+
 def sql(api, query, token):
     r = api.post('/api/v2/sql', json={'sql': query}, headers=headers(token))
     assert r.status_code == 200, r.text
@@ -87,18 +92,24 @@ def test_task_pages_live_blocks_and_bot_context_do_not_bypass_audience(api):
     _, attempt = turn(api)
     tid = post(api, 'tasks', {'owner': 'ops', 'title': 'Shared work', 'body': 'Plan', 'private': False}, token='ben-test')['id']
     fid = page(api, attempt, task=tid, title='Audience secret').json()['page']['file_id']
-    outside = post(api, 'bots/finance/agent-credential', {})['token']
+    outside = finance_token(api)
     assert read(api, fid, outside).status_code == 200
     assert read(api, fid, 'cara-test').status_code == 200
     edit(api, fid, {'people': ['ben']})
     for token in (outside, 'cara-test'):
         assert api.get('/api/v2/tasks/' + tid, headers=headers(token)).status_code == 200
         assert read(api, fid, token).status_code == 404
-        for path in ('pages?task=' + tid, 'places/task:' + tid, 'files/search?q=deals'):
+        for path in ('pages?task=' + tid, 'places/task:' + tid, 'tasks/' + tid + '/files', 'files/search?q=deals'):
             r = api.get('/api/v2/' + path, headers=headers(token))
             assert r.status_code == 200, r.text
             assert fid not in r.text and 'Audience secret' not in r.text
         assert sql(api, f"SELECT id FROM bot_files WHERE id='{fid}'", token) == []
+    with api.app.state.store.read() as c:
+        from backend.task_review import comment_file
+        from backend.store import Problem
+        with pytest.raises(Problem):
+            comment_file(c, api.app.state.auth, api.app.state.files, Identity('bot:finance', 'bot'), tid, fid, 1)
+
     with api.app.state.store.read() as c:
         for viewer in (Identity('human:cara', 'human'), Identity('bot:finance', 'bot')):
             filled = live_blocks.fill(f'<tico-files task="{tid}"></tico-files>', c, viewer,
@@ -120,7 +131,7 @@ def test_nested_group_members_human_and_bot_match_the_shared_audience(api):
     tid = post(api, 'tasks', {'owner': 'ops', 'title': 'Shared work', 'body': 'Plan', 'private': False})['id']
     fid = page(api, attempt, task=tid).json()['page']['file_id']
     edit(api, fid, {'teams': [legal]})
-    token = post(api, 'bots/finance/agent-credential', {})['token']
+    token = finance_token(api)
     for viewer in ('cara-test', 'ben-test', token):
         assert read(api, fid, viewer).status_code == 200
     send(api, 'PATCH', 'groups/' + legal, {'remove': {'people': ['cara']}})
@@ -163,6 +174,8 @@ def test_access_changes_record_old_and_new_but_readers_never_get_the_names(api):
         assert reset and not sent
     assert sql(api, f"SELECT detail FROM events WHERE target='{fid}' AND action='page.access_changed'", 'cara-test') == []
     assert len(sql(api, f"SELECT detail FROM events WHERE target='{fid}' AND action='page.access_changed'", 'ben-test')) == 1
+    assert sql(api, f"SELECT detail FROM bot_file_activity WHERE file_id='{fid}' AND action='page.access_changed'", 'cara-test') == []
+    assert len(sql(api, f"SELECT detail FROM bot_file_activity WHERE file_id='{fid}' AND action='page.access_changed'", 'ben-test')) == 1
 
 
 def test_audience_does_not_grant_inherited_access_or_constrain_managers(api):

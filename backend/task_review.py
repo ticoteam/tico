@@ -38,7 +38,12 @@ def comment_rights(c, auth, who, task_id):
     return row
 
 
-def file_version(c, task_id, fid, number):
+def file_version(c, task_id, fid, number, *, auth=None, who=None):
+    if who is not None:
+        from .files import file_visible, page_blob_visible
+        file = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+        if (file and not file_visible(c, auth, who, file, {})) or (not file and not page_blob_visible(c, auth, who, fid)):
+            raise Problem("not_found", "File version not found on this task", 404)
     row = c.execute("SELECT v.* FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id "
                     "WHERE f.task_id=? AND v.file_id=? AND v.version=?", (task_id, fid, number)).fetchone()
     if row:
@@ -57,7 +62,7 @@ def comment_file(c, auth, files, who, task_id, fid, number):
     the task gets its own copy of the same bytes through the task-file service, so the task's readers open it
     through the task, and the chat file's own access and lifetime stay as they were."""
     try:
-        return fid, file_version(c, task_id, fid, number)
+        return fid, file_version(c, task_id, fid, number, auth=auth, who=who)
     except Problem:
         # A person's own chat upload is also a versioned file in that chat (backend/visuals.py); any other file's
         # bytes are shared by that file's id, never by its blob's.
@@ -76,7 +81,7 @@ def comment_file(c, auth, files, who, task_id, fid, number):
                      "WHERE f.task_id=? AND f.archived=0 AND v.digest=? AND v.name=? ORDER BY v.version DESC LIMIT 1",
                      (task_id, source["digest"], source["name"])).fetchone()
     if same:
-        return same["file_id"], file_version(c, task_id, same["file_id"], same["version"])
+        return same["file_id"], file_version(c, task_id, same["file_id"], same["version"], auth=auth, who=who)
     item = register(c, who, source["digest"], source["size"], source["name"], source["content_type"])
     copy = files.publish_task_deliverable(c, who, task_id, item, source["digest"])
     c.execute("INSERT INTO task_assets VALUES(?,?)", (task_id, item["id"]))
@@ -127,7 +132,7 @@ def check_ask(c, task_id, ask, auth, who, lint=True):
         for option in question.options:
             if option.file:
                 fid, number = option.file.rsplit("@", 1)
-                file_version(c, task_id, fid, int(number))
+                file_version(c, task_id, fid, int(number), auth=auth, who=who)
     if ask.if_no_answer and ask.if_no_answer.by:
         by = H.parse_ts(ask.if_no_answer.by)
         if not by or by.tzinfo is None:
@@ -158,7 +163,7 @@ def edit_version(c, auth, who, task_id, fid, number, body):
     auth.task(c, who, task_id)
     if body.ask is not None:
         comment_rights(c, auth, who, task_id)
-    version = file_version(c, task_id, fid, number)
+    version = file_version(c, task_id, fid, number, auth=auth, who=who)
     if version["actor"] != who.actor:
         raise Problem("forbidden", "Only whoever added this version may edit its note or question", 403)
     value = check_ask(c, task_id, body.ask, auth, who)
@@ -244,7 +249,7 @@ def answer_task(c, auth, who, task_id, body, wake, warn=""):
         if (asked.get("refs") or {}).get("target"):
             raise Problem("validation", "Use the file and version target for a file question", 422)
     else:
-        version = file_version(c, task_id, body.target.file, body.target.version)
+        version = file_version(c, task_id, body.target.file, body.target.version, auth=auth, who=who)
         review = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=? AND version=?",
                            (body.target.file, body.target.version)).fetchone()
         asked = H.message(c, review[0]) if review and review[0] else None

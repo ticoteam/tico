@@ -427,10 +427,8 @@ def blob_for(c, auth, who, bid):
     row = c.execute("SELECT * FROM blobs WHERE id=?", (bid,)).fetchone()
     if not row:
         raise Problem("not_found", "File not found", 404)
-    from .files import file_visible
-    linked_pages = c.execute("SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id "
-                             "JOIN bot_file_versions v ON v.file_id=f.id WHERE v.blob_id=? OR "
-                             "v.thumb_blob_id=? OR v.poster_blob_id=?", (bid, bid, bid)).fetchall()
+    from .files import file_visible, page_blobs
+    linked_pages = page_blobs(c, bid)
     if linked_pages:
         if not all(file_visible(c, auth, who, f, {}) for f in linked_pages):
             raise Problem("not_found", "File not found", 404)

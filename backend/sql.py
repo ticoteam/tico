@@ -533,7 +533,8 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
                         "WHEN scope LIKE 'conversation:%' THEN substr(scope,14) IN (SELECT id FROM conversations) "
                         f"ELSE {bots_visible('bot_id')} END)"),
         "bot_file_versions": "file_id IN (SELECT id FROM bot_files)",
-        "bot_file_activity": "file_id IN (SELECT id FROM bot_files)",
+        "bot_file_activity": "file_id IN (SELECT id FROM bot_files) AND "
+                             "(action<>'page.access_changed' OR " + function("page_manager") + "(file_id))",
         # The company owner is not thereby the owner of everyone's private attachments (media.py).
         "blobs": blob_gate + " AND (" + ("" if bot else f"owner={me} OR ") +
                  "id IN (SELECT blob_id FROM message_assets) OR id IN (SELECT blob_id FROM task_assets) "
@@ -745,7 +746,7 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         columns = schema_columns(conn, path)
         unseen = TA.hidden(conn, who, "see", ("human", "group"), auth)
         tables = guarded(conn, auth, who, inner, function, columns, unseen=unseen)
-        source_tables = set(tables) | {"blob_media", "live_meetings", "live_meeting_access", "live_meeting_bots",
+        source_tables = set(tables) | {"pages", "pins", "pin_places", "teammate_accesses", "blob_media", "live_meetings", "live_meeting_access", "live_meeting_bots",
                                        "live_meeting_turns"}
         class Source:
             def __init__(self):
@@ -788,16 +789,20 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                 finally:
                     trusted[0] = False
         index = ReadIndex(Source(), who, rooms=True)
-        from .files import file_visible, page_event_readable
+        from .files import file_visible, page_event_readable, page_blob_visible
+        from .pages import may_manage as page_manager
         source = index.c
         def visible_file(fid):
             row = source.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
             return bool(row) and file_visible(source, auth, who, row, {})
-        functions = {"file": (1, visible_file), "message": (4, index.message), "attempt": (1, index.attempt),
+        def manages_page(fid):
+            row = source.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+            return bool(row) and page_manager(source, auth, who, row)
+        functions = {"file": (1, visible_file), "page_manager": (1, manages_page), "message": (4, index.message), "attempt": (1, index.attempt),
                      "conversation": (1, index.conversation), "meeting_room": (1, index.meeting_room),
                      "event": (4, lambda target, actor, ts, detail:
                                     page_event_readable(source, auth, who, target, detail) and
-                                    index.event(target, actor, ts, detail)), "tag": (2, index.tag), "blob": (1, index.blob),
+                                    index.event(target, actor, ts, detail)), "tag": (2, index.tag), "blob": (1, lambda bid: index.blob(bid) and page_blob_visible(source, auth, who, bid)),
                      "settled_message": (5, lambda mid, cid, refs, reply, fast:
                                          True if fast else index.message(mid, cid, refs, reply)),
                      "settled_attempt": (2, lambda aid, fast: True if fast else index.attempt(aid)),

@@ -233,6 +233,17 @@ def file_visible(c, auth, who, row, cache):
     return cards.widened(c, auth, who, row["id"], cache)
 
 
+def page_blobs(c, bid):
+    """The pages whose bytes or previews this blob holds; attachment ownership never bypasses them."""
+    return c.execute("SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id "
+                     "JOIN bot_file_versions v ON v.file_id=f.id WHERE v.blob_id=? OR "
+                     "v.thumb_blob_id=? OR v.poster_blob_id=?", (bid, bid, bid)).fetchall()
+
+
+def page_blob_visible(c, auth, who, bid):
+    return all(file_visible(c, auth, who, row, {}) for row in page_blobs(c, bid))
+
+
 def page_event_readable(c, auth, who, target, detail):
     row = c.execute("SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id WHERE f.id=?", (target,)).fetchone()
     if not row:
