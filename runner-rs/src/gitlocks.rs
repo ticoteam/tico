@@ -12,24 +12,32 @@ fn old_file(path: &Path) -> Option<std::fs::Metadata> {
 }
 
 #[cfg(target_os = "linux")]
+fn inaccessible_git(process: &Path) -> bool {
+    match std::fs::read_to_string(process.join("comm")) {
+        Ok(name) => name.trim().starts_with("git"),
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
+#[cfg(target_os = "linux")]
 async fn unused(path: &Path, lock: &std::fs::Metadata) -> bool {
     let Ok(processes) = std::fs::read_dir("/proc") else { return false };
     for process in processes {
         let Ok(process) = process else { return false };
         if !process.file_name().to_string_lossy().bytes().all(|c| c.is_ascii_digit()) { continue; }
-        let Ok(owner) = process.metadata() else { continue };
         let files = match std::fs::read_dir(process.path().join("fd")) {
             Ok(files) => files,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            // Another user's process cannot create this private Git lock. Unknown for its owner stays locked.
-            Err(_) if owner.uid() != lock.uid() => continue,
+            // Docker's supervisor cannot inspect the bot user's descriptors. Unrelated model processes must
+            // not hold recovery back forever; an inaccessible Git process (or unknown name) does.
+            Err(_) if !inaccessible_git(&process.path()) => continue,
             Err(_) => return false,
         };
         for file in files {
             let Ok(file) = file else { return false };
             match std::fs::metadata(file.path()) {
                 Ok(m) if m.dev() == lock.dev() && m.ino() == lock.ino() => return false,
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return false,
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound && inaccessible_git(&process.path()) => return false,
                 _ => {}
             }
         }
@@ -122,6 +130,21 @@ mod tests {
 
     fn age(path: &Path) {
         std::fs::File::open(path).unwrap().set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now() - OLD * 2)).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inaccessible_bot_git_writers_block_recovery_but_model_processes_do_not() {
+        let root = std::env::temp_dir().join(format!("tico-git-owner-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("comm"), "model-host\n").unwrap();
+        assert!(!inaccessible_git(&root));
+        std::fs::write(root.join("comm"), "git\n").unwrap();
+        assert!(inaccessible_git(&root));
+        std::fs::remove_file(root.join("comm")).unwrap();
+        std::fs::create_dir(root.join("comm")).unwrap();
+        assert!(inaccessible_git(&root), "unknown process names cannot authorize deleting a Git lock");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

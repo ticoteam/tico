@@ -1,6 +1,7 @@
 """A checkout follows its server's release: the update process (python -m runner_support.release_update) against a temp repository."""
 import fcntl
 import os
+from pathlib import Path
 import subprocess
 import threading
 import time
@@ -180,6 +181,31 @@ def test_updater_retries_an_abandoned_index_lock_but_keeps_fresh_and_open_locks(
         with lock.open():
             assert ru.git(checkout, *command).returncode != 0 and lock.exists()
         assert ru.git(checkout, *command).returncode == 0 and not lock.exists()
+
+
+def test_inaccessible_bot_descriptors_block_lock_recovery_only_for_git_or_unknown_processes(tmp_path, monkeypatch):
+    from runner_support import git_locks
+    process = tmp_path / "123"
+    process.mkdir()
+    lock = tmp_path / "config.lock"
+    lock.write_text("old")
+    original = Path.iterdir
+
+    def processes(path):
+        if path == Path("/proc"):
+            return iter([process])
+        if path == process / "fd":
+            raise PermissionError("another OS user")
+        return original(path)
+
+    monkeypatch.setattr(Path, "iterdir", processes)
+    (process / "comm").write_text("model-host\n")
+    assert git_locks.unused(lock, lock.stat())
+    (process / "comm").write_text("git\n")
+    assert not git_locks.unused(lock, lock.stat())
+    (process / "comm").unlink()
+    # A vanished process no longer holds a file.
+    assert git_locks.unused(lock, lock.stat())
 
 
 def test_a_blocked_update_names_the_first_three_changed_files(repos):

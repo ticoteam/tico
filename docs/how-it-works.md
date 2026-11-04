@@ -701,8 +701,8 @@ from this computer's repository list for 30 days is removed from `repos/`. Older
 the repository endpoint leave this feature idle.
 
 An interrupted Git command can leave a lock behind. The runner removes a reported lock only after
-five minutes and only when no process holds it open; fresh locks and locks whose owner cannot be
-checked stay in place. A broken private mirror is rebuilt from the remote. If a base clone's config
+five minutes and only when no Git process holds it open; fresh locks and locks that might belong
+to an inaccessible Git process stay in place. A broken private mirror is rebuilt from the remote. If a base clone's config
 cannot be written, the runner recreates that config from a fresh clone, keeping the old config as
 `.git/tico-config-backup-*`. Its files, index, branches, stash and task worktree registrations stay
 in place, including unpublished bot work. Git failure details are scrubbed before reaching Health.

@@ -9,6 +9,15 @@ import time
 OLD_S = 5 * 60
 
 
+def inaccessible_git(process):
+    try:
+        return (process / "comm").read_text().strip().startswith("git")
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+
+
 def unused(path, lock):
     if sys.platform != "linux":
         try:
@@ -20,20 +29,22 @@ def unused(path, lock):
         for process in Path("/proc").iterdir():
             if not process.name.isdigit():
                 continue
-            owner = None
             try:
-                owner = process.stat().st_uid
                 files = list((process / "fd").iterdir())
             except FileNotFoundError:
                 continue
             except PermissionError:
-                if owner is not None and owner != lock.st_uid:
+                if not inaccessible_git(process):
                     continue
                 return False
             for file in files:
                 try:
                     opened = file.stat()
                 except FileNotFoundError:
+                    continue
+                except PermissionError:
+                    if inaccessible_git(process):
+                        return False
                     continue
                 if (opened.st_dev, opened.st_ino) == (lock.st_dev, lock.st_ino):
                     return False
