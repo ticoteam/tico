@@ -706,3 +706,21 @@ def test_instruction_backup_cleanup_never_follows_a_metadata_symlink(tmp_path):
     (metadata / "tico-instruction-backups").symlink_to(outside)
     assert "cannot inspect instruction backups" in ru.instruction_backup_note(checkout, metadata)
     assert backup.read_text() == "same bytes"
+
+
+def test_instruction_writer_closing_during_fd_scan_cannot_lose_its_edit(tmp_path, monkeypatch):
+    from runner_support import git_locks
+    metadata = tmp_path / ".git"
+    saved = metadata / "tico-instruction-backups"
+    saved.mkdir(parents=True)
+    (tmp_path / "AGENTS.md").write_text("same bytes")
+    backup = saved / "AGENTS.md.tico-backup-1"
+    backup.write_text("same bytes")
+
+    def write_and_close(path, before):
+        path.write_text("late edit, writer now closed")
+        return True
+
+    monkeypatch.setattr(git_locks, "unused", write_and_close)
+    assert backup.name in ru.instruction_backup_note(tmp_path, metadata)
+    assert backup.read_text() == "late edit, writer now closed"

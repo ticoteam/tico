@@ -359,11 +359,16 @@ fn no_alternate_users(roots: &[PathBuf], mirror: &Path) -> Result<(), Fail> {
     let mut pending = roots.to_vec();
     let mut seen = HashSet::new();
     while let Some(dir) = pending.pop() {
-        if !dir.exists() { continue; }
+        if !dir.try_exists().map_err(|_| attention("cannot inspect runner repositories for alternates"))? { continue; }
         let dir = dir.canonicalize().map_err(|_| attention("cannot inspect runner repositories for alternates"))?;
         if !seen.insert(dir.clone()) { continue; }
         let alternate = dir.join("objects/info/alternates");
-        if dir != mirror && alternate.symlink_metadata().is_ok() {
+        let has_alternate = match alternate.symlink_metadata() {
+            Ok(_) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(_) => return Err(attention("cannot inspect repository alternates")),
+        };
+        if dir != mirror && has_alternate {
             if is_symlink(&alternate) { return Err(attention(format!("cannot inspect alternates {}", alternate.display()))); }
             let text = std::fs::read_to_string(&alternate).map_err(|_| attention("cannot read repository alternates"))?;
             for line in text.lines().filter(|s| !s.is_empty()) {
@@ -1543,11 +1548,16 @@ async fn instruction_backup_note(root: &Path, git_dir: &Path) -> Option<String> 
             if real_dir(&path) { pending.push(path); continue; }
             let Some(name) = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.rsplit_once(".tico-backup-").map(|(name, _)| name)) else { continue };
             let relative = path.strip_prefix(&saved).unwrap().with_file_name(name);
-            if is_symlink(&path) || std::fs::read(&path).ok().zip(std::fs::read(root.join(relative)).ok()).is_none_or(|(a, b)| a != b) {
+            if is_symlink(&path) || std::fs::read(&path).ok().zip(std::fs::read(root.join(&relative)).ok()).is_none_or(|(a, b)| a != b) {
                 names.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
             } else if let Ok(m) = path.symlink_metadata() {
                 if m.is_file() && m.nlink() == 1 && crate::gitlocks::no_open_file(&path, &m).await {
-                    let _ = std::fs::remove_file(&path);
+                    // A writer may have written and closed between our first read and the fd scan.
+                    if std::fs::read(&path).ok().zip(std::fs::read(root.join(&relative)).ok()).is_none_or(|(a, b)| a != b) {
+                        names.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
+                    } else if path.symlink_metadata().is_ok_and(|after| after.dev() == m.dev() && after.ino() == m.ino() && after.mtime() == m.mtime() && after.mtime_nsec() == m.mtime_nsec()) {
+                        let _ = std::fs::remove_file(&path);
+                    }
                 }
             }
         }
