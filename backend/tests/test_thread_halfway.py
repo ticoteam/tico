@@ -98,8 +98,8 @@ def test_an_unreadable_target_is_refused_and_its_quote_is_hidden(api, monkeypatc
     reply = say(api, thread["id"], "Noted", in_reply_to=secret["id"])
     real = threads.message_readable
     monkeypatch.setattr(threads, "message_readable",
-                        lambda c, v, m: m.get("id") != secret["id"] if getattr(v, "actor", "") == "human:ben"
-                        else real(c, v, m))
+                        lambda c, v, m, **kw: m.get("id") != secret["id"] if getattr(v, "actor", "") == "human:ben"
+                        else real(c, v, m, **kw))
     r = api.post(f"/api/v2/threads/{thread['id']}/messages", json={"text": "x", "in_reply_to": secret["id"]},
                  headers=headers("ben-test"))
     assert r.status_code == 422 and r.json()["error"]["code"] == "reply_target_invalid", r.text
