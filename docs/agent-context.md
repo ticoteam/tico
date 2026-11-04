@@ -26,7 +26,7 @@ The `hub` CLI and MCP expose the same read-only functions, and one that files a 
 
 Doc search accepts `--market` (also the market's notes, entities and evidence), `--manual` (only the Tico manual) and `--limit` (1–50). Results
 include source IDs, links, and matching excerpts. Use the existing `hub market show`
-to inspect a market entity. Search is keyword-based, not a generated answer.
+to inspect a market entity. Search is keyword-based, not a generated answer. Market entities and evidence match any word of three or more characters; market notes need every word.
 
 Meeting search accepts `--person`, `--since YYYY-MM-DD`, `--until YYYY-MM-DD`,
 `--limit` (1–50), and `--offset`. Dates are inclusive and use the meeting start
