@@ -90,7 +90,7 @@ def bot_ids(api):
 def test_the_sample_is_a_company_file_of_five_bots_each_with_a_goal_and_short_starter_tasks():
     draft, extra = sample_company.team()
     assert draft == from_yaml(sample_company.FILE.read_text())          # import can read it as it is
-    assert [b["template"] for b in draft["bots"]] == ["coo", "product-lead", "pr-reviewer", "support", "content"]
+    assert [b["template"] for b in draft["bots"]] == ["coo", "product-lead", "builder", "support", "content"]
     assert [b["title"] for b in draft["bots"]] == ["Assistant", "Head of Product", "Builder", "Support Agent",
                                                    "Content Marketer"]
     assert sorted(g["owner"] for g in draft["goals"]) == sorted(b["id"] for b in draft["bots"])

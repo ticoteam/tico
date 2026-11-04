@@ -60,9 +60,11 @@ def test_a_copy_is_an_independent_bot_owned_by_whoever_asked(api, scribe):
     with api.app.state.store.read() as c:
         event = c.execute("SELECT actor,detail FROM events WHERE action='bot.copied'").fetchone()
         assert event["actor"] == "human:cara" and json.loads(event["detail"])["from"] == scribe_id
-    # Left out, the slug and the name follow the original; asking again makes another.
+    # Left out, the slug and the name are the original's with the next free number; asking again makes another.
     again = copy(api)
-    assert again["slug"] == "scribe-copy" and again["display_name"] == "Copy of Scribe" and copy(api)["slug"] == "scribe-copy-2"
+    assert again["slug"] == "scribe-2" and again["display_name"] == "Scribe 2" and copy(api)["slug"] == "scribe-3"
+    third = copy(api, bot="scribe-2")                                                          # a copy of a copy numbers on from the original
+    assert third["slug"] == "scribe-4" and third["display_name"] == "Scribe 4"
     copy(api, {"slug": "cara-scribe"}, expected=409)                                            # a slug someone holds
 
 

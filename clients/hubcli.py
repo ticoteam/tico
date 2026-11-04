@@ -3563,7 +3563,7 @@ def parser():
     s.set_defaults(fn="bot branch")
     s = bot.add_parser("copy", help="copy a bot into a new one the requester owns (BotOps)")
     s.add_argument("bot", help="the bot to copy")
-    s.add_argument("--slug", help="the copy's slug; <bot>-copy by default")
+    s.add_argument("--slug", help="the copy's slug; the original's with the next free number (builder-2) by default")
     s.add_argument("--name", help="what people call the copy")
     s.add_argument("--with-memory", dest="with_memory", action="store_true", help="also copy the original's memory, notes and state")
     s.add_argument("--computer", help="a computer's label or id to put the copy on")
