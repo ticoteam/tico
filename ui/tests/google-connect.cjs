@@ -39,6 +39,9 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/v2/operations') return json({machines: [], services: []});
       if (p === '/api/v2/models') return json({models: [], harnesses: []});
       if (p === '/api/v2/me/tokens') return json({tokens: []});
+      if (p === '/api/v2/google') return json({can_admin: false, workspace: null, pending: null,
+        oauth: {configured: google.configured !== false, source: 'settings', redirect_uri: 'https://tico-ui.test/api/v2/mail/google/callback', client_id: null},
+        me: {mailbox: google.mailbox, covered_by_workspace: false}, setup: {base: 'https://tico-ui.test', reachable: true}});
       if (p === '/api/v2/mail/google') return json(google);
       if (p === '/api/v2/mail/google/connect') { writes.push(p); return json({auth_url: authUrl, mailbox: google.mailbox}); }
       if (p === '/api/v2/mail/google/disconnect') { writes.push(p); google = {...google, status: 'disconnecting'}; return json(google); }
@@ -98,7 +101,7 @@ const {unrouted} = require('./support/routes.cjs');
     // A server without Tico's Google app says so, with no button.
     google = {configured: false, mailbox: 'cara@acme.example', status: 'none'};
     await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
-    await page.waitForFunction(() => /isn't available on this Tico server/.test(document.querySelector('#set-google')?.textContent || ''));
+    await page.waitForFunction(() => /Ask an admin to set up Google/.test(document.querySelector('#set-google')?.textContent || ''));
     assert.equal(await page.locator('#set-google [data-google-connect]').count(), 0);
     assert.deepEqual(errors, []);
   } finally {

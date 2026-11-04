@@ -7,6 +7,7 @@ from backend import wake_rules as W
 from backend.store import H
 from backend.tests.test_api import api, get  # noqa: F401
 from backend.tests.test_dev_ticket_rules import dev_type
+from backend.tests.hold_rows import set_holds
 
 
 def ticket(c, title="Fix the connection", owner="bot:cpo", manager="coo"):

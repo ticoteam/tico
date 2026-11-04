@@ -410,24 +410,39 @@ Replace `<container-name>` below with this Computer's full Docker container name
 or find it with `docker ps`. Only the optional unnamed manual install uses `tico-runner`.
 See [Computer sign-in and diagnostics](install.md#linux-or-cloud-server-docker).
 
-1. Create the Google service account with domain-wide delegation once (`connectors/mail/README.md`, Setup), and download its JSON key.
-   Without delegation, each person connects their own account instead ([Connect your Google account](#connect-your-google-account)) and you skip step 2.
-2. Put the key on **one** runner, in the runner's own state directory, where only the runner can read it (owner `ticorun`, mode 0600):
-   `docker exec -i -u ticorun '<container-name>' sh -c 'umask 077; cat > "$(ls -d /home/runner/state-* | head -1)/google-sa.json"' < google-sa.json`.
-   A key left in `workspace/secrets/google-sa.json` (an older install, or an older version of this page) is moved there within
-   a minute. Bots cannot read that place: a message bot's run asks the runner for a short-lived token for one mailbox instead
-   (below).
-   Re-enrollment on the same volume carries the protected key from the previous registration into the new state directory,
-   preserving its permissions. The operator and server must match; another operator's key is never copied, and an existing
-   key in the new registration is kept. Carryover is recorded once per registration after copying, finding an existing
-   key or confirming there is no previous key. Deleting that registration's key later is respected on restart;
-   a missing previous key is quiet, while failed reads or copies can retry. The previous key remains available for rollback.
-   Health warns when an assigned teammate's online Computer reports a missing Tool Credential, naming the Tool and Computer.
-3. Wait a minute. `docker logs '<container-name>'` says `Tico side jobs: started connectors (mail, calendar)`. The first start builds
+### Set up Google in Settings
+
+Settings > Google has two cards.
+
+**Whole Workspace** lets Tico read the mailboxes of your Google Workspace through one service account. A Workspace admin does this once:
+
+1. Click **New command**, click **Open Cloud Shell**, and paste the command there. If you belong to more than one organization, Cloud Shell asks which one to use. The command makes a service account in a Google Cloud project for Tico, turns on Gmail and Calendar for it, and sends its key to Tico. It never shows the key. If an organization policy blocks service account keys, the command turns that rule off for that project only.
+2. Back in Tico, click **Open Google Admin**. Add the client ID and scopes shown in Tico, then click **Authorize**.
+3. Under **Mailbox to check**, enter one covered mailbox and click **Check**. When Google accepts the key, Tico shows the mailbox as connected. If Google hasn't accepted it yet, Tico lists what to check and keeps checking every 20 seconds for 10 minutes.
+
+To change the key later, click **Replace key**. **Disconnect** stops Tico reading every covered mailbox.
+
+**Your account** lets each person connect their own mailbox ([Connect your Google account](#connect-your-google-account)). It needs Tico's Google app, which an admin sets up once for the server:
+
+1. Enter the Google Cloud project ID, then open **Auth overview** and fill in the app name, support email and audience.
+2. Open **Create a client**, choose Web application, and add the redirect URI that Tico shows.
+3. Paste the client ID and client secret, then click **Save**.
+
+Choose the audience in step 1:
+- **Internal**: only accounts in your domain. Gmail needs no Google verification. It needs a project in your organization.
+- **External**: any Google account, but Gmail is a restricted scope, so Google's verification applies.
+
+**Remove Google app** turns it off for everyone. A server's Google app can also come from its environment; see [Manual or self-hosted](#manual-or-self-hosted).
+
+### Start the sync on the runner
+
+With Whole Workspace set, the `connectors` job on the runner reads the mailboxes below. It gets short-lived tokens from the Tico server, so no key file goes to the runner.
+
+1. Wait a minute. `docker logs '<container-name>'` says `Tico side jobs: started connectors (mail, calendar)`. The first start builds
    the Python environment into the runner's volume (`/home/runner/tools/mail-venv`, or `/var/lib/tico-runner/tools/mail-venv`),
    about a minute, needing outbound access to PyPI once. It is not in the image, so the image stays slim for runners that never sync mail;
    it is rebuilt when `connectors/mail/requirements.txt` changes.
-4. Check: `python -m runner_support --config <runner.json> connectors-doctor`, then Settings shows the mail and calendar
+2. Check: `python -m runner_support --config <runner.json> connectors-doctor`, then Settings shows the mail and calendar
    tool health.
 
 ### Which mailboxes the sync covers
@@ -456,11 +471,11 @@ Workspace admin console and no Google Cloud project of their own. It works for a
 Tico supplies the Google app ("Tico") and the consent screen, unless the company sets its own Google app (below). Google itself enforces what Tico may do: the grant belongs to
 the account that signed in and cannot reach anyone else in the Workspace.
 
-![My Google account tab showing the demo’s unconnected Google account card](images/settings-stage1/settings-my-google-account.png)
+![Google tab showing the demo’s unconnected Google account card](images/settings-stage1/settings-my-google-account.png)
 
-*Synthetic Acme example with Google not configured. Your personal Google connection is under My Google account.*
+*Synthetic Acme example with Google not configured. Your personal Google connection is in Settings > Google.*
 
-1. In Tico, the person opens **Settings > My Google account** and chooses **Connect Google**. Tico names the mailbox it will connect:
+1. In Tico, the person opens **Settings > Google** and chooses **Connect Google**. Tico names the mailbox it will connect:
    the one their message bot manages.
 2. Google asks them to sign in as that mailbox and to allow Tico to read their mail and calendar. With Tico's shared app,
    nothing that writes or sends is asked for. With the company's own Google app, see below.
@@ -496,7 +511,7 @@ Reconnect and revoke:
 - If the person removes Tico at myaccount.google.com/permissions, changes their password, or the admin blocks the app
   later, the next sync fails and Settings > Health says to reconnect (or names the admin policy). Tico never falls back
   to a service account for that mailbox. **Connect Google** again replaces the grant.
-- **Disconnect** in Settings > My Google account revokes the grant at Google and deletes it from the computer that holds it.
+- **Disconnect** in Settings > Google revokes the grant at Google and deletes it from the computer that holds it.
   A reconnect or a disconnect goes only to that computer, and a person's first connect goes to the computer that
   already holds mail access, so one computer keeps the team's mail. If another computer answers anyway it says it
   holds nothing, and Settings shows that instead of "disconnected". If that computer stays offline for 15 minutes,
@@ -545,13 +560,6 @@ app avoids verification only for accounts in the Workspace that owns the project
 Grants still end for Google's other reasons: the person removes the app or changes their password, six months without
 use, a newer grant past Google's per-account limit, or an admin's policy. Settings > Health then says to reconnect.
 
-For the Tico server's operator: Connect Google needs Tico's OAuth client on the server (`TICO_GOOGLE_OAUTH_CLIENT_ID`,
-`TICO_GOOGLE_OAUTH_CLIENT_SECRET`, a Web application client whose redirect URI is
-`<TICO_PUBLIC_URL>/api/v2/mail/google/callback`). Without it, Settings says Connect Google is not available on this
-server. A self-hosted team may use its own client the same way, or connect from the runner with
-`scripts/mail.sh google connect --mailbox <address> --client-file client.json` (a Desktop app client). `google status`,
-`google revoke` and `doctor` list, remove and check grants there.
-
 IMAP is not an alternative here: Google's OAuth for IMAP needs full-mail access, it carries no calendar, and a Workspace
 that blocks apps usually blocks IMAP as well.
 
@@ -559,7 +567,8 @@ that blocks apps usually blocks IMAP as well.
 
 The key can act as any mailbox in the team, so bots must not be able to read it.
 
-- **Docker runner with the two-user layout** (the current `runner.compose.yaml`): the key is in the runner's state directory,
+- **Key set in Settings > Google**: the key is sealed on the Tico server, and no computer gets it. A computer gets short-lived tokens for the mailboxes it may use, and nothing else.
+- **Docker runner with the two-user layout** (the current `runner.compose.yaml`) with a key you made yourself: the key is in the runner's state directory,
   closed to the bots' user. The `connectors` job reads it there. A message bot's run gets, from the runner over its credential
   socket, a Gmail or Calendar access token that lasts an hour for one mailbox at a time. The mailboxes it may ask for are the
   one the bot declares (its human's own email only if it declares none). Those of the humans below that human in the
@@ -603,6 +612,30 @@ the job (and show a sign-in problem in Settings until the key is there).
 Nothing in the `connectors` job is Mac-only: the key is a file on both (no Keychain), and there is no browser automation
 in it. What stays Mac-only is launchd (`scripts/tico install`; Linux uses the runner's own supervisor) and
 `connectors/browser.py`, the signed-in browser tool bots use, which needs a desktop browser.
+
+### Manual or self-hosted
+
+Use these instead of the Settings steps above when you make the Google key yourself, or run the Tico server.
+
+**A key you make yourself**
+
+1. Create the Google service account with domain-wide delegation once (`connectors/mail/README.md`, Setup), and download its JSON key.
+   Without delegation, each person connects their own account instead ([Connect your Google account](#connect-your-google-account)) and you skip step 2.
+2. Put the key on **one** runner, in the runner's own state directory, where only the runner can read it (owner `ticorun`, mode 0600):
+   `docker exec -i -u ticorun '<container-name>' sh -c 'umask 077; cat > "$(ls -d /home/runner/state-* | head -1)/google-sa.json"' < google-sa.json`.
+   A key left in `workspace/secrets/google-sa.json` (an older install, or an older version of this page) is moved there within
+   a minute. Bots cannot read that place: a message bot's run asks the runner for a short-lived token for one mailbox instead
+   ([Who can read the key](#who-can-read-the-key)).
+   Re-enrollment on the same volume carries the protected key from the previous registration into the new state directory,
+   preserving its permissions. The operator and server must match; another operator's key is never copied, and an existing
+   key in the new registration is kept. Carryover is recorded once per registration after copying, finding an existing
+   key or confirming there is no previous key. Deleting that registration's key later is respected on restart;
+   a missing previous key is quiet, while failed reads or copies can retry. The previous key remains available for rollback.
+   Health warns when an assigned teammate's online Computer reports a missing Tool Credential, naming the Tool and Computer.
+
+**Tico's Google app on a server you run**
+
+The server's operator can set Tico's OAuth client in its environment, `TICO_GOOGLE_OAUTH_CLIENT_ID` and `TICO_GOOGLE_OAUTH_CLIENT_SECRET`, as a Web application client whose redirect URI is `<TICO_PUBLIC_URL>/api/v2/mail/google/callback`. Settings > Google can set the same client under **Your account**. When the environment sets it, the card says Set on the server and can't change it. Until one of them is set, Connect Google isn't set up on this server. A self-hosted team may use its own client the same way, or connect from the runner with `scripts/mail.sh google connect --mailbox <address> --client-file client.json` (a Desktop app client). `google status`, `google revoke` and `doctor` list, remove and check grants there.
 
 ## Turning sending on
 

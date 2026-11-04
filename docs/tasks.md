@@ -233,6 +233,9 @@ own field: `waiting_on` (the person it waits on), `relations.blocks`, `worktree_
 `milestone_waits` and `deferred`. Task list filters are unchanged: `?snoozed=only|all` lists snoozed tasks, and a
 blocked task is a `waiting` one (`?status=waiting`).
 
+Each hold is a row of `task_holds` in the hub database (one open row per kind; a released one keeps its
+`released_at` as history), readable in hub SQL with its task ([Hub SQL](hub-sql.md)).
+
 ### Waiting for a milestone, not the whole task
 
 Often what a task needs is an earlier milestone of another task, not that task being done: a pull request merged

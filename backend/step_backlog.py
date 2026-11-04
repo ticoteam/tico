@@ -103,7 +103,7 @@ def sweep(c, at=None):
         if not rule:
             continue
         rows = H._rows(c.execute(
-            f"SELECT * FROM tasks WHERE step_id=? AND status NOT IN ({','.join('?' * len(FINISHED))}) "
+            f"SELECT * FROM {H.TASKS} tasks WHERE step_id=? AND status NOT IN ({','.join('?' * len(FINISHED))}) "
             "ORDER BY created_at, id", (step["id"], *FINISHED)))
         rows = [row for row in rows if not H.task_private(c, row) and not {row["owner_id"], row["requester_id"]} & hidden]
         groups = {}

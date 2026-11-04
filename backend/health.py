@@ -2141,8 +2141,10 @@ def view(c, who, settings, auth, github, config):
         checks.append(_check("waiting", "Bots waiting", "ok", "Every active bot has a computer that is up."))
     # An offline computer (or none) is "Bots waiting"; this check is everything else, so one cause is one item.
     held = {w["bot"] for w in waiting}
-    # A bot stuck in onboarding has its own check below ("Onboarding not finished").
-    blocking = [s for s in blocked if s["bot"] not in held and s["reason"] != "setup"]
+    # A bot stuck in onboarding has its own check below ("Onboarding not finished"). A quarantined bot is BotOps's to
+    # review, so it has its own check (after this one): Settings > Health lists it, the person's status dot does not.
+    quarantined = [s for s in blocked if s["bot"] not in held and s["reason"] == "quarantined"]
+    blocking = [s for s in blocked if s["bot"] not in held and s["reason"] not in ("setup", "quarantined")]
     busy = [row for row in slow if row["reason"] == "busy"]
     readable = auth.bot_accesses(c, who, [row["bot"] for row in busy]) if busy and not full else {}
     busy_rows = _stuck(c, [{**row, "reason": row["wait_reason"], "runtime": ""} for row in busy
@@ -2166,6 +2168,12 @@ def view(c, who, settings, auth, github, config):
                              [_fix("Open Runs", "#/settings", "runs")] if full else []))
     else:
         checks.append(_check("queue", "Work queueing", "ok", "No work is waiting long."))
+    if quarantined:
+        items = _queue_items(quarantined, full, kind == "bot") if full or kind == "bot" else []
+        checks.append(_check("quarantine", "Quarantined bots", "bad",
+                             _diagnostic_summary(f"{_plural(len(quarantined), 'bot')} quarantined; queued work waits "
+                                                 "until the quarantine clears.", items),
+                             [_fix("Open Runs", "#/settings", "runs")] if full else [], items=items))
     for slug, name, count, what, oldest in unfinished_setup(c) if full else ():
         checks.append(_check("setup:" + slug, "Onboarding not finished", "warn",
                              f"{name} is still onboarding; {_plural(count, what)} waiting since {oldest[:10]}.",

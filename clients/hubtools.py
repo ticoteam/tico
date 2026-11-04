@@ -5348,10 +5348,11 @@ def approval_approve(api, args):
 @tool("hub_approval_read_back", "Assistant only, before approving for the person: post in their chat the list of "
       "approvals you are about to approve, as your reply, then end the turn. The server writes the whole message from "
       "the approvals; only the ones listed may then be approved, on the person's plain yes to it.",
-      {"ids": {"type": "array", "items": {"type": "string"}, "description": "The approval ids, up to 100"}},
+      {"ids": {"type": "array", "items": {"type": "string"}, "description": "The approval ids, up to 100"},
+       "note": _s("Optional, one plain line shown above the list: the real decision you found, by name")},
       required=("ids",), writes=True)
 def approval_read_back(api, args):
-    return api.post("assistant/read-back", {"approvals": args["ids"]}, key=_key(args))
+    return api.post("assistant/read-back", {"approvals": args["ids"], "note": args.get("note") or ""}, key=_key(args))
 
 
 @tool("hub_approval_decline", "Decline an approval addressed to you (a send, spend, publish or merge), with a short reason "
@@ -7699,6 +7700,9 @@ ASSISTANT_TOOLS = frozenset({
     "hub_task_update", "hub_team_show",
     "hub_automation_restore", "hub_automation_versions", "hub_bot_model", "hub_bot_pause", "hub_bot_resume",
     "hub_rules_retire", "hub_task_bulk",
+    # Admin jobs 42-49: groups, bot owners and access, routines, budgets, inbox audience, Pending meetings.
+    "hub_automation_create", "hub_bot_access", "hub_bot_owners", "hub_finance_act", "hub_inbound_audience",
+    "hub_meeting_approve", "hub_meeting_pending",
 })
 
 

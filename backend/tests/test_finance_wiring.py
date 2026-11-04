@@ -26,7 +26,8 @@ def _turn(c, bot, finished, cost, model="tico-medium", billing="api", tid=None):
         c.execute("UPDATE attempts SET settled_at=?, usage_model=?, est_cost_usd=?, billing=?, trigger='message' WHERE id=?",
                   (finished, model, cost, billing, tid))
         return tid
-    c.execute("INSERT INTO attempts(id, bot_id, created_at, settled_at, usage_model, est_cost_usd, billing) VALUES(?,?,?,?,?,?,?)",
+    c.execute("INSERT INTO attempts(id, bot_id, created_at, settled_at, trigger, usage_model, est_cost_usd, billing) "
+              "VALUES(?,?,?,?,'message',?,?,?)",
               (tid, bot, finished, finished, model, cost, billing))
     return tid
 

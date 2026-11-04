@@ -14,6 +14,7 @@ from backend.store import Store
 TABLES = {
     rows.TaskRow: "tasks",
     rows.TaskCheckBackWakeRow: "task_check_back_wakes",
+    rows.TaskHoldRow: "task_holds",
     rows.AttemptRow: "attempts",
     rows.RunnerRow: "runners",
     rows.RunnerStateRow: "runner_states",

@@ -373,6 +373,9 @@ def test_run_windows_include_failed_runs_and_hide_private_rooms(api):
     machine, message, attempt = setup_attempt(api)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (H.now(), attempt["id"]))
+        # No run record: the lease ended before one was written.
+        c.execute("UPDATE attempts SET trigger=NULL,trigger_kind=NULL,trigger_source=NULL,purpose=NULL,settled_at=NULL,"
+                  "exit=NULL,summary=NULL WHERE id=?", (attempt["id"],))
         H.status_set(c, "bot:ops", "ops", "running")
         H.status_set(c, "bot:ops", "ops", "idle")
     rows = get(api, "bots/ops/turns?since=24h")

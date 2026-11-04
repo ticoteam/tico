@@ -11,6 +11,7 @@ from backend.auth import Identity
 from backend.config import Settings
 from backend.store import encode
 from backend import bot_settings as BS
+from backend.tests.hold_rows import set_holds
 
 BOTS = ("cpo", "cmo", "qa", "devops-engineer")
 REFUSAL = {"repo": "acme/app", "status": 403, "endpoint": "workflow_dispatch"}
@@ -117,8 +118,8 @@ def test_sweep_finds_a_check_blocked_before_this_change(api):
     from backend import task_blocked
     with api.app.state.store.transaction() as c:
         ticket, check = in_qa_ticket(c)
-        c.execute("UPDATE tasks SET status='waiting',waiting_on='human:ana',blocked_reason='GitHub refused the run' "
-                  "WHERE id=?", (check["id"],))
+        c.execute("UPDATE tasks SET status='waiting',waiting_on='human:ana' WHERE id=?", (check["id"],))
+        set_holds(c, check["id"], blocked_reason='GitHub refused the run')
         assert H.task(c, ticket["id"])["status"] == "review"
         task_blocked.sweep(c, H.now())
         row = H.task(c, ticket["id"])

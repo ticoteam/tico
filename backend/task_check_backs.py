@@ -92,6 +92,8 @@ def timestamp(value, at):
 
 def set_time(c, row, value, note=None, *, actor=None, at=None, system=False):
     H = _H()
+    from . import task_holds
+    row = task_holds.with_holds(c, row)     # its snooze, when the row came from plain `tasks`
     if system and ("version" not in row or "check_back_at" not in row):
         return row  # legacy upgrade helpers create tasks before the file migrations finish
     at = at or H.now()
@@ -148,7 +150,8 @@ def consume(c, task_id, actor):
 
 def default_time(c, row, at, stagger=False):
     H = _H()
-    from . import quiet_work
+    from . import quiet_work, task_holds
+    row = task_holds.with_holds(c, row)
     resume = quiet_work.condition(row) or {}  # resume and due already served as legacy check-back dates
     values = [row.get("snoozed_until"), resume.get("until"), row.get("due_at")]
     if H._has_table(c, "deferrals"):
@@ -299,7 +302,7 @@ def context(c, row, recipient):
                      + ". Inspect now; retain this production wait unless its condition is met or explicitly changed.")
     links = c.execute("SELECT url,state FROM task_links WHERE task_id=? AND kind='pr' LIMIT 8", (row["id"],)).fetchall()
     lines.append("Linked pull requests: " + (", ".join((x["state"] or "unknown") + " " + x["url"][:180] for x in links) if links else "none"))
-    children = c.execute("SELECT t.* FROM tasks t JOIN task_relations r ON r.from_task=t.id "
+    children = c.execute(f"SELECT t.* FROM {H.TASKS} t JOIN task_relations r ON r.from_task=t.id "
                          "WHERE r.to_task=? AND r.kind='parent' ORDER BY t.created_at LIMIT 9", (row["id"],)).fetchall()
     shown = [dict(x) for x in children[:8] if H.task_private_readable(c, recipient, dict(x))]
     lines.append("Readable subtasks: " + (str(len(shown)) if shown else "none; unreadable work may exist. Verify routing before filing a duplicate."))
@@ -528,7 +531,7 @@ def candidates(c, at):
     H = _H()
     cursor_row = c.execute("SELECT value FROM registry_metadata WHERE key='task_check_back_scan'").fetchone()
     cursor = H._json(cursor_row[0], ["", ""]) if cursor_row else ["", ""]
-    query = (f"SELECT * FROM tasks WHERE {PREDICATE} AND (check_back_at<=? OR check_back_at IS NULL) "
+    query = (f"SELECT * FROM {H.TASKS} tasks WHERE {PREDICATE} AND (check_back_at<=? OR check_back_at IS NULL) "
              "AND (owner_id LIKE 'bot:%' OR requester_id LIKE 'bot:%') "
              "AND (coalesce(check_back_at,''),id)>(?,?) ORDER BY check_back_at,id LIMIT ?")
     rows = c.execute(query, (at, *cursor, LIMIT)).fetchall()

@@ -882,7 +882,7 @@ def run(args, who=None):
             query.update({k: v for k, v in (("from", args.from_actor), ("before", args.before), ("since", args.since)) if v})
             return client.get("approvals", **query)
         if sub == "read-back":
-            return post("assistant/read-back", {"approvals": args.ids})
+            return post("assistant/read-back", {"approvals": args.ids, "note": args.note})
         if sub in ("approve", "decline"):
             return post("approvals/" + args.id, {"decision": sub + "d", "note": args.note},
                         delegate=getattr(args, "on_behalf_of", None) or False)

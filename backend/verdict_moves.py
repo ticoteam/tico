@@ -51,6 +51,8 @@ def at_step(c, task_id, refs):
 def _ticket(c, row):
     """The ticket a bot builds, or None: an open ticket owned by a bot, on a type whose steps have a flow, and not
     held: a hold keeps the ticket at its check step, where a verdict must wait for it to clear (`resumed`)."""
+    from . import task_holds
+    row = task_holds.with_holds(c, row)     # its holds, when the row came from plain `tasks`
     return row if (row and H.is_bot(row.get("owner_id")) and row.get("status") in H.ACTIVE_STATUSES
                    and not row.get("blocked_since") and F.has_flow(c, row.get("type_id"))) else None
 

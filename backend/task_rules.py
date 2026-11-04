@@ -169,6 +169,8 @@ def untouched(c, task, hours, now):
 
 
 def safe(c, task):
+    from . import task_holds
+    task = task_holds.with_holds(c, task)
     if task.get("waiting_on") or task.get("snoozed_until") or task.get("pinned"):
         return False
     # Pin tags are a durable task-level pin; the rail's pinned filtered views are only bookmarks.
@@ -200,7 +202,7 @@ ACTIONS = {"close": ("close it", close)}
 DUE_SQL = (
     "SELECT t.* FROM tasks t WHERE t.status='done' AND t.closed_at IS NULL "
     "AND t.updated_at<=? AND coalesce(t.done_at,t.updated_at)<=? AND coalesce(t.checkpoint_at,t.updated_at)<=? "
-    "AND t.waiting_on IS NULL AND t.snoozed_until IS NULL "
+    "AND t.waiting_on IS NULL AND NOT " + H.SNOOZED % "t" + " "
     "AND NOT EXISTS (SELECT 1 FROM task_tags tt JOIN tags g ON g.id=tt.tag_id "
     "WHERE tt.task_id=t.id AND lower(g.key) IN ('pin','pinned')) "
     "AND NOT EXISTS (SELECT 1 FROM json_each(t.labels) WHERE lower(value) IN ('pin','pinned')) "

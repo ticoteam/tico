@@ -82,7 +82,7 @@ def shown(card):
 
 
 def start_turn(c, task_id):
-    """A bot's turn on the task begins, as a runner's claim writes it: a running attempt and its turn, while the task
+    """A bot's turn on the task begins, as a runner's claim writes it: a running attempt on the task, while the task
     row itself stays as it was."""
     other = H.task_create(c, "human:ana", "Elsewhere " + H.new_id(), "x", "bot:ops")
     H.task_comment(c, "human:ana", other["id"], "Please look at this")

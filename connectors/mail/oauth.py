@@ -64,9 +64,10 @@ SERVICE_SCOPES = {
                  G + "calendar.calendarlist.readonly"],
 }
 WRITE_SCOPES = {"gmail": {G + "gmail.modify", G + "gmail.compose"}, "calendar": {G + "calendar.events"}}
-# The granted scopes that let each capability's operations through (gmail.modify also covers drafts).
+# The granted scopes that let each capability's operations through (gmail.modify also covers drafts). The full calendar
+# scope, which the Google Workspace connection's token carries, covers event writes as calendar.events does.
 NEEDS = {"labels": {G + "gmail.modify"}, "drafts": {G + "gmail.modify", G + "gmail.compose"},
-         "calendar-write": {G + "calendar.events"}}
+         "calendar-write": {G + "calendar.events", G + "calendar"}}
 
 
 def grants_path(key_path=None):
@@ -131,6 +132,30 @@ def refused(kind, mailbox, error=""):
                             refresh_failed_hint(mailbox))
     return SignInFailed(kind, f"Google refused the sign-in for {mailbox}: {error or 'unknown error'}",
                         "Start the sign-in again.")
+
+
+# The Google Workspace connection on the Tico server (POST connectors/mail/workspace/token) refuses a mailbox with a 403
+# whose code is one of these kinds. Each says what happened and the one fix, in plain words.
+WORKSPACE_REFUSALS = {
+    "not_this_mailbox": ("The Google Workspace connection does not serve {m} to this computer.",
+                         "Mail for a bot's inbox runs on the computer that runs that bot. Check which computer runs it."),
+    "personal_grant": ("{m} is connected with its own Google account, and that account takes precedence over the "
+                       "Google Workspace connection.",
+                       "Its owner can disconnect that account in Settings > Google, and then the Google Workspace "
+                       "connection serves {m}."),
+    "workspace_owned": ("The Google Workspace connection serves {m} from the computer that runs its inbox bot, not from "
+                        "this one.",
+                        "Run mail for {m} on the computer that runs its bot."),
+    "not_connected": ("The Google Workspace connection cannot get access for {m} right now.",
+                      "Open Settings > Google and click Check. If Google still refuses, an admin in Google Admin needs "
+                      "to click Authorize for Tico."),
+}
+
+
+def workspace_refused(kind, mailbox):
+    """The SignInFailed for a refusal from the Google Workspace connection: its kind (mint-token prints it) and the reason."""
+    what, fix = WORKSPACE_REFUSALS[kind]
+    return SignInFailed(kind, what.format(m=mailbox), fix.format(m=mailbox))
 
 
 def load(path=None):
@@ -280,6 +305,11 @@ def exchange(client, code, verifier, redirect_uri=REDIRECT_URI, opener=None, mai
                            "Check this computer's network, then start the sign-in again.")
 
 
+def broker_configured():
+    """True when this process has the runner's way to the Tico server (the URL and its registration)."""
+    return bool(os.environ.get(BROKER_URL_ENV) and os.environ.get(BROKER_AUTH_ENV))
+
+
 def broker(retries=1):
     """A client for the Tico server that refreshes Connect Google grants, from the runner's environment."""
     url, auth = os.environ.get(BROKER_URL_ENV), os.environ.get(BROKER_AUTH_ENV)
@@ -297,6 +327,9 @@ def _broker_call(path, body, mailbox, retries=1):
         return broker(retries).post(path, body)
     except APIError as e:
         kind = str((e.extra or {}).get("kind") or "")
+        refusal = e.code if e.code in WORKSPACE_REFUSALS else kind
+        if e.status == 403 and refusal in WORKSPACE_REFUSALS:   # the Google Workspace connection refused this mailbox
+            raise workspace_refused(refusal, mailbox)
         if e.code == "google_refused" and kind == "network":
             raise SignInFailed("network", f"Tico's server could not reach Google for {mailbox}",
                                "Try again in a few minutes.")
@@ -325,6 +358,18 @@ def server_token(found, service, scopes, mailbox):
     if not isinstance(answer, dict) or not answer.get("access_token"):
         raise Failure(f"Tico's server returned no access for {mailbox}", "Try again in a few minutes.")
     return answer["access_token"], str(answer.get("expiry") or ""), [str(s) for s in answer.get("scopes") or scopes]
+
+
+def server_workspace_token(mailbox, service):
+    """(access token, expiry ISO, granted scopes or None) from the Tico server's Google Workspace connection, for a computer
+    with no key of its own: the server mints only for a mailbox it covers and names this computer for. None means the
+    server named no scopes, which reads the same as the key path (no narrowing)."""
+    answer = _broker_call("connectors/mail/workspace/token", {"mailbox": mailbox, "service": service}, mailbox)
+    if not isinstance(answer, dict) or not answer.get("access_token"):
+        raise Failure(f"Tico's server returned no access for {mailbox}", "Try again in a few minutes.")
+    granted = answer.get("scopes")
+    return (answer["access_token"], str(answer.get("expiry") or ""),
+            [str(s) for s in granted] if isinstance(granted, list) else None)
 
 
 def confirmed_identity(access_token, opener=None):
