@@ -121,7 +121,10 @@ RUN_BYTES = 524_288
 VALUES_BYTES = 60_000    # what a judge call is shown of a run's values
 MAIL_LEASE_MINUTES = 5   # a claimed mail action not reported by then goes back to the queue
 MAIL_TRIES = 3           # claims a mail action gets before it fails
-BOTOPS = "bot:botops"            # builds automations for whoever asks it, with that asker's rights (backend/botops_act.py)
+# Mail actions safe to carry out again on any computer (Gmail label changes): an expired lease another computer held
+# goes back to the queue for these. The rest may already have run there (a sent draft, a sent unsubscribe request).
+REPEATABLE_MAIL = ("archive", "label", "leave")
+BOTOPS ="bot:botops"            # builds automations for whoever asks it, with that asker's rights (backend/botops_act.py)
 VERSIONED = ("trigger", "steps", "batch", "destinations")   # what the automation does; a change here is a new version
 # The automations a write in this context comes from: their own actions never start them again.
 CHAIN = contextvars.ContextVar("automation_chain", default=())
@@ -2924,6 +2927,12 @@ def install(app, store, auth, mutate):
                 if row["attempts"] >= MAIL_TRIES:
                     _mail_report(c, row, "failed", {**json.loads(row["result"] or "{}"), "ok": False,
                                                     "detail": f"no result after {MAIL_TRIES} tries"})
+                elif row["claimed_by"] != runner["id"] and row["action"] not in REPEATABLE_MAIL:
+                    # Another computer's lease ran out: its attempt may already have run on the mailbox (a draft made,
+                    # a request sent), and the dedup it keeps is on that computer. Such an action is not run again here.
+                    _mail_report(c, row, "failed", {**json.loads(row["result"] or "{}"), "ok": False,
+                                                    "detail": "the lease ran out on another computer, which may already "
+                                                              "have carried it out; not run again"})
                 else:
                     state = _requeue(c, row)
                     c.execute("UPDATE automation_mail_actions SET state=? WHERE id=?", (state, row["id"]))
