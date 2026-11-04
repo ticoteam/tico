@@ -1,6 +1,6 @@
 {
   "inbox": {
-    "id": "au_board", "name": "Inbox · ops@acme.example", "owner": "person:dana", "enabled": true, "builtin": false, "version": 3,
+    "id": "au_board", "name": "Inbox · ops@acme.example", "owner": "person:dana", "owner_id": "person:dana", "enabled": true, "builtin": false, "version": 3,
     "trigger": {"type": "message", "inbox": "ops@acme.example", "filters": []},
     "destinations": [
       {"id": "me", "name": "Me", "color": "amber", "then": [{"do": "leave_for_you", "args": {}}]},
@@ -35,7 +35,7 @@
     ]
   },
   "webhook": {
-    "id": "au_hook", "name": "Order events", "owner": "person:dana", "enabled": true, "builtin": false, "version": 2,
+    "id": "au_hook", "name": "Order events", "owner": "person:dana", "owner_id": "person:dana", "enabled": true, "builtin": false, "version": 2,
     "trigger": {"type": "webhook", "id": "wh_2", "name": "orders"},
     "destinations": [
       {"id": "ops", "name": "Ops", "color": "blue", "then": [{"do": "create_task", "args": {"title": "Check the order", "owner": "person:omar"}}]},
