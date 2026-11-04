@@ -357,6 +357,14 @@ fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<bool
             builder = builder.data_store_identifier(*store.as_bytes());
         }
     }
+    {
+        // When this page's webview was built, for its first `bootTiming` report (bridge.rs). A page closed before it
+        // reports leaves its entry, so old ones go here.
+        let state = app.state::<AppState>();
+        let mut opened = state.page_opened.lock().unwrap();
+        opened.retain(|_, at| at.elapsed() < std::time::Duration::from_secs(120));
+        opened.insert(label.clone(), std::time::Instant::now());
+    }
     let frame = page_bounds(app, on_screen);
     let webview = window.add_child(builder, frame.position, frame.size)?;
     if !on_screen {

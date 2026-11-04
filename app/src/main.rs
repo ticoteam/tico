@@ -18,7 +18,7 @@ mod timing;
 mod windows;
 
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -67,6 +67,9 @@ struct AppState {
     parked_visual: Mutex<Option<visual_origin::VisualOrigin>>,
     // Switches being timed, for the log.
     traces: Mutex<Vec<timing::Trace>>,
+    // When each org page's webview was built, by its label: its first `bootTiming` report says how long the open
+    // took from there (bridge.rs). Taken last: no other lock is taken while it is held.
+    page_opened: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 impl AppState {
@@ -83,6 +86,7 @@ impl AppState {
             prefetch: Mutex::new(windows::Prefetch::default()),
             parked_visual: Mutex::new(None),
             traces: Mutex::new(Vec::new()),
+            page_opened: Mutex::new(HashMap::new()),
         }
     }
 }
