@@ -1238,6 +1238,25 @@ fn meeting_notices_are_read_from_new_events_only() {
     tico.read_notices("live-events", 42).unwrap();
 }
 
+#[test]
+fn shared_items_refetch_on_the_first_invalidation() {
+    let (tico, _, worker) = server(vec![Some(json!({"sse": concat!(
+        "event: ready\ndata: {\"seq\":41}\n\n",
+        "id: 42\nevent: meeting_items\ndata: {\"meeting_id\":\"m1\",\"kind\":\"items\"}\n\n",
+        "id: 43\nevent: presence\ndata: {\"place\":\"meeting:m1\"}\n\n",
+        ": keepalive\n\n",
+    )}))]);
+    let found = tico
+        .events_until_change(
+            "/api/v2/events?topics=meeting_items,presence&meeting=m1&place=meeting:m1",
+        )
+        .unwrap();
+    worker.join().unwrap();
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[1].0, 42);
+    assert_eq!(found[1].1, "meeting_items");
+}
+
 /// Edits and removals of lines already shared live (synthetic replay, no bots): an edit during the
 /// meeting, an edit after Stop, a removal, a lost reply retried, a finished chunk that arrives after
 /// the edit, then Send. Each change is one revision, the person's text wins, and Send files it.
