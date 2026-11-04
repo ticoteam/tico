@@ -39,9 +39,9 @@ API key. One signed-in model is enough for the first result; Health lists the ot
 4. Before any real work, open **Settings > Health**: **Models** should read "Codex is signed in." (or Claude Code). If not, follow
    [first-result recovery](docs/install.md#first-result-recovery). With no spending limit set there is no cap; a limit pauses new
    work and lets a run in progress finish ([Usage](docs/usage.md)).
-5. Hire Head of Marketing first, then Content Marketer (or untick Head of Marketing in step 1): on the team chart, open each
-   seat and press **Hire** on its template. Hiring Content Marketer first fails with "Reports-to bot was not found". On
-   Content Marketer's page, press **Start onboarding**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
+5. On the team chart, open each seat and press **Hire** on its template, in any order. A seat hired before its manager
+   reports to the nearest hired manager above it until that manager is hired, then moves under it. On Content Marketer's
+   page, press **Start onboarding**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
    to give it readers, publishing plans, topics, voice examples and privacy rules; review its first draft in chat.
 6. On **Tasks > New task**, assign it the short draft from [Your first result](docs/install.md#your-first-result). The bot marks
    it Done with the draft file on the task. Read the draft, then close the task yourself: the requester closes it, not the bot.
