@@ -113,8 +113,9 @@ def test_the_request_is_a_taskless_notice_in_the_main_lane_path(api):
                         (ops, DAY)).fetchone()
         assert msg["sender_id"] == H.KEEPER and msg["kind"] == "notice" and msg["recipient_id"] == H.bot_actor(ops)
         conversation = c.execute("SELECT * FROM conversations WHERE id=?", (msg["conversation_id"],)).fetchone()
-        assert execution.work_task_id(dict(msg), dict(conversation)) is None, "no task: the notice takes no task lane"
-        assert "task" not in json.loads(msg["refs"]), "the request names no task"
+        message = {**dict(msg), "refs": json.loads(msg["refs"])}     # the decoded message the runner's rules read
+        assert execution.work_task_id(message, dict(conversation)) is None, "no task: the notice takes no task lane"
+        assert "task" not in message["refs"], "the request names no task"
 
 
 def test_private_tasks_stay_out_of_the_request_and_shared_ones_go_in(api):
