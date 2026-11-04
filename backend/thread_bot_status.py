@@ -33,46 +33,72 @@ CAPPED = "Waiting: too many bot turns this hour"
 BUSY = "Busy with other work"
 STARTING = "Starting"
 
-# The root's open wakes from a person's message. A bot's post in the root after the message closes it. The partial
-# index message_deliveries_open_bots (migration 0068) holds exactly these rows. Each bot keeps its newest
-# OPEN_PER_BOT, so one bot's old wakes never crowd out another's.
+# The root's open wakes from a person's message. A bot's post in the root after the message closes it: each bot's
+# latest post in the root is read once (from the oldest open wake's seq on, by messages_thread_seq), never once per
+# wake. The partial index message_deliveries_open_bots (migration 0068) holds exactly the open rows. Each bot keeps its
+# newest OPEN_PER_BOT, so one bot's old wakes never crowd out another's.
 OPEN_PER_BOT = 50
 _OPEN_SQL = (
-    "SELECT recipient, state, carrier_id, message_id, created_at FROM (SELECT d.recipient, d.state, d.carrier_id, "
-    "d.message_id, d.created_at, ROW_NUMBER() OVER (PARTITION BY d.recipient ORDER BY d.created_at DESC) AS n "
-    "FROM message_deliveries d JOIN messages m ON m.id=d.message_id WHERE d.root_id=? AND d.recipient LIKE 'bot:%' "
-    "AND d.mode IN ('queue','steer') AND d.state IN ('pending','delivered','capped') AND d.cause='human' "
-    "AND NOT EXISTS (SELECT 1 FROM messages p WHERE p.conversation_id IN "
-    "(SELECT id FROM conversations WHERE root_id=d.root_id) AND p.sender_id=d.recipient AND p.seq>m.seq)) "
-    "WHERE n<=? ORDER BY created_at")
+    "WITH open AS (SELECT d.recipient, d.state, d.carrier_id, d.message_id, d.created_at, m.seq FROM message_deliveries d "
+    "JOIN messages m ON m.id=d.message_id WHERE d.root_id=?1 AND d.recipient LIKE 'bot:%' "
+    "AND d.mode IN ('queue','steer') AND d.state IN ('pending','delivered','capped') AND d.cause='human'), "
+    "posted AS (SELECT p.sender_id, MAX(p.seq) AS seq FROM messages p WHERE p.conversation_id IN "
+    "(SELECT id FROM conversations WHERE root_id=?1 OR id=?1) AND p.seq>(SELECT MIN(seq) FROM open) "
+    "AND p.sender_id IN (SELECT recipient FROM open) GROUP BY p.sender_id) "
+    "SELECT recipient, state, carrier_id, message_id, created_at FROM (SELECT o.*, ROW_NUMBER() OVER "
+    "(PARTITION BY o.recipient ORDER BY o.created_at DESC) AS n FROM open o LEFT JOIN posted q ON q.sender_id=o.recipient "
+    "WHERE q.seq IS NULL OR o.seq>q.seq) WHERE n<=?2 ORDER BY created_at")
 _RUNS_SQL = (
     "SELECT a.id, a.bot_id, a.runner_id, a.state, COALESCE(a.started_at, a.created_at) AS since FROM attempts a "
     "JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id "
     "WHERE a.state IN ('leased','running') AND t.root_id=? ORDER BY a.created_at")
 
 
-# A running turn's step that the 5 s throttle (events.py changes_threads_bot_status_steps) let pass unsent: its root's
-# newest bot_status row is older than the step, and old enough that one more keeps to one per 5 s.
-_TRAILING_SQL = (
-    "SELECT DISTINCT r FROM (SELECT COALESCE(t.root_id, t.id) AS r, a.id AS aid FROM attempts a "
-    "JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id "
-    "WHERE a.state IN ('leased','running')) "
-    "WHERE (SELECT MAX(created_at) FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=r) "
-    "< strftime('%Y-%m-%dT%H:%M:%fZ','now','-5 seconds') "
-    "AND EXISTS (SELECT 1 FROM attempt_events e WHERE e.attempt_id=aid AND e.kind IN ('tool','message') "
-    "AND e.created_at > (SELECT MAX(created_at) FROM changes WHERE topic='threads' AND kind='bot_status' "
-    "AND subject_id=r)) LIMIT 200")
+# The running turns and their roots (the partial index one_active_attempt_per_lane holds exactly these).
+_RUNNING_SQL = (
+    "SELECT a.id, COALESCE(t.root_id, t.id) FROM attempts a JOIN jobs j ON j.id=a.job_id "
+    "JOIN messages m ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id "
+    "WHERE a.state IN ('leased','running')")
+# A turn's newest step, walking its UNIQUE(attempt_id, seq) key back from the end: it reads only the deltas since that
+# step, never the run's history.
+_NEWEST_STEP_SQL = ("SELECT created_at FROM attempt_events WHERE attempt_id=? AND kind IN ('tool','message') "
+                    "ORDER BY seq DESC LIMIT 1")
+_LAST_STATUS_SQL = ("SELECT MAX(created_at) FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=?")
+_QUIET = "strftime('%Y-%m-%dT%H:%M:%fZ','now','-5 seconds')"
 
 
-def send_trailing(c):
-    """One `bot_status` change for each root whose running turn moved on since its last one was sent: a step the
-    throttle held back would otherwise leave readers on its earlier step until the turn ends. The scheduler's tick
-    runs it. Returns how many it wrote."""
-    roots = [r[0] for r in c.execute(_TRAILING_SQL)]
-    # The triggers' own clock (events._NOW), so the throttle compares like with like.
-    c.executemany("INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) "
-                  "VALUES('threads','bot_status',?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))", [(r, r) for r in roots])
-    return len(roots)
+def trailing_roots(c):
+    """The roots whose running turn took a step after their last `bot_status` change, once that one is 5 s old: a step
+    the throttle (events.py changes_threads_bot_status_steps) held back. A read: a few indexed lookups per running
+    turn, whatever its length."""
+    quiet = c.execute(f"SELECT {_QUIET}").fetchone()[0]
+    roots, last = [], {}
+    for attempt_id, root in c.execute(_RUNNING_SQL).fetchall():
+        if not root or root in roots:
+            continue
+        if root not in last:
+            last[root] = c.execute(_LAST_STATUS_SQL, (root,)).fetchone()[0]
+        if not last[root] or last[root] >= quiet:
+            continue
+        step = c.execute(_NEWEST_STEP_SQL, (attempt_id,)).fetchone()
+        if step and step[0] and step[0] > last[root]:
+            roots.append(root)
+    return roots
+
+
+def send_trailing(c, roots=None):
+    """One `bot_status` change for each root whose running turn moved on since its last one was sent (`trailing_roots`,
+    read before the write when `roots` is None): readers would otherwise stay on an earlier step until the turn ends.
+    The scheduler's tick reads the roots outside its write lock and passes them. Returns how many it wrote."""
+    roots = trailing_roots(c) if roots is None else roots
+    wrote = 0
+    for root in roots:
+        # The triggers' own clock (events._NOW), and again quiet for 5 s: a trigger may have sent one since the read.
+        wrote += c.execute("INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) "
+                           "SELECT 'threads','bot_status',?1,?1,strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+                           f"WHERE NOT EXISTS (SELECT 1 FROM changes WHERE topic='threads' AND kind='bot_status' "
+                           f"AND subject_id=?1 AND created_at>={_QUIET})", (root,)).rowcount
+    return wrote
 
 
 def _root(c, root):

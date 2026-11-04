@@ -338,3 +338,52 @@ def test_a_step_the_throttle_held_back_is_sent_on_the_next_tick(api):
         assert thread_bot_status.send_trailing(c) == 1
         assert thread_bot_status.send_trailing(c) == 0          # sent once
     assert rows() == before + 1
+
+
+def clone_wakes(c, message_id, count, tag):
+    """`count` copies of a person's message and its open wakes, as one root's long backlog: new ids, and new seqs from
+    the stamp trigger."""
+    def columns(table):
+        return [r[1] for r in c.execute(f"PRAGMA table_info({table})") if r[1] != "id"]
+    m, d = columns("messages"), columns("message_deliveries")
+    for n in range(count):
+        new = f"{message_id}-{tag}-{n}"
+        c.execute(f"INSERT INTO messages(id,{','.join(m)}) SELECT ?,{','.join(m)} FROM messages WHERE id=?", (new, message_id))
+        picked = ["?" if col == "message_id" else col for col in d]
+        c.execute(f"INSERT INTO message_deliveries(id,{','.join(d)}) SELECT ?||recipient,{','.join(picked)} "
+                  "FROM message_deliveries WHERE message_id=?", (new + ":", new, message_id))
+
+
+def test_a_thousand_open_wakes_for_one_bot_are_read_in_a_bounded_number_of_statements(api):
+    machine_for(api)
+    thread = new_thread(api)
+    first = say(api, thread["id"], "@ops can you check this?")
+    store = api.app.state.store
+    with store.transaction() as c:
+        clone_wakes(c, first["id"], 1000, "a")
+
+    def read():
+        seen, steps = [], [0]
+        with store.read() as c:
+            c.set_trace_callback(seen.append)
+            found = thread_bot_status.candidates(c, thread["id"])
+            c.set_trace_callback(None)
+            c.set_progress_handler(lambda: steps.__setitem__(0, steps[0] + 1), 100)
+            c.execute(thread_bot_status._OPEN_SQL, (thread["id"], thread_bot_status.OPEN_PER_BOT)).fetchall()
+            c.set_progress_handler(None, 100)
+        return found, len(seen), steps[0]
+    found, statements, steps = read()
+    assert set(found) == {"bot:ops"}
+    assert statements <= 10
+    with store.transaction() as c:
+        clone_wakes(c, first["id"], 1000, "b")
+    found, more_statements, more_steps = read()
+    assert set(found) == {"bot:ops"} and more_statements == statements
+    assert more_steps < 3 * steps                   # each bot's latest post is read once, not once per wake
+
+    bot_post(api, "bot:ops", thread["id"], "Checked.")
+    with store.read() as c:
+        assert thread_bot_status.candidates(c, thread["id"]) == {}
+    say(api, thread["id"], "@ops and this one?")
+    with store.read() as c:
+        assert set(thread_bot_status.candidates(c, thread["id"])) == {"bot:ops"}
