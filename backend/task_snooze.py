@@ -1,19 +1,20 @@
 """Snoozing a task until a date.
 
-A snoozed task says "nobody plans to get to this until then". It keeps its status, owner, goal and
-place; only `snoozed_until` (and `snoozed_by`) are set. Until that moment:
+A snoozed task says "nobody plans to get to this until then". It keeps its status, owner, goal and place; only
+`snoozed_until` (and `snoozed_by`) are set. Until that moment:
 
-- it is left out of the board, task lists (`GET /api/v2/tasks` unless `snoozed=all|only`), Needs you
-  and Decide;
-- nothing automatic moves it: no stall wake, spot check, stranded or stuck sweep (`H.not_yet_due`),
-  no "Still wanted?" ask, no "Due:" reminder, and the keeper's notices about it reach its owner bot
-  quietly (`H._wake`), as does another bot's comment (`H.comment_wakes`). A person's comment and Run
-  now still reach the bot, and notices to anyone else (a requester bot handed it for review) are as usual.
+- it is left out of the board, task lists (`GET /api/v2/tasks` unless `snoozed=all|only`), Needs you and Decide;
+- nothing automatic moves it: the task roundup skips it (backend/task_roundup.py), and no "Still wanted?" ask or "Due:"
+  reminder goes out (`H.not_yet_due`). The keeper's notices about it reach its owner bot quietly (`H._wake`), as does
+  another bot's comment (`H.comment_wakes`). A person's comment and Run now still reach the bot, and notices to anyone else
+  (a requester bot handed it for review) are as usual.
+- a snooze sets no follow-up time (tasks.check_back_at): a date set here is not a follow-up, so nothing is left behind
+  when the snooze ends or is ended early.
 
-When the moment passes, the scheduler clears the snooze (`wake_ended`): the task is back everywhere and
-its owner bot gets one "Snooze over" notice, which also stands in for a "Due:" reminder that fell
-inside the snooze. A note the snoozer left (`snoozed_note`) goes in that notice as "Your note:". Finishing,
-declining or closing a task, or handing it on for review, clears its snooze (`H._set_status`). The requester is told when someone else snoozes their task.
+When the moment passes, the scheduler clears the snooze (`wake_ended`): the task is back everywhere and its owner bot gets
+one "Snooze over" notice, which also stands in for a "Due:" reminder that fell inside the snooze. A note the snoozer left
+(`snoozed_note`) goes in that notice as "Your note:". Finishing, declining or closing a task, or handing it on for review,
+clears its snooze (`H._set_status`). The requester is told when someone else snoozes their task.
 
 This module imports nothing from hubdb at load, so hubdb can import it.
 """
@@ -114,11 +115,6 @@ def snooze(conn, actor, task_id, until, mover=False, note=None):
                  "WHERE id=?", (stamp, actor, note, at, task_id))
     H._task_event(conn, task_id, actor, "snoozed_until", row.get("snoozed_until"), stamp, note or "")
     after = H.task(conn, task_id)
-    from . import task_check_backs
-    if task_check_backs.involved(after):
-        planned = min(stamp, after["check_back_at"]) if H.is_bot(actor) and task_check_backs.pending(after) else stamp
-        task_check_backs.set_time(conn, after, planned, note, system=True)
-        after = H.task(conn, task_id)
     # The owner learns nobody expects it before then; a bot reads it on its next real run, not now.
     if after["owner_id"] != actor:
         H._wake(conn, after, after["owner_id"], f"Snoozed until {_label(stamp)}: {after['title']}",
@@ -140,12 +136,6 @@ def unsnooze(conn, actor, task_id, mover=False):
         return row
     left = row.get("snoozed_note")
     after = _clear(conn, actor, row, "unsnoozed")
-    from . import task_check_backs
-    if task_check_backs.enabled(conn) and task_check_backs.involved(after):
-        soon = H.shift(H.now(), minutes=30)
-        task_check_backs.set_time(conn, after, min(soon, after["check_back_at"]) if task_check_backs.pending(after) else soon,
-                                  "Inspect the resumed work and continue.", system=True)
-        after = H.task(conn, task_id)
     if after["owner_id"] != actor and after["status"] in H.ACTIVE_STATUSES:
         H._wake(conn, after, after["owner_id"], f"Unsnoozed: {after['title']}" + _note_line(left),
                 _wake_refs({"wake": "snooze"}, left))
@@ -201,11 +191,8 @@ def wake_ended(conn, at, failures=None):
             if after.get("due_at") and H._has_table(conn, "task_reminders") and not H.not_yet_due(after, at):
                 # This notice is the due date's reminder too; the Due pass would only repeat it.
                 conn.execute("INSERT OR IGNORE INTO task_reminders VALUES(?,?,?)", (after["id"], after["due_at"], at))
-            from . import task_check_backs
-            body, refs = task_check_backs.fold_snooze(conn, after,
-                f"Snooze over: {after['title']}" + _note_line(left), _wake_refs({"wake": "snooze"}, left), at)
-            message = H._wake(conn, after, after["owner_id"], body, refs, trigger="schedule")
-            task_check_backs.record_fold(conn, after, message, refs, at)
+            H._wake(conn, after, after["owner_id"], f"Snooze over: {after['title']}" + _note_line(left),
+                    _wake_refs({"wake": "snooze"}, left), trigger="schedule")
             woken.append(after["id"])
     return woken
 

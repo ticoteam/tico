@@ -37,7 +37,7 @@ def test_all_good(environment, monkeypatch):
     with_backup(monkeypatch, {"mode": "remote", "last_replicated_at": H.now(), "target_kind": "s3"})
     body, checks = health_of(api)
     assert {k: v["status"] for k, v in checks.items() if k != "signin"} == {
-        "version": "ok", "computers": "ok", "models": "ok", "waiting": "ok", "queue": "ok", "task_check_backs": "ok",
+        "version": "ok", "computers": "ok", "models": "ok", "waiting": "ok", "queue": "ok",
         "github": "info", "backups": "ok", "failed": "ok", "stalled_runs": "ok", "turns:" + body["computers"][0]["id"]: "ok"}
     assert body["computers"][0]["online"] and body["computers"][0]["runtimes"][0]["ready"]
 
@@ -217,7 +217,7 @@ def test_others_see_counts_not_details(environment):
     heartbeat(api, runner, seconds_ago=600)
     body, checks = health_of(api, as_person(api, "quinn"))
     assert body["audience"] == "human" and body["computers"] == [] and body["waiting"] == []
-    assert set(checks) == {"computers", "waiting", "queue", "failed", "stalled_runs", "task_check_backs"}
+    assert set(checks) == {"computers", "waiting", "queue", "failed", "stalled_runs"}
     assert all(not row["fixes"] for row in checks.values())
     assert "helper" not in checks["waiting"]["summary"]
 
@@ -236,7 +236,7 @@ def test_a_bot_reads_computers_and_failed_runs_without_admin_detail(environment)
     assert body["computers"][0]["online"] and set(body["computers"][0]) == {
         "id", "label", "online", "resting", "last_seen_at", "platform", "disk", "update", "turn_counts", "turn_summary"}
     assert body["failures"] == [] and set(checks) == {
-        "computers", "waiting", "queue", "failed", "stalled_runs", "task_check_backs", "turns:" + body["computers"][0]["id"]}
+        "computers", "waiting", "queue", "failed", "stalled_runs", "turns:" + body["computers"][0]["id"]}
     assert api.get("/api/v2/health/issues", headers=signed_in("qa-bot")).status_code == 200
 
 
@@ -560,7 +560,11 @@ def test_a_bot_left_in_setup_is_nudged_once_to_whoever_its_setup_reminder_goes_t
     _parked(api, "sales", 3, operator="quinn")      # nobody known added it: its operator, as the reminder picks
     _parked(api, "ops", 3, created_by="human:quinn")
     with api.app.state.store.transaction() as c:
-        assert H._setup_reminder(c, "ops")["owner_id"] == "human:quinn"     # it already has its ask
+        # An install from before the reminders were retired still holds ops's open "Finish onboarding" task: it has its ask.
+        reminder = H.task_create(c, H.KEEPER, "Finish onboarding ops", "Still onboarding.", "human:quinn",
+                                 deduplicate=False, lint=False)
+        H.event(c, H.KEEPER, "bot.setup_reminder", "ops", {"task": reminder["id"], "owner": "human:quinn"})
+        assert H._open_setup_reminder(c, "ops")["owner_id"] == "human:quinn"
         told = setup_stuck.nudge(c)
         assert told == {"support": ["human:quinn"], "sales": ["human:quinn"]}
         assert setup_stuck.nudge(c) == {}

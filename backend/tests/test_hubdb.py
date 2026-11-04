@@ -913,7 +913,6 @@ class WaitingWithDependency(HubCase):
         self.assertEqual(H.waiting_for(self.conn, after), 'an open blocker')
         future = H.shift(H.now(), hours=48)
         self.assertNotIn(task['id'], [r['id'] for r in H.stalled_tasks(self.conn, at=future)])
-        self.assertEqual(H.sweep_stranded(self.conn, at=future), [])
         H.task_update(self.conn, CMO, blocker['id'], status='done')
         self.assertEqual(TR.blocker_ids(self.conn, task['id']), [])
         self.assertTrue(any('Unblocked:' in m['body'] for m in H._rows(
@@ -932,26 +931,14 @@ class WaitingWithDependency(HubCase):
         # A note naming what it waits on parks it, with a hint on recording the wait.
         parked = H.task_update(self.conn, CMO, task['id'], status='waiting', note='Waiting on the vendor reply')
         self.assertEqual(parked['status'], 'waiting')
-        self.assertIn('goes back to open', parked['warnings'][0])
+        self.assertIn('nothing will move it', parked['warnings'][0])
         self.assertIn('hub task create --parent', parked['warnings'][0])
 
-    def test_a_note_only_wait_on_a_person_requested_task_warns_and_reopens_in_hours(self):
+    def test_a_note_only_wait_on_a_person_requested_task_warns(self):
         # Seen live: a person's task parked "waiting on BotOps's snapshot" that BotOps never heard of.
         task = H.task_create(self.conn, ANA, 'Check the box resources', '', CMO)
         parked = H.task_update(self.conn, CMO, task['id'], status='waiting', note="Waiting on BotOps's snapshot")
         self.assertIn(f"--parent {task['id']}", parked['warnings'][0])
-        soon = H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS - 1)
-        self.assertEqual(H.sweep_stranded(self.conn, at=soon), [])
-        later = H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1)
-        self.assertEqual(H.sweep_stranded(self.conn, at=later), [(task['id'], 'open')])
-        # A due date says when to look again; a subtask is something to wait on.
-        other = H.task_create(self.conn, ANA, 'Check the crawl', '', CMO)
-        H.task_update(self.conn, CMO, other['id'], status='waiting', note='Waiting on the crawl',
-                      due=H.shift(H.now(), hours=48))
-        sub = H.task_create(self.conn, ANA, 'Check the disk', '', CMO)
-        H.task_create(self.conn, CMO, 'Send the disk snapshot', '', SEO, parent_id=sub['id'])
-        H.task_update(self.conn, CMO, sub['id'], status='waiting', note='Waiting on the snapshot')
-        self.assertEqual(H.sweep_stranded(self.conn, at=later), [])
 
     def test_a_bot_marks_its_task_done_with_subtasks_still_open(self):
         parent = H.task_create(self.conn, ANA, 'Launch the pricing page', '', CMO)
@@ -995,7 +982,6 @@ class WaitingWithDependency(HubCase):
         self.assertEqual(([t['id'] for t in mine['tasks']], mine['waiting']), ([card['id']], []))
         self.assertEqual(needs(), 1)
         self.assertEqual(H.waiting_for(self.conn, H.task(self.conn, task['id'])), 'an open child task')
-        self.assertEqual(H.sweep_stranded(self.conn, at=H.shift(H.now(), hours=48)), [])
         # Asking again, as the note reads now or as first said, makes no second card.
         for note in (None, ask):
             H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=note)
@@ -1145,7 +1131,7 @@ class WaitingWithDependency(HubCase):
                          (CMO, 'waiting', None, f'Blocked on Ana Rivera: {plain}'))
         [card] = [H.task(self.conn, t) for t in TR.child_ids(self.conn, moved['id'])]
         self.assertEqual((card['owner_id'], card['title'], card['body']), (ANA, 'Approve the venue for Friday?', plain))
-        # The one with no plain ask stays for its bot to restate (backend/restate_asks.py).
+        # The one with no plain ask stays for its bot to restate (the task roundup lists it).
         self.assertEqual(H.task(self.conn, unclear['id'])['waiting_on'], ANA)
 
     def test_a_plain_ask_passes_and_shorthand_does_not(self):

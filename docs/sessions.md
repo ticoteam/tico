@@ -112,9 +112,9 @@ sure, or the check takes over 1.5 seconds, nothing changes and your message goes
 Nothing closes on its own. A task with no activity for 7 days gets one **Still wanted?** question, with **Keep** and
 **Close**, to the person who asked for it (or the person who owns it). See [Picking work back up](tasks.md#picking-work-back-up).
 
-## Spot checks
+## Task progress
 
-Tico does not check running work one task at a time. A task with no progress shows in its bot's task roundup, once per run (three times a day by default). A Dev ticket long at a working step is reported once to its manager.
+Tico does not check running work one task at a time. A task with no progress shows in its bot's task roundup, once per run (three times a day by default). A Dev ticket long at a working step is listed on its manager's task roundup, and again every seven days while it stays late.
 
 Human messages still wake the bot as before ([details](hub-sql.md#what-woke-each-run-and-what-it-did)).
 

@@ -800,7 +800,7 @@ def task_check_back(api, args):
 
 
 @tool("hub_task_snooze", "Set a task aside until a date: it leaves the board, task lists and Needs you, and nothing "
-      "wakes its bot about it (no stall wake, Still wanted? or Due reminder; a person's comment still does) until "
+      "wakes its bot about it (no Still wanted? or Due reminder; a person's comment still does) until "
       "then, when it is back and its owner bot is woken once. Its requester, owner, anyone on it by role, or a mover. "
       "Snoozing again moves the date. `note` says what to check when the snooze ends: it comes back in the wake "
       "(at most 500 characters).",
@@ -5289,9 +5289,7 @@ def task_manager_run(api, args):
     return _as_person(api).call("POST", "system-routines/task_manager_report/run", {}, _key(args))
 
 
-@tool("hub_stall_triage", "Stalled task check: before a stall check stays silent on a stalled task nothing has changed on, Tico "
-      "Decide reads its last six messages and sets the wait they name, closes the task if it is finished, or lets one wake "
-      "through if it is stuck. On by default; the owner or an admin switches it. Omit `on` to read the switch.",
+@tool("hub_stall_triage", "Stalled task check: no longer run. Tico sends no stall wakes; the switch is kept so the setting still reads. Omit `on` to read the switch.",
       {"on": {"type": "boolean", "description": "true switches it on, false off; leave out to read"}}, writes=True)
 def stall_triage(api, args):
     if args.get("on") is None:

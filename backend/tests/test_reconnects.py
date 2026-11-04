@@ -178,14 +178,12 @@ def test_two_tasks_on_one_account_are_one_needs_you_item_and_each_wakes_once(api
     assert {shown(api, t)["task"]["status"] for t in (first, second)} == {"open"}
 
 
-def test_a_task_waiting_on_its_card_gets_no_stall_wake_and_is_not_stranded(api):
+def test_a_task_waiting_on_its_card_gets_no_stall_wake(api):
     t = task(api)
     open_card(api, t)
     later = H.shift(H.now(), hours=30)
     with api.app.state.store.transaction() as c:
         assert t["id"] not in {r["id"] for r in H.stalled_tasks(c, later)}
-        H.sweep_stranded(c, later)
-        assert H.task(c, t["id"])["status"] == "waiting"
         from backend import wake_rules
         assert wake_rules.parked(c, H.task(c, t["id"])) == "reconnect"
 

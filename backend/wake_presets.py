@@ -6,7 +6,7 @@ including the former `current` setting, use Performance. New bots start as Doers
 Under a preset, two kinds of job wait at enqueue time (the `wake_preset_hold` trigger on jobs, so every
 event source is held the same way): a nonblocking notice the server marks with `refs.wake_batch`
 (BATCH_KINDS: a finished request, review comments, a failing check nobody armed a wait for) and a sweep
-(a routine's scheduled run, a stall or status check). Only the keeper writes those refs, so nobody can make
+(a routine's scheduled run, or a legacy stall or status check). Only the keeper writes those refs, so nobody can make
 an immediate wake wait by sending text that looks like one. Other news (a comment, a task's status, step or relation
 moving, any notice no rule names) starts no job at all: the rules engine writes it as a note (backend/rules.py,
 `default_note`), so nothing here holds it. A held batch never holds anything else back: a person's message starts

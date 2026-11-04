@@ -102,7 +102,7 @@ def test_reparenting_cannot_turn_an_existing_blocker_into_an_ancestor(c):
 
 
 @pytest.mark.parametrize("state", ["waiting", "reserved"])
-def test_worktree_wait_is_visible_and_survives_stranded_sweep(c, state):
+def test_worktree_wait_is_visible_and_keeps_its_task_waiting(c, state):
     task = create(c, "Build task fix")
     H.task_update(c, "bot:cmo", task["id"], status="waiting")
     WW.ensure(c)
@@ -113,7 +113,6 @@ def test_worktree_wait_is_visible_and_survives_stranded_sweep(c, state):
     detail = H.wait_detail(c, row)
     assert detail and "worktree" in detail["why"] and "acme/product" in detail["why"]
     assert H.waiting_for(c, row) == detail["why"]
-    assert H.sweep_stranded(c, at=AT) == []
     assert H.task(c, task["id"])["status"] == "waiting"
     c.execute("UPDATE worktree_waits SET state='canceled' WHERE id='wait'")
     assert H.wait_detail(c, row) is None
@@ -147,7 +146,7 @@ def test_shared_person_card_stays_until_every_dependent_task_finishes(c):
     assert H.task(c, card["id"])["status"] == "closed"
 
 
-def test_milestone_wake_resumes_waiter_without_later_stranded_wake(c):
+def test_milestone_wake_resumes_waiter_once(c):
     typ = H.type_create(c, "human:ana", "Delivery", [{"name": "Build", "status": "doing"}], mover=True)
     task = create(c, "Build after merge", type=typ["id"], step="Build")
     H.task_update(c, "bot:cmo", task["id"], status="waiting")
@@ -158,7 +157,6 @@ def test_milestone_wake_resumes_waiter_without_later_stranded_wake(c):
     assert row["status"] == "doing" and row["step_id"] == before["step_id"]
     assert row["version"] > before["version"]
     count = c.execute("SELECT count(*) FROM messages").fetchone()[0]
-    assert H.sweep_stranded(c, at=H.shift(AT, hours=3)) == []
     assert MW.happened(c, "pr_merged", "acme/product#1") == []
     assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == count
 
@@ -180,7 +178,6 @@ def test_milestone_resume_with_obsolete_step_notifies_owner_once(c, retained):
     assert row["status"] == "open" and row["step_id"] == typ["steps"][0]["id"]
     assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:cmo'").fetchone()[0] == before + 1
     assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:cpo'").fetchone()[0] == other + 1
-    assert H.sweep_stranded(c, at=H.shift(AT, hours=3)) == []
 
 
 def test_milestone_keeps_waiting_when_another_wait_remains(c):

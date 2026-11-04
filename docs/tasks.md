@@ -131,9 +131,9 @@ kept by id, so renaming a step keeps its flow. All keys are optional:
 | `on_merge` | The one step a ticket goes to when its pull request merges, from any earlier step. |
 | `skip_tag` | A ticket with this tag passes the step: it goes straight to `on_pass`, and the skip is recorded. |
 | `timeout_hours` | A check still open this long is closed unanswered and the round skipped: the ticket goes on as if it passed with no comments, unless a check there already gave a fail, changes or comments at the pull request's head, in which case it moves to `on_fail`. |
-| `late_hours` | A ticket this long at a working step gets its manager one notice. Dev working steps default to 4. `status_hours` is still accepted but wakes no one. |
+| `late_hours` | A ticket this long at a working step is listed as late on its manager's task roundup, and again every seven days while it stays late. Dev working steps default to 4. `status_hours` is still accepted but wakes no one. |
 | `assign` | `{pool, slots}`: an unowned ticket here goes to the least busy pool bot with a free slot (tickets past this step it holds). |
-| `backlog` | `{over, per, notify, every_hours}`: more than `over` tickets at the step (`per: step`) or for one owner (`per: owner`) tells `notify`: `manager` (the type's), `owner`, `owner_manager` (one level up on the org chart), or a named bot or person. Once every `every_hours` (4) while over. |
+| `backlog` | `{over, per, notify, every_hours}`: more than `over` tickets at the step (`per: step`) or for one owner (`per: owner`) lists it on the task roundup of `notify`: `manager` (the type's), `owner`, `owner_manager` (one level up on the org chart), or a named bot (a named person is not told by the roundup). Relisted once every `every_hours` (4) while over. |
 | `can_hold` | `false`: a ticket here is never put on hold; a merged change is reverted or fixed forward. |
 | `gate` | Entering the step needs green CI and a test receipt at the head (the review gate above). |
 | `check` | The kind of check the step asks for: `review`, `qa` or `release_qa`. Review pools, the one-open-check rule, Review 2 never going to an earlier review's bot, QA waivers and blocked checks find their steps by this, so a renamed check step keeps working. A check request is titled with the step's name (`QA` for a QA step); `Review <n>`, `QA` and `Post Release QA` still name the board's nth review, its QA and its after-release check. |
@@ -264,7 +264,7 @@ deleted task keeps its waits in the trash and gets them back when restored. The 
 When a bot's work on a task stops because an account or a credential needs a person, Tico puts one card in the
 task's thread ("Sales Bot can't reach Google (ana@acme.example)."), with the fix for the person who can make it and
 "Waiting on <person>" for everyone else. The task waits on the card: it is in that person's Needs you under connect,
-and no stall check, stranded sweep or news wakes the bot meanwhile. When the account works again the card says
+and no stall check or news wakes the bot meanwhile. When the account works again the card says
 Reconnected and the owner gets one wake ("Google (ana@acme.example) is reconnected. Continue."); the task goes back to
 the step it held. One card per task and account; tasks waiting on the same account are one Needs-you item. While
 another card or hold still stands on the task, the fix is kept and told once, with the last hold to clear. A card
@@ -351,7 +351,7 @@ or, on a private task with no person on it, the one person it brings in as its g
 person on it: its guest").
 
 Bot tasks that were waiting on a person before this rule are moved to it within the hour when their note is a plain
-ask; the rest stay last in the person's Needs you while their bot is asked once to restate the ask.
+ask; the rest stay last in the person's Needs you while their bot's task roundup lists the ask to restate it.
 
 Needs you, Decide and the Assistant's lineup put work that traces back to a person first: a
 person requested the task, or it sits under a task a person requested (only tasks the viewer may
@@ -373,7 +373,7 @@ hub task update <task> --status waiting --note "Needs BotOps's disk snapshot"
 ```
 
 A note alone wakes nobody. A bot's task waiting with no blocker, subtask, approval, question or
-person goes back to open after two hours (unless its due date says to look later), and the update
+person goes back to open at once when its last hold clears (unless its due date says to look later), and the update
 that parks it warns the bot.
 
 The task roundup leaves a task off its bot's list while the bot has a run queued or running on it, or while the task
@@ -383,8 +383,8 @@ stall sweeps is never listed. The Task Manager's stalled-task list does not use 
 still reaches its report.
 
 Tico does not wake a bot once for each stalled task, and does not escalate repeated stalls to BotOps. Each bot gets at
-most one list in each run of the task roundup (three times a day by default, at 6am, noon and 6pm company time): the tasks that have a missed update or have gone quiet (see
-[System routines](system-routines.md)). The list goes only to the bot, in its own notice room with Tico, so the roundup
+most one list in each run of the task roundup (three times a day by default, at 6am, noon and 6pm company time): its lines (a follow-up time that came, an unanswered question, a task to restate, a late Dev ticket,
+an engineering exception, a backlog, a missed update or a quiet task; see [System routines](system-routines.md)). The list goes only to the bot, in its own notice room with Tico, so the roundup
 never tells a person about a task. A private task is named by its id alone: who set its follow-up and its note, and what
 changed on it, stay out of the line.
 
@@ -605,7 +605,7 @@ A send, a spend, a delete, any default when the owner turned going ahead off, an
 written since the ask (a comment, a Clarify tap) never goes ahead, but its question still closes on its date: the bot is
 told nothing went ahead and decides without it. A question with no date that
 is unanswered after two business days (Monday to Friday, Pacific) leaves the person's Needs you at the next weekday
-morning's batch (8:00): each asking bot gets one "Still needed?" wake listing all of its questions that crossed the line,
+morning's batch (8:00): each asking bot gets its questions that crossed the line as lines on its task roundup, with no wake,
 and asks again (a fresh question with a new clock) or drops them (`backend/still_needed.py`). A question also closes
 when its task or any task above it is done, closed or declined (a done task keeps only the structured question asking its
 requester to accept the result, asked once it is done), when the person replies to it or writes on its task to the bot
@@ -624,8 +624,8 @@ specific wins (the **What wakes** automations on the Automations page). The mess
 
 An event no rule names waits as a note (`default_note`): the bot reads it on its next run. Work still wakes the bot: an
 assignment or a task handed back to it, a review or QA request, a blocker, a routine, a schedule, a due date, a snooze
-ending, a requested update, an unanswered ask restated, a release published, the Task Manager's report, a pull request's
-checks finishing, a subtask or a blocker finishing, a stall check, and a task the bot asked for being finished, declined
+ending, a requested update, a release published, the Task Manager's report, a pull request's
+checks finishing, a subtask or a blocker finishing, and a task the bot asked for being finished, declined
 or blocked on someone else (`task_blocked`). A plain
 comment, another bot's status or step move, and the bot's own write (`own_write`, ignored) do not. A rule's outcome is
 `ignore`, `note`, `batch`, `wake`, `ask` or `action`. **Ask** writes the message as a note and puts one item in the
@@ -745,7 +745,7 @@ Until that moment:
 - it is off the board, the Open list, Needs you, Decide and `hub task list`. The **Snoozed** tab on
   the Tasks page (shown while something is snoozed), `hub task list --snoozed only|all` and
   `GET /api/v2/tasks?snoozed=only|all` list it; a read by id or number always finds it.
-- nothing automatic moves it: no stall wake or status check, no stranded or stuck sweep, no
+- nothing automatic moves it: no stall wake or status check, no
   **Still wanted?** question and no **Due:** reminder. Tico's notices about it reach its owner bot
   deferred, read on the bot's next run instead of starting one, and so does another bot's comment.
   A person's comment still reaches the bot as usual, **Run now** still runs it, and notices to
@@ -1226,7 +1226,7 @@ a 422, a steer, queue or goal by someone not on the task a 403, a goal on a task
 is saved.
 
 Tico no longer spot-checks running work one task at a time. A bot's open or doing task that makes no progress appears
-in its task roundup, one list per run (three times a day by default). A Dev ticket long at a working step is reported once to its manager.
+in its task roundup, one list per run (three times a day by default). A Dev ticket long at a working step is listed on its manager's task roundup, and again every seven days while it stays late.
 
 Human messages still wake the bot as before ([details](hub-sql.md#what-woke-each-run-and-what-it-did)).
 
@@ -1680,9 +1680,7 @@ Open **Settings → Tasks → Task settings** to see what Tico does when a task 
 
 ## Following up bot work
 
-Every unfinished task whose requester or owner is a bot records **Follow up by** and what result to inspect.
-Human-only tasks keep their existing behavior. A follow-up is an inspection time, separate from the delivery
-deadline, and does not pause useful work. Choose a time conservatively longer than the expected work:
+A bot's task may carry a **follow-up time** (`check_back_at`, shown as **Follow up by**): an inspection time, separate from the delivery deadline, that does not pause useful work. Choose a time longer than the expected work:
 
 ```sh
 hub task check-back <task-id> --in 45m --for "Verify the review assignment and inspect its result"
@@ -1690,39 +1688,8 @@ hub task check-back <task-id> --in 45m --for "Verify the review assignment and i
 hub task check-back <task-id> --at 2026-12-02T15:00:00-08:00 --for "Read the returned acceptance result"
 ```
 
-`hub_task_check_back` and `POST /api/v2/tasks/{id}/check-back` take `at` (a duration or timestamp) and `note`.
-Task create/update also accept `check_back_at` and `check_back_note`. An omitted time stays empty: Tico sets no follow-up time of its own, only a person or a bot does (the explicit set is recorded in history as `check_back_explicit`).
-Read responses include these fields and a compact `check_back` object with the time, expected result, responsible
-bot and whether it is due. When follow-up delivery is enabled, the web, phone and desktop task properties show
-**Follow up by** and let task parties reschedule it. While disabled, the fields remain available through the API and CLI and Health shows shadow counts. Explicit bot appointments are at least five minutes ahead and within 14 days; a person's dated
-snooze can be longer. A human snooze takes precedence over an earlier inspection.
+`hub_task_check_back` and `POST /api/v2/tasks/{id}/check-back` take `at` (a duration or timestamp) and `note`. Task create/update also accept `check_back_at` and `check_back_note`. An omitted time stays empty: Tico sets no follow-up time of its own, only a person or a bot does (the explicit set is recorded in history as `check_back_explicit`). A task view carries the time, the note, who set it and whether it is due, as a `check_back` object. An explicit bot time is at least five minutes ahead and within 14 days, and a bot cannot set one on a done or declined task. A person's dated snooze can be longer, and a human snooze takes precedence over an earlier inspection.
 
-Follow-up delivery is off in this build: no appointment wakes a bot. Bots and people can set a follow-up time; it shows on the bot's next task roundup (three times a day by default, 6am, noon and 6pm company time), and it is listed once, then cleared. Tico sets none on its own. Dates are stored, and Health reports missing or overdue follow-ups as shadow counts. The delivery rules below are kept for when it is turned back on: enabling would backfill missing appointments in bounded batches and deliver due ones through the existing task session queue. No second session starts beside a running task, and a paused, offline or limited bot keeps its queued obligation.
+A follow-up time wakes nobody. Once it has come, it is listed once on its owner's task roundup (three times a day by default, at 6am, noon and 6pm company time), and then cleared. Only live tasks (open, doing, waiting, review or ready) are listed.
 
-On the wake, inspect the actual PR link, assignment/reservation, result and blocker. A missing readable child is
-not proof that a private child does not exist: check routing before creating a duplicate. Repair routine handoffs
-within your existing authority, then continue or set the next follow-up naming the actual wait. Waiting on a
-child never removes the parent bot's responsibility. A ledger entry or status comment is not proof the work ran.
-Dropped deliveries and completed follow-up turns without a next date are repaired with bounded backoff. Three
-unchanged inspections route one diagnostic when authorized; rewriting the date or the bot’s own comment does not
-reset that count. An explicit date for a recorded external wait is allowed, with a separate cap of 12 inspections
-per task per day. Repeated omissions otherwise leave visible debt rather than leaking private
-work or repeatedly asking a person. Done/declined results belong to the requester: a suitable parent's check carries
-them, otherwise a bot requester receives a consumption check. The requester must close/accept or reopen the result
-with remaining work; a bot cannot keep re-parking a Done/Declined result. Human acceptance keeps its existing question/Close
-flow. Self-requested completed work does not create a perpetual consumption loop.
-
-Check-backs never broaden permissions or waive review/QA policy, and do not postpone the existing untouched-human-ask
-auto-close. Snooze-end and an already-due task deadline can share the follow-up wake.
-
-The rollout is bounded to 50 inspected tasks per scheduler pass. Old appointments preserve future snooze,
-resume and deadline dates; otherwise they receive staggered provisional dates. At most 12 first follow-up
-wakes per bot and 50 first wakes across the fleet are delivered in an hour (`TICO_TASK_CHECK_BACKS_PER_BOT_HOUR`
-and `TICO_TASK_CHECK_BACKS_FLEET_HOUR` change those caps). Due work beyond a cap stays visible and is delivered by a
-later pass. Historical Done/Declined results remain in audit counts without automatically waking their requesters;
-new result transitions and explicit new activity while enabled establish consumption recovery. Age never proves acceptance. Health shows missing dates, overdue work and returned
-results even while the feature is in shadow mode; it never publishes unreadable task details.
-
-System appointment repairs do not refresh a task’s human-idle clock or edit version. Scheduler candidates are read
-outside the write lock and each task is rechecked in its own short transaction. Old delivery occurrences are pruned
-after 30 days in bounded batches, preserving the first occurrence and the current obligation.
+When it is listed, inspect the actual PR link, assignment or reservation, result and blocker. A missing readable child is not proof that a private child does not exist: check routing before creating a duplicate. Repair routine handoffs within your existing authority, then continue or set the next follow-up naming the actual wait. Waiting on a child never removes the parent bot's responsibility. A ledger entry or status comment is not proof the work ran.

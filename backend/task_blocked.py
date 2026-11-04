@@ -16,7 +16,7 @@ def ensure(c):
         ('blocked_since', 'TEXT'), ('blocked_reason', 'TEXT'), ('blocked_kind', 'TEXT'),
         ('blocked_from_step', 'TEXT'), ('blocked_from_status', 'TEXT'), ('blocked_gate', 'TEXT'),
         ('building_started_at', 'TEXT'), ('building_seconds', 'REAL NOT NULL DEFAULT 0'),
-        # When its last tracked hold cleared, for a task still waiting: the stranded sweep's clock (task_holds.py).
+        # When its last tracked hold cleared, for a task still waiting: task_holds.py's clock.
         ('holds_cleared_at', 'TEXT'),
     ):
         H.add_column(c, 'tasks', name, kind)
@@ -358,7 +358,7 @@ def candidates(c, at):
 
 
 def sweep(c, at, task_ids=None):
-    """Share the existing stall sweep; one private-safe age alert per blocked episode."""
+    """Runs each minute from the stall checks job (scheduler). One private-safe age alert per blocked episode, for Engineering tasks and gate holds blocked over four hours."""
     from . import hubdb as H
     scope, args = '', ()
     if task_ids is not None:

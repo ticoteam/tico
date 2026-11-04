@@ -1241,10 +1241,10 @@ def create_app(settings=None):
         value.pop("occurrence_step", None)      # the server's: which step made an occurrence's task (never in a view)
         value.pop("rule_due_id", None)          # the server's: the rule due date its run was fired for (rule_due.py)
         from .task_check_backs import view as check_back_view
-        value["check_back"] = check_back_view(row, c)
+        value["check_back"] = check_back_view(row)
         value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
         value.pop("blocker_key", None)          # blocker_asks' match key, for the server only
-        value.pop("holds_cleared_at", None)     # the stranded sweep's clock (task_holds), for the server only
+        value.pop("holds_cleared_at", None)     # task_holds' clock, for the server only
         # Most list rows have no accumulated clock; omit empty optional fields.
         for field in ("building_started_at", "building_seconds"):
             if not value.get(field):
@@ -1392,12 +1392,8 @@ def create_app(settings=None):
         step_since = step_age.since_map(c, rows)
         hold_marks = task_holds.marks(c, rows)
         result = []
-        from . import task_check_backs
-        check_backs_on = task_check_backs.enabled(c)
         for row in rows:
             value = task_view(row, pipelines=pipelines, hold_marks=hold_marks)
-            if value.get("check_back"):
-                value["check_back"]["enabled"] = check_backs_on
             value.pop("checkpoint", None)    # up to a page of text per task; the full task view carries it
             value.update({
                 "relations": relations[row["id"]],

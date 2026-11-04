@@ -19,8 +19,8 @@ at claim, so every run joins to the rule that woke it (`rule_weekly` in hub sql)
 
 Built-in rules are defined here, in code, with stable ids. They reproduce what the wake filters did before there
 were rules: the ALWAYS_WAKE classes (a person's message, an ask, an approval, a needs-action flag, a reply, a gate
-verdict) and AWAITED results wake; a bot's own write (`own_write`), news about a parked task (`parked`) and a stall
-check on a task that stands as at the last checkpoint (`same_state`) wait; a plain bot-to-bot message waits
+verdict) and AWAITED results wake; a bot's own write (`own_write`), news about a parked task (`parked`) and a legacy stall
+or status check on a task that stands as at the last checkpoint (`same_state`) wait; a plain bot-to-bot message waits
 (`bot_to_bot`); a finished request and a person's review comments are batched (`batch_*`); one check finishing is
 ignored (`pr_check`), every check on a pull request head finished (`pr_checks_done`) wakes the ticket's owner at a
 working step and is a note otherwise (`pr_checks_note`), and a review that is not a person's is a note
@@ -260,7 +260,7 @@ def profile_of(conn, bot):
 
 
 def sweeps_on(conn, bot):
-    """Whether stall and status checks (the sweeps) may wake this bot's tasks: False for a reviewer, lead, responder
+    """Whether the task roundup and the legacy stall and status checks (the sweeps) apply to this bot: False for a reviewer, lead, manager, responder
     and monitor, and for a custom profile that turned them off. Fails open: a bot whose profile cannot be read is
     swept."""
     try:

@@ -7,15 +7,12 @@ from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_task_lanes import task_bot
 
 
-def reopened(api, sweep=True):
+def reopened(api):
     task = post(api, 'tasks', {'owner': 'ops', 'title': 'Check the installed runtime',
                               'body': 'Check the installed runtime.', 'next_run': True})
     with api.app.state.store.transaction() as c:
         H.task_update(c, 'bot:ops', task['id'], status='waiting', note='Waiting for installation evidence')
-        if sweep:
-            assert H.sweep_stranded(c, at=H.shift(H.now(), hours=3)) == [(task['id'], 'open')]
-        else:
-            H.task_update(c, 'human:ana', task['id'], status='open')
+        H.task_update(c, 'human:ana', task['id'], status='open')
     return task
 
 
@@ -24,10 +21,9 @@ def reason(api, machine):
         return execution.bot_refusal(c, api.app.state.store.settings, machine['runner_id'], 'ops')
 
 
-@pytest.mark.parametrize('sweep', [False, True])
-def test_reopened_quiet_task_reuses_its_queued_job_once(api, sweep):
+def test_reopened_quiet_task_reuses_its_queued_job_once(api):
     machine = task_bot(api, lanes=True)
-    task = reopened(api, sweep)
+    task = reopened(api)
     with api.app.state.store.read() as c:
         [job] = c.execute("SELECT id FROM jobs WHERE bot_id='ops' AND state='queued'").fetchall()
         assert H.task(c, task['id'])['next_run'] == 1  # also covers queues stranded before this fix

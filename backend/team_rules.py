@@ -8,7 +8,7 @@ own bot (backend/credentials.py), the SQL page and personal tokens, whether a bo
 a person leaves its ask unanswered (backend/ask_deadlines.py), whether a bot's report to the Tico team goes without a card
 (backend/support.py send_by_rule), whether Tico support may be let in (backend/support_access.py), whether the hourly stale ticket review runs (backend/stale_review.py), and whether a direct
 chat starts fresh when the topic changes (backend/topic_change.py), whether Decide reads a quiet task before its stall
-check stays silent (backend/stall_triage.py), and whether a bot manages its direct reports, and how many it may add or archive a week (backend/report_managers.py).
+check stays silent (backend/stall_triage.py, which no longer runs), and whether a bot manages its direct reports, and how many it may add or archive a week (backend/report_managers.py).
 The stale review and fresh topics are off by default; those two and
 triage an admin may turn too (ADMIN_RULES), and the server's environment may set their default (ENV_DEFAULTS).
 """
@@ -33,7 +33,7 @@ DEFAULTS = {
     "support_access": True,         # an owner or admin may let Tico support in from a ticket (backend/support_access.py)
     "stale_review": False,          # the hourly stale ticket review suggests updates to owners (backend/stale_review.py)
     "topic_fresh": False,           # a direct chat starts fresh when the topic changes (backend/topic_change.py)
-    "stall_triage": True,           # Decide reads a quiet task that nothing has changed on before a stall check stays silent (backend/stall_triage.py)
+    "stall_triage": True,           # Legacy: the stall triage no longer runs (backend/stall_triage.py)
     "managers_manage_reports": True,  # a bot changes its direct reports' model, task model, name and description (backend/report_managers.py)
     "org_rule_checks": True,        # a bot's outputs are checked against the org rules that apply to them (backend/org_rule_check.py)
 }

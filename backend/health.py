@@ -1716,14 +1716,6 @@ def view(c, who, settings, auth, github, config):
         limited = [row for row in limited if readable.get(row["bot"], auth.FULL)["read"]]
     failed, failures = _failed(c)
     checks = []
-    from . import task_check_backs
-    coverage = task_check_backs.coverage(c, auth.task_sql(c, who), H.shift(H.now(), minutes=-30))
-    late = coverage["missing"] + coverage["overdue"]
-    checks.append(_check("task_check_backs", "Task follow-ups",
-                         "warn" if late and task_check_backs.enabled(c) else "ok",
-                         f"{coverage['missing']} missing appointments; {coverage['overdue']} overdue by more than 30 minutes; "
-                         f"{coverage['results']} returned results awaiting disposition. "
-                         + ("Follow-ups enabled." if task_check_backs.enabled(c) else "Shadow reporting; follow-ups disabled.")))
     from . import assigned_start
     assigned = []
     # Each bot's checks and each task's waits are read once for all the overdue tasks, not once per task.

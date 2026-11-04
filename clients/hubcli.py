@@ -635,8 +635,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            when the report runs (business = hourly, weekdays 08:00 to 18:00)
     hub task-manager run                   run the department check now
     hub task-manager bot on|off            turn the Task Manager bot itself on or off (the owner)
-    hub stall-triage [--on|--off]          stalled task check: Decide reads a stalled task's last messages before its stall check
-                                           stays silent (the owner or an admin; on by default)
+    hub stall-triage [--on|--off]          stalled task check: no longer run; the switch is kept so it still reads (the owner or an admin)
     hub service-key create --label "Billing backend"
                                            the owner or an admin: a key another system uses to file, update and close
                                            tasks (POST /api/v2/inbound/tasks, docs/service-keys.md); shown once
@@ -1970,7 +1969,7 @@ def parser():
     timing.add_argument("--in", dest="in_duration", help="duration such as 45m or 2h")
     s.add_argument("--for", dest="check_back_note", help="the result or handoff to inspect")
     s.set_defaults(fn="task check-back")
-    s = task.add_parser("snooze", help="set a task aside until a date: off the lists, Needs you and stall wakes "
+    s = task.add_parser("snooze", help="set a task aside until a date: off the lists and Needs you "
                         "until then, when its owner bot is woken once")
     s.add_argument("id")
     s.add_argument("--until", required=True,
@@ -3878,7 +3877,7 @@ def parser():
     s = manager.add_parser("bot", help="turn the Task Manager bot itself on or off")
     s.add_argument("state", choices=["on", "off"])
     s.set_defaults(fn="task-manager bot")
-    s = sub.add_parser("stall-triage", help="stalled task check: Decide reads a stalled task before its stall check stays silent (docs/tasks.md)")
+    s = sub.add_parser("stall-triage", help="stalled task check: no longer run; the switch is kept so it still reads (docs/tasks.md)")
     on = s.add_mutually_exclusive_group()
     on.add_argument("--on", dest="on", action="store_true", default=None, help="switch it on")
     on.add_argument("--off", dest="on", action="store_false", help="switch it off; leave both out to read the switch")

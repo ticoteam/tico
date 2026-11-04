@@ -1076,7 +1076,7 @@ KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "setup": 1, "
              # mention or an unread DM is a person's to read.
              "thread_ask": 1, "thread_held": 1, "thread_capped": 1, "thread_mention": 2, "thread_dm": 2}
 # A card whose bot has not yet said plainly what it needs (`ask_missing`) waits at the very bottom: there is nothing
-# for the person to do on it until the bot restates it (backend/restate_asks.py asks it to).
+# for the person to do on it until the bot restates it (its bot's task roundup lists the restate, backend/task_roundup.py).
 
 
 _VISIBLE_TASK_SQL = "SELECT * FROM tasks WHERE id=? AND (%s)"

@@ -12,8 +12,8 @@ of them changes (`refresh`):
 - an owner's own hold (a move to Blocked with a reason) is kept as written, and Engineering's gate, check and
   worktree holds keep their own reconciliation (backend/task_blocked.py).
 
-The stranded sweep (hubdb.sweep_stranded) counts from `holds_cleared_at` (when the last hold cleared) or
-`blocked_since` (when a wait on nothing began), never from a note: a note cannot keep a task waiting on nothing.
+A task waiting on nothing is measured from `holds_cleared_at` (when the last hold cleared) or `blocked_since` (when a
+wait on nothing began), never from a note: a note cannot keep a task waiting on nothing.
 """
 
 NOTHING = "Nothing tracked to wait on"

@@ -18,9 +18,10 @@ reads, about hourly, the few things that did not move on their own and fixes the
 
 An entry is one per subject (a ticket, a bot, a step or a service) and kind; `since` is when that cause began. Every
 entry, a count included, is made only from the tickets its reader may read (`build`): a private ticket the manager does
-not read adds nothing to a builder's slots, a step's backlog or the GitHub outage. The list is a read: it routes nothing. The hourly pass (`deliver`, system routine `engineering_exceptions`) wakes a manager
-whose profile is `manager` with it only when an entry is new since the last list it was sent, so a week of tickets
-that move on their own costs the manager no turn."""
+not read adds nothing to a builder's slots, a step's backlog or the GitHub outage. The list is a read: it routes
+nothing. The task roundup (backend/task_roundup.py) lists each entry on the manager's own list, and lists an entry again after RELIST_DAYS while it stands. A manager that does not read the list gets
+none of them.
+"""
 from . import task_privacy as privacy
 from .store import H
 
@@ -28,9 +29,6 @@ STUCK_MINUTES = 45
 REFUSAL_HOURS = 24
 FAILED = ("failed", "interrupted", "expired")
 MAX_EXCEPTIONS = 500
-MAX_LINES = 40                  # lines in the wake; the rest is in `hub pipeline`
-EVENT = "exceptions.sent"
-WAKE = "exceptions"
 PROFILE = "manager"
 BOT_HELD = ("crashed", "quarantined", "limited")
 
@@ -374,50 +372,3 @@ def report(c, auth, who, typ, rows=None, at=None):
     if rows is None:
         rows = H.tasks(c, status=H.ACTIVE_STATUSES, type_id=typ["id"], limit=5000, visible=auth.task_sql(c, who))
     return build(c, typ, rows, at, reader=who.actor)
-
-
-def render(entries, more=0):
-    lines = []
-    for e in entries:
-        t = e.get("ticket") or {}
-        subject = (f"#{t['number']} {t['title']}" if t.get("number") is not None else t.get("title")) if t else \
-            (e.get("bot") or e.get("step") or e["key"].split(":", 1)[0])
-        lines.append(f"- {subject}: {e['cause']}, since {str(e['since'])[:16].replace('T', ' ')}Z"
-                     + (f" [{t['step']}]" if t.get("step") else ""))
-    if more:
-        lines.append(f"- and {more} more: `hub pipeline` lists every one.")
-    return "\n".join(lines)
-
-
-def deliver(c, at=None):
-    """The hourly pass: each engineering type whose manager reads the list gets one wake with it, only when an entry
-    is new since the last list it was sent. Notes held for it (verdicts, results, ticket news) wake nothing: they ride
-    with its next run, whatever starts it. Returns the managers woken."""
-    from . import rules
-    from .roadmap_flow import ENGINEERING
-    at = at or H.now()
-    woke = []
-    for typ in H._rows(c.execute("SELECT * FROM task_types WHERE role=? AND manager IS NOT NULL ORDER BY id",
-                                 (ENGINEERING,))):
-        slug = (H.resolve_bot(c, typ["manager"]) or {}).get("id", typ["manager"])
-        if not reads_list(c, slug):
-            continue
-        entries = build(c, typ, at=at, reader=H.bot_actor(slug))
-        keys = sorted(e["key"] for e in entries)
-        last = c.execute("SELECT detail FROM events WHERE action=? AND target=? ORDER BY rowid DESC LIMIT 1",
-                         (EVENT, typ["id"])).fetchone()
-        sent = set((H._json(last[0], {}) or {}).get("keys") or []) if last else set()
-        new = [k for k in keys if k not in sent]
-        if new:
-            shown = entries[:MAX_LINES]
-            text = (f"Exceptions on {typ['name']}: {len(entries)} ({len(new)} new). Fix each cause: move a ticket by "
-                    "hand, reassign it, or close a duplicate. Tickets that move on their own are not listed.\n\n"
-                    + render(shown, len(entries) - len(shown)))
-            ok, _detail = rules._tell_bot(c, WAKE, slug, text, {"wake": WAKE, "type": typ["id"]}, wake=True)
-            if not ok:
-                continue        # nobody could be told: the same entries are new again on the next pass
-            woke.append(slug)
-        if new or set(keys) != sent:
-            # The list as it stands is what the next pass compares with; an entry that cleared and comes back is new.
-            H.event(c, H.KEEPER, EVENT, typ["id"], {"keys": keys, "bot": slug, "woke": bool(new)})
-    return woke
