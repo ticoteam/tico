@@ -15,6 +15,7 @@ nested under it), matching who acted or whom the row is about, and by `kind=`.
 import csv
 import io
 import json
+import sqlite3
 import time
 
 from fastapi import Request
@@ -178,7 +179,7 @@ def install(app, store, auth):
                 args = {"first": first, "last": last, "at": at, "rid": rid, "n": limit + 1,
                         "actors": json.dumps(sorted(actors or ())), "people": json.dumps(people)}
                 rows += [{**dict(row), "kind": kind} for row in conn.execute(statement, args)]
-        except Exception as exc:
+        except sqlite3.Error as exc:
             if time.monotonic() > deadline or "interrupted" in str(exc):
                 raise Problem("timeout", f"History stopped after {seconds:g} s; filter it or page with before", 422) from exc
             raise
@@ -242,7 +243,7 @@ def install(app, store, auth):
                     changed = ", ".join(k for k in detail if k not in ("via", "delegation"))
                     subject, result, link = name("human:" + target), PERMISSIONS[action] + (f": {changed}" if changed else ""), "#/person/" + target
                 else:
-                    subject, result, link = "Team", PERMISSIONS.get(action, action), "#/settings/people"
+                    subject, result, link = "Org", PERMISSIONS.get(action, action), "#/settings/people"
             else:   # decision
                 subject, result = clip(r["asked"]) or "A question", clip(r["answer"])
                 if not task and str(r["about"] or "").startswith("bot:"):
