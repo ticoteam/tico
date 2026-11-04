@@ -1174,6 +1174,38 @@ def test_a_bot_handoff_while_the_filter_is_off_replays_but_a_human_handoff_does_
                       "asked": None, "created_at": "2026-10-06T09:00:00"}]
 
 
+def test_a_let_through_handoff_is_not_replayed_again_on_its_release_day(gate):
+    """A sent-back handoff is listed on its ask day, not again when let through later changes the owner."""
+    api, model, token = gate
+    plate(api, 15)
+    task = own_task(api, token, "Renew the vendor contract")
+    r = api.post(f"/api/v2/tasks/{task['id']}", json={"version": task["version"], "owner": "ben"},
+                 headers=headers(token))
+    assert r.status_code == 200 and r.json()["ingest"]["outcome"] == A.SENT_BACK, r.text
+    [item] = get(api, "ask-ingest/filtered", token="ben-test")["items"]
+    ask_day, released_day = "2026-10-05", "2026-10-06"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE ask_ingest_items SET created_at=? WHERE id=?", (f"{ask_day}T09:00:00", item["id"]))
+    released = let_through(api, item["id"])["item"]
+    assert released["let_through_at"]
+
+    with api.app.state.store.transaction() as c:
+        event = c.execute("SELECT id, data FROM history_events WHERE subject_type='task' AND subject_id=? "
+                          "AND kind='owner' AND actor_id='bot:ops' AND new='human:ben' ORDER BY rowid DESC LIMIT 1",
+                          (task["id"],)).fetchone()
+        assert event and json.loads(event["data"])["ask_ingest_item"] == item["id"]
+        # A stable ask-to-event link still deduplicates when their timestamps differ by more than the legacy window.
+        c.execute("UPDATE ask_ingest_items SET let_through_at='2026-10-06T09:00:00.000000Z' WHERE id=?",
+                  (item["id"],))
+        release_at = "2026-10-06T09:00:02.000000Z"
+        c.execute("UPDATE history_events SET created_at=? WHERE id=?", (release_at, event["id"]))
+        asked = A.replay_items(c, "human:ben", f"{ask_day}T00:00:00", A._next_day(ask_day))
+        released = A.replay_items(c, "human:ben", f"{released_day}T00:00:00", A._next_day(released_day))
+
+    assert [i["ref"] for i in asked if i["kind"] == "task"] == [task["id"]]
+    assert not [i for i in released if i["kind"] == "task"]
+
+
 def test_a_task_filed_while_the_filter_was_off_counts_on_its_day_and_again_on_a_later_handoff(gate):
     """Filed for Ben on Oct 5 with the filter Off (no ask row), moved to the bot that evening, and handed back to Ben on
     Oct 6 with the filter On (an ask row). The filing still counts on Oct 5 and the handoff on Oct 6: the handoff does
@@ -1212,6 +1244,29 @@ def test_a_task_filed_with_the_filter_on_is_listed_once(gate):
         day = H.task(c, tid)["created_at"][:10]
         listed = A.replay_items(c, "human:ben", f"{day}T00:00:00", A._next_day(day))
     assert [i["ref"] for i in listed if i["kind"] == "task"] == [tid]
+
+
+def test_a_live_on_handoff_stays_single_when_its_history_event_is_later_than_the_ask(gate):
+    """The history link deduplicates a real On handoff without relying on their timestamps staying within one second."""
+    api, model, token = gate
+    task = own_task(api, token, "Renew the vendor contract")
+    r = api.post(f"/api/v2/tasks/{task['id']}", json={"version": task["version"], "owner": "ben"},
+                 headers=headers(token))
+    assert r.status_code == 200 and r.json()["task"]["owner_id"] == "human:ben", r.text
+    [item] = [row for row in items(api) if row["ref"] == task["id"]]
+    assert item["outcome"] == A.THROUGH
+    with api.app.state.store.transaction() as c:
+        event = c.execute("SELECT id, data FROM history_events WHERE subject_type='task' AND subject_id=? "
+                          "AND kind='owner' AND actor_id='bot:ops' AND new='human:ben' ORDER BY rowid DESC LIMIT 1",
+                          (task["id"],)).fetchone()
+        assert event and json.loads(event["data"])["ask_ingest_item"] == item["id"]
+        ask_at, event_at = "2026-10-06T09:00:00.000000Z", "2026-10-06T09:00:02.000000Z"
+        c.execute("UPDATE ask_ingest_items SET created_at=? WHERE id=?", (ask_at, item["id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE id=?", (event_at, event["id"]))
+        day = ask_at[:10]
+        listed = A.replay_items(c, "human:ben", f"{day}T00:00:00", A._next_day(day))
+
+    assert [(i["ref"], i["created_at"]) for i in listed if i["kind"] == "task"] == [(task["id"], ask_at)]
 
 
 def test_a_filing_the_gate_judged_and_a_later_handoff_each_list_once(gate):

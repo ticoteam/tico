@@ -576,11 +576,12 @@ def matches(verdict, person):
 
 def record(c, verdict, decided, ref, message_id=None):
     """One `ask_ingest_items` row for the gated item `ref` (a task id; `message_id` the question asked on it), and
-    the call's `decision.outcome`."""
+    the call's `decision.outcome`; returns the row id for an owner-history link."""
     merged_into = decided.get("merged_into") if decided["outcome"] == MERGED else None
+    item_id = H.new_id()
     c.execute("INSERT INTO ask_ingest_items(id,person,asker,kind,ref,message_id,mode,outcome,would,reason,load,call_id,"
               "created_at,merged_into) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-              (H.new_id(), verdict["person"], verdict["asker"], verdict["kind"], ref, message_id, decided["mode"],
+              (item_id, verdict["person"], verdict["asker"], verdict["kind"], ref, message_id, decided["mode"],
                decided["outcome"], decided["would"], decided["reason"], decided["load"], verdict.get("call"), H.now(),
                merged_into))
     if merged_into:
@@ -590,6 +591,7 @@ def record(c, verdict, decided, ref, message_id=None):
     if verdict.get("call"):
         H.event(c, H.KEEPER, "decision.outcome", verdict["call"],
                 {"label": QUESTION_SET, "verdict": decided["would"], "action": decided["outcome"]})
+    return item_id
 
 
 def skipped(c, verdict, why):
@@ -757,7 +759,7 @@ def let_through(c, person, item_id):
     if row["kind"] != "loose" and (not task or task["status"] not in H.ACTIVE_STATUSES):
         raise LookupError("that task has ended")
     if row["kind"] == "task":
-        H.task_update(c, asker, task["id"], owner=person)
+        H.task_update(c, asker, task["id"], owner=person, owner_event_data={"ask_ingest_item": row["id"]})
     elif row["kind"] == "wait":
         H.task_update(c, asker, task["id"], status="waiting", waiting_on=person)
     else:
@@ -836,8 +838,8 @@ def replay_items(c, person, start, end, assistant_bot=None):
     # for them written no later than the task's first owner change leaves the filing to the second branch. That branch
     # lists every ask row the filter wrote for them on its own day, so a judged filing shows once, and each handoff
     # shows on the day it was handed back, wherever the task was created and whoever owns it now. When the filter was
-    # off there is no ask row, so owner history supplies that handoff. On writes its ask row just before the owner
-    # event in the same update, so the nearby-row check keeps that handoff single despite their slightly different times.
+    # off there is no ask row, so owner history supplies that handoff. New On handoffs and let-through owner events
+    # link back to their ask row; the nearby-row check keeps older history single where that link is absent.
     out = [{"kind": "task", "ref": r["id"], "asker": r["asker"], "title": r["title"] or "", "text": r["body"] or "",
             "asked": None, "created_at": r["at"]}
            for r in c.execute("SELECT t.id,t.title,t.body,t.requester_id AS asker,t.created_at AS at FROM tasks t "
@@ -853,7 +855,8 @@ def replay_items(c, person, start, end, assistant_bot=None):
                               "AND h.new=? AND h.actor_id LIKE 'bot:%' AND h.actor_id<>? "
                               "AND h.created_at>=? AND h.created_at<? AND NOT EXISTS "
                               "(SELECT 1 FROM ask_ingest_items i WHERE i.person=? AND i.kind='task' AND i.ref=t.id "
-                              "AND i.asker=h.actor_id AND abs(julianday(i.created_at)-julianday(h.created_at))<=1.0/86400)",
+                              "AND i.asker=h.actor_id AND (json_extract(h.data,'$.ask_ingest_item')=i.id OR "
+                              "abs(julianday(i.created_at)-julianday(h.created_at))<=1.0/86400))",
                               (person, start, end, skip, person, person, start, end, skip,
                                person, skip, start, end, person))]
     for m in H._rows(c.execute("SELECT * FROM messages WHERE recipient_id=? AND kind='ask' AND created_at>=? AND created_at<? "
