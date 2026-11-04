@@ -406,6 +406,7 @@ class Ids(_Case):
 
         bot_id = self.make_bot("ops-lead")
         self.assertEqual(tuple(principal(H.bot_actor(bot_id))), ("bot", None))
+        self.conn.execute("DELETE FROM bot_settings WHERE bot_id=?", (bot_id,))
         self.conn.execute("DELETE FROM bots WHERE id=?", (bot_id,))
         gone = principal(H.bot_actor(bot_id))
         self.assertIsNotNone(gone)                    # the row is kept
