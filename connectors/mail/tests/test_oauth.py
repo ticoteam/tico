@@ -493,6 +493,17 @@ class ActGrant(Base):
             cal.Calendar(read_only, "ana@acme.example").create_event(now, now, "x")
         self.assertEqual(read_only.mock_calls, [])
 
+    def test_a_refresh_for_scopes_the_grant_lacks_says_connect_again(self):
+        from clients.tico import APIError
+        self.finish(scopes=READ_ONLY)                    # the shared app's read-only grant asks for an act scope
+        refusal = APIError("scope", "This Connect Google grant does not hold all the gmail scopes asked for.", 422)
+        with patch.object(oauth, "broker", return_value=Server(refusal)):
+            with self.assertRaises(oauth.SignInFailed) as caught:
+                oauth.server_token(oauth.grant("ana@acme.example"), "gmail", [G + "gmail.modify"], "ana@acme.example")
+        self.assertEqual(caught.exception.kind, "scope")
+        self.assertEqual(caught.exception.msg, "ana@acme.example's Connect Google grant does not hold that access")
+        self.assertEqual(caught.exception.hint, "Connect Google again in Settings > Google to give Tico this access.")
+
 
 class AdminPolicy(Base):
     def test_a_workspace_policy_block_is_named_as_the_admins_and_nothing_is_widened(self):
