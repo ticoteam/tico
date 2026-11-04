@@ -50,6 +50,7 @@ class World:
         self.ci_fail = ci_fail   # chance a CI run on a new head fails (a flaky or broken change)
         self.ci = {}             # pr number -> (head, when its checks finish, passed)
         self.ci_skip = 0.0       # chance a new PR's only CI check is skipped or neutral on every head (a path filter)
+        self.ci_skip_first = False   # the first new PR's only CI check is skipped too, so a run always has one
         self.tick = dt.timedelta(minutes=tick_minutes)
         self.tmp = Path(tempfile.mkdtemp(prefix="factory-sim-"))
         self.prs = {}        # pr number -> {"task": id, "head": sha, "merged": bool}
@@ -394,6 +395,8 @@ class World:
         self.prs[number] = {"task": task_id, "head": uuid.uuid4().hex + uuid.uuid4().hex[:8], "merged": False}
         self.prs[number]["heads"] = [(self.now(), self.prs[number]["head"])]
         if self.ci_skip and self.rng.random() < self.ci_skip:
+            self.prs[number]["skip_ci"] = True
+        if self.ci_skip_first and not any(p.get("skip_ci") for p in self.prs.values()):
             self.prs[number]["skip_ci"] = True
         self.post(f"tasks/{task_id}/links", {"url": self.pr_url(number)}, token=token)
         self.hook("pull_request", self.pr_payload(number, "opened"))
