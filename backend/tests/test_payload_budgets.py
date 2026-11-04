@@ -77,18 +77,23 @@ def test_folded_needs_changes_stay_under_the_live_event_budget(api):
     post(api, f"approvals/{approvals[1]['id']}", {"decision": "declined"})
     assert "folded_task_ids" not in change()
 
-    # Removing more than the limit also requests a whole read, even though the new set is empty.
+    # The set is sent whole, so an empty one is small enough to send, however many ids left it.
     with store.transaction() as c:
         c.executemany("UPDATE tasks SET status='open', waiting_on=NULL WHERE id=?", [(tid,) for tid in waits])
-    assert change()["folded_task_ids"] is None
+    assert change()["folded_task_ids"] == []
     assert get(api, "needs-you?limit=1")["folded_task_ids"] == []
 
-    # A replacement at the limit fits; the first id beyond it uses the same whole-read path.
-    for n in (E.NEEDS_CHANGES_MAX, E.NEEDS_CHANGES_MAX + 1):
+    # The folded ids share one cap with the changed and removed ids: a set that fits beside them is sent, one past
+    # the cap with them uses the whole-read path.
+    for n in (E.NEEDS_CHANGES_MAX // 2, E.NEEDS_CHANGES_MAX + 1):
         with store.transaction() as c:
+            c.executemany("UPDATE tasks SET status='open', waiting_on=NULL WHERE id=?", [(tid,) for tid in waits])
             c.executemany("UPDATE tasks SET status='waiting', waiting_on='human:ana' WHERE id=?",
                           [(tid,) for tid in waits[:n]])
-        assert change()["folded_task_ids"] == (sorted(waits[:n]) if n == E.NEEDS_CHANGES_MAX else None)
+        event = change()
+        named = len(event["changed"] or []) + len(event["removed"] or [])
+        assert named < E.NEEDS_CHANGES_MAX // 2
+        assert event["folded_task_ids"] == (sorted(waits[:n]) if n == E.NEEDS_CHANGES_MAX // 2 else None)
 
 
 def test_payloads_stay_under_their_budgets(api):

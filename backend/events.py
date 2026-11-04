@@ -20,8 +20,8 @@ signed-in person as they commit, filtered to what that person may read:
   `needs=changes` is sent its `count`, `version`, and the ids `changed` and `removed` since `base` instead (both
   null when more than NEEDS_CHANGES_MAX moved: read the list whole), and reads only those items
   (`GET /api/v2/needs-you?ids=`). The stream keeps the marks of the list it last described, from its start; a page
-  whose held version is not `base` reads the list whole. Folded task ids are sent only when their set changes;
-  a replacement or change larger than NEEDS_CHANGES_MAX sends null to read the list whole.
+  whose held version is not `base` reads the list whole. Folded task ids are sent, whole, only when their set
+  changes, and share NEEDS_CHANGES_MAX with `changed` and `removed`: past it, null reads the list whole.
   Without `needs=changes` a page gets the whole list, as before, so an older page keeps working.
 
 `after` (or the browser's `Last-Event-ID`) resumes from the last change number seen, so a
@@ -1549,9 +1549,10 @@ def _needs_list(view, rows, task_view, held=None):
              "bots": needs_bots(items, view.who.actor), "by_kind": needs_kinds(items)}   # whole-list facts, even on a page
     before_folded = held.get("folded_task_ids") or []
     if folded != before_folded:
-        # Even one moved id can leave a replacement too large for a live event.
-        many_folded = max(len(folded), len(set(folded) ^ set(before_folded))) > NEEDS_CHANGES_MAX
-        entry["folded_task_ids"] = None if many_folded else folded
+        # The set is sent whole, and it shares one cap with the changed and removed ids: together they could pass the
+        # live event's budget. Past it, null reads the list whole.
+        named = 0 if many else len(changed) + len(removed)
+        entry["folded_task_ids"] = None if many or named + len(folded) > NEEDS_CHANGES_MAX else folded
     held.update(marks=marks, version=version, folded_task_ids=folded)
     return [(rows[-1], entry)]
 
