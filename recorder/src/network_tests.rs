@@ -2296,7 +2296,8 @@ fn a_save_is_filed_for_who_was_chosen_and_an_older_tico_refuses_participants_onl
         .unwrap_err()
         .to_string();
     assert!(refused.contains("participants only"), "{refused}");
-    tico.send_to(&store, &live.id, false, "participants").unwrap();
+    tico.send_to(&store, &live.id, false, "participants")
+        .unwrap();
     worker.join().unwrap();
     let calls = seen.lock().unwrap();
     assert!(calls[1].0.contains("meetings/import"));
@@ -2309,8 +2310,15 @@ fn a_save_is_filed_for_who_was_chosen_and_an_older_tico_refuses_participants_onl
         calls[5].1,
         json!({"action":"approve","private":true,"audience":"participants"})
     );
-    assert_eq!(store.get(&narrow.id).unwrap().deliveries[0].status, "failed");
-    assert!(store.get(&narrow.id).unwrap().deliveries[0].meeting_id.is_empty());
+    assert_eq!(
+        store.get(&narrow.id).unwrap().deliveries[0].status,
+        "failed"
+    );
+    assert!(
+        store.get(&narrow.id).unwrap().deliveries[0]
+            .meeting_id
+            .is_empty()
+    );
 }
 
 #[test]
@@ -2367,8 +2375,16 @@ fn keeping_a_live_share_local_removes_it_from_tico_and_it_can_be_saved_later() {
     assert!(tico.send_to(&store, &older.id, false, "team").is_err());
     worker.join().unwrap();
     let calls = seen.lock().unwrap();
-    assert!(calls[0].0.contains("/api/v2/meetings/pending-fixture/delete"));
-    assert!(calls[1].0.contains("/api/v2/live-meetings/live-ended/discard"));
+    assert!(
+        calls[0]
+            .0
+            .contains("/api/v2/meetings/pending-fixture/delete")
+    );
+    assert!(
+        calls[1]
+            .0
+            .contains("/api/v2/live-meetings/live-ended/discard")
+    );
     assert!(calls[3].0.contains("meetings/import"));
     assert_eq!(calls[3].1["external_id"], json!(kept.id));
     assert!(calls[5].0.contains("/live-meetings/live-live/control"));

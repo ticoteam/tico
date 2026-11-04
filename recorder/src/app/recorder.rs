@@ -1778,7 +1778,12 @@ impl Recorder {
             return;
         };
         if self.context.live_id.is_empty() {
-            if !self.config.destinations.iter().any(|row| row.id == destination) {
+            if !self
+                .config
+                .destinations
+                .iter()
+                .any(|row| row.id == destination)
+            {
                 self.error = "Choose an org first".into();
                 return;
             }
@@ -1801,7 +1806,11 @@ impl Recorder {
                     .any(|row| row.meeting == meeting && &row.actor == actor)
             })
             .collect();
-        let humans: Vec<String> = actors.iter().filter(|a| a.starts_with("human:")).cloned().collect();
+        let humans: Vec<String> = actors
+            .iter()
+            .filter(|a| a.starts_with("human:"))
+            .cloned()
+            .collect();
         let slugs: Vec<String> = actors
             .iter()
             .filter_map(|a| a.strip_prefix("bot:").map(str::to_owned))
@@ -1889,7 +1898,11 @@ impl Recorder {
     pub fn send_targets(&self, id: &str, deliveries: &[store::Delivery]) -> Vec<Value> {
         let context = self.store.context(id).unwrap_or_default();
         // Kept on this computer after a live share: it is a meeting recorded here again.
-        let live = if context.live_removed { String::new() } else { context.live_destination };
+        let live = if context.live_removed {
+            String::new()
+        } else {
+            context.live_destination
+        };
         self.targets(&live, deliveries)
     }
     /// `send_targets` for a meeting whose live connection is already known, without a read.
@@ -1926,7 +1939,10 @@ impl Recorder {
         if let Ok(record) = self.store.get(id)
             && !title.is_empty()
             && title != record.title
-            && record.deliveries.iter().all(|row| row.meeting_id.is_empty())
+            && record
+                .deliveries
+                .iter()
+                .all(|row| row.meeting_id.is_empty())
         {
             let result = self.store.mutate(id, |r| {
                 r.title = title;
@@ -1967,7 +1983,13 @@ impl Recorder {
             Ok(json!({"message":"Kept on this Mac"}))
         });
     }
-    fn send_meeting_to(&mut self, id: &str, destination: &str, paused_confirmed: bool, audience: &str) {
+    fn send_meeting_to(
+        &mut self,
+        id: &str,
+        destination: &str,
+        paused_confirmed: bool,
+        audience: &str,
+    ) {
         if self.updating {
             self.error = UPDATING.into();
             return;
@@ -1987,7 +2009,9 @@ impl Recorder {
                 return;
             }
             if !paused_confirmed && tico_recorder_native::live::paused_review_required(&context) {
-                self.error = "A kept task may quote paused speech. Review it, then choose Save anyway.".into();
+                self.error =
+                    "A kept task may quote paused speech. Review it, then choose Save anyway."
+                        .into();
                 return;
             }
         }
@@ -2052,8 +2076,11 @@ impl Recorder {
             }
             let record = store.get(&id)?;
             network::ready(&record)?;
-            anyhow::ensure!(paused_confirmed || !tico_recorder_native::live::paused_review_required(&store.context(&id)?),
-                "A kept task may quote paused speech. Review it, then choose Save anyway.");
+            anyhow::ensure!(
+                paused_confirmed
+                    || !tico_recorder_native::live::paused_review_required(&store.context(&id)?),
+                "A kept task may quote paused speech. Review it, then choose Save anyway."
+            );
             let tico = Tico::saved(&config, &destination)?;
             let context = store.context(&id)?;
             if !context.live_id.is_empty() && !context.live_removed {
@@ -2088,7 +2115,10 @@ impl Recorder {
         self.screen.stop_meeting(id);
         let context = self.store.context(id).unwrap_or_default();
         let filed = self.store.get(id).is_ok_and(|record| {
-            record.deliveries.iter().any(|row| row.status != "partial" || row.receipt["approved"] == true)
+            record
+                .deliveries
+                .iter()
+                .any(|row| row.status != "partial" || row.receipt["approved"] == true)
         });
         // Shared live and not saved: it leaves Tico too. A meeting saved to Tico stays there.
         if !context.live_id.is_empty() && !context.live_removed && !filed {
@@ -2123,7 +2153,6 @@ impl Recorder {
     }
 
     // ---- Settings and connections ----
-
 
     /// Keep the chosen Tico when it still exists; otherwise use the default (first).
     fn keep_destination(&mut self) {
@@ -3127,7 +3156,10 @@ pub fn seed_demo(store: &Store) -> anyhow::Result<()> {
 fn wait_stopped(store: &Store, id: &str) -> anyhow::Result<()> {
     let deadline = Instant::now() + SEND_WAIT;
     while store.get(id)?.state == "recording" {
-        anyhow::ensure!(Instant::now() < deadline, "The recording is still stopping. Try again.");
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "The recording is still stopping. Try again."
+        );
         std::thread::sleep(Duration::from_millis(250));
     }
     Ok(())

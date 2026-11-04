@@ -641,8 +641,8 @@ impl Tico {
         delivery.error.clear();
         store.delivery(id, &delivery)?;
         let result = (|| -> Result<String> {
-            let live_source =
-                ["live", "legacy-live"].contains(&delivery.receipt["source"].as_str().unwrap_or(""));
+            let live_source = ["live", "legacy-live"]
+                .contains(&delivery.receipt["source"].as_str().unwrap_or(""));
             let chosen = delivery.receipt["audience"].as_str().unwrap_or("") == audience;
             if !live_source && (delivery.meeting_id.is_empty() || !chosen) {
                 let reply = self

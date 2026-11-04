@@ -459,7 +459,8 @@ impl Tico {
             .iter()
             .find(|entry| entry.destination_id == self.destination.id);
         ensure!(
-            filed.is_none_or(|entry| entry.status == "partial" && entry.receipt["approved"] != true),
+            filed
+                .is_none_or(|entry| entry.status == "partial" && entry.receipt["approved"] != true),
             "This meeting is already saved to Tico"
         );
         // Durable first, so recovery cannot file it while the requests run.
@@ -483,13 +484,15 @@ impl Tico {
         );
         let older = match &removed {
             Ok(_) => false,
-            Err(error) => {
-                let text = format!("{error:#}");
-                if !(text.contains("HTTP 404") || text.contains("HTTP 405")) {
-                    return removed.map(|_| ());
-                }
+            // A Tico without the discard route answers 404, which reads as the older-Tico message.
+            Err(error)
+                if error
+                    .chain()
+                    .any(|cause| cause.to_string() == crate::network::OLD_TICO) =>
+            {
                 true
             }
+            Err(_) => return removed.map(|_| ()),
         };
         if older && context.live_state != "ended" {
             self.call(
