@@ -34,6 +34,7 @@ from . import teammate_access
 from . import start_places
 from . import ask_ingest, delivery, strategy_bot, invites, owner_link
 from . import org_rule_check
+from . import bot_home_merge
 from .roadmaps import exact_approval
 from . import login_holds
 from . import cloud_access
@@ -1494,7 +1495,21 @@ def create_app(settings=None):
             elif kind not in ("depth", "turn_id"):
                 raise Problem("reference", f"Unsupported reference kind: {kind}", 422)
 
+    def named_destination(c, who, body, create=True):
+        """The conversation a message lands in, named before any check reads it, so each check and the write see the same
+        one. A room that moved names its Home (backend/bot_home_merge.py). A bot's message to a person that names no room
+        lands in that person's chat Home when there is one (hubdb.chat_home): where `H.say` would put it, but otherwise
+        only after the checks had run, so a private run's words would reach a Home that others read. A message to a bot,
+        or from a person with no room named, costs no lookup here."""
+        if body.conversation_id:
+            return bot_home_merge.home_for(c, body.conversation_id, create=create) or body.conversation_id
+        if H.is_human(who.actor) or str(body.to).lower() == "assistant" or str(body.to).startswith("bot:"):
+            return None
+        to = body.to if str(body.to).startswith("human:") else auth.target(c, who, body.to)
+        return H.chat_home(c, who.actor, to, {"ask": "ask", "notice": "notice"}.get(body.kind, "chat"), create=create)
+
     def send(c, who, body):
+        body.conversation_id = named_destination(c, who, body)
         in_assistant_room = False
         if str(body.to).lower() == "assistant":
             if who.role not in ("human", "owner") or who.via:
@@ -1543,7 +1558,11 @@ def create_app(settings=None):
         if body.conversation_id:
             conv = auth.conversation(c, who, body.conversation_id, write=True)
             from . import threads
-            if to not in threads.legacy_participants(c, conv):
+            if conv.get("audience") == "home":
+                # A bot's Home is read by its readers, not by its participant list (which names the bot alone).
+                if not threads.readable(c, threads.actor_viewer(c, to), conv["id"]):
+                    raise Problem("forbidden", "Recipient is not a conversation participant", 403)
+            elif to not in threads.legacy_participants(c, conv):
                 raise Problem("forbidden", "Recipient is not a conversation participant", 403)
         if body.in_reply_to:
             msg = H.message(c, body.in_reply_to)
@@ -3040,9 +3059,19 @@ def create_app(settings=None):
 
     def chat_place(who, bot):
         """A person's chat with a bot is the direct chat it lands in: its conversation id is the thread `where:` names.
-        The chat route names no conversation, so the check finds the open chat (none yet: a DM with no thread)."""
-        return lambda c, author, recipients: org_rule_check.place_for(
-            c, author, recipients, (views.direct_chat(c, who.actor, bot) or {}).get("id") or "")
+        The chat route names no conversation, so the check finds the open chat (none yet: a DM with no thread). Once the
+        bot's chats have moved, that chat is its Home (backend/bot_home_merge.py home_for_chat)."""
+        def place(c, author, recipients):
+            home = bot_home_merge.home_for_chat(c, who.actor, bot, create=False)
+            chat = (views.direct_chat(c, who.actor, bot) or {}).get("id") or ""
+            return org_rule_check.place_for(c, author, recipients, home or chat)
+        return place
+
+    def home_place(home):
+        """A place that is one Home: a write there is in `where: thread:<home>`, and its kind is a thread."""
+        def place(c, author, recipients):
+            return org_rule_check.place_for(c, author, recipients, home)
+        return place
 
     def task_place(who, tid):
         """A task comment's place: its task's conversation, the thread its comments are in (`where: thread:<id>`)."""
@@ -3220,6 +3249,43 @@ def create_app(settings=None):
         """Both checks of one message, outside the write: the rule check, then ask ingest (a held one skips it, and so
         does a saved retry, `retry`: `mutate` replays its answer without the write). `place`: the message's place when
         the route does not name a conversation (`rule_message_place`)."""
+        if body.conversation_id:
+            # A reply to a room that moved names its Home for every check below (backend/bot_home_merge.py); the sender's
+            # attempt, a private run's, still decides what the Home allows. A room whose Home is archived gets the bot's
+            # Home made here, before the checks, as the implicit path does, so the checks see where the words would land.
+            with store.read() as c:
+                make = bot_home_merge.home_missing(c, body.conversation_id)
+                if not make:
+                    body.conversation_id = named_destination(c, who, body, create=False)
+            if make:
+                with store.transaction() as c:
+                    body.conversation_id = named_destination(c, who, body)
+        elif not H.is_human(who.actor):
+            # A bot's message to a person that names no room goes to the person's chat Home (hubdb.chat_home). The checks
+            # must see that Home: it is made here if the bot has none open (an archived one), so a private run's words
+            # cannot reach a Home the checks never named.
+            with store.transaction() as c:
+                body.conversation_id = named_destination(c, who, body)
+        elif str(body.to).lower() != "assistant":
+            # A person's message to a bot that names no room is written to the bot's personal room (rooms.chat_room), which
+            # is the chat's Home once the bot's chats have moved (rooms.personal_room). The recipient is resolved as the
+            # write resolves it (auth.target: `bot:<slug>`, a bare slug or an id), so every spelling of one bot gets the same
+            # Home. The checks name that Home too, so `where: thread:<home>` sees it, and it is made first when archived, as
+            # the write would make it. A shared bot's shared room is not a Home: a member's message there is checked where it
+            # is written. The Assistant's own room is not a Home either (send routes it apart).
+            from .shared_bots import route as shared_route
+            with store.read() as c:
+                to = auth.target(c, who, body.to)
+                target = H.actor_id(shared_route(c, who.actor, to)) if to.startswith("bot:") else ""
+                personal = bool(target) and target != settings.assistant_bot and not (
+                    rooms.thread_mode(c, target) == rooms.SHARED and rooms.shared_member(c, auth, who.actor, target))
+                make = personal and bot_home_merge.chat_home_missing(c, who.actor, target)
+                home = None if make or not personal else bot_home_merge.home_for_chat(c, who.actor, target, create=False)
+            if make:
+                with store.transaction() as c:
+                    home = bot_home_merge.home_for_chat(c, who.actor, target)
+            if home and place is None:
+                place = home_place(home)
         reach.precheck(store, who, lambda c: reach.check(
             c, who, auth.target(c, who, body.to), "chat", conversation_id=body.conversation_id,
             task_id=(body.refs or {}).get("task") or (body.refs or {}).get("task_id"), in_reply_to=body.in_reply_to))
