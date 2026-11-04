@@ -351,6 +351,76 @@ def test_the_wake_limiter_holds_a_bot_already_woken_this_run(api):
     assert dream_rows(api, "ops") == []
 
 
+@pytest.mark.parametrize("limiter", ["bot", "fleet"])
+def test_a_dream_refused_only_by_wake_limits_retries_on_a_later_run_that_day(api, monkeypatch, limiter):
+    store, auth = api.app.state.store, api.app.state.auth
+    clock = [DA.stamp(M.day_start(now()) + timedelta(hours=2))]
+    first_at = clock[0]
+    monkeypatch.setattr(H, "now", lambda: clock[0])
+    aged(api)
+    remember(api, "ops", 10, when=H.parse_ts(first_at) - timedelta(hours=1))
+    previous = H.shift(first_at, days=-1)
+    with store.transaction() as c:
+        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key NOT IN ('find_stuck','dream')")
+        M.save_step(c, "human:ana", {"key": "find_stuck", "frequency": "run"})
+        M.save_step(c, "human:ana", {"key": "dream", "max_bots": 1})
+        c.execute("UPDATE maintenance_steps SET last_started_at=?,cursor_at=? WHERE key='dream'", (previous, previous))
+
+    def earlier_wakes(c, ctx):
+        if ctx["now"] == first_at:
+            with store.transaction() as write:
+                for bot in (["ops"] if limiter == "bot" else [f"other_{n}" for n in range(L.WAKES_PER_HOUR)]):
+                    L.record(write, bot)
+        return {"status": "ran"}
+
+    monkeypatch.setitem(M.LIVE, "find_stuck", earlier_wakes)
+    with settings(store, test_identities={}):
+        first, _ = M.run_now(store, auth, "human:ana", wait=True)
+        row = steps_by_key(first)["dream"]
+        assert row["status"] == "skipped" and row["woke"] == 0
+        assert row["details"]["limited"] == [verdict(api, "ops", H.parse_ts(clock[0])).name]
+        assert dream_rows(api, "ops") == []
+        with store.read() as c:
+            saved = c.execute("SELECT last_started_at,cursor_at FROM maintenance_steps WHERE key='dream'").fetchone()
+            assert tuple(saved) == (previous, previous), "a limiter refusal uses neither the daily attempt nor its cursor"
+        clock[0] = H.shift(first_at, hours=2)        # a later run, past the fleet's rolling hour
+        second, _ = M.run_now(store, auth, "human:ana", wait=True)
+        assert steps_by_key(second)["dream"]["woke"] == 1 and len(dream_rows(api, "ops")) == 1
+        remember(api, "coo", 10, when=H.parse_ts(first_at) - timedelta(hours=1))
+        clock[0] = H.shift(first_at, hours=4)
+        third, _ = M.run_now(store, auth, "human:ana", wait=True)
+    assert steps_by_key(third)["dream"]["reason"] == "not due", "a real start still uses the daily attempt"
+    assert dream_rows(api, "coo") == []
+
+
+@pytest.mark.parametrize("outcome", ["started", "failed"])
+def test_a_limiter_refusal_beside_another_dream_attempt_still_counts_for_the_day(api, monkeypatch, outcome):
+    store, auth = api.app.state.store, api.app.state.auth
+    clock = [DA.stamp(M.day_start(now()) + timedelta(hours=2))]
+    first_at = clock[0]
+    monkeypatch.setattr(H, "now", lambda: clock[0])
+    aged(api)
+    for bot, lines in (("ops", 80), ("coo", 30)):
+        remember(api, bot, 10, lines=lines, when=H.parse_ts(first_at) - timedelta(hours=1))
+    with store.transaction() as c:
+        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key<>'dream'")
+        M.save_step(c, "human:ana", {"key": "dream", "max_bots": 1})
+        L.record(c, "ops")
+    if outcome == "failed":
+        def refused(*args, **kwargs):
+            raise H.Refused("duplicate", "already filed")
+        monkeypatch.setattr(dream, "start", refused)
+    with settings(store, test_identities={}):
+        first, _ = M.run_now(store, auth, "human:ana", wait=True)
+        row = steps_by_key(first)["dream"]
+        assert row["status"] == "ran" and row["woke"] == int(outcome == "started")
+        assert row["details"]["limited"] == [verdict(api, "ops", H.parse_ts(clock[0])).name]
+        clock[0] = H.shift(first_at, hours=2)
+        second, _ = M.run_now(store, auth, "human:ana", wait=True)
+    assert steps_by_key(second)["dream"]["reason"] == "not due"
+    assert dream_rows(api, "ops") == []
+
+
 def test_rehearsal_and_test_servers_skip_the_dream_step(api):
     aged(api)
     remember(api, "ops", 10)

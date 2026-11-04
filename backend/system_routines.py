@@ -255,12 +255,6 @@ JOBS = [
         "alerts once when an Engineering task has been blocked over four hours. It wakes no bot about a quiet task: "
         "the task roundup lists those.",
         HOUSEKEEPING, "Every minute", 60, then=("drop_unreadable",)),
-    Job("task_roundup", "Task roundup",
-        "Sends each bot one list of its tasks: a follow-up time that came, a question that went unanswered, an assignment not started, a task to "
-        "restate, a Dev ticket late at its step, a manager's engineering exceptions, a step's backlog, an update it may have "
-        "missed, or a quiet task. Managers and doers get every line; a reviewer, lead, responder or monitor gets its questions "
-        "and its own follow-up times only. Plain code: no model is called, and nothing to list is a quiet run.",
-        HOUSEKEEPING, "Three times a day (6am, noon, 6pm company time)", 21600, control=True, then=("send_task_roundup",)),
     Job("turn_fixer", "Turn fixer",
         "Frees turns proven dead, keeps one Health finding per busy-turns incident and hands what it cannot fix to "
         "BotOps.", HOUSEKEEPING, "Every 10 seconds", 10, then=("free_dead_starts", "turns_finding")),
@@ -366,16 +360,13 @@ CONTROLS = {
     "task_manager_report": Control(presets=(BUSINESS, HOURLY, FOUR_HOURS, DAILY), preset=BUSINESS, at="09:00"),
     "bookkeeper_check": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     "topic_fresh": Control(rule="topic_fresh"),
-    # Three times a day in company time (6am, noon, 6pm; the time applies to Daily only): one list to each bot per run
-    # (backend/task_roundup.py).
-    "task_roundup": Control(presets=(THREE_DAILY, DAILY), preset=THREE_DAILY, at="06:00"),
 }
 
 
+# Last runs read by backend/scheduler.py (QUICK and FIXED).
 QUICK_KEYS = ("kpi_asks", "health_scan", "ask_deadlines", "task_manager_report",
               "bookkeeper_check", "bookkeeper_watch",
-              "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention",
-              "task_roundup")   # last runs read by backend/scheduler.py (QUICK and FIXED)
+              "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention")
 
 
 def zone():
@@ -908,8 +899,15 @@ def install(app, store, auth, mutate):
     def system_routine_run(key: str, request: Request, body: M.Empty):
         """Run one of the controlled jobs once, now, through the code and caps of its scheduled run (a stale ticket
         review still makes at most its hourly Decide calls); its result lands on its row. `running` while a job that
-        asks Decide works on its own thread. 409 while it is off or already running."""
+        asks Decide works on its own thread. 409 while it is off or already running. The retired task_roundup runs
+        Maintenance Find stuck and returns {run, started}."""
         who = request.state.identity
+        if key == "task_roundup":
+            from . import maintenance
+            maintenance.may_change(auth, who)
+            run, started = maintenance.run_now(store, auth, who.actor, step="find_stuck",
+                                               key=request.headers.get("idempotency-key"))
+            return {"run": run, "started": started}
         may_change(auth, who, key)
         job = BY_KEY[key]
         if not job.control:

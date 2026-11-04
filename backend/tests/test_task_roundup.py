@@ -6,14 +6,14 @@ bot with nothing to list gets no message, a private task is named without its ti
 bot alone, and a quiet task is listed again only after seven days. Synthetic fixtures only."""
 import importlib
 import json
-from datetime import datetime, timezone
 
 import pytest
 
 from backend import bot_settings as BS
 from backend.enqueue import enqueue_stored
-from backend import scheduler, still_needed, task_check_backs, task_roundup
+from backend import still_needed, task_check_backs, task_roundup
 from backend import step_backlog as SB
+from backend import task_holds as TH
 from backend import task_relations as TR
 from backend.store import H
 from backend.tests.hold_rows import set_holds
@@ -35,9 +35,9 @@ def ago(**kw):
     return H.shift(DAY, **{k: -v for k, v in kw.items()})
 
 
-def task(c, title):
+def task(c, title, owner="bot:finance"):
     """Created at the fixed DAY clock, so the runs' cutoffs do not depend on the real date."""
-    made = H.task_create(c, H.human_actor("ana"), title, f"{title}, for the roundup.", "bot:finance")
+    made = H.task_create(c, H.human_actor("ana"), title, f"{title}, for the roundup.", owner)
     c.execute("UPDATE tasks SET created_at=? WHERE id=?", (DAY, made["id"]))
     return made
 
@@ -443,20 +443,18 @@ def test_a_private_task_is_listed_by_its_id_without_its_title(api):
         assert "Confidential merger plan" not in body
 
 
-def test_the_scheduler_reads_every_list_then_sends_each_bot_in_its_own_transaction_that_rechecks_the_run(api):
+def test_sending_each_bot_list_in_its_own_transaction_rechecks_the_run(api):
     store = api.app.state.store
     with store.transaction() as c:
         idle = task(c, "Renew the parking permit")
         settle(c, idle["id"], "finance", ago(days=2))
         complete_jobs(c)
-    at = datetime(2026, 11, 3, 14, 0, tzinfo=timezone.utc)      # 06:00 company time: the 6am run, DAY
     with store.transaction() as c:
         [plan] = [p for p in task_roundup.discover(c, DAY) if p["slug"] == "finance"]
     with store.transaction() as c:
         assert task_roundup.send(c, plan) == 1                   # the list names one task
     with store.transaction() as c:
         assert task_roundup.send(c, plan) == 0                   # the run was written by the first send: a stale plan sends nothing
-    scheduler.run_task_roundup(store, None, at)                  # the same run, through the scheduler: nothing again
     with store.read_transaction() as c:
         assert len(lists(c)) == 1
 
@@ -591,8 +589,9 @@ def test_a_bot_with_no_live_task_is_skipped_before_any_per_task_query(api, monke
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (finished["id"],))
         complete_jobs(c)
         asked = []
-        visit = task_roundup._list
-        monkeypatch.setattr(task_roundup, "_list", lambda c, slug, at, shared: asked.append(slug) or visit(c, slug, at, shared))
+        visit = task_roundup._items
+        monkeypatch.setattr(task_roundup, "_items", lambda c, slug, at, shared, skip_tasks=(), **kw:
+                            asked.append(slug) or visit(c, slug, at, shared, skip_tasks, **kw))
         assert "finance" not in task_roundup.run(c, DAY)["woke"]
         assert "finance" not in asked                                     # no live task: no per-task query at all
         live = task(c, "Plan the offsite")
@@ -1048,3 +1047,214 @@ def test_a_reviewer_is_woken_once_by_its_roundup_and_listed_only_its_returned_qu
         body = only_list(c)
         assert "no answer in two business days" in body
         assert named_in(body) == 1 and "Quiet for" not in body, "a reviewer gets no idle or quiet line"
+
+
+def test_a_missed_start_is_listed_once_for_its_time_and_not_again_on_the_next_run(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        tid = task(c, "Call the venue")["id"]
+        settle(c, tid, "finance", ago(days=2))
+        H._task_event(c, tid, H.KEEPER, "snoozed_until", ago(hours=5), None, "snooze over")
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=? AND kind='snoozed_until'",
+                  (ago(hours=3), tid))
+        complete_jobs(c)
+        assert "finance" in task_roundup.run(c, DAY)["woke"]
+        assert f"{tid[:8]} Call the venue: Snooze ended at 09:00 UTC and nothing has picked it up" in only_list(c)
+        assert "finance" not in task_roundup.run(c, H.shift(DAY, hours=2))["woke"], "listed once for that time"
+
+
+def test_a_deferred_time_that_passed_unfired_is_a_missed_start(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        tid = task(c, "Chase the invoice")["id"]
+        settle(c, tid, "finance", ago(days=2))
+        c.execute("UPDATE tasks SET next_run=1 WHERE id=?", (tid,))
+        conv = H.task(c, tid)["conversation_id"]
+        c.execute("INSERT INTO deferrals(id,bot,kind,item,conversation_id,task_id,due_at,created_at,fired_job,settled_at,how,attempt) "
+                  "VALUES(?,?,'task',?,?,?,?,?,NULL,NULL,NULL,NULL)",
+                  (H.new_id(), "finance", tid, conv, tid, ago(hours=2), ago(hours=4)))
+        complete_jobs(c)
+        assert "finance" in task_roundup.run(c, DAY)["woke"]
+        assert f"{tid[:8]} Chase the invoice: Deferred time passed at 12:00 UTC and nothing has picked it up" in only_list(c)
+
+
+def test_a_past_deferral_waits_for_the_tasks_current_resume_condition(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        tid = task(c, "Chase the invoice")["id"]
+        settle(c, tid, "finance", ago(days=2))
+        resume = json.dumps({"kind": "time", "until": H.shift(DAY, days=1)})
+        c.execute("UPDATE tasks SET next_run=1, resume=? WHERE id=?", (resume, tid))
+        conv = H.task(c, tid)["conversation_id"]
+        c.execute("INSERT INTO deferrals(id,bot,kind,item,conversation_id,task_id,due_at,created_at,fired_job,settled_at,how,attempt) "
+                  "VALUES(?,?,'task',?,?,?,?,?,NULL,NULL,NULL,NULL)",
+                  (H.new_id(), "finance", tid, conv, tid, ago(hours=2), ago(hours=4)))
+        complete_jobs(c)
+        task_roundup.run(c, DAY)
+        assert not any("Deferred time passed" in body for body in lists(c)), "the new resume condition still holds it"
+        key = task_roundup._key("start", "finance", f"{tid}:{ago(hours=2)}")
+        assert task_roundup._mark(c, key) is None, "the held deferral is not recorded as listed"
+        assert H.task(c, tid)["resume"] == resume
+        c.execute("UPDATE tasks SET resume=NULL WHERE id=?", (tid,))
+        assert "finance" in task_roundup.run(c, NOON)["woke"]
+        assert any(f"{tid[:8]} Chase the invoice: Deferred time passed" in body for body in lists(c))
+
+
+def test_a_waiting_task_held_only_by_bots_is_listed_on_its_blocker_bots_list_not_its_owners(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        blocker = H.task_create(c, H.human_actor("ana"), "Finish the menu", "Ops finishes it.", H.bot_actor("ops"))["id"]
+        mine = task(c, "Print the menu")["id"]
+        settle(c, mine, "finance", ago(days=1))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
+        blocks(c, blocker, mine, ago(days=1))
+        complete_jobs(c)
+        complete_jobs(c, "ops")
+        assert task_roundup.run(c, DAY)["woke"] == ["ops"], "the blocker's bot is listed, not the owner"
+        assert f"{mine[:8]} Print the menu: Waiting on you" in only_list(c, "ops")
+        assert lists(c) == [], "the owner is not told about its own blocked task"
+        assert task_roundup.run(c, DAY)["woke"] == [], "listed once per update of the task"
+
+
+def test_a_person_owned_waiting_task_never_reaches_task_holds_and_a_bot_owned_one_still_does(api, monkeypatch):
+    store = api.app.state.store
+    with store.transaction() as c:
+        blocker = H.task_create(c, H.human_actor("ana"), "Finish the menu", "Ops finishes it.", H.bot_actor("ops"))["id"]
+        person = task(c, "Sign the lease")["id"]
+        c.execute("UPDATE tasks SET owner_id=?, status='waiting' WHERE id=?", (H.human_actor("ana"), person))
+        blocks(c, blocker, person, ago(days=1))
+        mine = task(c, "Print the menu")["id"]
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
+        blocks(c, blocker, mine, ago(days=1))
+        seen = []
+        real = TH.holds
+
+        def counting(conn, row):
+            seen.append(row["id"])
+            return real(conn, row)
+
+        monkeypatch.setattr(TH, "holds", counting)
+        waits = task_roundup._blocked_waits(c, DAY)
+        assert person not in seen, "a person-owned waiting task is dropped in SQL, before task_holds"
+        assert mine in seen, "a bot-owned waiting task of an active bot still reaches task_holds"
+        assert [row["id"] for row, _ in waits.get("ops", [])] == [mine]
+
+
+def test_a_waiting_task_already_listed_for_its_update_is_not_returned_for_that_recipient(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        blocker = H.task_create(c, H.human_actor("ana"), "Finish the menu", "Ops finishes it.", H.bot_actor("ops"))["id"]
+        mine = task(c, "Print the menu")["id"]
+        settle(c, mine, "finance", ago(days=1))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
+        blocks(c, blocker, mine, ago(days=1))
+        complete_jobs(c)
+        complete_jobs(c, "ops")
+        assert task_roundup.run(c, DAY)["woke"] == ["ops"]
+        assert task_roundup._blocked_waits(c, NOON).get("ops", []) == []
+
+
+def test_a_task_held_by_two_bots_is_listed_to_both_in_one_run_and_to_neither_on_the_next_run(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        ops = H.task_create(c, H.human_actor("ana"), "Finish the menu", "Ops finishes it.", H.bot_actor("ops"))["id"]
+        coo = H.task_create(c, H.human_actor("ana"), "Sign off the menu", "The COO signs it off.", H.bot_actor("coo"))["id"]
+        for tid in (ops, coo):
+            c.execute("UPDATE tasks SET created_at=?, updated_at=? WHERE id=?", (ago(days=2), ago(days=2), tid))
+        mine = task(c, "Print the menu")["id"]
+        settle(c, mine, "finance", ago(days=1))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
+        blocks(c, ops, mine, ago(days=1))
+        blocks(c, coo, mine, ago(days=1))
+        complete_jobs(c)
+        complete_jobs(c, "ops")
+        complete_jobs(c, "coo")
+        assert sorted(task_roundup.run(c, DAY)["woke"]) == ["coo", "ops"], "each blocker's bot is listed in the same run"
+        assert f"{mine[:8]} Print the menu: Waiting on you" in only_list(c, "ops")
+        assert f"{mine[:8]} Print the menu: Waiting on you" in only_list(c, "coo")
+        before = {slug: len(lists(c, slug)) for slug in ("ops", "coo")}
+        task_roundup.run(c, NOON)
+        # A later list may carry other news (the bot's own task), but never this task again with no update to it.
+        for slug, count in before.items():
+            assert not any(mine[:8] in body for body in lists(c, slug)[count:]), slug
+
+
+def test_a_blocker_that_cannot_read_the_owners_task_gets_no_line(api, monkeypatch):
+    store = api.app.state.store
+    real = H.bot_reads_task
+
+    def unread_by_ops(conn, bot, row):
+        if bot == H.bot_actor("ops") and row["title"] == "Print the menu":
+            return False
+        return real(conn, bot, row)
+
+    monkeypatch.setattr(H, "bot_reads_task", unread_by_ops)
+    with store.transaction() as c:
+        blocker = task(c, "Finish the menu", owner=H.bot_actor("ops"))["id"]
+        settle(c, blocker, "ops", ago(days=3))     # ops has a list of its own (its quiet blocker), so the check is not vacuous
+        mine = task(c, "Print the menu")["id"]
+        settle(c, mine, "finance", ago(days=1))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
+        blocks(c, blocker, mine, ago(days=1))
+        complete_jobs(c)
+        complete_jobs(c, "ops")
+        task_roundup.run(c, DAY)
+        ops = lists(c, "ops")
+        assert ops and not any(mine[:8] in body for body in ops), "a blocker that cannot read the owner's task names nothing"
+
+
+def test_a_missed_start_is_listed_for_three_days_after_its_deadline_and_not_longer(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        recent = task(c, "Call the venue")["id"]
+        old = task(c, "Chase the old one")["id"]
+        settle(c, recent, "finance", ago(days=3))
+        settle(c, old, "finance", ago(days=5))
+        H._task_event(c, recent, H.KEEPER, "snoozed_until", ago(days=2), None, "snooze over")
+        H._task_event(c, old, H.KEEPER, "snoozed_until", ago(days=4), None, "snooze over")
+        complete_jobs(c)
+        assert "finance" in task_roundup.run(c, DAY)["woke"]
+        body = only_list(c)
+        assert f"{recent[:8]} Call the venue: Snooze ended at 14:00 UTC and nothing has picked it up" in body
+        assert f"{old[:8]} Chase the old one: Snooze ended" not in body, "a missed start older than three days is history"
+
+
+def test_a_deferral_a_bot_made_on_a_task_another_bot_owns_is_not_its_missed_start(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        tid = task(c, "Chase the invoice", owner=H.bot_actor("ops"))["id"]
+        settle(c, tid, "ops", ago(days=2))
+        conv = H.task(c, tid)["conversation_id"]
+        c.execute("INSERT INTO deferrals(id,bot,kind,item,conversation_id,task_id,due_at,created_at,fired_job,settled_at,how,attempt) "
+                  "VALUES(?,?,'task',?,?,?,?,?,NULL,NULL,NULL,NULL)",
+                  (H.new_id(), "finance", tid, conv, tid, ago(hours=2), ago(hours=4)))
+        complete_jobs(c)
+        complete_jobs(c, "ops")
+        task_roundup.run(c, DAY)
+        assert not any("Deferred time passed" in body for body in lists(c, "finance") + lists(c, "ops")), (
+            "the bot that made the deferral is not told of a task it does not own")
+
+
+def test_a_snooze_notice_written_to_an_external_inbox_is_its_delivery_so_no_start_is_listed(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        BS.update(c, "finance", {"harness": "hermes"})   # an external agent with no computer: its inbox is its delivery
+        tid = task(c, "Call the venue")["id"]
+        settle(c, tid, "finance", ago(days=2))
+        H._task_event(c, tid, H.KEEPER, "snoozed_until", ago(hours=5), None, "snooze over")
+        note(c, tid, H.KEEPER, ago(hours=3))
+        complete_jobs(c)
+        task_roundup.run(c, DAY)
+        assert not any("Snooze ended" in body for body in lists(c)), "a snooze notice written to the external inbox was delivered"
+
+
+def test_an_external_inbox_with_no_notice_since_its_snooze_ended_has_a_missed_start(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        BS.update(c, "finance", {"harness": "hermes"})
+        tid = task(c, "Call the venue")["id"]
+        settle(c, tid, "finance", ago(days=2))
+        H._task_event(c, tid, H.KEEPER, "snoozed_until", ago(hours=5), None, "snooze over")
+        complete_jobs(c)
+        assert "finance" in task_roundup.run(c, DAY)["woke"]
+        assert f"{tid[:8]} Call the venue: Snooze ended at 09:00 UTC and nothing has picked it up" in only_list(c)
