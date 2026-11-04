@@ -3582,6 +3582,7 @@ export type Place = {
   months?: Array<string>;
   name?: string;
   pins: Array<{
+  can_unpin?: boolean;
   card?: Card;
   id: string | null;
   item: string | null;
@@ -9709,6 +9710,7 @@ export type SearchDocsResponse = DocSearch;
 
 /** GET /api/v2/files/search */
 export type SearchFilesParams = {
+  kind?: string;
   limit?: number;
   q?: string;
 };
