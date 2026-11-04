@@ -233,7 +233,6 @@ const AU_MAIL_ACTS = ['archive', 'label', 'star', 'leave_for_you', 'forward', 'd
 const AU_BOARD_ACTS = {archive: 'Archive', label: 'Label', star: 'Star', leave_for_you: 'Leave in inbox', forward: 'Forward',
   draft_reply: 'Draft reply', send_reply: 'Reply', unsubscribe: 'Unsubscribe', create_task: 'Create a task', wake_bot: 'Message a bot',
   assign: 'Assign', note: 'Note', post_update: 'Post update', call_webhook: 'Call webhook'};
-const AU_MAIL_ONLY = ['archive', 'star', 'leave_for_you', 'draft_reply', 'send_reply', 'unsubscribe'];
 const AU_BOARD_OPS = {is: 'is', is_not: 'is not', contains: 'contains', matches: 'matches', '>=': '≥', '<=': '≤'};
 const AU_Q_MIN = 0.75, AU_SORT_MIN = 0.5;
 // Star is a label (STARRED); the board shows it as its own action.
@@ -299,7 +298,8 @@ function auBoardShape(flow) {
     i += 2;
   } else if (sd?.type === 'llm' && sd.choose && typeof sd.choose === 'object') {
     const c = sd.choose;
-    if (!['draft', 'reply'].includes(c.mode) || !Array.isArray(c.to) || !c.to.length || !c.to.every(id => ids.has(id)) || !ids.has(c.default)) return null;
+    // A draft or a reply runs mail actions: only a message flow has one to answer.
+    if (flow.trigger?.type !== 'message' || !['draft', 'reply'].includes(c.mode) || !Array.isArray(c.to) || !c.to.length || !c.to.every(id => ids.has(id)) || !ids.has(c.default)) return null;
     b.llm = {mode: c.mode, prompt: String(sd.prompt || ''), to: [...c.to], default: c.default, as: sd.as || ''};
     b.src.ls = sd;
     i += 1;
@@ -400,11 +400,10 @@ function auBoardRow(key, cond, chain, cls = '') {
     <div class="au-bc">${cond}</div><span class="au-bw${chain.mv ? ' mv' : ''}" aria-hidden="true"></span><div class="au-bch">${chain.html}</div></div>`;
 }
 const auBoardAdd = (key, words) => AU.cur?.can_edit ? `<button class="linkish au-badd" type="button" data-board="${key}:new">+ ${esc(words)}</button>` : '';
-// The LLM's modes: Sort, then Sort + draft and Sort + reply (Sort + note and Sort + act off mail). A group's flow has no
-// one to run a turn as, so it sorts only.
+// The LLM's modes: Sort, then Sort + draft and Sort + reply on a message flow (a draft or a reply answers the message).
+// Off mail, and on a group's flow (no one to run a turn as), it sorts only.
 function auBoardModes(a) {
-  const mail = a.trigger?.type === 'message';
-  return [['sort', 'Sort'], ...(auOwnerAs(a) ? [['draft', mail ? 'Sort + draft' : 'Sort + note'], ['reply', mail ? 'Sort + reply' : 'Sort + act']] : [])];
+  return [['sort', 'Sort'], ...(a.trigger?.type === 'message' && auOwnerAs(a) ? [['draft', 'Sort + draft'], ['reply', 'Sort + reply']] : [])];
 }
 // Who a draft or reply turn runs as: a person's Assistant, or the owning bot.
 function auOwnerAs(a) {
@@ -421,7 +420,7 @@ function auBoardHTML(a, b) {
   const sec = (label, n, title, rows, add) => !rows && !edit ? '' : `<section class="au-bsec" aria-label="${esc(label)}">
       <div class="au-bh${rows ? '' : ' solo'}"><span class="au-tag">${n} · ${esc(label)}</span><b>${esc(title)}</b>${add}</div>${rows}</section>`;
   const L = b.llm, modes = auBoardModes(a);
-  const seg = `<span class="au-bseg" role="group" aria-label="Mode">${modes.map(([k, w]) =>
+  const seg = modes.length < 2 ? '' : `<span class="au-bseg" role="group" aria-label="Mode">${modes.map(([k, w]) =>
     `<button type="button" data-bmode="${k}" aria-pressed="${L.mode === k}"${edit ? '' : ' disabled'}>${esc(w)}</button>`).join('')}</span>`;
   const dsel = i => AU.ed?.kind === 'board' && AU.ed.part === 'dest' && AU.ed.i === i ? ' sel' : '';
   return `<div class="au-board">${auAboutHTML(a)}
