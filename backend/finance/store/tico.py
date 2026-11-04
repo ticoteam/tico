@@ -478,6 +478,8 @@ ORG_TRIGGERS = (
 
 
 def watch_org(c: sqlite3.Connection) -> None:
-    """Make the org-chart triggers that move the view version. Idempotent."""
+    """Make the org-chart triggers that move the view version, and the version's row: a trigger's UPDATE moves nothing
+    while the row is absent, and view_version reads an absent row as 0, so the row starts at 0. Idempotent."""
+    c.execute("INSERT OR IGNORE INTO fin_view_versions(id, version, reason, updated_at) VALUES(1, 0, '', ?)", (now(),))
     for name, when, why in ORG_TRIGGERS:
         c.execute(f"CREATE TRIGGER IF NOT EXISTS {name} {when} BEGIN {_BUMP.format(why=why)}; END")
