@@ -1213,7 +1213,8 @@ function thvPressWire(view) {
   el.addEventListener('pointermove', ev => { if (press && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) > 10) end(); });
   for (const type of ['pointerup', 'pointercancel']) el.addEventListener(type, () => { end(); if (view.pressQuiet > Date.now() + 1000) view.pressQuiet = Date.now() + 400; });
   el.addEventListener('scroll', end, {passive: true});
-  el.addEventListener('contextmenu', ev => { if (view.pressQuiet > Date.now() && ev.target.closest('.th-msg')) ev.preventDefault(); });
+  // The browser's own long-press menu would cancel the press before it is one.
+  el.addEventListener('contextmenu', ev => { if ((press || view.pressQuiet > Date.now()) && ev.target.closest('.th-msg')) ev.preventDefault(); });
 }
 function thvSheet(view, m) {
   const d = fbDialog('fb-menu thv-sheet', 'Message actions');

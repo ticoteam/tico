@@ -73,7 +73,7 @@ button.th-quote:hover{color:var(--ink);border-left-color:var(--accent)}
 /* React, Reply and Copy show on hover or focus; touch has the long press instead */
 .th-acts{position:absolute;top:-10px;right:8px;z-index:1;display:flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--raised,var(--surface));box-shadow:0 2px 6px rgba(0,0,0,.08);opacity:0;pointer-events:none}
 .th-msg:hover .th-acts,.th-msg:focus-within .th-acts{opacity:1;pointer-events:auto}
-@media (hover:none){.th-acts{display:none}}
+@media (hover:none){.th-acts{display:none}.th-msg{-webkit-touch-callout:none}}
 .th-act{display:inline-grid;place-items:center;width:30px;height:30px;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
 .th-act:hover{background:var(--surface2);color:var(--ink)}
 /* the reaction picker: one row of emoji */
