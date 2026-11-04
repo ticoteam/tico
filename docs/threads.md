@@ -102,6 +102,14 @@ sub-thread under it.
   author can withdraw a held message (a person's comes back as Edit and resend), and so can the person a bot reports
   to.
 
+## Pinned and Catch up
+
+Anyone who reads a thread can pin it for themselves. A manager can pin a thread for everyone who reads it, except a DM
+with one teammate, a Home, a task's thread or a meeting's; anyone can still unpin it for themselves. Pinned threads lead
+the thread list. Catch up shows every thread with new messages for you, ones that mention you first, each with its new
+messages. A group DM and every other new thread need a name; only a DM with one teammate may go unnamed. Details:
+[threads contract §10.1](dev/threads-contract.md).
+
 ## Editing and deleting
 
 People and bots edit and delete their own messages. Asks, answers and notices cannot be edited. An edit is a new
@@ -127,8 +135,8 @@ Each command is also an MCP tool with the same name and arguments ([Connect an a
 | `hub thread show <thread>` | `hub_thread_show` | the messages in tree order, each sub-thread under its message |
 | `hub thread home <actor>` | `hub_thread_home` | a teammate's Home, made on first use; needs Read on them |
 | `hub thread dm <actor>` | `hub_thread_dm` | your DM with one person or bot, the open one or a new one; needs Write |
-| `hub thread dm-group <actor> <actor> ... [--body "..."]` | `hub_thread_dm_group` | a group DM with these people or bots; `--body` is the first message |
-| `hub thread create ["title"]` | `hub_thread_create` | start a thread: `--audience`, `--group`, `--member` (repeat), `--body` |
+| `hub thread dm-group <actor> <actor> ... --title "..." [--body "..."]` | `hub_thread_dm_group` | a group DM with these people or bots; a new one needs `--title`; `--body` is the first message |
+| `hub thread create "title"` | `hub_thread_create` | start a thread: `--audience`, `--group`, `--member` (repeat), `--body`, `--pin-for-members` |
 | `hub thread post <thread> "..."` | `hub_thread_post` | a message: `--kind say\|ask`, `--to`, `--ref KIND:ID` (repeat) |
 | `hub thread reply <thread> <message> "..."` | `hub_thread_reply` | a reply in that message's sub-thread |
 | `hub thread edit <message> "..."` | `hub_thread_edit` | a new revision of your own message |
@@ -142,9 +150,12 @@ Each command is also an MCP tool with the same name and arguments ([Connect an a
 | `hub thread follow <thread> [--notify ...]` | `hub_thread_follow` | follow at a level |
 | `hub thread unfollow <thread>` | `hub_thread_unfollow` | stop following |
 | `hub thread read <thread> [--seq N \| --all]` | `hub_thread_read` | mark read |
+| `hub thread pin <thread>` | `hub_thread_pin` | pin a thread for you |
+| `hub thread unpin <thread>` | `hub_thread_unpin` | unpin it for you, even one pinned for everyone |
+| `hub thread catch-up [--cursor C]` | `hub_thread_catch_up` | the threads with new messages for you, mentions first, each with its new messages |
 | `hub thread search "..."` | `hub_thread_search` | messages in threads you can read |
 | `hub thread members list\|add\|remove` | `hub_thread_members_list`, `_add`, `_remove` | who reads the thread; `add --owner` makes an owner |
-| `hub thread update <thread>` | `hub_thread_update` | `--title`, `--archive` or `--unarchive`, `--audience`, `--group`, `--keep-days N` or `--keep-forever` |
+| `hub thread update <thread>` | `hub_thread_update` | `--title`, `--archive` or `--unarchive`, `--audience`, `--group`, `--keep-days N` or `--keep-forever`, `--pin-for-everyone` or `--unpin-for-everyone` (managers) |
 | `hub thread link-slack <thread> [<channel>] [--history] [--off]` | `hub_thread_link_slack` | link a Slack channel (admins), list the thread's links, or take them away ([Slack](slack.md)) |
 | `hub thread slack-resume <link-id>` | `hub_thread_slack_resume` | check a suspended or refused Slack link again (admins) |
 
