@@ -576,8 +576,11 @@ def test_an_ordinary_lease_expiry_resumes_with_the_outside_action_it_held_on_nam
 def test_a_held_run_whose_source_message_was_deleted_is_listed_without_words_and_the_others_stay(api):
     """Codex P2. A deleted source message must not fail the whole review list: its run is listed without its words, and
     the other held runs are still there."""
-    _, message, gone = held(api)
-    _, _, kept = restarted_mid_turn(api, [('Read', None), ('Bash', None)])
+    machine, message, gone = held(api)
+    post(api, 'chat/ops', {'text': 'A second request.'})
+    ready(api, machine, ['ops'])
+    kept = claim(api, machine)
+    restart_mid_merge(api, machine, kept)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE messages SET deleted_at=? WHERE id=?", (H.now(), message['id']))
     jobs = {job['id']: job for job in get(api, 'bots/ops/execution-review')['jobs']}
