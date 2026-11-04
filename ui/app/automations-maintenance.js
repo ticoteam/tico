@@ -109,7 +109,9 @@ function auMaintHead(hd) {
 function auMaintPane(pane) {
   const m = AU.maint;
   if (!m) { pane.innerHTML = AU.maintError ? `<p class="err au-pad">${esc(AU.maintError)}</p>` : '<p class="muted au-pad">Loading…</p>'; return; }
-  const top = pane.scrollTop;
+  // A redraw keeps the place; Settings and Runs each open at the top.
+  const top = AU.mtPaneView === AU.view ? pane.scrollTop : 0;
+  AU.mtPaneView = AU.view;
   pane.innerHTML = AU.view === 'runs' ? auMaintRunsHTML() : auMaintSettingsHTML(m);
   pane.scrollTop = top;
 }
