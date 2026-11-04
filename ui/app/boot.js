@@ -22,6 +22,8 @@ window.addEventListener('load', () => {
   });
   sw.register('/sw.js?v=41', {updateViaCache: 'none'}).then(reg => reg.update()).catch(() => {});
 });
+// The longest boot waits for the roster and /me before it says it couldn't load.
+const BOOT_ROSTER_WAIT_MS = 10000;
 (async () => {
   bootMark('boot');
   let configVersion = nativeVisualVersion();
@@ -29,7 +31,11 @@ window.addEventListener('load', () => {
   // What the first page needs goes out first: a browser opens only a few connections to one server, so the
   // roster and the opening page's own read are not queued behind the sidebar's counts.
   const employees = get('/employees'), meRead = get('/me');
-  const roster = Promise.all([employees, meRead, get('/humans').catch(() => ({people: []}))]);
+  // A roster that never answers (a separate read after /api/v2/boot left it out, a stalled connection) ends in the
+  // error card below, with Try again, rather than a page that waits for ever.
+  const late = new Promise((_, fail) => setTimeout(() => fail(Object.assign(new Error('Tico took too long to answer.'),
+    {timedOut: true})), BOOT_ROSTER_WAIT_MS));
+  const roster = Promise.race([Promise.all([employees, meRead, get('/humans').catch(() => ({people: []}))]), late]);
   bootSnapShow(meRead);              // the last screen, as soon as /me says it is this person's (boot-snap.js)
   updPrefetch();
   dashPrefetch();
@@ -64,6 +70,11 @@ window.addEventListener('load', () => {
     await cleared;
     if (SESSION.out || configVersion !== nativeVisualVersion()) return;
     bootSnapHandOff(); bootSnapRelease();
+    if (e.timedOut) {
+      $('#main').innerHTML = `<section class="card"><h2>Couldn't load Tico</h2><p class="err">${esc(e.message)}</p><button type="button" data-boot-retry>Try again</button></section>`;
+      $('#main [data-boot-retry]').onclick = () => location.reload();
+      return;
+    }
     $('#main').innerHTML = `<section class="card"><h2>Tico server not running</h2><p>Start it with <code>scripts/tico server start</code> in the Tico repo, or install it with <code>scripts/tico server install</code> so it runs at login.</p><p class="err">${esc(e.message)}</p></section>`;
     return;
   }

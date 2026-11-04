@@ -1226,13 +1226,21 @@ def create_app(settings=None):
         tasks = {path: asyncio.ensure_future(boot_read(request.scope, path,
                                                        needs if path == "/api/v2/needs-you" else b""))
                  for path in BOOT_READS}
-        await asyncio.wait(tasks.values(), timeout=request.app.state.boot_part_budget)
-        parts = []
-        for path, task in tasks.items():
-            if not task.done():
+        try:
+            await asyncio.wait(tasks.values(), timeout=request.app.state.boot_part_budget)
+        finally:
+            # Every part is stopped with this request, even when it is cancelled while it waits (the caller went
+            # away), and each is awaited briefly. A part in a sync worker thread cannot be stopped: awaiting it would
+            # hold the answer until its thread finishes the read, so it is left to end by itself, its answer dropped
+            # (harmless: every part is a read; the callback only collects its outcome).
+            pending = [task for task in tasks.values() if not task.done()]
+            for task in pending:
                 task.cancel()
-            elif not task.cancelled() and task.exception() is None:
-                parts.append((path, *task.result()))
+                task.add_done_callback(lambda t: t.cancelled() or t.exception())
+            if pending:
+                await asyncio.wait(pending, timeout=0.05)
+        parts = [(path, *task.result()) for path, task in tasks.items()
+                 if not task.cancelled() and task.exception() is None]
         return fast_json.RawJsonResponse(b'{"reads":{' + b",".join(
             json.dumps(path).encode() + b':{"status":' + str(status).encode() + b',"etag":' + json.dumps(etag).encode()
             + b',"body":' + body + b"}" for path, status, etag, body in parts) + b"}}")

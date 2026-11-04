@@ -116,18 +116,19 @@ const {t} = require('./support/load.cjs');
     assert.deepEqual({mains: after.mains, shown: after.mainShown, drawn: after.mainKids > 0}, {mains: 1, shown: '', drawn: true});
     await heading().waitFor();
 
-    // A roster that never answers: the copy goes on its own, counted from when it was shown.
+    // A roster that never answers: past boot's wait the copy goes, and the page says it couldn't load, with Try again
+    // (never a blank page, never a wait for ever).
     held = [];
     await page.reload({waitUntil: 'domcontentloaded'});
     await page.waitForFunction(() => performance.getEntriesByName('tico:paint-cached').length === 1);
     const shownAt = Date.now();
-    await page.waitForFunction(() => !document.querySelector('[data-boot-snap]'), null, {timeout: t(20000)});
-    assert.ok(Date.now() - shownAt > 8000, 'it stayed up until the wait ended');
+    await page.getByRole('heading', {name: "Couldn't load Tico"}).waitFor({timeout: t(20000)});
+    assert.ok(Date.now() - shownAt > 7000, 'it stayed up until the wait ended');
     const stalled = await copyState();
-    assert.deepEqual({routed: stalled.routed, shown: stalled.mainShown, drawn: stalled.mainKids > 0}, {routed: 0, shown: '', drawn: true},
-      'down while boot still waits, its loading rows in its place, never a blank page');
-    assert.equal(await page.evaluate(() => !!document.querySelector('#main .skel')), true);
+    assert.deepEqual({host: stalled.host, routed: stalled.routed, shown: stalled.mainShown}, {host: false, routed: 0, shown: ''},
+      'the copy is down while the roster still has not answered');
     const late = held; held = null; late.forEach(answer => answer());
+    await page.getByRole('button', {name: 'Try again'}).click();
     await heading().waitFor();
 
     // Someone else signed in here: nothing of Ana's is shown, and her screen is gone.
