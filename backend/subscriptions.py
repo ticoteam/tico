@@ -188,6 +188,7 @@ def refusal(c, runner_id, bot):
 
 def record(c, runner_id, profiles, readiness=None):
     # Omitted by an older computer: retain its last report until it can report again.
+    from . import model_subscriptions
     from .repositories import save_metadata
     from .repositories import metadata
     reported = {'reported': profiles is not None}
@@ -212,6 +213,9 @@ def record(c, runner_id, profiles, readiness=None):
                 older = weekly_snapshot(previous.get(runtime, {}).get(window), window)
                 values = [v for v in (latest, older) if v]
                 value[window] = max(values, key=lambda v: datetime.fromisoformat(v['reported_at'].replace('Z', '+00:00'))) if values else None
+                # Whose login it is, from the turns that took it (backend/model_subscriptions.py), against what was stored.
+                value[window] = model_subscriptions.owned(c, runner_id, runtime, value[window],
+                                                          previous.get(runtime, {}).get(window))
             if not value.get('account'):
                 value.pop('account', None)
             runtimes[runtime] = value

@@ -1053,6 +1053,9 @@ class SubscriptionWeekly(Contract):
     resets_at: str | None = Field(default=None, max_length=50)
     reported_at: str = Field(max_length=50)
     status: Literal["allowed", "allowed_warning", "rejected"] | None = None
+    # Whose login the reading is, stamped by the server from the turns that overlapped it (model_subscriptions.owned): a
+    # subscription's id, "" for the computer's own login, None when that cannot be told. A computer's own value is replaced.
+    owner: str | None = Field(default=None, max_length=80)
 
 
 # The computer's own login's usage window on its runtime row: one that fails its checks is left out, like the account.

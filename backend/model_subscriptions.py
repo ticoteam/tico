@@ -69,7 +69,7 @@ one.
 """
 import base64
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from pydantic import Field, SecretStr
 
@@ -99,13 +99,14 @@ KINDS = {
 }
 RUNTIMES = tuple(dict.fromkeys(k["runtime"] for k in KINDS.values()))
 RUNTIME_LABELS = {"claude": "Claude Code", "codex": "Codex"}
+API_KINDS = tuple(kind for kind, spec in KINDS.items() if spec.get("billing") == "api")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS model_subscriptions(
  id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, sealed TEXT NOT NULL,
  preview TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'new',
  status_detail TEXT NOT NULL DEFAULT '', status_at TEXT, added_by TEXT NOT NULL, created_at TEXT NOT NULL,
- updated_at TEXT NOT NULL, owner_id TEXT NOT NULL DEFAULT '');
+ updated_at TEXT NOT NULL, owner_id TEXT NOT NULL DEFAULT '', credential_at TEXT);
 CREATE TABLE IF NOT EXISTS computer_subscriptions(
  runner_id TEXT NOT NULL, runtime TEXT NOT NULL, subscription_id TEXT NOT NULL, set_by TEXT NOT NULL,
  updated_at TEXT NOT NULL, PRIMARY KEY(runner_id, runtime));
@@ -340,6 +341,32 @@ def covered(ready, runtimes):
 
 
 # ------------------------------------------------------------------------------------------------ views
+# An API key's month cost, driven from the month's turns (turns_started), each one's attempt_subscriptions rows by their
+# primary key, then the attempt. CROSS JOIN keeps that order whatever sqlite_stat1 says: the plan without it read every
+# attempt a key ever ran, and probed each turn, on every listing.
+COSTS_SQL = ("SELECT s.subscription_id, coalesce(sum(t.est_cost_usd),0) AS cost FROM turns t "
+             "CROSS JOIN attempt_subscriptions s ON s.attempt_id=t.id CROSS JOIN attempts a ON a.id=t.id "
+             "WHERE t.started_at>=? AND s.subscription_id IN ({ids}) AND coalesce(a.handed_runtime,s.runtime)=s.runtime "
+             "GROUP BY s.subscription_id")
+
+
+def costs_sql(count):
+    """The month-cost statement for `count` API keys (its placeholders: the month, then the keys)."""
+    return COSTS_SQL.format(ids=",".join("?" * count))
+
+
+def _api_costs(c, month, sid=None):
+    """{subscription id: this month's cost} for the API keys, which bill per use; {} when none is saved (the usual company's
+    plans alone), so a list of plans runs no cost query. With `sid`, only that key."""
+    where = " AND id=?" if sid else ""
+    ids = [r[0] for r in c.execute(
+        f"SELECT id FROM model_subscriptions WHERE kind IN ({','.join('?' * len(API_KINDS))}){where}",
+        (*API_KINDS, *([sid] if sid else []))).fetchall()]
+    if not ids:
+        return {}
+    return {r["subscription_id"]: r["cost"] for r in H._rows(c.execute(costs_sql(len(ids)), (month, *ids)))}
+
+
 def _listing(c, sid=None):
     """What a plan list reads about plans and their computers, in a fixed number of queries however many plans and
     computers there are (Settings > Models shows every plan's usage at once): the grants with their computers, each
@@ -359,12 +386,7 @@ def _listing(c, sid=None):
     ready = {rid: readiness_document(r["readiness"]) for rid, r in runners.items()}
     profiles = {(r["runner_id"], r["profile"]): r["runtimes"] for r in H._rows(c.execute(
         f"SELECT runner_id,profile,runtimes FROM computer_profiles WHERE runner_id IN ({computers})", args))}
-    month = H.now()[:7] + "-01"
-    costs = {r["subscription_id"]: r["cost"] for r in H._rows(c.execute(
-        "SELECT s.subscription_id, coalesce(sum(t.est_cost_usd),0) AS cost FROM attempt_subscriptions s "
-        "JOIN turns t ON t.id=s.attempt_id JOIN attempts a ON a.id=s.attempt_id "
-        "WHERE t.started_at>=? AND coalesce(a.handed_runtime,s.runtime)=s.runtime"
-        + (" AND s.subscription_id=?" if sid else "") + " GROUP BY s.subscription_id", (month, *args[:1])))}
+    costs = _api_costs(c, H.now()[:7] + "-01", sid)
     holds = {row["key"]: row["value"] for row in c.execute(
         "SELECT key,value FROM registry_metadata WHERE key>=? AND key<?",
         (login_holds.PREFIX, login_holds.PREFIX[:-1] + ";"))}
@@ -431,13 +453,67 @@ def _plan_identity(sub):
     return preview if sub.get("kind") == "codex_login" and "@" in preview else ""
 
 
+# A reading is taken during a turn on its computer. The computer's clock and this server's can differ a little, so a turn
+# counts for a reading from OWNER_SKEW before its start to OWNER_SKEW after its end; a turn that began up to OWNER_RUN
+# before the reading (a turn runs for hours at most) is one that may have taken it.
+OWNER_RUN = timedelta(hours=12)
+OWNER_SKEW = timedelta(minutes=2)
+
+
+def _stamp(at):
+    return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+
+
+def reading_owner(c, runner_id, runtime, reported):
+    """Whose a computer's reading for `runtime` is, from the turns on that computer that overlapped it: the one
+    subscription every one of them signed in with (its id), "" when each ran on the computer's own login, or None when
+    they did not agree or none overlapped it, so it cannot be told apart and is no plan's. A turn on the other runtime
+    that overlaps counts too: nothing in the report says which turn took it."""
+    at = H.parse_ts(reported)
+    if at is None or at.tzinfo is None or not H._has_table(c, "attempt_subscriptions"):
+        return None
+    owners = {row[0] for row in c.execute(
+        "SELECT coalesce(s.subscription_id,'') FROM attempts a LEFT JOIN attempt_subscriptions s "
+        "ON s.attempt_id=a.id AND s.runtime=? WHERE a.runner_id=? AND a.created_at>=? AND a.created_at<=? "
+        "AND coalesce(a.finished_at,a.lease_until)>=?",
+        (runtime, runner_id, _stamp(at - OWNER_RUN), _stamp(at + OWNER_SKEW), _stamp(at - OWNER_SKEW)))}
+    return owners.pop() if len(owners) == 1 else None
+
+
+def owned(c, runner_id, runtime, reading, previous=None):
+    """A computer's `reading` (one usage window, or None) with its `owner`: the same report `previous` already had keeps
+    that owner, and a new one takes `reading_owner`. Whatever owner the computer sent is never kept."""
+    if not reading:
+        return None
+    if previous and previous.get("reported_at") == reading.get("reported_at") and "owner" in previous:
+        owner = previous["owner"]
+    else:
+        owner = reading_owner(c, runner_id, runtime, reading.get("reported_at"))
+    return {**reading, "owner": owner}
+
+
+def stamp_readiness(c, runner_id, readiness, before):
+    """Each runtime's usage windows on a computer's readiness document (its own login's), owned (`owned`) against the
+    document they replace (`before`)."""
+    old = (before or {}).get("runtimes") or {}
+    for runtime, row in ((readiness or {}).get("runtimes") or {}).items():
+        if not isinstance(row, dict):
+            continue
+        previous = old.get(runtime) if isinstance(old.get(runtime), dict) else {}
+        for window in ("weekly", "five_hour"):
+            if row.get(window):
+                row[window] = owned(c, runner_id, runtime, row[window], previous.get(window))
+
+
 def _plan_usage(c, sub, runtime, ctx):
     """A plan's used percent from the computers it is given to. Each signs in with it on its turns, and the runner files
     those turns' usage windows under the computer's default profile (runner-rs drive.rs `remember_weekly`, with the
     profile `turn_profile` picks, which the heartbeat names as readiness `computer_profile`; "" is its own home). So that
     profile's windows for `runtime` are this plan's, but only a reading that is this plan's: taken since the plan was
-    given to that computer or last changed (a new value may be another account, a refresh is the same one), and, where
-    the plan names its account, reported for that account. A window whose reset has passed is no longer any reading.
+    given to that computer or its credential was last replaced (`credential_at`: a new value may be another account; a
+    rename, an owner change or a refresh of the same account is not), taken on a turn that signed in with this plan
+    (the reading's `owner`, `owned`), and, where the plan names its account, reported for that account. A window whose
+    reset has passed is no longer any reading.
     The most-used window wins, its freshest report breaking a tie. Otherwise the reason is what the data tells: not on a
     computer, a reconnect due, a computer too old, a plan that sends no percent, readings from before it was added,
     computers offline, or a computer yet to report."""
@@ -461,7 +537,7 @@ def _plan_usage(c, sub, runtime, ctx):
         profile = ctx["ready"][runner_id].get("computer_profile") or ""
         state = _login_state(c, ctx, runner_id, profile, runtime)
         account = (state.get("account") or {}).get("email") or ""
-        since = max(_at(grant["granted_at"]), _at(sub["updated_at"]))
+        since = max(_at(grant["granted_at"]), _at(sub["credential_at"] or sub["created_at"]))
         for window, label in (("weekly", "week"), ("five_hour", "5h")):
             reading = state.get(window)
             if not reading:
@@ -470,7 +546,9 @@ def _plan_usage(c, sub, runtime, ctx):
             ends = _at(reading["resets_at"]) if reading.get("resets_at") else reported + WINDOWS[window]
             if ends <= now:
                 continue
-            if reported < since or (account_of_plan and account.lower() != account_of_plan.lower()):
+            # Not taken on a turn that signed in with this plan (`owner`), or no turn overlapped it: not this plan's.
+            if (reported < since or reading.get("owner") != sub["id"]
+                    or (account_of_plan and account.lower() != account_of_plan.lower())):
                 outside = True
                 continue
             if reading.get("used_percent") is None:
@@ -725,9 +803,11 @@ def save(c, vault, settings, who, body, sid=None):
             c.execute("UPDATE model_subscriptions SET owner_id=?,updated_at=? WHERE id=?", (owner, now, sid))
             H.event(c, who.actor, "subscription.owner_changed", sid, {"from": sub["owner_id"], "to": owner})
         if body.secret is not None:
+            # The credential's own time: readings taken before it are the old account's (`_plan_usage`). Only a replaced or
+            # reconnected value moves it; a rename, an owner change or a same-account refresh (`refreshed`) does not.
             c.execute("UPDATE model_subscriptions SET sealed=?,preview=?,revision=revision+1,status='new',"
-                      "status_detail='',status_at=?,updated_at=? WHERE id=?",
-                      (vault.cipher.seal(c, _context(sid), value), preview, now, now, sid))
+                      "status_detail='',status_at=?,updated_at=?,credential_at=? WHERE id=?",
+                      (vault.cipher.seal(c, _context(sid), value), preview, now, now, now, sid))
             # A new value may be another account: its own usage-limit hold ends as Try now does, one probe turn tests it
             # (login_holds.try_now), before the bots are re-judged. As for a change, every computer given it stops its
             # live runs on that runtime (their work goes back in the queue; confirmed first) and starts its sessions
@@ -749,9 +829,10 @@ def save(c, vault, settings, who, body, sid=None):
     value, preview = checked(body.kind, body.secret.get_secret_value())
     owner = _default_owner(c, who, body, body.kind)
     sid = H.new_id()
-    c.execute("INSERT INTO model_subscriptions(id,name,kind,sealed,preview,added_by,owner_id,created_at,updated_at) "
-              "VALUES(?,?,?,?,?,?,?,?,?)",
-              (sid, name, body.kind, vault.cipher.seal(c, _context(sid), value), preview, who.actor, owner, now, now))
+    c.execute("INSERT INTO model_subscriptions(id,name,kind,sealed,preview,added_by,owner_id,created_at,updated_at,"
+              "credential_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+              (sid, name, body.kind, vault.cipher.seal(c, _context(sid), value), preview, who.actor, owner, now, now,
+               now))
     H.event(c, who.actor, "subscription.created", sid, {"kind": body.kind})
     _tick_provider(c, settings, who.actor, body.kind)
     return view(c, row(c, sid))

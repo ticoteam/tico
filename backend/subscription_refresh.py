@@ -118,6 +118,8 @@ def report(c, runner, rid, body):
                     (runner, body.profile)).fetchone()
     state = json.loads(row[0] or '{}').get(body.runtime) if row else None
     weekly = weekly_snapshot(body.weekly.model_dump()) if body.weekly else None
+    if weekly:
+        weekly['owner'] = None      # a named login's refresh is never a plan's reading, whatever the computer sent
     if body.state == 'succeeded' and (not weekly or H.parse_ts(weekly['reported_at']) < H.parse_ts(value['requested_at'])
                                     or state is None or state.get('signed_in') is False):
         raise Problem('invalid', 'Weekly refresh has no current valid reading', 422)

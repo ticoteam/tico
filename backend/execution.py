@@ -2644,6 +2644,8 @@ class Execution:
                     row[window] = reading
                 else:
                     row.pop(window, None)
+        # Whose login each reading is (the turns that took it, backend/model_subscriptions.py), against the report it replaces.
+        model_subscriptions.stamp_readiness(c, who.runner_id, readiness, readiness_document(stored[3]))
         if readiness.get('worktrees') is None:
             readiness.pop('worktrees', None)
         if not readiness.get('harnesses'):

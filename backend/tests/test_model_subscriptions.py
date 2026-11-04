@@ -1188,7 +1188,7 @@ def window_reading(used, resets_in, reported_ago=timedelta(0)):
 def beat(api, m, profiles, *, takes=True, logins=True, signed_in=True, runtime="claude"):
     """A heartbeat: each login profile's runtimes as the computer reports them. `logins` names its default login (a
     computer that does not names none); `takes` says it can take a subscription."""
-    readiness = {"schema_version": 1, "bots": {},
+    readiness = {"schema_version": 1, "bots": {"ops": {"runtime": runtime, "ready": True}},
                  "runtimes": {runtime: {"installed": True, "authenticated": "ready" if signed_in else "missing"}}}
     if logins:
         readiness["computer_profile"] = "own"
@@ -1213,7 +1213,26 @@ def home_beat(api, m, **runtimes):
     each runtime's windows itself."""
     return post(api, "runners/heartbeat", {
         "version": "test", "platform": "test", "capabilities": [MS.CAPABILITY, "computer_logins_v1"],
-        "readiness": {"schema_version": 1, "bots": {}, "computer_profile": "", "runtimes": runtimes}}, token=m["token"])
+        "readiness": {"schema_version": 1, "bots": {"ops": {"runtime": next(iter(runtimes), "claude"), "ready": True}},
+                      "computer_profile": "", "runtimes": runtimes}}, token=m["token"])
+
+
+def usage_machine(api, label="Plan Mac"):
+    """A computer that names its own login, takes plans and has the bot ops on it, so a turn can run there."""
+    m = runner(api, label=label)
+    assign(api, m, "ops")
+    beat(api, m, {})
+    return m
+
+
+def turn_on(api, m, sid, runtime="claude", bot="ops"):
+    """A turn of `bot` on computer `m` that signs in with plan `sid` (given to `m` for `runtime` first), still running:
+    the readings `m` takes while it runs are this plan's (model_subscriptions.owned)."""
+    give(api, m, runtime, sid)
+    post(api, "chat/" + bot, {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    assert turn and signed_with(api, turn) == sid
+    return turn
 
 
 def test_a_plan_says_why_it_shows_no_usage_yet(api):
@@ -1242,9 +1261,8 @@ def test_a_plan_shows_the_most_used_window_its_computer_reads_even_at_zero(api):
     setup(api)
     company(api)
     sid = add(api)["id"]
-    m = runner(api, label="Plan Mac")
-    beat(api, m, {})
-    give(api, m, "claude", sid)
+    m = usage_machine(api)
+    turn_on(api, m, sid)
     beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(0, timedelta(days=3))}}})
     usage = usage_of(api, sid)
     assert (usage["window"], usage["used_pct"]) == ("week", 0) and "reason" not in usage
@@ -1266,10 +1284,10 @@ def test_a_window_that_has_reset_or_sends_no_percent_is_not_a_reading(api):
     setup(api)
     company(api)
     sid = add(api)["id"]
-    m = runner(api, label="Plan Mac")
+    m = usage_machine(api)
     beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(
         55, timedelta(days=1), reported_ago=timedelta(days=2))}}})
-    give(api, m, "claude", sid)
+    turn_on(api, m, sid)
     # Its week reset a day ago, so the 55% read before it is no longer this plan's usage.
     assert usage_of(api, sid)["reason"] == "Waiting for a computer to report"
     beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(None, timedelta(days=3))}}})
@@ -1281,13 +1299,16 @@ def test_only_a_computer_that_names_its_default_login_and_takes_plans_reads_usag
     company(api)
     sid = add(api)["id"]
     m = runner(api, label="Plan Mac")
+    assign(api, m, "ops")
     beat(api, m, {}, logins=False)
     give(api, m, "claude", sid)
     weekly = {"own": {"claude": {"signed_in": True, "weekly": window_reading(30, timedelta(days=3))}}}
     beat(api, m, weekly, logins=False)
     assert usage_of(api, sid)["reason"] == "Update the computer to see usage"
-    beat(api, m, weekly)
-    assert usage_of(api, sid)["used_pct"] == 30
+    beat(api, m, {})
+    turn_on(api, m, sid)
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(31, timedelta(days=3))}}})
+    assert usage_of(api, sid)["used_pct"] == 31
 
 
 def test_a_reading_from_before_a_plan_was_given_to_the_computer_is_not_its_usage(api):
@@ -1295,36 +1316,60 @@ def test_a_reading_from_before_a_plan_was_given_to_the_computer_is_not_its_usage
     company(api)
     sid = add(api)["id"]
     m = runner(api, label="Plan Mac")
+    assign(api, m, "ops")
     # The computer's own login was at 88% before the plan reached it: that is not this plan's usage.
     home_beat(api, m, claude=runtime_state(weekly=window_reading(88, timedelta(days=3))))
     give(api, m, "claude", sid)
     assert usage_of(api, sid)["reason"] == NOT_SINCE and usage_of(api, sid)["used_pct"] is None
+    turn_on(api, m, sid)
     home_beat(api, m, claude=runtime_state(weekly=window_reading(45, timedelta(days=3))))
     assert usage_of(api, sid)["used_pct"] == 45
 
 
-def test_a_new_secret_on_a_plan_ends_the_readings_taken_for_the_old_one(api):
+def test_a_rename_keeps_the_readings_taken_for_a_plan_and_a_new_secret_ends_them(api):
     setup(api)
     company(api)
     sid = add(api)["id"]
-    m = runner(api, label="Plan Mac")
-    beat(api, m, {})
-    give(api, m, "claude", sid)
+    m = usage_machine(api)
+    turn_on(api, m, sid)
     beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(30, timedelta(days=3))}}})
     assert usage_of(api, sid)["used_pct"] == 30
-    post(api, f"model-subscriptions/{sid}", {"secret": OTHER})     # another account: the readings are not its
+    post(api, f"model-subscriptions/{sid}", {"name": "Renamed plan"})          # the same credential: its readings stand
+    assert usage_of(api, sid)["used_pct"] == 30
+    post(api, f"model-subscriptions/{sid}", {"secret": OTHER, "confirm": True})  # another account: they are not its
     assert usage_of(api, sid)["reason"] == NOT_SINCE
+    turn_on(api, m, sid)
     beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(12, timedelta(days=3))}}})
     assert usage_of(api, sid)["used_pct"] == 12
+
+
+def test_a_same_accounts_refresh_keeps_the_readings_taken_for_a_chatgpt_plan(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "codex", "gpt-6.1-sol")
+    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    m = runner(api, label="Plan Mac")
+    assign(api, m, "ops")
+    home_beat(api, m, codex=runtime_state(account="ana@acme.example"))
+    turn = turn_on(api, m, sid, runtime="codex")
+    home_beat(api, m, codex=runtime_state(account="ana@acme.example", weekly=window_reading(64, timedelta(days=3))))
+    assert usage_of(api, sid)["used_pct"] == 64
+    # The run refreshes its file for the same account: the stored credential moves on, its readings stand.
+    body = {"attempt": turn["id"], "subscription": sid, "revision": 1}
+    assert post(api, "runner-model-subscription-refresh", {**body, "value": codex_file(refresh="r-2")},
+                m["token"]) == {"stored": True, "revision": 2}
+    assert usage_of(api, sid)["used_pct"] == 64
 
 
 def test_a_chatgpt_reading_on_an_ordinary_home_counts_only_for_the_account_the_plan_is_signed_in_as(api):
     setup(api)
     company(api)
+    on(api, "ops", "codex", "gpt-6.1-sol")
     sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     m = runner(api, label="Plan Mac")
+    assign(api, m, "ops")
     home_beat(api, m, codex=runtime_state(account="ana@acme.example"))
-    give(api, m, "codex", sid)
+    turn_on(api, m, sid, runtime="codex")
     home_beat(api, m, codex=runtime_state(account="ana@acme.example", weekly=window_reading(64, timedelta(days=3))))
     assert usage_of(api, sid)["used_pct"] == 64
     # The same computer signed in as someone else: that account's usage is not this plan's.
@@ -1335,17 +1380,35 @@ def test_a_chatgpt_reading_on_an_ordinary_home_counts_only_for_the_account_the_p
     assert usage_of(api, sid)["reason"] == NOT_SINCE
 
 
-def test_a_computer_on_its_ordinary_home_shows_the_usage_its_own_claude_login_reports(api):
+def test_a_computer_on_its_ordinary_home_shows_the_plan_its_turn_ran_on_not_its_own_login(api):
     setup(api)
     company(api)
     sid = add(api)["id"]
     m = runner(api, label="Plan Mac")
+    assign(api, m, "ops")
     home_beat(api, m, claude=runtime_state())
-    give(api, m, "claude", sid)
+    turn_on(api, m, sid)
     home_beat(api, m, claude=runtime_state(five_hour=window_reading(40, timedelta(hours=2)),
                                            weekly=window_reading(70, timedelta(days=3))))
     usage = usage_of(api, sid)
     assert (usage["window"], usage["used_pct"]) == ("week", 70)
+
+
+def test_a_reading_taken_on_the_computers_own_login_is_not_the_plans_when_its_hold_ends(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    sid = add(api)["id"]
+    m = usage_machine(api)
+    give(api, m, "claude", sid)
+    hold_plan(api, sid)                       # the plan's limit is met, so its turns fall back to the computer's own login
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    assert turn and signed_with(api, turn) is None
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(88, timedelta(days=3))}}})
+    assert usage_of(api, sid)["used_pct"] == 100                              # a limit met on the plan holds it at 100
+    hold_plan(api, sid, until=H.shift(H.now(), seconds=-1))                   # the hold ends: the 88% was not the plan's
+    assert usage_of(api, sid)["reason"] == NOT_SINCE
 
 
 def listing_statements(api, monkeypatch):
@@ -1392,3 +1455,36 @@ def test_the_plan_list_runs_the_same_queries_however_many_computers_it_has(api, 
     assert any("computer_subscriptions" in sql for sql in many)     # the traced reads are the listing's
     assert len(many) == len(few)
     assert [len(row["computers"]) for row in listed(api)] == [12, 12]
+
+
+def test_a_plan_list_runs_the_month_cost_query_only_when_an_api_key_is_saved(api, monkeypatch):
+    setup(api)
+    company(api)
+    add(api)
+    assert not any("est_cost_usd" in sql for sql in listing_statements(api, monkeypatch))
+    add(api, "anthropic_key", secret="sk-ant-api-" + "c" * 24, name="Company API")
+    assert any("est_cost_usd" in sql for sql in listing_statements(api, monkeypatch))
+
+
+def test_the_month_cost_query_reads_the_months_turns_through_their_index(api):
+    with api.app.state.store.read() as c:
+        plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + MS.costs_sql(1), ("2026-11-01", "sub"))]
+    assert any("turns_started" in step for step in plan), plan
+    assert not any(step.startswith("SCAN") for step in plan), plan
+
+
+def test_the_credential_time_migration_starts_each_plan_from_its_last_change_and_skips_a_new_file():
+    import importlib
+    import sqlite3
+    credential = importlib.import_module("backend.migrations.0065_subscription_credential_at")
+    conn = sqlite3.connect(":memory:")
+    credential.up(conn)                                                       # a new file: no table yet
+    conn.executescript(
+        "CREATE TABLE model_subscriptions(id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, sealed TEXT "
+        "NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);"
+        "INSERT INTO model_subscriptions(id,name,kind,sealed,created_at,updated_at) VALUES"
+        " ('a','A','claude_token','x','2026-10-01T00:00:00.000000Z','2026-10-09T00:00:00.000000Z');")
+    credential.up(conn)
+    credential.up(conn)                                                       # idempotent
+    assert conn.execute("SELECT id,credential_at FROM model_subscriptions").fetchall() == [
+        ("a", "2026-10-09T00:00:00.000000Z")]
