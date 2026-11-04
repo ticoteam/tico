@@ -77,9 +77,9 @@ async function pageThreads() {
   threadUnmount(THREAD_PAGE?.view); THREAD_PAGE = null;
   pane.innerHTML = '<div class="tr-empty"><button type="button" class="primary" data-tr-new>New thread</button></div>';
 }
-// #/thread/<id>: that thread beside the rail. `?m=<message id>` (a search hit) opens it at that message.
+// #/thread/<id>: that thread beside the rail. `?m=<message id>` (a search hit, a quote; `?focus=` too) opens it at that message.
 function pageThread(id) {
-  const focus = new URLSearchParams(S.route.split('?')[1] || '').get('m') || '';
+  const q = new URLSearchParams(S.route.split('?')[1] || ''), focus = q.get('m') || q.get('focus') || '';
   const shell = threadsShell(), pane = shell.querySelector('.tr-pane');
   shell.dataset.mode = 'thread';
   railRender();

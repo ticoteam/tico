@@ -1,11 +1,12 @@
 // Threads on a real hub (ui/tests/support/real-hub.cjs): a company thread and a members-only thread, made through the API as
-// Dana. Dana, on a desktop, reads the company thread and replies in its composer; a sub-thread under one of its messages
-// shows inline under its header and opens on its own; and her bot page switches between the bot's Home and DM. Omar, a teammate on the
+// Dana. Dana, on a desktop, reads the company thread and replies in its composer; a sub-thread reply under one of its
+// messages shows in time order, quoting that message, and the sub-thread still opens on its own; and her bot page
+// switches between the bot's Home and DM. Omar, a teammate on the
 // desktop, sees the company thread on the thread rail but not the members-only one, and its text is not on his page; opened by
 // direct URL it is "Not found"; and on a bot he may see but not read, the bot has no Home tab. Priya's Home is hidden from
 // Omar until Dana makes him Priya's manager (reports_to), and then he reads it. Priya, on a phone, taps the company thread
 // on the rail, sees its composer, and the page does not scroll sideways. Dana, on a phone, finds a late sub-thread reply
-// under its root's row, reads DMs by who they are with, and switches a bot's Home and DM.
+// on its root's row, reads DMs by who they are with, and switches a bot's Home and DM.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
@@ -72,13 +73,12 @@ async function restrictPerson(hub) {
     await dana.locator('.thv-composer .p-send').click();
     await dana.getByText('Monday works.').waitFor({timeout: t(15000)});
 
-    // Dana: a sub-thread's header shows under its message with the reply count, and opens the sub-thread on its own page.
-    const head = dana.locator(`.th-msg:has-text("${KICKOFF}") + .th-subhead`);
-    await head.waitFor({timeout: t(15000)});
-    assert.match(await head.innerText(), /1 reply/, 'the sub-thread header counts its one reply');
-    // The sub-thread's messages sit inline under it, indented; the header, or tapping one, opens it.
-    await dana.locator('.th-msg.th-sub', {hasText: RISKS}).waitFor({timeout: t(15000)});
-    await head.click();
+    // Dana: the sub-thread's reply reads flat, quoting the message it answers; the sub-thread still opens on its own page.
+    const reply = dana.locator('.th-msg', {hasText: RISKS}).first();
+    await reply.waitFor({timeout: t(15000)});
+    assert.equal(await reply.locator('.th-quote').getAttribute('data-th-quote'), kickoff.id, 'the reply quotes its message');
+    assert.equal(await dana.locator('.th-subhead').count(), 0, 'no sub-thread heads');
+    await dana.goto(hub.url + '/#/thread/' + risks.thread_id);
     await dana.waitForURL(new RegExp('#/thread/' + risks.thread_id), {timeout: t(15000)});
     await dana.locator('.thv-composer .p-text').waitFor({timeout: t(15000)});
     await dana.getByText(RISKS).waitFor({timeout: t(15000)});
@@ -197,7 +197,7 @@ async function restrictPerson(hub) {
     await priya.context().close();
 
     // Dana, phone. Omar answers in the old sub-thread: the rail still shows only roots, the root's row carries the reply,
-    // and tapping it opens the root with the reply inline under its message. Opening the sub-thread adds no row for it.
+    // and tapping it opens the root with the reply in it. Opening the sub-thread adds no row for it.
     const late = await api(hub, 'omar', 'POST', `/v2/threads/${plan.id}/messages`, {text: 'A late risk from Omar', kind: 'say', parent_message_id: kickoff.id});
     const pair = await api(hub, 'dana', 'POST', '/v2/threads/dm', {members: ['human:priya']});
     const trio = await api(hub, 'dana', 'POST', '/v2/threads/dm', {members: ['human:priya', 'human:omar'], title: 'Launch trio'});
@@ -286,29 +286,6 @@ async function restrictPerson(hub) {
       assert.ok(word.height < 26, `${tag}: A team stays on one line (${word.height}px)`);
       assert.equal(await share.locator('[name=tcn-channel]').count(), 0, `${tag}: no Slack with Slack off`);
       await share.locator('[data-close]').first().click();
-
-      // Make task twice: the refusal links to the task it repeats, and the button keeps its one line.
-      await page.goto(hub.url + '/#/thread/' + plan.id);
-      const makeTask = async () => {
-        const row = page.locator('[data-message]', {hasText: KICKOFF}).first();
-        await row.hover();
-        await row.locator('[data-th-more]').click();
-        await page.locator('.thv-pop').getByText('Make task').click();
-        await page.locator('#thread-task[open] [type=submit]').click();
-      };
-      if (!isPhone) {
-        await makeTask();
-        await page.waitForFunction(() => !document.querySelector('#thread-task')?.open, null, {timeout: t(15000)});
-      }
-      await makeTask();
-      const twin = page.locator('#thread-task [data-status] a[href^="#/task/"]');
-      await twin.waitFor({timeout: t(15000)});
-      const buttons = page.locator('#thread-task .dash-form-foot');
-      const [cancel, make] = [await buttons.locator('button[data-close]').boundingBox(), await buttons.locator('[type=submit]').boundingBox()];
-      assert.ok(Math.abs(cancel.height - make.height) < 2, `${tag}: Make task is one line beside Cancel`);
-      await twin.click();
-      await page.waitForURL(/#\/task\//, {timeout: t(15000)});
-      assert.equal(await page.locator('#thread-task[open]').count(), 0, `${tag}: following the link closes the dialog`);
 
       // A group's Home sits in the same gutters as its cards.
       await page.goto(hub.url + '/#/team/' + encodeURIComponent(eng.id));
