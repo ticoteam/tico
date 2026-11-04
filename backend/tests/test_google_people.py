@@ -196,3 +196,27 @@ def test_a_page_stops_at_its_byte_budget_and_long_names_are_cut(api):
     second = api.get(PEOPLE, params={"after": first["next"]}, headers=headers("ana-test")).json()
     assert second["more"] is False and second["next"] is None
     assert [p["person_id"] for p in rows + second["people"]] == ["ana"] + [f"p{n:04d}" for n in range(400)]
+
+
+def test_a_person_id_too_long_to_be_a_cursor_is_left_out_and_the_whole_answer_fits_the_budget(api, caplog):
+    """The person id is the page cursor and is never cut, so one over CELL_MAX characters stays off the list (and the
+    log says so); the byte budget holds the whole answer, the first row and `next` included."""
+    long_id = "x" * (W.CELL_MAX + 1)
+    people = [{"id": "ana", "name": "Ana", "email": "ana@acme.example", "primary_for": ["*"]},
+              {"id": long_id, "name": "Long", "email": "long@acme.example"}]
+    people += [{"id": f"p{n:04d}" + "名" * (W.CELL_MAX - 5), "name": "名" * 5000, "email": f"p{n}@acme.example"}
+               for n in range(400)]
+    set_roster(api, people)
+    seen, after = [], None
+    with caplog.at_level("WARNING", logger="tico.google"):
+        while True:
+            r = api.get(PEOPLE, params={"after": after} if after else {}, headers=headers("ana-test"))
+            assert r.status_code == 200, r.text
+            assert len(r.content) <= W.PAGE_BYTES
+            page = r.json()
+            seen += [p["person_id"] for p in page["people"]]
+            if not page["more"]:
+                break
+            after = page["next"]
+    assert long_id not in seen and len(seen) == 401 and seen[0] == "ana"
+    assert "201 characters" in caplog.text

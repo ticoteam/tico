@@ -164,6 +164,7 @@ class Stage2(unittest.TestCase):
                        "policy_file": pl.POLICY_FILE, "review_projects": rv.PROJECTS,
                        "audit": audit_log.AUDIT_PATH, "run": pl.RUN, "hub_get": pl.HUB_GET, "hub_post": pl.HUB_POST,
                        "server_get": pl.SERVER_GET, "owner_proof": access.OWNER_PROOF, "who": access.WHO_AM_I,
+                       "home": access.HOME,
                        "gmail": cli.open_gmail, "db": cli.open_db, "cal": cli.open_calendar,
                        "reviewer": os.environ.get("MAIL_REVIEWER"), "judge": os.environ.get("MAIL_DECISIONS")}
         access.PROJECTS = pl.PROJECTS = rv.PROJECTS = self.root
@@ -196,6 +197,7 @@ class Stage2(unittest.TestCase):
         pl.HUB_POST = self._saved["hub_post"]
         pl.SERVER_GET = self._saved["server_get"]
         access.OWNER_PROOF, access.WHO_AM_I = self._saved["owner_proof"], self._saved["who"]
+        access.HOME = self._saved["home"]
         access._ME.clear()
         rv.PROJECTS = self._saved["review_projects"]
         audit_log.AUDIT_PATH = self._saved["audit"]

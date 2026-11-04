@@ -444,7 +444,9 @@ the runner's own read (`GET /api/v2/connectors/mail/targets`), never from the ac
 bot's writes are refused ("Tico couldn't check the company's mail settings; try again") and its reads go on.
 `--as <owner handle>` holds every verb and skips these boxes, so it is only for a run Tico vouches for through
 `GET /api/v2/me`: a person's token in `HUB_TOKEN`, or the runner's own registration on the mail commands it runs. No
-token, a bot's token, `HUB_BOT` naming the owner, or a failed lookup is refused. Change calendar needs `calendar.events`.
+token, a bot's token, `HUB_BOT` naming the owner, or a failed lookup is refused. The lookup goes to the Tico server in the
+computer's runner registration (`runner.json`), never to one an environment variable names. Change calendar needs
+`calendar.events`.
 
 A box turned off takes effect on the next token: Connect Google asks Google only for what is ticked, each refresh leaves
 out a write turned off (the grant keeps it, so turning it back on needs no new sign-in), and Whole Workspace tokens are
@@ -454,6 +456,12 @@ authorized before them keeps minting its write scopes (Tico still holds each box
 Google access.**; redo step 2, then click Check. A box turned on that a person's grant lacks shows **Connect Google again** on their card. Both agent
 prompts say what Tico will ask Google for. Only an admin acting as themselves changes it: never a bot, BotOps or the
 Assistant.
+
+**What these settings enforce.** Where Google allows it, Tico narrows the token itself: Organize mail and Send mail both
+off gives read-only mail, and Change calendar off gives a read-only calendar. Otherwise Tico's mail tool enforces them,
+and the server refuses a calendar booking while Change calendar is off (one already queued fails rather than lands
+later). On a computer where bots run as the runner's own user (a Mac today), a bot that deliberately works around the
+tool is not stopped; each bot's **Mail sending** switch has the same limit.
 
 **Whole Workspace** lets Tico read the mailboxes of your Google Workspace through one service account. A Workspace admin does this once:
 

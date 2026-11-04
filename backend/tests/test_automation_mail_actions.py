@@ -338,7 +338,7 @@ def test_a_mail_action_that_cannot_read_what_tico_may_do_writes_nothing_and_is_r
     assert "INBOX" in computer.gmail.store["m1"]["labelIds"]
 
 
-def test_a_bot_cannot_run_a_mail_action_as_the_owner(api, computer, monkeypatch):
+def test_a_bot_cannot_run_a_mail_action_as_the_owner(api, computer, monkeypatch, tmp_path):
     """Only the runner's own registration or a person's token makes a run the owner: a bot's mail-action is refused
     before its stdin is read for anything."""
     automate(api, ARCHIVE)
@@ -346,6 +346,8 @@ def test_a_bot_cannot_run_a_mail_action_as_the_owner(api, computer, monkeypatch)
     action, = claim(api, computer.token)["actions"]
     monkeypatch.setattr(access, "OWNER_PROOF", None)
     monkeypatch.setattr(access, "WHO_AM_I", lambda url, token: {"actor": "bot:inbox", "role": "bot"})
+    monkeypatch.setattr(access, "HOME", str(tmp_path))
+    (tmp_path / "runner.json").write_text(json.dumps({"url": "http://localhost:8765", "token": "unused"}))
     monkeypatch.setenv("HUB_API_URL", "http://localhost:8765")
     monkeypatch.setenv("HUB_TOKEN", "bot-turn-token")
     access._ME.clear()
@@ -739,3 +741,21 @@ def test_reply_mode_with_the_send_switch_off_saves_a_draft(api, computer):
     assert computer.worker.mail_action_tick() == 1
     assert computer.gmail.sent == [] and len(computer.drafts()) == 1
     assert last_run(api, aid)["steps"][0]["outputs"]["actions"][0]["detail"] == "send_off"
+
+
+def test_change_calendar_off_refuses_a_booking_and_fails_what_was_queued_at_claim(api, computer):
+    """What Tico may do holds the calendar on the server too: no booking is queued while Change calendar is off, and one
+    queued before it went off fails at the claim instead of landing on the calendar later."""
+    booking = {"calendar": BOX, "title": "Planning", "start": "2099-01-01T09:00:00+00:00",
+               "end": "2099-01-01T09:30:00+00:00", "attendees": []}
+    queued = post(api, "calendar/appointments", booking)["action"]
+    r = api.put("/api/v2/google/permissions", json={"organize_mail": True, "send_mail": True, "change_calendar": False},
+                headers=headers())
+    assert r.status_code == 200, r.text
+    refused = api.post("/api/v2/calendar/appointments", json=booking, headers=headers())
+    assert refused.status_code == 403 and refused.json()["error"]["code"] == "company_off", refused.text
+    assert post(api, "connectors/calendar/actions/claim", {}, computer.token) == {"action": None}
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT status,error FROM calendar_actions WHERE id=?", (queued["id"],)).fetchone()
+        assert row["status"] == "failed" and "What Tico may do" in row["error"]
+        assert c.execute("SELECT count(*) FROM calendar_actions").fetchone()[0] == 1

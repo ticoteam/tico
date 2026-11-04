@@ -2469,6 +2469,13 @@ def cmd_connector_event(args):
     if end <= start or (end - start) > timedelta(days=7):
         raise Refused("The connector calendar action has an invalid interval.")
     ctx = Ctx(args, "schedule", mailbox=mailbox)
+    if access.owner_proof() == "runner":                # What Tico may do, as the runner reads it (cmd_mail_action)
+        ctx.read_company = pl.runner_company
+        # A claimed action is never retried, so an unread setting refuses it here (exit 2: nothing was created)
+        # rather than as a failure the runner must report as unknown.
+        if ctx.company() == pl.UNREAD:
+            raise Refused("Tico couldn't check the company's mail settings; try again",
+                          "Nothing was sent to Google. Schedule it again once Tico answers.")
     event_id = hashlib.sha256(str(request["id"]).encode()).hexdigest()[:32]
     event = ctx.calendar.create_hub_event(
         start, end, str(request["title"]).strip(), attendees, event_id,

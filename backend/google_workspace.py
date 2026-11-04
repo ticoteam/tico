@@ -17,6 +17,7 @@ import asyncio
 import collections
 import hashlib
 import json
+import logging
 import re
 import secrets
 import threading
@@ -407,7 +408,10 @@ PEOPLE_PATH = "/api/v2/google/people"
 PERMISSIONS_PATH = "/api/v2/google/permissions"
 PEOPLE_MAX = 500                # the team list's rows a page; `more` says when people were left out
 PAGE_BYTES = 256 * 1024         # and its bytes a page, as JSON, so long names cannot make one page huge
-CELL_MAX = 200                  # the characters of a row's name and of its mailbox
+CELL_MAX = 200                  # the characters of a row's name and of its mailbox; a longer person id is left out
+# A page's JSON around its rows, with `next` at its longest (CELL_MAX characters, each escaped as \uXXXX at worst), so
+# the whole answer stays inside PAGE_BYTES.
+ENVELOPE = len(json.dumps({"people": [], "more": True, "next": "\u0000" * CELL_MAX}).encode())
 KEY_KINDS = ("unauthorized_client", "other")   # a refusal about the key itself, not about one mailbox
 _BAD = []                       # epoch seconds of recent wrong codes
 _LOCKOUT = {"until": 0.0}
@@ -806,6 +810,11 @@ def team_statuses(c, after=""):
         mailbox = own.get(person["id"]) or str(person.get("email") or "").strip().lower()
         if not routines.MAILBOX.fullmatch(mailbox):
             continue
+        if len(str(person["id"])) > CELL_MAX:
+            # The id is the page cursor and is never cut, so a row with one this long stays off the list.
+            logging.getLogger("tico.google").warning("Team list: left out a person whose id is %d characters",
+                                                     len(str(person["id"])))
+            continue
         out.append((order[person["id"]], {
             "person_id": person["id"], "name": str(person.get("name") or person["id"])[:CELL_MAX],
             "mailbox": mailbox[:CELL_MAX],
@@ -816,14 +825,19 @@ def team_statuses(c, after=""):
         if after not in order:
             raise Problem("after", "That person is no longer on the roster; load the list again", 422)
         out = [pair for pair in out if pair[0] > order[after]]
-    # A page stops at PEOPLE_MAX rows or PAGE_BYTES of them, whichever comes first, and `next` is its last row.
-    page, size = [], 0
-    for _, person in out[:PEOPLE_MAX]:
-        size += len(json.dumps(person, ensure_ascii=False).encode()) + 1
-        if page and size > PAGE_BYTES:
+    # A page stops at PEOPLE_MAX rows or at PAGE_BYTES for the whole answer, whichever comes first, and `next` is its
+    # last row. A row that could never fit a page alone is left out, so every page holds at least one row.
+    page, size, more, budget = [], 0, False, PAGE_BYTES - ENVELOPE
+    for _, person in out:
+        cost = len(json.dumps(person, ensure_ascii=False).encode()) + 1
+        if cost > budget:
+            logging.getLogger("tico.google").warning("Team list: left out a row of %d bytes", cost)
+            continue
+        if len(page) == PEOPLE_MAX or size + cost > budget:
+            more = True
             break
         page.append(person)
-    more = len(out) > len(page)
+        size += cost
     return {"people": page, "more": more, "next": page[-1]["person_id"] if more else None}
 
 

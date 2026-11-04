@@ -14,7 +14,8 @@ Two things beyond the declared verbs, both deliberate and documented in docs/mai
   - `draft` and `send` are recorded here for stage 2; stage 1 never writes an outbound message.
 """
 
-import os
+import json, os, pwd
+from pathlib import Path
 
 from . import PROJECTS, Refused, bot_folders, declared_tools, hub_bot, load_yaml, manifest_file, owner_handle, repo_dir
 from .oauth import BROKER_AUTH_ENV, BROKER_URL_ENV
@@ -77,10 +78,40 @@ def employee(slug=None, env=None):
 
 
 PERSON_ROLES = ("human", "owner")
-# Who a token is (GET /api/v2/me), once per process and token. Tests replace WHO_AM_I, or OWNER_PROOF outright.
+# Who a token is (GET /api/v2/me), once per process and token. Tests replace WHO_AM_I, or OWNER_PROOF outright, and
+# HOME, the OS user's home where the runner registrations are.
 _ME = {}
 WHO_AM_I = None
 OWNER_PROOF = None
+HOME = None
+
+
+def runner_urls():
+    """The Tico server each runner registration of this OS user names (runner.json: Docker's at the home, the Mac's
+    and Linux's under ~/.config/tico, and one per company environment), which is where the runner and its credential
+    socket talk to. The home is the OS account's, not $HOME, so no environment variable picks the file."""
+    home = Path(HOME) if HOME else Path(pwd.getpwuid(os.getuid()).pw_dir)
+    found = []
+    for path in [home / "runner.json", home / ".config/tico/runner.json",
+                 *sorted((home / ".config/tico/environments").glob("*/runner.json"))]:
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        url = str(data.get("url") or "").strip().rstrip("/") if isinstance(data, dict) else ""
+        if url and url not in found:
+            found.append(url)
+    return found
+
+
+def _server(named):
+    """The server to ask who a token is: a runner registration's, never one a run names. `named` (HUB_API_URL or the
+    broker URL) only picks among several; with one registration it is that one, and with none nobody vouches."""
+    urls = runner_urls()
+    named = str(named or "").strip().rstrip("/")
+    if named in urls:
+        return named
+    return urls[0] if len(urls) == 1 else ""
 
 
 def _who(url, token):
@@ -100,17 +131,20 @@ def _who(url, token):
 
 def owner_proof(env=None):
     """Who vouches for `--as <owner handle>`: "person" when HUB_TOKEN is a person's, "runner" when this process holds
-    the runner's own registration (TICO_GOOGLE_BROKER_URL/AUTH, which runner_support/connectors.py gives the mail
-    commands it runs as the owner and never a bot's turn), else "". Tico answers it (GET /api/v2/me); no token, a
-    bot's token or a failed lookup is "", so the owner's exemptions never come from what a run can set itself."""
+    the runner's own registration (TICO_GOOGLE_BROKER_AUTH, which runner_support/connectors.py gives the mail
+    commands it runs as the owner and never a bot's turn), else "". The server a runner registration names answers it
+    (GET /api/v2/me, runner_urls): no token, a bot's token, a server the run names itself or a failed lookup is "",
+    so the owner's exemptions never come from what a run can set."""
     env = os.environ if env is None else env
     if OWNER_PROOF is not None:
         return OWNER_PROOF(env)
-    url, token = env.get("HUB_API_URL"), env.get("HUB_TOKEN")
-    if url and token:                                   # a run with a token is that token's, and nothing else
-        return "person" if _who(url, token).get("role") in PERSON_ROLES else ""
-    url, token = env.get(BROKER_URL_ENV), env.get(BROKER_AUTH_ENV)
-    if url and token and _who(url, token).get("role") == "runner":
+    token = env.get("HUB_TOKEN")
+    if token:                                           # a run with a token is that token's, and nothing else
+        url = _server(env.get("HUB_API_URL"))
+        return "person" if url and _who(url, token).get("role") in PERSON_ROLES else ""
+    token = env.get(BROKER_AUTH_ENV)
+    url = _server(env.get(BROKER_URL_ENV)) if token else ""
+    if url and _who(url, token).get("role") == "runner":
         return "runner"
     return ""
 

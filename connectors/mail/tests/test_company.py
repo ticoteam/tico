@@ -10,7 +10,7 @@ vouches for (access.owner_proof: a person's token, or the runner's own registrat
 come from what a bot's run can set.
 """
 
-import json, os, sys, types, unittest
+import io, json, os, sys, types, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -39,6 +39,7 @@ access:
     identity: "ana@acme.example"
     can: [read, schedule]
 """
+TICO, FAKE = "https://team.acme.example", "http://127.0.0.1:9"
 ALL_ON = {"company_organize": True, "company_send": True, "company_calendar": True}
 
 
@@ -141,6 +142,34 @@ class CompanyGates(Base):
         self.assertEqual(rc, 0, out + err)
         self.assertFalse(self.in_inbox())
 
+    def test_a_runner_s_calendar_action_reads_change_calendar_as_the_runner_and_an_unread_one_is_refused(self):
+        """connector-event runs as the owner, so What Tico may do comes from the runner's own registration
+        (connectors/mail/targets), as a mail action's does; nothing on its stdin decides it."""
+        access.OWNER_PROOF = lambda env: "runner"
+        action = json.dumps({"id": "ca-1", "calendar": BOX, "title": "Planning", "attendees": [],
+                             "start": "2026-09-22T09:00:00-07:00", "end": "2026-09-22T09:30:00-07:00",
+                             "company": ALL_ON})
+
+        def event(answer):
+            def get(path):
+                if isinstance(answer, Exception):
+                    raise answer
+                return answer
+            pl.RUNNER_GET = get
+            with mock.patch.object(sys, "stdin", io.StringIO(action)):
+                return self.run_cli("connector-event", "--as", access.OWNER, "--json")
+        self.addCleanup(setattr, pl, "RUNNER_GET", pl.RUNNER_GET)
+        off = {"organize_mail": True, "send_mail": True, "change_calendar": False}
+        for answer, says in (({"company": off}, "Create and change calendar events"),
+                             (OSError("Tico is unreachable"), "Tico couldn't check")):
+            rc, out, _ = event(answer)
+            self.assertEqual(rc, 2, out)            # exit 2: the runner reports it failed, not unknown
+            self.assertIn(says, out)
+            self.assertEqual(self.calendar.created_events, {})
+        rc, out, err = event({"company": dict(off, change_calendar=True)})
+        self.assertEqual(rc, 0, out + err)
+        self.assertEqual(len(self.calendar.created_events), 1)
+
     def test_a_computer_s_own_key_and_a_standalone_grant_are_held_to_it_too(self):
         """The real open_gmail: auth.gmail_service builds from this computer's own credential, which the server never
         narrowed, and the connector still refuses what the company turned off."""
@@ -186,16 +215,23 @@ class OnlyTicoVouchesForTheOwner(Base):
     def setUp(self):
         super().setUp()
         access.OWNER_PROOF = None                       # the real access.owner_proof, over a fake GET /api/v2/me
+        # This computer's runner registration names Tico; a run names a server of its own in HUB_API_URL.
+        home = self.root / "home"
+        (home / ".config/tico").mkdir(parents=True)
+        (home / ".config/tico/runner.json").write_text(json.dumps({"url": TICO + "/", "token": "runner-token"}))
+        access.HOME = home
         self.asked = []
-        self.me = {"person-token": {"actor": "human:ana", "role": "human"},
-                   "bot-token": {"actor": "bot:inbox", "role": "bot", "slug": "inbox"},
-                   "runner-token": {"actor": "runner:r1", "role": "runner"}}
+        me = {"person-token": {"actor": "human:ana", "role": "human"},
+              "bot-token": {"actor": "bot:inbox", "role": "bot", "slug": "inbox"},
+              "runner-token": {"actor": "runner:r1", "role": "runner"}}
 
         def who(url, token):
-            self.asked.append(token)
-            if token == "down-token":
+            self.asked.append((url, token))
+            if url == FAKE:                             # a server the run stood up: it says whatever the bot likes
+                return {"actor": "human:ana", "role": "human"}
+            if url != TICO or token == "down-token":
                 raise OSError("Tico is unreachable")
-            return self.me.get(token)
+            return me.get(token)
         access.WHO_AM_I = who
 
     def as_owner(self):
@@ -223,18 +259,31 @@ class OnlyTicoVouchesForTheOwner(Base):
 
     def test_a_bot_s_token_or_a_failed_lookup_is_not_the_owner(self):
         self.company(company_send=False)
-        os.environ["HUB_API_URL"] = "http://127.0.0.1:9"
+        os.environ["HUB_API_URL"] = TICO
         for token in ("bot-token", "down-token", "unknown-token"):
             os.environ["HUB_TOKEN"] = token
             self.assert_refused()
         # A bot's token beside the runner's registration is still the bot's.
-        os.environ.update({"HUB_TOKEN": "bot-token", oauth.BROKER_URL_ENV: "http://127.0.0.1:9",
-                           oauth.BROKER_AUTH_ENV: "runner-token"})
+        os.environ.update({"HUB_TOKEN": "bot-token", oauth.BROKER_URL_ENV: TICO, oauth.BROKER_AUTH_ENV: "runner-token"})
+        self.assert_refused()
+
+    def test_a_server_the_run_names_is_never_asked(self):
+        """HUB_API_URL at a server that says human: Tico, from the runner's registration, is asked instead."""
+        self.company(company_send=False)
+        os.environ.update(HUB_API_URL=FAKE, HUB_TOKEN="bot-token")
+        self.assert_refused()
+        os.environ.update({oauth.BROKER_URL_ENV: FAKE, oauth.BROKER_AUTH_ENV: "bot-token"})
+        os.environ.pop("HUB_TOKEN")
+        self.assert_refused()
+        self.assertNotIn(FAKE, {url for url, _ in self.asked})
+        # With no runner registration on this computer, nobody vouches.
+        (access.HOME / ".config/tico/runner.json").unlink()
+        os.environ.update(HUB_API_URL=TICO, HUB_TOKEN="person-token")
         self.assert_refused()
 
     def test_a_person_s_token_or_the_runner_s_registration_is_the_owner(self):
         self.company(company_send=False)
-        os.environ.update(HUB_API_URL="http://127.0.0.1:9", HUB_TOKEN="person-token")
+        os.environ.update(HUB_API_URL=FAKE, HUB_TOKEN="person-token")      # Tico is asked, whatever the run names
         access._ME.clear()
         self.assertEqual(access.employee(access.OWNER), access.OWNER)
         self.assertTrue(pl.switch(access.OWNER)["on"])
@@ -243,7 +292,7 @@ class OnlyTicoVouchesForTheOwner(Base):
         self.assertEqual(rc, 0, out + err)
         for name in ("HUB_API_URL", "HUB_TOKEN"):
             os.environ.pop(name)
-        os.environ.update({oauth.BROKER_URL_ENV: "http://127.0.0.1:9", oauth.BROKER_AUTH_ENV: "runner-token"})
+        os.environ.update({oauth.BROKER_URL_ENV: TICO, oauth.BROKER_AUTH_ENV: "runner-token"})
         access._ME.clear()
         self.assertEqual(access.owner_proof(), "runner")
         self.assertEqual(access.employee(access.OWNER), access.OWNER)
