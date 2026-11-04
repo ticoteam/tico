@@ -177,7 +177,7 @@ def _list(c, slug, at):
     cutoff = now - timedelta(hours=QUIET_HOURS)
     relist = now - timedelta(days=RELIST_DAYS)
     due, missed, quiet = [], [], []
-    rows = H._rows(c.execute("SELECT * FROM tasks WHERE owner_id=? AND status IN (" + _marks() + ") ORDER BY updated_at",
+    rows = H._rows(c.execute("SELECT * FROM " + H.TASKS + " tasks WHERE owner_id=? AND status IN (" + _marks() + ") ORDER BY updated_at",
                              (actor, *H.ACTIVE_STATUSES)))
     for row in rows:
         if not H.task_private_readable(c, actor, row) or TS.snoozed(row, at) or _running(c, slug, row):

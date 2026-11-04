@@ -392,6 +392,8 @@ def refusal(c, row, config, woken=False, result=False, *, message=None, suspect=
     that, while waits, the off switch and the task cap still do. `result`: the job is a subtask's result, which a
     Waiting task's open subtasks do not hold back (`waiting`). `suspect`: `maybe_waiting` over the caller's tasks; a
     task outside it is not asked `waiting` again."""
+    from . import task_holds
+    row = task_holds.with_holds(c, row)     # its holds, when the row came from plain `tasks`
     if row and row.get("blocked_since") and (row.get("blocked_kind") == "gate"
                                               or waiting(c, row, starting=True, result=result)):
         return "task_wait"

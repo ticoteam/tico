@@ -55,7 +55,7 @@ def show(c, auth, who, ref):
 def resolve(c, auth, who, ref):
     """(kind, row) for the one thing `ref` names that the caller may read; 404 when none does."""
     if len(ref) >= 8:
-        rows = [dict(r) for r in c.execute("SELECT * FROM tasks WHERE id=? OR id LIKE ? LIMIT 2", (ref, ref + "%"))]
+        rows = [dict(r) for r in c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE id=? OR id LIKE ? LIMIT 2", (ref, ref + "%"))]
         if len(rows) == 1:
             visible = auth.task_sql(c, who)
             if views._readable_task_ids(c, visible, [rows[0]["id"]]):
