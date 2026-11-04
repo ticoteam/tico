@@ -106,7 +106,7 @@ def test_a_quarantine_stopped_turn_with_a_named_merge_is_held_for_review(api, ti
     assert HELD in notice['body'] and 'runs again when the quarantine lifts' not in notice['body']
     aged(api, attempt['id'])
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
-    assert attempt['job_id'] in review(api) and 'merge pull request' in review(api)
+    assert attempt['job_id'] in review(api) and 'used Bash' in review(api)
     lift(api)
     ready(api, machine, ['ops'])
     assert claim(api, machine) is None
