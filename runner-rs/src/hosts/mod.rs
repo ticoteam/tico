@@ -419,17 +419,18 @@ pub fn command_program(command: &str) -> String {
 
 /// The script of a line that is only `sh`, `bash`, `zsh` or `dash`, one plain `-c` flag (`-c`, `-lc`, `-ec`) and one script word.
 fn shell_script(command: &str) -> Option<String> {
-    if !matches!(plain_program(command)?, "sh" | "bash" | "zsh" | "dash") {
-        return None;
-    }
-    match shell_words(command)?.as_slice() {
-        // Only flag groups whose every option takes no argument: `-o` would take the next word, and `--norc` is a long
-        // option whose next word is a file.
-        [_, flag, script] if matches!(flag.as_str(), "-c" | "-lc" | "-ic" | "-ec" | "-xc" | "-lic" | "-ilc") => {
-            Some(script.clone())
-        }
-        _ => None,
-    }
+    let words = shell_words(command)?;
+    let [shell, flag, script] = words.as_slice() else { return None };
+    // The line itself starts with the shell's plain path and a space, so no separator or redirection hides beside it.
+    let plain = shell.chars().all(|c| c.is_ascii_alphanumeric() || "._+/-".contains(c))
+        && command.trim_start().strip_prefix(shell.as_str()).is_some_and(|rest| rest.starts_with([' ', '\t']));
+    let name = shell.rsplit('/').next().unwrap_or(shell);
+    // Only flag groups whose every option takes no argument: `-o` would take the next word, and `--norc` is a long
+    // option whose next word is a file.
+    (plain
+        && matches!(name, "sh" | "bash" | "zsh" | "dash")
+        && matches!(flag.as_str(), "-c" | "-lc" | "-ic" | "-ec" | "-xc" | "-lic" | "-ilc"))
+    .then(|| script.clone())
 }
 
 /// The program a text plainly starts with: its first word after plain or plainly quoted assignments, when that word is a plain name or
@@ -1220,6 +1221,8 @@ mod tests {
         assert_eq!(command_program("bash --norc /tmp/customer-private.sh"), "bash");
         assert_eq!(command_program("bash -c-x 'customer-private'"), "bash");
         assert_eq!(command_program("bash -oc /tmp/customer-private.sh"), "bash");
+        assert_eq!(command_program("bash;<<\\'\n-c\n'customer-private\n'"), "bash");
+        assert_eq!(command_program("bash; -c /tmp/customer-private.json"), "bash");
     }
 
     #[test]
