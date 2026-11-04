@@ -454,10 +454,11 @@ def test_a_run_that_says_it_reports_tool_calls_resumes_plainly_when_it_called_no
     assert 'recorded no tool call' in claim(api, machine)['message']['body']
 
 
-def restarted_mid_turn(api, calls, *, reported=True, hop=False, restart=True):
+def restarted_mid_turn(api, calls, *, reported=True, hop=False, restart=True, stopped=False):
     """A Claude-style run that says it reports its tool calls, made `calls` ((name, parent) pairs) and was cut off:
     by a runner restart that reported it interrupted, or by a lapsed lease. `hop`: it then fell back to a host that
-    does not report its calls (`tool_events: false`, runner-rs execute.rs)."""
+    does not report its calls (`tool_events: false`, runner-rs execute.rs). `stopped`: the computer's clean stop
+    ("Runner stopped during execution") instead of a restart."""
     machine, message, attempt = setup_attempt(api)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'restarted'}, machine['token'])
     events = [{'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}}]
@@ -471,8 +472,10 @@ def restarted_mid_turn(api, calls, *, reported=True, hop=False, restart=True):
     events.append({'seq': len(events) + 1, 'kind': 'message', 'payload': {'text': 'Reading the notes.'}})
     post(api, f"attempts/{attempt['id']}/events", {'events': events}, machine['token'])
     if reported:
+        text = ('Runner stopped during execution' if stopped else 'Runner restarted during execution' if restart
+                else 'Execution interrupted')
         post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': len(events),
-             'text': 'Runner restarted during execution' if restart else 'Execution interrupted'}, machine['token'])
+             'text': text}, machine['token'])
     else:
         expire(api, attempt['id'])
         assert claim(api, machine) is None
@@ -2256,3 +2259,41 @@ def test_saved_resume_applies_when_main_lane_frees(api, monkeypatch):
     with api.app.state.store.read() as c:
         saved = dict(c.execute("SELECT * FROM job_recovery WHERE job_id=?", (attempt['job_id'],)).fetchone())
     assert saved['decision'] == 'resume'
+
+
+def test_a_clean_stop_that_used_bash_resumes_at_once_as_a_restart_does(api):
+    """The computer stopped the turn itself and said so, which is what a restart reports (`restart_reported`): a run
+    that used a shell resumes on the next sweep, with its note and its provider session, not held for review."""
+    add_recovery_reviewer(api)
+    machine, message, attempt = restarted_mid_turn(api, [('Bash', None)], stopped=True)
+    assert [d['state'] for d in sweep(api)] == ['queued']
+    ready(api, machine, ['ops'])
+    resumed = claim(api, machine)
+    assert resumed['job_id'] == attempt['job_id']
+    assert resumed['recovery'] == {'resume_session': True}
+    assert 'Check what already happened first' in resumed['message']['body']
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:botops'").fetchone()
+
+
+def test_a_clean_stop_with_a_named_merge_is_still_held(api):
+    add_recovery_reviewer(api)
+    machine, message, attempt = restarted_mid_turn(api, [('Bash', None)], stopped=True)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempt_events SET payload=json_set(payload,'$.summary',?) "
+                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload,'$.status')='started'",
+                  ('gh pr merge 42 --squash', attempt['id']))
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    review = get(api, 'bots/ops/execution-review')['jobs'][0]
+    assert 'merge pull request' in review['reason']
+
+
+def test_a_clean_stop_run_that_consumed_an_approval_is_still_held(api):
+    from backend.store import H
+    add_recovery_reviewer(api)
+    machine, message, attempt = restarted_mid_turn(api, [('Read', None)], stopped=True)
+    with api.app.state.store.transaction() as c:
+        started = c.execute("SELECT started_at FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
+        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by_id,created_at,consumed_at) VALUES(?,?,?,?,?,?)",
+                  (H.new_id(), 'spend', message['id'], 'bot:ops', started, started))
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'

@@ -11,6 +11,9 @@ STALL_MINUTES = 5
 # The runner enforces the limit itself, but a frozen computer cannot, so the server must not wait for it.
 MAX_RUN_MINUTES, MAX_RUN_GRACE_MINUTES = 60, 5
 CAP_EVENT = 'attempt.max-run-cap'
+# What a computer reports when it stopped the turn itself: a restart of the computer, or its clean stop. Both are the
+# computer's own report, so they relax generic tool uncertainty alike (execution.restart_reported); a lost lease is not.
+RUNNER_STOPS = ('Runner restarted during execution', 'Runner stopped during execution')
 TAIL_BYTES = 64 * 1024
 TAIL_LINES = 200
 # Defense in depth after the runner's literal/encoded granted-secret redactor.
@@ -69,8 +72,8 @@ def reason(c, row: AttemptRow, outcome, summary=''):
             return scrub(json.loads(capped[0]).get('reason') or 'Ended by the server')[:500]
         return 'Computer lost or heartbeat stopped (attempt lease expired)'
     result = json.loads(row['result'] or '{}')
-    if result.get('text') == 'Runner restarted during execution':
-        return 'Runner restarted during execution'
+    if result.get('text') in RUNNER_STOPS:
+        return result['text']
     # The newest terminal cause wins over a primary model that failed before a fallback succeeded.
     events = c.execute("SELECT kind,payload FROM attempt_events WHERE attempt_id=? "
                         "AND kind IN ('error','diagnostic') ORDER BY seq DESC LIMIT 50", (row['id'],)).fetchall()
