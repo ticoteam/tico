@@ -247,3 +247,26 @@ def test_a_bot_dms_count_takes_its_sub_threads(api):
         sub = threads.create(c, "bot:finance", parent_message_id=parent["id"])["id"]
     say(api, sub, "Ana, one more line.", actor="bot:finance", to_actor="human:ana")      # addressed to her: unread
     assert get(api, "threads", token="ana-test")["bot_dms"] == {"bot:finance": 1}
+
+
+def test_the_thread_items_take_the_same_statements_however_many_threads_name_the_person(api, monkeypatch):
+    # Each item's message, thread and membership are read together: one read each an item made Needs you and Home take
+    # ~2,300 statements for a person named in a thousand open threads.
+    from backend.tests.test_health_queries import counted
+
+    def mention_in(n):
+        for k in range(n):
+            say(api, members_thread(api, members=("human:ana", "human:ben"), title=f"Plan {k}"), f"Can you check {k}?",
+                to_actor="human:ana")
+
+    mention_in(2)
+    few_body, few = counted(api, monkeypatch, "/api/v2/needs-you")
+    mention_in(20)
+    many_body, many = counted(api, monkeypatch, "/api/v2/needs-you")
+    assert len([i for i in many_body["items"] if i["kind"] == "thread_mention"]) == \
+        len([i for i in few_body["items"] if i["kind"] == "thread_mention"]) + 20
+    assert many - few <= 2, (few, many)
+    _, sidebar_few = counted(api, monkeypatch, "/api/v2/threads?limit=50")
+    mention_in(10)
+    _, sidebar_many = counted(api, monkeypatch, "/api/v2/threads?limit=50")
+    assert sidebar_many - sidebar_few <= 2, (sidebar_few, sidebar_many)
