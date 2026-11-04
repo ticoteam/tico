@@ -23,9 +23,14 @@ body. The page lists them grouped by folder.
 - **First visit.** While Docs holds nothing a person wrote or linked, the Librarian asks "Where are your docs?" above
   the list: links become sources at once and it reads them and builds the map of the docs. **Skip for now** is yours
   alone; **Set up with the Librarian…** in the `...` menu asks again ([librarian.md](librarian.md#first-run-setup)).
-- **Import** a file from the `...` menu: `.md`, `.markdown`, `.txt`, `.html`, `.docx` or `.pdf`, up to 20 MB. It becomes
-  a Markdown doc (headings, lists, links, bold and italic, and tables are kept; a PDF gives its text, and a scan with no
-  text is refused). The title is the first `#` heading, else the file name.
+- **Import** a file from **More** (the `…` button), then **Import a file…**: `.md`, `.markdown`, `.txt`, `.html`, `.docx`
+  or `.pdf`, up to 20 MB. It becomes a Markdown doc (headings, lists, links, bold and italic, and tables are kept; a PDF
+  gives its text, and a scan with no text is refused). The title is the first `#` heading, else the file name.
+  Each conversion gets 30 seconds and 1 GB of memory, and a server converts two files at a time. If a file goes over
+  either limit, the import stops. If two other imports are running, the import does not start. The dialog says why:
+  "That file took too long to convert. Split it into smaller files and try again.", "That file is too large to convert
+  on this server. Split it into smaller files and try again." or "Imports are busy right now. Try again in a minute."
+  A stopped or refused import saves nothing. The dialog stays open, so you can try again or choose another file.
 - **Every change is a version.** **History** lists them (who, when, the note; "by Ops" for a bot), shows any old
   version, and **Restore** saves it as a new version. Nothing is rewritten or lost.
 - **Editing together.** Saving sends the version you opened. If someone (or a bot) saved first you get "Ben saved

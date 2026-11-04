@@ -377,9 +377,11 @@ request may succeed later. Some carry one extra fact beside them (a `sign_in` pa
 | 413 | `too_large` | Over 2 MB (uploads 20 MB). |
 | 422 | `idempotency_key` | A write without an `Idempotency-Key`. |
 | 422 | `lint`, `date`, `hierarchy`... | A rule of the product refused the request. `detail` says what to change. |
+| 422 | `import_failed` | A file import refused the file. `detail` says why, for example that it took too long, is too large to convert, or has over a million characters. Nothing is saved. |
 | 429 | `cap`, `budget` | A daily allowance is used. |
 | 503 | `busy` | The database was busy. Wait for `Retry-After` seconds and retry with the same `Idempotency-Key`. |
 | 503 | `storage_unavailable` | Try again shortly (`retryable: true`); back off. |
+| 503 | `imports_busy` | Two file imports are running on this server. Try again in a minute (`retryable: true`). Nothing is saved. |
 
 Request validation (a missing field, a wrong type or an unknown field) uses the same envelope:
 `{"error": {"code": "validation", "detail": "body.text: Field required", "retryable": false}}` with status `422`.
@@ -395,6 +397,8 @@ scheme, host and port exactly, and has no trailing slash).
 Tico applies **no request-rate limit** to the API: it will answer as fast as it can. The limits that exist:
 
 - Bodies: 2 MB for writes; 20 MB for uploads (`/api/v2/uploads/...`) and meeting imports (`413 too_large`).
+- File imports (`POST /api/v2/docs/import`): two conversions run at once per server. A third gets `503 imports_busy`, and
+  each conversion stops after 30 seconds (`422 import_failed`).
 - A few actions have a daily allowance (tool notes, the server's decisions) and answer `429` when it is used; the
   `detail` says which.
 - Live events: an open `/api/v2/events` costs nothing while nothing changes, and one read per burst of changes; keep
