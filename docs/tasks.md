@@ -435,19 +435,20 @@ Anything the filter can't judge (no model, the spend or daily cap, an error, no 
 its threshold) reaches you as before. Each call is a `judge.call` row that never holds the item's text, and Decide's
 readout counts the outcomes and what people let through.
 
-**Settings → Tasks → What bots may put on you** sets Off, Rehearsal or On, the budget, the chores budget and up to
+**Settings → Tasks → What bots may put on you** sets Off or On, the budget, the chores budget and up to
 ten lines of what you want to be asked about; an owner or admin sets the team default everyone starts from, and
 **Use the team default** goes back to it. A change applies to the next item; nothing already on a plate moves. It
-ships as **Rehearsal**: nothing changes, and **Filtered for you**, a folded line at the foot of Needs you, lists what
-On would have done. With it On, the same line lists what was kept off today, and **Let it through** puts an item on
-your plate in one click and tells the bot once. **Replay a day** on the settings card judges one past day's bot
+ships as **On**. **Filtered for you**, a folded line at the foot of Needs you, lists what was kept off today, and
+**Let it through** puts an item on your plate in one click and tells the bot once. A Rehearsal saved before this
+change reads as On. **Replay a day** on the settings card judges one past day's bot
 items with your settings and your plate as it was then, so you can see what On would have done before you turn it
 on; nothing moves. A replay counts no chores already waiting (none were grouped before the filter), so it never shows
 "chores full". A bot handing its own task to you (one or many) is judged like a task filed for you, and each item is
 judged against your plate as it was just before it. An owner or admin replaying someone else's day sees only the
 titles they may read.
 
-API: `GET`/`PUT`/`DELETE /api/v2/ask-ingest/settings`, `GET /api/v2/ask-ingest/filtered?hours=24`,
+API: `GET`/`PUT`/`DELETE /api/v2/ask-ingest/settings` (`mode` is `off` or `on`; a `rehearsal` sent is saved as `on`),
+`GET /api/v2/ask-ingest/filtered?hours=24`,
 `POST /api/v2/ask-ingest/items/{id}/let-through`, `POST /api/v2/ask-ingest/replay` (`person`, `date`, `offset`, a page
 of up to 25; the person, or an owner or admin).
 
