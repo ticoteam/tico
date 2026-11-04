@@ -1,6 +1,7 @@
 """Each step type in the executor (backend/automation_engine.py) with fake services: filter, decide, llm, find,
 bot_turn and action; on/off per step, the spend cap, batch times, and how a run's status comes out."""
 from backend import automation_engine as E
+from backend import automation_flow as F
 from backend.tests.automation_fakes import Services
 
 MESSAGE = {"message": {"from": "news@acme.example", "subject": "Weekly digest"}}
@@ -107,14 +108,22 @@ def test_decide_sends_the_sets_state_fields_of_the_mail_and_never_its_body():
     fields = J.load_set("mail-triage")["state"]
     services.fields["mail-triage@1"] = fields
     mail = {"message": {"source": "mail", "mailbox": "ana@acme.example", "id": "m1", "from": "billing@acme.example",
-                        "from_name": "Billing", "to": ["ana@acme.example"], "subject": "Invoice", "snippet": "Pay " * 200,
-                        "body": "SECRET body text", "labels": ["INBOX"], "list_id": "<news.acme.example>",
-                        "internal": True, "date": "2026-10-28"}}
+                        "from_name": "Billing", "from_domain": "acme.example", "to": ["ana@acme.example"],
+                        "subject": "Invoice", "snippet": "Pay " * 200, "body": "SECRET body text",
+                        "labels": ["INBOX", "CATEGORY_UPDATES"], "category": "updates", "list_id": "<news.acme.example>",
+                        "internal": True, "known_sender": False, "date": "2026-10-28"}}
     E.execute(flow({"id": "d", "type": "decide", "set": "mail-triage@1", "out": "d1"}), mail, services)
     sent = services.judged[0]["values"]
-    assert list(sent) == fields and len(sent) == 13
+    assert list(sent) == fields and len(sent) == 16
     assert "SECRET" not in str(sent) and sent["list_id"] is True and sent["is_internal"] is True
     assert sent["from_name"] == "Billing" and len(sent["snippet"]) == 400 and sent["mailbox"] == "ana@acme.example"
+    assert sent["from_domain"] == "acme.example" and sent["category"] == "updates" and sent["known_sender"] is False
+
+
+def test_mail_state_says_unknown_for_a_sender_an_older_computer_did_not_judge():
+    """A computer that predates known_sender sends none: the judge gets null, never a false that reads as a new sender."""
+    assert F.mail_state({"from": "x@acme.example"})["known_sender"] is None
+    assert F.mail_state({"from": "x@acme.example"})["category"] == ""
 
 
 def test_a_judge_failure_fails_the_step_and_the_run():
