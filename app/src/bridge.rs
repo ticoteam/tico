@@ -172,21 +172,68 @@ pub(crate) fn bridge(app: App, webview: Webview, name: String, body: Option<Valu
     Ok(bridge_reply(&name, org_count(&app)))
 }
 
+/// The page dialogs open now. A switch (and a removal) waits until none is: the page that asked keeps the screen
+/// until its dialog is answered, so a dialog never shows over another org.
+pub(crate) static DIALOGS: DialogGate = DialogGate::new();
+
+pub(crate) struct DialogGate {
+    open: std::sync::Mutex<usize>,
+    answered: std::sync::Condvar,
+}
+
+/// One open dialog; it counts as answered when dropped.
+pub(crate) struct OpenDialog(&'static DialogGate);
+
+impl DialogGate {
+    const fn new() -> Self {
+        DialogGate { open: std::sync::Mutex::new(0), answered: std::sync::Condvar::new() }
+    }
+
+    pub(crate) fn opened(&'static self) -> OpenDialog {
+        *self.open.lock().unwrap() += 1;
+        OpenDialog(self)
+    }
+
+    /// Waits until every open dialog is answered.
+    pub(crate) fn wait_closed(&self) {
+        let mut open = self.open.lock().unwrap();
+        while *open > 0 {
+            open = self.answered.wait(open).unwrap();
+        }
+    }
+}
+
+impl Drop for OpenDialog {
+    fn drop(&mut self) {
+        let mut open = self.0.open.lock().unwrap();
+        *open = open.saturating_sub(1);
+        self.0.answered.notify_all();
+    }
+}
+
 /// The page's `alert` (`confirm` false) or `confirm`: a dialog over the main window, for the open org's page while
 /// it is on screen only, so a page built hidden for a prefetch never puts one over another org. Answers whether OK
-/// was chosen. Async, so it waits off the main thread, as the dialog plugin's own command does.
+/// was chosen. The check and the dialog's opening happen under `changing`, which a switch holds: a switch under way
+/// finishes first (and the page, no longer on screen, is refused), and a switch after it waits for the answer
+/// (`DIALOGS`). Async, so it waits off the main thread, as the dialog plugin's own command does.
 #[tauri::command]
 pub(crate) async fn page_dialog(app: App, webview: Webview, confirm: bool, message: String) -> Result<bool, String> {
-    let shown = org_of(webview.label()).is_some_and(|id| crate::windows::page_on_screen(&app, id));
-    if !shown || !from_server(&app, &webview) {
-        return Err("Only the page on screen may show a dialog.".into());
-    }
+    let open = {
+        let state = app.state::<AppState>();
+        let _changing = state.changing.lock().unwrap();
+        let shown = org_of(webview.label()).is_some_and(|id| crate::windows::page_on_screen(&app, id));
+        (shown && from_server(&app, &webview)).then(|| DIALOGS.opened())
+    };
+    let Some(open) = open else { return Err("Only the page on screen may show a dialog.".into()) };
     let mut dialog = app.dialog().message(message).parent(&webview.window());
     if confirm {
         dialog = dialog.buttons(MessageDialogButtons::OkCancel);
     }
     let (answer, answered) = tokio::sync::oneshot::channel();
-    dialog.show_with_result(move |result| { let _ = answer.send(result); });
+    dialog.show_with_result(move |result| {
+        drop(open);
+        let _ = answer.send(result);
+    });
     Ok(confirm && matches!(answered.await, Ok(MessageDialogResult::Ok)))
 }
 
@@ -409,6 +456,20 @@ mod visual_bridge_tests {
             assert_eq!(script.contains("'multiOrg'"), several);
         }
         assert!(BRIDGE_SCRIPT.contains("'orgInfo'"));
+    }
+
+    #[test]
+    fn a_switch_waits_until_every_open_dialog_is_answered() {
+        static GATE: DialogGate = DialogGate::new();
+        GATE.wait_closed();
+        let (first, second) = (GATE.opened(), GATE.opened());
+        let (done, finished) = std::sync::mpsc::channel();
+        let switch = std::thread::spawn(move || { GATE.wait_closed(); done.send(()).unwrap(); });
+        drop(first);
+        assert!(finished.recv_timeout(std::time::Duration::from_millis(200)).is_err(), "one dialog is still open");
+        drop(second);
+        finished.recv_timeout(std::time::Duration::from_secs(5)).expect("the switch goes on once both are answered");
+        switch.join().unwrap();
     }
 
     #[test]

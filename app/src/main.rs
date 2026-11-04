@@ -384,9 +384,14 @@ fn ask_remove(app: &App, org: &Org) {
 /// Removes an org: its windows and page close, its data store is deleted, and the list is saved. Removing the open
 /// org opens the first one left, or the setup window when none is left.
 async fn remove_org(app: &App, id: &str) {
+    // A session being renewed into the org's store finishes first (see signin::RENEWING); one that starts after this
+    // finds the org gone.
+    let renewing = signin::RENEWING.lock().await;
     let (removed, was_open) = {
         let state = app.state::<AppState>();
         let _changing = state.changing.lock().unwrap();
+        // A dialog the org's page has open is answered first.
+        bridge::DIALOGS.wait_closed();
         let (removed, was_open) = {
             let mut list = state.orgs.lock().unwrap();
             let was_open = list.active().is_some_and(|org| org.id == id);
@@ -416,6 +421,7 @@ async fn remove_org(app: &App, id: &str) {
         // sign-in goes too. Every other org has a store of its own, so nothing of theirs is in it.
         None => if let Err(e) = clear_store(app, &removed) { log::warn!("could not clear the default data store: {e}"); },
     }
+    drop(renewing);
     // The next org opens (and the rail drops the removed one) before the store is deleted, which can take seconds.
     if was_open {
         match active_org(app) {

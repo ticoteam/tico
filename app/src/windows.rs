@@ -321,9 +321,10 @@ pub(crate) fn first_page(usual: url::Url, hub: &url::Url, sign_in: bool) -> url:
 }
 
 /// Opens an org's page as a child of the main window, on the org's own data store (macOS 14+). A page built for a
-/// prefetch (`on_screen` false) loads hidden, off to the side, until a switch shows it.
-fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<()> {
-    let (Some(window), Some(home)) = (main_window(app), Home::of(org)) else { return Ok(()) };
+/// prefetch (`on_screen` false) loads hidden, off to the side, until a switch shows it. Answers whether the page
+/// started on the hub's sign-in.
+fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<bool> {
+    let (Some(window), Some(home)) = (main_window(app), Home::of(org)) else { return Ok(false) };
     let label = new_page_label(&home.id);
     grant(app, server_capability(&home.hub, &home.id))?;
     timing::mark(app, &home.id, "granted");
@@ -367,7 +368,7 @@ fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<()> 
     if let Some(store) = home.store {
         crate::signin::release_store(app, store);
     }
-    Ok(())
+    Ok(sign_in)
 }
 
 /// Adds an org's capability, once a run: one per org however many pages it opens.
@@ -421,6 +422,8 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
     timing::begin(app, id);
     let state = app.state::<AppState>();
     let _changing = state.changing.lock().unwrap();
+    // A dialog the open page has up is answered before its page goes (see bridge::page_dialog).
+    crate::bridge::DIALOGS.wait_closed();
     timing::mark(app, id, "lock");
     let (org, was_open, previous) = {
         let orgs = state.orgs.lock().unwrap();
@@ -459,7 +462,10 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
         layout_page(app, page);
         let _ = page.show();
         let _ = page.set_focus();
-        state.orgs.lock().unwrap().take_sign_in(id);
+        // The flag is used up only by a page that went to the hub's sign-in with it: a prefetch built on it.
+        if state.prefetch.lock().unwrap().started_on_sign_in(id) {
+            state.orgs.lock().unwrap().take_sign_in(id);
+        }
     } else if let Err(e) = open_org_webview(app, &org, true) {
         log::warn!("could not open an org's page, so the open org stays: {e}");
         return Err(e);
@@ -531,6 +537,8 @@ fn select_org(state: &AppState, config: Config, built: bool) {
 #[derive(Default)]
 pub(crate) struct Prefetch {
     pub(crate) org: Option<String>,
+    // Whether that org's page started on the hub's sign-in (its `sign_in` flag, which a prefetch leaves set).
+    on_sign_in: bool,
     // Moves on at every rest, leave and switch: a build or a close waiting for its turn goes ahead only if nothing
     // came in meanwhile.
     serial: u64,
@@ -552,7 +560,23 @@ impl Prefetch {
     /// build), otherwise the org whose prefetched page this one replaces. Checked and recorded in one step, so a
     /// leave from here on finds the org recorded and schedules the page's close (`left`).
     pub(crate) fn claim(&mut self, ticket: u64, id: &str) -> Option<Option<String>> {
-        self.is_latest(ticket).then(|| self.org.replace(id.to_string()))
+        if !self.is_latest(ticket) {
+            return None;
+        }
+        self.on_sign_in = false;
+        Some(self.org.replace(id.to_string()))
+    }
+
+    /// `id`'s prefetched page was built: on the hub's sign-in or not.
+    pub(crate) fn built(&mut self, id: &str, on_sign_in: bool) {
+        if self.org.as_deref() == Some(id) {
+            self.on_sign_in = on_sign_in;
+        }
+    }
+
+    /// Whether `id` is the prefetch and its page started on the hub's sign-in.
+    pub(crate) fn started_on_sign_in(&self, id: &str) -> bool {
+        self.org.as_deref() == Some(id) && self.on_sign_in
     }
 
     /// The pointer left: a rest still waiting to build is called off, and a page already built gets the ticket for its
@@ -568,6 +592,7 @@ impl Prefetch {
             return false;
         }
         self.org = None;
+        self.on_sign_in = false;
         self.serial += 1;
         true
     }
@@ -585,15 +610,14 @@ pub(crate) fn prefetch(app: &App, id: &str) -> tauri::Result<()> {
     let _changing = state.changing.lock().unwrap();
     let org = {
         let list = state.orgs.lock().unwrap();
-        if list.active().is_some_and(|org| org.id == id) {
-            return Ok(());
-        }
-        list.get(id).cloned()
+        list.get(id).filter(|_| list.active().map(|open| open.id.as_str()) != Some(id)).cloned()
     };
-    let Some(org) = org else { return Ok(()) };
-    if main_window(app).is_none() {
+    let Some(org) = org.filter(|_| main_window(app).is_some()) else {
+        // Nothing to build (a rest on the open org, say). The rest still called off the close of the page built for
+        // another org, so for that page it counts as a leave: its close is scheduled again.
+        leave(app);
         return Ok(());
-    }
+    };
     let built = org_page(app, id).is_some();
     let replaced = {
         let mut prefetch = state.prefetch.lock().unwrap();
@@ -613,14 +637,15 @@ pub(crate) fn prefetch(app: &App, id: &str) -> tauri::Result<()> {
     }
     timing::hover(app, id);
     let opened = open_org_webview(app, &org, false);
-    if opened.is_err() {
+    let mut prefetch = state.prefetch.lock().unwrap();
+    match opened {
+        Ok(on_sign_in) => prefetch.built(id, on_sign_in),
         // No page to wait for its click.
-        let mut prefetch = state.prefetch.lock().unwrap();
-        if prefetch.org.as_deref() == Some(id) {
+        Err(_) => if prefetch.org.as_deref() == Some(id) {
             prefetch.org = None;
-        }
+        },
     }
-    opened
+    opened.map(|_| ())
 }
 
 /// The pointer left the org it rested on: its prefetched page closes unless a click (or another rest on it) comes
@@ -669,17 +694,16 @@ pub(crate) fn forget_page(app: &App, id: &str) {
     }
 }
 
-/// Loads org `id`'s open page again after Tico sign-in renewed its session: on the hub's sign-in when the org has
-/// one, so it goes straight in, otherwise on its usual first page.
-pub(crate) fn renew_page(app: &App, id: &str) {
+/// Loads org `id`'s open page again after Tico sign-in renewed its session: on the hub's sign-in when the server
+/// has one (`login`, decided when the session was renewed), so it goes straight in, otherwise on its usual first page.
+/// Going to the sign-in uses up the org's flag.
+pub(crate) fn renew_page(app: &App, id: &str, login: bool) {
     let Some(page) = org_page(app, id) else { return };
-    let (org, sign_in) = {
-        let state = app.state::<AppState>();
-        let mut list = state.orgs.lock().unwrap();
-        (list.get(id).cloned(), list.take_sign_in(id))
-    };
+    let org = app.state::<AppState>().orgs.lock().unwrap().get(id).cloned();
     let Some(home) = org.as_ref().and_then(Home::of) else { return };
-    let _ = page.navigate(first_page(Config::new(home.hub.clone()).start_url(), &home.hub, sign_in));
+    if page.navigate(first_page(Config::new(home.hub.clone()).start_url(), &home.hub, login)).is_ok() && login {
+        app.state::<AppState>().orgs.lock().unwrap().take_sign_in(id);
+    }
 }
 
 /// Whether the main window is waiting for its first org page to paint before it shows.
@@ -777,6 +801,38 @@ mod page_tests {
         assert!(newer_click(&mut last, 3));
         assert!(!newer_click(&mut last, 2), "B ran after the later A: it does nothing");
         assert!(newer_click(&mut last, 4));
+    }
+
+    #[test]
+    fn a_rest_on_the_open_org_counts_as_a_leave_for_the_prefetched_page() {
+        // A open; rest on B (built), leave B, rest on A. The rest on A calls off B's close, so `prefetch` treats it
+        // as a leave, which schedules B's close again.
+        let mut prefetch = Prefetch::default();
+        let rest = prefetch.rest();
+        prefetch.claim(rest, "b").unwrap();
+        let close = prefetch.left().unwrap();
+        prefetch.rest();
+        assert!(!prefetch.is_latest(close));
+        let close = prefetch.left().expect("B still gets a close");
+        assert!(prefetch.is_latest(close));
+        assert_eq!(prefetch.org.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn only_a_prefetch_built_on_the_hub_sign_in_uses_up_the_flag_when_shown() {
+        let mut prefetch = Prefetch::default();
+        let rest = prefetch.rest();
+        prefetch.claim(rest, "b").unwrap();
+        assert!(!prefetch.started_on_sign_in("b"), "not built yet");
+        prefetch.built("b", true);
+        assert!(prefetch.started_on_sign_in("b") && !prefetch.started_on_sign_in("c"));
+        prefetch.built("c", false);
+        assert!(prefetch.started_on_sign_in("b"), "another org's build changes nothing");
+        let rest = prefetch.rest();
+        prefetch.claim(rest, "b").unwrap();
+        assert!(!prefetch.started_on_sign_in("b"), "a new claim starts over");
+        prefetch.built("b", true);
+        assert!(prefetch.take("b") && !prefetch.started_on_sign_in("b"));
     }
 
     #[test]
