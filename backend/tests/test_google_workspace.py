@@ -141,7 +141,7 @@ def test_the_key_is_sealed_at_rest_and_never_comes_back_in_a_view(api, private):
         opened = json.loads(W._cipher().unseal(c, "google-workspace:" + row["id"], row["key_sealed"]))
         with pytest.raises(Exception):
             W._cipher().unseal(c, "google-workspace:someone-else", row["key_sealed"])
-    assert opened["private_key"] == private and opened["client_email"] == SA
+    assert opened["private_key"] == private.strip() and opened["client_email"] == SA   # fields are stripped
     text = json.dumps(google_view(api))
     assert private not in text and "key_sealed" not in text and "private_key" not in text
 
@@ -469,8 +469,8 @@ def test_a_cloud_computer_publishes_the_workspace_mailboxes_its_bots_run_on(api,
         H.sync_registry(c, {"inbox-cara": {"name": "inbox-cara", "runtime": "fake", "status": "active"}},
                         {"people": []})
         for runner_id in ("cloud-1", "box-2"):
-            c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES(?,?,'ana','h',?)",
-                      (runner_id, runner_id, H.now()))
+            c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES(?,?,'ana',?,?)",
+                      (runner_id, runner_id, "h-" + runner_id, H.now()))
         c.execute("INSERT INTO assignments VALUES('inbox-cara','cloud-1',1,?,'human:ana')", (H.now(),))
     connected(api, private)
     personal(api, "cara", "cara@acme.example", holder="cloud-1", grant="g1")
@@ -570,7 +570,9 @@ def test_me_is_null_without_a_roster_or_for_someone_not_acting_as_themselves(api
     store = api.app.state.store
     monkeypatch.setitem(store.settings.test_identities, "ana-via-test",
                         Identity("human:ana", "owner", "ana@acme.example", via="assistant"))
-    no_roster = google_view(api, "cara-test")
+    monkeypatch.setitem(store.settings.test_identities, "zed-test",
+                        Identity("human:zed", "human", "zed@acme.example"))   # not on the roster
+    no_roster = google_view(api, "zed-test")
     assert no_roster["me"] is None and no_roster["can_admin"] is False
     assert google_view(api, "ana-via-test")["me"] is None        # the Assistant acting for her is not her
     assert google_view(api, "ana-test")["can_admin"] is True
