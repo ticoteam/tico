@@ -34,7 +34,12 @@ The dot is cheap by rule: it moves by transform and opacity only, so nothing lay
 the screen moves at a time and the rest hold still; it pauses off screen and in a background tab, where no timer is
 left running; and with reduced motion it holds still and says what it is doing in a word. `ui/tests/dot-perf.cjs`
 holds it to budgets in Chrome: 10 s idle with no layout, at most 4 style recalcs per idle swap and under 150 ms of work; with the
-CPU slowed 4x, opening, a reply and closing keep frame gaps at p95 20 ms and max 50 ms with no long task over 50 ms.
+CPU slowed 4x, opening, a reply and closing keep renderer work per frame at p95 20 ms and max 50 ms, with no task over
+50 ms. Each action records at least 30 frames. Chrome's thread CPU clock measures the work, charged at 4x because
+throttling suspends the thread; it includes script, style, layout and paint. Wall frame gaps and long tasks remain in
+the report, but do not gate a shared CI runner: time when another browser gets the CPU is not work done by Ask.
+The work budgets do not increase with runner load. Readiness events, rendered frames and finished animations bound
+the measurements; the 10 s idle window is an observation period.
 Opening and closing change no `hidden` attribute anywhere and add nothing to the page, which the same test checks: on
 a real hub either restyles the whole page (30-50 ms before the flight could start). So the closed panel keeps its box
 but draws nothing (a class, not `hidden`), and the dot's flying copy is made once, in a layer of its own, and reused.

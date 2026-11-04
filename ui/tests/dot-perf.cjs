@@ -4,8 +4,9 @@
 //   the dot, and every running animation on a dot moves transform or opacity only, on one dot at most.
 // - Each idle variant swapped in by hand: no layout and no paint.
 // - With the CPU slowed 4x, opening Ask (the dot flies up to the panel's header), a reply (the header's dot works, then
-//   rests) and closing (it flies back down): frame gaps p95 <= 20 ms and max <= 50 ms, and no long task over 50 ms. On a loaded runner
-//   (TICO_UI_SLOWDOWN > 1) the frame budgets stretch by that factor; the counts never do.
+//   rests) and closing (it flies back down): renderer CPU work per frame p95 <= 20 ms and max <= 50 ms, and no task
+//   over 50 ms, with thread CPU time charged at 4x. Wall frame gaps and long tasks are diagnostics: neighbouring CI
+//   browsers can deschedule this renderer. Work budgets never stretch with runner load.
 // - Opening and closing Ask, by the row, ⌘J, Escape and a peek, with a peek showing, and from a page with no heading to
 //   one with a heading (the page it sees goes and comes back), flights included: no `hidden` attribute changes anywhere
 //   and no child of <body> comes or goes (each restyles the whole page on a real hub); the flying copy is made once
@@ -17,7 +18,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
-const {SLOWDOWN} = require('./support/load.cjs');
+const {CPU_RATE, FRAME_SAMPLES, frameWork, assertFrameWork} = require('./support/frame-work.cjs');
 
 const now = new Date().toISOString();
 const msg = (id, from, body) => ({id, sender_id: from, body, refs: {}, created_at: now, kind: 'say'});
@@ -29,6 +30,9 @@ async function open(browser) {
   const page = await browser.newPage({viewport: {width: 1280, height: 860}, serviceWorkers: 'block'});
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
+  await page.addInitScript(() => {
+    document.addEventListener('tico:ask-peek-checked', () => { window.__dotPeekChecked = true; }, {once: true});
+  });
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname, method = route.request().method();
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -67,23 +71,36 @@ const dotAnimations = page => page.evaluate(() => {
   const dots = new Set(running.map(a => a.effect.target.closest('.ldot')).filter(d => d && !d.closest('[data-paused]') && !d.matches('[data-paused]')));
   return {props: [...props], dots: dots.size};
 });
-// Frame gaps and long tasks while `act` runs.
+const rendered = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+// Cover the action and at least 30 frame samples, so the percentile has enough observations. The end is tied to
+// samples and completed animations, not a sleep. Start/end markers include the first action task and the last frame.
 async function frames(page, act) {
+  const browser = page.context().browser();
+  await browser.startTracing(page, {categories: ['toplevel', 'devtools.timeline']});
   await page.evaluate(() => {
-    const f = window.__frames = {gaps: [], long: []};
-    let last = performance.now();
-    const tick = t => { f.gaps.push(t - last); last = t; if (f.on) requestAnimationFrame(tick); };
-    f.on = true; requestAnimationFrame(t => { last = t; requestAnimationFrame(tick); });
+    const f = window.__frames = {gaps: [], long: [], count: 0};
+    let last;
+    const tick = t => {
+      console.timeStamp('dot-perf:frame');
+      if (last !== undefined) f.gaps.push(t - last);
+      last = t; f.count++; f.raf = requestAnimationFrame(tick);
+    };
+    console.timeStamp('dot-perf:start');
+    f.raf = requestAnimationFrame(tick);
     f.obs = new PerformanceObserver(list => list.getEntries().forEach(e => f.long.push(e.duration)));
     f.obs.observe({type: 'longtask'});
   });
   await act();
-  await page.waitForTimeout(300);
-  return page.evaluate(() => {
-    const f = window.__frames; f.on = false; f.obs.disconnect();
-    const gaps = f.gaps.slice(1).sort((a, b) => a - b);
-    return {frames: gaps.length, p95: gaps[Math.floor(gaps.length * .95)] || 0, max: gaps.at(-1) || 0, long: Math.max(0, ...f.long)};
+  await page.waitForFunction(n => window.__frames.count >= n, FRAME_SAMPLES);
+  const wall = await page.evaluate(() => {
+    const f = window.__frames; cancelAnimationFrame(f.raf);
+    f.long.push(...f.obs.takeRecords().map(e => e.duration)); f.obs.disconnect();
+    console.timeStamp('dot-perf:end');
+    const gaps = f.gaps.sort((a, b) => a - b);
+    return {p95: gaps[Math.floor(gaps.length * .95)], max: gaps.at(-1), long: Math.max(0, ...f.long)};
   });
+  const trace = JSON.parse((await browser.stopTracing()).toString()).traceEvents;
+  return {work: frameWork(trace), wall};
 }
 const round = v => Math.round(v * 10) / 10;
 
@@ -95,7 +112,9 @@ const round = v => Math.round(v * 10) / 10;
     const cdp = await page.context().newCDPSession(page);
     await cdp.send('Performance.enable');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(4500);                       // the page settles: first draws, fonts, support's read, the peek's first look
+    await page.waitForFunction(() => window.__dotPeekChecked);
+    await page.evaluate(() => document.fonts.ready);
+    await rendered(page);
 
     // ---- Idle, Ask closed.
     // Count the scheduler's swaps in the window: each may cost a few style recalcs (4 at most), nothing else may.
@@ -133,7 +152,7 @@ const round = v => Math.round(v * 10) / 10;
     await browser.startTracing(page, {categories: ['devtools.timeline']});
     for (const v of await page.evaluate(() => LDOT_IDLES)) {
       await page.evaluate(v => { document.querySelector('#ask-row .ldot').dataset.idle = v; }, v);
-      await page.waitForTimeout(400);
+      await rendered(page);
     }
     const swapsAfter = await metrics(cdp);
     const swapPaints = JSON.parse((await browser.stopTracing()).toString()).traceEvents.filter(e => e.name === 'Paint')
@@ -149,10 +168,11 @@ const round = v => Math.round(v * 10) / 10;
     await page.keyboard.press('Escape');
     await page.locator('#ask-panel').waitFor({state: 'hidden'});
     await page.waitForFunction(() => !document.querySelector('.ldot-fly, .ldot-away'));
-    await page.waitForTimeout(400);
-    await cdp.send('Emulation.setCPUThrottlingRate', {rate: 4});
-    const settle = () => page.waitForFunction(() => !document.querySelector('.ldot-fly, .ldot-away') && !document.querySelector('#ask-row').getAnimations().length);
-    const budget = {p95: 20 * SLOWDOWN, max: 50 * SLOWDOWN, long: 50 * SLOWDOWN};
+    const settle = () => page.waitForFunction(() => !document.querySelector('.ldot-fly, .ldot-away')
+      && document.getAnimations().filter(a => a.effect?.target?.closest?.('#ask-panel, #ask-row, .ldot-layer'))
+        .every(a => !Number.isFinite(a.effect.getComputedTiming().endTime) || a.playState === 'finished'));
+    await settle();
+    await cdp.send('Emulation.setCPUThrottlingRate', {rate: CPU_RATE});
     const phases = {
       open: async () => { await page.locator('#ask-row').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle(); },
       reply: async () => {
@@ -167,17 +187,15 @@ const round = v => Math.round(v * 10) / 10;
       close: async () => { await page.keyboard.press('Escape'); await page.locator('#ask-panel').waitFor({state: 'hidden'}); await settle(); },
     };
     out.throttled = {};
+    const measured = {};
     for (const [name, act] of Object.entries(phases)) {
-      const r = await frames(page, act);
-      out.throttled[name] = {frames: r.frames, p95: round(r.p95), max: round(r.max), longTask: round(r.long)};
+      const {work, wall} = await frames(page, act);
+      measured[name] = work;
+      out.throttled[name] = {frames: work.frames, cpuP95: round(work.p95), cpuMax: round(work.max), taskCpuMax: round(work.task),
+        wallP95: round(wall.p95), wallMax: round(wall.max), longTask: round(wall.long)};
     }
     await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
-    for (const [name, r] of Object.entries(out.throttled)) {
-      assert.ok(r.frames > 5, `${name}: ${r.frames} frames`);
-      assert.ok(r.p95 <= budget.p95, `${name}: frame p95 ${r.p95} ms (budget ${budget.p95})`);
-      assert.ok(r.max <= budget.max, `${name}: frame max ${r.max} ms (budget ${budget.max})`);
-      assert.ok(r.longTask <= budget.long, `${name}: a ${r.longTask} ms long task (budget ${budget.long})`);
-    }
+    for (const [name, work] of Object.entries(measured)) assertFrameWork(name, work);
 
     // ---- Opening and closing (the row, ⌘J, Escape), flights included, change no `hidden` attribute anywhere and add
     // nothing to <body> or take nothing from it: on a real hub either restyles the whole page (ui/app/ask-panel.js askSync).
@@ -221,14 +239,14 @@ const round = v => Math.round(v * 10) / 10;
     assert.equal(await page.evaluate(() => document.querySelectorAll('.ldot-layer .ldot').length), 1, 'one flying copy, reused');
 
     // ---- A hidden tab: everything pauses and no idle timer runs, or is set, until it shows again.
-    const hidden = await page.evaluate(async () => {
+    const hidden = await page.evaluate(() => {
       let set = 0;
       const real = window.setTimeout;
       window.setTimeout = (fn, ...rest) => { if (fn === ldotIdle) set++; return real(fn, ...rest); };
       Object.defineProperty(document, 'hidden', {configurable: true, get: () => true});
       Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'hidden'});
       document.dispatchEvent(new Event('visibilitychange'));
-      await new Promise(r => real(r, 1500));
+      ldotSchedule(); ldotIdle();                       // neither scheduling path may arm a timer while hidden
       const res = {timer: ldotScheduled(), set, paused: [...document.querySelectorAll('.ldot')].every(d => d.hasAttribute('data-paused'))};
       delete document.hidden; delete document.visibilityState;
       document.dispatchEvent(new Event('visibilitychange'));
