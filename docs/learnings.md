@@ -121,12 +121,12 @@ it asks at most three business questions in one message, then makes a second com
 requester did not start the dream, so the question is what they answer, and it goes through the same exemption from
 ask ingest. Settings > Routines switches it off; Run now starts the same selection at once and ignores only the clock.
 
-## Nightly learning run
+## Learn (beta)
 
-Once a night, at or after 3:00 (Pacific, the same clock as daily updates; an owner or admin moves the time or
-switches it off in Settings > System), Tico reads the day's
-activity once and hands each recipient what is relevant to it (`backend/learnings.py`). No bot reads
-Slack or mail for this itself.
+Learn is a Maintenance step, off by default and due at most once a day. It reads activity once, scores it with
+Tico Decide, and keeps each bot's top items for that bot's next Update turn (`backend/maintenance_steps/learn.py`,
+`backend/learnings.py`). No bot reads Slack or mail for this itself. Learn has its own source cursors; Run now
+uses Maintenance's step rules.
 
 **What is read**, newer than the last run (the first run looks back 24 hours), at most 600 items:
 
@@ -142,29 +142,36 @@ Slack or mail for this itself.
   never the transcript.
 
 **Routing.** The decision model (the Tico AI Gateway when the server has a gateway key, then your own TypeSafe key if
-you set one, then the team's own AI provider; with none of them the night shows "needs a decision model"; when the team's monthly decision spend cap is
+you set one, then the team's own AI provider; with none of them the run shows "needs a decision model"; when the team's monthly decision spend cap is
 reached, even partway through, the night sends nothing, shows "Skipped", and the same activity is read again on a later
 night) answers, per item, whether it is
 learnable and, per recipient, whether it is relevant (`questions/learnings-route.json`). An item goes
-to every recipient scoring 0.6 or more, unless its learnable score is under 0.2; at most 40 items each,
-highest first. Recipients are the active bots other than BotOps, the Assistant and the Strategy Bot,
+to every recipient scoring 0.6 or more, unless its learnable score is under 0.2; at most 15 items each,
+highest first. The same 15-item limit applies across pending runs when Update sends its request. Recipients are the active bots other than BotOps, the Assistant and the Strategy Bot,
 plus the Librarian for how the company works and the market, that had a run in the last 24 hours. A bot
 synced in from another platform (Grok, Dots, Muse) never gets a run here, so it gets no packet.
 
-**Packets are tasks.** Each recipient gets one private task, "Nightly learnings: <date>", with the
-instructions and its packet: each item's source, link, the quoted text, its score and who else got it.
-A new night closes the bot's earlier packet if no run has picked it up yet, so unread nights never pile up.
-A bot changes only its own repository and commits with `Tico-Run:`; a change to its instructions or
-settings goes to BotOps as a task. The Librarian edits docs directly (every edit is a version) and
-reports market facts with `hub market report`.
+**Delivery.** Items wait in `learning_deliveries` with no task and no Update batch id. The next Update request
+carries a short "Learnings for you" block, with at most 15 one-line items and their sources. Sources are checked
+again before sending: private tasks and restricted conversations stay out of a company session. A bot with no
+work gets a delivery-only turn and posts no update. No packet task is created.
 
-**The page.** **Learnings** in the account menu lists the nights. A night shows Bots (memory commits
-made by the runs that worked its packet task), Docs (the Librarian's doc versions while its task was
-open) and Market (its market changes then), each change with its source and diff. A bot's changes show
-only to readers who may read that bot. A packet's text shows only when the reader may read the source
-today (the thread, the task, the mailbox, the meeting); anything else is counted as private.
+The request and its receipts share the `update_queue` id (`update_batch_id`). Retries reuse those items; a redo of
+an old update consumes none. When several runs are pending, the highest scores go first and excess items count
+as not sent. Original items stay readable on the Learnings page. The bot follows its memory working rules,
+commits its changes and reports `learnings_saved: n`, including zero, in its final reply or the update's structured
+fields. Saved counts are attributed to the oldest contributing run first. Drops count only reported items;
+an absent or invalid count stays unreported. Learn's run details and `learnings.beta_stats(c, days=7)` show reads,
+items sent per bot, saved, dropped, unreported, not sent and cost. Decide meters calls under the monthly cap,
+including paid failures; a capped run sends nothing and keeps its cursors.
 
-- `POST /api/v2/learnings/run` (owner or admin, the same as Run now on Nightly learnings in Settings > System): tonight's run now; 409 when it is running or already ran.
+**The page.** Learnings lists runs by day, including old packet tasks and new Update deliveries. It shows memory
+commits from the delivery turn, the Librarian's doc and market changes during that turn, and delivery status.
+A bot's changes show only to readers who may read that bot. An item's text shows only when the reader may read
+its source today (the thread, task, mailbox or meeting); anything else is counted as private. Old packet tasks
+stay readable.
+
+- `POST /api/v2/learnings/run` (owner or admin): Maintenance Run now with `step=learn`; an off step stays off.
 - `GET /api/v2/learnings?before=&limit=`: nights, newest first.
 - `GET /api/v2/learnings/{id}`: one night's sections.
 - `GET /api/v2/learnings/{id}/packets/{bot}`: one recipient's packet.

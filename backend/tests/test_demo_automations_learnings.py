@@ -84,7 +84,7 @@ def test_last_night_shows_the_routed_correction_with_its_source(built):
         last = nights[0]
         assert last["night"] == "2026-09-25" and last["updates"] == 1
         detail = api.get(f"/api/v2/learnings/{last['id']}").json()
-        [bot] = detail["sections"]["bots"]
+        bot = next(row for row in detail["sections"]["bots"] if row["id"] == "technical-support")
         assert bot["id"] == "technical-support" and "1 task" in bot["saw"]
         [entry] = bot["entries"]
         assert "flat surface" in entry["title"]
@@ -98,7 +98,8 @@ def test_the_night_before_saves_a_smaller_change(built):
     with signed_in(settings) as api:
         night = next(n for n in api.get("/api/v2/learnings").json()["nights"] if n["night"] == "2026-09-23")
         assert night["updates"] == 1
-        [bot] = api.get(f"/api/v2/learnings/{night['id']}").json()["sections"]["bots"]
+        bot = next(row for row in api.get(f"/api/v2/learnings/{night['id']}").json()["sections"]["bots"]
+                   if row["id"] == "technical-support")
         [entry] = bot["entries"]
         assert "hold the phone still" in entry["title"].lower()
         [source] = [s for s in entry["sources"] if "hold the phone still" in s["quote"].lower()]

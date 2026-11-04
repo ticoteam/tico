@@ -1,16 +1,4 @@
-"""The nightly learning run and the Learnings page (docs/learnings.md, Nightly learning run).
-
-Once a night per company, after 03:00 local, one coordinator reads the day's activity once: what people
-said in chats and on tasks, finished tasks' notes, Slack channel messages, mail a teammate sent from their
-own mailbox, and live company meetings. The decision model scores each item once: is it durable enough to
-learn from, and which recipients is it relevant to. Each recipient (a working bot, and the Librarian for
-docs and the market) gets one task carrying its packet, and changes its own memory the usual way. No bot
-reads Slack or mail for this itself.
-
-What a recipient changed is never copied here: the page reads it back from where it already lives (the
-bot's memory commits made by that task's runs, the Librarian's doc versions and market events while the
-task was open). The packet's text is shown only to a reader who may read each item's source today.
-"""
+"""Learn scoring, pending Update deliveries and the Learnings page (docs/learnings.md)."""
 
 import difflib
 import json
@@ -37,20 +25,6 @@ from . import bot_settings as BS
 
 LOG = logging.getLogger("tico.learnings")
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS learning_runs(
- id TEXT PRIMARY KEY, night TEXT NOT NULL UNIQUE, status TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT,
- read_count INTEGER NOT NULL DEFAULT 0, routed_count INTEGER NOT NULL DEFAULT 0, detail TEXT NOT NULL DEFAULT '{}');
-CREATE TABLE IF NOT EXISTS learning_items(
- run_id TEXT NOT NULL, item_key TEXT NOT NULL, source TEXT NOT NULL, ref TEXT NOT NULL,
- author TEXT NOT NULL DEFAULT '', label TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL,
- learnable REAL, scores TEXT NOT NULL DEFAULT '{}', PRIMARY KEY(run_id, item_key));
-CREATE TABLE IF NOT EXISTS learning_deliveries(
- run_id TEXT NOT NULL, recipient TEXT NOT NULL, task_id TEXT NOT NULL, item_keys TEXT NOT NULL,
- created_at TEXT NOT NULL, PRIMARY KEY(run_id, recipient));
-CREATE TABLE IF NOT EXISTS learning_cursors(source TEXT PRIMARY KEY, last_ts TEXT NOT NULL);
-"""
-
 SOURCES = ("chat", "task", "slack", "mail", "meeting")
 HOUR = 3                        # local hour the night's run starts at
 LOOKBACK_HOURS = 24             # a source with no cursor yet is read this far back
@@ -70,20 +44,6 @@ PAGE = 30
 KIND_WORDS = {"chat": "Chat", "task": "Task", "slack": "Slack", "mail": "Email", "meeting": "Meeting"}
 SAW_WORDS = {"task": ("task", "tasks"), "chat": ("chat", "chats"), "slack": ("Slack message", "Slack messages"),
              "mail": ("email", "emails"), "meeting": ("meeting", "meetings")}
-
-LEARN_TEXT = """Tonight's packet: what people said and decided yesterday that scored as relevant to you. Turn the durable parts into memory.
-
-1. Read `memory/learnings.md`: its working rules come first, then the log, newest first. Then, for each packet item, decide: write only an explicit human statement, a human correcting a bot, or a pattern seen 3+ times (check memory for earlier sightings). Skip one-off inferences and chit-chat.
-2. Before writing, search your memory, knowledge and playbooks for a related entry and choose ONE action: update it (preferred), merge near-duplicates, replace it when a newer source contradicts it, add a new one-line entry, or skip if already known.
-3. Entry format: `- <claim> [source: <link or source label>; added: YYYY-MM-DD]`, a new one at the top of the log (a standing rule in the working rules section). Keep no memory outside the repository. Quote the source; never paraphrase a person's words into something stronger.
-4. Personal preferences of a specific human do NOT go into this repository (docs/threads.md).
-5. If a learning needs a change to your instructions (AGENT.md) or settings, file it with `hub task create --owner botops --title "<one line>" --body "<the change and the packet item>"`; BotOps makes the change.
-6. Commit with a clear one-line subject per change and the trailer `Tico-Run: <run id>`, push, and finish this task with a one-line note: what changed, or "Nothing new"."""
-
-LIBRARIAN_TEXT = """
-7. Docs: edit them directly with `hub doc write` (every edit is a version). You may edit human-written docs when the packet shows they are out of date; say what changed in the version note.
-8. Market facts: `hub market report`, then curate as usual (`playbooks/curate-the-market.md`)."""
-
 
 # ----------------------------------------------------------------------------- time
 def local(at):
@@ -285,7 +245,12 @@ class Tally:
         self.answers = []       # one `J.summary` per call, for the readout's answer spread
 
     def __call__(self, state, questions, label=None):
-        result = self.engine(state, questions, label)
+        try:
+            result = self.engine(state, questions, label)
+        except Exception as exc:
+            with self.lock:
+                self.cost += getattr(exc, "cost_usd", 0.0) or 0.0
+            raise
         with self.lock:
             self.calls += 1
             self.fallbacks += bool(result.get("fallback"))
@@ -347,10 +312,10 @@ def route(engine, qset, items, team):
     return dict(failed)
 
 
-def packets(items, qset):
+def packets(items, qset, limit=None):
     """{id: [item, ...]}: every recipient at or over the relevance bar, unless the item is noise."""
     bar, floor = qset["thresholds"].get("relevant", 0.6), qset["thresholds"].get("noise", 0.2)
-    cap = int(qset["thresholds"].get("per_recipient", PER_RECIPIENT))
+    cap = int(qset["thresholds"].get("per_recipient", PER_RECIPIENT)) if limit is None else limit
     out = {}
     for item in items:
         if item["learnable"] is None or item["learnable"] < floor:
@@ -378,68 +343,172 @@ def link(item):
     return ""
 
 
-def packet_body(slug, rows, team, run_id):
-    text = LEARN_TEXT + (LIBRARIAN_TEXT if slug == LIBRARIAN else "")
-    lines = [text, "", f"Run: {run_id}", "", "## Packet"]
-    for n, item in enumerate(rows, 1):
-        others = [team[s]["name"] for s, rel in sorted(item["scores"].items(), key=lambda kv: -kv[1])
-                  if s != slug and s in item.get("sent_to", ())]
-        lines += ["", f"### {n}. {item['label']}",
-                  f"Source: {KIND_WORDS[item['source']]} · {item['label']} · {day_words(item['created_at'])}"]
-        if link(item):
-            lines.append(f"Link: {link(item)}")
-        lines += ["> " + line if line.strip() else ">" for line in item["text"].splitlines()]
-        lines.append(f"Relevance: {item['scores'][slug]:.2f}" + (f" · Also sent to: {', '.join(others)}" if others else ""))
-    return "\n".join(lines)
-
-
-def superseded(c, slug, night):
-    """A bot's earlier packets that no run has picked up yet close when a new night's arrives: unread nights
-    would otherwise pile up, and tonight's packet is the one worth reading."""
-    for row in c.execute("SELECT d.task_id FROM learning_deliveries d JOIN learning_runs r ON r.id=d.run_id "
-                         "JOIN tasks t ON t.id=d.task_id WHERE d.recipient=? AND r.night<? AND t.status='open'",
-                         (slug, night)).fetchall():
-        H.task_close(c, H.KEEPER, row[0], f"Replaced by the packet for {night}; this one was never picked up.",
-                     quiet=True, strict=False)
-
-
 def dispatch(c, run_id, night, items, chosen, team, detail):
-    """One task per recipient; the routed items, deliveries and cursors in the same transaction."""
-    sent_to = {}
-    for slug, rows in chosen.items():
-        for item in rows:
-            sent_to.setdefault(item["key"], set()).add(slug)
-    for item in items:
-        item["sent_to"] = sent_to.get(item["key"], set())
-    title = TITLE + day_words(utc(datetime.combine(datetime.fromisoformat(night).date(), datetime.min.time(), ZONE)
-                                  + timedelta(hours=12)))
-    delivered, refused = 0, {}
-    for slug, rows in sorted(chosen.items()):
-        superseded(c, slug, night)
-        c.execute("SAVEPOINT learning_delivery")
-        try:
-            task = H.task_create(c, H.KEEPER, title, packet_body(slug, rows, team, run_id), H.bot_actor(slug),
-                                 deduplicate=False, lint=False, private=True)
-        except H.Refused as exc:
-            c.execute("ROLLBACK TO learning_delivery")
-            c.execute("RELEASE learning_delivery")
-            refused[slug] = exc.rule
-            for item in rows:
-                item["sent_to"].discard(slug)
-            continue
-        c.execute("RELEASE learning_delivery")
-        c.execute("INSERT INTO learning_deliveries(run_id,recipient,task_id,item_keys,created_at) VALUES(?,?,?,?,?)",
-                  (run_id, slug, task["id"], json.dumps([i["key"] for i in rows]), H.now()))
-        delivered += 1
-    routed = [i for i in items if i["sent_to"]]
-    for item in routed:
-        c.execute("INSERT OR REPLACE INTO learning_items(run_id,item_key,source,ref,author,label,text,created_at,"
+    """Keep each bot's top items for its next Update, without waking it."""
+    chosen = {slug: rows[:15] for slug, rows in chosen.items()}
+    routed = {item["key"]: item for rows in chosen.values() for item in rows}
+    for item in routed.values():
+        c.execute("INSERT OR IGNORE INTO learning_items(run_id,item_key,source,ref,author,label,text,created_at,"
                   "learnable,scores) VALUES(?,?,?,?,?,?,?,?,?,?)",
                   (run_id, item["key"], item["source"], json.dumps(item["ref"]), item["author"], item["label"],
                    item["text"], item["created_at"], item["learnable"], json.dumps(item["scores"])))
-    if refused:
-        detail["refused"] = refused
-    return delivered, len(routed)
+    for slug, rows in chosen.items():
+        c.execute("INSERT OR IGNORE INTO learning_deliveries(run_id,recipient,item_keys,created_at) VALUES(?,?,?,?)",
+                  (run_id, slug, json.dumps([i["key"] for i in rows]), H.now()))
+    detail.update(items_read=len(items), items_sent={}, saved=0, dropped=0, cost_usd=detail.get("cost_usd", 0.0))
+    return len(chosen), len(routed)
+
+
+def shared_item(c, item, bot):
+    """Recheck a source before putting its words in a company Update session."""
+    from . import updates
+    ref = H._json(item["ref"], {}) if isinstance(item["ref"], str) else item["ref"]
+    shared = updates.shared_tasks_sql(updates._hidden_for(c, bot))
+    ids = {ref["task"]} if ref.get("task") else set()
+    if ref.get("message"):
+        message = H.message(c, ref["message"])
+        if not message or message.get("deleted_at") or message.get("restricted"):
+            return False
+        room = H.conversation(c, message["conversation_id"]) or {}
+        audience = room.get("audience")
+        if room.get("scope") == "personal" or (audience not in ("company", "task")
+                                                and not (audience is None and item["source"] == "task")):
+            return False
+        try:
+            ids.update(privacy.message_tasks(c, message, current=True))
+        except Problem:
+            return False
+    for tid in ids:
+        if not c.execute(f"SELECT 1 FROM tasks WHERE id=? AND {shared}", (tid,)).fetchone():
+            return False
+    if item["source"] in ("task", "chat"):
+        return bool(ids or ref.get("message"))
+    if item["source"] == "slack":
+        return bool(c.execute("SELECT 1 FROM slack_events WHERE channel=? AND ts=? AND deleted_at IS NULL "
+                              "AND channel_kind<>'im'", (ref.get("channel"), ref.get("ts"))).fetchone())
+    if item["source"] == "mail":
+        return bool(c.execute("SELECT 1 FROM mail_messages m JOIN humans h ON lower(h.email)=lower(m.from_addr) "
+                              "WHERE m.mailbox=? AND m.msg_id=? AND lower(m.mailbox)=lower(m.from_addr) "
+                              "AND m.deleted_at IS NULL AND m.labels LIKE '%\"SENT\"%'",
+                              (ref.get("mailbox"), ref.get("msg_id"))).fetchone())
+    if item["source"] == "meeting":
+        return bool(c.execute("SELECT 1 FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
+                              "WHERE m.id=? AND m.review_state='live' AND mc.deleted_at IS NULL "
+                              "AND json_extract(m.metadata,'$.kind')='meeting' "
+                              "AND coalesce(json_extract(m.metadata,'$.private'),0)=0", (ref.get("meeting"),)).fetchone())
+    return False
+
+
+def pending(c, bot, batch_id=None):
+    """The top fifteen items across pending runs, or the items already sent in this batch."""
+    sent = batch_id and c.execute("SELECT 1 FROM learning_deliveries WHERE recipient=? AND update_batch_id=? LIMIT 1",
+                                  (bot, batch_id)).fetchone()
+    where = "d.update_batch_id=?" if sent else "d.update_batch_id IS NULL"
+    keys = "d.sent_item_keys" if sent else "d.item_keys"
+    rows = c.execute("SELECT i.* FROM learning_deliveries d JOIN learning_items i ON i.run_id=d.run_id "
+                     f"JOIN json_each({keys}) k ON k.value=i.item_key WHERE d.recipient=? AND d.task_id IS NULL AND {where} "
+                     "ORDER BY coalesce(json_extract(i.scores,?),0) DESC,i.created_at,i.run_id,i.item_key",
+                     (bot, *((batch_id,) if sent else ()), '$.' + json.dumps(bot)))
+    out = []
+    for row in rows:
+        if shared_item(c, row, bot):
+            item = dict(row)
+            item["ref"] = json.loads(item["ref"])
+            text = clip(" ".join(item["text"].split()), 500)
+            label = clip(" ".join(item["label"].split()), 160)
+            item["line"] = f"{label}: {text}" + (f" [source: {link(item)}]" if link(item) else "")
+            out.append(item)
+            if len(out) == 15:
+                break
+    return out
+
+
+def delivery_details(c, run_id):
+    """Counts only; an absent report stays unknown instead of counting as dropped."""
+    sent, saved, dropped, unreported, not_sent = {}, 0, 0, 0, 0
+    for row in c.execute("SELECT * FROM learning_deliveries WHERE run_id=? AND task_id IS NULL", (run_id,)):
+        count = len(json.loads(row["sent_item_keys"] or "[]"))
+        if row["update_batch_id"] is not None:
+            sent[row["recipient"]] = count
+            not_sent += len(json.loads(row["item_keys"])) - count
+        if row["learnings_saved"] is None:
+            unreported += count
+        else:
+            saved += row["learnings_saved"]
+            dropped += count - row["learnings_saved"]
+    return {"items_sent": sent, "saved": saved, "dropped": dropped, "unreported": unreported, "not_sent": not_sent}
+
+
+def refresh_details(c, run_id):
+    row = c.execute("SELECT detail FROM learning_runs WHERE id=?", (run_id,)).fetchone()
+    if not row:
+        return
+    counts = delivery_details(c, run_id)
+    detail = {**json.loads(row["detail"]), **counts}
+    c.execute("UPDATE learning_runs SET detail=? WHERE id=?", (json.dumps(detail), run_id))
+    if c.execute("SELECT 1 FROM sqlite_master WHERE name='maintenance_run_steps'").fetchone():
+        for step in c.execute("SELECT id,details FROM maintenance_run_steps WHERE maintenance_run_id=? AND step='learn'",
+                              (run_id,)).fetchall():
+            c.execute("UPDATE maintenance_run_steps SET details=? WHERE id=?",
+                      (json.dumps({**json.loads(step["details"] or "{}"), **counts}), step["id"]))
+
+
+def mark_sent(c, bot, batch_id, items):
+    """Bind the exact request and its items in the message's transaction; retries keep that batch."""
+    if c.execute("SELECT 1 FROM learning_deliveries WHERE recipient=? AND update_batch_id=? LIMIT 1",
+                 (bot, batch_id)).fetchone():
+        return
+    by_run = {}
+    for item in items[:15]:
+        by_run.setdefault(item["run_id"], []).append(item["item_key"])
+    for row in c.execute("SELECT run_id FROM learning_deliveries WHERE recipient=? AND task_id IS NULL "
+                         "AND update_batch_id IS NULL", (bot,)).fetchall():
+        keys = by_run.get(row["run_id"], [])
+        c.execute("UPDATE learning_deliveries SET update_batch_id=?,sent_item_keys=?,sent_at=? "
+                  "WHERE run_id=? AND recipient=?", (batch_id, json.dumps(keys), H.now() if keys else None,
+                                                    row["run_id"], bot))
+        refresh_details(c, row["run_id"])
+
+
+def record_saved(c, bot, batch_id, saved):
+    """A batch reports a count, so attribute saved items to its oldest runs first."""
+    rows = c.execute("SELECT * FROM learning_deliveries WHERE recipient=? AND update_batch_id=? "
+                     "AND task_id IS NULL ORDER BY created_at,run_id", (bot, batch_id)).fetchall()
+    total = sum(len(json.loads(r["sent_item_keys"] or "[]")) for r in rows)
+    if not rows or any(r["learnings_saved"] is not None for r in rows) or type(saved) is not int or not 0 <= saved <= total:
+        return
+    for row in rows:
+        kept = min(saved, len(json.loads(row["sent_item_keys"] or "[]")))
+        saved -= kept
+        c.execute("UPDATE learning_deliveries SET learnings_saved=?,settled_at=? WHERE run_id=? AND recipient=?",
+                  (kept, H.now(), row["run_id"], bot))
+        refresh_details(c, row["run_id"])
+
+
+def settle_delivery(c, bot, batch_id):
+    """A completed turn with no count stays unreported; a later structured receipt can still fill it."""
+    c.execute("UPDATE learning_deliveries SET settled_at=coalesce(settled_at,?) "
+              "WHERE recipient=? AND update_batch_id=? AND task_id IS NULL", (H.now(), bot, batch_id))
+
+
+def beta_stats(c, days=7):
+    """Learn's recent reads, deliveries, outcomes and cost, without source text."""
+    days = max(1, min(int(days), 30))
+    since = utc(H.parse_ts(H.now()) - timedelta(days=days))
+    stats = {"days": days, "runs": 0, "items_read": 0, "items_sent": {}, "saved": 0, "dropped": 0,
+             "unreported": 0, "not_sent": 0, "cost_usd": 0.0}
+    for row in c.execute("SELECT id,read_count,detail FROM learning_runs WHERE started_at>=?", (since,)):
+        detail = json.loads(row["detail"])
+        stats["runs"] += 1
+        stats["items_read"] += row["read_count"]
+        stats["cost_usd"] += detail.get("cost_usd", 0.0)
+        counts = delivery_details(c, row["id"])
+        for bot, count in counts["items_sent"].items():
+            stats["items_sent"][bot] = stats["items_sent"].get(bot, 0) + count
+        for key in ("saved", "dropped", "unreported", "not_sent"):
+            stats[key] += counts[key]
+    stats["cost_usd"] = round(stats["cost_usd"], 6)
+    return stats
 
 
 def advance(c, items, now):
@@ -478,7 +547,7 @@ def run(store, run_id):
             finish(store, run_id, *(("capped", {"reason": "monthly decision spend cap"}) if capped else
                                     ("unconfigured", {"reason": "no decision model"})))
             return
-        detail = {"read": dict(Counter(i["source"] for i in items)), "dropped": dropped, "recipients": len(team)}
+        detail = {"read": dict(Counter(i["source"] for i in items)), "source_dropped": dropped, "recipients": len(team)}
         chosen, failed = {}, {}
         if items:
             qset = question_set(settings)
@@ -613,11 +682,22 @@ KIND_RE = re.compile(r"^(chat|task|slack|mail|email|meeting|doc|commit)\b", re.I
 
 def run_attempts(c, task_id):
     """The runs that worked this task: started by one of its messages, or handed one as an input."""
+    if not task_id:
+        return []
     return [r[0] for r in c.execute(
         "SELECT a.id FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
         f"LEFT JOIN conversations cv ON cv.id=m.conversation_id WHERE {H.MESSAGE_TASK_SQL}=? UNION "
         "SELECT i.attempt_id FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
         f"LEFT JOIN conversations cv ON cv.id=m.conversation_id WHERE {H.MESSAGE_TASK_SQL}=?", (task_id, task_id))]
+
+
+def delivery_attempts(c, delivery):
+    if delivery["task_id"]:
+        return run_attempts(c, delivery["task_id"])
+    return [r[0] for r in c.execute(
+        "SELECT a.id FROM update_queue q JOIN jobs j ON j.message_id=q.message_id "
+        "JOIN attempts a ON a.job_id=j.id OR a.id=j.attempt_id WHERE q.id=? AND a.bot_id=?",
+        (delivery["update_batch_id"], delivery["recipient"]))]
 
 
 def sources_of(diff):
@@ -641,8 +721,11 @@ def line_diff(old, new):
 
 
 def window(c, delivery):
-    task = H.task(c, delivery["task_id"]) or {}
-    return delivery["created_at"], task.get("done_at") or task.get("closed_at") or H.now()
+    if delivery["task_id"]:
+        task = H.task(c, delivery["task_id"]) or {}
+        return delivery["created_at"], task.get("done_at") or task.get("closed_at") or H.now()
+    queue = c.execute("SELECT sent_at,done_at FROM update_queue WHERE id=?", (delivery["update_batch_id"],)).fetchone()
+    return (queue["sent_at"], queue["done_at"] or H.now()) if queue else ("9999", "9999")
 
 
 def saw(c, run_id, keys):
@@ -655,8 +738,8 @@ def saw(c, run_id, keys):
     return "Saw " + ", ".join(parts) if parts else ""
 
 
-def bot_entries(c, slug, task_id):
-    ids = run_attempts(c, task_id)
+def bot_entries(c, delivery):
+    ids = delivery_attempts(c, delivery)
     if not ids:
         return []
     rows = c.execute(f"SELECT * FROM bot_memory_updates WHERE attempt_id IN ({','.join('?' * len(ids))}) "
@@ -709,10 +792,17 @@ def night_view(c, auth, who, run, team_names):
             sections["market"] += market_subjects(c, d, saw_text)
         if not auth.bot_access(c, who, d["recipient"])["read"]:
             continue
-        entries = bot_entries(c, d["recipient"], d["task_id"])
-        if entries:
+        entries = bot_entries(c, d)
+        title = ""
+        if not d["task_id"]:
+            count = len(json.loads(d["sent_item_keys"] or "[]"))
+            title = (f"{count} items sent in Update" if d["update_batch_id"] else f"{len(keys)} items waiting for Update")
+            if d["learnings_saved"] is not None:
+                title += f"; {d['learnings_saved']} saved, {count - d['learnings_saved']} dropped"
+        if entries or not d["task_id"]:
             sections["bots"].append({"id": d["recipient"], "name": team_names.get("bot:" + d["recipient"], d["recipient"]),
-                                     "saw": saw_text, "task_id": d["task_id"], "entries": entries})
+                                     "saw": saw_text, "task_id": d["task_id"], "entries": entries,
+                                     "delivery_status": title})
     return sections
 
 
@@ -747,8 +837,18 @@ def readable(c, auth, who, item, mailboxes):
 def install(app, store, auth, mutate):
     @app.post("/api/v2/learnings/run")
     def run_now(request: Request, body: M.Empty):
-        """Tonight's learning run, now: who may press Run now on Nightly learnings in Settings > Routines (an owner or
-        an admin), and refused, as there, while it is switched off. 409 when tonight's has already started."""
+        """An owner or admin starts Learn through Maintenance, keeping its switch and due rules."""
+        try:
+            from .maintenance import may_change, run_now as maintenance_run_now
+        except ModuleNotFoundError as exc:
+            if exc.name != __package__ + ".maintenance":
+                raise
+        else:
+            who = request.state.identity
+            may_change(auth, who)
+            run, started = maintenance_run_now(store, auth, who.actor, step="learn",
+                                              key=request.headers.get("idempotency-key"))
+            return {"run": run, "started": started}
         from . import system_routines
         who = request.state.identity
         system_routines.may_change(auth, who, "learnings")
@@ -770,8 +870,13 @@ def install(app, store, auth, mutate):
         limit = max(1, min(limit, 60))
         with store.read() as c:
             team_names = names(c)
-            rows = c.execute("SELECT * FROM learning_runs WHERE (?='' OR night<?) ORDER BY night DESC LIMIT ?",
-                             (before, before, limit + 1)).fetchall()
+            cursor = before.split("|", 2)
+            if len(cursor) == 3:
+                where, args = "(night,started_at,id)<(?,?,?)", tuple(cursor)
+            else:
+                where, args = "(?='' OR night<?)", (before, before)
+            rows = c.execute("SELECT * FROM learning_runs WHERE " + where +
+                             " ORDER BY night DESC,started_at DESC,id DESC LIMIT ?", (*args, limit + 1)).fetchall()
             out = []
             for r in rows[:limit]:
                 sections = night_view(c, auth, who, r, team_names)
@@ -779,7 +884,8 @@ def install(app, store, auth, mutate):
                             "updates": sum(len(s["entries"]) for group in sections.values() for s in group),
                             "recipients": c.execute("SELECT count(*) FROM learning_deliveries WHERE run_id=?",
                                                     (r["id"],)).fetchone()[0]})
-            return {"nights": out, "next_before": rows[limit - 1]["night"] if len(rows) > limit else None}
+            last = rows[limit - 1] if len(rows) > limit else None
+            return {"nights": out, "next_before": "|".join((last["night"], last["started_at"], last["id"])) if last else None}
 
     def one(c, run_id):
         row = c.execute("SELECT * FROM learning_runs WHERE id=?", (run_id,)).fetchone()
@@ -817,7 +923,7 @@ def install(app, store, auth, mutate):
             for d in c.execute("SELECT recipient,item_keys FROM learning_deliveries WHERE run_id=?", (run_id,)):
                 for k in json.loads(d["item_keys"]):
                     sent.setdefault(k, []).append(d["recipient"])
-            ids = run_attempts(c, delivery["task_id"])
+            ids = delivery_attempts(c, delivery)
             commits = c.execute("SELECT subject,diff FROM bot_memory_updates WHERE attempt_id IN (" +
                                 ",".join("?" * len(ids)) + ")", ids).fetchall() if ids else []
             boxes = []

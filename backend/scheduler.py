@@ -196,11 +196,8 @@ def run_now(store, auth, key, actor):
         from . import memory_tidy_controls
         running = memory_tidy_controls.run_now(store, auth, actor)
     elif key == "learnings":
-        from . import learnings
-        with store.transaction() as c:
-            run_id = learnings.claim_tonight(c)
-        learnings.start(store, run_id)
-        running = True
+        from . import maintenance
+        _, running = maintenance.run_now(store, auth, actor, step="learn")
     else:
         raise Problem("invalid", "Nothing to run", 422)
     with store.transaction() as c:
