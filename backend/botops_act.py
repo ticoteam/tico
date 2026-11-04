@@ -279,9 +279,9 @@ DO = _routes(
     ("DELETE", rf"credentials/{_S}"),
     # Computers: a restart, a model sign-in (its code is pasted in the app, never here), who may open its screen (opening
     # one is the person's own, in the app), inbox sharing where one owner runs
-    # everything (the route says where). Limits are spending: lowering one is always direct; raising one, and the providers,
+    # everything (the route says where), and its name (owners and admins, which the route checks). Limits are spending: lowering one is always direct; raising one, and the providers,
     # are direct unless the owner's rule says otherwise (TIGHTENED).
-    ("POST", rf"(runners|computers)/{_S}/(restart|inbox-only|logins|screen)"), ("POST", rf"(runners|computers)/{_S}/logins/{_S}/cancel"),
+    ("POST", rf"(runners|computers)/{_S}/(restart|inbox-only|logins|screen|label)"), ("POST", rf"(runners|computers)/{_S}/logins/{_S}/cancel"),
     ("PUT", r"providers"), ("PUT", r"usage/limits"), ("PUT", rf"usage/limits/{_S}"), ("PUT", rf"usage/pools/(company|groups/{_S})"),
     # The Tico AI Gateway address, off or back to automatic is a provider change too (the owner's, which the route
     # checks). Saving its key is a secret, refused in the request; checking it changes nothing.

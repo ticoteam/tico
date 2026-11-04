@@ -7167,7 +7167,8 @@ def create_app(settings=None):
             if not runner or not (auth.bot_admin(who) or who.role == "human" and who.actor == "human:" + runner["owner_id"]):
                 raise Problem("forbidden", "You cannot revoke this runner", 403)
             c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), rid))
-            c.execute('DELETE FROM registry_metadata WHERE key=?', ('computer-repositories:' + rid,))
+            c.execute('DELETE FROM registry_metadata WHERE key IN (?,?)',
+                      ('computer-repositories:' + rid, 'computer-enrolled-as:' + rid))
             app_delivery.runner_revoked(c, who.actor, rid)
             H.event(c, who.actor, "runner.revoked", rid)
             return {"revoked": True}
@@ -7564,6 +7565,27 @@ def create_app(settings=None):
                     {"before": row["turns_at_once"], "after": body.turns_at_once})
             return {"turns_at_once": body.turns_at_once,
                     "turn_limit": start_places.turn_limit({**dict(row), "turns_at_once": body.turns_at_once})}
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/runners/{rid}/label")
+    def runner_label(request: Request, rid: str, body: M.RunnerLabel):
+        """Rename a computer. A cloud machine made again keeps the name. Owners and admins."""
+        from . import cloud_machines
+        from .execution import rename
+        who = request.state.identity
+        def work(c):
+            admin_only(who, "renames a computer")
+            row = c.execute("SELECT label FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+            if not row:
+                raise Problem("not_found", "Computer not found", 404)
+            if row["label"] != body.label:
+                rename(c, rid, row["label"], body.label)
+                cloud_machines.named(c, rid, body.label)
+                # Its bots' assignments carry the computer's name (computer_label): the runner reads them again.
+                c.execute("INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('runner','assignments',?,?)",
+                          (rid, H.now()))
+                H.event(c, who.actor, "runner.renamed", rid, {"before": row["label"], "after": body.label})
+            return {"label": body.label}
         return mutate(request, body, work)
 
     @app.post("/api/v2/runners/{rid}/member-bots")

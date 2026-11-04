@@ -322,6 +322,12 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .computer-detail{width:min(760px,calc(100vw - 32px))}
 .computer-detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:14px 16px 6px;border-bottom:1px solid var(--line)}
 .computer-detail-head h2{margin:0;font-size:var(--t-lg);letter-spacing:var(--track-tight)}
+.computer-detail-name{display:flex;align-items:center;gap:4px;min-width:0}
+.computer-rename{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:5px;background:none;color:var(--muted);cursor:pointer}
+.computer-rename:hover{background:var(--surface2);color:var(--ink)}.computer-rename .nav-icon{font-size:16px}
+.computer-rename-form{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 4px}
+.computer-rename-form input{flex:1 1 220px;min-width:0;max-width:100%}
+.computer-rename-form .field-err{order:1;flex-basis:100%;margin:0}
 .computer-detail-body{padding:4px 16px 16px;overflow:auto;max-height:calc(86vh - 70px)}
 .computer-detail-section{padding:10px 0;border-bottom:1px solid var(--line)}.computer-detail-section:last-child{border-bottom:0}
 .computer-detail-section h3{margin:0 0 6px;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
