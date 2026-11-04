@@ -366,7 +366,10 @@ def action_refusal(c, owner, mailbox, action, args=None, *, queued=False):
     if allowed.get(need) or (queued and need == "send" and allowed.get("draft")):
         return None
     words = {"organize": "organize", "draft": "write drafts in", "send": "send from"}
-    return (f"the automation's owner may not {words[need]} {str(mailbox or '').strip().lower()} "
+    address = str(mailbox or "").strip().lower()
+    if level(c, owner, mailbox) == "read_write":
+        return (f"Tico may not {words[need]} {address}: it is off in Settings > Google > What Tico may do")
+    return (f"the automation's owner may not {words[need]} {address} "
             "(Settings > Mailboxes: Who can use this mailbox)")
 
 
@@ -762,7 +765,8 @@ def plan(c):
                 for below in P.below(person["id"], roster)[1:]:
                     if below.get("hidden"):
                         continue
-                    for other in declared.get(below["id"]) or [_addr(below.get("email"))]:
+                    # inbox_of read their emails, token_mailboxes their message bots' mailboxes: keep both.
+                    for other in dict.fromkeys((declared.get(below["id"]) or []) + [_addr(below.get("email"))]):
                         other = box(other)
                         if other:
                             give_(other, "bot", bot, "read")
@@ -818,6 +822,8 @@ def plan(c):
             for address in wanted:
                 if address not in old:
                     continue                            # not heard today either
+                if kind == "person" and address == _addr((live_people.get(ident) or {}).get("email")):
+                    continue                            # their own mailbox: theirs with no row
                 address = box(address)
                 if address:
                     give_(address, "bot" if kind == "bot" else "person", ident, "read_write")

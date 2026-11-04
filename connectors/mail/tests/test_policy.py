@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fake                                                          # noqa: E402
 import harness                                                       # noqa: E402
 from harness import Stage2, gh_answer                                # noqa: E402
 
@@ -51,6 +52,7 @@ class Gates(Stage2):
 
     def test_the_blocklist_beats_an_approval_issue(self):
         pl.RUN = gh_answer(body="blocked@nope.example is fine by me")
+        fake.MAIL_LEVELS["ana"] = {"ana@acme.example": "read_write"}     # her own mailbox, as Tico answers it
         d = pl.check_send(self.policy(), "ana", "ana@acme.example", ["blocked@nope.example"],
                           root=self.root, approval="77")
         self.assertEqual(d["gate"], "blocklist")
