@@ -200,7 +200,8 @@ def test_one_bulk_call_counts_once_toward_a_bots_quarantine(api):
     assert refusals() == 50 and state() == "active"
 
     # It counts as the same refused close made one by one: nine more single tries are its nine repeats, and the
-    # tenth holds that task, as ten single tries in a row would have.
+    # tenth holds the originating chat, as ten single tries in a row would have. The chat's token names the source,
+    # even when a write targets another task.
     for i in range(H.QUARANTINE_AT):
         assert state() == "active", i
         row = get(api, "tasks/" + owned[0]["id"])["task"]
@@ -208,8 +209,8 @@ def test_one_bulk_call_counts_once_toward_a_bots_quarantine(api):
     assert state() == "active"
     # What the bot is told when it is back quotes the refused words, never the stored refusal or its call.
     with api.app.state.store.read() as c:
-        hold = c.execute("SELECT task_id,refusal FROM quarantine_holds WHERE released_at IS NULL").fetchone()
-        assert hold["task_id"] == owned[0]["id"]
+        hold = c.execute("SELECT task_id,conversation_id,refusal FROM quarantine_holds WHERE released_at IS NULL").fetchone()
+        assert hold["task_id"] is None and hold["conversation_id"]
         stopped = H._json(hold["refusal"], {})
         words = H.refusals_for(c, actor="bot:ops")[-1]["detail"]
     assert stopped == {"rule": "close", "detail": words}

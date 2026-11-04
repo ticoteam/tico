@@ -45,7 +45,7 @@ def test_one_tasks_refusals_stop_only_its_turn_and_other_work_claims_and_runs(ap
         assert c.execute("SELECT owner_id FROM tasks WHERE title=?", ("Review ops's refused writes",)).fetchone()[0] == H.bot_actor(H.FLEET_MAINTAINER)
     stopped = post(api, f"attempts/{bad['id']}/renew", {}, machine["token"])
     assert stopped["stop"] and stopped["stop_reason"].startswith("Quarantined: 10 repeated refusals today")
-    assert not post(api, f"attempts/{good['id']}/renew", {}, machine["token"])["stop"]
+    assert not post(api, f"attempts/{good['id']}/renew", {}, machine["token"]).get("stop")
     post(api, f"tasks/{task['id']}/comments", {"text": "Please check it again."})
     assert post(api, f"attempts/{bad['id']}/inputs", {}, machine["token"])["messages"] == []
     refused = post(api, "messages", {"to": "finance", "text": "Keep trying."}, bad["token"], expected=403)
@@ -112,6 +112,17 @@ def test_refusals_from_several_tasks_still_stop_every_turn(api):
     assert holds(api) == []
     for attempt in (one, two):
         assert post(api, f"attempts/{attempt['id']}/renew", {}, machine["token"])["stop"]
+
+
+def test_the_running_task_is_held_instead_of_the_target_of_its_refused_write(api):
+    machine = task_bot(api, lanes=True)
+    source = new_task(api, "Check the export")
+    attempt = started(api, machine)
+    target = new_task(api, "Check the archive")
+    refusals(api, attempt, target)
+    [hold] = holds(api)
+    assert hold["task_id"] == source["id"]
+    assert started(api, machine)["task"]["id"] == target["id"]
 
 
 def test_an_escape_over_a_task_hold_stays_bot_wide_and_needs_a_person(api, time_machine):

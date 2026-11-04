@@ -14,7 +14,7 @@ def notes_for(api, slug):
         return H.notes_waiting(c, slug)
 
 
-def test_a_lifted_task_hold_leaves_a_task_note_and_an_escape_leaves_the_bot_a_note(api):
+def test_a_lifted_chat_hold_leaves_a_chat_notice_and_an_escape_leaves_the_bot_a_note(api):
     token = bot_token(api, "cpo")
     item = post(api, "tasks", {"owner": "cpo", "title": "Research exports", "body": "x"})
     for _ in range(H.QUARANTINE_AT + 1):
@@ -22,12 +22,14 @@ def test_a_lifted_task_hold_leaves_a_task_note_and_an_escape_leaves_the_bot_a_no
         assert r.status_code == 403, r.text
     with api.app.state.store.read() as c:
         assert H.bot(c, "cpo")["state"] == "active"
-        assert c.execute("SELECT task_id FROM quarantine_holds WHERE released_at IS NULL").fetchone()[0] == item["id"]
+        hold = c.execute("SELECT task_id,conversation_id FROM quarantine_holds WHERE released_at IS NULL").fetchone()
+        assert hold["task_id"] is None and hold["conversation_id"]
     assert notes_for(api, "cpo") == [], "nothing until it is back"
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE quarantine_holds SET created_at=?", (H.shift(H.now(), seconds=-3700),))
         assert H.lift_cooled_quarantines(c) == ["cpo"]
-        note = H.task_comments(c, item["id"])[-1]
+        note = c.execute("SELECT body FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1",
+                         (hold["conversation_id"],)).fetchone()
     assert notes_for(api, "cpo") == []
     assert "identity rule" in note["body"] and note["body"].endswith(H.QUARANTINE_LIFTED)
     # A person clearing it leaves the same note; so does an escape, naming what the check stopped.
