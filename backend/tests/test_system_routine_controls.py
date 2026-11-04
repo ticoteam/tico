@@ -19,7 +19,7 @@ from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
 from backend.tests.test_stale_review import FakeDecide
 
 TIMED = {"stale_review", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
-         "bookkeeper_check", "memory_tidy", "auto_dream", "task_roundup"}   # the jobs with a schedule preset
+         "bookkeeper_check", "memory_tidy", "task_roundup"}   # the jobs with a schedule preset
 
 
 def rows(api, token="ana-test"):
@@ -30,7 +30,7 @@ def test_admin_sees_a_switch_and_a_schedule_on_the_timed_jobs_and_housekeeping_h
     jobs = rows(api, "ben-test")
     timed = {k for k, j in jobs.items() if j["presets"]}
     assert timed == TIMED | {"task-rule-close-after-done"}
-    assert {k for k, j in jobs.items() if j["switch"]} == TIMED | {"topic_fresh", "stall_triage", "task-rule-close-after-done"}
+    assert {k for k, j in jobs.items() if j["switch"]} == TIMED | {"topic_fresh", "task-rule-close-after-done"}
     for key in TIMED - {"health_scan"}:
         assert jobs[key]["can_change"] is True, key
     for key, job in jobs.items():
@@ -38,7 +38,6 @@ def test_admin_sees_a_switch_and_a_schedule_on_the_timed_jobs_and_housekeeping_h
             assert not job["switch"] and not job["presets"] and not job["can_change"], key
     assert jobs["stale_review"]["schedule"] == "Hourly" and "still_wanted" not in jobs
     assert jobs["learnings"]["on"] is True and jobs["learnings"]["schedule"] == "Nightly at 03:00"
-    assert jobs["auto_dream"]["on"] is True and jobs["auto_dream"]["schedule"] == "Nightly at 02:00"
 
 
 def test_ai_jobs_are_never_offered_every_15_minutes_and_the_server_refuses_it(api):
@@ -297,4 +296,3 @@ def test_every_row_reads_when_then_with_one_department_from_the_chart_and_search
     done = {k for k, j in jobs.items() if "done" in j["search"]}
     assert {"stale_review", "approval_expiry"} <= done
     assert "close" in jobs["stale_review"]["search"] and "remind" in jobs["due_reminders"]["search"]
-    assert "engineering" in jobs["cleanup"]["search"] and "housekeeping" in jobs["cleanup"]["search"]
