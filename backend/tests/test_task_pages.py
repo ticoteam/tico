@@ -56,6 +56,16 @@ def test_task_read_access_is_required_for_linking_and_listing_pinned_pages(api):
     place(api, "task:" + tid, "cara-test", expected=404)
 
 
+def test_a_bot_can_unpin_its_page_after_handing_the_task_to_a_person(api):
+    tid = task(api, "bot:ops", "Prepare the plan")
+    _, attempt = turn(api)
+    fid = seeded_page(api, "ops")
+    linked = post(api, "pins", {"place": "task:" + tid, "item": "page:" + fid}, attempt["token"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (tid,))
+    delete(api, "pins/" + linked["id"], attempt["token"])
+
+
 def test_task_page_listing_pages_over_filed_and_linked_pages_once(api):
     tid = task(api, "human:ben", "All project pages")
     _, attempt = turn(api)

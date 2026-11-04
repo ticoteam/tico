@@ -884,8 +884,10 @@ def may_manage(ctx, kind, ident):
 
 
 def may_unpin(ctx, pin, kind, ident):
-    if kind != "task" or not ctx.person:
+    if kind != "task":
         return may_manage(ctx, kind, ident)
+    if not ctx.person and (ctx.who.role != "bot" or ctx.who.via):
+        return False
     row = ctx.auth.task(ctx.c, ctx.who, ident)
     return ctx.who.role == "owner" or ctx.who.actor in (pin["made_by"], row["owner_id"], row["requester_id"])
 

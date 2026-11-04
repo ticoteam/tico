@@ -55,7 +55,8 @@ TAGS = {
 EVENTS_DESCRIPTION = (
     "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` "
     "(who made it, when the viewer may know) and `at`:\n"
-    "- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n"
+    "- `tasks`: `id`, `kind` (including `files` for page links) and `task` (as `GET /api/v2/tasks` shows it to the viewer), "
+    "or `gone: true` for a deleted task.\n"
     "- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; "
     "a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n"
     "- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or "

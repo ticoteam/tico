@@ -241,7 +241,7 @@ function taskPagesAdopt(d, task) {
   };
   d.tpOff = liveOn('tasks', e => {
     if (d.open && d.tpEl === slot && e.kind === 'files' && String(e.id) === id)
-      liveSoon('task-pages:' + id, () => { if (d.open && d.tpEl === slot) void taskPagesLoad(d); }, 200);
+      liveSoon('task-pages:' + d.id + ':' + id, () => { if (d.open && d.tpEl === slot) void taskPagesLoad(d); }, 200);
   });
   void taskPagesLoad(d);
 }

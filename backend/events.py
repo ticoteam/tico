@@ -1173,7 +1173,7 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
     views = {item["id"]: item for item in task_views(found, c, who, visible_sql)}
     present = {r[0] for r in c.execute(f"SELECT id FROM tasks WHERE id IN ({marks})", ids)}
     for task_id, row in last.items():
-        entry = {"id": task_id}
+        entry = {"id": task_id, "kind": row["kind"]}
         if task_id in views:
             entry["task"] = views[task_id]
         elif task_id not in present and _trashed_visible(c, who, task_id):
