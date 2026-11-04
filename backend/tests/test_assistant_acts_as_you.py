@@ -399,7 +399,7 @@ def _template_tools():
 
 def test_the_assistant_turn_is_offered_the_tools_its_template_runs_and_never_the_hidden_ones():
     """The Assistant's MCP listing: every tool its template runs is offered, the NEVER tools are not, and the listing stays
-    small enough for the model (about 165 KB today; the cliff is past 200 KB)."""
+    small enough for the model (about 185 KB today; the cliff is past 200 KB)."""
     everything = {t["name"] for t in hubtools.TOOLS}
     offered = hubtools.listing(local=True, kind="assistant")
     names = {t["name"] for t in offered}

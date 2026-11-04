@@ -7700,6 +7700,9 @@ ASSISTANT_TOOLS = frozenset({
     "hub_task_update", "hub_team_show",
     "hub_automation_restore", "hub_automation_versions", "hub_bot_model", "hub_bot_pause", "hub_bot_resume",
     "hub_rules_retire", "hub_task_bulk",
+    # Admin jobs 42-49: groups, bot owners and access, routines, budgets, inbox audience, Pending meetings.
+    "hub_automation_create", "hub_bot_access", "hub_bot_owners", "hub_finance_act", "hub_inbound_audience",
+    "hub_meeting_approve", "hub_meeting_pending",
 })
 
 
