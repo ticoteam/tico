@@ -55,19 +55,20 @@ def test_a_bot_reader_can_link_readable_pages_but_cannot_manage_the_task_or_link
     location = "task:" + tid
     source = task(api, "human:ana", "Shared source")
     fid = seeded_page(api, "cpo", task=source)
+    machine, attempt = turn(api)
+    bot = attempt["token"]
     identities = api.app.state.store.settings.test_identities
-    identities["ops-reader"] = Identity("bot:ops", "bot")
-    identities["ops-via"] = Identity("bot:ops", "bot", via="botops")
-    view = place(api, location, "ops-reader")
+    identities["ops-via"] = Identity("bot:ops", "bot", runner_id=machine["id"], attempt_id=attempt["id"], via="botops")
+    view = place(api, location, bot)
     assert view["can_link"] is True and view["can_edit"] is False
-    linked = post(api, "pins", {"place": location, "item": "page:" + fid}, "ops-reader")
+    linked = post(api, "pins", {"place": location, "item": "page:" + fid}, bot)
     assert linked["pins"][0]["page"]["file_id"] == fid
-    post(api, "cards", {"template": "tasks_by_status", "place": location}, "ops-reader", expected=403)
+    post(api, "cards", {"template": "tasks_by_status", "place": location}, bot, expected=403)
     private_page = seeded_page(api, "cpo", task=task(api, "human:ana", "Private source", private=True))
-    post(api, "pins", {"place": location, "item": "page:" + private_page}, "ops-reader", expected=404)
+    post(api, "pins", {"place": location, "item": "page:" + private_page}, bot, expected=404)
     assert place(api, location, "ops-via")["can_link"] is False
     post(api, "pins", {"place": location, "item": "page:" + fid}, "ops-via", expected=403)
-    delete(api, "pins/" + linked["id"], "ops-reader")
+    delete(api, "pins/" + linked["id"], bot)
 
 
 def test_unpinning_is_for_the_linker_task_parties_or_org_owner(api):
