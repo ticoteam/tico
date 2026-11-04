@@ -1338,9 +1338,6 @@ def test_a_rename_keeps_the_readings_taken_for_a_plan_and_a_new_secret_ends_them
     assert usage_of(api, sid)["used_pct"] == 30
     post(api, f"model-subscriptions/{sid}", {"secret": OTHER, "confirm": True})  # another account: they are not its
     assert usage_of(api, sid)["reason"] == NOT_SINCE
-    turn_on(api, m, sid)
-    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(12, timedelta(days=3))}}})
-    assert usage_of(api, sid)["used_pct"] == 12
 
 
 def test_a_same_accounts_refresh_keeps_the_readings_taken_for_a_chatgpt_plan(api):

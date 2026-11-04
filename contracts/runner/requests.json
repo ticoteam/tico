@@ -2584,19 +2584,6 @@
   "SubscriptionWeekly": {
    "additionalProperties": false,
    "properties": {
-    "owner": {
-     "anyOf": [
-      {
-       "maxLength": 80,
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "title": "Owner"
-    },
     "reported_at": {
      "maxLength": 50,
      "title": "Reported At",

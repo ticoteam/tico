@@ -5,6 +5,7 @@ from typing import Annotated, Any, Literal
 import re
 
 from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, SecretStr, StrictBool, StrictInt, StrictStr, ValidationError, WrapValidator, model_serializer, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 Text = Annotated[str, Field(min_length=1, max_length=200_000)]
 ID = Annotated[str, Field(min_length=1, max_length=200)]
@@ -1055,7 +1056,8 @@ class SubscriptionWeekly(Contract):
     status: Literal["allowed", "allowed_warning", "rejected"] | None = None
     # Whose login the reading is, stamped by the server from the turns that overlapped it (model_subscriptions.stamped): a
     # subscription's id, "" for the computer's own login, None when that cannot be told. A computer's own value is replaced.
-    owner: str | None = Field(default=None, max_length=80)
+    # Server-only: SkipJsonSchema keeps it out of the runner's request contract, which never carries it.
+    owner: Annotated[str | None, SkipJsonSchema()] = Field(default=None, max_length=80)
 
 
 # The computer's own login's usage window on its runtime row: one that fails its checks is left out, like the account.
