@@ -128,8 +128,11 @@ def _unsubscribe(ctx, mid):
 
 
 def _keep_reason(ctx, original):
-    """Why the owner keeps this mail (no unsubscribe), or '' when it may be unsubscribed from."""
+    """Why the owner keeps this mail (no unsubscribe), or '' when it may be unsubscribed from. With no internal domains
+    known on this computer (a Docker install with no registry), nothing can be told apart from a coworker: refused."""
     sender = original["from"]
+    if not ctx.policy.get("internal_domains"):
+        return "internal domains unknown on this computer"
     if "STARRED" in original["labels"]:
         return "the message is starred"
     if in_domain(sender, ctx.policy["internal_domains"]) or sender == ctx.mailbox:
@@ -143,12 +146,24 @@ def _keep_reason(ctx, original):
 
 def _known_sender(ctx, original):
     """Whether the mailbox already writes to this sender: its sends or its synced sent mail have them as a recipient,
-    in any thread (db.has_sent_to), or the message's thread has something from the mailbox in it."""
+    in any thread (db.has_sent_to), or the message's thread holds a message the mailbox sent to them (_answered_in_thread)."""
     if db.has_sent_to(ctx.conn, ctx.mailbox, original["from"]):
         return True
     if not original["thread_id"]:
         return False
-    return any(gm.normalize(m)["from"] == ctx.mailbox for m in ctx.gmail.thread(original["thread_id"]))
+    return _answered_in_thread(ctx, original)
+
+
+def _answered_in_thread(ctx, original):
+    """Whether the thread holds a message the mailbox sent to this sender: SENT, from the owner's address, with the sender
+    among its To or Cc. A draft, or inbound mail that spoofs the owner's From, does not count."""
+    sender = original["from"].lower()
+    for m in ctx.gmail.thread(original["thread_id"]):
+        sent = gm.normalize(m)
+        if ("SENT" in sent["labels"] and sent["from"].lower() == ctx.mailbox.lower()
+                and sender in {a.lower() for a in sent["to"] + sent["cc"]}):
+            return True
+    return False
 
 
 def _one_click_url(ctx, mid):

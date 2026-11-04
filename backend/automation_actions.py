@@ -89,11 +89,13 @@ def _message(values):
     return message if isinstance(message, dict) else None
 
 
-def _queue_mail(c, auto, run_id, action, message, args, result=None, step=None):
+def _queue_mail(c, auto, run_id, action, message, args, result=None, step=None, refused=None):
     """`result` starts the action's result: a send the switch turned into a draft keeps `send_off` once reported.
     A step's mail actions on one message form a chain: this one comes after the one the step queued before it
     (`after`), and is claimed only once that one settled ok (backend/automations.py `claim`). Behind one that already
-    failed or was canceled it is queued as skipped or canceled, so it never runs."""
+    failed or was canceled it is queued as skipped or canceled, so it never runs. `refused` is the reason the hub keeps
+    this action from running: it is recorded as failed (ok false, nothing for a computer to claim), and a chained
+    action after it is skipped the same way."""
     aid = H.new_id()
     mailbox, msg_id = str(message.get("mailbox") or "").strip().lower(), str(message.get("id") or "")
     prev = c.execute("SELECT id, state FROM automation_mail_actions WHERE run_id=? AND \"step\"=? AND mailbox=? "
@@ -102,10 +104,14 @@ def _queue_mail(c, auto, run_id, action, message, args, result=None, step=None):
     after, state = (prev["id"] if prev else None), "queued"
     if prev and prev["state"] in ("failed", "skipped", "canceled"):
         state = "canceled" if prev["state"] == "canceled" else "skipped"
+    elif refused:
+        state, result = "failed", {"ok": False, "detail": refused, "retry": False}
     c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,created_at,"
               "result,\"step\",\"after\") VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
               (aid, auto["id"], run_id, mailbox, msg_id, action, json.dumps(args, default=str), state, H.now(),
                json.dumps(result) if result else None, step, after))
+    if refused and state == "failed":
+        return {"ok": False, "detail": refused, "mail_action": aid, "queued": False}
     if state != "queued":
         return {"ok": False, "detail": "skipped: an earlier action on this message failed", "mail_action": aid,
                 "queued": False}
@@ -143,13 +149,37 @@ def _mail_or_slack(do):
 
 def _unsubscribe(c, auto, run_id, args, values, step=None):
     """A one-click unsubscribe from the message's own link, carried out by its mailbox's computer like an archive. Mail
-    only: a Slack message has no unsubscribe link, so it is refused, and so is anything without a mailbox."""
+    only: a Slack message has no unsubscribe link, so it is refused, and so is anything without a mailbox. Mail the
+    hub knows the owner keeps (_keep_reason) is never queued: it is recorded as refused, so nothing chained after runs."""
     message = _message(values)
     if not message:
         return _fail("unsubscribe needs a message")
     if message.get("source") == "slack" or not str(message.get("mailbox") or "").strip():
         return _fail("unsubscribe works on mail only, and this message is not mail")
-    return _queue_mail(c, auto, run_id, MAIL_ACTIONS["unsubscribe"], message, args, step=step)
+    why = _keep_reason(c, auto, message)
+    return _queue_mail(c, auto, run_id, MAIL_ACTIONS["unsubscribe"], message, args, step=step,
+                       refused=f"not unsubscribing: {why}" if why else None)
+
+
+def _keep_reason(c, auto, message):
+    """Why the owner keeps this mail, or '' when it may be unsubscribed from. Judged on the hub from what the hub knows,
+    so a flow's args or a computer's answer cannot change it: the company's domains (access.company_domains with the
+    settings this run has; the roster's domains when it has none), the people on the roster, and the mailbox itself.
+    A message with no sender is kept too: the hub cannot tell whose mail it is."""
+    from . import access, views
+    sender = str(message.get("from") or "").strip().lower()
+    if not sender:
+        return "the sender is unknown"
+    if sender == str(message.get("mailbox") or "").strip().lower():
+        return "the sender is internal"
+    settings = auto.get("settings")
+    domains = access.company_domains(c, settings) if settings is not None else access.roster_domains(c)
+    domain = sender.rsplit("@", 1)[-1]
+    if "@" in sender and any(domain == d or domain.endswith("." + d) for d in domains):
+        return "the sender is internal"
+    if sender in {str(p.get("email") or "").strip().lower() for p in views.roster(c)["people"]}:
+        return "the sender is on the people roster"
+    return ""
 
 
 def _slack(c, auto, run_id, do, args, message):

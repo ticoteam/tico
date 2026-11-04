@@ -206,3 +206,23 @@ class UnsubscribeAction(unittest.TestCase):
         self.synced_send(to=["xnews@example.org"])
         self.assertEqual(self.perform(), {"ok": True, "detail": "unsubscribed"})
         self.assertEqual(self.posts, [UNSUB_URL])
+
+    def test_with_no_internal_domains_known_on_this_computer_nothing_is_unsubscribed_from(self):
+        self.assertEqual(self.perform(internal=()), {"ok": False, "retry": False,
+                                                     "detail": "not unsubscribing: internal domains unknown on this computer"})
+        self.assertEqual(self.posts, [])
+
+    def test_a_draft_in_the_thread_does_not_make_the_sender_known(self):
+        draft = fake.message("m2", "t1", {"From": f"Ana <{BOX}>", "To": "news@example.org",
+                                          "Subject": "Re: Weekly digest", "Message-ID": "<d-1@acme.example>",
+                                          "Date": "Tue, 27 Oct 2026 10:00:00 -0700"}, body="Not sent.", labels=("DRAFT",))
+        self.assertEqual(self.perform(news(), draft), {"ok": True, "detail": "unsubscribed"})
+        self.assertEqual(self.posts, [UNSUB_URL])
+
+    def test_inbound_mail_spoofing_the_owners_from_in_the_thread_does_not_make_the_sender_known(self):
+        spoof = fake.message("m2", "t1", {"From": f"Ana <{BOX}>", "To": "news@example.org",
+                                          "Subject": "Re: Weekly digest", "Message-ID": "<s-1@example.org>",
+                                          "Date": "Tue, 27 Oct 2026 10:00:00 -0700"}, body="Not from her.",
+                             labels=("INBOX", "UNREAD"))
+        self.assertEqual(self.perform(news(), spoof), {"ok": True, "detail": "unsubscribed"})
+        self.assertEqual(self.posts, [UNSUB_URL])

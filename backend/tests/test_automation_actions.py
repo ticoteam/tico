@@ -8,7 +8,8 @@ from backend.tests.test_api import api, post  # noqa: F401
 from backend.tests.test_market import _librarian
 
 MAIL = {"message": {"source": "mail", "mailbox": "ana@acme.example", "id": "m1", "subject": "Invoice"}}
-SLACK = {"message": {"source": "slack", "inbox": "slack:#general", "channel": "C1", "ts": "1.1", "text": "Help?"}}
+NEWS = {"message": {**MAIL["message"], "from": "news@example.org"}}      # a sender the hub knows nothing about
+SLACK ={"message": {"source": "slack", "inbox": "slack:#general", "channel": "C1", "ts": "1.1", "text": "Help?"}}
 
 
 def auto(owner="person:ana"):
@@ -175,7 +176,7 @@ def run_in_step(api, step, do, args=None, values=None):
 
 
 def test_unsubscribe_queues_on_mail_and_is_refused_off_mail(api):
-    done = act(api, "unsubscribe", {}, MAIL)
+    done = act(api, "unsubscribe", {}, NEWS)
     assert done == {"ok": True, "detail": "unsubscribe queued", "mail_action": done["mail_action"], "queued": True}
     assert sql(api, "SELECT action, state, args FROM automation_mail_actions") == [
         {"action": "unsubscribe", "state": "queued", "args": "{}"}]
@@ -188,7 +189,7 @@ def test_unsubscribe_queues_on_mail_and_is_refused_off_mail(api):
 
 
 def test_mail_actions_of_one_step_on_one_message_chain_in_order(api):
-    first = run_in_step(api, "gate", "unsubscribe")["mail_action"]
+    first = run_in_step(api, "gate", "unsubscribe", values=NEWS)["mail_action"]
     second = run_in_step(api, "gate", "archive")["mail_action"]
     other_step = run_in_step(api, "next", "archive")["mail_action"]
     plain = act(api, "archive", {}, MAIL)["mail_action"]
@@ -200,8 +201,8 @@ def test_mail_actions_of_one_step_on_one_message_chain_in_order(api):
 
 
 def test_a_chained_action_behind_a_failed_or_canceled_one_is_never_queued(api):
-    failed = run_in_step(api, "gate", "unsubscribe")["mail_action"]
-    canceled = run_in_step(api, "other", "unsubscribe")["mail_action"]
+    failed = run_in_step(api, "gate", "unsubscribe", values=NEWS)["mail_action"]
+    canceled = run_in_step(api, "other", "unsubscribe", values=NEWS)["mail_action"]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE automation_mail_actions SET state='failed' WHERE id=?", (failed,))
         c.execute("UPDATE automation_mail_actions SET state='canceled' WHERE id=?", (canceled,))
@@ -214,3 +215,43 @@ def test_a_chained_action_behind_a_failed_or_canceled_one_is_never_queued(api):
         {"id": late["mail_action"], "state": "skipped", "after": failed}]
     assert sql(api, 'SELECT state, "after" FROM automation_mail_actions WHERE id=?',
                (late_canceled["mail_action"],)) == [{"state": "canceled", "after": canceled}]
+
+
+def hub_mail(sender, msg_id):
+    """A mail message as the hub's trigger hands it over: the sender from the synced message, never from the flow."""
+    return {"message": {"source": "mail", "mailbox": "ana@acme.example", "id": msg_id, "from": sender}}
+
+
+def test_the_hub_keeps_a_roster_persons_and_a_company_domains_mail_and_queues_nothing(api):
+    """The hub judges the sender from its own roster and the company's domains, whatever the flow says: a refused
+    unsubscribe is recorded as failed and nothing is queued for a computer to claim."""
+    from backend import access
+    settings = api.app.state.store.settings
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO humans(id,name,email) VALUES('sam','Sam','sam@gmail.com')")
+        team = access.company_domains(c, settings)[0]
+    with api.app.state.store.transaction() as c:
+        roster = A.run(c, {**auto(), "settings": settings}, "run_1", "unsubscribe", {}, hub_mail("sam@gmail.com", "m1"))
+        domain = A.run(c, {**auto(), "settings": settings}, "run_1", "unsubscribe", {}, hub_mail(f"ops@{team}", "m2"))
+    assert roster == {"ok": False, "detail": "not unsubscribing: the sender is on the people roster",
+                      "mail_action": roster["mail_action"], "queued": False}
+    assert domain == {"ok": False, "detail": "not unsubscribing: the sender is internal",
+                      "mail_action": domain["mail_action"], "queued": False}
+    rows = sql(api, "SELECT msg_id, state, result FROM automation_mail_actions ORDER BY created_at, rowid")
+    assert [(r["msg_id"], r["state"]) for r in rows] == [("m1", "failed"), ("m2", "failed")]
+    assert [json.loads(r["result"])["detail"] for r in rows] == [roster["detail"], domain["detail"]]
+
+
+def test_an_archive_chained_after_a_refused_unsubscribe_is_skipped_on_the_hub(api):
+    settings = api.app.state.store.settings
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO humans(id,name,email) VALUES('sam','Sam','sam@gmail.com')")
+    values = hub_mail("sam@gmail.com", "m3")
+    with api.app.state.store.transaction() as c:
+        first = A.run(c, {**auto(), "settings": settings}, "run_1", "unsubscribe", {}, values, step="gate")
+        second = A.run(c, {**auto(), "settings": settings}, "run_1", "archive", {}, values, step="gate")
+    assert second == {"ok": False, "detail": "skipped: an earlier action on this message failed",
+                      "mail_action": second["mail_action"], "queued": False}
+    assert sql(api, "SELECT action, state FROM automation_mail_actions ORDER BY created_at, rowid") == [
+        {"action": "unsubscribe", "state": "failed"}, {"action": "archive", "state": "skipped"}]
+    assert first["queued"] is False and first["detail"] == "not unsubscribing: the sender is on the people roster"
