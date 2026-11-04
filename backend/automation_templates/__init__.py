@@ -30,8 +30,14 @@ ROLES = {
 NEEDS_ACTOR = ("create_task", "draft_reply", "send_reply")
 # The actions a Slack channel shows nothing for (automation_actions._slack): a group hears only Slack channels.
 NO_OP_IN_SLACK = ("archive", "leave_for_you", "label", "forward")
-# The message a choose step's turn is asked about, named by the fields the trigger carries (automations.on_mail and
-# on_slack). Each {{field}} is quoted as data after the instructions (automation_flow.render_prompt), never read as them.
+# The actions a draft is filed with: in Slack automation_actions._slack files a draft as a task under the owner's actor,
+# so a bot actor that cannot take a non-routine task cannot draft there (fill takes these out).
+DRAFTS = ("draft_reply", "send_reply")
+DRAFT_TITLE = "Draft reply"
+# The message a choose step's turn is asked about, and that each task body and wake text hands on, named by the fields
+# the trigger carries (automations.on_mail and on_slack). A prompt's {{field}} is quoted as data after the instructions
+# (automation_flow.render_prompt). A task body is rendered as plain text (automation_engine._act: render_args), so there
+# the message is substituted unquoted; a wake text is quoted like the prompt.
 MESSAGE_PART = {
     "mail": ("\n\nThe message to handle: id {{message.id}} in thread {{message.thread}}, from {{message.from}} "
              "({{message.from_name}}), subject {{message.subject}}. Its body:\n{{message.body}}"),
@@ -39,9 +45,13 @@ MESSAGE_PART = {
 }
 
 
+def _is_slack(inbox):
+    return str(inbox or "").strip().lower().startswith("slack:")
+
+
 def _message_part(inbox):
-    """The part of a choose step's prompt that names the message: Slack for a `slack:` inbox, mail otherwise."""
-    return MESSAGE_PART["slack" if str(inbox or "").strip().lower().startswith("slack:") else "mail"]
+    """The part that names the message: Slack for a `slack:` inbox, mail otherwise."""
+    return MESSAGE_PART["slack" if _is_slack(inbox) else "mail"]
 
 
 def load(tid):
@@ -113,12 +123,16 @@ def _pick(c, A, owner, actor, found, dest, do, args, assistant_bot, role):
     return None
 
 
-def _fill_actions(c, A, owner, actor, found, dest, assistant_bot):
+def _fill_actions(c, A, owner, actor, found, dest, assistant_bot, part):
     """The destination's actions for this owner, or None when one of them has no bot that takes it (the destination is
-    dropped)."""
+    dropped). `part` (the message, _message_part) goes into each task body and wake text, so the hand-off carries it."""
     then = []
     for action in dest.get("then") or []:
         do, args = action["do"], dict(action.get("args") or {})
+        if do == "create_task":
+            args["body"] = str(args.get("body") or "") + part
+        elif do == "wake_bot":
+            args["text"] = str(args.get("text") or "") + part
         role = args.get("owner") if do == "create_task" else args.get("bot") if do == "wake_bot" else None
         if isinstance(role, dict):
             picked = _pick(c, A, owner, actor, found, dest, do, args, assistant_bot, role["role"])
@@ -164,6 +178,15 @@ def _without_actions(rule, dos):
         return None
     rule = {key: value for key, value in rule.items() if key != "then"}
     return {**rule, "then": then} if then else rule
+
+
+def _no_drafts(step):
+    """The step with its filter rules' draft and send actions taken out (_without_actions). A rule left with nothing to do
+    and nowhere to go is gone. A step that is not a filter has no rules to take them from and stays as it is."""
+    if step["type"] != "filter":
+        return step
+    rules = [_without_actions(rule, DRAFTS) if rule.get("then") else rule for rule in step.get("rules") or []]
+    return {**step, "rules": [rule for rule in rules if rule is not None]}
 
 
 def _prune(steps, gone, no_actor=False):
@@ -238,7 +261,8 @@ def _useful(destinations, steps):
 def fill(c, tid, owner, inbox, settings=None):
     """The template `tid` filled in for `owner` on `inbox`: a flow as the hub would save it, `enabled` off. Not checked
     here (automations._checked does that, with the inbox and the rights). Unknown templates and owners are refused, and so
-    is a group with no lead to act as when nothing the template does would run there."""
+    is a group with no lead to act as when nothing the template does would run there. In a Slack inbox a bot that cannot
+    take a non-routine task (a draft is one) gets no drafts, and no choose either: Sort."""
     from .. import automation_actions as AA
     from .. import automations as A
     tpl = load(tid)
@@ -255,27 +279,33 @@ def fill(c, tid, owner, inbox, settings=None):
     found = _active_by_template(c, chart)
     actor = AA.acts_as(c, {"flow": {"owner": owner}})
     assistant_bot = getattr(settings, "assistant_bot", None)
+    part = _message_part(inbox)
+    # In Slack a draft is filed as a task under the actor (automation_actions._slack). A bot actor that cannot take a
+    # non-routine task (task_create's gate, asked as the bot files one) cannot draft there, so its drafts go.
+    actor_bot = H.actor_id(actor) if actor and H.is_bot(actor) else ""
+    drafts = not (_is_slack(inbox) and actor_bot and not _takes_task(c, actor, actor_bot, DRAFT_TITLE))
     destinations, gone = [], set()
     for dest in tpl["destinations"]:
-        then = _fill_actions(c, A, owner, actor, found, dest, assistant_bot)
+        then = _fill_actions(c, A, owner, actor, found, dest, assistant_bot, part)
         if then is None or (not actor and any(action["do"] in NEEDS_ACTOR for action in then)):
             gone.add(dest["id"])
         else:
             destinations.append({**{k: v for k, v in dest.items() if k != "then"}, "then": then})
-    steps = _prune(tpl["steps"], gone, no_actor=not actor)
+    steps = _prune([step if drafts else _no_drafts(step) for step in tpl["steps"]], gone, no_actor=not actor)
     if not actor and not _useful(destinations, steps):
         raise Problem("invalid", f"{owner} has no lead to act as, so the {tpl['name']} template would do nothing in its "
                       "Slack channel. Give the group a lead first.", 422)
     # A group owns no turn. A bot owns one only if start_turn could file it: the gate a routine's task passes, asked as the
     # bot itself (onboarding, a Responder's or a synced bot's profile). Without a turn the choose becomes Sort (plan v2.1).
+    # A bot that has a turn but no drafts (the Slack case above) gets Sort too: its choose would draft.
     turn = kind == "person" or (kind == "bot" and _takes_task(c, "bot:" + ident, ident, tpl["name"], routine=True))
-    if not turn:
+    if not turn or not drafts:
         steps = [kept for step in steps for kept in _as_sort(step, tpl)]
     else:
         for step in steps:
             if step["type"] == "llm":
                 step["as"] = ("assistant:" if kind == "person" else "bot:") + ident
-                step["prompt"] = step["prompt"] + _message_part(inbox)
+                step["prompt"] = step["prompt"] + part
     return {"name": tpl["name"], "owner": owner, "enabled": False,
             "trigger": {"type": "message", "inbox": str(inbox or "").strip()}, "steps": steps,
             "destinations": destinations}

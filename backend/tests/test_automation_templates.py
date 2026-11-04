@@ -343,3 +343,78 @@ def test_a_bot_owner_on_a_synced_harness_gets_sort_for_its_draft(api):
     set_templates(api, STAFF)
     set_config(api, "finance", "harness", "dots")          # works on another platform: no task reaches it
     assert_sorted_draft(bot_flow(api, "finance"))
+
+
+def slack_bot_flow(api, bot):
+    listed(api, "general")
+    with api.app.state.store.read() as c:
+        flow = T.fill(c, "founder", f"bot:{bot}", "slack:#general", api.app.state.store.settings)
+    F.check(flow)
+    return flow
+
+
+def draft_actions(flow):
+    """The draft and send actions the flow's filter rules hold."""
+    return [a["do"] for step in flow["steps"] if step["type"] == "filter" for rule in step.get("rules") or []
+            for a in rule.get("then") or [] if a["do"] in T.DRAFTS]
+
+
+def test_a_task_hand_off_carries_the_mail_message_as_placeholders(api):
+    set_templates(api, STAFF)
+    flow = fill(api, "founder", "person:ana", "ana@acme.example")
+    legal = by_id(flow["destinations"])["legal"]["then"][0]["args"]
+    assert "{{message.body}}" in legal["body"]              # the task's body names the message it hands on
+    assert "{{message.subject}}" in legal["body"] and "{{message.from}}" in legal["body"]
+    for dest in ("engineering", "finance", "marketing"):    # marketing's wake, or its task when ana may not tell it
+        assert "{{message.body}}" in json.dumps(by_id(flow["destinations"])[dest]["then"])
+
+
+def test_a_task_hand_off_carries_the_slack_text_as_placeholders(api):
+    set_templates(api, STAFF)
+    listed(api, "general")
+    flow = fill(api, "founder", "person:ana", "slack:#general")
+    body = by_id(flow["destinations"])["legal"]["then"][0]["args"]["body"]
+    assert "{{message.text}}" in body and "{{message.from}}" in body and "{{message.body}}" not in body
+
+
+def test_a_slack_bot_owner_that_cannot_file_a_draft_is_sorted_without_drafts(api):
+    set_templates(api, STAFF)
+    set_config(api, "coo", "profile", "reviewer")          # runs its routine's turn, but takes no draft task
+    flow = slack_bot_flow(api, "coo")
+    assert draft_actions(flow) == []
+    assert_sorted_draft(flow)
+    assert "meet" not in by_id(flow["steps"])["ask"]["questions"]   # the only question the draft route read
+
+
+def test_a_slack_bot_owner_that_can_file_a_draft_keeps_it(api):
+    set_templates(api, STAFF)
+    flow = slack_bot_flow(api, "coo")                      # no profile: it takes every task, its drafts included
+    assert "draft_reply" in draft_actions(flow)
+    assert by_id(flow["steps"])["draft"]["as"] == "bot:coo"
+
+
+def test_a_reviewer_owner_keeps_its_mail_draft_since_no_task_is_filed(api):
+    set_templates(api, STAFF)
+    set_config(api, "coo", "profile", "reviewer")
+    flow = bot_flow(api, "coo")
+    assert "draft_reply" in draft_actions(flow)
+    assert by_id(flow["steps"])["draft"]["as"] == "bot:coo"
+
+
+def test_a_group_whose_bot_lead_cannot_file_a_draft_is_sorted_without_drafts(api):
+    set_templates(api, STAFF)
+    set_config(api, "coo", "profile", "reviewer")
+    gid = post(api, "groups", {"name": "Legal Desk", "add": {"bots": ["coo"]}, "lead": "bot:coo"})["id"]
+    listed(api, "general")
+    flow = fill(api, "founder", f"group:{gid}", "slack:#general")
+    F.check(flow)
+    assert draft_actions(flow) == []
+    assert_sorted_draft(flow)
+
+
+def test_a_person_owner_in_slack_keeps_its_drafts(api):
+    set_templates(api, STAFF)
+    listed(api, "general")
+    flow = fill(api, "founder", "person:ana", "slack:#general")
+    assert "draft_reply" in draft_actions(flow)
+    assert by_id(flow["steps"])["draft"]["as"] == "assistant:ana"
