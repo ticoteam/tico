@@ -12,11 +12,6 @@ def ago(**kw):
     return H.shift(DAY, **{k: -v for k, v in kw.items()})
 
 
-def bot_ready(c, slug="finance"):
-    c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES(?,?,?,'active')", (slug, slug, slug.title()))
-    c.execute("UPDATE bots SET state='active' WHERE id=?", (slug,))
-
-
 def task(c, title):
     return H.task_create(c, H.human_actor("ana"), title, f"{title}, for the daily check.", "bot:finance")
 
@@ -57,7 +52,6 @@ def only_list(c, slug="finance"):
 def test_a_task_blocked_on_a_person_with_nothing_new_is_not_listed_until_the_blocker_is_closed_before_the_turn(api):
     store = api.app.state.store
     with store.transaction() as c:
-        bot_ready(c)
         blocker = H.task_create(c, H.human_actor("ana"), "Sign the lease", "Ana signs it.", "human:ana")
         mine = task(c, "Hold the warehouse for the lease")
         blocks(c, blocker["id"], mine["id"], ago(days=3))
@@ -75,7 +69,6 @@ def test_a_task_blocked_on_a_person_with_nothing_new_is_not_listed_until_the_blo
 def test_a_blocker_closed_after_the_bots_last_turn_is_listed_as_a_missed_update(api):
     store = api.app.state.store
     with store.transaction() as c:
-        bot_ready(c)
         blocker = H.task_create(c, H.human_actor("ana"), "Sign the lease", "Ana signs it.", "human:ana")
         mine = task(c, "Hold the warehouse for the lease")
         blocks(c, blocker["id"], mine["id"], ago(days=3))
@@ -90,7 +83,6 @@ def test_a_blocker_closed_after_the_bots_last_turn_is_listed_as_a_missed_update(
 def test_an_idle_open_task_untouched_two_days_is_listed_as_quiet_and_a_recent_one_is_not(api):
     store = api.app.state.store
     with store.transaction() as c:
-        bot_ready(c)
         idle = task(c, "Renew the parking permit")
         settle(c, idle["id"], "finance", ago(days=2))
         recent = task(c, "Book the dentist")
@@ -105,7 +97,6 @@ def test_an_idle_open_task_untouched_two_days_is_listed_as_quiet_and_a_recent_on
 def test_a_task_with_a_run_already_queued_is_not_listed(api):
     store = api.app.state.store
     with store.transaction() as c:
-        bot_ready(c)
         queued = task(c, "Chase the invoice")        # its creation wake is still queued
         settle(c, queued["id"], "finance", ago(days=2))
         idle = task(c, "Plan the offsite")
@@ -122,7 +113,6 @@ def test_a_task_with_a_run_already_queued_is_not_listed(api):
 def test_a_bot_with_nothing_to_list_gets_no_message(api):
     store = api.app.state.store
     with store.transaction() as c:
-        bot_ready(c)
         c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES('idlebot','idlebot','Idle Bot','active')")
         complete_jobs(c)
         out = daily_task_check.run(c, DAY)
@@ -133,7 +123,6 @@ def test_a_bot_with_nothing_to_list_gets_no_message(api):
 def test_two_runs_on_one_utc_day_give_one_message_and_a_list_names_at_most_25_tasks(api):
     store = api.app.state.store
     with store.transaction() as c:
-        bot_ready(c)
         for n in range(30):
             settle(c, task(c, f"Old errand {n:02d}")["id"], "finance", ago(days=2))
         complete_jobs(c)
