@@ -1,0 +1,52 @@
+{
+  "inbox": {
+    "id": "au_board", "name": "Inbox · ops@acme.example", "owner": "person:dana", "enabled": true, "builtin": false, "version": 3,
+    "trigger": {"type": "message", "inbox": "ops@acme.example", "filters": []},
+    "destinations": [
+      {"id": "me", "name": "Me", "color": "amber", "then": [{"do": "leave_for_you", "args": {}}]},
+      {"id": "legal", "name": "Legal", "color": "orange", "then": [{"do": "create_task", "args": {"title": "Legal mail", "owner": "person:priya"}}]},
+      {"id": "eng", "name": "Engineering", "color": "violet", "then": [{"do": "wake_bot", "args": {"bot": "bot:eng-lead"}}]},
+      {"id": "archive", "name": "Archive", "color": "gray", "then": [{"do": "label", "args": {"name": "Done"}}, {"do": "archive", "args": {}}]}
+    ],
+    "steps": [
+      {"id": "f1", "type": "filter", "enabled": true, "rules": [
+        {"when": [{"field": "message.subject", "op": "matches", "value": "subpoena|lawsuit"}], "match": "all", "then": [{"do": "label", "args": {"name": "STARRED"}}], "to": "legal", "next": "end", "stop": true},
+        {"when": [{"field": "message.from", "op": "contains", "value": "acme.example"}], "match": "all", "then": [{"do": "label", "args": {"name": "Known"}}], "next": "rule", "stop": false},
+        {"when": [{"field": "message.subject", "op": "contains", "value": "receipt"}], "match": "all", "then": [{"do": "archive", "args": {}}], "next": "end", "stop": true}
+      ]},
+      {"id": "dq", "type": "decide", "enabled": true, "out": "d1", "level": "medium", "questions": {
+        "q1": {"type": "noul", "instructions": "Is someone asking to meet?"},
+        "q2": {"type": "noul", "instructions": "Is it a bug report?"}
+      }},
+      {"id": "fq", "type": "filter", "enabled": true, "rules": [
+        {"when": [{"field": "d1.q1", "op": "is", "value": "yes", "min": 0.75}], "match": "all", "then": [{"do": "draft_reply", "args": {"body": "Here is my booking link."}}], "to": "me", "next": "end", "stop": true},
+        {"when": [{"field": "d1.q2", "op": "is", "value": "yes", "min": 0.8}], "match": "all", "then": [], "to": "eng", "next": "end", "stop": true}
+      ]},
+      {"id": "sd", "type": "decide", "enabled": true, "out": "d2", "level": "high", "questions": {
+        "to": {"type": "choice", "instructions": "Pick where this goes. Unsure: Me.", "criteria": {"me": "Me", "legal": "Legal", "eng": "Engineering", "archive": "Archive"}}
+      }},
+      {"id": "sf", "type": "filter", "enabled": true, "rules": [
+        {"when": [{"field": "d2.to", "op": "is", "value": "me", "min": 0.5}], "match": "all", "then": [], "to": "me", "next": "end", "stop": true},
+        {"when": [{"field": "d2.to", "op": "is", "value": "legal", "min": 0.5}], "match": "all", "then": [], "to": "legal", "next": "end", "stop": true},
+        {"when": [{"field": "d2.to", "op": "is", "value": "eng", "min": 0.5}], "match": "all", "then": [], "to": "eng", "next": "end", "stop": true},
+        {"when": [{"field": "d2.to", "op": "is", "value": "archive", "min": 0.5}], "match": "all", "then": [], "to": "archive", "next": "end", "stop": true},
+        {"when": [], "match": "all", "then": [], "to": "me", "next": "end", "stop": true}
+      ]}
+    ]
+  },
+  "webhook": {
+    "id": "au_hook", "name": "Order events", "owner": "person:dana", "enabled": true, "builtin": false, "version": 2,
+    "trigger": {"type": "webhook", "id": "wh_2", "name": "orders"},
+    "destinations": [
+      {"id": "ops", "name": "Ops", "color": "blue", "then": [{"do": "create_task", "args": {"title": "Check the order", "owner": "person:omar"}}]},
+      {"id": "log", "name": "Log", "color": "gray", "then": [{"do": "note", "args": {"text": "Logged"}}]}
+    ],
+    "steps": [
+      {"id": "f1", "type": "filter", "enabled": true, "rules": [
+        {"when": [{"field": "payload.type", "op": "is", "value": "refund"}], "match": "all", "then": [], "to": "ops", "next": "end", "stop": true}
+      ]},
+      {"id": "l1", "type": "llm", "enabled": true, "out": "l1", "as": "assistant:dana", "prompt": "Sort the order event.",
+       "choose": {"to": ["ops", "log"], "default": "log", "mode": "draft"}}
+    ]
+  }
+}
