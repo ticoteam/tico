@@ -1,6 +1,7 @@
 """Synthetic runner traffic during the worktree-heavy heartbeat and scheduler pass."""
 import json
 import math
+import os
 import threading
 import time
 from types import SimpleNamespace
@@ -13,6 +14,37 @@ from backend.scheduler import Scheduler
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, headers, ready, runner  # noqa: F401
 from backend.enqueue import enqueue_stored
+
+
+@pytest.fixture
+def two_cpu_cap():
+    """Keep this lock-contention load repeatable on a busy shared VM."""
+    if not hasattr(os, "sched_getaffinity") or not hasattr(os, "sched_setaffinity"):
+        yield None
+        return
+    original = os.sched_getaffinity(0)
+    capped = set(sorted(original)[:2]) or original
+    # TestClient starts its ASGI portal before this fixture is entered, so cap
+    # every existing thread as well as the caller. Threads started below inherit
+    # the capped caller affinity.
+    affinities = {}
+    for thread in threading.enumerate():
+        ident = thread.native_id
+        if ident is None:
+            continue
+        try:
+            affinities[ident] = os.sched_getaffinity(ident)
+            os.sched_setaffinity(ident, capped)
+        except ProcessLookupError:
+            affinities.pop(ident, None)
+    try:
+        yield sorted(capped)
+    finally:
+        for ident, affinity in affinities.items():
+            try:
+                os.sched_setaffinity(ident, affinity)
+            except ProcessLookupError:
+                pass
 
 
 def fleet(api, attempts=100, trees=50):
@@ -254,7 +286,7 @@ def test_health_flags_runner_p95_and_clears_after_the_window(api):
 
 
 @pytest.mark.slow
-def test_100_attempt_routes_during_heartbeat_and_scheduler(api, monkeypatch):
+def test_100_attempt_routes_during_heartbeat_and_scheduler(api, monkeypatch, two_cpu_cap):
     computer = fleet(api)
     store = api.app.state.store
     # Time SQL and lock waits without starting any production service or background exporter.
@@ -301,7 +333,10 @@ def test_100_attempt_routes_during_heartbeat_and_scheduler(api, monkeypatch):
         finally:
             flight.request_finished(token)
 
-    with ThreadPoolExecutor(max_workers=18) as pool:
+    # Match the established synthetic live-holder profile: heartbeat, scheduler and 100 turns on a
+    # two-CPU cap. More request threads only increase CPU/GIL queueing and make lock-wait results
+    # depend on unrelated VM load instead of the SQLite contention being measured.
+    with ThreadPoolExecutor(max_workers=12) as pool:
         beat = pool.submit(api.post, "/api/v2/runners/heartbeat", headers=headers(computer["token"]), json={
             "version": "synthetic", "platform": "test", "readiness": {"schema_version": 1, "bots": {}, "worktrees": True}})
         assert entered.wait(10)
@@ -317,6 +352,7 @@ def test_100_attempt_routes_during_heartbeat_and_scheduler(api, monkeypatch):
                       "work_p95_ms": round(sorted(v[2] for v in values)[math.ceil(.95 * len(values)) - 1], 2)}
                for name, values in samples.items()}
     print("SNAPSHOT_RECEIPT " + json.dumps(snapshot_counts, sort_keys=True))
+    print("CPU_CAP " + json.dumps(two_cpu_cap))
     print("CONTENTION_RECEIPT " + json.dumps(receipt, sort_keys=True))
     rec.drain()
     print("HOLDERS " + json.dumps(sorted(rec.long_holds, key=lambda h: -h["hold_s"])[:10]))
