@@ -84,7 +84,7 @@ If spending takes you straight to paused before a warning is sent, you get only 
 At the minimum, **Paused: out of credit** shows the reported stop times for the Gateway key and both servers.
 **Not reported yet** means that service’s stop time is not available yet.
 For zero-grace companies, the owner gets one run-out email for that pause, saying the bots and server are paused and the data is safe.
-It includes an **Ask for more credit** link.
+It includes a **Contact support for more credit** line with a link to Support.
 Companies with positive Hosting grace use the [grace emails below](#hosting-grace-and-retained-data).
 Waitlist credit notices do not create a card inside your Tico.
 A Gateway recovery alone does not clear **Paused: out of credit** while billing-stopped servers remain stopped.
@@ -163,7 +163,7 @@ For example, changing a 72-hour grace to 48 hours after 50 hours schedules that 
 The change email names that next 00:05 UTC run, not the already-passed deadline.
 
 During grace, the company owner sees one **Needs you: add credit** card on this account page.
-It shows the stop time in UTC, says **Your data is kept**, and directs you to **Ask for more credit** below.
+It shows the stop time in UTC, says **Your data is kept**, and directs you to **Contact support for more credit** below.
 The card appears only for the owner, not other company members, and stays on the account page outside your Tico.
 Refreshing the page does not create another card.
 
@@ -172,7 +172,7 @@ This applies to earlier and later moves, before or after a reminder has been sen
 An edit that leaves the effective stop time unchanged sends nothing.
 The card disappears when your balance rises above the minimum or the stop completes.
 Credit or a lower minimum that ends grace sends no stop-time change email.
-Use [Ask for more credit](ask-for-credit.md) to request credit from staff. The card does not take a card payment.
+Use [Contact support for more credit](ask-for-credit.md) to ask Tico staff for credit. The card does not take a card payment.
 
 The grace emails go to the current company owner, using the account page’s company membership and profile email.
 They do not rely on the original sign-up email.
@@ -206,8 +206,8 @@ Your account page stays available while your Tico server and bot computer are st
 
 ## More credit and restarting
 
-[Ask for more credit](ask-for-credit.md) sends a request to Tico staff from this account page.
-You can use it while your servers are stopped.
+[Contact support for more credit](ask-for-credit.md) explains how to ask Tico staff for more credit.
+Your account page stays available while your servers are stopped.
 
 After staff add enough credit to cover model usage and bring the balance above the minimum, Tico models resume within five minutes.
 Server restart follows a separate check.

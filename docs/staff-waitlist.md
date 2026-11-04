@@ -18,7 +18,7 @@ The Waitlist page has five views. Each view's link shows HQ's count.
 | **Approved** | Sign-ups staff approved. |
 | **Declined** | Sign-ups staff declined, newest decision first. |
 | **Approved (before waitlist)** | Accounts that had a hosted preview before the waitlist. They keep their servers. |
-| **Credit requests** | Open requests from the customer’s account page, oldest first, with balance and usage. |
+| **Credit requests** | Open requests the account page took before it stopped taking them, oldest first, with balance and usage. |
 
 A row shows the name, email, company, the customer's answer (line breaks kept) and the sign-up date. A decided row also shows who decided and when. A declined row shows your private note, and "Email not sent" if the decline email failed.
 
@@ -89,6 +89,8 @@ Repeated requests keep one grant and setup; concurrent Resends send one completi
 
 ## Handle a credit request
 
+The account page no longer takes new requests. Customers contact Support, so this list shows only the rows written before that change.
+
 1. Open **Waitlist** on the admin page.
 2. Select **Credit requests**.
 3. Review the company, email, message, request date, **Balance when asked**, **Balance now**, and **Usage so far**.
@@ -123,6 +125,8 @@ Each change records the signed-in staff email.
 *Sources: ticoteam/tico-internal admin/README.md "Waitlist" (Dev 342), ticoteam/tico-services#120 (squash 028ce6bc), 2026-10-22. Not seen live: no access to admin.tico.team.*
 
 *Credit requests sources checked 2026-10-23: ticoteam/tico-internal#16, admin/tico_admin/waitlist.py (Forms, credit_requests, submit_credit); ticoteam/tico-services#127, portal/account.py. Separate admin installation not verified.*
+
+*No-new-requests check, 2026-11-04: tico-services CHANGELOG.md under Unreleased and portal/account.py lines 14–16, read from the local origin/main 90e43ae (a fetch failed, so the live remote is unconfirmed).*
 
 *Approval sources checked 2026-10-23: services#132, hosting/approve.py (shown, approve, retry, on_installed, _grant, _send, SignupSetup); admin#17 reviewed head c7a0ab9c, admin/tico_admin/waitlist.py (Forms.approve/retry/youre_in, approval_credit, status_cell); Engineering’s accepted receipt ordering on Dev 344. Admin merge d47f5682; reviewed source has no subsequent delta per Builder’s receipt. No installation or real action verified.*
 
