@@ -73,7 +73,9 @@ function snapDb() {
       const db = req.result;
       // Made by someone else at this version without the store (a script poking at it): start again next time.
       if (!db.objectStoreNames.contains(SNAP_STORE)) { db.close(); indexedDB.deleteDatabase(SNAP_DB); reject(new Error('no store')); return; }
-      db.onversionchange = () => { db.close(); SNAP.db = null; };
+      // Another tab deletes the database (a sign-out that could not move the epoch) or upgrades it: this one closes and
+      // keeps nothing more, since a database made again would start at epoch 0.
+      db.onversionchange = () => { db.close(); SNAP.db = null; SNAP.banned = true; SNAP.who = ''; clearTimeout(SNAP.timer); };
       resolve(db);
     };
     req.onerror = () => reject(req.error);
@@ -120,9 +122,11 @@ function snapGuarded(work) {
   })).catch(() => false);
 }
 // Sign-out: the epoch moves on and the kept screen goes, in one transaction.
+// It is tried twice; if both abort, the whole database goes instead (every other tab closes on versionchange and
+// bans itself). Should that be blocked or fail too, only this tab is banned. Nothing here throws into sign-out.
 function snapSignOut() {
   if (!snapOn()) return Promise.resolve();
-  return snapDb().then(db => new Promise((resolve, reject) => {
+  const bump = () => snapDb().then(db => new Promise((resolve, reject) => {
     const tx = db.transaction(SNAP_STORE, 'readwrite'), store = tx.objectStore(SNAP_STORE);
     store.get(SNAP_EPOCH).onsuccess = e => {
       store.put((Number(e.target.result) || 0) + 1, SNAP_EPOCH);
@@ -130,7 +134,16 @@ function snapSignOut() {
     };
     tx.oncomplete = () => resolve();
     tx.onerror = tx.onabort = () => reject(tx.error);
-  })).catch(() => {});
+  }));
+  return bump().catch(bump).catch(snapDelete).catch(() => {});
+}
+function snapDelete() {
+  const open = SNAP.db;
+  SNAP.db = null;
+  return Promise.resolve(open).then(db => db?.close(), () => {}).then(() => new Promise(done => {
+    const req = indexedDB.deleteDatabase(SNAP_DB);
+    req.onsuccess = req.onerror = req.onblocked = () => done();
+  }));
 }
 // Signed out, or someone else: nothing more is kept in this page, a copy on screen goes now, and what was kept goes.
 function bootSnapDrop() {

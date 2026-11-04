@@ -163,14 +163,56 @@ const {t} = require('./support/load.cjs');
     assert.equal(await other.evaluate(() => SNAP.banned && SNAP.who === ''), true, 'and the other tab keeps nothing more');
 
     // Both tabs again, from a fresh load; the other tab hears nothing of the next sign-out (no BroadcastChannel).
-    await page.reload({waitUntil: 'domcontentloaded'});
-    await heading().waitFor();
-    await keptAs(entry => entry?.route === '#/tasks', 'kept again after a fresh load');
-    await other.reload({waitUntil: 'domcontentloaded'});
-    await other.getByRole('heading', {name: 'Tasks', exact: true}).waitFor();
-    await other.waitForFunction(() => performance.getEntriesByName('tico:paint-fresh').length === 1);
-    await other.evaluate(() => { snapChannel.onmessage = null; });
+    const fresh = async () => {
+      await page.reload({waitUntil: 'domcontentloaded'});
+      await heading().waitFor();
+      await keptAs(entry => entry?.route === '#/tasks', 'kept again after a fresh load');
+      await other.reload({waitUntil: 'domcontentloaded'});
+      await other.getByRole('heading', {name: 'Tasks', exact: true}).waitFor();
+      await other.waitForFunction(() => performance.getEntriesByName('tico:paint-fresh').length === 1);
+      await other.evaluate(() => { snapChannel.onmessage = null; });
+    };
+    const epochNow = () => page.evaluate(async () => {
+      if (!(await indexedDB.databases()).some(d => d.name === 'tico-boot')) return null;
+      return new Promise(done => {
+        const req = indexedDB.open('tico-boot');
+        req.onsuccess = () => {
+          const db = req.result, get = db.transaction('screens').objectStore('screens').get('epoch');
+          get.onsuccess = () => { db.close(); done(Number(get.result) || 0); };
+        };
+      });
+    });
+    // The sign-out's readwrite transactions abort, `times` of them (a test stub over IndexedDB).
+    const abortSignOut = times => page.evaluate(async times => {
+      let left = times;
+      const real = IDBDatabase.prototype.transaction;
+      IDBDatabase.prototype.transaction = function (names, mode, ...rest) {
+        const tx = real.call(this, names, mode, ...rest);
+        if (mode === 'readwrite' && left > 0) { left--; queueMicrotask(() => tx.abort()); }
+        return tx;
+      };
+      await bootSnapDrop();
+    }, times);
+    const otherKeepsNothing = async what => {
+      await other.evaluate(() => { bootSnapSave(); window.dispatchEvent(new Event('pagehide')); });
+      await other.waitForTimeout(300);
+      assert.equal(await kept(), null, what);
+    };
 
+    // One aborted try: the second moves the epoch, and the other tab's save writes nothing.
+    await fresh();
+    const before = await epochNow();
+    await abortSignOut(1);
+    assert.equal(await epochNow(), before + 1, 'the retry moved the epoch');
+    await otherKeepsNothing('an aborted first try still bans every tab');
+    // Both tries aborted: the database goes, the other tab closes on versionchange and bans itself.
+    await fresh();
+    await abortSignOut(2);
+    await page.waitForFunction(async () => !(await indexedDB.databases()).some(d => d.name === 'tico-boot'));
+    assert.equal(await other.evaluate(() => SNAP.banned && SNAP.who === ''), true, 'the other tab banned itself');
+    await otherKeepsNothing('nothing is kept after the database went');
+
+    await fresh();
     // Signing out while the copy is up takes it down at once, and leaves no screen behind (the navigation itself is
     // not followed).
     held = [];
