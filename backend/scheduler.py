@@ -433,10 +433,11 @@ class Scheduler:
             # One snapshot for the whole scan, so the bots' shared reads (runners, providers, holds) are read once.
             with self.store.read_transaction() as c:
                 observations = queue_refusals.pending(c, self.store.settings, stamp(at), failures)
-            for change in observations:
-                with locked("queue_refusals:" + change[0]) as c:
-                    with isolated(c, "queue_refusals", change[0], failures):
-                        queue_refusals.apply(c, change)
+        # Each observation is its own short write: the writer gate is not reentrant, so one inside "deferred" would wait out its timeout.
+        for change in observations:
+            with locked("queue_refusals:" + change[0]) as c:
+                with isolated(c, "queue_refusals", change[0], failures):
+                    queue_refusals.apply(c, change)
         # A running turn's step the bot status throttle held back is sent now (backend/thread_bot_status.py).
         from . import thread_bot_status
         with self.store.read() as c:
