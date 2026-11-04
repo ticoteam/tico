@@ -166,11 +166,19 @@ def authority(c, mailbox):
 
 def owned_mailboxes(c, runner_id):
     """The mailboxes this computer may publish, claim, read the calendar of and report on, and nothing else:
-    the workspace mailboxes whose inbox bot runs here, and the personal mailboxes whose live grant it holds."""
+    the workspace mailboxes whose inbox bot runs here, and the personal mailboxes whose live grant it holds. A personal
+    grant whose mailbox's bot now runs on another computer is not held here: a reconnect moves it, and the old holder
+    keeps nothing meanwhile (google_rights.may_row refuses that holder's refresh the same way)."""
     row = active(c)
     live = _live_mailboxes(c)
-    owned = {r[0] for r in c.execute("SELECT lower(mailbox) FROM google_connects WHERE holder=? AND "
-                                     "grant_hash IS NOT NULL AND status<>'disconnected'", (runner_id,))}
+    bots = {str(box["address"]).lower(): box["bot"] for box in routines.message_bot_mailboxes(c)}
+    placed = {r[0]: r[1] for r in c.execute("SELECT bot, runner_id FROM assignments")}
+    owned = set()
+    for box, status in c.execute("SELECT lower(mailbox), status FROM google_connects WHERE holder=? AND "
+                                 "grant_hash IS NOT NULL AND status<>'disconnected'", (runner_id,)).fetchall():
+        host = placed.get(bots.get(box))
+        if host in (None, runner_id) or status in ("disconnecting", "revoking"):
+            owned.add(box)
     if row:
         hosted = {r[0] for r in c.execute("SELECT bot FROM assignments WHERE runner_id=?", (runner_id,))}
         for box in routines.message_bot_mailboxes(c):
