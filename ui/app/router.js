@@ -65,6 +65,7 @@ function route(hash = location.hash) {
   if (!S.route.startsWith('#/bot/')) botStopped();
   if (!S.route.startsWith('#/seat/')) recruitStop();
   threadsSync();      // the sidebar's Threads link and the rail's lists (ui/app/threads.js)
+  setupMark();        // the wizard's mark first: Ask stays away from it (ui/app/notices.js)
   askSync();          // Ask's button: away on the Assistant page and in setup (ui/app/ask-panel.js)
   renderTree();
   if (redesignRoute(S.route)) { /* Strategy's tabs, Automations, Connections and the old addresses that moved (ui/app/redesign.js) */ }

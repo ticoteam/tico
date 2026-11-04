@@ -4,7 +4,8 @@
 // at 390 px with the phone drawer (More) open, with the bottom bar. Finance shows as the last answer this browser had
 // for the same person: none kept is hidden, a kept "shown" stands until /v2/finance/access says no (403, or a list with
 // nothing in view), a failed read changes nothing, and a sign-out or another person drops what was kept. Finish setup and
-// the folds (Library, Rules, Team) are kept the same way.
+// the folds (Library, Rules, Team) are kept the same way. A sign-out in one tab stops every other tab keeping anything,
+// and an Ask tap made before /me never opens Ask over the setup wizard.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -43,10 +44,12 @@ const shows = (snap, nav) => snap.rows.find(r => r.key === nav)?.on;
 const kept = page => page.evaluate(k => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return 'unreadable'; } }, KEPT);
 
 // One visit in `context` (its localStorage is this browser's): who /me answers as, what Finance's access read says
-// ('yes', 'no', or a status to fail with), and whether the server asks for setup.
-async function visit(context, {phone = false, who = 'ana', finance = 'no', onboarding = false, proxy = false} = {}) {
+// ('yes', 'no', or a status to fail with), and whether the server asks for setup. `holdFinance` leaves Finance's read
+// out (visit.releaseFinance lets it answer); `early` runs once the scripts are in and before any read answers.
+async function visit(context, {phone = false, who = 'ana', finance = 'no', onboarding = false, proxy = false, hash = '#/updates',
+  holdFinance = false, early = null} = {}) {
   const page = await context.newPage();
-  const errors = [], gates = {scripts: [], reads: [], holdScripts: true, holdReads: true};
+  const errors = [], gates = {scripts: [], reads: [], finance: [], holdScripts: true, holdReads: true, holdFinance};
   page.on('pageerror', e => errors.push(e.message));
   const config = {company_name: 'Acme', onboarding_needed: onboarding};
   const me = {id: who, name: who === 'ana' ? 'Ana Silva' : 'Bea Lopez', email: who + '@acme.example', role: who === 'ana' ? 'owner' : 'member',
@@ -77,12 +80,13 @@ async function visit(context, {phone = false, who = 'ana', finance = 'no', onboa
     if (p === '/api/v2/threads/rail') return json({pinned: [], threads: [], catch_up: 0, catch_up_ids: [], next_cursor: null, dms: {}});
     if (p === '/api/v2/threads') return json({attention: [], threads: [], dms: [], bot_dms: {}, next_cursor: null});
     if (p === '/api/v2/finance/access') {
+      if (gates.holdFinance) await new Promise(go => gates.finance.push(go));
       if (typeof finance === 'number') return json({error: {code: finance === 403 ? 'denied' : 'failed', message: 'No'}}, finance);
       return json(access(finance === 'yes'));
     }
     return json(unrouted(p));
   });
-  await page.goto(ORIGIN + '/#/updates', {waitUntil: 'commit'});
+  await page.goto(ORIGIN + '/' + hash, {waitUntil: 'commit'});
   // Painted: the whole body is in and styled, no script of the app's has run.
   await page.waitForFunction(() => document.getElementById('org-fan') && [...document.querySelectorAll('link[rel="stylesheet"]')].every(l => l.sheet)
     && typeof S === 'undefined', null, {timeout: t(15000)});
@@ -96,14 +100,19 @@ async function visit(context, {phone = false, who = 'ana', finance = 'no', onboa
     await page.waitForFunction(() => document.body.classList.contains('drawer'));
   }
   const ran = await rail(page);
+  if (early) await early(page);
   // Settled: every read answered, Finance's included.
   gates.holdReads = false; gates.reads.splice(0).forEach(go => go());
   await page.waitForFunction(() => S.me && typeof FIN_PROBE !== 'undefined' && FIN_PROBE && THREADS.on !== null
     && document.querySelector('#tree li:not(.empty)'), null, {timeout: t(15000)});
-  await page.evaluate(() => FIN_PROBE);
+  if (!holdFinance) await page.evaluate(() => FIN_PROBE);
   await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
   const settled = await rail(page);
-  return {page, errors, painted, ran, settled};
+  const releaseFinance = async () => {
+    gates.holdFinance = false; gates.finance.splice(0).forEach(go => go());
+    await page.evaluate(() => FIN_PROBE);
+  };
+  return {page, errors, painted, ran, settled, releaseFinance};
 }
 // Nothing moved: painted, ran and settled are the same rail.
 function same({painted, ran, settled}, tag) {
@@ -196,7 +205,8 @@ const newContext = (browser, phone) => browser.newContext({viewport: phone ? PHO
       await again.page.locator('#account').click();
       await again.page.locator('#sign-out').click();
       await again.page.waitForURL('**/api/v2/logout');
-      assert.equal(await kept(again.page), null, 'a sign-out forgets the rail kept for Ana');
+      const out = await kept(again.page);
+      assert.ok(!out.who && !('finance' in out), 'a sign-out forgets the rail kept for Ana');
       await again.page.close();
       const bea = await visit(context, {who: 'bea', finance: 'no'});
       same(bea, 'Bea after Ana signed out');
@@ -214,6 +224,47 @@ const newContext = (browser, phone) => browser.newContext({viewport: phone ? PHO
       assert.equal(shows(bea2.settled, 'finance'), false, 'Bea: Ana\'s Finance goes once /me names her');
       assert.equal((await kept(bea2.page)).finance, false);
       await bea2.page.close();
+      await context.close();
+    }
+
+    // Two tabs, Ana in both; one signs out while the other's Finance read is still out. That answer, and the other tab's
+    // next sidebar draw, keep nothing: no first paint after the sign-out shows Ana's rows.
+    {
+      const context = await newContext(browser, false);
+      const seed = await visit(context, {finance: 'yes', proxy: true});
+      await seed.page.close();
+      const other = await visit(context, {finance: 'yes', proxy: true, holdFinance: true});
+      const here = await visit(context, {finance: 'yes', proxy: true});
+      await here.page.locator('#account').click();
+      await here.page.locator('#sign-out').click();
+      await here.page.waitForURL('**/api/v2/logout');
+      await other.releaseFinance();
+      assert.equal(shows(await rail(other.page), 'finance'), true, 'the other tab still draws its own answer');
+      await other.page.evaluate(() => renderTree());
+      const out = await kept(other.page);
+      assert.ok(!out.who && !('finance' in out) && !('welcome' in out), 'nothing kept for Ana after a sign-out in another tab: ' + JSON.stringify(out));
+      await other.page.close();
+      await here.page.close();
+      const next = await visit(context, {who: 'bea', finance: 'no'});
+      assert.equal(shows(next.painted, 'finance'), false, 'the next first paint has no Finance');
+      await next.page.close();
+      await context.close();
+    }
+
+    // A new install opening on the wizard, nothing kept: Ask tapped before /me answers stays shut over setup.
+    {
+      const context = await newContext(browser, false);
+      const v = await visit(context, {hash: '', onboarding: true, early: page => page.locator('#ask-row').click()});
+      await v.page.waitForFunction(() => location.hash === '#/welcome');
+      assert.equal(await v.page.evaluate(() => document.documentElement.classList.contains('in-setup')), true, 'the wizard is marked');
+      assert.equal(await v.page.evaluate(() => document.querySelector('#ask-panel').classList.contains('ask-shown')
+        || document.body.classList.contains('ask-open')), false, 'Ask stays shut over the wizard');
+      assert.equal(await v.page.locator('#ask-row').isVisible(), false, 'and its row goes');
+      await v.page.close();
+      // The same tap on an ordinary page opens Ask once /me answers.
+      const open = await visit(context, {early: page => page.locator('#ask-row').click()});
+      await open.page.waitForFunction(() => document.body.classList.contains('ask-open'));
+      await open.page.close();
       await context.close();
     }
 

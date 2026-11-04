@@ -19,17 +19,26 @@ const helpBubble = (text, attrs = '') => `<span class="rd-help"${attrs ? ' ' + a
 // The answers are kept for whoever signed in here last (snapWho: this server, its owner, the person); /me answering as
 // anyone else drops them before the config is applied (boot.js), and so does a sign-out (boot-snap.js bootSnapDrop).
 // A kept answer only stands in until this visit's own arrives.
+// A sign-out in any tab stops every tab writing, as the boot snapshot's epoch does (boot-snap.js): the kept entry
+// carries an `epoch` a sign-out (or another person's /me) moves on, each tab notes the epoch its /me read, and a tab
+// writes only while the entry still holds that epoch. The tab-wide sign-out message (SNAP_CHANNEL) drops the tab's
+// person too, so nothing is written there until its own next /me.
 const RD_NAV_KEPT = 'tico.nav.kept';
 const RD_NAV_ROWS = {finance: 'nav-finance', welcome: 'nav-welcome'};
-let RD_NAV_WHO = '';     // whose answers are kept now: '' until /me answers
+let RD_NAV_WHO = '', RD_NAV_EPOCH = 0;     // whose answers are kept now ('' until /me answers), and the epoch its /me read
 function rdNavKept() {
   try { const kept = JSON.parse(localStorage.getItem(RD_NAV_KEPT) || 'null'); return kept && typeof kept === 'object' ? kept : {}; }
   catch { return {}; }
 }
-// Signed out, or someone else: what was kept goes, and nothing more is kept until /me names who is here.
+const rdNavEpoch = kept => Number(kept.epoch) || 0;
+// Told another tab signed out: this one keeps nothing more until its own /me.
+function rdNavStop() { RD_NAV_WHO = ''; }
+// Signed out, or someone else: what was kept goes, the epoch moves on (every other tab stops writing), and nothing more
+// is kept here until /me names who is here.
 function rdNavForget() {
   RD_NAV_WHO = '';
-  try { localStorage.removeItem(RD_NAV_KEPT); } catch { /* nothing kept */ }
+  RD_NAV_EPOCH = rdNavEpoch(rdNavKept()) + 1;
+  try { localStorage.setItem(RD_NAV_KEPT, JSON.stringify({epoch: RD_NAV_EPOCH})); } catch { /* nothing kept */ }
 }
 // The row and the mark on <html> together: the mark draws it before this file runs (styles/redesign.css), `hidden` after
 // (search.js lists only rows that are not hidden).
@@ -38,19 +47,23 @@ function rdNavPaint(name, shown) {
   const row = document.getElementById(RD_NAV_ROWS[name]);
   if (row && row.hidden !== !shown) row.hidden = !shown;   // an unchanged `hidden` is not written again (ask-panel.js askSet)
 }
-// This visit's answer: shown as it says, and kept for the next first paint.
+// This visit's answer: shown as it says, and kept for the next first paint while no sign-out came since this tab's /me.
 function rdNavShow(name, shown) {
   rdNavPaint(name, shown);
   if (!RD_NAV_WHO || SESSION.out) return;
-  const kept = rdNavKept(), mine = kept.who === RD_NAV_WHO;
+  const kept = rdNavKept();
+  if (rdNavEpoch(kept) !== RD_NAV_EPOCH) { RD_NAV_WHO = ''; return; }
+  const mine = kept.who === RD_NAV_WHO;
   if (mine && kept[name] === shown) return;
-  try { localStorage.setItem(RD_NAV_KEPT, JSON.stringify({...(mine ? kept : {}), who: RD_NAV_WHO, [name]: shown})); } catch { /* not kept */ }
+  try { localStorage.setItem(RD_NAV_KEPT, JSON.stringify({...(mine ? kept : {}), epoch: RD_NAV_EPOCH, who: RD_NAV_WHO, [name]: shown})); }
+  catch { /* not kept */ }
 }
 // /me answered: someone else's answers go, and their rows with them, until this person's own come in.
 function rdNavWho(me) {
-  const who = me ? snapWho(me) : '';
-  if (!who || rdNavKept().who !== who) {
-    rdNavForget();
+  const who = me ? snapWho(me) : '', kept = rdNavKept();
+  RD_NAV_EPOCH = rdNavEpoch(kept);
+  if (!who || kept.who !== who) {
+    if (kept.who || !who) rdNavForget();
     for (const name of Object.keys(RD_NAV_ROWS)) rdNavPaint(name, false);
   }
   RD_NAV_WHO = who;
