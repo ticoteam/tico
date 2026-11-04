@@ -55,7 +55,10 @@ TAGS = {
 EVENTS_DESCRIPTION = (
     "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` "
     "(who made it, when the viewer may know) and `at`:\n"
-    "- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n"
+    "- `tasks`: `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and "
+    "`task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). "
+    "Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. "
+    "A `bulk: true` event without `id` means read task lists in full.\n"
     "- `meeting_items`: `meeting_id`, `kind`; refetch items. `presence`: `place`; refetch presence. "
     "Explicit meeting/task subscriptions receive one `gone: true` on access loss, rechecked within 60 seconds.\n"
     "- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; "
@@ -1011,6 +1014,11 @@ SCHEMAS = {
                        "run_model": {"oneOf": [ref("TaskRunChoice"), {"type": "null"}]},
                        "comment_delivery": {"oneOf": [ref("CommentDelivery"), {"type": "null"}]}},
                        required=["task", "events", "children", "comments", "messages", "has_more"], actors=ACTORS),
+    "TaskEvent": obj({"seq": "i", "actor": "n", "at": "s", "id": "s",
+                      "kind": {"type": "string", "description": "The last change kind for this task in the batch"},
+                      "kinds": {"type": "array", "items": {"type": "string"}, "uniqueItems": True,
+                                "description": "All change kinds for this task in the batch; files invalidates files and linked pages"},
+                      "task": ref("Task"), "gone": "b"}, required=["seq", "actor", "at", "id", "kind", "kinds"]),
     "TaskReviewAskView": obj({"questions": "a", "who": "n", "by": "s"}),
     "ReviewAnswer": {"oneOf": [
         obj({"target": "o", "answers": "o", "other": "n", "dismiss": "b", "by": "s", "at": "s"}),
@@ -2311,7 +2319,8 @@ STABLE.extend([
     ("/api/v2/pages", "post", "Pages", "publishPage",
      "A bot publishes an .html page (raw with fields in the query, or JSON); scripts and outside loads are removed", "PagePublished"),
     ("/api/v2/pages", "get", "Pages", "listPages",
-     "Pages the caller may read: `ids` (up to 50) in that order, leaving out the unreadable; else newest first by bot or task",
+     "Pages the caller may read: `ids` (up to 50) in that order, leaving out the unreadable; else newest first by bot "
+     "or task (filed on or pinned to it)",
      "PageList"),
     ("/api/v2/pages/{fid}", "get", "Pages", "getPage", "One page and its status line; 404 when the caller may not read it",
      "PageShown"),
@@ -2322,7 +2331,7 @@ STABLE.extend([
      "Library › Files: every file the caller may see, newest activity first, filtered by kind, bot, team, task, date, "
      "pinned or archived; paged and byte-capped, no totals", "FileLibrary"),
     ("/api/v2/files/search", "get", "Files", "searchFiles",
-     "Search the files the caller may read by title and text, best first, each with an excerpt", "FileSearch"),
+     "Search the files the caller may read by title and text, filtered by kind, best first with an excerpt", "FileSearch"),
     ("/api/v2/files/{fid}", "delete", "Files", "deleteFile",
      "The owner deletes a file for good: every version's bytes leave storage; activity keeps who and when", "FileDeleted"),
 ])
@@ -2384,9 +2393,11 @@ STABLE.extend([
      'default cards become pins); a team page\'s audience sets its group\'s Read', 'Place'),
     ('/api/v2/places/{place}/order', 'post', 'Cards and pins', 'orderPlace', 'Put every pin at a place in this order', 'Place'),
     ('/api/v2/pins', 'post', 'Cards and pins', 'addPin', 'Pin page:<file id> or card:<id> at a place: a bot its own, to '
-     'its sidebar or task; a person who arranges the Dashboard or a team page there', 'Place'),
+     'its sidebar or task; any person who may read a task there, without widening page access; a person who arranges '
+     'the Dashboard or a team page there', 'Place'),
     ('/api/v2/pins/{pid}', 'patch', 'Cards and pins', 'updatePin', 'Resize or move a pin', 'Place'),
-    ('/api/v2/pins/{pid}', 'delete', 'Cards and pins', 'removePin', 'Unpin; a card pinned nowhere else goes with it', None),
+    ('/api/v2/pins/{pid}', 'delete', 'Cards and pins', 'removePin', 'Unpin; on a task, whoever pinned it, its owner or '
+     'requester, or the org owner; a card pinned nowhere else goes with it', None),
     ('/api/v2/cards', 'get', 'Cards and pins', 'listCards', 'Cards the caller made or sees pinned, with their data; '
      '`ids` reads up to 50', 'CardList'),
     ('/api/v2/cards', 'post', 'Cards and pins', 'addCard', 'A built-in card, pinned at `place` in the same write', None),
@@ -2442,11 +2453,14 @@ SCHEMAS['Card'] = obj({'id': 'n', 'template': {'enum': ['tasks_by_status', 'done
                       required=['id', 'template', 'heading', 'settings', 'hidden', 'data'])
 SCHEMAS['CardList'] = obj({'cards': items(ref('Card')), 'next': 'n'})
 SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'growth', 'team', 'bot', 'task', 'person']}, 'saved': 'b',
-                        'can_edit': 'b', 'month': {'type': 'string', 'description': 'growth: the month its cards read (YYYY-MM)'},
+                        'can_edit': 'b', 'can_link': {'type': 'boolean', 'description':
+                            'Task places: whether the reader may link a readable page; does not grant card or pin management'},
+                        'month': {'type': 'string', 'description': 'growth: the month its cards read (YYYY-MM)'},
                         'months': {'type': 'array', 'items': {'type': 'string'},
                                    'description': 'growth: the newest 24 months with cohort rows, oldest first'},
                         'pins': items(obj({'id': 'n', 'item': 'n', 'position': 'i', 'size': {'enum': ['small', 'medium', 'large']},
-                                           'card': ref('Card'),
+                                           'card': ref('Card'), 'can_unpin': {'type': 'boolean', 'description':
+                                               'Task pins: whether this reader may unlink it'},
                                            'page': obj({'file_id': 's', 'title': 's', 'bot': 's', 'updated_at': 's', 'archived': 'b'})},
                                           required=['id', 'item', 'position', 'size'])),
                         'audience': {'type': 'object', 'description': 'A team page: who sees it (docs/permissions.md)'},
@@ -2837,6 +2851,7 @@ def spec(app):
             responses["200"] = {"description": "OK", "content": {"application/json": {"schema": ref(answer)}}}
         if path == "/api/v2/events":
             responses["200"] = {"description": EVENTS_DESCRIPTION,
+                                "x-task-event-schema": ref("TaskEvent"),
                                 "content": {"text/event-stream": {"schema": {"type": "string"}}}}
         if method == "get" and path.startswith("/api/v2/files/") and path.endswith("/versions/{number}"):
             responses["200"] = {"description": "The file's bytes (application/octet-stream, sent as an attachment)",

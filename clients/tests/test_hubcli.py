@@ -60,6 +60,28 @@ def test_wake_url_commands_reach_the_tools_that_put_the_owners_address(monkeypat
     assert {"hub_relay_wake_url_show", "hub_relay_wake_url_set", "hub_relay_wake_url_off"} <= set(hubtools.BY_NAME)
 
 
+def test_page_link_queries_reach_the_api_through_cli_and_mcp(monkeypatch):
+    from clients import hubtools, remotecli
+    calls = []
+
+    class Api:
+        def __init__(self, *args, **kw):
+            self.__dict__["_tico_is_botops"] = False
+
+        def get(self, path, **query):
+            calls.append((path, {k: v for k, v in query.items() if v is not None}))
+            return {"pages": [], "results": []}
+
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    remotecli.run(hubcli.parser().parse_args(["page", "list", "--task", "task-1", "--limit", "2", "--cursor", "next"]))
+    remotecli.run(hubcli.parser().parse_args(["file", "search", "plan", "--kind", "page"]))
+    hubtools.pages_list(Api(), {"task": "task-1", "limit": 2, "cursor": "next"})
+    hubtools.files_search(Api(), {"q": "plan", "kind": "page"})
+    assert calls == [("pages", {"task": "task-1", "limit": 2, "cursor": "next"}),
+                     ("files/search", {"q": "plan", "kind": "page"})] * 2
+
+
 def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
     from clients import hubtools, remotecli
     from clients.tico import APIError
