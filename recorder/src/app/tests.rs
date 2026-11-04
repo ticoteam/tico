@@ -689,10 +689,12 @@ fn delete_while_recording_here_stops_capture_then_deletes() {
     app.open(&recording.id).unwrap();
     // Finish → Delete on a recording that was never shared.
     app.delete(&recording.id);
-    settle(&mut app, |app| app.store.get(&recording.id).is_err());
-    assert!(app.error.is_empty(), "{}", app.error);
+    settle(&mut app, |app| {
+        app.store.get(&recording.id).is_err() && app.status_view()["recording"].is_null()
+    });
     assert!(app.store.get(&recording.id).is_err());
     assert!(full_view(&mut app)["status"]["recording"].is_null());
+    assert!(app.error.is_empty(), "{}", app.error);
 }
 
 #[test]
