@@ -129,8 +129,9 @@ Tico Decide, and keeps each bot's top items for that bot's next Update turn (`ba
 uses Maintenance's step rules.
 
 The nightly timer and its System routines control are retired. Learn uses Maintenance's schedule and its own
-"How often" setting (once a day by default). A saved learnings on/off choice carries over at cutover; an inherited
-default becomes off. The old read-only Automations mirror is soft-deleted and its unfinished runs are skipped.
+"How often" setting (once a day by default). A saved learnings on/off choice carries over at cutover unless someone
+has already edited Learn in Maintenance; an inherited default becomes off. The old read-only Automations mirror
+is soft-deleted and its unfinished runs are skipped.
 
 **What is read**, newer than the last run (the first run looks back 24 hours), at most 600 items:
 
@@ -157,14 +158,16 @@ synced in from another platform (Grok, Dots, Muse) never gets a run here, so it 
 
 **Delivery.** Items wait in `learning_deliveries` with no task and no Update batch id. The next Update request
 carries a short "Learnings for you" block, with at most 15 one-line items and their sources. Sources are checked
-again before sending: private tasks and restricted conversations stay out of a company session. A bot with no
+again before sending: private tasks and restricted conversations stay out of a company session. Bot Home messages
+require company-wide Read access and still pass each message's privacy checks. A bot with no
 work gets a delivery-only turn and posts no update. No packet task is created.
 Slack items require a stored public-channel event; private channels and unknown audiences stay out. Mailbox
 access is restricted, so sent mail is excluded from Update delivery.
 
 The request and its receipts share the `update_queue` id (`update_batch_id`). Retries reuse those items; a redo of
-an old update consumes none. Each delivery also keeps its original request message id, so a redo cannot detach
-the original turn's feedback. Pending deliveries expire after seven days and count as expired. Selection checks
+an old update consumes none. Each delivery keeps its original request message id for history and the latest delivery
+request id for final-reply feedback. A redo changes neither. Pending deliveries
+expire after seven days and count as expired. Selection checks
 at most 100 candidate items; when several runs are pending, the highest scores go first and excess items count
 as not sent. Original items stay readable on the Learnings page. The bot follows its memory working rules,
 commits its changes and reports `learnings_saved: n`, including zero, in its final reply or the update's structured
@@ -175,6 +178,7 @@ including paid failures; a capped run sends nothing and keeps its cursors.
 
 **The page.** Learnings lists runs by day, including old packet tasks and new Update deliveries. It shows memory
 commits from the delivery turn, the Librarian's doc and market changes during that turn, and delivery status.
+The original request and turn define that history even after an Update redo or queue cleanup.
 A bot's changes show only to readers who may read that bot. An item's text shows only when the reader may read
 its source today (the thread, task, mailbox or meeting); anything else is counted as private. Old packet tasks
 stay readable.

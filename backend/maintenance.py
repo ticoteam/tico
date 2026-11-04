@@ -22,6 +22,7 @@ A step-only Run now does not hold its schedule bucket: the bucket's full run sti
 import json
 import logging
 import threading
+from contextlib import contextmanager
 from datetime import datetime, time, timedelta, timezone
 
 from . import learnings, updates
@@ -43,6 +44,7 @@ MAX_BOTS_STEPS = ("find_stuck", "dream")          # the steps that take "Most bo
 STATUSES = ("ran", "skipped", "failed", "pending")
 OLD_TIMER_REASON = "on its old timer"
 ABANDONED_MINUTES = 30          # a live run with no heartbeat this long is abandoned
+HEARTBEAT_SECONDS = 60
 WINDOW_BACK = timedelta(days=1)    # a step that has never moved its cursor looks back this far
 DETAILS_MAX = 20000
 
@@ -315,7 +317,29 @@ def _still_pending(c, row_id):
     """Whether a step's row is still pending in a run that is still live. A step that returns after recover() has ended
     its run finds neither, and its late result must not write over the abandoned row or move the cursor."""
     return c.execute("SELECT 1 FROM maintenance_run_steps s JOIN maintenance_runs r ON r.id=s.maintenance_run_id "
-                     "WHERE s.id=? AND s.status='pending' AND r.finished_at IS NULL", (row_id,)).fetchone() is not None
+                     "WHERE s.id=? AND s.status='pending' AND s.finished_at IS NULL AND r.finished_at IS NULL",
+                     (row_id,)).fetchone() is not None
+
+
+@contextmanager
+def heartbeat(store, run_id, row_id):
+    """Keep a claimed step alive while its model calls run outside a write transaction."""
+    stopped = threading.Event()
+
+    def beat():
+        while not stopped.wait(HEARTBEAT_SECONDS):
+            with store.transaction() as c:
+                if not _still_pending(c, row_id):
+                    return
+                c.execute("UPDATE maintenance_runs SET heartbeat_at=? WHERE id=?", (H.now(), run_id))
+
+    worker = threading.Thread(target=beat, name="maintenance-heartbeat", daemon=True)
+    worker.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        worker.join()
 
 
 def _move_cursor(c, key, window_end, ran_at):
@@ -332,7 +356,7 @@ def _run_step(store, auth, run_id, key, row, window_start, now, cap, tally):
                   "VALUES(?,?,?,'pending','',?,?,?)", (row_id, run_id, key, now, now, _dump(window)))
         c.execute("UPDATE maintenance_steps SET last_started_at=? WHERE key=?", (now, key))
         c.execute("UPDATE maintenance_runs SET heartbeat_at=? WHERE id=?", (H.now(), run_id))
-    ctx = {"run_id": run_id, "window_start": window_start, "window_end": now, "settings": row, "now": now,
+    ctx = {"run_id": run_id, "step_id": row_id, "window_start": window_start, "window_end": now, "settings": row, "now": now,
            "cap": cap, "store": store, "auth": auth}
     try:
         with store.read() as c:

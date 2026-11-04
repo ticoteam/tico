@@ -2,12 +2,15 @@
 
 import importlib.util
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sqlite3
+import threading
 
 import pytest
 
-from backend import judge, learnings, maintenance, slack_gateway, updates
+from backend import judge, learnings, maintenance, market, slack_gateway, threads, updates
+from backend.docs import Docs
 from backend.maintenance_steps import learn as step
 from backend.maintenance_steps import update as update_step
 from backend.store import H
@@ -21,15 +24,22 @@ def context(api, **changes):
     ctx = {"run_id": H.new_id(), "window_start": H.shift(now, days=-1), "window_end": now, "now": now,
            "settings": {"key": "learn", "enabled": 1, "frequency": "day"}, "cap": 0.0,
            "store": api.app.state.store, "auth": api.app.state.auth}
-    return {**ctx, **changes}
+    ctx.update(changes)
+    return {"step_id": ctx["run_id"] + ":learn", **ctx}
 
 
 def run_step(api, ctx=None):
     store = api.app.state.store
+    ctx = ctx or context(api)
+    with store.transaction() as c:
+        c.execute("INSERT OR IGNORE INTO maintenance_runs(id,occurrence_key,trigger,started_at,heartbeat_at) "
+                  "VALUES(?,?,'run_now',?,?)", (ctx["run_id"], ctx["run_id"], ctx["now"], ctx["now"]))
+        c.execute("INSERT OR IGNORE INTO maintenance_run_steps(id,maintenance_run_id,step,status,started_at) "
+                  "VALUES(?,?,'learn','pending',?)", (ctx["step_id"], ctx["run_id"], ctx["now"]))
     with store.read() as c:
         c.execute("PRAGMA query_only=ON")
         try:
-            return step.run(c, ctx or context(api))
+            return step.run(c, ctx)
         finally:
             c.execute("PRAGMA query_only=OFF")
 
@@ -64,9 +74,10 @@ def queue(c, bot_id="ops", day=None):
     return c.execute("SELECT * FROM update_queue WHERE bot=? AND day=?", (bot_id, day)).fetchone()
 
 
-def start(api, row):
-    machine = runner(api)
-    assign(api, machine, row["bot"])
+def start(api, row, machine=None):
+    if machine is None:
+        machine = runner(api)
+        assign(api, machine, row["bot"])
     ready(api, machine, [row["bot"]])
     with api.app.state.store.transaction() as c:
         # Creation wakes are over; claim the Update request itself.
@@ -148,6 +159,70 @@ def test_maintenance_runs_learn_and_moves_its_cursor_with_its_log(api, monkeypat
         assert not maintenance.due(settings, H.parse_ts(settings["last_started_at"]))
         assert c.execute("SELECT read_count FROM learning_runs WHERE id=?", (run["id"],)).fetchone()[0] == 2
         assert c.execute("SELECT task_id FROM learning_deliveries WHERE run_id=?", (run["id"],)).fetchone()[0] is None
+
+
+def test_recovered_learn_worker_cannot_deliver_or_advance_after_scoring(api, monkeypatch):
+    scoring(api, monkeypatch, count=1)
+    store, auth = api.app.state.store, api.app.state.auth
+    entered, release, heartbeat = threading.Event(), threading.Event(), threading.Event()
+    original_engine = learnings.engine_for(store, None)
+    original_claimed = maintenance._still_pending
+
+    def engine(*args, **kwargs):
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(10)
+        return original_engine(*args, **kwargs)
+
+    def claimed(c, row_id):
+        result = original_claimed(c, row_id)
+        if threading.current_thread().name == "maintenance-heartbeat":
+            heartbeat.set()
+        return result
+
+    monkeypatch.setattr(learnings, "engine_for", lambda *args: engine)
+    monkeypatch.setattr(maintenance, "_still_pending", claimed)
+    monkeypatch.setattr(maintenance, "HEARTBEAT_SECONDS", 0.01)
+    with store.transaction() as c:
+        maintenance.save_step(c, "human:ana", {"key": "learn", "enabled": True})
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        old_worker = workers.submit(maintenance.run_now, store, auth, "human:ana", step="learn", wait=True)
+        try:
+            assert entered.wait(5) and heartbeat.wait(5)
+            with store.transaction() as c:
+                old = c.execute("SELECT * FROM maintenance_runs WHERE finished_at IS NULL").fetchone()
+                assert old["heartbeat_at"] > old["started_at"]
+                # Simulate a stopped heartbeat while the model still has its request.
+                c.execute("UPDATE maintenance_runs SET heartbeat_at=? WHERE id=?",
+                          (H.shift(H.now(), minutes=-31), old["id"]))
+                maintenance.recover(c, H.now())
+            replacement, started = maintenance.run_now(store, auth, "human:ana", step="learn", wait=True)
+            assert started and replacement["ok"]
+            with store.read() as c:
+                cursors = [tuple(r) for r in c.execute("SELECT * FROM learning_cursors ORDER BY source")]
+        finally:
+            release.set()
+        abandoned, _ = old_worker.result(timeout=5)
+    assert abandoned["result"] == "abandoned" and abandoned["steps"][0]["reason"] == "abandoned"
+    with store.read() as c:
+        assert c.execute("SELECT id FROM learning_runs").fetchall()[0][0] == replacement["id"]
+        assert [r[0] for r in c.execute("SELECT run_id FROM learning_deliveries")] == [replacement["id"]]
+        assert not c.execute("SELECT 1 FROM learning_runs WHERE id=?", (old["id"],)).fetchone()
+        assert [tuple(r) for r in c.execute("SELECT * FROM learning_cursors ORDER BY source")] == cursors
+
+
+def test_finished_learn_step_writes_no_deliveries_or_cursors(api, monkeypatch):
+    scoring(api, monkeypatch, count=1)
+    ctx = context(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO maintenance_runs(id,occurrence_key,trigger,started_at,heartbeat_at) "
+                  "VALUES(?,?,'run_now',?,?)", (ctx["run_id"], ctx["run_id"], ctx["now"], ctx["now"]))
+        c.execute("INSERT INTO maintenance_run_steps(id,maintenance_run_id,step,status,started_at,finished_at) "
+                  "VALUES(?,?,'learn','pending',?,?)", (ctx["step_id"], ctx["run_id"], ctx["now"], H.now()))
+    assert run_step(api, ctx)["reason"] == "claim lost"
+    with api.app.state.store.read() as c:
+        for table in ("learning_runs", "learning_items", "learning_deliveries", "learning_cursors"):
+            assert c.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
 
 
 def test_maintenance_listing_shows_seven_day_delivery_stats_on_learn(api, monkeypatch):
@@ -281,6 +356,48 @@ def test_private_or_deleted_sources_stay_out_of_company_update(api, monkeypatch)
         assert updates.request_slots(c, "ops")["learnings"] == []
 
 
+def test_direct_chat_referencing_a_public_task_stays_out_of_company_update(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Invoice rules", "Friday is the cutoff.", "bot:ops", lint=False, private=False)
+        room = H.open_conversation(c, "human:ana", ["human:ana", "bot:ops"], scope="direct")
+        message = H.say(c, "human:ana", "bot:ops", "Keep this correction between us.",
+                        conversation_id=room["id"], refs={"task": task["id"]})
+        c.execute("UPDATE conversations SET audience=NULL WHERE id=?", (room["id"],))
+        assert H.conversation(c, room["id"])["audience"] is None
+        items, _ = learnings.collect(c, store.settings, H.now(), {"ops": {"name": "Ops"}})
+        [item] = [i for i in items if i["ref"].get("message") == message["id"]]
+        assert item["source"] == "task" and item["audience"] is None
+        keep_items(c, [item])
+        assert learnings.pending(c, "ops") == []
+        assert "between us" not in updates.request_text(c, "ops", "daily", updates.today())
+
+
+def test_bot_home_corrections_follow_home_access_and_message_privacy(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        home = threads.home(c, "bot:ops")
+        public = H.say(c, "human:ana", "bot:ops", "Use the Friday cutoff.", conversation_id=home["id"])
+        legacy = H.say(c, "human:ana", "bot:ops", "Old restricted history.", conversation_id=home["id"])
+        c.execute("UPDATE messages SET legacy_audience='shared:ops' WHERE id=?", (legacy["id"],))
+        task = H.task_create(c, "human:ana", "Private invoice rules", "Personal billing.", "bot:ops", lint=False, private=True)
+        private = H.say(c, "human:ana", "bot:ops", "Keep the private billing rule.",
+                        conversation_id=home["id"], refs={"task": task["id"]})
+        ids = {m["id"] for m in (public, legacy, private)}
+        items, _ = learnings.collect(c, store.settings, H.now(), {"ops": {"name": "Ops"}})
+        corrections = [i for i in items if i["ref"].get("message") in ids]
+        assert len(corrections) == 3
+        keep_items(c, corrections)
+        assert [i["ref"]["message"] for i in learnings.pending(c, "ops")] == [public["id"]]
+        c.execute("UPDATE bot_config SET access=? WHERE bot='ops'",
+                  (json.dumps({"read": {"everyone": False, "people": ["ana"]}}),))
+        assert learnings.pending(c, "ops") == []
+        c.execute("UPDATE bot_config SET access=NULL WHERE bot='ops'")
+        request = updates.send_request(c, queue(c), delivery=True)
+        assert "Use the Friday cutoff." in request["body"]
+        assert "Old restricted history" not in request["body"] and "private billing rule" not in request["body"]
+
+
 def test_only_known_public_slack_messages_reach_company_update(api):
     with api.app.state.store.transaction() as c:
         items = []
@@ -380,33 +497,93 @@ def test_final_feedback_after_a_post_is_collected_by_the_next_queue_tick(api, mo
         assert c.execute("SELECT learnings_saved FROM learning_deliveries").fetchone()[0] == 1
 
 
-@pytest.mark.parametrize("resend", [False, True])
-def test_redo_keeps_the_original_delivery_turn_for_feedback_and_history(api, monkeypatch, resend):
+@pytest.mark.parametrize("first_state", ["canceled", "completed"])
+def test_delivery_retry_reports_its_final_saved_count(api, monkeypatch, first_state):
     scoring(api, monkeypatch, count=2)
     run_step(api)
     store = api.app.state.store
     with store.transaction() as c:
         row = queue(c)
+        updates.send_request(c, row)
+        sent = c.execute("SELECT * FROM update_queue WHERE id=?", (row["id"],)).fetchone()
+        if first_state == "canceled":
+            c.execute("UPDATE jobs SET state='canceled' WHERE message_id=?", (sent["message_id"],))
+    first_turn = start(api, sent) if first_state == "completed" else None
+    if first_turn:
+        complete(api, first_turn, "No update posted.")
+    with store.transaction() as c:
+        updates.settle_learnings(c)
+        assert updates.settle_sent(c, sent) is False
+        retry = c.execute("SELECT * FROM update_queue WHERE id=?", (row["id"],)).fetchone()
+        assert retry["state"] == "queued" and retry["tries"] == 1
+        message = updates.send_request(c, retry, delivery=True)
+        assert message["id"] != sent["message_id"]
+        retry = c.execute("SELECT * FROM update_queue WHERE id=?", (row["id"],)).fetchone()
+        assert c.execute("SELECT feedback_message_id FROM learning_deliveries").fetchone()[0] == retry["message_id"]
+        assert c.execute("SELECT message_id FROM learning_deliveries").fetchone()[0] == sent["message_id"]
+        updates.settle_learnings(c)
+        assert c.execute("SELECT settled_at FROM learning_deliveries").fetchone()[0] is None
+    complete(api, start(api, retry, first_turn[0] if first_turn else None), "learnings_saved: 1")
+    with store.transaction() as c:
+        updates.settle_sent(c, retry)
+        updates.settle_learnings(c)
+        assert c.execute("SELECT state FROM update_queue WHERE id=?", (row["id"],)).fetchone()[0] == "delivered_without_update"
+        delivery = c.execute("SELECT learnings_saved,settled_at FROM learning_deliveries").fetchone()
+        assert delivery["learnings_saved"] == 1 and delivery["settled_at"]
+        stats = learnings.beta_stats(c)
+        assert (stats["saved"], stats["dropped"], stats["unreported"]) == (1, 1, 0)
+
+
+@pytest.mark.parametrize("resend", [False, True])
+def test_redo_keeps_the_original_delivery_turn_for_feedback_and_history(api, monkeypatch, resend):
+    bot(api, "librarian", "Librarian")
+    scoring(api, monkeypatch, count=2, recipients=("librarian",))
+    run_step(api)
+    store = api.app.state.store
+    docs = Docs(api.app, store, api.app.state.auth, None)
+    with store.transaction() as c:
+        row = queue(c, bot_id="librarian")
         updates.send_request(c, row, delivery=True)
         sent = c.execute("SELECT * FROM update_queue WHERE id=?", (row["id"],)).fetchone()
     turn = start(api, sent)
+    post(api, "bots/librarian/memory/report", {"commits": [{
+        "sha": "a" * 40, "subject": "Keep the invoice cutoff", "author": "librarian", "committed": H.now(),
+        "files": ["memory/learnings.md"], "diff": "+ Keep the Friday cutoff", "attempt": turn[1]["id"]}]}, turn[0]["token"])
     with store.transaction() as c:
-        updates.redo(c, row["kind"], row["day"], bots=["ops"])
+        doc = docs.insert(c, "bot:librarian", "Invoice policy", "Friday is the cutoff.")
+        evidence, _ = market.create_evidence(c, "bot:librarian", quote="Invoices close on Friday.")
+        entity, _ = market.create_entity(c, "bot:librarian", type="company", name="Acme Billing",
+                                        evidence_ids=[evidence["id"]])
+        updates.redo(c, row["kind"], row["day"], bots=["librarian"])
         redo = c.execute("SELECT * FROM update_queue WHERE id=?", (row["id"],)).fetchone()
         assert redo["message_id"] is None
         if resend:
             assert updates.send_request(c, redo)["id"] != sent["message_id"]
+        assert c.execute("SELECT feedback_message_id FROM learning_deliveries").fetchone()[0] == sent["message_id"]
         assert c.execute("SELECT message_id FROM learning_deliveries").fetchone()[0] == sent["message_id"]
+        delivery = c.execute("SELECT * FROM learning_deliveries").fetchone()
+        assert [d["id"] for d in learnings.doc_subjects(c, delivery, "")] == [doc["id"]]
+        assert [e["id"] for e in learnings.market_subjects(c, delivery, "")] == [entity["id"]]
     complete(api, turn, "learnings_saved: 1")
     with store.transaction() as c:
+        docs.insert(c, "bot:librarian", "Unrelated policy", "Outside the delivery turn.")
+        market.create_entity(c, "bot:librarian", type="company", name="Acme Shipping", evidence_ids=[evidence["id"]])
         updates.settle_learnings(c)
         assert c.execute("SELECT learnings_saved FROM learning_deliveries").fetchone()[0] == 1
         run_id = c.execute("SELECT run_id FROM learning_deliveries").fetchone()[0]
         assert learnings.delivery_details(c, run_id)["saved"] == 1
         delivery = c.execute("SELECT * FROM learning_deliveries").fetchone()
         assert learnings.delivery_attempts(c, delivery) == [turn[1]["id"]]
+        assert [e["title"] for e in learnings.bot_entries(c, delivery)] == ["Keep the invoice cutoff"]
+        before = learnings.window(c, delivery)
+        assert before[0] and before[1] < H.now()
+        assert [d["id"] for d in learnings.doc_subjects(c, delivery, "")] == [doc["id"]]
+        assert [e["id"] for e in learnings.market_subjects(c, delivery, "")] == [entity["id"]]
         c.execute("DELETE FROM update_queue WHERE id=?", (row["id"],))
         assert learnings.delivery_attempts(c, delivery) == [turn[1]["id"]]
+        assert learnings.window(c, delivery) == before
+        assert [d["id"] for d in learnings.doc_subjects(c, delivery, "")] == [doc["id"]]
+        assert [e["id"] for e in learnings.market_subjects(c, delivery, "")] == [entity["id"]]
 
 
 def test_missing_or_out_of_range_feedback_is_unreported(api, monkeypatch):
@@ -579,6 +756,20 @@ def test_learn_cutover_takes_the_latest_saved_switch_once(saved, seed, expected)
         migration.up(c)
         assert c.execute("SELECT enabled,updated_at,updated_by_id FROM maintenance_steps").fetchone() == (
             1 - expected, "later", "human:ana")
+
+
+def test_learn_cutover_preserves_a_maintenance_choice_made_before_its_first_execution():
+    migration = learn_migration()
+    with sqlite3.connect(":memory:") as c:
+        c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY,value TEXT)")
+        c.execute("CREATE TABLE maintenance_steps(key TEXT PRIMARY KEY,enabled INTEGER,updated_at TEXT,updated_by_id TEXT)")
+        c.execute("INSERT INTO registry_metadata VALUES('system_routines',?)", (json.dumps({"learnings": {"on": True}}),))
+        c.execute("INSERT INTO maintenance_steps VALUES('learn',1,'foundation','migration')")
+        c.execute("UPDATE maintenance_steps SET enabled=0,updated_at='human-choice',updated_by_id='human:ana' WHERE key='learn'")
+        migration.up(c)
+        assert c.execute("SELECT enabled,updated_at,updated_by_id FROM maintenance_steps").fetchone() == (
+            0, "human-choice", "human:ana")
+        assert json.loads(c.execute("SELECT value FROM registry_metadata").fetchone()[0]) == {}
 
 
 @pytest.mark.parametrize("with_runs", [False, True])

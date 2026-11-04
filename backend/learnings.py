@@ -361,7 +361,7 @@ def dispatch(c, run_id, night, items, chosen, team, detail):
 
 def shared_item(c, item, bot):
     """Recheck a source before putting its words in a company Update session."""
-    from . import updates
+    from . import teammate_access, threads, updates
     ref = H._json(item["ref"], {}) if isinstance(item["ref"], str) else item["ref"]
     shared = updates.shared_tasks_sql(updates._hidden_for(c, bot))
     ids = {ref["task"]} if ref.get("task") else set()
@@ -369,10 +369,22 @@ def shared_item(c, item, bot):
         message = H.message(c, ref["message"])
         if not message or message.get("deleted_at"):
             return False
-        room = H.conversation(c, message["conversation_id"]) or {}
-        audience = room.get("audience")
-        if room.get("scope") == "personal" or (audience not in ("company", "task")
-                                                and not (audience is None and item["source"] == "task")):
+        room = threads.root_of(c, message["conversation_id"])
+        if not room:
+            return False
+        audience = threads.audience_of(room)
+        if audience == "home":
+            owner = threads.home_owner(room) or ""
+            if (not owner.startswith("bot:") or not H.bot(c, owner[4:])
+                    or not teammate_access.document(c, owner)["read"]["everyone"]):
+                return False
+        elif audience == "task":
+            if not room.get("task_id"):
+                return False
+            ids.add(room["task_id"])
+        elif audience != "company":
+            return False
+        if threads.message_narrower(c, message):
             return False
         try:
             ids.update(privacy.message_tasks(c, message, current=True))
@@ -470,6 +482,10 @@ def mark_sent(c, bot, batch_id, message_id, items):
     """Bind the exact request and its items in the message's transaction; retries keep that batch."""
     if c.execute("SELECT 1 FROM learning_deliveries WHERE recipient=? AND update_batch_id=? LIMIT 1",
                  (bot, batch_id)).fetchone():
+        # A retry reports on its own turn; the original message still anchors history.
+        c.execute("UPDATE learning_deliveries SET feedback_message_id=?, "
+                  "settled_at=CASE WHEN learnings_saved IS NULL THEN NULL ELSE settled_at END "
+                  "WHERE recipient=? AND update_batch_id=?", (message_id, bot, batch_id))
         return
     by_run = {}
     for item in items[:15]:
@@ -478,9 +494,9 @@ def mark_sent(c, bot, batch_id, message_id, items):
                          "AND update_batch_id IS NULL AND expired_at IS NULL AND created_at>=?",
                          (bot, H.shift(H.now(), days=-7))).fetchall():
         keys = by_run.get(row["run_id"], [])
-        c.execute("UPDATE learning_deliveries SET update_batch_id=?,message_id=?,sent_item_keys=?,sent_at=? "
-                  "WHERE run_id=? AND recipient=?", (batch_id, message_id, json.dumps(keys), H.now() if keys else None,
-                                                    row["run_id"], bot))
+        c.execute("UPDATE learning_deliveries SET update_batch_id=?,message_id=?,feedback_message_id=?,sent_item_keys=?,sent_at=? "
+                  "WHERE run_id=? AND recipient=?", (batch_id, message_id, message_id, json.dumps(keys),
+                                                    H.now() if keys else None, row["run_id"], bot))
         refresh_details(c, row["run_id"])
 
 
@@ -657,8 +673,12 @@ def window(c, delivery):
     if delivery["task_id"]:
         task = H.task(c, delivery["task_id"]) or {}
         return delivery["created_at"], task.get("done_at") or task.get("closed_at") or H.now()
-    queue = c.execute("SELECT sent_at,done_at FROM update_queue WHERE id=?", (delivery["update_batch_id"],)).fetchone()
-    return (queue["sent_at"], queue["done_at"] or H.now()) if queue else ("9999", "9999")
+    turn = c.execute("SELECT m.created_at,max(coalesce(a.finished_at,?)) AS finished_at FROM messages m "
+                     "LEFT JOIN jobs j ON j.message_id=m.id AND j.bot_id=? "
+                     "LEFT JOIN attempts a ON (a.job_id=j.id OR a.id=j.attempt_id) AND a.bot_id=? "
+                     "WHERE m.id=? GROUP BY m.id",
+                     (H.now(), delivery["recipient"], delivery["recipient"], delivery["message_id"])).fetchone()
+    return (turn["created_at"], turn["finished_at"]) if turn else ("9999", "9999")
 
 
 def saw(c, run_id, keys):

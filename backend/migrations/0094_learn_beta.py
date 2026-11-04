@@ -24,7 +24,7 @@ def _cutover_learnings(conn):
             on = saved.get("on") if isinstance(saved, dict) else None
             if isinstance(on, bool):
                 conn.execute("UPDATE maintenance_steps SET enabled=?, updated_at=?, updated_by_id='migration' "
-                             "WHERE key='learn'", (int(on), when))
+                             "WHERE key='learn' AND (updated_by_id IS NULL OR updated_by_id='migration')", (int(on), when))
             # Consuming the old choice keeps a replay from replacing a later Maintenance choice.
             conn.execute("UPDATE registry_metadata SET value=? WHERE key='system_routines'",
                          (json.dumps(stored, sort_keys=True),))
@@ -81,7 +81,8 @@ def up(conn):
     if columns["task_id"][3]:
         sql = conn.execute("SELECT sql FROM sqlite_master WHERE name='learning_deliveries'").fetchone()[0]
         _rebuild(conn, "learning_deliveries", re.sub(r"(task_id\s+TEXT)\s+NOT\s+NULL", r"\1", sql, flags=re.I))
-    for name, declaration in (("update_batch_id", "TEXT"), ("message_id", "TEXT"), ("sent_item_keys", "TEXT"),
+    for name, declaration in (("update_batch_id", "TEXT"), ("message_id", "TEXT"), ("feedback_message_id", "TEXT"),
+                              ("sent_item_keys", "TEXT"),
                               ("sent_at", "TEXT"),
                               ("learnings_saved", "INTEGER CHECK(learnings_saved BETWEEN 0 AND 15)"),
                               ("settled_at", "TEXT"), ("expired_at", "TEXT")):

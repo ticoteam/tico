@@ -71,7 +71,9 @@ each of its tasks.
 A switch you chose keeps its value. A switch you never chose takes the new default. The stalled task check switch was removed.
 Find stuck takes the latest saved Task roundup switch when its cutover migration runs, then retires the legacy switch, schedule and Automations mirrors.
 
-Learn takes the latest saved learnings switch at cutover, then retires the old setting and its read-only Automations mirror. Unfinished mirror runs are skipped. Replaying the migration preserves later Maintenance choices.
+Learn takes the latest saved learnings switch at cutover only while its Maintenance setting is still seeded.
+A person's Maintenance choice is preserved, including one made before cutover. The old setting and its read-only
+Automations mirror are retired, and unfinished mirror runs are skipped.
 
 ## Where to see it
 

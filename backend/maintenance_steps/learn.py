@@ -28,6 +28,7 @@ def _result(status, reason, checked=0, found=0, cost=0.0, details=None):
 
 def run(c, ctx):
     """Read on c; keep every write in the store's transactions, outside model calls."""
+    from .. import maintenance
     if not ctx["settings"].get("enabled", False):
         return _result("skipped", "Learn is off")
     store, now, run_id = ctx["store"], ctx["now"], ctx["run_id"]
@@ -65,7 +66,8 @@ def run(c, ctx):
         tally = learnings.Tally(engine)
         if items:
             qset = learnings.question_set(store.settings)
-            failed = learnings.route(tally, qset, items, team)
+            with maintenance.heartbeat(store, run_id, ctx["step_id"]):
+                failed = learnings.route(tally, qset, items, team)
             chosen = learnings.packets(items, qset, limit=15)
         capped = bool(failed.get("spend_cap"))
         if capped:
@@ -75,6 +77,8 @@ def run(c, ctx):
         reason = "monthly decision spend cap" if capped else "items kept for the next Update"
     detail.update(reason=reason, ms=round((time.monotonic() - started) * 1000))
     with store.transaction() as tx:
+        if not maintenance._still_pending(tx, ctx["step_id"]):
+            return _result("skipped", "claim lost", len(items), cost=detail["cost_usd"], details=detail)
         tx.execute("INSERT OR IGNORE INTO learning_runs(id,night,status,started_at) VALUES(?,?,'running',?)",
                    (run_id, learnings.night_of(H.parse_ts(now)), now))
         if chosen:
