@@ -193,7 +193,9 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     if (p === '/api/humans') return json({people: fx.people.map(x => ({...x, org_parent: ''})), org_groups: []});
     if (p === '/api/status') return json({active: [], employees: []});
     if (p === '/api/v2/status') return json({bots: []});
-    if (p === '/api/v2/models') return json({models: [{id: 'claude-sonnet-5-5', label: 'Sonnet', provider: 'anthropic'}]});
+    if (p === '/api/v2/models') return json({models: [
+      {id: 'claude-sonnet-5-5', label: 'Sonnet', provider: 'anthropic', direct_api: true},
+      {id: 'agent-only', label: 'Agent only', provider: 'agent', direct_api: false}]});
     if (p === '/api/v2/groups') return json({groups: fx.groups});
     const body = method === 'GET' ? null : req.postDataJSON?.() ?? null;
     let m0;

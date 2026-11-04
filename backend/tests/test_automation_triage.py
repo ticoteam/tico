@@ -178,6 +178,9 @@ def test_new_default_and_existing_explicit_modes_survive_save(api):
         changed = patch(api, made["id"], {"name": "Renamed"})
         assert changed["steps"][0]["choose"]["mode"] == mode
     from backend import gateway_tiers
+    models = get(api, "models")["models"]
+    assert next(m for m in models if m["id"] == T.DEFAULT_MODEL)["direct_api"]
+    assert not next(m for m in models if m["id"] == gateway_tiers.default_model())["direct_api"]
     for model in ("not-a-model", gateway_tiers.default_model()):
         post(api, "automations", flow(model=model), expected=422)
 
