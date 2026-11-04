@@ -44,8 +44,9 @@ def _event(c, task_id, actor, field, old, new, note=""):
 
 
 def enabled(c):
-    from . import read_cache, system_routines
-    return read_cache.value(c, KEY + ":enabled", lambda: system_routines.config_of(c, KEY)["on"], shared=True)
+    """Always off. The daily task check (backend/daily_task_check.py) replaced the per-task check-back wakes, so no
+    appointment wakes a bot. Dates, moves and results are still recorded, and a notice queued before this was is stale."""
+    return False
 
 
 def involved(row):

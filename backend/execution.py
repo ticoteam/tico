@@ -2174,7 +2174,7 @@ def obsolete_notices_sql():
             "OR m.kind='notice' "
             "AND ((m.ref_wake='check_back' AND ("
             "t.check_back_at IS NOT json_extract(m.refs,'$.check_back_at') OR "
-            "coalesce(json_extract((SELECT value FROM registry_metadata WHERE key='system_routines'),'$.task_check_backs.on'),0)=0 OR "
+            "1=1 OR "   # check-backs are off (task_check_backs.enabled): every queued check-back notice is obsolete
             "(t.snoozed_until>?3 AND t.snoozed_by_id LIKE 'human:%') OR t.status='closed' OR "
             "(t.status IN ('done','declined') AND (t.requester_id NOT LIKE 'bot:%' OR t.requester_id=t.owner_id)) OR "
             "m.recipient_id<>CASE WHEN t.status IN ('done','declined') THEN t.requester_id "

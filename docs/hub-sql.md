@@ -238,7 +238,7 @@ Every run records what woke it (`turns.trigger_kind`), its tokens, and whether i
 - **`trigger_kind`**: `comment` (a bot wrote to it: a task comment or a message), `person_message` (a person
   wrote to it, or pressed Run now), `status_or_relation` (a task of its moved: assigned, done, unblocked, a
   subtask finished, reopened, snoozed by someone), `pr_checks` (its pull request's checks, review comments,
-  merge conflict, merge or release), `stall_check` (Tico's status check on long-running work, a task
+  merge conflict, merge or release), `stall_check` (a ticket late at its working step, a task
   not starting, a stale ask, a worktree left idle), `schedule` (a routine firing, a due date, a snooze ending,
   a next-run task, an update request), `background_done` (background commands an earlier turn left running
   when the runner ended it on its wait have ended), `daily_task_check` (the once-a-day list of a bot's tasks with a missed update or gone quiet) or `other` (anything else: a Slack digest, a meeting turn, a worktree

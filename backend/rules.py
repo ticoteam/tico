@@ -122,6 +122,7 @@ WAKE_EVENTS = {
     "stall": "a task has gone quiet and nothing is set to move it",
     "status_check": "a quiet task's status check",
     "stall_check": "a stall or status check",
+    "daily_task_check": "the daily task check lists a bot's tasks once a day",
     "routine": "a routine ran",
     "schedule": "a scheduled run",
     "due": "a task's due date came",

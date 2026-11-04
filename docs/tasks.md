@@ -131,7 +131,7 @@ kept by id, so renaming a step keeps its flow. All keys are optional:
 | `on_merge` | The one step a ticket goes to when its pull request merges, from any earlier step. |
 | `skip_tag` | A ticket with this tag passes the step: it goes straight to `on_pass`, and the skip is recorded. |
 | `timeout_hours` | A check still open this long is closed unanswered and the round skipped: the ticket goes on as if it passed with no comments, unless a check there already gave a fail, changes or comments at the pull request's head, in which case it moves to `on_fail`. |
-| `status_hours`, `late_hours` | A ticket stalled this long at the step gets its bot owner one status check; one this long at the step gets its manager one notice. Dev working steps default to 2 and 4. |
+| `late_hours` | A ticket this long at a working step gets its manager one notice. Dev working steps default to 4. `status_hours` is still accepted but wakes no one. |
 | `assign` | `{pool, slots}`: an unowned ticket here goes to the least busy pool bot with a free slot (tickets past this step it holds). |
 | `backlog` | `{over, per, notify, every_hours}`: more than `over` tickets at the step (`per: step`) or for one owner (`per: owner`) tells `notify`: `manager` (the type's), `owner`, `owner_manager` (one level up on the org chart), or a named bot or person. Once every `every_hours` (4) while over. |
 | `can_hold` | `false`: a ticket here is never put on hold; a merged change is reverted or fixed forward. |
@@ -1217,7 +1217,7 @@ a 422, a steer, queue or goal by someone not on the task a 403, a goal on a task
 is saved.
 
 Tico no longer spot-checks running work one task at a time. A bot's open or doing task that makes no progress appears
-in its daily task check, one list a UTC day. A Dev ticket long at a working step still gets a status ask from its owner.
+in its daily task check, one list a UTC day. A Dev ticket long at a working step is reported once to its manager.
 
 Human messages still wake the bot as before ([details](hub-sql.md#what-woke-each-run-and-what-it-did)).
 
@@ -1688,11 +1688,7 @@ bot and whether it is due. When follow-up delivery is enabled, the web, phone an
 **Follow up by** and let task parties reschedule it. While disabled, the fields remain available through the API and CLI and Health shows shadow counts. Explicit bot appointments are at least five minutes ahead and within 14 days; a person's dated
 snooze can be longer. A human snooze takes precedence over an earlier inspection.
 
-Enable **Task check-backs** under Automations > System routines for the staged rollout. It starts off: dates are
-stored, and nothing is delivered until it is enabled. Enabling backfills missing appointments in
-bounded batches, and the server scheduler delivers due appointments through the existing task session queue.
-No second session starts beside a running task. A paused, offline or limited bot retains its queued obligation;
-Health reports missing or overdue follow-ups. Turning the rollout off stops new deliveries.
+Follow-up delivery is off in this build: no appointment wakes a bot, and the daily task check lists quiet tasks instead. Dates are stored, and Health reports missing or overdue follow-ups as shadow counts. The delivery rules below are kept for when it is turned back on: enabling would backfill missing appointments in bounded batches and deliver due ones through the existing task session queue. No second session starts beside a running task, and a paused, offline or limited bot keeps its queued obligation.
 
 On the wake, inspect the actual PR link, assignment/reservation, result and blocker. A missing readable child is
 not proof that a private child does not exist: check routing before creating a duplicate. Repair routine handoffs

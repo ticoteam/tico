@@ -238,8 +238,6 @@ JOBS = [
     Job("learnings", "Nightly learnings",
         "Reads yesterday's chats, tasks, Slack, mail and meetings and sends each bot what it should remember.",
         LEARNING, "Nightly at 03:00", ai=True, control=True, labels=("learnings-route",), then=("read_activity", "send_learnings")),
-    Job("task_check_backs", "Task check-backs", "Follows up unfinished bot work and verifies its handoffs.",
-        REMINDERS, "Every 10 seconds", 10, control=True, then=("remind_due",)),
     Job("auto_dream", "Auto dream",
         "Starts a dream for each bot whose memory changed a lot since its last dream: at least 200 changed lines over 10 "
         "memory turns, none in the last 48 hours, three a night at most, most changed first. The dream's requester is the "
@@ -377,8 +375,6 @@ class Control:
 
 
 CONTROLS = {
-    "task_check_backs": Control(on=False),  # staged rollout; dates are stored while legacy recovery stays enabled
-
     "stale_review": Control(rule="stale_review", presets=AI_PRESETS, preset=HOURLY, at="09:00"),
     "still_wanted": Control(presets=EVERY_PRESET, preset=DAILY, at="09:00"),
     "kpi_asks": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),

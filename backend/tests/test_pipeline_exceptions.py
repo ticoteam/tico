@@ -242,7 +242,7 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
         assert list(H.TR.child_ids(c, fresh["id"])) == []
 
 
-def test_a_turn_that_ends_doing_with_nothing_queued_wakes_its_owner_once_and_the_sweep_lists_it(api):
+def test_a_turn_that_ends_doing_with_nothing_queued_wakes_no_owner_and_is_listed_for_its_manager(api):
     with api.app.state.store.transaction() as c:
         typ = board(c)
         row = ticket(c, typ, minutes=120)
@@ -251,10 +251,8 @@ def test_a_turn_that_ends_doing_with_nothing_queued_wakes_its_owner_once_and_the
         c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (H.shift(H.now(), minutes=-120), check["id"]))
         run(c, check, "completed", 60)
         before = unheld_jobs(c, "ops")
-        assert step_age.turn_ended(c) == [check["id"]]
-        assert unheld_jobs(c, "ops") == before + 1, "a reviewer's profile would hold a status check; this one wakes"
-        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")
-        assert step_age.turn_ended(c) == [], "once per stay at the step"
+        assert not hasattr(step_age, "turn_ended"), "no owner wake after an idle turn: the manager's list carries it"
+        assert unheld_jobs(c, "ops") == before
         [entry] = listed(c, typ, "stuck")
         assert entry["check"]["id"] == check["id"]
         assert rules.EVENTS["exceptions"]
@@ -300,7 +298,7 @@ def test_a_verdict_a_handoff_and_a_child_or_blocker_result_are_a_note_for_a_mana
         assert results("manager") == 0
 
 
-def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_and_unwoken_until_it_is_really_idle(api):
+def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_until_it_is_really_idle(api):
     """A reviewer's profile has no stall sweeps; what its check waits on is read all the same."""
     with api.app.state.store.transaction() as c:
         typ = board(c)
@@ -338,13 +336,9 @@ def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_and_unwoken_unti
             undo = wait()
             settled(c)
             assert listed(c, typ, "stuck") == [], wait.__name__
-            assert step_age.turn_ended(c) == [], wait.__name__
             undo()
         [entry] = listed(c, typ, "stuck")
         assert entry["check"]["id"] == check["id"], "nothing recorded: the idle reviewer's check is listed"
-        before = unheld_jobs(c, "ops")
-        assert step_age.turn_ended(c) == [check["id"]], "and its reviewer is woken"
-        assert unheld_jobs(c, "ops") == before + 1
 
 
 def test_a_finished_check_is_filed_so_an_idle_ticket_is_listed_as_not_moving_on_not_as_missing_its_check(api):

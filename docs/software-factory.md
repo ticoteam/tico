@@ -106,12 +106,7 @@ ticket stays at its step with a Waiting tag.
   **What wakes** automation on the Automations page.
 - **A ticket at a working step (In Progress or a Fixes step) shows its age at that step** on its card (`step_since`
   on the task), amber past 4 hours. Waiting time is not counted: the clock restarts when the ticket comes back to
-  work. After 2 hours with no activity (no update, checkpoint or message), its bot owner is woken once for a status,
-  even when the ticket stands as at its last checkpoint and the plain status check would be held, and unless it waits on
-  something recorded (a question, a snooze, a due date, a blocker, a subtask) or a run of it is going. After 4 hours at
-  the step, the type's manager (Head of Engineering), or else the owner's manager, is woken once to unblock or reroute
-  it. Each happens once per stay at the step. A step's flow sets its own hours (`status_hours`, `late_hours`), on any
-  board; a Dev step without them uses 2 and 4.
+  work. After 4 hours at the step, the type's manager (Head of Engineering), or else the owner's manager, is woken once to unblock or reroute it. Owners are not woken for a status: a quiet ticket is listed on its owner's daily task check, once a day. It happens once per stay at the step. A step's flow sets its own late hours (`late_hours`), on any board; a Dev step without one uses 4. `status_hours` no longer wakes anyone.
 - **A turn that ends and leaves its ticket in progress with nothing queued wakes its owner once.** Ten minutes after
   the owner's last run on a working ticket, or on an open check below it, finished with nothing live, queued or held
   after it and nothing recorded to wait on, the owner is woken once per stay at the step, a reviewer included.

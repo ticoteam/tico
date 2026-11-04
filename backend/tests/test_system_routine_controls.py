@@ -30,7 +30,7 @@ def test_admin_sees_a_switch_and_a_schedule_on_the_timed_jobs_and_housekeeping_h
     jobs = rows(api, "ben-test")
     timed = {k for k, j in jobs.items() if j["presets"]}
     assert timed == TIMED | {"task-rule-close-after-done"}
-    assert {k for k, j in jobs.items() if j["switch"]} == TIMED | {"topic_fresh", "stall_triage", "task-rule-close-after-done", "task_check_backs"}
+    assert {k for k, j in jobs.items() if j["switch"]} == TIMED | {"topic_fresh", "stall_triage", "task-rule-close-after-done"}
     for key in TIMED - {"health_scan"}:
         assert jobs[key]["can_change"] is True, key
     for key, job in jobs.items():

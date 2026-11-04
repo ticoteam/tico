@@ -596,7 +596,7 @@ window and a gap between sweeps, and it grants no right.
 | **Custom** | what its rules say | its rules | what its settings say |
 
 A bot's own clock still wakes it: a routine or schedule wakes a Reviewer, Lead, Manager and Monitor, and a due date or a
-snooze ending wakes a Lead, Manager and Monitor; a Responder has no routines. Stall and status checks run only for a Doer (and for a
+snooze ending wakes a Lead, Manager and Monitor; a Responder has no routines. Late-ticket checks run only for a Doer (and for a
 Custom bot that keeps them on). Doers pull open tasks themselves; the others start a task only when it is handed to them.
 **Custom** copies the profile's rows into the Rules table, marked as the profile's, to edit there; choosing a named profile
 again deletes them after a confirm. Set a profile in **Settings → Bots → Edit**, with `hub bot profile <bot> [name]`, MCP

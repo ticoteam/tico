@@ -191,13 +191,19 @@ def run_thread_retention(store, auth, at, failures=None):
 
 def run_daily_task_check(store, auth, at, failures=None):
     # Once a day, each active bot gets at most one list of its tasks with a missed update or gone quiet
-    # (backend/daily_task_check.py). Plain code: no model call, and nothing to list is a quiet run.
+    # (backend/daily_task_check.py). Plain code: no model call, and nothing to list is a quiet run. The lists are read in
+    # one read transaction; each bot is then sent in its own short transaction that rechecks the day.
+    from . import daily_task_check
     with SR.recording(store, "daily_task_check", failures) as run:
-        from . import daily_task_check
-        with store.transaction() as c:
-            sent = daily_task_check.run(c, stamp(at))
-        run.did(SR.words_of({"bots woken": sent["woke"], "tasks listed": sent["listed"]}, none="Nothing to list"),
-                quiet=not sent["woke"])
+        with store.read_transaction() as c:
+            plans = daily_task_check.discover(c, stamp(at))
+        woke, listed = [], 0
+        for plan in plans:
+            with store.transaction() as c:
+                if daily_task_check.send(c, plan):
+                    woke.append(plan["slug"])
+                    listed += plan["count"]
+        run.did(SR.words_of({"bots woken": woke, "tasks listed": listed}, none="Nothing to list"), quiet=not woke)
 
 
 QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
@@ -221,13 +227,7 @@ def run_now(store, auth, key, actor):
     their own thread, as when scheduled, and return True. Raises a 409 when that one is already running."""
     from .store import Problem
     at = datetime.now(timezone.utc)
-    if key == "task_check_backs":
-        from . import task_check_backs
-        with SR.recording(store, key) as run:
-            checked = task_check_backs.run_pass(store, stamp(at))
-            run.did(f"{len(checked['woke'])} followed up", quiet=not any(checked.values()))
-        running = False
-    elif key in QUICK:
+    if key in QUICK:
         QUICK[key](store, auth, at, [])
         running = False
     elif key == "stale_review":
@@ -436,11 +436,6 @@ class Scheduler:
             with locked("task_snooze") as c:
                 woken = task_snooze.wake_ended(c, stamp(at), failures)
             run.did(SR.words_of(woken, "snooze ended", "Nothing due"), quiet=not woken)
-        from . import task_check_backs
-        with SR.recording(self.store, "task_check_backs") as run:
-            checked = task_check_backs.run_pass(self.store, stamp(at), failures)
-            run.did(f"{len(checked['woke'])} followed up, {len(checked['repaired'])} repaired, {len(checked['blocked'])} blocked",
-                    quiet=not any(checked.values()))
         # Quiet tasks a run deferred to a time that has come get their run (backend/quiet_work.py).
         from . import quiet_work
         with locked("quiet_work") as c:
@@ -806,7 +801,7 @@ class Scheduler:
                 for task_id in blocked_ids:
                     with locked('blocked_check:' + task_id) as c:
                         task_blocked.sweep(c, stamp(at), task_ids=[task_id])
-                # Dev tickets long at a working step: a status from a quiet owner, the late ones to their manager.
+                # Dev tickets long at a working step: the late ones go to their manager (backend/step_age.py).
                 aged = {}
                 try:
                     from . import step_age
@@ -814,14 +809,6 @@ class Scheduler:
                         aged = step_age.sweep(c, stamp(at))
                 except Exception as exc:
                     failures.append({"step_age": type(exc).__name__})
-                # A turn that ended and left its ticket or check in progress with nothing queued: its owner, once.
-                nudged = []
-                try:
-                    from . import step_age
-                    with self.store.transaction() as c:
-                        nudged = step_age.turn_ended(c, stamp(at))
-                except Exception as exc:
-                    failures.append({"turn_ended": type(exc).__name__})
                 # Work piling up at a step with a backlog setting: whoever it names hears of it (backend/step_backlog.py).
                 backlogged = []
                 try:
@@ -846,10 +833,9 @@ class Scheduler:
                         timed_out = verdict_moves.timeouts(c, stamp(at))
                 except Exception as exc:
                     failures.append({"check_timeouts": type(exc).__name__})
-                acted = {"asked for a status": aged.get("asked") or [], "late tickets told": aged.get("late") or [],
+                acted = {"late tickets told": aged.get("late") or [],
                          "checks timed out": timed_out, "tickets allocated": allocated, "backlogs reported": backlogged,
                          "late tickets nobody told": aged.get("untold") or [],
-                         "owners woken after an idle turn": nudged,
                          "tickets failed": aged.get("failed") or []}
                 run.did(SR.words_of(acted, none="Nothing stalled"), quiet=not any(acted.values()))
                 # ...and queued jobs whose message their bot may no longer read, which no claim would ever take.

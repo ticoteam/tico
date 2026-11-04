@@ -11,10 +11,8 @@ from backend.tests.test_cloud_machines import cloud  # noqa: F401
 
 
 @pytest.fixture
-def followups(api):
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('system_routines',?)",
-                  (json.dumps({CB.KEY: {"on": True}}),))
+def followups(api, monkeypatch):
+    monkeypatch.setattr(CB, "enabled", lambda c: True)     # the switch is off in production: these tests run it on
     return api
 
 
@@ -193,7 +191,7 @@ def test_private_child_context_withholds_ids_titles_and_status(followups):
         assert "unreadable work may exist" in body
 
 
-def test_disabled_rollout_never_suppresses_existing_recovery(api):
+def test_with_the_gate_off_no_appointment_wakes_a_bot(api):
     with api.app.state.store.transaction() as c:
         row = task(c)
         assert row["check_back_at"]
@@ -341,14 +339,12 @@ def test_generic_update_persists_date_only_and_note_only_edits(followups):
     assert note["check_back_at"] == updated["check_back_at"]
 
 
-def test_a_bot_can_snooze_after_an_appointment_expired_even_with_service_off(followups):
-    with followups.app.state.store.transaction() as c:
-        for on in (False, True):
-            c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('system_routines',?)", (json.dumps({CB.KEY: {"on": on}}),))
-            row = due(c, H.task_create(c, "human:ana", "Inspect overdue work " + str(on), "x", "bot:ops", lint=False))
-            until = H.shift(H.now(), hours=2)
-            after = H.TS.snooze(c, "bot:ops", row["id"], until)
-            assert after["snoozed_until"] == until and after["check_back_at"] == until
+def test_a_bot_can_snooze_after_an_appointment_expired_even_with_service_off(api):
+    with api.app.state.store.transaction() as c:
+        row = due(c, H.task_create(c, "human:ana", "Inspect overdue work", "x", "bot:ops", lint=False))
+        until = H.shift(H.now(), hours=2)
+        after = H.TS.snooze(c, "bot:ops", row["id"], until)
+        assert after["snoozed_until"] == until and after["check_back_at"] == until
 
 
 def test_system_checkpoints_do_not_refresh_human_idle_time_or_edit_revision(followups):
@@ -418,7 +414,7 @@ def test_result_consumer_must_record_disposition_instead_of_reparking(followups)
         assert "hub task close" in CB.context(c, H.task(c, row["id"]), "bot:finance")
 
 
-def test_disabling_followups_cancels_queued_obsolete_wakes_on_claim(followups):
+def test_disabling_followups_cancels_queued_obsolete_wakes_on_claim(followups, monkeypatch):
     from backend.tests.test_api import assign, claim, ready, runner
     r = runner(followups)
     assign(followups, r, "ops")
@@ -428,7 +424,7 @@ def test_disabling_followups_cancels_queued_obsolete_wakes_on_claim(followups):
         c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")
         CB.sweep(c)
         [wake] = wakes(c, row["id"])
-        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('system_routines',?)", (json.dumps({CB.KEY: {"on": False}}),))
+        monkeypatch.setattr(CB, "enabled", lambda c: False)
     attempt = claim(followups, r, "ops")  # legacy assignment recovery is allowed to resume when the feature is off
     with followups.app.state.store.read() as c:
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (wake["id"],)).fetchone()[0] == "canceled"
@@ -460,16 +456,14 @@ def test_first_wake_fleet_cap_applies_across_bots(followups, monkeypatch):
         assert len(checked["woke"]) == len(checked["blocked"]) == 1
 
 
-def test_results_returned_while_disabled_remain_audit_only_after_enable(followups):
-    with followups.app.state.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('system_routines',?)", (json.dumps({CB.KEY: {"on": False}}),))
+def test_results_returned_while_disabled_remain_audit_only(api):
+    with api.app.state.store.transaction() as c:
         returned = []
         for status in ("done", "declined"):
             row = H.task_create(c, "bot:finance", "Inspect an offline result " + status, "x", "bot:ops", lint=False)
             H.task_update(c, "bot:ops", row["id"], status=status)
             returned.append(row["id"])
         assert all(H.task(c, tid)["check_back_at"] is None for tid in returned)
-        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('system_routines',?)", (json.dumps({CB.KEY: {"on": True}}),))
         assert CB.sweep(c)["woke"] == []
         assert CB.coverage(c)["results"] == 2
 
@@ -535,14 +529,13 @@ def test_idle_reachable_bot_is_woken_a_bounded_number_of_times(followups, monkey
         assert all(gap >= 30 * 60 for gap in gaps)
 
 
-def test_a_stopped_cloud_machine_is_started_by_one_followup_and_gets_no_more(cloud):  # noqa: F811
+def test_a_stopped_cloud_machine_is_started_by_one_followup_and_gets_no_more(cloud, monkeypatch):  # noqa: F811
     """A cloud machine sleeps when idle and is started by queued work for its bot. Its silence must not hold the
     follow-up: the one notice queues, the machine's want sees it and starts the machine, and a later sweep adds none."""
     from backend import cloud_machines as CM
     from backend.tests.test_cloud_machines import enrolled
+    monkeypatch.setattr(CB, "enabled", lambda c: True)   # the gate is off in production: these run the sweep on
     store = cloud.store
-    with store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('system_routines',?)", (json.dumps({CB.KEY: {"on": True}}),))
     enrolled(cloud)
     cloud.hq.calls.clear()
     cloud.manager.synced = None
@@ -573,15 +566,14 @@ def test_a_stopped_cloud_machine_is_started_by_one_followup_and_gets_no_more(clo
         assert len(wakes(c, row["id"])) == 1
 
 
-def test_moved_due_time_replaces_the_stale_notice_on_a_stopped_cloud_machine(cloud):  # noqa: F811
+def test_moved_due_time_replaces_the_stale_notice_on_a_stopped_cloud_machine(cloud, monkeypatch):  # noqa: F811
     """The due time moves while the one notice waits on a stopped cloud machine. That notice is now obsolete, and
     cloud_machines.bot_want starts no machine for an obsolete notice, so left queued it would hold the dedupe and the
     follow-up would never be sent. The sweep cancels it, queues the current one, and that one starts the machine."""
     from backend import cloud_machines as CM
     from backend.tests.test_cloud_machines import enrolled
+    monkeypatch.setattr(CB, "enabled", lambda c: True)   # the gate is off in production: these run the sweep on
     store = cloud.store
-    with store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('system_routines',?)", (json.dumps({CB.KEY: {"on": True}}),))
     enrolled(cloud)
     cloud.hq.calls.clear()
     cloud.manager.synced = None
