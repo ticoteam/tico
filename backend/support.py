@@ -13,8 +13,8 @@ A bot (or the Assistant, or a person's token) reports a Tico bug the same way, w
 a `support` approval (backend/hubdb.py `lint_approval`: the message, its hash, whether the IDs go), a person reads it in
 Needs you and says yes, and only then may the bot send it (`file_approved`). The ticket is the approving person's: it is
 filed as them, counts against their day, and its replies show on their Support page. No diagnostics bundle goes this way.
-Unless the team lets bots send without asking (team rule `bot_reports_direct`, on by default): then the bot's report is
-sent at once, filed as the install's default person (`report_now`).
+Unless the team lets bots send without asking (team rule `bot_reports_direct`, on by default): then the same draft is
+decided as the install's default person under the team rule and sent at once (`send_by_rule`, through the same send).
 
 `TICO_SUPPORT=off` removes the feature (an air-gapped install); PRIVACY.md and docs/support.md describe it.
 """
@@ -37,7 +37,7 @@ from .auth import Identity, validate_identity
 from .models import Contract
 from .replication import rehearsal_on
 from .credentials import SEALED
-from .store import H, Problem, digest, encode, refused
+from .store import H, Problem, encode, refused
 
 log = logging.getLogger("tico.support")
 
@@ -64,9 +64,9 @@ HQ_WAIT = 8
 # The sources this server names when it files (HQ's `source` field; HQ owns the full list and stores `unknown` for any
 # value it does not know): a person, a bot's report a person approved, BotOps, the Health Monitor.
 SOURCES = ("person", "bot_report", "botops", "health_monitor")
-RULE = "bot_reports_direct"     # the team rule: a bot's report is sent without a card (report_now)
-REPORT_OPERATION = "support.report"  # the Idempotency-Key scope of a direct report (a drafted approval has its own)
-DRAFT_OPERATION = "/api/v2/approvals"  # the Idempotency-Key scope of a drafted report (app.py approval_request)
+RULE = "bot_reports_direct"     # the team rule: a bot's report is sent without a card (send_by_rule)
+RULE_VIA = "team rule"          # approvals.decided_via of a draft the rule decided: no person decided it
+RULE_NOTE = "team rule: bots send reports without asking"   # the decision's note, in its history
 # Who may act for a person on their confirmation (`Identity.confirmed`): BotOps and the Assistant, with their yes to a
 # read-back or their tap on a Confirm card (backend/app.py, backend/auth.py). Unconfirmed, they are refused here.
 CONFIRMED_VIA = ("botops", "assistant")
@@ -448,80 +448,75 @@ class Support:
                 on_filed(c, ticket_id)
             return view(c.execute("SELECT * FROM support_tickets WHERE id=?", (ticket_id,)).fetchone())
 
-    def report_now(self, who, body, key=None):
-        """A bot's report, sent without a card when the team lets bots send without asking (team rule `bot_reports_direct`).
-        Returns None when the caller should draft it as a `support` approval, as before: the caller is not a bot, the rule is
-        off (checked again under the send's lock, so a report queued while the owner turned it off is drafted, not sent), or
-        the key already drafted a report (the route replays that draft). Otherwise it gets the checks a drafted report gets
-        (backend/hubdb.py `lint_approval`, a quarantined bot refused, a refusal recorded and counted the same way) and is
-        filed as an approved one is: the same HQ call, the same day limit, the same source. It is filed as the install's
-        default person (`H.default_human`), the one whose yes a drafted report would ask for. A bot has no person of its own
-        to file as; the Health Monitor files as the owner the same way (backend/health_monitor.py report). `body` is the
-        approval request and `key` its Idempotency-Key, kept as `mutate` keeps a write's: scoped to the bot's attempt, bound
-        to the request's content (another body under the key is a 409), and a retry gets the same ticket whatever the rule
-        says now. Sends are serialized as `file_approved` serializes them, and the bot is checked under the write lock before
-        anything is sent (`validate_identity`, as `mutate` checks it)."""
+    def send_by_rule(self, who, approval_id, check=None):
+        """Send a bot's report the team rule lets go without a card (`bot_reports_direct`), once the route has drafted it.
+        The draft is decided as the install's default person under the team rule and sent through `_file_approved`, the
+        send a person's yes gets: the same HQ call, day limit, source and spend. `check(c)` is the privacy check for this
+        send, run under the write lock; when it refuses, the draft waits. Returns {ticket, sent, filed_as}, or None when the
+        draft waits for a person: the rule is off (read under the lock, so a report queued while the owner turned it off
+        waits), or a person already decided the draft. A bot that is paused or revoked is refused and nothing is sent. A
+        spent approval answers with its ticket whatever the rule says now.
+
+        A rule decision is taken back when its send fails, or when the rule is off by the time it is sent, so a draft is
+        never left decided by the rule without a ticket."""
         if who.role != "bot":
             return None
-        if not key or len(key) > 200:
-            raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
-        content = body.model_dump()
         with self.sending:
-            return self._report_now(who, content, key)
+            return self._send_by_rule(who, approval_id, check)
 
-    def _report_now(self, who, content, key):
+    def _send_by_rule(self, who, approval_id, check):
         from . import lifecycle
-        payload = content["payload"]
-        principal = self.store._principal(who)     # the key's scope: the bot's attempt, as `mutate` scopes it
-        hashed = digest(encode(content))
         refusal = None
         with self.store.transaction() as c:
             validate_identity(c, who)              # the bot still holds its credential, lease and state, under the lock
-            # The receipts come first, whatever the rule says now: a key that already sent is replayed, and a key that
-            # already drafted is the draft's (the route replays it), so neither path sends the report a second time.
-            kept = c.execute("SELECT request_hash, response FROM idempotency WHERE binding IS NULL AND actor=? "
-                             "AND operation=? AND key=?", (principal, REPORT_OPERATION, key)).fetchone()
-            if kept:
-                if kept["request_hash"] != hashed:
-                    raise Problem("idempotency_conflict", "This key was used for different content", 409)
-                answer = json.loads(kept["response"])
-                done = c.execute("SELECT * FROM support_tickets WHERE id=?", (answer["ticket_id"],)).fetchone()
-                if not done:
-                    raise Problem("idempotency_conflict", "This key's report is no longer kept", 409)
-                return {"ticket": view(done), "sent": True, "filed_as": answer["filed_as"]}
-            drafted = c.execute("SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
-                                (principal, DRAFT_OPERATION, key)).fetchone()
-            if drafted or not team_rules.load(c)[RULE]:
-                return None                        # drafted, as the caller does; the rule is read under the lock
-            c.execute("SAVEPOINT domain_write")
-            try:
-                lifecycle.refuse_send(c, who, None, what="anything")
-                H._writer(c, who.actor)            # the bot is known, and not quarantined
-                problems = H.lint_approval("support", payload)
-                if problems:
-                    H.refuse(c, who.actor, "lint", "; ".join(problems))
-                c.execute("RELEASE domain_write")
-            except H.Refused as exc:
-                refusal = refused(c, who, exc)     # the write undone, the refusal kept and counted
-            person = "" if refusal else H.default_human(c)
+            lifecycle.refuse_send(c, who, None, what="anything")
+            row = H.approval(c, approval_id)
+            if not row or row["kind"] != "support" or row["requested_by_id"] != who.actor:
+                return None
+            if not row["consumed_at"]:
+                if row["decided_via"] == RULE_VIA:
+                    if not team_rules.load(c)[RULE]:
+                        self._unrule(c, who, approval_id)    # the rule went off before this send: a person decides
+                        return None
+                elif row["decision"] is None:
+                    if not team_rules.load(c)[RULE]:
+                        return None
+                    try:
+                        if check is not None:
+                            check(c)
+                    except Problem:
+                        return None                  # this send is not allowed for its source: the draft waits
+                    person = H.default_human(c)
+                    if not person:
+                        raise Problem("identity", "This install has no person to file a report for yet.", 409)
+                    c.execute("SAVEPOINT domain_write")
+                    try:
+                        H.approval_decide(c, H.human_actor(person), approval_id, "approved", RULE_NOTE)
+                        c.execute("UPDATE approvals SET decided_via=? WHERE id=?", (RULE_VIA, approval_id))
+                        c.execute("RELEASE domain_write")
+                    except H.Refused as exc:
+                        refusal = refused(c, who, exc)   # the decision undone, the refusal kept and counted
+                else:
+                    return None                      # a person decided it: their file_approved sends it, or it is declined
         if refusal:
             raise refusal
-        if not person:
-            raise Problem("identity", "This install has no person to file a report for yet.", 409)
-        actor = H.human_actor(person)
+        try:
+            sent = self._file_approved(who, approval_id)
+        except Exception:
+            with self.store.transaction() as c:
+                self._unrule(c, who, approval_id)    # not sent: the rule's decision is taken back, the draft waits
+            raise
+        return {"ticket": sent["ticket"], "sent": True, "filed_as": sent["filed_as"]}
 
-        def logged(c, ticket_id):                  # in the transaction that keeps the ticket
-            H.event(c, who.actor, "support.reported", ticket_id, {"as": actor})
-            H.path_mentioned(c, who.actor, "support report", json.dumps(payload, sort_keys=True, default=str))
-            # The key's answer is kept with the ticket, so a retry finds this ticket, and other content is a conflict.
-            c.execute("INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)",
-                      (principal, REPORT_OPERATION, key, hashed,
-                       encode({"ticket_id": ticket_id, "filed_as": actor}), H.now()))
-        ticket = self.file(Identity(actor, "human"),
-                           SupportTicket(message=payload["message"],
-                                         include_ids=payload.get("include_ids", True) is not False),
-                           f"bot:{principal}:{key}", on_filed=logged, source="bot_report")
-        return {"ticket": ticket, "sent": True, "filed_as": actor}
+    def _unrule(self, c, who, approval_id):
+        """Take a team-rule decision back, while nothing has been sent on it: the draft waits for a person again."""
+        row = H.approval(c, approval_id)
+        if not row or row["decided_via"] != RULE_VIA or row["consumed_at"]:
+            return
+        c.execute("UPDATE approvals SET decision=NULL, decided_by_id=NULL, decided_at=NULL, decided_via=NULL, "
+                  "decided_for=NULL WHERE id=?", (approval_id,))
+        H.event(c, who.actor, "approval.undo", approval_id, {"was": row["decision"], "via": RULE_VIA})
+        H._recount(c, row["requested_by_id"])
 
     def file_approved(self, who, approval_id):
         """Send the report a person approved, for whoever asked for the approval. The ticket is filed as the person who
@@ -529,49 +524,61 @@ class Support:
         transaction that keeps the ticket: HQ refusing or out of reach spends nothing, so the call can be made again.
         A second call for a spent approval answers with the same ticket."""
         with self.sending:
+            return self._file_approved(who, approval_id)
+
+    def _file_approved(self, who, approval_id):
+        """The send itself, under the lock `sending` that file_approved and send_by_rule both hold."""
+        with self.store.read() as c:
+            row = H.approval(c, approval_id)
+            quarantined = H.is_bot(who.actor) and (H.bot(c, H.actor_id(who.actor)) or {}).get("state") == "quarantined"
+        if not row:
+            raise Problem("not_found", "Approval not found", 404)
+        if row["requested_by_id"] != who.actor:
+            raise Problem("forbidden", "Only whoever asked for this approval may send it.", 403)
+        if quarantined:
+            raise Problem("forbidden", "A quarantined bot sends nothing until a person clears it.", 403)
+        if row["kind"] != "support":
+            raise Problem("approval", f"{approval_id} is a {row['kind']} approval, not a support report.", 422)
+        if row["decision"] != "approved":
+            state = row["decision"] or "waiting for a person"
+            raise Problem("approval", f"This report is {state}: only a report a person approved is sent.", 409)
+        if row["decided_via"] == RULE_VIA and not row["consumed_at"]:
+            # The team rule decided it and nothing was sent: once the rule is off, the draft waits for a person.
+            with self.store.transaction() as c:
+                waits = not team_rules.load(c)[RULE]
+                if waits:
+                    self._unrule(c, who, approval_id)
+            if waits:
+                raise Problem("approval", "This report waits for a person: the team rule that would send it is off.", 409)
+        payload = row["payload"] or {}
+        if H.lint_support(payload) or not H.support_text_matches(payload):
+            raise Problem("approval", "The approved message no longer matches its hash; nothing was sent.", 409)
+        person = Identity(row["decided_by_id"], "human")
+        key = "approval:" + approval_id
+        with self.store.read() as c:      # a Health Monitor report a person approved is still the Health Monitor's
+            health = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='health_reports'").fetchone() \
+                and c.execute("SELECT 1 FROM health_reports WHERE approval_id=?", (approval_id,)).fetchone()
+        source = "health_monitor" if health else "bot_report"
+        if row["consumed_at"]:
             with self.store.read() as c:
-                row = H.approval(c, approval_id)
-                quarantined = H.is_bot(who.actor) and (H.bot(c, H.actor_id(who.actor)) or {}).get("state") == "quarantined"
-            if not row:
-                raise Problem("not_found", "Approval not found", 404)
-            if row["requested_by_id"] != who.actor:
-                raise Problem("forbidden", "Only whoever asked for this approval may send it.", 403)
-            if quarantined:
-                raise Problem("forbidden", "A quarantined bot sends nothing until a person clears it.", 403)
-            if row["kind"] != "support":
-                raise Problem("approval", f"{approval_id} is a {row['kind']} approval, not a support report.", 422)
-            if row["decision"] != "approved":
-                state = row["decision"] or "waiting for a person"
-                raise Problem("approval", f"This report is {state}: only a report a person approved is sent.", 409)
-            payload = row["payload"] or {}
-            if H.lint_support(payload) or not H.support_text_matches(payload):
-                raise Problem("approval", "The approved message no longer matches its hash; nothing was sent.", 409)
-            person = Identity(row["decided_by_id"], "human")
-            key = "approval:" + approval_id
-            with self.store.read() as c:      # a Health Monitor report a person approved is still the Health Monitor's
-                health = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='health_reports'").fetchone() \
-                    and c.execute("SELECT 1 FROM health_reports WHERE approval_id=?", (approval_id,)).fetchone()
-            source = "health_monitor" if health else "bot_report"
-            if row["consumed_at"]:
-                with self.store.read() as c:
-                    done = c.execute("SELECT * FROM support_tickets WHERE actor=? AND request_key=?",
-                                     (person.actor, key)).fetchone()
-                if not done:
-                    raise Problem("approval", f"{approval_id} was already spent at {row['consumed_at']}.", 409)
-                return {"ticket": view(done), "approval": approval_id, "filed_as": person.actor, "again": True}
+                done = c.execute("SELECT * FROM support_tickets WHERE actor=? AND request_key=?",
+                                 (person.actor, key)).fetchone()
+            if not done:
+                raise Problem("approval", f"{approval_id} was already spent at {row['consumed_at']}.", 409)
+            return {"ticket": view(done), "approval": approval_id, "filed_as": person.actor, "again": True}
 
-            def spend(c, _ticket_id=None):
-                spent = c.execute("UPDATE approvals SET consumed_at=? WHERE id=? AND consumed_at IS NULL",
-                                  (H.now(), approval_id)).rowcount
-                if spent:
-                    H.event(c, who.actor, "approval.consume", approval_id, {"kind": "support"})
+        def spend(c, _ticket_id=None):
+            spent = c.execute("UPDATE approvals SET consumed_at=? WHERE id=? AND consumed_at IS NULL",
+                              (H.now(), approval_id)).rowcount
+            if spent:
+                H.event(c, who.actor, "approval.consume", approval_id, {"kind": "support"})
 
-            ticket = self.file(person, SupportTicket(message=payload["message"],
-                                                     include_ids=payload.get("include_ids", True) is not False),
-                               key, on_filed=spend, source=source)
-            with self.store.transaction() as c:      # a ticket kept before its approval was spent (an older crash)
-                spend(c)
-            return {"ticket": ticket, "approval": approval_id, "filed_as": person.actor, "again": False}
+        ticket = self.file(person, SupportTicket(message=payload["message"],
+                                                 include_ids=payload.get("include_ids", True) is not False),
+                           key, on_filed=spend, source=source)
+        with self.store.transaction() as c:      # a ticket kept before its approval was spent (an older crash)
+            spend(c)
+        return {"ticket": ticket, "approval": approval_id, "filed_as": person.actor, "again": False}
 
     def write(self, who, ticket_id, text, attachment=""):
         """Add a message to one of the caller's tickets."""

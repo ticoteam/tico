@@ -5683,11 +5683,6 @@ def create_app(settings=None):
         if body.kind == "support":
             from .support import require_on
             require_on(settings)            # nothing to draft where nothing can be sent (docs/support.md)
-            # A bot's report goes without a card when the team lets bots send without asking (team rule
-            # `bot_reports_direct`, backend/support.py report_now); otherwise, or for anyone else, it is drafted below.
-            sent = app.state.support.report_now(who, body, request.headers.get("idempotency-key"))
-            if sent is not None:
-                return sent
         def work(c):
             auth.domain(who)
             # What an approval clears is a send, a spend or a publication; an onboarding bot does none of them.
@@ -5706,7 +5701,17 @@ def create_app(settings=None):
                                      supersedes=body.supersedes_approval, to=to)
             # A proposal answers as a bot's cap PUT does too: the approval's id and that it waits on a person.
             return {**row, "approval": row["id"], "status": "pending"} if body.kind in proposals.KINDS else row
-        return mutate(request, body, work)
+        draft = mutate(request, body, work)
+        if body.kind == "support" and who.role == "bot":
+            # The team rule `bot_reports_direct` (backend/support.py send_by_rule) decides the draft as the install's default
+            # person and sends it now; off, or refused by the privacy check, it waits for a person. A same-key retry replays
+            # the draft, and send_by_rule answers with the same ticket.
+            def privacy_now(c):
+                privacy.guard_write(c, getattr(request.state, "privacy_source", who), request.url.path, auth)
+            sent = app.state.support.send_by_rule(who, draft["id"], check=privacy_now)
+            if sent is not None:
+                return sent
+        return draft
 
     @app.get("/api/v2/approvals/{aid}")
     def approval(request: Request, aid: str):

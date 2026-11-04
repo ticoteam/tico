@@ -124,13 +124,7 @@ A bot that hits a Tico bug (or a person's token, through MCP) reports it to the 
 copy-and-paste task. Whether a person says yes first is the team's rule **Bots send reports to the Tico team without
 asking** (`bot_reports_direct`, Settings > General > Team, owner only; on by default).
 
-**On.** `hub support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) is sent at once, and the
-command prints the ticket. No approval card is made. The ticket is filed as the install's default person (the one a
-drafted report would ask), counts toward their 10 a day, and its replies show on their Support page. The same checks as
-a drafted report run first (the message is checked as `lint_approval` checks it, a quarantined bot is refused, and a
-refusal is recorded), and the day limit, the HQ call and the source are the same. The bot sends an `Idempotency-Key`, as
-every write does: a retry with the same key is the same ticket and nothing more reaches HQ. The key is the bot's attempt's, and the same key with other content is refused (409) and sends nothing. A retry after the owner turns direct reports off is still the same ticket, and a key that drafted stays a draft. The version and install ID go
-with it unless `--no-ids`.
+**On.** `hub support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) is drafted as below and then decided and sent at once by the team rule: no card is made, and the command prints the ticket. The draft is decided as the install's default person (the one a drafted report would ask), with the note "team rule: bots send reports without asking", so it never shows in Needs you. The ticket is filed as that person, counts toward their 10 a day, and its replies show on their Support page. The checks are a drafted report's, and they run first: the message is checked as `lint_approval` checks it, a quarantined bot is refused, and the privacy check for this send must pass. The day limit, the HQ call and the source are the same. The bot sends an `Idempotency-Key`, as every write does: a retry with the same key is the same ticket and nothing more reaches HQ, and the same key with other content is refused (409) and sends nothing. A retry after the owner turns direct reports off is still the same ticket, and a report already sent stays sent. If the rule is off when a report is sent, the draft waits for a person (below); a retry after the owner turns the rule on sends that draft once. If the send fails, the rule's decision is taken back and the draft waits the same way. The version and install ID go with it unless `--no-ids`.
 
 **Off.** The report waits for a person's yes:
 

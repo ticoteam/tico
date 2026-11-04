@@ -504,7 +504,7 @@ async function renderSettingsAssistantApprovals() {
   });
 }
 // Settings > General > Team: whether a bot's report to the Tico team goes without a card (team rule bot_reports_direct,
-// backend/support.py report_now). Owner only. Off, every bot report waits for a person's yes in Needs you.
+// backend/support.py send_by_rule). Owner only. Off, every bot report waits for a person's yes in Needs you.
 async function renderSettingsBotReports() {
   const host = $('#settings-bot-reports');
   if (!host || formBusy(host)) return;

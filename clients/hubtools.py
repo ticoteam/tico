@@ -5190,7 +5190,7 @@ def support_report(api, args):
         payload["include_ids"] = False
     row = api.post("approvals", {"kind": "support", "payload": payload}, key=_key(args))
     if row.get("sent"):
-        # The team rule let it go at once (backend/support.py report_now): filed as the install's default person.
+        # The team rule let it go at once (backend/support.py send_by_rule): filed as the install's default person.
         return {"ticket": row.get("ticket"), "sent": True, "filed_as": row.get("filed_as"),
                 "next": "Sent to the Tico team without a person's approval. Replies reach the person it was filed as."}
     return {"approval": row.get("id"), "decision": row.get("decision"),
