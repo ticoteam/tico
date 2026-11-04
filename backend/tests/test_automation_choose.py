@@ -144,11 +144,12 @@ class Crash(BaseException):
 
 
 class Memo(Services):
-    """Services that keep each effect's answer by its key, as the hub does (`_once`), and crash on one action once."""
+    """Services that keep each effect's answer by its key, as the hub does (`_once`). Each crashes once: `crash_on` before
+    its effect runs, `crash_after` once its effect ran and was kept, as a crash before the step's checkpoint leaves it."""
 
-    def __init__(self, crash_on=None, **kw):
+    def __init__(self, crash_on=None, crash_after=None, **kw):
         super().__init__(**kw)
-        self.memo, self.crash_on = {}, crash_on
+        self.memo, self.crash_on, self.crash_after = {}, crash_on, crash_after
 
     def act(self, do, args, ctx):
         if ctx["key"] not in self.memo:
@@ -156,6 +157,9 @@ class Memo(Services):
                 self.crash_on = None
                 raise Crash(do)
             self.memo[ctx["key"]] = super().act(do, args, ctx)
+            if do == self.crash_after:
+                self.crash_after = None
+                raise Crash(do)
         return self.memo[ctx["key"]]
 
 
@@ -239,3 +243,24 @@ def test_a_waiting_choose_run_whose_owner_changed_sends_no_reply_and_runs_only_t
     out = run["steps"][0]["outputs"]
     assert out["skipped"] == "owner changed" and out["error"] and out["to"] == "sales"
     assert run["status"] == "ok" and run["threads"][0]["state"] == "done"
+
+
+def test_a_crash_after_a_chosen_destinations_effect_then_an_owner_change_runs_the_default_with_its_own_effects():
+    """The chosen destination's first effect ran and was kept, then the run crashed before its checkpoint, and the owner
+    changed before the resume. The default destination's chain has its own slots, so its action runs, and nothing that
+    already ran is repeated or served from the other destination's kept result."""
+    services = Memo(crash_after="create_task")
+    f = flow(llm(choosing()), destinations=DESTS)
+    run = E.execute(f, MESSAGE, services)
+    assert E.answer(run, "msg_1", json.dumps({"to": "legal", "body": "Sending."}))
+    saved = json.loads(json.dumps(run))   # what the hub saves when the answer comes in
+    with pytest.raises(Crash):
+        E.advance(f, run, services)       # the reply and the chosen chain's first effect are out; the crash follows
+    resumed = E.advance({**f, "owner": "group:legal-team"}, saved, services)
+    assert services.acted == [("draft_reply", {"body": "Sending."}), ("create_task", {"title": "Review"}),
+                              ("label", {"name": "Sales"})]
+    assert len(services.keys) == len(set(services.keys)) == 3
+    out = resumed["steps"][0]["outputs"]
+    assert out["skipped"] == "owner changed" and out["to"] == "sales"
+    assert [(a["do"], a["from"], a["ok"]) for a in out["actions"]] == [("label", "destination", True)]
+    assert resumed["status"] == "ok" and resumed["threads"][0]["state"] == "done"
