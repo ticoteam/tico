@@ -545,6 +545,10 @@ a bot's turn on a Mac without the runner's credential socket, cannot refresh suc
 A grant made with `google connect --client-file` (a team's own Desktop client) keeps its own secret and refreshes on
 the computer as before.
 
+On the computer that holds the grants, `scripts/mail.sh google status` lists the connected accounts and what each may
+do (never a token). `scripts/mail.sh google revoke --mailbox <address>` revokes that account's grant at Google and
+removes it from this computer.
+
 Neither way gets past a Workspace's own controls. An administrator who blocks third-party apps, or who marks Gmail or
 Calendar as restricted, blocks an unverified or untrusted app; Tico names that block as the admin's. An **Internal**
 app avoids verification only for accounts in the Workspace that owns the project.
