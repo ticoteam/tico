@@ -8,6 +8,7 @@
 
 mod applog;
 mod config;
+mod cookies;
 mod hub;
 mod orgs;
 mod visual_origin;
@@ -681,7 +682,7 @@ async fn check_for_update_once(app: &App) {
             Err(_) => { report_update(app, "failed", "the update feed address is invalid"); return; }
         };
         let cookie = if hub::same_origin(&connection.hub, &endpoint) {
-            Client::new(connection.clone(), active_label(app)).cookie_header(app, &endpoint)
+            Client::new(connection.clone(), active_label(app)).cookie_header(app, &endpoint).await
         } else {
             None
         };
@@ -773,14 +774,17 @@ mod updater_integration_tests {
     const TARGET: &str = "tico-updater-test";
     const COOKIE: &str = "CF_Authorization=synthetic-test-session";
 
-    fn key_and_signature(bytes: &[u8]) -> (String, String) {
+    /// Signs `bytes` the way `cargo tauri build` does: the trusted comment records the version, which the updater
+    /// (2.14+) checks against the version the feed announces.
+    fn key_and_signature(bytes: &[u8], version: &str) -> (String, String) {
         let pair = KeyPair::generate_unencrypted_keypair().unwrap();
         let public_key = pair.pk.to_box().unwrap().to_string();
+        let comment = format!("timestamp:0\tfile:Tico.tar.gz\tversion:{version}");
         let signature = sign(
             Some(&pair.pk),
             &pair.sk,
             Cursor::new(bytes.to_vec()),
-            Some("version: 0.3.21"),
+            Some(&comment),
             Some("synthetic updater test"),
         ).unwrap().into_string();
         (base64::engine::general_purpose::STANDARD.encode(public_key),
@@ -889,12 +893,14 @@ mod updater_integration_tests {
         let (bundles, installed_dir) = (scratch.join("bundles"), scratch.join("installed"));
         std::fs::create_dir_all(&bundles).unwrap();
         std::fs::create_dir_all(&installed_dir).unwrap();
-        let candidate = b"#!/bin/sh\necho Acme Tico 0.3.99\n";
-        let (public_key, signature) = key_and_signature(candidate);
-        let (other_key, _) = key_and_signature(candidate);
+        // The updater installs only ELF AppImages, and `infer` needs a full 64-byte ELF header to call it one.
+        let mut candidate = b"\x7fELF Acme Tico 0.3.99".to_vec();
+        candidate.resize(64, 0);
+        let (public_key, signature) = key_and_signature(&candidate, CANDIDATE);
+        let (other_key, _) = key_and_signature(&candidate, CANDIDATE);
         // The file names `cargo tauri build --bundles appimage` writes, which app_release.py classifies.
         let appimage = bundles.join(format!("Acme Tico_{CANDIDATE}_amd64.AppImage"));
-        std::fs::write(&appimage, candidate).unwrap();
+        std::fs::write(&appimage, &candidate).unwrap();
         std::fs::write(bundles.join(format!("Acme Tico_{CANDIDATE}_amd64.AppImage.sig")), &signature).unwrap();
         let installed = installed_dir.join("Acme Tico.AppImage");
         let previous = b"#!/bin/sh\necho Acme Tico 0.3.98\n";
@@ -970,7 +976,7 @@ mod updater_integration_tests {
     #[tokio::test]
     async fn tauri_updater_rejects_access_login_redirect_without_requesting_login_origin() {
         let expected = b"synthetic Tico updater artifact";
-        let (public_key, signature) = key_and_signature(expected);
+        let (public_key, signature) = key_and_signature(expected, VERSION);
         let (hub_listener, hub_address) = bind();
         let (login_listener, login_address) = bind();
         login_listener.set_nonblocking(true).unwrap();
@@ -1016,7 +1022,7 @@ mod updater_integration_tests {
     #[tokio::test]
     async fn tauri_updater_keeps_configured_public_runner_feed_and_artifact_unauthenticated() {
         let bytes = b"synthetic public runner artifact";
-        let (public_key, signature) = key_and_signature(bytes);
+        let (public_key, signature) = key_and_signature(bytes, VERSION);
         let (runner_listener, runner_address) = bind();
         let hub = Url::parse("https://tico.example.test/").unwrap();
         let endpoint = url(runner_address, "/download/latest.json");

@@ -238,6 +238,16 @@ class ThreadPinRow(TypedDict):
     updated_at: str
 
 
+class MessageRouteRow(TypedDict):
+    """Who routing asked for one person's message (backend/thread_routing.py): `bot_ids` is a JSON list of bot actors,
+    `[]` when it asked none."""
+    message_id: str
+    thread_id: str
+    bot_ids: str
+    created_at: str
+    updated_at: str
+
+
 class MemoryTidyPacketRow(TypedDict):
     """Trusted runner custody for one editing and verification attempt."""
     attempt_id: str

@@ -1865,7 +1865,8 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
     record = loads.record if loads is not None else providers.load(c, settings)
     filled = providers.fill(record, config)
     # A runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
-    ready = model_subscriptions.covered(ready, model_subscriptions.covered_runtimes(c, runner, filled, loads))
+    covers = model_subscriptions.covered_runtimes(c, runner, filled, loads)
+    ready = model_subscriptions.covered(ready, covers)
     access = loads.access if loads is not None else cloud_access.access(c)
     if cloud_access.frozen(c, access) and (gateway_connection.is_tico(filled.get("model"))
                                    or models_preset.waiting(record, ready, filled)):
@@ -1894,6 +1895,8 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
     if check.get("ready") is not True:
         reported = check.get("ready") is False and bot in (ready.get("bots") or {})
         return ("not_ready" if reported else "readiness_unknown"), None
+    if signed_in_by_lapsed_plan(ready, check, covers):
+        return "sign_in_missing", None
     if ((ready.get("runtimes", {}).get(check.get("runtime")) or {}).get("authenticated") == "rejected"
             and not check.get("profile") and check.get("sign_in") != "ready"):
         return "sign_in_rejected", None
@@ -1912,6 +1915,23 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
                    for j in pending):
             return "cooling_off", None
     return None, config
+
+
+def signed_in_by_lapsed_plan(ready, check, covers):
+    """Whether the computer called the bot ready only because a subscription signed its runtime in, and none does now:
+    the runner reads a missing sign-in as ready for a runtime its last assignments said a plan covers
+    (runner-rs/src/readiness.rs `subscribed`), so between a plan lapsing (held, needs reconnecting, removed) and its
+    next report, the bot reads ready with nothing signed in, and its turn would fail on the missing login. The
+    computer's own login (no profile, not a per-bot key) is still missing, and the claim's own plans cover nothing."""
+    runtime = str(check.get("runtime") or "")
+    if not runtime or runtime in (covers or {}) or check.get("profile") or bot_keyed(runtime):
+        return False
+    row = (ready.get("runtimes") or {}).get(runtime) or {}
+    # The bot's own login's row, as the runner's preflight reads it: the runtime row is the worst of its profiles, so
+    # another profile signed out would read as this login missing.
+    own = (row.get("profiles") or {}).get("")
+    row = own if isinstance(own, dict) else row
+    return check.get("sign_in") == "ready" and row.get("authenticated") == "missing"
 
 
 def cooling_off_here(c, settings, runner, bot, config, ctx=None, loads=None):
@@ -2755,7 +2775,7 @@ class Execution:
         if restart and restart["restart_requested_at"]:
             c.execute("UPDATE runners SET restart_requested_at=NULL WHERE id=?", (who.runner_id,))
         # The assignments are read after the commit (app.py heartbeat route), off the write lock.
-        return {"server_time": H.now(), "start_places": True, "runtime_credential_source": True, "subscription_accounts": True, "worktree_record_stamp": True, "worktree_actions": sendable,
+        return {"server_time": H.now(), "start_places": True, "runtime_credential_source": True, "subscription_accounts": True, "subscription_usage_sources": True, "worktree_record_stamp": True, "worktree_actions": sendable,
                 # Whether the runner samples its performance (backend/performance.py).
                 "performance": bool(restart) and restart["performance"] != "off",
                 # Whether this computer's owner shares its internet with bots: the runner holds its exit link open

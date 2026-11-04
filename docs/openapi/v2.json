@@ -11376,7 +11376,7 @@
         ],
         "responses": {
           "200": {
-            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md \u00a79); an `activity` one also carries `counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` (how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`.\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `version`, each bot's count (`bots`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
+            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md \u00a79); an `activity` one also carries `counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` (how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as `GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `version`, each bot's count (`bots`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -36892,6 +36892,58 @@
         ]
       }
     },
+    "/api/v2/threads/{thread_id}/bot-status": {
+      "get": {
+        "summary": "The bots the thread's root waits on, at most 5, oldest wait first: `working` (its current step), `up_next` (finishing other work first) or `cant_reply` (what stops it, and `fix`)",
+        "operationId": "getThreadBotStatus",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadBotStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Threads"
+        ]
+      }
+    },
     "/api/v2/threads/{thread_id}/calls": {
       "get": {
         "summary": "The calls in a thread, newest first, a page at a time: before=<next_before> reads the next page",
@@ -37450,7 +37502,7 @@
     },
     "/api/v2/threads/{thread_id}/messages": {
       "post": {
-        "summary": "Post a message in a thread, or in a sub-thread with `parent_message_id`; it passes the org rules first",
+        "summary": "Post a message in a thread, or in a sub-thread with `parent_message_id`; it passes the org rules first. `in_reply_to` answers a message of the same root's open subtree the poster reads (422 `reply_target_invalid` otherwise): the post stays in this thread, quoting it, and a bot replied to is woken",
         "operationId": "postThreadMessage",
         "parameters": [
           {
@@ -37825,7 +37877,7 @@
     },
     "/api/v2/threads/{thread_id}/timeline": {
       "get": {
-        "summary": "The thread in tree order, a page of its own messages at a time (`cursor` is the seq from next_cursor), each followed by its sub-thread's messages; a long branch has a `collapsed` row with the cursor that reads the rest",
+        "summary": "The thread in tree order, a page of its own messages at a time (`cursor` is the seq from next_cursor), each followed by its sub-thread's messages; a long branch has a `collapsed` row with the cursor that reads the rest. With `flat=1`: the thread and every open sub-thread under it the viewer reads, in time order, all at depth 0, paged the same way, with `read_marks`. Each message has `reply_to` and `routed`; the first page has `bot_status`",
         "operationId": "getThreadTimeline",
         "parameters": [
           {
@@ -37883,6 +37935,16 @@
                 }
               ],
               "title": "Max Bytes"
+            }
+          },
+          {
+            "name": "flat",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Flat"
             }
           }
         ],
@@ -39423,7 +39485,7 @@
     },
     "/api/v2/uploads/threads/{thread_id}/messages": {
       "post": {
-        "summary": "A person's message with files in a thread (multipart: text, titles and the files); each file is linked to the message, under the chat upload limit",
+        "summary": "A person's message with files in a thread (multipart: text, titles and the files, and `in_reply_to` as a post takes it); each file is linked to the message, under the chat upload limit",
         "operationId": "uploadThreadMessage",
         "parameters": [
           {
@@ -39517,6 +39579,17 @@
                     ],
                     "title": "Parent Message Id"
                   },
+                  "in_reply_to": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "In Reply To"
+                  },
                   "titles": {
                     "items": {
                       "type": "string"
@@ -39602,6 +39675,17 @@
                       }
                     ],
                     "title": "Parent Message Id"
+                  },
+                  "in_reply_to": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "In Reply To"
                   },
                   "titles": {
                     "items": {
@@ -58227,6 +58311,12 @@
                       "string",
                       "null"
                     ]
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
@@ -68433,6 +68523,86 @@
         ],
         "additionalProperties": true
       },
+      "ThreadBotStatus": {
+        "type": "object",
+        "properties": {
+          "bots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThreadBotStatusRow"
+            }
+          }
+        },
+        "required": [
+          "bots"
+        ],
+        "additionalProperties": true
+      },
+      "ThreadBotStatusRow": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "working",
+              "up_next",
+              "cant_reply"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fix": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "href": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "href",
+                  "label"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where to fix what stops it (cant_reply only)"
+          }
+        },
+        "required": [
+          "actor",
+          "detail",
+          "fix",
+          "name",
+          "run_id",
+          "since",
+          "state"
+        ],
+        "additionalProperties": true
+      },
       "ThreadBrowse": {
         "type": "object",
         "properties": {
@@ -68810,6 +68980,34 @@
               "null"
             ],
             "description": "The sub-thread branching from this message: {id, count, last_seq, unread, more}"
+          },
+          "in_reply_to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reply_to": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ThreadReplyQuote"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The message this one answers (or a sub-thread message's parent): a quote, `{id, hidden: true}` when the viewer does not read it, or null"
+          },
+          "routed": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ThreadRouted"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who routing asked to answer this message (`to` empty: nobody); null when routing never looked at it"
           }
         },
         "required": [
@@ -68948,6 +69146,17 @@
             ],
             "title": "Parent Message Id"
           },
+          "in_reply_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "In Reply To"
+          },
           "delivery": {
             "anyOf": [
               {
@@ -69082,6 +69291,59 @@
         ],
         "additionalProperties": true
       },
+      "ThreadReplyQuote": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "author_name": {
+            "type": "string"
+          },
+          "excerpt": {
+            "type": "string",
+            "description": "Plain text, at most 120 characters"
+          },
+          "hidden": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": true
+      },
+      "ThreadRouted": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "actor",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "to"
+        ],
+        "additionalProperties": true
+      },
       "ThreadSearch": {
         "type": "object",
         "properties": {
@@ -69194,6 +69456,20 @@
               "string",
               "null"
             ]
+          },
+          "bot_status": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThreadBotStatusRow"
+            },
+            "description": "First page only: the bots the root waits on, as `GET .../bot-status` gives them"
+          },
+          "read_marks": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "`flat` only: the viewer's last_read_seq in the root and in each thread a message on the page is in (0: read nothing)"
           }
         },
         "required": [

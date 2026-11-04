@@ -24,6 +24,7 @@ TABLES = {
     rows.MemoryTidyPacketRow: "memory_tidy_packets",
     rows.ThreadRankingRow: "thread_rankings",
     rows.ThreadPinRow: "thread_pins",
+    rows.MessageRouteRow: "message_routes",
     rows.FeedbackRow: "feedbacks",
     rows.UsageFactRow: "usage_facts",
     rows.UsageMeterReadRow: "usage_meter_reads",

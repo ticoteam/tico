@@ -163,6 +163,7 @@ KEEP = frozenset((
     # outside destination that has not gone is made moot below, so the copy never sends it.
     "message_deliveries", "message_mentions", "message_reactions", "message_revisions", "sequences",
     "teammate_accesses", "thread_followers", "thread_members", "thread_pins", "thread_routings",
+    "message_routes",
     "message_search_keys",    # the search index's keys (thread_search.py); its FTS table is copied whole too, and search joins messages
     "home_merges", "home_merge_messages",   # where each person's old chat with a bot went (backend/bot_home_merge.py)
 )) | frozenset(finance.DEV_COPY_KEPT)

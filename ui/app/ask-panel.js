@@ -204,12 +204,28 @@ let ASK_PEEK_TIMER = 0;
 // On a computer the peek sits just past the rail, level with the Ask row (ask.css --ask-row-y). Measured only while a
 // peek shows, never on the way in or out of the panel.
 function askPeekPlace(el) {
+  if (el.classList.contains('ask-peek-row')) return;
   const r = !askPhone() && $('#ask-row')?.getBoundingClientRect();
   if (r?.height) el.style.setProperty('--ask-row-y', `${Math.round(innerHeight - r.bottom + r.height / 2)}px`);
 }
+// The peek's element, held here: docked above a thread's composer it sits inside the thread view, which a new page
+// replaces, so a lookup by id would lose it.
+let ASK_PEEK_EL = null;
+const askPeekEl = () => ASK_PEEK_EL ||= $('#ask-peek');
+// With a thread's composer on screen the peek is its own row above it, never over the words; elsewhere it floats by the dot.
+function askPeekDock() {
+  const el = askPeekEl(); if (!el) return;
+  const slot = [...document.querySelectorAll('#main .thv-peek-slot')].find(s => s.parentElement?.getClientRects().length);
+  const home = slot || document.body;
+  if (el.parentElement !== home) home.append(el);
+  el.classList.toggle('ask-peek-row', !!slot);
+}
+window.askPeekDock = askPeekDock;
+addEventListener('hashchange', () => setTimeout(askPeekDock, 0));
 function askPeek() {
-  const el = $('#ask-peek');
+  const el = askPeekEl();
   if (!el) return;
+  askPeekDock();
   clearTimeout(ASK_PEEK_TIMER);
   const now = Date.now(), open = !!ASK?.open, away = askAway() || !S.me;
   const items = away ? [] : askQuestions().map(it => ({id: String(it.id)}))
@@ -234,12 +250,12 @@ function askPeek() {
 }
 // Dismissed or tapped, the line is done with every item it spoke for.
 function askPeekDone() {
-  const el = $('#ask-peek'), store = askPeekStore();
+  const el = askPeekEl(), store = askPeekStore();
   askPeekSave({...store, dismissed: [...store.dismissed, ...(el.dataset.items || '').split(' ').filter(Boolean)]});
   askOn(el, false); delete el.dataset.item;
 }
-$('#ask-peek')?.addEventListener('click', ev => {
-  const el = $('#ask-peek'), id = el.dataset.item;
+askPeekEl()?.addEventListener('click', ev => {
+  const el = askPeekEl(), id = el.dataset.item;
   if (!id) return;
   if (ev.target.closest('[data-peek-x]')) { askPeekDone(); return; }
   if (!ev.target.closest('[data-peek-go]')) return;
