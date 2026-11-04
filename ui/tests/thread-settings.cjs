@@ -1,8 +1,10 @@
 // Thread settings (ui/app/threads-page.js threadSettingsOpen): the ⋯ in a thread's header opens one panel whose rows
-// save as they change, with the calls the thread's routes take: the name, who can read, Members, notifications (Off is
-// unfollow; muted reads as Off), pin for everyone and how long messages are kept, then Summarize, Mark all read and
-// Archive. A row the viewer may not use is left out: a reader who does not manage the thread, and a DM. At desktop and
-// at a phone's 390px, where the panel takes the screen.
+// save as they change, with the calls the thread's routes take: the name, who can read (A team waits for a team when
+// there is a choice; the Slack row redraws after), Members, notifications (Off is a lasting mute; not following reads
+// as Off), pin for everyone and how long messages are kept, then Summarize, Mark all read and Archive. Saves go one at
+// a time, so a slow rename is not undone by a later change. A row the viewer may not use is left out: a reader who
+// does not manage the thread, and a one-to-one DM (a group DM keeps its name). At desktop and at a phone's 390px,
+// where the panel takes the screen.
 // TICO_SCREENSHOT_DIR=<dir> also saves thread-settings-<desktop|phone>-<dark|light>.png.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -23,13 +25,16 @@ const world = () => ({
   't-muted': thread('t-muted', 'Quiet', {me: me({notify: 'muted'})}),
   't-dm': {id: 't-dm', title: 'Chat with Bea', audience: 'personal', last_seq: 4, last_unread_seq: 0, last_message_at: at(3), me: me({can_manage: true}),
     members: [{actor: 'human:ana'}, {actor: 'human:bea'}], dm_with: [{actor: 'human:bea', name: 'Bea'}], dm_with_count: 1},
+  't-gdm': {id: 't-gdm', title: 'Bea, Cy', audience: 'personal', last_seq: 4, last_unread_seq: 0, last_message_at: at(3), me: me({can_manage: true}),
+    members: [{actor: 'human:ana'}, {actor: 'human:bea'}, {actor: 'human:cy'}], dm_with: [{actor: 'human:bea', name: 'Bea'}, {actor: 'human:cy', name: 'Cy'}],
+    dm_with_count: 2},
 });
 
 async function open(browser, {phone = false} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
   const threads = world();
-  const seen = {errors: [], patches: [], follows: [], readAll: [], catchUps: []};
+  const seen = {errors: [], patches: [], follows: [], readAll: [], catchUps: [], slack: 0};
   page.on('pageerror', e => seen.errors.push(e.message));
   page.on('dialog', d => d.accept());
   await page.route('**/*', async route => {
@@ -45,9 +50,9 @@ async function open(browser, {phone = false} = {}) {
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: [],
       my_access: {see: true, read: true, write: true}}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}, {id: 'bea', name: 'Bea', email: 'bea@acme.example'}],
-      org_groups: [{id: 'ops', name: 'Ops team', my_access: {see: true, read: true, write: true}}]});
+      org_groups: [{id: 'ops', name: 'Ops team', my_access: {see: true, read: true, write: true}}, {id: 'eng', name: 'Engineering', my_access: {see: true, read: true, write: true}}]});
     if (p === '/api/v2/events') return route.abort();
-    if (p === '/api/v2/slack/links') return json({links: [], available: false, next_cursor: null});
+    if (p === '/api/v2/slack/links') return seen.slack++, json({links: [], available: false, next_cursor: null});
     const rail = () => Object.values(threads).filter(t => t.audience === 'team' && !t.archived_at);
     if (p === '/api/v2/threads' && method === 'GET') return json({attention: [], threads: rail(), dms: [threads['t-dm']], bot_dms: {}, next_cursor: null});
     if (p === '/api/v2/threads/rail') return json({pinned: rail().filter(t => t.me.pinned), threads: rail().filter(t => !t.me.pinned), catch_up: 0, next_cursor: null, dms: {}});
@@ -72,6 +77,7 @@ async function open(browser, {phone = false} = {}) {
       if (!what && method === 'PATCH') {
         const b = body(); seen.patches.push(b);
         if (b.title === 'Refused') return json({error: {code: 'invalid', detail: 'Not that name'}}, 422);
+        if (b.title === 'Slow plan') await new Promise(r => setTimeout(r, 600));
         const {archived, ...rest} = b;
         Object.assign(t, rest, 'archived' in b ? {archived_at: archived ? at(0) : null} : {});
         return json(t);
@@ -152,13 +158,41 @@ let browser = null;
     assert.equal(await dlg.locator('#ths-name').inputValue(), 'Launch plan v2', 'the refused name goes back');
     seen.patches.length = 0;
 
-    // Who can read: a radio saves at once, the team's own select with it.
+    // A slow rename, then a notification change before it answers: both stick.
+    await name.fill('Slow plan');
+    await name.press('Enter');
+    await until(page, () => seen.patches.length === 1, 'the slow rename');
+    await dlg.locator('[data-notify="mentions"]').click();
+    await dlg.locator('[data-notify="mentions"][aria-pressed="true"]').waitFor();
+    await page.locator('.thv-head .thv-title', {hasText: 'Slow plan'}).waitFor();
+    assert.equal(await dlg.locator('#ths-name').inputValue(), 'Slow plan');
+    assert.deepEqual(seen.follows, ['PUT:mentions']);
+    seen.patches.length = 0; seen.follows.length = 0;
+
+    // Who can read: a radio saves at once. A team, with two to choose from, waits for one: nothing is sent until then.
+    let slack = seen.slack;
     await dlg.locator('input[name=audience][value=company]').check();
     await until(page, () => seen.patches.length === 1, 'the audience');
     assert.deepEqual(seen.patches[0], {audience: 'company', audience_group_id: null});
+    await until(page, () => seen.slack > slack, 'the Slack row redraws after the audience');
+    assert.equal(await dlg.locator('input[name=audience]:checked').getAttribute('value'), 'company');
     await dlg.locator('input[name=audience][value=team]').check();
+    assert.equal(await dlg.locator('select[name=group]').inputValue(), '', 'Choose a team');
+    assert.equal(await dlg.locator('select[name=group] option[value=""]').textContent(), 'Choose a team');
+    await page.waitForTimeout(300);
+    assert.equal(seen.patches.length, 1, 'no team is sent before one is chosen');
+    slack = seen.slack;
+    await dlg.locator('select[name=group]').selectOption('eng');
     await until(page, () => seen.patches.length === 2, 'the team');
-    assert.deepEqual(seen.patches[1], {audience: 'team', audience_group_id: 'ops'});
+    assert.deepEqual(seen.patches[1], {audience: 'team', audience_group_id: 'eng'});
+    await until(page, () => seen.slack > slack, 'the Slack row redraws after the team');
+    assert.equal(await dlg.locator('select[name=group]').inputValue(), 'eng');
+    assert.equal(await dlg.locator('select[name=group] option[value=""]').count(), 0, 'no Choose a team once one is set');
+    // Another team, from the select, saves at once.
+    await dlg.locator('select[name=group]').selectOption('ops');
+    await until(page, () => seen.patches.length === 3, 'the other team');
+    assert.deepEqual(seen.patches[2], {audience: 'team', audience_group_id: 'ops'});
+    assert.ok(seen.patches.every(b => b.audience !== 'team' || b.audience_group_id), 'never a team with no group');
     seen.patches.length = 0;
 
     // Members opens the Members dialog over the panel; Done there comes back to it.
@@ -169,14 +203,14 @@ let browser = null;
     await members.waitFor({state: 'hidden'});
     assert.equal(await panel(page).count(), 1, 'the panel is still open');
 
-    // Notifications: one choice saves; Off unfollows; another choice follows again.
+    // Notifications: one choice saves; Off mutes, for good; another choice follows again.
     await dlg.locator('[data-notify="digest"]').click();
     await dlg.locator('[data-notify="digest"][aria-pressed="true"]').waitFor();
     await dlg.locator('[data-notify="off"]').click();
     await dlg.locator('[data-notify="off"][aria-pressed="true"]').waitFor();
     await dlg.locator('[data-notify="live"]').click();
     await dlg.locator('[data-notify="live"][aria-pressed="true"]').waitFor();
-    assert.deepEqual(seen.follows, ['PUT:digest', 'DELETE', 'PUT:live']);
+    assert.deepEqual(seen.follows, ['PUT:digest', 'PUT:muted', 'PUT:live']);
 
     // Pin for everyone is a switch; Keep messages a select.
     await dlg.locator('#ths-pin').click();
@@ -230,16 +264,31 @@ let browser = null;
     assert.deepEqual(seen.follows, ['PUT:mentions']);
     await page.keyboard.press('Escape');
 
-    // Muted (still in the API) shows as Off.
+    // Muted shows as Off; another choice follows again.
     dlg = await openPanel(page, 't-muted');
     assert.equal(await pressed(dlg), 'Off');
+    seen.follows.length = 0;
+    await dlg.locator('[data-notify="digest"]').click();
+    await dlg.locator('[data-notify="digest"][aria-pressed="true"]').waitFor();
+    assert.deepEqual(seen.follows, ['PUT:digest']);
     await page.keyboard.press('Escape');
 
-    // A DM, managed: no name, no Who can read and no pin for everyone.
+    // A one-to-one DM, managed: no name, no Who can read and no pin for everyone.
     dlg = await openPanel(page, 't-dm');
     const dm = await labels(dlg);
     for (const gone of ['Name', 'Who can read', 'Pin for everyone']) assert.ok(!dm.includes(gone), `no ${gone} in a DM: ${dm}`);
     assert.ok(dm.includes('Notifications'));
+    await page.keyboard.press('Escape');
+
+    // A group DM keeps its name: Rename, but still no Who can read.
+    dlg = await openPanel(page, 't-gdm');
+    const gdm = await labels(dlg);
+    assert.ok(gdm.includes('Name') && !gdm.includes('Who can read'), `a group DM: ${gdm}`);
+    seen.patches.length = 0;
+    await dlg.locator('#ths-name').fill('Weekend crew');
+    await dlg.locator('#ths-name').press('Enter');
+    await until(page, () => seen.patches.length === 1, 'the group DM rename');
+    assert.deepEqual(seen.patches, [{title: 'Weekend crew'}]);
     await page.keyboard.press('Escape');
     assert.deepEqual(seen.errors, []);
     await page.close();
@@ -266,5 +315,5 @@ let browser = null;
     assert.deepEqual(seen.errors, []);
     await page.close();
   }
-  console.log('PASS: Thread settings: the ⋯ opens one panel; name, who can read, members, notifications (Off unfollows, muted reads as Off), pin for everyone and keep messages save as they change; Summarize, Mark all read and Archive close it; a reader and a DM get only their rows; full screen on a phone');
+  console.log('PASS: Thread settings: the ⋯ opens one panel; name, who can read, members, notifications (Off mutes, muted reads as Off), a slow rename kept, pin for everyone and keep messages save as they change; Summarize, Mark all read and Archive close it; A team waits for a chosen team; a reader and a one-to-one DM get only their rows, a group DM its name; full screen on a phone');
 })().catch(e => { console.error(e); process.exitCode = 1; }).finally(() => browser?.close());
