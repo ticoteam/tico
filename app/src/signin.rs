@@ -414,6 +414,11 @@ pub(crate) fn clean_up_last_run(app: &App) {
     let stale = {
         let state = app.state::<AppState>();
         let list = state.orgs.lock().unwrap();
+        // Only against every saved org: with orgs.json unread (HUB_URL) or unreadable, a store a saved org uses could
+        // look unused, so the stores and the file are left for a launch that reads the list.
+        if !list.is_complete() {
+            return;
+        }
         stale_stores(&pending, list.orgs())
     };
     let owned: Vec<Uuid> = pending.iter().copied().filter(|store| !stale.contains(store)).collect();

@@ -167,13 +167,21 @@ pub fn startup(file: Option<PathBuf>, legacy: impl FnOnce() -> Result<Option<Url
     };
     match std::fs::read_to_string(&path) {
         Ok(text) => match parse(&text) {
-            Some(doc) => return Ok(Orgs::new(doc, Some(path))),
+            Some(doc) => return Ok(Orgs { complete: true, ..Orgs::new(doc, Some(path)) }),
             None => {
                 log::warn!("{FILE_NAME} is not readable; it is kept as {FILE_NAME}.corrupt");
                 let _ = std::fs::rename(&path, path.with_file_name(format!("{FILE_NAME}.corrupt")));
             }
         },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        // A first run: no org was ever saved, so the list made below is the whole of it.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let doc = legacy()?.map(|hub| Document::with_one(&hub)).unwrap_or_default();
+            let orgs = Orgs { complete: true, ..Orgs::new(doc, Some(path)) };
+            if !orgs.orgs().is_empty() {
+                let _ = orgs.write_to(&orgs.doc);
+            }
+            return Ok(orgs);
+        }
         Err(error) => {
             // Not overwritten: the file may be there and only unreadable for now.
             log::warn!("{FILE_NAME} could not be read: {error}");
@@ -196,12 +204,20 @@ pub struct Orgs {
     path: Option<PathBuf>,
     /// Every id handed out this run, removed orgs included: an id is never given to a second org.
     issued: HashSet<String>,
+    /// Whether this is every org saved on this Mac: orgs.json was read, or there was none yet. Not so when the list
+    /// was not read (a fixed server, HUB_URL) or could not be (unreadable, set aside as corrupt).
+    complete: bool,
 }
 
 impl Orgs {
     pub fn new(doc: Document, path: Option<PathBuf>) -> Orgs {
         let issued = doc.orgs.iter().map(|org| org.id.clone()).collect();
-        Orgs { doc, path, issued }
+        Orgs { doc, path, issued, complete: false }
+    }
+
+    /// Whether this is every org saved on this Mac, so a data store none of them uses belongs to no org.
+    pub fn is_complete(&self) -> bool {
+        self.complete
     }
 
     pub fn is_multi(&self) -> bool {
@@ -380,6 +396,25 @@ mod tests {
         let kept = path.with_file_name("orgs.json.corrupt");
         assert_eq!(std::fs::read_to_string(&kept).unwrap(), "{not json");
         assert!(parse(r#"{"version":2,"orgs":[]}"#).is_none(), "another version is not read");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn the_list_is_complete_only_when_orgs_json_was_read_or_never_written() {
+        let path = folder("complete");
+        let first = startup(Some(path.clone()), server("https://acme.example.com")).unwrap();
+        assert!(first.is_complete(), "a first run: no orgs.json, so no org was saved");
+        assert!(startup(Some(path.clone()), server("https://other.example.com")).unwrap().is_complete(), "orgs.json read");
+        // HUB_URL or a built-in server: orgs.json is not read, so its orgs are unknown.
+        assert!(!startup(None, server("https://override.example.com")).unwrap().is_complete());
+        // An unreadable orgs.json is set aside: its orgs are unknown too.
+        std::fs::write(&path, "{not json").unwrap();
+        assert!(!startup(Some(path.clone()), server("https://acme.example.com")).unwrap().is_complete());
+        // A path that cannot be read as a file (here a folder) leaves the list unread.
+        let _ = std::fs::remove_file(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        assert!(!startup(Some(path.clone()), server("https://acme.example.com")).unwrap().is_complete());
+        assert!(!Orgs::new(Document::default(), Some(path.clone())).is_complete());
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
