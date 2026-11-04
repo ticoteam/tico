@@ -794,7 +794,7 @@ pub fn item_send_blocked(context: &crate::workspace::Context) -> Option<&'static
     if context.live_discarded {
         Some("This meeting was discarded; its recording stays local")
     } else if context.live_state == "paused" || context.locally_paused {
-        Some("Resume sharing before sending an action item")
+        Some("Resume sharing before creating a task")
     } else {
         None
     }

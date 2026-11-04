@@ -839,7 +839,7 @@ impl Tico {
             .items
             .iter()
             .find(|item| item.id == item_id)
-            .context("This action item was removed")?
+            .context("This task was removed")?
             .clone();
         if !item.task_id.is_empty() {
             return Ok(());
@@ -848,12 +848,12 @@ impl Tico {
             paused_confirmed
                 || context.paused_windows.is_empty()
                 || (item.quote.trim().is_empty() && item.title.trim().is_empty()),
-            "This action item may quote paused speech. Review its title and quote before sending"
+            "This task may quote paused speech. Review its title and quote, then choose Create anyway"
         );
         let record = crate::live::shareable(&record, &context.paused_windows);
         ensure!(
             owner.starts_with("bot:") || owner.starts_with("human:"),
-            "Choose who gets it"
+            "Choose an owner"
         );
         let base = self.task_browser_url()?;
         let filed = record.deliveries.iter().find(|entry| {

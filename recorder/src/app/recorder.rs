@@ -1518,7 +1518,7 @@ impl Recorder {
                         .map(str::to_owned)
                         .or_else(|| (!paused_confirmed && !context.paused_windows.is_empty()
                             && context.items.iter().any(|i| i.id == item_id && (!i.quote.trim().is_empty() || !i.title.trim().is_empty())))
-                            .then(|| "This action item may quote paused speech. Review its title and quote before sending".into()));
+                            .then(|| "This task may quote paused speech. Review its title and quote, then choose Create anyway".into()));
                     if let Some(reason) = reason {
                         self.item_error = Some((item_id.to_owned(), reason));
                         return;
@@ -1987,7 +1987,7 @@ impl Recorder {
                 return;
             }
             if !paused_confirmed && tico_recorder_native::live::paused_review_required(&context) {
-                self.error = "A kept action item may quote paused speech. Review it, then choose Save anyway.".into();
+                self.error = "A kept task may quote paused speech. Review it, then choose Save anyway.".into();
                 return;
             }
         }
@@ -2053,7 +2053,7 @@ impl Recorder {
             let record = store.get(&id)?;
             network::ready(&record)?;
             anyhow::ensure!(paused_confirmed || !tico_recorder_native::live::paused_review_required(&store.context(&id)?),
-                "A kept action item may quote paused speech. Review it, then choose Save anyway.");
+                "A kept task may quote paused speech. Review it, then choose Save anyway.");
             let tico = Tico::saved(&config, &destination)?;
             let context = store.context(&id)?;
             if !context.live_id.is_empty() && !context.live_removed {
@@ -2784,6 +2784,7 @@ impl Recorder {
                     "owner_name": owner_name,
                     "sent": !item.task_id.is_empty(),
                     "sent_to": item.sent_to,
+                    "task_id": item.task_id,
                     "task_url": item.task_url,
                     "sending": self.sending.as_deref() == Some(item.id.as_str()),
                     "send_blocked": send_blocked,

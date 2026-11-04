@@ -319,6 +319,18 @@ html.hidden *, html.hidden *::before, html.hidden *::after { animation-play-stat
 .owner:hover { color: var(--text); background: var(--fill); }
 .owner.empty { color: var(--text-4); }
 .item .error { color: var(--amber); font-size: 12px; }
+.section > .label.head { margin-bottom: 6px; }
+.section > .label.head .btn { text-transform: none; letter-spacing: 0; color: var(--text-2); font-weight: 500; }
+.items.tasks { margin-bottom: 10px; }
+.item.task .check.done { background: transparent; border-color: var(--text-3); color: var(--text-2); }
+.item.task .title { display: block; }
+.item .num { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.item.proposal { background: var(--accent-soft); padding: 9px 10px; margin: 0 -10px; border-radius: 10px; align-items: flex-start; }
+.item.proposal:hover, .item.proposal.picking { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--line); }
+.item .check.dashed { border-style: dashed; border-color: var(--g5); }
+.item-tail { display: flex; align-items: center; gap: 2px; flex: none; margin: -2px -4px 0 0; }
+.item-tail .btn { background: var(--sheet); }
+.choose-org { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; font-size: 12px; }
 .add-item { display: flex; align-items: center; gap: 10px; padding: 3px 0; color: var(--text-4); }
 .add-item .check { width: 14px; display: flex; justify-content: center; flex: none; }
 .add-item input { flex: 1; border: 0; background: transparent; height: 22px; padding: 0; color: var(--text); font-size: 13px; }
