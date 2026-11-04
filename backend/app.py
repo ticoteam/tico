@@ -997,8 +997,8 @@ def create_app(settings=None):
             if route_keeps or file_bytes:
                 pass                    # the route's own "private, max-age=…" stands
             elif ui_bundle.is_part(request.url.path) and response.status_code in (200, 304) \
-                    and "immutable" in str(response.headers.get("cache-control", "")):
-                pass                    # a hashed script or stylesheet (ui_bundle): kept for a year
+                    and response.headers.get("cache-control") in (ui_bundle.IMMUTABLE, "no-store"):
+                pass                    # the bundle route keeps current bytes, never another build under an old URL
             elif request.query_params.get("v") and response.status_code in (200, 304) \
                     and re.fullmatch(r"/(?:tico/ui/)?vendor/fonts/[\w.-]+\.woff2", request.url.path):
                 # A font under its hashed URL (scripts/build-*-font.py): kept for a year. Inter's font-display is
@@ -8708,7 +8708,8 @@ def create_app(settings=None):
                 headers["Vary"] = "Accept-Encoding"
                 from .json_response import accepts_gzip
                 if accepts_gzip(request.headers):
-                    body, etag, headers["ETag"], headers["Content-Encoding"] = gz, gz_etag, gz_etag, "gzip"
+                    body = gz() if callable(gz) else gz
+                    etag, headers["ETag"], headers["Content-Encoding"] = gz_etag, gz_etag, "gzip"
             # A weak form of the tag (Cloudflare sends one) matches too: a 304 needs only the same content.
             if etag in [t.strip().removeprefix("W/") for t in request.headers.get("if-none-match", "").split(",")]:
                 return Response(status_code=304, headers=headers)
@@ -8720,10 +8721,18 @@ def create_app(settings=None):
             path = request.url.path
             if bundle is None or path not in bundle.parts:
                 raise Problem("not_found", "Not found", 404)
-            js = path.endswith(".js")
-            return ui_reply(request, bundle.parts[path],
-                            "text/javascript; charset=utf-8" if js else "text/css; charset=utf-8",
-                            bundle.etag[path], ui_bundle.IMMUTABLE, bundle.gz[path], bundle.gz_etag[path])
+            kind = "js" if path.endswith(".js") else "css"
+            media_type = "text/javascript; charset=utf-8" if kind == "js" else "text/css; charset=utf-8"
+            v = request.query_params.get("v")
+            stale = v is not None and v != bundle.version[kind]
+            cache_control = "no-store" if stale else ui_bundle.IMMUTABLE
+            # A page from before the split names only the first URL: it needs the whole app, without caching it there.
+            if stale and path == ui_bundle.part_path(kind, 0):
+                etag = bundle.whole_etag[kind]
+                return ui_reply(request, getattr(bundle, kind), media_type, etag, cache_control,
+                                lambda: bundle.gzip_whole(kind), etag[:-1] + '-gzip"')
+            return ui_reply(request, bundle.parts[path], media_type, bundle.etag[path], cache_control,
+                            bundle.gz[path], bundle.gz_etag[path])
 
         @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
         @app.api_route("/index.html", methods=["GET", "HEAD"], include_in_schema=False)
