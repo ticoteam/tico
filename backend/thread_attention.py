@@ -41,10 +41,27 @@ def items(c, auth, who, skip=(), with_capped=True):
     item keeps `conversation_id` empty, since its card opens the hold; `thread_id` says where it would post, for someone
     who reads that thread."""
     from . import threads
+    from . import read_cache
     viewer = threads.viewer(auth, who)
+    # Home's Needs you and unread cards ask with different skip/capped rules. Build their common list once in this
+    # snapshot, keyed by the whole identity and Auth; writes and returning the connection discard it (read_cache).
+    common = read_cache.value(c, ("thread_attention", viewer.auth, viewer.who), lambda: _items(c, viewer), shared=True)
+    skipped = set(skip)
+    # Thread items hold only scalars; each caller gets its own rows without copying the entire list recursively.
+    out = [dict(it) for it in common if not it.get("message_id") or it["message_id"] not in skipped]
+    for row in _capped(c) if with_capped else ():
+        root = c.execute("SELECT * FROM conversations WHERE id=?", (row["root_id"],)).fetchone()
+        if root and threads.readable(c, viewer, dict(root)) and threads.can_manage(c, viewer, dict(root)):
+            out.append(_item("thread_capped", row["root_id"], row["root_id"],
+                             _clip(root["subject"] or "Thread") + ": bot replies paused", row["since"]))
+    return sorted(out, key=lambda it: str(it["created_at"] or ""))
+
+
+def _items(c, viewer):
+    from . import threads
     me = viewer.actor
     known = viewer.known(c)
-    seen, out = set(skip), []
+    seen, out = set(), []
     addressed = _addressed(c, me)
     # Each message, its thread and the viewer's standing there are read together (a query a chunk), not once an item:
     # a person named in a thousand open threads took ~2,300 statements here, on every Home and Needs you read.
@@ -73,12 +90,7 @@ def items(c, auth, who, skip=(), with_capped=True):
         # A hold has no thread here: the list names its author only to someone who may see them.
         out.append({**_item("thread_held", row["id"], None, title, row["created_at"], known.name(row["author"], None)),
                     "thread_id": _held_thread(c, viewer, row["id"])})
-    for row in _capped(c) if with_capped else ():
-        root = c.execute("SELECT * FROM conversations WHERE id=?", (row["root_id"],)).fetchone()
-        if root and threads.readable(c, viewer, dict(root)) and threads.can_manage(c, viewer, dict(root)):
-            out.append(_item("thread_capped", row["root_id"], row["root_id"],
-                             _clip(root["subject"] or "Thread") + ": bot replies paused", row["since"]))
-    return sorted(out, key=lambda it: str(it["created_at"] or ""))
+    return out
 
 
 def _addressed(c, me):
