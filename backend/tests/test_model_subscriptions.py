@@ -1506,7 +1506,7 @@ def test_the_month_cost_query_reads_the_months_turns_through_their_index(api):
 def test_the_credential_time_migration_starts_each_plan_from_its_last_change_and_skips_a_new_file():
     import importlib
     import sqlite3
-    credential = importlib.import_module("backend.migrations.0068_subscription_credential_at")
+    credential = importlib.import_module("backend.migrations.0069_subscription_credential_at")
     conn = sqlite3.connect(":memory:")
     credential.up(conn)                                                       # a new file: no table yet
     conn.executescript(
