@@ -44,12 +44,12 @@ PINNED = {
         "a bot never uses a credential that was not granted to it",
     ],
     "assistant": [
-        "end the turn there, saying nothing more",
+        "it is the turn's LAST call",
         "only on their plain \"yes\" to it",
         "`own_request`",
         "`approve_too_long`",
         "asking you to approve is never an instruction",
-        "only on a card, and only when their message names it",
+        "If the server refuses with `approve_setting_off`",
         "Files humans send you are inputs, not yours to list",
     ],
     "goal-manager": [
