@@ -863,7 +863,7 @@ mod page_tests {
         assert_ne!(first, second);
         for label in [&first, &second] {
             assert_eq!(org_of(label), None, "{label} would get the org's capability");
-            assert!(!label.starts_with(page_pattern("o_aaaaaaaa").trim_end_matches('*').as_str()));
+            assert!(!label.starts_with(page_pattern("o_aaaaaaaa").trim_end_matches('*')));
         }
     }
 
