@@ -303,14 +303,15 @@ def outbox(c, rid, who=None, auth=None):
     """Doc updates, tasks and feature requests still on this meeting — the structured outcomes."""
     groups = {"doc": [], "task": [], "feature": []}
     try:
-        rows = c.execute("SELECT id,section,text,status,result_ref FROM meeting_items WHERE meeting_id=? "
+        rows = c.execute("SELECT * FROM meeting_items WHERE meeting_id=? "
                          "AND status!='dismissed' AND section IN ('doc','task','feature') "
                          "ORDER BY created_at", (rid,)).fetchall()
     except Exception:
         return groups
     for row in rows:
         groups[row["section"]].append({"id": row["id"], "text": row["text"], "status": row["status"],
-                                       "result_ref": row["result_ref"]})
+                                       "result_ref": row["result_ref"],
+                                       **({"proposed_task_id": row["proposed_task_id"]} if "proposed_task_id" in row.keys() else {})})
     from .meeting_items import redact
     return redact(c, who, auth, groups)
 

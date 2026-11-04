@@ -60,7 +60,7 @@ const SEND_WAIT: Duration = Duration::from_secs(600);
 /// Jobs that run beside the person's own actions instead of disabling the controls.
 /// Shown when a recording or a send is asked for while an update installs.
 const UPDATING: &str = "Tico Recorder is updating. Try again in a moment.";
-const BACKGROUND: [&str; 7] = [
+const BACKGROUND: [&str; 8] = [
     "live",
     "calendar",
     "autodraft",
@@ -68,6 +68,7 @@ const BACKGROUND: [&str; 7] = [
     "ask",
     "roster",
     "speech",
+    "items",
 ];
 /// Drafting reads streamed text too, so it can follow speech closely; one model call per
 /// interval at most.
@@ -316,6 +317,11 @@ pub struct Recorder {
     refresh: Instant,
     refresh_library: Instant,
     last_sync: Instant,
+    saved_items: Value,
+    items_cursor: u64,
+    items_at: Instant,
+    presence_session: String,
+    presence_target: Option<(String, String)>,
     last_calendar: Instant,
     last_draft: Instant,
     draft_wait: Duration,
@@ -436,6 +442,11 @@ impl Recorder {
             refresh: Instant::now(),
             refresh_library: Instant::now(),
             last_sync: Instant::now(),
+            saved_items: Value::Null,
+            items_cursor: 0,
+            items_at: Instant::now() - Duration::from_secs(30),
+            presence_session: uuid::Uuid::new_v4().to_string(),
+            presence_target: None,
             last_calendar: Instant::now(),
             last_draft: Instant::now(),
             draft_wait: DRAFT_INTERVAL,
@@ -572,6 +583,9 @@ impl Recorder {
         let record = self.store.get(id)?;
         self.context = self.store.context(id).unwrap_or_default();
         self.current = Some(record);
+        self.leave_saved();
+        self.saved_items = Value::Null;
+        self.items_cursor = 0;
         self.meeting = Some(id.to_owned());
         self.live = json!({});
         self.chat_error.clear();
@@ -590,6 +604,8 @@ impl Recorder {
         Ok(())
     }
     pub fn close(&mut self) {
+        self.leave_saved();
+        self.saved_items = Value::Null;
         self.save_context();
         self.meeting = None;
         self.current = None;
@@ -720,6 +736,62 @@ impl Recorder {
             .as_ref()
             .map(|worker| worker.error(id))
             .unwrap_or_default()
+    }
+    pub fn saved_target(&self) -> Option<(String, String)> {
+        self.current.as_ref()?.deliveries.iter()
+            .find(|entry| entry.destination_id == self.router() && entry.status == "sent"
+                  && !entry.meeting_id.is_empty())
+            .map(|entry| (entry.destination_id.clone(), entry.meeting_id.clone()))
+    }
+    pub fn shared_items_reply(&mut self, data: Value) {
+        self.saved_items = data;
+        self.bump();
+    }
+    fn leave_saved(&mut self) {
+        if let Some((destination, id)) = self.presence_target.take() {
+            let config = self.config.clone();
+            let session = self.presence_session.clone();
+            std::thread::spawn(move || {
+                if let Ok(tico) = Tico::saved(&config, &destination) {
+                    let _ = tico.call("/api/v2/presence", Some(&json!({"place":format!("meeting:{id}"),
+                        "session_id":session,"gone":true})), &uuid::Uuid::new_v4().to_string());
+                }
+            });
+        }
+    }
+    pub fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
+        if !visible { self.leave_saved(); }
+    }
+    fn sync_saved(&mut self) {
+        if !self.visible || self.background.contains("items") || self.items_at.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        let Some((destination, remote)) = self.saved_target() else { return; };
+        self.presence_target = Some((destination.clone(), remote.clone()));
+        self.items_at = Instant::now();
+        let session = self.presence_session.clone();
+        let after = self.items_cursor;
+        let config = self.config.clone();
+        let initial = self.saved_items.is_null();
+        self.job("items", move || {
+            let tico = Tico::saved(&config, &destination)?;
+            tico.call("/api/v2/presence", Some(&json!({"place":format!("meeting:{remote}"),
+                "session_id":session})), &uuid::Uuid::new_v4().to_string())?;
+            let mut cursor = after;
+            if !initial {
+                for (seq, kind, value) in tico.events(&format!(
+                    "/api/v2/events?topics=meeting_items,presence&meeting={remote}&place=meeting:{remote}&after={after}"))? {
+                    cursor = cursor.max(seq);
+                    if kind == "ready" { cursor = cursor.max(value["seq"].as_u64().unwrap_or(0)); }
+                    if value["gone"] == true { return Ok(json!({"gone":true,"cursor":cursor})); }
+                }
+            }
+            let mut data = tico.call(&format!("/api/v2/meetings/{remote}/items"), None, "")?;
+            data["presence"] = tico.call(&format!("/api/v2/presence?place=meeting:{remote}"), None, "")?;
+            data["cursor"] = json!(cursor);
+            Ok(data)
+        });
     }
     /// The connection whose router answers private questions and drafts for this meeting.
     pub fn router(&self) -> String {
@@ -1005,7 +1077,7 @@ impl Recorder {
                 _ => {}
             }
             if [
-                "live", "task", "chat", "connect", "finish", "attach", "access",
+                "live", "items", "task", "chat", "connect", "finish", "attach", "access",
             ]
             .contains(&reply.kind.as_str())
                 && !here
@@ -1043,6 +1115,10 @@ impl Recorder {
                                 self.say("Tico calendar is out of date");
                             }
                             self.calendar = value;
+                        }
+                        "items" => {
+                            self.items_cursor = value["cursor"].as_u64().unwrap_or(self.items_cursor);
+                            self.saved_items = value;
                         }
                         "live" => {
                             // Polled every few seconds; the window hears about it only on change.
@@ -1125,6 +1201,7 @@ impl Recorder {
         {
             self.reload();
         }
+        self.sync_saved();
         self.watch_inputs();
         let outside = self.outside_state();
         if outside != self.outside {
@@ -2572,6 +2649,13 @@ impl Recorder {
         // Bots first: most action items go to one.
         let mut owners = self.roster.clone();
         owners.sort_by_key(|row| !row.0.starts_with("bot:"));
+        if !self.context.live_id.is_empty() && self.live["visibility"] == "private" {
+            owners.retain(|row| self.live["owner_actor"] == row.0
+                || self.live["access"].as_array().into_iter().flatten().any(|a| a["actor"] == row.0)
+                || self.live["bots"].as_array().into_iter().flatten().any(|b|
+                    row.0 == format!("bot:{}", b["bot"].as_str().unwrap_or_default())
+                    && b["joined_by"] == self.live["owner_actor"]));
+        }
         let send_blocked = tico_recorder_native::live::item_send_blocked(&self.context);
         let can_send = mode == "ready" && self.sending.is_none() && send_blocked.is_none();
         let items = &self.context.items;
@@ -2616,6 +2700,8 @@ impl Recorder {
             })
             .collect();
         json!({
+            "saved": self.saved_target().is_some(),
+            "shared": self.saved_items,
             "mode": mode,
             "org": org,
             "orgs": self.config.destinations.iter().map(|row| json!({"id":row.id,"name":row.name})).collect::<Vec<_>>(),

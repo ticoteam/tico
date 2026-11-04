@@ -361,6 +361,7 @@
     return `<button class="badge ${live === 'Ended in Tico' ? 'muted' : 'accent'} badge-btn" data-act="pop" data-pop="people" title="${esc(m.place)}">${icon(team ? 'globe' : 'lock', 12)}${esc(live)}</button>`;
   }
   function actions(a) {
+    if (a.saved) return sharedActions(a);
     let aside = '';
     if (a.mode === 'ready' && a.multiple) {
       aside = `to ${esc(a.org)}${a.can_change ? ` · <button class="link" data-act="change-org">Change</button>` : ''}`;
@@ -375,6 +376,72 @@
     if (!a.items.length) html += `<div class="hint">Drafted as people talk. Nothing goes to Tico until you send it.</div>`;
     else if (a.mode === 'signin') html += `<div class="hint"><button class="link" data-act="settings">Sign in to a Tico</button> to send these.</div>`;
     return html + '</section>';
+  }
+  const sharedDrafts = new Map();
+  const sharedKey = id => `${S.meeting.id}:${id}`;
+  function sharedDraft(id) {
+    const key = sharedKey(id);
+    if (!sharedDrafts.has(key)) sharedDrafts.set(key, {patch: {}, flight: null, error: '', timer: 0});
+    return sharedDrafts.get(key);
+  }
+  const mergeShared = (a, b) => ({...a, ...b, detail: {...a.detail, ...b.detail}});
+  function sharedActions(a) {
+    const data = a.shared;
+    if (!data || !data.sections) return '<section class="section"><h2>Tasks</h2>' + (data?.gone ? '' : '<span>Loading…</span>') + '</section>';
+    const here = (data.presence?.actors || []).map(p => p.name);
+    return `<section class="section"><div class="section-head"><h2>Tasks</h2><span class="aside">${here.length ? esc(here.join(', ') + (here.length === 1 ? ' is here' : ' are here')) : ''}</span></div>` +
+      Object.values(data.sections).flat().filter(i => i.status !== 'dismissed').map(it => {
+        if (it.status === 'pushed') return `<div class="item sent">${esc(it.text)} · Sent</div>`;
+        const draft = sharedDraft(it.id), current = mergeShared(it, draft.patch), detail = current.detail || {};
+        const fields = it.section === 'task' ? ['owner', 'due', 'body'] : it.section === 'doc' ? ['document', 'change', 'why'] : ['side', 'app', 'area'];
+        const owners = a.owners.filter(o => !data.audience || data.audience.includes(o.actor));
+        return `<div class="shared-item" data-shared-item="${esc(it.id)}"><label>Title<textarea data-defer data-shared-field="text" aria-label="Title">${esc(current.text)}</textarea></label>` + fields.map(key => {
+          const label = ({body:'Details', owner:'Owner', due:'Due'})[key] || key;
+          if (key === 'owner') return `<label>Owner<select data-defer data-shared-field="owner" aria-label="Owner"><option value="">Choose</option>${owners.map(o => `<option value="${esc(o.actor)}" ${o.actor === detail.owner ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>`;
+          return `<label>${label}<${key === 'body' ? 'textarea' : 'input'} data-defer data-shared-field="${key}" aria-label="${label}" ${key === 'body' ? '' : `value="${esc(detail[key] || '')}"`}>${key === 'body' ? esc(detail.body || '') + '</textarea>' : ''}</label>`;
+        }).join('') + `<div class="aside">${it.updated_by ? esc((a.owners.find(o => o.actor === it.updated_by)?.name || it.updated_by) + ' edited · just now') : ''}</div>
+          <span class="error" data-shared-error ${draft.error ? '' : 'hidden'}>Not saved · <button class="link" data-act="shared-retry" data-id="${esc(it.id)}">Retry</button></span>
+          <div class="actions"><button class="btn small" data-act="shared-dismiss" data-id="${esc(it.id)}">Dismiss</button><button class="btn small primary" data-act="shared-send" data-id="${esc(it.id)}" ${draft.sending || !data.can_send ? 'disabled' : ''}>Send${detail.owner ? ' to ' + esc(owners.find(o => o.actor === detail.owner)?.name || detail.owner) : ''}</button></div></div>`;
+      }).join('') + '</section>';
+  }
+  function sharedChanged(field) {
+    const id = field.closest('[data-shared-item]').dataset.sharedItem, draft = sharedDraft(id), key = field.dataset.sharedField;
+    if (key === 'text') draft.patch.text = field.value;
+    else (draft.patch.detail ||= {})[key] = field.value;
+    clearTimeout(draft.timer);
+    if (!draft.error) draft.timer = setTimeout(() => sharedSave(id), 700);
+  }
+  async function sharedSave(id) {
+    const draft = sharedDraft(id);
+    clearTimeout(draft.timer);
+    if (draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight;
+    const patch = draft.patch; draft.patch = {}; draft.error = '';
+    draft.flight = invoke('shared_item', {id, body:patch});
+    try { await draft.flight; }
+    catch (e) { draft.patch = mergeShared(patch, draft.patch); draft.error = String(e); }
+    finally { draft.flight = null; }
+    if (!draft.error && Object.keys(draft.patch).length && !draft.sending) return sharedSave(id);
+    await poll();
+    const node = [...document.querySelectorAll('[data-shared-item]')].find(n => n.dataset.sharedItem === id);
+    if (node) node.querySelector('[data-shared-error]').hidden = !draft.error;
+    render();
+  }
+  async function sharedFinish(button, send) {
+    const id = button.dataset.id, draft = sharedDraft(id), node = button.closest('[data-shared-item]');
+    if (draft.sending) return;
+    draft.sending = true; clearTimeout(draft.timer); button.disabled = true;
+    const body = {detail:{}};
+    for (const f of node.querySelectorAll('[data-shared-field]')) {
+      if (f.dataset.sharedField === 'text') body.text = f.value;
+      else body.detail[f.dataset.sharedField] = f.value;
+    }
+    try {
+      if (draft.flight) { try { await draft.flight; } catch {} }
+      await invoke('shared_item', {id, action:send ? 'send' : null, body:send ? body : {status:'dismissed'}});
+      draft.patch = {}; draft.error = '';
+    } catch (e) { draft.error = String(e); }
+    finally { draft.sending = false; button.disabled = false; }
+    await poll(); render();
   }
   function item(it) {
     const id = esc(it.id);
@@ -1291,6 +1358,9 @@
       S.ui.pop = null;
       if (it?.can_send) act('send_item', { id: it.id, owner: it.owner, pausedConfirmed: true });
     },
+    'shared-retry': el => sharedSave(el.dataset.id),
+    'shared-send': el => sharedFinish(el, true),
+    'shared-dismiss': el => sharedFinish(el, false),
     'remove-item': (el) => act('remove_item', { id: el.dataset.id }),
     'set-owner': (el) => { S.ui.pop = null; act('set_owner', { id: el.dataset.id, owner: el.dataset.actor }); },
     'choose-org': (el) => act('choose_org', { id: el.dataset.id }),
@@ -1381,6 +1451,7 @@
   });
   document.addEventListener('input', (event) => {
     const el = event.target;
+    if (el.dataset.sharedField) sharedChanged(el);
     if (el.dataset.model) {
       setModel(el.dataset.model, el.value);
       if (el.dataset.model === 'ask') el.closest('.ask')?.classList.toggle('blank', !el.value.trim());
@@ -1413,6 +1484,7 @@
   });
   document.addEventListener('change', (event) => {
     const el = event.target;
+    if (el.dataset.sharedField) { sharedChanged(el); sharedSave(el.closest('[data-shared-item]').dataset.sharedItem); }
     if (el.dataset.check) {
       S.ui.form[el.dataset.check] = el.checked;
       render();
@@ -1426,6 +1498,7 @@
   }, true);
   document.addEventListener('focusout', async (event) => {
     const el = event.target;
+    if (el.dataset.sharedField) await sharedSave(el.closest('[data-shared-item]').dataset.sharedItem);
     if (el.dataset?.blur === 'rename' && S.ui.titleDraft !== null) {
       const title = S.ui.titleDraft;
       S.ui.titleDraft = null;

@@ -59,6 +59,25 @@ fn view(
     Ok(view)
 }
 
+// Network writes run outside the Recorder mutex, so typing and redraws keep working while a save waits.
+#[tauri::command(async)]
+fn shared_item(state: State<'_, Shared>, id: Option<String>, action: Option<String>, body: Option<Value>) -> Result<Value, String> {
+    let (config, destination, meeting) = {
+        let app = lock(&state);
+        let (destination, meeting) = app.saved_target().ok_or("Save the meeting first")?;
+        (app.config.clone(), destination, meeting)
+    };
+    let tico = tico_recorder_native::network::Tico::saved(&config, &destination).map_err(|e| e.to_string())?;
+    let mut path = format!("/api/v2/meetings/{meeting}/items");
+    if let Some(id) = &id { path.push_str(&format!("/{id}")); }
+    if action.as_deref() == Some("send") { path.push_str("/push"); }
+    let reply = tico.call(&path, body.as_ref(), &uuid::Uuid::new_v4().to_string()).map_err(|e| e.to_string())?;
+    let data = tico.call(&format!("/api/v2/meetings/{meeting}/items"), None, "").map_err(|e| e.to_string())?;
+    let mut app = lock(&state);
+    if app.saved_target() == Some((destination, meeting)) { app.shared_items_reply(data); }
+    Ok(reply)
+}
+
 commands! {
     stop_screen() => |app| app.screen.stop("");
     record(event: Option<Value>) => |app| app.record(event);
@@ -102,7 +121,7 @@ commands! {
     dismiss_error() => |app| app.dismiss_error();
     open_url(url: String) => |app| app.open_url(&url);
     dismiss_notice() => |app| app.dismiss_notice();
-    set_visible(visible: bool) => |app| app.visible = visible;
+    set_visible(visible: bool) => |app| app.set_visible(visible);
 }
 
 #[tauri::command(async)]
@@ -355,6 +374,7 @@ fn main() {
             set_notes,
             add_item,
             edit_item,
+            shared_item,
             set_owner,
             remove_item,
             send_item,

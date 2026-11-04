@@ -415,7 +415,7 @@ def install_meeting_items(app, store, mutate, task_create, auth):
                 row = one(c, rid, iid)
             detail = json.loads(row["detail"] or "{}")
             owner = (owner_of(c, detail) if row["section"] == "task" else
-                     "bot:" + DOC_BOT if row["section"] == "doc" else feature_owner(c))
+                     "bot:" + (H.resolve_bot(c, DOC_BOT) or {}).get("id", DOC_BOT) if row["section"] == "doc" else feature_owner(c))
             participants = meeting_audience.check(c, auth, who, owner, record=record)
 
             def create_task(c, who, body, **kwargs):

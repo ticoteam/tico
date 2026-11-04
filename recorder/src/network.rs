@@ -835,13 +835,23 @@ impl Tico {
             .as_str()
             .or(who["email"].as_str())
             .unwrap_or("me");
-        let body = json!({"title":item.title.chars().take(300).collect::<String>(),
+        let mut body = json!({"title":item.title.chars().take(300).collect::<String>(),
             "body":crate::assist::task_body(&record, &item, sender, &link),"owner":owner,"private":private});
-        let reply = self.call(
+        if !context.live_id.is_empty() {
+            body["live_meeting_id"] = json!(context.live_id);
+        }
+        let reply = if let Some(entry) = filed.filter(|entry| entry.status == "sent") {
+            let server_item = entry.receipt["items"][item_id]["id"].as_str()
+                .context("This item is not saved on the meeting")?;
+            let result = self.call(&format!("/api/v2/meetings/{}/items/{server_item}/push", entry.meeting_id),
+                Some(&json!({"text":item.title,"detail":{"owner":owner}})),
+                &format!("recorder:{id}:push:{server_item}:{}", hash(&body)))?;
+            json!({"task":{"id":result["item"]["result_ref"]}})
+        } else { self.call(
             "/api/v2/tasks",
             Some(&body),
             &format!("recorder:{id}:task:{item_id}:{}", hash(&body)),
-        )?;
+        )? };
         let task = reply["task"]["id"]
             .as_str()
             .context("Tico did not return the new task")?
@@ -860,16 +870,6 @@ impl Tico {
             }
             Ok(())
         })?;
-        // Sent with the meeting earlier as a proposed item: the task replaces it there.
-        if let Some(entry) = filed
-            && let Some(filed_item) = entry.receipt["items"][item_id]["id"].as_str()
-        {
-            let _ = self.call_meeting(
-                &format!("/meetings/{}/items/{filed_item}", entry.meeting_id),
-                Some(&json!({"status":"dismissed"})),
-                &format!("recorder:{id}:dismiss:{filed_item}"),
-            );
-        }
         Ok(())
     }
 }

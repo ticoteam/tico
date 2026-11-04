@@ -654,3 +654,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .share-sheet p { font-size: 13px; line-height: 1.5; }
 .share-sheet .buttons { margin-top: 14px; }
 @media(max-width: 760px) { .screen-start span { display: none; } .screen-stop { max-width: 130px; } }
+
+.shared-item { display: grid; gap: 10px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.shared-item label { display: grid; gap: 5px; }
+.shared-item input, .shared-item textarea, .shared-item select { width: 100%; box-sizing: border-box; }
+.shared-item textarea { min-height: 64px; resize: vertical; }

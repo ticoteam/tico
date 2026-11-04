@@ -123,3 +123,46 @@ def test_watch_notices_bot_access_revoked_without_task_change(api):
     clock[0] = 120
     watch()
     assert watch.drain() == []
+
+
+def test_before_save_checks_private_live_audience_and_finalize_preserves_access(api):
+    from backend.tests.test_api import post
+    mid = post(api, 'live-meetings', {'title': 'Private live', 'visibility': 'private'})['id']
+    post(api, f'live-meetings/{mid}/access', {'add': ['human:ben']})
+    body = {'title': 'Private words', 'body': 'Transcript around it', 'owner': 'human:cara', 'live_meeting_id': mid}
+    denied = api.post('/api/v2/tasks', json=body, headers=headers())
+    assert denied.status_code == 409, denied.text
+    task = post(api, 'tasks', {**body, 'owner': 'human:ana'})['task']
+    assert task['private']
+    assert get(api, 'tasks/' + task['id'], 'ben-test')['task']['id'] == task['id']
+    post(api, f'live-meetings/{mid}/chunks', {'chunks': [{'seq': 1, 'speaker': 'Ana', 'start_ms': 0, 'end_ms': 1000, 'text': 'Private words'}]})
+    api.app.state.live_meeting_routing.settle(timeout=30)
+    post(api, f'live-meetings/{mid}/control', {'action': 'end'})
+    api.app.state.live_meeting_routing.settle(timeout=30)
+    rid = post(api, f'live-meetings/{mid}/finalize', {})['meeting_id']
+    post(api, f'meetings/{rid}/review', {'action': 'approve', 'private': True})
+    assert api.get('/api/meetings/' + rid, headers=headers('ben-test')).status_code == 200
+    assert api.get('/api/meetings/' + rid, headers=headers('cara-test')).status_code == 403
+    team = post(api, 'live-meetings', {'title': 'Team live', 'visibility': 'team'})['id']
+    public = post(api, 'tasks', {**body, 'title': 'Team words', 'live_meeting_id': team})['task']
+    assert get(api, 'tasks/' + public['id'], 'cara-test')['task']['id'] == public['id']
+    post(api, f'live-meetings/{team}/access', {'visibility': 'private'})
+    assert get(api, 'tasks/' + public['id'], 'cara-test')['task']['id'] == public['id']
+
+
+def test_doc_feature_and_bot_manager_are_inside_the_audience(api):
+    from backend.tests.test_api import post
+    mid = post(api, 'live-meetings', {'title': 'Private live', 'visibility': 'private'})['id']
+    post(api, f'live-meetings/{mid}/bots', {'bot': 'ops'})
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c, 'ops')
+    denied = api.post('/api/v2/tasks', json={'title': 'Bot words', 'body': 'Private transcript', 'owner': 'bot:ops',
+                                          'live_meeting_id': mid}, headers=headers())
+    assert denied.status_code == 409, denied.text
+    rid = record(api, {'private': True}, 'ben-test')
+    for section in ('doc', 'feature'):
+        iid = add(api, rid, {'section': section, 'text': 'Private outcome'}, 'ben-test')['item']['id']
+        # The doc bot is not attached; the feature's default owner (Ana) is the org owner and can read this meeting.
+        result = push(api, rid, iid, token='ben-test', expected=409 if section == 'doc' else 200)
+        if section == 'feature':
+            assert get(api, 'tasks/' + result['item']['result_ref'], 'ben-test')['task']['private']
