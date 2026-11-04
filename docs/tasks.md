@@ -21,6 +21,7 @@ when the builder resumes in UTC, or that a person must clear it. The notice clea
 When repeated refusals all come from one task, only that bot's work on the task is held. A quiet task note explains
 the hold and its cooldown; the bot continues its other tasks. A person who manages the bot can clear the hold with
 quarantine clear, and the task keeps its existing status and other holds.
+The held task does not consume the bot's optional limit on tasks in progress.
 Your selection is remembered, shared links carry it, and new
 tasks start with that type. Clearing filters keeps the selected type. Older combined views and
 deleted types fall back to General.
