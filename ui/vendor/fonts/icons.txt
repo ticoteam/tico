@@ -1,6 +1,7 @@
 account_balance
 account_balance_wallet
 account_tree
+add
 ads_click
 alt_route
 analytics
@@ -142,6 +143,7 @@ store
 strategy
 supervisor_account
 support_agent
+swap_horiz
 tag
 target
 task_alt

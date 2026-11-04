@@ -1,49 +1,17 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Organizations</title>
-<style>
-  :root { color-scheme: light dark; --rail: #e9eaee; --chip: #d6d8df; --open: #4a5bd4; --ink: #1d1f24; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --rail: #1f2126; --chip: #33363e; --ink: #e6e7eb; } }
-  :root[data-theme="dark"] { --rail: #1f2126; --chip: #33363e; --ink: #e6e7eb; }
-  html, body { height: 100%; margin: 0; }
-  body { background: var(--rail); color: var(--ink); font: 600 13px -apple-system, system-ui, sans-serif;
-         display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0; box-sizing: border-box;
-         user-select: none; -webkit-user-select: none; }
-  button { width: 42px; height: 42px; border: 0; border-radius: 12px; background: var(--chip); color: var(--ink);
-           font: inherit; cursor: pointer; }
-  button[aria-current="true"] { background: var(--open); color: #fff; }
-  #add { background: transparent; border: 1px dashed var(--chip); font-size: 20px; font-weight: 400; margin-top: auto; }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src ipc: http://ipc.localhost">
+  <title>Organizations</title>
+  <link rel="stylesheet" href="rail.css">
+  <script src="rail.js" defer></script>
 </head>
 <body>
-<div id="orgs"></div>
-<button id="add" title="Add an organization" aria-label="Add an organization">+</button>
-<script>
-  // Placeholder list: the org names come from the shell (rail_orgs and orgs-changed), never from a page.
-  const invoke = window.__TAURI__.core.invoke;
-  const list = document.getElementById('orgs');
-  function render(orgs) {
-    list.replaceChildren(...orgs.map(org => {
-      const button = document.createElement('button');
-      const letter = (org.title || '').trim().charAt(0).toUpperCase();
-      button.textContent = letter || '?';
-      button.title = org.title;
-      button.setAttribute('aria-label', org.title);
-      button.setAttribute('aria-current', String(!!org.active));
-      button.onclick = () => invoke('rail_switch', {id: org.id}).catch(() => {});
-      button.oncontextmenu = event => {
-        event.preventDefault();
-        invoke('rail_menu', {x: event.clientX, y: event.clientY}).catch(() => {});
-      };
-      return button;
-    }));
-  }
-  document.getElementById('add').onclick = () => invoke('rail_add').catch(() => {});
-  invoke('rail_orgs').then(render).catch(() => {});
-  window.__TAURI__.event.listen('orgs-changed', event => render(event.payload));
-</script>
+  <nav aria-label="Organizations">
+    <ul id="orgs"></ul>
+    <button id="add" class="add" type="button" title="Add organization" aria-label="Add organization">+</button>
+  </nav>
 </body>
 </html>
