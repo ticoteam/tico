@@ -228,17 +228,29 @@ impl Orgs {
     /// Adds an org for `hub`, on a store of its own, and makes it the open one. Nothing changes if the file cannot
     /// be written, so the caller can show the error. Only a list that is kept can add.
     pub fn add(&mut self, hub: &Url) -> Result<Org, String> {
+        let mut added = self.add_all(&[(hub.clone(), Uuid::new_v4())])?;
+        Ok(added.remove(0))
+    }
+
+    /// Adds an org for each `(server, store)`, on the store given (Tico sign-in puts the session in it first), in one
+    /// write, and makes the first of them the open one. Nothing changes if the file cannot be written.
+    pub fn add_all(&mut self, hubs: &[(Url, Uuid)]) -> Result<Vec<Org>, String> {
         if !self.is_multi() {
             return Err(SAVE_FAILED.to_string());
         }
-        let org = new_org(hub, Some(Uuid::new_v4()), &self.issued);
-        let mut next = self.doc.clone();
-        next.orgs.push(org.clone());
-        next.active = Some(org.id.clone());
+        let (mut next, mut issued, mut added) = (self.doc.clone(), self.issued.clone(), Vec::new());
+        for (hub, store) in hubs {
+            let org = new_org(hub, Some(*store), &issued);
+            issued.insert(org.id.clone());
+            next.orgs.push(org.clone());
+            added.push(org);
+        }
+        let Some(first) = added.first() else { return Ok(added) };
+        next.active = Some(first.id.clone());
         self.write_to(&next)?;
-        self.issued.insert(org.id.clone());
+        self.issued = issued;
         self.doc = next;
-        Ok(org)
+        Ok(added)
     }
 
     /// Makes `id` the open org. Applied even if the file cannot be written: the org is already open on screen.
@@ -426,6 +438,25 @@ mod tests {
         assert_eq!(saved.active.as_deref(), Some(second.id.as_str()));
         assert!(orgs.find_hub(&hub("https://acme.example.com/tico/")).is_some(), "the same origin is the same org");
         assert!(Orgs::new(Document::default(), None).add(&hub("https://acme.example.com")).is_err(), "a fixed server cannot add");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn signed_in_picks_are_added_together_on_their_given_stores_and_the_first_opens() {
+        let path = folder("add-all");
+        let mut orgs = Orgs::new(Document::default(), Some(path.clone()));
+        let kept = orgs.add(&hub("https://kept.example.com")).unwrap();
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let added = orgs.add_all(&[(hub("https://acme.example.com"), a), (hub("https://tidy.example.com"), b)]).unwrap();
+        assert_eq!(added.iter().map(|org| org.store_id().unwrap()).collect::<Vec<_>>(), [a, b]);
+        assert_ne!(added[0].id, added[1].id);
+        assert!(added.iter().all(|org| org.id != kept.id));
+        assert_eq!(orgs.active().map(|org| org.id.clone()), Some(added[0].id.clone()));
+        let saved = parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved.orgs.len(), 3);
+        assert_eq!(saved.active.as_deref(), Some(added[0].id.as_str()));
+        assert!(orgs.add_all(&[]).unwrap().is_empty());
+        assert_eq!(orgs.active().map(|org| org.id.clone()), Some(added[0].id.clone()), "nothing added, nothing changes");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
