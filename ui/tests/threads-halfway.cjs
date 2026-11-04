@@ -28,6 +28,17 @@ const messages = () => [
   msg('m5', 5, 'human:cy', 'No action needed here.', 5, {routed: {to: []}}),
   msg('m6', 6, 'human:bea', 'Agreed.', 4, {reply_to: {id: 'mx', hidden: true}}),
 ];
+// A thread whose older sub-thread ('t-side') is flattened in, read to a different place than the root.
+const ZED = 'Zebedeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+const marksThread = {...team, id: 't-marks', title: 'Marks', last_seq: 7, me: me({last_read_seq: 5})};
+const marksMessages = () => [
+  msg('k1', 1, 'human:bea', 'Start of the plan.', 30, {thread_id: 't-marks'}),
+  msg('k2', 2, 'human:cy', 'A side note.', 29, {thread_id: 't-side'}),
+  msg('k3', 3, 'human:bea', 'Back on the plan.', 20, {thread_id: 't-marks', reply_to: quote('k1', 'human:bea', 'Bea', 'Start of the plan.')}),
+  msg('k4', 5, 'human:cy', 'Late on the side.', 10, {thread_id: 't-side'}),
+  msg('k5', 6, 'human:zed', 'Newest on the plan.', 3, {thread_id: 't-marks'}),
+  msg('k6', 7, 'human:ana', 'About that old one.', 1, {thread_id: 't-marks', reply_to: quote('kfar', 'human:zed', ZED, 'far back in the thread')}),
+];
 const working = (min = 1.1) => ({actor: 'bot:ops', name: 'Ops', state: 'working', detail: 'Reading the tax table', since: at(min), run_id: 'run1', fix: null});
 const statuses = () => [working(), {actor: 'bot:fin', name: 'Fin', state: 'up_next', detail: 'After Ops', since: at(1), run_id: null, fix: null},
   {actor: 'bot:qa', name: 'QA', state: 'cant_reply', detail: 'Out of credits', since: at(2), run_id: null, fix: {label: 'Fix', href: '#/settings/billing'}}];
@@ -40,7 +51,7 @@ async function open(browser, {phone = false} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
   const seen = {errors: [], posts: [], stops: [], timelines: [], reacts: []};
-  const sse = {queue: [], seq: 0, latest: null, done: false};
+  const sse = {queue: [], seq: 0, latest: null, done: false}, state = {archived: false};
   page.on('pageerror', e => seen.errors.push(e.message));
   // A closed page's waiting stream ends, so node can exit.
   page.on('close', () => { sse.done = true; });
@@ -58,7 +69,7 @@ async function open(browser, {phone = false} = {}) {
     if (p === '/api/employees') return json(['ops', 'fin', 'qa'].map(name => ({name, display_name: name === 'qa' ? 'QA' : name[0].toUpperCase() + name.slice(1),
       host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: [], my_access: {see: true, read: true, write: true}})));
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}, {id: 'bea', name: 'Bea', email: 'bea@acme.example'},
-      {id: 'cy', name: 'Cy', email: 'cy@acme.example'}], org_groups: [{id: 'ops', name: 'Ops team', my_access: {see: true, read: true, write: true}}]});
+      {id: 'cy', name: 'Cy', email: 'cy@acme.example'}, {id: 'zed', name: ZED, email: 'zed@acme.example'}], org_groups: [{id: 'ops', name: 'Ops team', my_access: {see: true, read: true, write: true}}]});
     if (p === '/api/v2/events') {
       // A stand-in stream: the newest connection with the threads topic waits for the events the test sends, then ends.
       if (!(url.searchParams.get('topics') || '').split(',').includes('threads')) return route.abort();
@@ -72,12 +83,15 @@ async function open(browser, {phone = false} = {}) {
     }
     if (p === '/api/v2/threads/rail') return json({pinned: [], threads: [team], catch_up: 0, next_cursor: null, dms: {}});
     if (p === '/api/v2/threads' && method === 'GET') return json({attention: [], threads: [team], dms: [dmThread], next_cursor: null});
-    if (p === '/api/v2/threads/dm') return json(dmThread);
+    if (p === '/api/v2/threads/dm') return json(state.archived ? {thread: null} : dmThread);
+    if (p === '/api/v2/threads/t-dm-ops' && method === 'PATCH') { state.archived = true; return json({...dmThread, archived_at: at(0)}); }
+    if (p === '/api/v2/messages/kfar') return json({error: 'not_found'}, 404);
     if (p === '/api/v2/threads/home/' + encodeURIComponent('bot:ops') || p === '/api/v2/threads/home/bot:ops') return json({error: 'not_found'}, 404);
     const tl = p.match(/^\/api\/v2\/threads\/([^/]+)\/timeline$/);
     if (tl) {
       seen.timelines.push(url.searchParams.get('flat'));
       if (tl[1] === 't-ship') return json({thread: team, breadcrumb: [{id: 't-ship', title: 'Ship day'}], next_cursor: null, messages: messages(), bot_status: statuses()});
+      if (tl[1] === 't-marks') return json({thread: marksThread, breadcrumb: [], next_cursor: null, messages: marksMessages(), bot_status: [], read_marks: {'t-marks': 5, 't-side': 2}});
       if (tl[1] === 't-dm-ops') return json({thread: dmThread, breadcrumb: [], next_cursor: null, messages: dmMessages(), bot_status: [working(0.4)]});
     }
     if (/^\/api\/v2\/threads\/[^/]+\/(read|members|calls)$/.test(p)) return json(p.endsWith('calls') ? {calls: [], next_before: null, available: false} : p.endsWith('members') ? {members: [], next_cursor: null} : {ok: true});
@@ -111,6 +125,20 @@ async function themed(page, name, phone = false) {
     await shot(page, `${name}-${phone ? 'phone' : 'desktop'}-${theme}`);
   }
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+}
+// A long unbroken name gives way in a quote and in the reply row above the composer: Cancel stays on screen.
+async function longNames(page) {
+  await page.goto('https://tico-ui.test/#/thread/t-marks');
+  await row(page, 'k6').waitFor();
+  const who = await box(row(page, 'k6').locator('.th-quote-who')), chip = await box(row(page, 'k6').locator('.th-quote'));
+  assert.ok(chip.x + chip.width <= 390 && who.width <= chip.width * 0.45, 'the name is cut short: ' + JSON.stringify([who, chip]));
+  await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-marks'); thvReplyStart(v, v.messages.find(m => m.id === 'k5')); });
+  const x = await box(page.locator('.thv-replying-x'));
+  assert.ok(x.x + x.width <= 390, 'Cancel is on screen: ' + JSON.stringify(x));
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390);
+  await page.locator('.thv-replying-x').click();
+  await page.goto('https://tico-ui.test/#/thread/t-ship');
+  await row(page, 'm6').waitFor();
 }
 const row = (page, id) => page.locator(`.th-msg[data-mid="${id}"]`);
 const box = loc => loc.boundingBox();
@@ -246,6 +274,37 @@ let browser = null;
     assert.ok(menu.y >= top.y && menu.y + menu.height <= top.y + top.height + 0.5, 'the menu sits in the top line');
     assert.equal(await page.locator('#pane-chat .bot-talk-bar .thv-menu-btn').count(), 0, 'no box of its own under the tabs');
     await themed(page, 'bot-dm-working');
+    // /new: the fresh DM starts with nothing of the old one, its status rows and Stop included.
+    await page.evaluate(() => thvNewDm([...THV_VIEWS].find(v => v.opts.dm && !v.gone)));
+    await page.locator('#bot-thread .thv-list .th-empty').waitFor();
+    assert.equal(await page.locator('#bot-thread .th-status').count(), 0, 'no status rows from the archived DM');
+    // Leaving for Info: the top line's actions go, and the clock stops.
+    await page.goto('https://tico-ui.test/#/bot/ops/info');
+    await page.waitForFunction(() => !document.querySelector('#bot-top-acts')?.children.length);
+    await page.waitForFunction(() => THV_TICK === 0, null, {timeout: 3000});
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+  }
+
+  // ---- read marks: each message against its own thread's mark; quotes follow edits; a quote too far back
+  {
+    const {page, seen} = await open(browser);
+    await page.goto('https://tico-ui.test/#/thread/t-marks');
+    await row(page, 'k6').waitFor();
+    // The root is read to 5 and the side thread to 2: the side's seq 5 is new, the root's 3 is not.
+    const fresh = await page.locator('.th-msg').evaluateAll(els => els.filter(e => e.classList.contains('th-new')).map(e => e.dataset.mid));
+    assert.deepEqual(fresh, ['k4', 'k5'], 'new by their own thread\'s mark');
+    assert.equal(await page.locator('.th-newline + .th-msg').getAttribute('data-mid'), 'k4', 'the New line sits before the first new one');
+    // An edit to a quoted message changes the chip; a delete says so.
+    await page.evaluate(() => threadViewsLive('messages', {id: 'k1', thread_id: 't-marks', root_id: 't-marks',
+      message: {id: 'k1', seq: 1, revision: 2, thread_id: 't-marks', sender_id: 'human:bea', body: 'Start of the new plan.', created_at: new Date().toISOString()}}));
+    await page.waitForFunction(() => document.querySelector('[data-mid="k3"] .th-quote-text')?.textContent.includes('new plan'));
+    await page.evaluate(() => threadViewsLive('messages', {id: 'k1', thread_id: 't-marks', root_id: 't-marks', deleted: true, revision: 3}));
+    await row(page, 'k3').locator('.th-quote-hidden').waitFor();
+    // A quote the server cannot find, however far back, becomes "not shown".
+    await row(page, 'k6').locator('[data-th-quote]').click();
+    await row(page, 'k6').locator('.th-quote-hidden').waitFor();
+    assert.equal(await row(page, 'k6').locator('[data-th-quote]').count(), 0);
     assert.deepEqual(seen.errors, []);
     await page.close();
   }
@@ -281,6 +340,7 @@ let browser = null;
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'no sideways scroll with the quote above the composer');
     assert.ok((await box(page.locator('.thv-replying-x'))).height >= 44);
     await page.locator('.thv-replying-x').click();
+    await longNames(page);
     await page.evaluate(() => { const b = document.querySelector('.thv-scroll'); b.scrollTop = b.scrollHeight; });
     await themed(page, 'shared-thread', true);
     await page.goto('https://tico-ui.test/#/bot/ops/dm');

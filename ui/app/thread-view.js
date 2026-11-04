@@ -61,7 +61,7 @@ function threadMount(host, opts = {}) {
 }
 // Everything that belongs to one conversation: a view that moves to another (a fresh DM) starts from this again.
 const thvConvFresh = () => ({id: '', thread: null, breadcrumb: [], messages: [], next: null, state: 'loading', execution: null,
-  readAt: 0, openSeq: 0, readSent: new Map(), marks: new Map(), readMarks: null, pending: [], replyTo: null, botStatus: null,
+  readAt: 0, openSeq: 0, readSent: new Map(), marks: new Map(), pending: [], replyTo: null, botStatus: null,
   flash: '', focus: '', error: '', memberList: null, memberMore: false, run: {openSteps: new Set(), steps: {}, openFolds: new Set()}});
 function threadUnmount(view) {
   if (!view || view.gone) return;
@@ -119,9 +119,9 @@ async function thvLoad(view) {
     thvStatusTake(view, r);
     view.messages = thvMerge(view, r.messages || []);
     view.next = r.next_cursor || null;
-    view.readAt = Number(view.thread?.me?.last_read_seq) || 0;
+    view.readAt = Number(r.read_marks?.[id] ?? view.thread?.me?.last_read_seq) || 0;
     view.openSeq = thvMaxSeq(view.messages);
-    thvLearnMarks(view, view.messages);
+    thvLearnMarks(view, r);
     view.state = view.messages.length ? 'ready' : 'empty';
     thvDraw(view, {stick: !view.opts.focus});
     thvMarkRead(view);
@@ -160,9 +160,11 @@ async function thvHoldsLoad(view) {
   } catch {}           // a server without rule holds has nothing to bring back
 }
 const thvMaxSeq = list => list.reduce((n, m) => Math.max(n, Number(m.seq) || 0), 0);
-// Where the viewer had read each sub-thread an older server sends inline: what is past it shows as new, per thread.
-function thvLearnMarks(view, rows) {
-  for (const m of rows) if (m.sub_thread?.id && !view.marks.has(m.sub_thread.id)) view.marks.set(m.sub_thread.id, Number(m.sub_thread.last_read_seq) || 0);
+// Where the viewer had read each thread on the page, as first read: a flat page's `read_marks` ({thread id: seq}), or an
+// older server's inline sub-threads. What is past its own thread's mark shows as new.
+function thvLearnMarks(view, r) {
+  for (const [tid, seq] of Object.entries(r?.read_marks || {})) if (tid !== view.id && !view.marks.has(tid)) view.marks.set(tid, Number(seq) || 0);
+  for (const m of r?.messages || []) if (m.sub_thread?.id && !view.marks.has(m.sub_thread.id)) view.marks.set(m.sub_thread.id, Number(m.sub_thread.last_read_seq) || 0);
 }
 // A page read from the server merged with what the stream already put on screen: the higher revision of each message
 // wins, and newer messages the page does not have yet stay at the bottom (`seq` orders the whole install).
@@ -192,7 +194,7 @@ async function thvRefresh(view) {
     view.thread = r.thread || view.thread;
     view.breadcrumb = r.breadcrumb || view.breadcrumb;
     thvStatusTake(view, r);
-    thvLearnMarks(view, fresh);
+    thvLearnMarks(view, r);
     const olderIds = new Set(older.map(m => m.id));
     const merged = thvMerge({messages: view.messages.filter(m => !olderIds.has(m.id))}, fresh);
     view.messages = [...older, ...merged];
@@ -208,7 +210,7 @@ async function thvRefresh(view) {
 async function thvPageOlder(view) {
   const r = await get(thvTimeline(view.id, view.next), {fresh: true});
   if (view.gone) return false;
-  thvLearnMarks(view, r.messages || []);
+  thvLearnMarks(view, r);
   const have = new Set(view.messages.map(m => m.id));
   view.messages = [...(r.messages || []).filter(m => !have.has(m.id)), ...view.messages];
   view.next = r.next_cursor || null;
@@ -337,11 +339,10 @@ function thvRows(view) {
 }
 function thvIsNew(view, m) {
   if (!m.seq || thvMine(m)) return false;
-  // Arriving at the bottom of the thread on screen is not news. An older server's inline sub-thread keeps its own read
-  // mark, and a reply arriving in it is.
-  const tid = m.thread_id || view.id;
-  if (tid !== view.id && view.marks.has(tid)) return m.seq > view.marks.get(tid);
-  return m.seq > view.readAt && m.seq <= view.openSeq;
+  // Each message against its own thread's mark (an older sub-thread's flattened in, else the root's). Arriving at the
+  // bottom of the view on screen is not news.
+  const tid = m.thread_id || view.id, mark = tid !== view.id && view.marks.has(tid) ? view.marks.get(tid) : view.readAt;
+  return m.seq > mark && m.seq <= view.openSeq;
 }
 const thvBot = a => String(a || '').startsWith('bot:');
 function thvWhoHTML(a) {
@@ -587,8 +588,6 @@ function thvMarkRead(view) {
 document.addEventListener('visibilitychange', () => { if (!document.hidden) for (const v of THV_VIEWS) thvMarkRead(v); });
 
 // ----------------------------------------------------------------- live
-// A message changed in a thread on screen: an edit or a delete in place, a new one at the bottom in time order (a reply
-// in an older sub-thread too, as the flat timeline reads it); anything the view cannot place reads the first page again.
 // A message edited or deleted: the chips that quote it say what it says now.
 function thvQuotesFollow(view, target) {
   let changed = false;
@@ -600,6 +599,8 @@ function thvQuotesFollow(view, target) {
   }
   return changed;
 }
+// A message changed in a thread on screen: an edit or a delete in place, a new one at the bottom in time order (a reply
+// in an older sub-thread too, as the flat timeline reads it); anything the view cannot place reads the first page again.
 function thvApplyMessage(view, d) {
   const tid = d.thread_id || d.message?.thread_id || d.message?.conversation_id, inView = tid === view.id || view.messages.some(m => m.thread_id === tid || m.sub_thread?.id === tid);
   if (!inView && d.root_id !== (view.thread?.root_id || view.id)) return false;
