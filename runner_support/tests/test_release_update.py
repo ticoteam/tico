@@ -724,3 +724,33 @@ def test_instruction_writer_closing_during_fd_scan_cannot_lose_its_edit(tmp_path
     monkeypatch.setattr(git_locks, "unused", write_and_close)
     assert backup.name in ru.instruction_backup_note(tmp_path, metadata)
     assert backup.read_text() == "late edit, writer now closed"
+
+
+def test_macos_closed_git_owner_and_unreadable_ps_output_block_recovery(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from runner_support import git_locks
+    checkout, elsewhere = tmp_path / "repo", tmp_path / "elsewhere"
+    checkout.mkdir()
+    elsewhere.mkdir()
+    lock = checkout / "index.lock"
+    lock.write_text("closed but owned")
+    current = {"cwd": checkout, "command": "git commit"}
+
+    def run(command, **kwargs):
+        if command[:2] == ["ps", "-axo"]:
+            return SimpleNamespace(returncode=0, stdout="123 /usr/bin/git\n", stderr="")
+        if command[0] == "ps":
+            return SimpleNamespace(returncode=0, stdout=current["command"], stderr="")
+        if "-d" in command:
+            return SimpleNamespace(returncode=0, stdout=f"p123\nn{current['cwd']}\n", stderr="")
+        return SimpleNamespace(returncode=1, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(git_locks.sys, "platform", "darwin")
+    monkeypatch.setattr(git_locks.subprocess, "run", run)
+    assert not git_locks.unused(lock, lock.stat(), (checkout,))
+    current["cwd"] = elsewhere
+    assert git_locks.unused(lock, lock.stat(), (checkout,))
+    current["command"] = f"git --git-dir={checkout} commit"
+    assert not git_locks.unused(lock, lock.stat(), (checkout,))
+    current["command"] = ""
+    assert not git_locks.unused(lock, lock.stat(), (checkout,))
