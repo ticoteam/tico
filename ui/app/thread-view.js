@@ -42,9 +42,7 @@ function thvDraftSave(view) {
 // (a bot's Home or DM) brings back the old chat's bar (pill.js): the ways to send (Set as goal among them) and the
 // pinned goal's bar (chat-goal.js), the bot's avatar that switches bots on a phone, Stop while it runs, and the "/" menu.
 function threadMount(host, opts = {}) {
-  const view = {key: ++THV_N, host, opts, id: '', thread: null, breadcrumb: [], messages: [], next: null, state: 'loading',
-                readAt: 0, openSeq: 0, readSent: new Map(), marks: new Map(), pending: [], replyTo: null, botStatus: null, flash: '',
-                follow: null, gone: false, error: '', run: {openSteps: new Set(), steps: {}, openFolds: new Set()}};
+  const view = {key: ++THV_N, host, opts, ...thvConvFresh(), follow: null, gone: false};
   THV_VIEWS.add(view);
   host.innerHTML = `<section class="thv${opts.card ? ' thv-card' : ''}" data-thv="${view.key}">
     ${opts.header === false ? '' : '<header class="thv-head"></header>'}
@@ -61,6 +59,10 @@ function threadMount(host, opts = {}) {
   void thvLoad(view);
   return view;
 }
+// Everything that belongs to one conversation: a view that moves to another (a fresh DM) starts from this again.
+const thvConvFresh = () => ({id: '', thread: null, breadcrumb: [], messages: [], next: null, state: 'loading', execution: null,
+  readAt: 0, openSeq: 0, readSent: new Map(), marks: new Map(), readMarks: null, pending: [], replyTo: null, botStatus: null,
+  flash: '', focus: '', error: '', memberList: null, memberMore: false, run: {openSteps: new Set(), steps: {}, openFolds: new Set()}});
 function threadUnmount(view) {
   if (!view || view.gone) return;
   thvDraftSave(view);
@@ -68,6 +70,9 @@ function threadUnmount(view) {
   view.follow?.();
   view.shown?.disconnect();
   THV_VIEWS.delete(view);
+  // The page's bar the view drew its actions into is empty again, unless another view has taken it since.
+  const bar = view.opts.actsHost;
+  if (bar && bar.dataset.thv === String(view.key)) { bar.innerHTML = ''; bar.onclick = null; delete bar.dataset.thv; }
   window.askPeekDock?.();
 }
 // Views whose host left the page stop following.
@@ -212,8 +217,10 @@ async function thvPageOlder(view) {
 }
 // A message to show (from search, or a quote): earlier pages are read until it is there, then it is scrolled to and
 // marked. False when it is not in the pages this view can read.
-async function thvFocus(view, mid, {flash = false} = {}) {
-  for (let pages = 0; !view.messages.some(m => m.id === mid) && view.next && pages < 10 && !view.gone; pages++) {
+// With `toSeq` (the message's own seq) the pages are read down to it, however far.
+async function thvFocus(view, mid, {flash = false, toSeq = 0} = {}) {
+  const above = () => !toSeq || !view.messages.length || Number(view.messages[0].seq) > toSeq;
+  for (let pages = 0; !view.messages.some(m => m.id === mid) && view.next && pages < (toSeq ? 200 : 10) && above() && !view.gone; pages++) {
     const ok = await thvPageOlder(view).catch(() => false);
     if (!ok) return false;
     thvDraw(view);
@@ -236,7 +243,11 @@ async function thvGoTo(view, mid) {
   if (await thvFocus(view, mid, {flash: true}) || view.gone) return;
   // Not in this view's pages (a sub-thread's message, or past what it reads): its thread opens at it.
   const root = view.thread?.root_id || view.id;
-  if (root && root !== view.id) location.hash = threadHref(root) + '?focus=' + encodeURIComponent(mid);
+  if (root && root !== view.id) { location.hash = threadHref(root) + '?focus=' + encodeURIComponent(mid); return; }
+  // Further back than a few pages: read down to its seq. One the server will not give is "not shown".
+  const seq = await get('/v2/messages/' + encodeURIComponent(mid), {fresh: true}).then(r => Number(r?.seq) || 0, () => 0);
+  if (view.gone || seq && await thvFocus(view, mid, {flash: true, toSeq: seq}) || view.gone) return;
+  if (thvQuotesFollow(view, {id: mid, hidden: true})) thvDraw(view);
 }
 async function thvOlder(view, button) {
   if (!view.next) return;
@@ -379,7 +390,7 @@ function thvQuoteOf(view, m) {
 }
 function thvQuoteHTML(q) {
   if (!q?.id) return '';
-  if (q.hidden) return `<span class="th-quote th-quote-hidden">${THV_SVG.quote}<span class="th-quote-text">Message not shown</span></span>`;
+  if (q.hidden) return `<span class="th-quote th-quote-hidden">${THV_SVG.quote}<span class="th-quote-text">${q.deleted ? 'Message deleted' : 'Message not shown'}</span></span>`;
   const who = q.author_name || (q.author ? actorName(q.author) : '');
   return `<button type="button" class="th-quote" data-th-quote="${esc(q.id)}" aria-label="${esc(who ? 'Reply to ' + who : 'Reply')}">${THV_SVG.quote}${
     who ? `<b class="th-quote-who">${esc(who)}</b>` : ''}<span class="th-quote-text">${esc(q.excerpt || '')}</span></button>`;
@@ -490,9 +501,12 @@ function thvStatusHTML(view, b) {
 // The working rows' clocks tick in place, once a second, while any is on screen.
 let THV_TICK = 0;
 function thvTick() {
-  const els = document.querySelectorAll('[data-th-since]');
-  if (!els.length) { clearInterval(THV_TICK); THV_TICK = 0; return; }
-  for (const el of els) { const t = thvMinSec(el.dataset.thSince); if (el.textContent !== t) el.textContent = t; }
+  let any = false;
+  for (const v of THV_VIEWS) {
+    if (v.gone || !v.host.isConnected || !v.el.getClientRects().length) continue;
+    for (const el of v.el.querySelectorAll('[data-th-since]')) { any = true; const t = thvMinSec(el.dataset.thSince); if (el.textContent !== t) el.textContent = t; }
+  }
+  if (!any) { clearInterval(THV_TICK); THV_TICK = 0; }
 }
 // A bot's reply landed: its row goes, before the server's next status says so.
 function thvStatusReplied(view, m) {
@@ -526,7 +540,7 @@ function thvDraw(view, {stick = false} = {}) {
   if (!view.host.isConnected) { threadUnmount(view); return; }
   const head = view.opts.actsHost?.isConnected ? view.opts.actsHost : view.el.querySelector('.thv-head');
   if (head) { const h = thvHeadHTML(view); patchHTML(head, h); head.hidden = !h; }
-  if (head === view.opts.actsHost) view.el.querySelector('.thv-head')?.setAttribute('hidden', '');
+  if (head === view.opts.actsHost) { head.dataset.thv = view.key; view.el.querySelector('.thv-head')?.setAttribute('hidden', ''); }
   const list = view.el.querySelector('.thv-list'), box = view.el.querySelector('.thv-scroll');
   if (view.opts.compactEmpty) {
     const blank = view.state === 'empty' && !view.pending.length, card = view.opts.hideGone === true ? view.host : view.opts.hideGone;
@@ -575,12 +589,24 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) for 
 // ----------------------------------------------------------------- live
 // A message changed in a thread on screen: an edit or a delete in place, a new one at the bottom in time order (a reply
 // in an older sub-thread too, as the flat timeline reads it); anything the view cannot place reads the first page again.
+// A message edited or deleted: the chips that quote it say what it says now.
+function thvQuotesFollow(view, target) {
+  let changed = false;
+  for (const [i, m] of view.messages.entries()) {
+    if (m.reply_to?.id !== target.id || m.reply_to.hidden) continue;
+    view.messages[i] = {...m, reply_to: target.deleted ? {id: target.id, hidden: true, deleted: true} : target.hidden ? {id: target.id, hidden: true}
+      : {...m.reply_to, excerpt: thvQuoteFrom(target).excerpt}};
+    changed = true;
+  }
+  return changed;
+}
 function thvApplyMessage(view, d) {
   const tid = d.thread_id || d.message?.thread_id || d.message?.conversation_id, inView = tid === view.id || view.messages.some(m => m.thread_id === tid || m.sub_thread?.id === tid);
   if (!inView && d.root_id !== (view.thread?.root_id || view.id)) return false;
   const at = view.messages.findIndex(m => m.id === d.id);
   if (d.deleted) {
-    if (at < 0) return false;
+    const quoted = thvQuotesFollow(view, {id: d.id, deleted: true});
+    if (at < 0) return quoted;
     view.messages[at] = {...view.messages[at], deleted: true, body: '', revision: d.revision};
     return true;
   }
@@ -591,6 +617,7 @@ function thvApplyMessage(view, d) {
     // The stream's view carries no `reply_to` or `routed`; the read's stay.
     const was = view.messages[at];
     view.messages[at] = {...was, ...m, reply_to: m.reply_to !== undefined ? m.reply_to : was.reply_to, routed: m.routed !== undefined ? m.routed : was.routed, sub_thread: was.sub_thread};
+    thvQuotesFollow(view, view.messages[at]);
     return true;
   }
   view.pending = view.pending.filter(p => p.messageId !== m.id);
@@ -901,7 +928,9 @@ async function thvNewDm(view) {
   catch (e) { toast(e.message, true); return; }
   if (view.gone) return;
   view.follow?.(); view.follow = null;
-  Object.assign(view, {id: '', thread: null, messages: [], pending: [], next: null, execution: null, state: 'loading'});
+  clearTimeout(view.flashTimer);
+  Object.assign(view, thvConvFresh());
+  thvReplyingDraw(view);
   if (view.goals) { view.goals.conv = null; view.goals.goal = null; }
   thvStopSync(view);
   await thvLoad(view);
