@@ -69,17 +69,26 @@ async fn remove_abandoned(path: &Path, root: &Path) -> bool {
     std::fs::remove_file(path).is_ok()
 }
 
-fn metadata_root(argv: &[String], cwd: Option<&Path>) -> Option<(PathBuf, PathBuf)> {
+fn metadata_roots(argv: &[String], cwd: Option<&Path>) -> Option<(Vec<PathBuf>, PathBuf)> {
     let at = argv.windows(2).rfind(|p| p[0] == "-C").map(|p| Path::new(&p[1])).or(cwd)?;
     let git = at.join(".git");
-    let root = if git.symlink_metadata().is_ok_and(|m| m.is_dir()) {
-        git
-    } else if at.join("HEAD").is_file() && at.join("objects").is_dir() {
-        at.to_path_buf()
-    } else {
-        return None;
+    let roots = match git.symlink_metadata() {
+        Ok(m) if m.is_dir() => vec![git.canonicalize().ok()?],
+        Ok(m) if m.is_file() && m.len() < 4096 => {
+            let text = std::fs::read_to_string(&git).ok()?;
+            let admin = at.join(text.trim().strip_prefix("gitdir: ")?).canonicalize().ok()?;
+            // Accept only a registered worktree's Git directory, never an arbitrary gitdir pointer.
+            let back = std::fs::read_to_string(admin.join("gitdir")).ok()?;
+            if Path::new(back.trim()).canonicalize().ok()? != git.canonicalize().ok()? { return None; }
+            let common = std::fs::read_to_string(admin.join("commondir")).ok()?;
+            let common = admin.join(common.trim()).canonicalize().ok()?;
+            if admin.parent()? != common.join("worktrees").as_path() { return None; }
+            vec![admin, common]
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && at.join("HEAD").is_file() && at.join("objects").is_dir() => vec![at.canonicalize().ok()?],
+        _ => return None,
     };
-    Some((root.canonicalize().ok()?, at.canonicalize().ok()?))
+    Some((roots, at.canonicalize().ok()?))
 }
 
 /// Only the lock Git actually reports is eligible, never a sweep of a bot's checkout.
@@ -87,7 +96,7 @@ pub async fn recover(argv: &[String], cwd: Option<&Path>, stderr: &str) -> bool 
     if Path::new(&argv[0]).file_name().is_none_or(|n| n != "git") || !stderr.contains("File exists") {
         return false;
     }
-    let Some((root, at)) = metadata_root(argv, cwd) else { return false };
+    let Some((roots, at)) = metadata_roots(argv, cwd) else { return false };
     let re = regex::Regex::new(r"'([^'\n]+\.lock)'").unwrap();
     let mut paths = vec![];
     for cap in re.captures_iter(stderr) {
@@ -101,7 +110,9 @@ pub async fn recover(argv: &[String], cwd: Option<&Path>, stderr: &str) -> bool 
     }
     for path in paths {
         let path = if path.is_absolute() { path } else { at.join(path) };
-        if remove_abandoned(&path, &root).await { return true; }
+        for root in &roots {
+            if remove_abandoned(&path, root).await { return true; }
+        }
     }
     false
 }
@@ -162,6 +173,32 @@ mod tests {
             assert!(out.ok(), "{}", out.stderr);
             assert!(!lock.exists());
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_task_worktrees_abandoned_index_lock_recovers_without_touching_the_base_index() {
+        let root = std::env::temp_dir().join(format!("tico-gitlocks-{}", uuid::Uuid::new_v4().simple()));
+        let base = root.join("base");
+        let task = root.join("task");
+        std::fs::create_dir_all(&base).unwrap();
+        let env = crate::safegit::clean_environment(&crate::env::process_environment());
+        assert!(crate::gitrun::git(&base, &env, &["init", "-q"], 10).await.unwrap().ok());
+        std::fs::write(base.join("saved"), "base work\n").unwrap();
+        assert!(crate::gitrun::git(&base, &env, &["add", "saved"], 10).await.unwrap().ok());
+        assert!(crate::gitrun::git(&base, &env, &["-c", "user.name=Fixture", "-c", "user.email=fixture@acme.example", "commit", "-qm", "initial"], 10).await.unwrap().ok());
+        assert!(crate::gitrun::git(&base, &env, &["worktree", "add", "--detach", task.to_str().unwrap()], 10).await.unwrap().ok());
+        let index = std::fs::read(base.join(".git/index")).unwrap();
+        let found = crate::gitrun::git(&task, &env, &["rev-parse", "--git-path", "index.lock"], 10).await.unwrap();
+        let lock = PathBuf::from(found.stdout.trim());
+        std::fs::write(&lock, "abandoned").unwrap();
+        age(&lock);
+        std::fs::write(task.join("draft"), "task work\n").unwrap();
+        let out = crate::gitrun::git(&task, &env, &["add", "draft"], 10).await.unwrap();
+        assert!(out.ok(), "{}", out.stderr);
+        assert!(!lock.exists());
+        assert_eq!(std::fs::read(base.join(".git/index")).unwrap(), index);
+        assert_eq!(std::fs::read_to_string(task.join("draft")).unwrap(), "task work\n");
         std::fs::remove_dir_all(root).unwrap();
     }
 
