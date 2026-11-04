@@ -433,10 +433,32 @@ fn shell_script(command: &str) -> Option<String> {
     let name = shell.rsplit('/').next().unwrap_or(shell);
     // Only flag groups whose every option takes no argument: `-o` would take the next word, and `--norc` is a long
     // option whose next word is a file.
+    // A `$` or backtick the outer shell sees expands before the inner shell runs, so the rebuilt script is not
+    // what runs: leave such a line labelled by its shell.
     (plain
+        && !outer_expands(command)
         && matches!(name, "sh" | "bash" | "zsh" | "dash")
         && matches!(flag.as_str(), "-c" | "-lc" | "-ic" | "-ec" | "-xc" | "-lic" | "-ilc"))
     .then(|| script.clone())
+}
+
+/// Whether the line has a `$` or backtick outside single quotes, where the shell running it would expand it.
+fn outer_expands(command: &str) -> bool {
+    let (mut single, mut double) = (false, false);
+    let mut chars = command.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' if !double => single = !single,
+            _ if single => {}
+            '\\' => {
+                chars.next();
+            }
+            '"' => double = !double,
+            '$' | '`' => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// The program a text plainly starts with: its first word after plain or plainly quoted assignments, when that word is a plain name or
@@ -553,7 +575,8 @@ fn shell_words(command: &str) -> Option<Vec<String>> {
     let mut chars = command.chars();
     while let Some(c) = chars.next() {
         match c {
-            c if c.is_whitespace() => {
+            // Only the shell's own blanks split words; a carriage return or a no-break space is part of a word.
+            ' ' | '\t' | '\n' => {
                 if started {
                     words.push(std::mem::take(&mut word));
                     started = false;
@@ -1245,6 +1268,14 @@ mod tests {
         assert_eq!(command_program("NOTE=\u{a0}customer-private"), "");
         assert_eq!(command_program("bash -c \"NOTE=\\ customer-private /usr/bin/true\""), "");
         assert_eq!(command_program("bash -c \"NOTE=\\$x customer-private\""), "");
+        assert_eq!(command_program("bash -c \r customer-private"), "bash");
+        assert_eq!(command_program("bash -c \u{a0} customer-private"), "bash");
+        assert_eq!(
+            command_program("bash -c \"NOTE='$(printf %b \\\\047\\\\040/usr/bin/true\\\\040\\\\047)' customer-private\""),
+            "bash"
+        );
+        assert_eq!(command_program("bash -c \"NOTE='`printf x`' customer-private\""), "bash");
+        assert_eq!(command_program("bash -lc 'cd /w && hub needs-you show $X'"), "hub needs-you show");
         assert_eq!(command_program("bash -c \"cd /w && hub \\\nneeds-you show\""), "hub needs-you show");
     }
 
