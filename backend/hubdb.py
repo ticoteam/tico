@@ -6589,7 +6589,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                 step_rank=None, number=None, title=None, private=None, waiting_on=None, roles=None, visibility=None, public_title=None,
                 public_summary=None, approval_id=None, size=None, clear_size=False, review_prs=None, verdict=None,
                 verdict_head=None, skip_step_wake=(), review_reader=None, receipt_owner=None, public_allowance=0,
-                wake_others=True, check_back_at=None, check_back_note=None):
+                wake_others=True, check_back_at=None, check_back_note=None, owner_event_data=None):
     """Rule 5. The owner may set open|doing|waiting|review|done|declined and a note; it may not close.
 
     `lane` and `labels` are a mover's to change (`mover` says whether this actor is one; the
@@ -6904,7 +6904,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                     conn.execute('UPDATE task_links SET detail=? WHERE id=?', (json.dumps(detail), link['id']))
         sets.append("owner_id=:owner_id")
         args["owner_id"] = new_owner
-        _task_event(conn, task_id, actor, "owner", row["owner_id"], new_owner, note or "")
+        _task_event(conn, task_id, actor, "owner", row["owner_id"], new_owner, note or "", data=owner_event_data)
         if new_owner != row["owner_id"]:
             from . import task_run_models
             task_run_models.moved(conn, actor, task_id)
@@ -7767,11 +7767,11 @@ def history_event(conn, subject_type, subject_id, actor, kind, old=None, new=Non
     return event_id
 
 
-def _task_event(conn, task_id, actor, field, old, new, note="", *, event_id=None):
+def _task_event(conn, task_id, actor, field, old, new, note="", *, event_id=None, data=None):
     # A Strategy Bot decision (or its Undo) stamps each change it makes with its action id (backend/strategy_acts.py).
     from .strategy_acts import ACTION
     event_id = history_event(conn, "task", task_id, actor, field, old, new, note,
-                             action_id=ACTION.get() or None, via=VIA.get() or None, event_id=event_id)
+                             action_id=ACTION.get() or None, via=VIA.get() or None, data=data, event_id=event_id)
     if field in ("status", "owner"):
         # A reconnect card stands only on its unfinished task with the owner it was opened for (backend/reconnects.py).
         from .reconnects import moved as reconnects_moved
