@@ -7592,6 +7592,9 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
     _set_status(conn, actor, row, status="closed", type=type, step=step, note=note or "")
     conn.execute("UPDATE tasks SET closed_at=?, closed_by_id=?, updated_at=?, "
                  "note=COALESCE(NULLIF(?, ''), note) WHERE id=?", (ts, actor, ts, note or "", task_id))
+    if row.get("waiting_on"):
+        conn.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (task_id,))
+        _task_event(conn, task_id, actor, "waiting_on", row["waiting_on"], None, "")
     if with_parent:
         _task_event(conn, task_id, actor, "closed_with", None, with_parent, "")
         changed = None

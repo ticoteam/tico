@@ -72,7 +72,7 @@ def test_finish_closes_nested_open_subtasks_and_preserves_finished_subtasks(tmp_
         assert TR.parent_of(c, kid["id"]) == (copy["id"] if kid == proof else finished[0]["id"] if kid == late else parent["id"])
     assert [(H.task(c, kid["id"]), history(c, kid)) for kid in finished] == before
     assert not c.execute("SELECT 1 FROM messages WHERE json_extract(refs,'$.wake')='subtask_finished'").fetchone()
-    H.task_update(c, ANA, parent["id"], status="open", note="One more change")
+    H.task_update(c, ANA, parent["id"], status="open", note="One more change", mover=True)
     assert all(H.task(c, kid["id"])["status"] == "closed" for kid in (copy, proof, late))
     assert any(e["kind"] == "children" and e["new"].startswith("Still closed") for e in history(c, parent))
     c.close()
@@ -134,3 +134,15 @@ def test_bot_cannot_close_a_persons_subtask_and_api_finish_rolls_back(api, opera
     post(api, "tasks/" + parent["id"], {"version": version, **({"close": True} if operation == "close" else {"status": "done"})})
     assert get(api, "tasks/" + child["id"])["task"]["status"] == "closed"
     assert get(api, "tasks/" + own["id"])["task"]["status"] == "closed"
+
+
+def test_api_has_no_detach_option(api):
+    parent = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "x"})
+    child = post(api, "tasks", {"owner": "cpo", "title": "Review the launch plan", "body": "x",
+                                "relations": [{"task": parent["id"], "kind": "parent"}]})
+    post(api, "tasks/" + parent["id"], {"version": parent["version"], "close": True, "children": "detach"}, expected=422)
+    assert get(api, "tasks/" + parent["id"])["task"]["status"] == "open"
+    post(api, "tasks/" + parent["id"], {"version": parent["version"], "close": True})
+    assert get(api, "tasks/" + child["id"])["task"]["status"] == "closed"
+    with api.app.state.store.read() as c:
+        assert TR.parent_of(c, child["id"]) == parent["id"]
