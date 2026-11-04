@@ -172,10 +172,12 @@ def require_on(settings):
 
 
 def require_person(who):
-    """A person at their own browser: not a token, not a bot or a computer, and not the Assistant or BotOps acting for
-    them unless they act on the person's confirmation (`confirmed`: a yes to their read-back, or a tap on a Confirm card).
+    """A person at their own browser: not a personal token, not a bot or a computer, and not the Assistant or BotOps acting
+    for them unless they act on the person's confirmation (`confirmed`: a yes to their read-back, or a tap on a Confirm
+    card). The Assistant's chat turn is a token too (`via_token`, auth.py chat_person), so it counts only when confirmed.
     Confirmed, they file as that person; BotOps with its own rights is a bot and is refused."""
-    if who.role not in ("owner", "human") or who.via_token or (who.via and not (who.via in CONFIRMED_VIA and who.confirmed)):
+    if (who.role not in ("owner", "human") or (who.via_token and who.via != "assistant")
+            or (who.via and not (who.via in CONFIRMED_VIA and who.confirmed))):
         raise Problem("forbidden", "Only a signed-in person can contact support.", 403)
 
 
