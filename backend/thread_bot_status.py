@@ -51,6 +51,30 @@ _RUNS_SQL = (
     "WHERE a.state IN ('leased','running') AND t.root_id=? ORDER BY a.created_at")
 
 
+# A running turn's step that the 5 s throttle (events.py changes_threads_bot_status_steps) let pass unsent: its root's
+# newest bot_status row is older than the step, and old enough that one more keeps to one per 5 s.
+_TRAILING_SQL = (
+    "SELECT DISTINCT r FROM (SELECT COALESCE(t.root_id, t.id) AS r, a.id AS aid FROM attempts a "
+    "JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id "
+    "WHERE a.state IN ('leased','running')) "
+    "WHERE (SELECT MAX(created_at) FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=r) "
+    "< strftime('%Y-%m-%dT%H:%M:%fZ','now','-5 seconds') "
+    "AND EXISTS (SELECT 1 FROM attempt_events e WHERE e.attempt_id=aid AND e.kind IN ('tool','message') "
+    "AND e.created_at > (SELECT MAX(created_at) FROM changes WHERE topic='threads' AND kind='bot_status' "
+    "AND subject_id=r)) LIMIT 200")
+
+
+def send_trailing(c):
+    """One `bot_status` change for each root whose running turn moved on since its last one was sent: a step the
+    throttle held back would otherwise leave readers on its earlier step until the turn ends. The scheduler's tick
+    runs it. Returns how many it wrote."""
+    roots = [r[0] for r in c.execute(_TRAILING_SQL)]
+    # The triggers' own clock (events._NOW), so the throttle compares like with like.
+    c.executemany("INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) "
+                  "VALUES('threads','bot_status',?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))", [(r, r) for r in roots])
+    return len(roots)
+
+
 def _root(c, root):
     row = root if isinstance(root, dict) else H.conversation(c, root)
     return (row or {}).get("root_id") or (row or {}).get("id")

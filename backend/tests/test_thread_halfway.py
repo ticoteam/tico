@@ -311,3 +311,30 @@ def test_an_offline_outside_agent_is_waited_on_without_a_job(api, monkeypatch):
     monkeypatch.setattr(agents, "presence", lambda c, bot, *a, **kw: {"online": False} if bot == "ops" else None)
     [row] = bot_status(api, thread["id"])
     assert row["actor"] == "bot:ops" and row["state"] == "cant_reply" and row["detail"] == thread_bot_status.OFFLINE
+
+
+def test_a_step_the_throttle_held_back_is_sent_on_the_next_tick(api):
+    machine = machine_for(api)
+    thread = new_thread(api)
+    say(api, thread["id"], "@ops can you check this?")
+    attempt = claim(api, machine)
+    store = api.app.state.store
+
+    def rows():
+        with store.read() as c:
+            return c.execute("SELECT COUNT(*) FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=?",
+                             (thread["id"],)).fetchone()[0]
+    with store.transaction() as c:
+        assert thread_bot_status.send_trailing(c) == 0          # nothing moved since the run started
+    before = rows()
+    with store.transaction() as c:
+        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,9001,'tool',?,?)",
+                  (attempt["id"], '{"name": "Read"}', H.now()))
+    assert rows() == before                                     # within 5 s of the last one: held back
+    with store.transaction() as c:
+        c.execute("UPDATE changes SET created_at='2020-01-01T00:00:00.000Z' WHERE topic='threads' AND kind='bot_status' "
+                  "AND subject_id=?", (thread["id"],))
+        c.execute("UPDATE attempt_events SET created_at=? WHERE attempt_id=? AND seq=9001", (H.now(), attempt["id"]))
+        assert thread_bot_status.send_trailing(c) == 1
+        assert thread_bot_status.send_trailing(c) == 0          # sent once
+    assert rows() == before + 1
