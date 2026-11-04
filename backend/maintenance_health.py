@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS health_findings(
  key TEXT PRIMARY KEY, signature TEXT NOT NULL, check_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL,
  detail TEXT NOT NULL DEFAULT '', fix TEXT NOT NULL DEFAULT '', first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
  present INTEGER NOT NULL DEFAULT 1, occurrences INTEGER NOT NULL DEFAULT 1, last_woke_at TEXT NOT NULL DEFAULT '',
- severity TEXT NOT NULL DEFAULT 'warn');
+ severity TEXT NOT NULL DEFAULT 'warn', pending INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS health_reports(
  signature TEXT PRIMARY KEY, ticket_id TEXT, approval_id TEXT, created_at TEXT NOT NULL, reported_occurrences INTEGER NOT NULL DEFAULT 1);
 """

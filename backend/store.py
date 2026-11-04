@@ -1226,7 +1226,6 @@ class Store:
             # confirmation run (backend/maintenance_steps/check_health.py). Only a filed finding is listed or reported.
             H.add_column(c, "health_findings", "last_woke_at", "TEXT NOT NULL DEFAULT ''")
             H.add_column(c, "health_findings", "severity", "TEXT NOT NULL DEFAULT 'warn'")
-            H.add_column(c, "health_findings", "pending", "INTEGER NOT NULL DEFAULT 0")
             # The production checks' last answers and alert tasks (backend/invariants.py).
             from . import invariants as _invariants
             c.executescript(_invariants.SCHEMA)
