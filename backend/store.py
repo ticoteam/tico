@@ -1905,6 +1905,12 @@ class Store:
                 # The change log live events are read from (backend/events.py); idempotent.
                 from .events import ensure as ensure_changes
                 ensure_changes(c)
+                # Finance's org-chart triggers, on every start (backend/finance/store/tico.py watch_org). Finance's cloud
+                # migrations make them too, but once: migration 0070 dropped fin_view_bot_update (it read bot_config.config)
+                # and the bot_settings triggers only exist from the move on, so an install past the move never got them.
+                # IF NOT EXISTS: a start makes only what is missing.
+                from .finance.store import tico as _finance_tico
+                _finance_tico.watch_org(c)
                 # A new bot's repository access, when its declaration names none: the company's default
                 # (backend/repositories.py). A bot's settings row is made with it (backend/bot_settings.py write).
                 c.execute("""CREATE TRIGGER IF NOT EXISTS repository_new_bot_default
