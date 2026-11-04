@@ -297,7 +297,7 @@ def test_the_head_and_every_role_the_team_fills_are_shown_however_many(api, monk
     team = engineering(api)
     others = [role["pick"]["template"] for role in suggest(api, team)["roles"] if role["pick"].get("template")]
     others += [alt["template"] for role in suggest(api, team)["roles"] for alt in role["alternatives"]]
-    filled = {t: "ghost-" + t for t in dict.fromkeys(others) if t != "engineering-lead"}
+    filled = {t: "ghost-" + t for t in dict.fromkeys(others) if t and t != "engineering-lead"}
     assert len(filled) > team_build.ROLES
     monkeypatch.setattr(team_build, "_filled", lambda c, group: filled)
     roles = [role for role in suggest(api, team)["roles"] if role["pick"].get("template")]
