@@ -8,15 +8,17 @@ updated never drags its computers ahead of it.
 
 ## What changed since your last look
 
-**What's new** in the sidebar (above Ask Tico, only while something is unread) and **Changelog** in the account menu show product changes you
-have not acknowledged. **Since last look** includes every unread release and team announcement;
+The sidebar's version row (above Ask Tico, one row at a time) reads **Updated to v…** while product changes you have not
+acknowledged are unread, and **Update to v…** while a newer release is on offer (it then wins the row; its pop-up links
+**What's new**). Clicking **Updated to** opens **What's new**, which shows the product changes you have not acknowledged; **Changelog**
+in the account menu lists the same changes. **Since last look** includes every unread release and team announcement;
 choose **All product updates** to browse history or **All activity** to include accessible bot outcomes.
 Search changes, expand a release's remaining bullets, or open its full release notes. Opening the
 page marks the product entries it shows as read, and **Load older changes** does the same for the ones
 it adds; they stay listed and marked **New** until you leave the page.
 Read status belongs to each person and follows them across sign-ins and devices.
 A new company starts caught up: when the owner completes Finish setup, every release shipped before then is marked
-read for them, so a fresh install shows no count on **What's new**. Later releases count as usual, everyone else keeps
+read for them, so a fresh install shows no **Updated to** row. Later releases count as usual, everyone else keeps
 their own read status, and completing setup a second time changes nothing.
 
 Release entries come directly from the installed `CHANGELOG.md`. They work offline and require

@@ -3,8 +3,8 @@
 A release is a version tag. Everything it ships is built once, by the Release validation run for that commit and
 version, and that same build is what the gate tests. Pushing `vX.Y.Z` runs `.github/workflows/release.yml`, which
 builds nothing: it takes that run's runner binaries and image digests, builds the installer bundle and publishes the
-GitHub release. Running installations look for that release to show
-"New version" in the sidebar. A release is not held for its notes: the release command tags the validated commit,
+GitHub release. Running installations look for that release and offer it as
+"Update to vX" in the sidebar. A release is not held for its notes: the release command tags the validated commit,
 and once the release is published it files one task for the Technical Writer to write that version's section of
 [CHANGELOG.md](../CHANGELOG.md). The installed `CHANGELOG.md` supplies the in-app, API and MCP product changelog,
 so a release's notes reach users with the next build that contains them. No separate product announcement is required.

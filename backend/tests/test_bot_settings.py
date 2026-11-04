@@ -92,7 +92,9 @@ def _old_shape(path):
         c.execute("DROP TABLE bot_settings")
         c.execute("ALTER TABLE bot_config ADD COLUMN config TEXT NOT NULL DEFAULT '{}'")
         c.execute("CREATE TRIGGER old_reads_config AFTER UPDATE OF config ON bot_config BEGIN SELECT 1; END")
-        c.execute("DELETE FROM schema_migrations WHERE version='0070_bot_settings'")
+        # 0070 and every migration after it are unapplied, as on main before 0070: a later one left applied would make
+        # 0070 sort before an applied migration, which a start refuses.
+        c.execute("DELETE FROM schema_migrations WHERE version>='0070' AND version NOT LIKE 'legacy_%'")
         rows = [("full", {**SETTINGS, **ODD}), ("empty", {}), ("broken", None), ("list", [1, 2]),
                 *((f"many{n}", {"model": f"m{n}", "turns_per_day": n, "team": "ops"}) for n in range(1200))]
         for bot, config in rows:
