@@ -25,7 +25,11 @@ body. The page lists them grouped by folder.
   alone; **Set up with the Librarian…** in the `...` menu asks again ([librarian.md](librarian.md#first-run-setup)).
 - **Import** a file from the `...` menu: `.md`, `.markdown`, `.txt`, `.html`, `.docx` or `.pdf`, up to 20 MB. It becomes
   a Markdown doc (headings, lists, links, bold and italic, and tables are kept; a PDF gives its text, and a scan with no
-  text is refused). The title is the first `#` heading, else the file name.
+  text is refused). The title is the first `#` heading, else the file name. A conversion that runs longer than 30 seconds,
+  or needs more than 1 GB of memory, is stopped with a message to split the file into smaller ones. A file with over a
+  million characters of text is refused. If two files are already converting on the server, yours is refused at once with
+  "Imports are busy right now. Try again in a minute." If you close the page while a file converts, the conversion stops
+  and nothing is saved.
 - **Every change is a version.** **History** lists them (who, when, the note; "by Ops" for a bot), shows any old
   version, and **Restore** saves it as a new version. Nothing is rewritten or lost.
 - **Editing together.** Saving sends the version you opened. If someone (or a bot) saved first you get "Ben saved
@@ -125,7 +129,7 @@ All of it is in the stable v2 contract ([openapi/v2.json](openapi/v2.json), tag 
 | `GET /api/v2/docs/{id}/versions` | `{"versions": [{"version", "current", "title", "path", "actor", "actor_name", "created_at", "note", "size"}]}` |
 | `GET /api/v2/docs/{id}/versions/{n}` | `{"version": {..., "body"}}` |
 | `POST /api/v2/docs/{id}/restore` `{"version"}` | `{"doc"}`: the old version saved as a new one |
-| `POST /api/v2/docs/import` (multipart `file`, `title`?, `path`?) | `{"doc"}` |
+| `POST /api/v2/docs/import` (multipart `file`, `title`?, `path`?) | `{"doc"}`; `422 import_failed` when the file cannot be converted (too slow, too large, too long or no text; the message says which); `503 imports_busy` (retryable) while two conversions are already running |
 | `GET /api/v2/docs/search?q=&limit=` | `{"results": [{"type": "internal", "id", "path", "title", "excerpt", "score"} \| {"type": "linked", "id", "title", "url", "kind", "description", "score"}]}` |
 | `GET /api/v2/linked-docs` | `{"linked": [{"id", "title", "url", "kind", "host", "description", "added_by", "added_by_name", "created_at", "updated_at"}]}` |
 | `POST /api/v2/linked-docs` `{"url", "title"?, "description"?}` | `{"linked"}`; `409 already_linked` |
