@@ -38,8 +38,7 @@ def seed(c, size):
         c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (aid, input_["id"]))
         H.event(c, "human:ana", privacy.INPUT_MOVED, aid,
                 {"message_id": moved["id"], "tasks": [source["id"]], "to_attempt": "missing-" + key})
-        c.execute("INSERT INTO attempts(id,bot_id,created_at,task_id,exit) VALUES(?,'ops',?,?,'ok')",
-                  (aid, H.now(), parent["id"]))
+        c.execute("UPDATE attempts SET trigger='task',task_id=?,exit='ok' WHERE id=?", (parent["id"], aid))
         H.task_comment(c, "bot:ops", parent["id"], "Done " + key, wake=False,
                        extra_refs={"turn_id": aid, "related_task": source["id"]})
         H._task_event(c, parent["id"], "human:ana", "note", None, source["id"], "")

@@ -369,11 +369,10 @@ def test_a_files_metadata_follows_the_same_access_as_the_file(api):
     get(api, "files/nope-nope-nope/meta", expected=404)
 
 
-def test_run_windows_include_failed_attempts_without_turns_and_hide_private_rooms(api):
+def test_run_windows_include_failed_runs_and_hide_private_rooms(api):
     machine, message, attempt = setup_attempt(api)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (H.now(), attempt["id"]))
-        c.execute("DELETE FROM attempts WHERE id=?", (attempt["id"],))
         H.status_set(c, "bot:ops", "ops", "running")
         H.status_set(c, "bot:ops", "ops", "idle")
     rows = get(api, "bots/ops/turns?since=24h")
