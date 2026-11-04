@@ -1113,7 +1113,11 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
                       "a person confirms", 422)
     if any(field in (body or {}) for field in PERSON_ONLY_FIELDS):
         raise Problem("operation", "Replacing a lost key is confirmed by a person directly, never through a proposal", 422)
-    if proposer == "assistant" and not any(m == method and p.fullmatch(path) for m, p in _PROPOSABLE):
+    from . import assistant_routines
+    routine_route = ((method == "POST" and path == assistant_routines.CREATE)
+                     or (method == "PATCH" and assistant_routines.EDIT.fullmatch(path)))
+    if proposer == "assistant" and (not any(m == method and p.fullmatch(path) for m, p in _PROPOSABLE)
+                                    or (routine_route and not assistant_routines.request_is_message(c, method, path, body))):
         # A setting the Assistant puts on a card is one catalogue entry's body, and never a person-only one.
         from . import settings_catalog
         found = settings_catalog.stored_class(c, method, path, body if isinstance(body, dict) else None)
@@ -1133,7 +1137,6 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
         body = {"actions": [{**s, "body": runnable(c, s["method"], s["path"], s["body"])} for s in batch_steps(body)]}
     else:
         body = runnable(c, method, path, body)
-    from . import assistant_routines
     if routes is not None:
         refuse_unrunnable(routes, method, path, body)
     body, routine = assistant_routines.prepare(c, settings, who, method, path, body) if proposer == "assistant" else (body, None)

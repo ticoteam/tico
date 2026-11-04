@@ -15,6 +15,17 @@ def message(flow):
     return isinstance(trigger, dict) and trigger.get("type") == "message"
 
 
+def request_is_message(c, method, path, body):
+    """Only Message writes get the routine card path; other automations keep their catalogue restrictions."""
+    from . import automations as A
+    if method == "POST" and path == CREATE:
+        return message(body)
+    if method == "PATCH" and (match := EDIT.fullmatch(path)):
+        row = A._row(c, match.group(1))
+        return message(body) or bool(row and message(A.flow_of(row)))
+    return False
+
+
 def defaults(fields):
     """A new chooser without an explicit mode drafts; Sort flows need no chooser at all."""
     fields = copy.deepcopy(fields)
