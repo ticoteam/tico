@@ -92,7 +92,7 @@ commands! {
     send_meeting(id: String, destination: String, paused_confirmed: Option<bool>) => |app| app.send_meeting_confirmed(&id, &destination, paused_confirmed.unwrap_or(false));
     delete_recording(id: String) => |app| app.delete(&id);
     share_live(destination: String, team: bool, actors: Vec<String>) => |app| app.share_live(&destination, team, actors);
-    save_meeting(id: String, destination: String, audience: String, title: String) => |app| app.save(&id, &destination, &audience, &title);
+    save_meeting(id: String, destination: String, audience: String, title: String, paused_confirmed: Option<bool>) => |app| app.save(&id, &destination, &audience, &title, paused_confirmed.unwrap_or(false));
     keep_local(id: String) => |app| app.keep_local(&id);
     save_settings(form: SettingsForm) => |app| app.save_settings(form);
     set_audio(microphone: String, meeting: bool) => |app| app.set_audio(&microphone, meeting);

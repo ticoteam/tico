@@ -1914,7 +1914,14 @@ impl Recorder {
     /// The Finish sheet's Save: `destination` is an org, or `local` to keep it on this computer
     /// only (a live share then ends and what was said leaves Tico). `audience` is `team` or
     /// `participants`. The title is saved first.
-    pub fn save(&mut self, id: &str, destination: &str, audience: &str, title: &str) {
+    pub fn save(
+        &mut self,
+        id: &str,
+        destination: &str,
+        audience: &str,
+        title: &str,
+        paused_confirmed: bool,
+    ) {
         let title: String = title.trim().chars().take(200).collect();
         if let Ok(record) = self.store.get(id)
             && !title.is_empty()
@@ -1936,7 +1943,7 @@ impl Recorder {
             self.error = "Choose who can see it".into();
             return;
         }
-        self.send_meeting_to(id, destination, true, audience);
+        self.send_meeting_to(id, destination, paused_confirmed, audience);
     }
     /// Stops the recording and keeps it on this computer; a live share ends and leaves Tico.
     pub fn keep_local(&mut self, id: &str) {
@@ -1980,7 +1987,7 @@ impl Recorder {
                 return;
             }
             if !paused_confirmed && tico_recorder_native::live::paused_review_required(&context) {
-                self.error = "A kept action item may quote paused speech. Review it and confirm Send in the Send menu.".into();
+                self.error = "A kept action item may quote paused speech. Review it, then choose Save anyway.".into();
                 return;
             }
         }
@@ -2046,7 +2053,7 @@ impl Recorder {
             let record = store.get(&id)?;
             network::ready(&record)?;
             anyhow::ensure!(paused_confirmed || !tico_recorder_native::live::paused_review_required(&store.context(&id)?),
-                "A kept action item may quote paused speech. Review it and confirm Send in the Send menu.");
+                "A kept action item may quote paused speech. Review it, then choose Save anyway.");
             let tico = Tico::saved(&config, &destination)?;
             let context = store.context(&id)?;
             if !context.live_id.is_empty() && !context.live_removed {
@@ -2769,6 +2776,8 @@ impl Recorder {
                 json!({
                     "id": item.id,
                     "title": item.title,
+                    "kind": item.kind,
+                    "document": item.document,
                     "quote": item.quote,
                     "at_ms": item.at_ms,
                     "owner": chosen,

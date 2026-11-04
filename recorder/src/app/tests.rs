@@ -1160,7 +1160,7 @@ fn send_requires_review_of_paused_quotes_and_discard_keeps_the_local_recording()
             .as_array()
             .unwrap()
             .iter()
-            .any(|r| r["id"] == id && r["status"]["label"] == "Discard pending · saved locally")
+            .any(|r| r["id"] == id && r["status"]["label"] == "Ending in Tico")
     );
 }
 
