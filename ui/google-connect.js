@@ -513,7 +513,8 @@
     } else {
       clearTimeout(watch?.timer);
       const mailbox = (host.querySelector('[data-ws-probe]')?.value || '').trim();
-      watch = host._googleWatch = {until: Date.now() + CHECK_FOR_MS, mailbox, timer: null, ended: false};
+      watch = host._googleWatch = {until: Date.now() + CHECK_FOR_MS, mailbox, timer: null, ended: false,
+        generation: newestGeneration(host._googleState?.g || {})};
       host._googleCheck = {html: '<p class="muted">Checking…</p>'};
       paintCheck(host);
     }
@@ -762,9 +763,16 @@
       paint(host);
     }
     bind(host);
-    // Returning to a paused check keeps its original deadline, including the time spent away.
+    // Returning to a paused check keeps its original deadline, including the time spent away. A key replaced or
+    // disconnected meanwhile (another tab or admin) ends it instead: its mailbox and deadline were for the old key.
     const watch = host._googleWatch;
-    if (watch && !watch.ended && watchable(host) && (watch.paused || watch.until <= Date.now())) {
+    if (watch && !watch.ended && watchable(host) && (watch.paused || watch.until <= Date.now())
+        && (replacing || newestGeneration(g) !== watch.generation)) {
+      clearTimeout(watch.timer);
+      host._googleWatch = null;
+      host._googleCheck = null;
+      paintCheck(host);
+    } else if (watch && !watch.ended && watchable(host) && (watch.paused || watch.until <= Date.now())) {
       clearTimeout(watch.timer);
       watch.timer = null;
       watch.paused = false;
