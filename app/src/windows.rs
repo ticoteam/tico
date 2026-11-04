@@ -698,6 +698,9 @@ pub(crate) fn forget_page(app: &App, id: &str) {
 /// has one (`login`, decided when the session was renewed), so it goes straight in, otherwise on its usual first page.
 /// Going to the sign-in uses up the org's flag.
 pub(crate) fn renew_page(app: &App, id: &str, login: bool) {
+    // Under `changing`, as switches are: no switch closes the page between finding it and loading it again.
+    let state = app.state::<AppState>();
+    let _changing = state.changing.lock().unwrap();
     let Some(page) = org_page(app, id) else { return };
     let org = app.state::<AppState>().orgs.lock().unwrap().get(id).cloned();
     let Some(home) = org.as_ref().and_then(Home::of) else { return };
@@ -855,6 +858,16 @@ mod page_tests {
     }
 
     #[test]
+    fn a_store_clearing_window_is_never_an_org_page() {
+        let (first, second) = (clear_label("o_aaaaaaaa"), clear_label("o_aaaaaaaa"));
+        assert_ne!(first, second);
+        for label in [&first, &second] {
+            assert_eq!(org_of(label), None, "{label} would get the org's capability");
+            assert!(!label.starts_with(page_pattern("o_aaaaaaaa").trim_end_matches('*').as_str()));
+        }
+    }
+
+    #[test]
     fn a_tico_sign_in_org_opens_on_the_hub_sign_in_once() {
         let hub = url::Url::parse("https://team.example.com/").unwrap();
         assert_eq!(first_page(hub.clone(), &hub, true).as_str(), "https://team.example.com/auth/login");
@@ -866,21 +879,30 @@ mod page_tests {
     }
 }
 
-/// Clears one org's cookies and storage when its page is not open: through a hidden 1x1 webview on its store.
+/// Clears one org's cookies and storage when its page is not open: through a hidden window of its own on the org's
+/// store, so it works whatever windows are left (removing the last org closes the main window first).
 #[cfg(target_os = "macos")]
-pub(crate) fn clear_store(app: &App, org: &Org) -> tauri::Result<()> {
-    let (Some(window), Some(home)) = (main_window(app), Home::of(org)) else { return Ok(()) };
-    let mut builder = WebviewBuilder::new(format!("clear-{}", home.id), WebviewUrl::External("about:blank".parse().unwrap()));
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(store) = home.store {
-            builder = builder.data_store_identifier(*store.as_bytes());
-        }
+pub(crate) async fn clear_store(app: &App, org: &Org) -> tauri::Result<()> {
+    let Some(home) = Home::of(org) else { return Ok(()) };
+    let mut builder = WebviewWindowBuilder::new(app, clear_label(&home.id), WebviewUrl::External("about:blank".parse().unwrap()))
+        .visible(false).focused(false).skip_taskbar(true).inner_size(1.0, 1.0);
+    if let Some(store) = home.store {
+        builder = builder.data_store_identifier(*store.as_bytes());
     }
-    let webview = window.add_child(builder, LogicalPosition::new(0.0, 0.0), LogicalSize::new(1.0, 1.0))?;
-    let cleared = webview.clear_all_browsing_data();
-    let _ = webview.close();
+    let window = builder.build()?;
+    let cleared = window.clear_all_browsing_data();
+    // WebKit clears on its own time: the window that asked stays a moment so the clearing is not cut short.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let _ = window.close();
     cleared
+}
+
+/// A label for a store-clearing window: never an org page's (`org_of` names no org for it), so no capability reaches
+/// it, and new each time.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn clear_label(id: &str) -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    format!("clear-{id}-{}", NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
 /// Anything that is not the hub opens in the default browser, except during a sign-in: from the hub's

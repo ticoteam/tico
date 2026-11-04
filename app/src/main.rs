@@ -415,11 +415,8 @@ async fn remove_org(app: &App, id: &str) {
     #[cfg(target_os = "macos")]
     let store = removed.store_id();
     #[cfg(target_os = "macos")]
-    match store {
-        Some(store) => signin::note_removed_store(app, store),
-        // The org moved over from server.txt uses the default store, which cannot be deleted: clear it now, so its
-        // sign-in goes too. Every other org has a store of its own, so nothing of theirs is in it.
-        None => if let Err(e) = clear_store(app, &removed) { log::warn!("could not clear the default data store: {e}"); },
+    if let Some(store) = store {
+        signin::note_removed_store(app, store);
     }
     drop(renewing);
     // The next org opens (and the rail drops the removed one) before the store is deleted, which can take seconds.
@@ -449,11 +446,14 @@ async fn remove_org(app: &App, id: &str) {
     }
     refresh_chrome(app);
     #[cfg(target_os = "macos")]
-    if let Some(store) = store {
-        if !signin::delete_store(app, store).await {
+    match store {
+        // The org moved over from server.txt uses the default store, which cannot be deleted: cleared, so its sign-in
+        // goes too. Every other org has a store of its own, so nothing of theirs is in it.
+        None => if let Err(e) = clear_store(app, &removed).await { log::warn!("could not clear the default data store: {e}"); },
+        Some(store) => if !signin::delete_store(app, store).await {
             // Still in use: its data is cleared at least, and the next launch deletes it.
             log::warn!("could not delete an org's data store, so clearing it now; the next launch deletes it");
-            if let Err(e) = clear_store(app, &removed) { log::warn!("could not clear an org's data store: {e}"); }
+            if let Err(e) = clear_store(app, &removed).await { log::warn!("could not clear an org's data store: {e}"); }
         }
     }
 }
