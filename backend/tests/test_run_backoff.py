@@ -14,7 +14,7 @@ def at(monkeypatch, api, when):
     """The clock reads `when`, and the test computer has been reporting in all along."""
     monkeypatch.setattr(H, "now", lambda: when)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen_at=?,awake_since=NULL", (when,))
+        c.execute("UPDATE runner_states SET last_seen_at=?,awake_since=NULL", (when,))
 
 
 def fail(api, machine, attempt, error, summary="", **extra):
@@ -150,10 +150,10 @@ def test_a_new_session_after_a_prompt_too_large_to_send_is_in_the_tasks_history(
     second = claim(api, machine)
     assert second["task"]["id"] == task and second["config"]["compact_first"] is True
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='session'", (task,)).fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='session'", (task,)).fetchone()[0] == 0
     fail(api, machine, second, TOO_BIG)
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT field,new,note FROM task_events WHERE task_id=? AND field='session'", (task,)).fetchone()
+        row = c.execute("SELECT kind AS field,new,note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='session'", (task,)).fetchone()
         assert tuple(row) == ("session", "new", "Started a new session: the old one was still too large to send after compacting")
 
 

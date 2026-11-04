@@ -345,7 +345,7 @@ def test_first_work_creates_the_machine_and_its_runner_is_that_bots_only(cloud):
     # The machine enrolls with that code: a computer named after the bot, closed to others, the bot assigned to it.
     enrolled = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})
     with cloud.store.read() as c:
-        computer = dict(c.execute("SELECT * FROM runners WHERE id=?", (enrolled["runner_id"],)).fetchone())
+        computer = dict(c.execute("SELECT * FROM runners_with_state WHERE id=?", (enrolled["runner_id"],)).fetchone())
         placed = c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()["runner_id"]
         others = placement.candidates(c, cloud.api.app.state.auth, "cpo")
     assert computer["label"] == "ops (cloud)" and not computer["accepts_member_bots"]
@@ -1016,6 +1016,38 @@ def test_only_a_builder_by_name_gets_its_own_machine_by_default(cloud):
             assert CM.default_placement(c, "ops") == want, name
 
 
+def _config(c, bot, config):
+    assert c.execute("SELECT 1 FROM bot_config WHERE bot=?", (bot,)).fetchone(), bot
+    c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(config), bot))
+
+
+def test_a_builder_template_a_copy_of_one_or_a_numbered_builder_gets_its_own_machine(cloud):
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE bots SET display_name=? WHERE id='ops'", ("Ops",))
+        _config(c, "ops", {})
+        assert CM.default_placement(c, "ops") == "shared"
+        _config(c, "ops", {"template": "builder"})
+        assert CM.default_placement(c, "ops") == "own"
+        _config(c, "ops", {"template": "video-producer"})
+        assert CM.default_placement(c, "ops") == "own"
+        # A copy of a Builder is heavy whatever it is called.
+        _config(c, "coo", {"template": "builder"})
+        _config(c, "ops", {"copied_from": {"bot": "coo", "sha": "0" * 40}})
+        assert CM.default_placement(c, "ops") == "own"
+        _config(c, "coo", {"template": "pr-reviewer"})
+        assert CM.default_placement(c, "ops") == "shared"
+        # A copy of a copy follows the line back to the Builder it started from; a loop of copies ends.
+        _config(c, "finance", {"template": "builder"})
+        _config(c, "coo", {"copied_from": {"bot": "finance", "sha": "0" * 40}})
+        assert CM.default_placement(c, "ops") == "own"
+        _config(c, "coo", {"copied_from": {"bot": "ops", "sha": "0" * 40}})
+        assert CM.default_placement(c, "ops") == "shared"
+        for name, want in (("Builder 2", "own"), ("builder (Claude)", "own"), ("BUILDER", "own"),
+                           ("Builder 2 Ops", "shared"), ("Rebuilder", "shared")):
+            c.execute("UPDATE bots SET display_name=? WHERE id='ops'", (name,))
+            assert CM.default_placement(c, "ops") == want, name
+
+
 def test_one_shared_machine_wakes_for_any_member_and_hosts_them_all(cloud):
     adopt(cloud, "ops", "shared")
     adopt(cloud, "finance", "shared")
@@ -1028,7 +1060,7 @@ def test_one_shared_machine_wakes_for_any_member_and_hosts_them_all(cloud):
     # Its computer is the company's, open to members' bots, and every member is assigned to it.
     rid = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})["runner_id"]
     with cloud.store.read() as c:
-        computer = dict(c.execute("SELECT * FROM runners WHERE id=?", (rid,)).fetchone())
+        computer = dict(c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone())
         offered = {r["id"] for r in placement.candidates(c, cloud.api.app.state.auth, "cpo")}
     assert computer["label"] == "Shared cloud machine" and computer["accepts_member_bots"] and computer["owner_id"] == "ana"
     assert placed(cloud) == {"ops": rid, "finance": rid} and rid not in offered
@@ -2049,7 +2081,7 @@ def test_a_cloud_machine_stopped_when_idle_is_not_offline_on_health(cloud):
     hour_ago = H.shift(H.now(), hours=-1)
     with cloud.store.transaction() as c:
         CM.save(c, CM.SHARED, state="stopped")
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (hour_ago, shared["runner_id"]))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (hour_ago, shared["runner_id"]))
     work(cloud, "cpo")                                       # work waits for it: it starts for that, it is not silent
     checks = health_of(cloud)
     assert checks["computers"]["status"] == "ok" and "stopped until work comes" in checks["computers"]["summary"]

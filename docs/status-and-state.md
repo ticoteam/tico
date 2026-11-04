@@ -526,7 +526,7 @@ Without a CHECK (not constrained here; values are whatever the code writes):
   `task_trash.status`, `assistant_actions.status`, `automation_mail_actions.state`, `ask_ingest_items.outcome`,
   `batches.state`, `turns.outcome`, `schedule_occurrences.outcome`, `stale_suggestions.verdict`, `stall_triage.outcome`,
   `trigger_bodies.outcome`, `trigger_deliveries.outcome`, `webhook_attempts.status`, `org_rule_holds.reviewer`, `kpis.stage`
-  (the funnel stage from `backend/growth.py`), `goal_events.status_source` and `goal_events.status_by` (event history).
+  (the funnel stage from `backend/growth.py`), `status_source` and `status_by` in a goal's `history_events.data` (event history).
 
 Spellings still outside the stable set:
 

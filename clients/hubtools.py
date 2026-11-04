@@ -4217,7 +4217,7 @@ def bot_branch(api, args):
       "list; one fresh commit, not its history). Its notes and memory are left out unless `with_memory`. No credential, .env or secret is "
       "ever copied: the credentials the original's tools need are granted to the copy when the person is a credential administrator, and "
       "the rest come back as `needs credential X` for you to ask for. Nothing stays linked. Runs on this computer, in its workspace.",
-      {"bot": _s("The bot to copy"), "slug": _s("The copy's slug; <bot>-copy by default"), "name": _s("What people call the copy"),
+      {"bot": _s("The bot to copy"), "slug": _s("The copy's slug; the original's with the next free number (builder-2) by default"), "name": _s("What people call the copy"),
        "with_memory": {"type": "boolean", "default": False, "description": "Also copy the original's memory, notes and state"},
        "computer": _s("A computer's label or id to put the copy on; leave out to place it later")},
       required=("bot",), writes=True, local=True)
@@ -5706,16 +5706,19 @@ def thread_show(api, args):
 @tool("hub_thread_create", "Start a thread. Its audience decides who reads it: members (the people and bots you add; "
       "the default and private), team (the members of a group) or company (everyone). personal starts a direct message "
       "with the members, and reuses an open one with exactly those members. `body` is the first message. A side topic "
-      "under a message is hub_thread_reply, not a new thread.",
-      {"title": _s("The title"),
+      "under a message is hub_thread_reply, not a new thread. Every thread needs a title, except a DM with one "
+      "teammate.",
+      {"title": _s("The title: needed unless it is a DM with one teammate"),
        "audience": {"type": "string", "enum": ["members", "team", "company", "personal"], "default": "members"},
        "audience_group_id": _s("For audience team: the group's id"),
        "members": {"type": "array", "items": {"type": "string"},
                    "description": "The people, bots and groups to add, as human:<id>, bot:<slug> or group:<id>"},
-       "body": _s("The first message")}, writes=True)
+       "body": _s("The first message"),
+       "pin_for_members": {"type": "boolean", "default": False,
+                           "description": "Pin it for you and every person you add"}}, writes=True)
 def thread_create(api, args):
-    body = {key: args[key] for key in ("title", "audience", "audience_group_id", "members", "body")
-            if args.get(key) not in (None, "", [])}
+    body = {key: args[key] for key in ("title", "audience", "audience_group_id", "members", "body", "pin_for_members")
+            if args.get(key) not in (None, "", [], False)}
     return api.post("threads", body, key=_key(args))
 
 
@@ -5785,6 +5788,29 @@ def thread_follow(api, args):
                     key=_key(args))
 
 
+@tool("hub_thread_pin", "Pin a thread for yourself: it stays at the top of your thread list. Only a top-level thread "
+      "is pinned (not a sub-thread). The answer is the thread.",
+      {"thread": THREAD_ID}, required=("thread",), writes=True)
+def thread_pin(api, args):
+    return api.call("PUT", _thread_path(args["thread"], "pin"), None, key=_key(args))
+
+
+@tool("hub_thread_unpin", "Unpin a thread for yourself, even one pinned for everyone. The answer is the thread.",
+      {"thread": THREAD_ID}, required=("thread",), writes=True)
+def thread_unpin(api, args):
+    return api.call("DELETE", _thread_path(args["thread"], "pin"), None, key=_key(args))
+
+
+@tool("hub_thread_catch_up", "Catch up: each thread with something new for you, and each open mention, ask or "
+      "unread DM, mentions first, with the new messages in tree order (at most 20 an item; `more` counts the rest). "
+      "count is every item, at most 99. Mark one read with hub_thread_read all. For a written summary of one thread, "
+      "hub_thread_catchup.",
+      {"cursor": THREAD_CURSOR,
+       "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Items in this page (default 20)"}})
+def thread_catch_up(api, args):
+    return api.get("threads/catch-up", cursor=args.get("cursor"), limit=args.get("limit"))
+
+
 @tool("hub_thread_unfollow", "Stop following a thread. You keep whatever you can read.",
       {"thread": THREAD_ID}, required=("thread",), writes=True)
 def thread_unfollow(api, args):
@@ -5827,16 +5853,21 @@ def thread_dm(api, args):
 
 
 @tool("hub_thread_dm_group", "A group direct message: you and the people or bots in members, with an optional first "
-      "message in body. The answer is the thread, with the message when a body was given.",
+      "message in body. A new one with two or more others needs a title. The answer is the thread, with the message "
+      "when a body was given.",
       {"members": {"type": "array", "items": {"type": "string"}, "minItems": 1,
                    "description": "The people or bots, as human:<id> or bot:<slug>: at least one"},
-       "body": _s("The first message, optional")},
+       "body": _s("The first message, optional"),
+       "title": _s("Its name: needed for a new group DM with two or more others")},
       required=("members",), writes=True)
 def thread_dm_group(api, args):
     members = args.get("members") or []
     if not members:
         raise APIError("invalid", "Give at least one member: human:<id> or bot:<slug>", 422)
-    return api.post("threads/dm", {"members": members, "body": args.get("body")}, key=_key(args))
+    body = {"members": members, "body": args.get("body")}
+    if args.get("title"):
+        body["title"] = args["title"]
+    return api.post("threads/dm", body, key=_key(args))
 
 
 @tool("hub_thread_members_list", "Who can read a thread: its people, bots and groups, with each one's role. Paged.",
@@ -5865,15 +5896,19 @@ def thread_members_remove(api, args):
 
 
 @tool("hub_thread_update", "Rename a thread, archive or unarchive it, change who may read it: members, team (a group) "
-      "or company, or set how long it keeps its messages. Only its starter or an admin can make a thread public.",
+      "or company, set how long it keeps its messages, or pin it for everyone who reads it. Only its starter or an "
+      "admin can make a thread public or pin it for everyone.",
       {"thread": THREAD_ID, "title": _s("The new title"), "archived": {"type": "boolean"},
+       "pinned_for_everyone": {"type": "boolean", "description": "true pins it for everyone who reads it, false "
+                               "takes that pin off. Not on a DM with one teammate, a Home or a task's thread"},
        "audience": {"type": "string", "enum": ["members", "team", "company"]},
        "audience_group_id": _s("For audience team: the group's id"),
        "retention_days": {"type": ["integer", "null"], "description": "On a root thread: delete its messages and its "
                           "sub-threads' after this many days; null keeps them for good"}},
       required=("thread",), writes=True)
 def thread_update(api, args):
-    body = {key: args[key] for key in ("title", "archived", "audience", "audience_group_id") if args.get(key) is not None}
+    body = {key: args[key] for key in ("title", "archived", "audience", "audience_group_id", "pinned_for_everyone")
+            if args.get(key) is not None}
     if "retention_days" in args:
         body["retention_days"] = args["retention_days"]
     return api.patch(_thread_path(args["thread"]), body, key=_key(args))

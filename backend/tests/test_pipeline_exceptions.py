@@ -19,8 +19,8 @@ def board(c, profile="manager"):
     c.execute("UPDATE bot_config SET config=? WHERE bot='coo'",
               (encode({"name": "coo", "runtime": "fake", "status": "active", "profile": profile}),))
     if not c.execute("SELECT 1 FROM runners WHERE id='r1'").fetchone():
-        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,last_seen_at) VALUES('r1','box','ana','h',?,?)",
-                  (H.now(), H.now()))
+        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','box','ana','h',?)", (H.now(),))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r1'", (H.now(),))
     return H.type_get(c, typ["id"])
 
 
@@ -46,7 +46,7 @@ def ticket(c, typ, title="Fix the connection", step="In Progress", minutes=0):
     if minutes:
         then = H.shift(H.now(), minutes=-minutes)
         c.execute("UPDATE tasks SET created_at=?, updated_at=? WHERE id=?", (then, then, row["id"]))
-        c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (then, row["id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (then, row["id"]))
     return H.task(c, row["id"])
 
 
@@ -111,7 +111,7 @@ def test_a_check_left_doing_with_no_run_is_listed_under_its_ticket_and_the_ticke
         check = check_of(c, row)
         check = doing(c, check)
         run(c, check, "completed", 360)
-        c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (H.shift(H.now(), hours=-6), check["id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (H.shift(H.now(), hours=-6), check["id"]))
         [entry] = listed(c, typ, "stuck")
         assert entry["ticket"]["id"] == row["id"] and entry["check"]["id"] == check["id"]
         assert entry["check"]["owner_id"] == "ops" and "owner ops" in entry["cause"]
@@ -211,7 +211,7 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
         H.task_update(c, "bot:cpo", row["id"], status="doing", note="Back on it")
         # Its own words: the same notice again is dropped as a repeat, which would hide a wake.
         H._wake(c, H.task(c, row["id"]), "bot:coo", f"A setup blocker on {title} needs you.", {"wake": "blocker"})
-        c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (H.shift(H.now(), hours=-5), late["id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (H.shift(H.now(), hours=-5), late["id"]))
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), hours=-5), late["id"]))
         step_age.sweep(c, H.shift(H.now(), minutes=1))
         H.task_update(c, "bot:cpo", row["id"], status="done", note="Shipped")
@@ -248,7 +248,7 @@ def test_a_turn_that_ends_doing_with_nothing_queued_wakes_its_owner_once_and_the
         row = ticket(c, typ, minutes=120)
         check = check_of(c, row)
         check = doing(c, check)
-        c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (H.shift(H.now(), minutes=-120), check["id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (H.shift(H.now(), minutes=-120), check["id"]))
         run(c, check, "completed", 60)
         before = unheld_jobs(c, "ops")
         assert step_age.turn_ended(c) == [check["id"]]
@@ -307,7 +307,7 @@ def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_and_unwoken_unti
         row = ticket(c, typ, minutes=200)
         check = doing(c, check_of(c, row))
         profile(c, "ops", "reviewer")
-        c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (H.shift(H.now(), minutes=-120), check["id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (H.shift(H.now(), minutes=-120), check["id"]))
         run(c, check, "completed", 60)
         upstream = H.task_create(c, "bot:cpo", "Ship the base fix", "Ship.", "bot:cpo", lint=False)
         settled(c)
@@ -465,7 +465,7 @@ def test_the_github_outage_folds_in_only_the_tickets_the_manager_reads_in_pipeli
         early, late = H.shift(H.now(), minutes=-30), H.shift(H.now(), minutes=-10)
 
         def held(row, since):
-            c.execute("INSERT INTO task_events(id,task_id,created_at,actor,field,old,new,note) VALUES(?,?,?,?,?,?,?,'')",
+            c.execute("INSERT INTO history_events(subject_type,id,subject_id,created_at,actor_id,kind,old,new,note) VALUES('task',?,?,?,?,?,?,?,'')",
                       (H.new_id(), row["id"], H.shift(H.now(), seconds=1), H.KEEPER, move_retry.FIELD,
                        row["step_id"], json.dumps({"state": "waiting", "outage": True, "since": since,
                                                    "step": "Review 1", "kind": "github"})))

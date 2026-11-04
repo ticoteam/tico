@@ -23,8 +23,8 @@ def team(api, seen=None):
                       "status": "active", **({"profile": "reviewer"} if slug.startswith("rev-") else {})}
             c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?) ON CONFLICT(bot) DO UPDATE "
                       "SET config=excluded.config", (slug, encode(config), "engineering", "ana"))
-        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,last_seen_at) VALUES('r1','box','ana','h',?,?)",
-                  (H.now(), seen or H.now()))
+        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','box','ana','h',?)", (H.now(),))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r1'", (seen or H.now(),))
         for slug in ("rev-a", "rev-b", "rev-c"):
             c.execute("INSERT INTO assignments VALUES(?,?,1,?,'human:ana')", (slug, "r1", H.now()))
 
@@ -83,8 +83,8 @@ def test_entering_review_1_files_the_check_to_the_least_busy_reviewer_and_wakes_
     assert check["title"] == "Review 1: PR #412" and check["owner_id"] == "bot:rev-a"
     assert check["requester_id"] == "bot:cpo", "filed as the builder's own request, so its verdict comes back to it"
     with api.app.state.store.read() as c:
-        head = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head'", (check["id"],)).fetchone()
-        filed = c.execute("SELECT actor,note FROM task_events WHERE task_id=? AND field='check_filed'", (task["id"],)).fetchone()
+        head = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head'", (check["id"],)).fetchone()
+        filed = c.execute("SELECT actor_id AS actor,note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_filed'", (task["id"],)).fetchone()
     assert head[0] == HEAD
     assert filed["actor"] == H.KEEPER and "rev-a" in filed["note"]
     age = woken(api, "rev-a", check["id"])
@@ -155,13 +155,13 @@ def test_turn_finish_consumes_pending_eligible_verdict_once_after_capture(api):
                   "provider": "openai", "est_cost_usd": 0.01, "billing": "subscription", "runtime": "codex",
                   "harness": "codex", "effort": "high", "profile": "engineering"}
         H.turn_finish(c, H.KEEPER, "review-turn", usage={**actual, "segments": [actual]})
-        events = c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='verdict_move'",
+        events = c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_move'",
                            (check["id"],)).fetchone()[0]
         assert events == 1
         moved_step = c.execute("SELECT s.name FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.id=?",
                                (task["id"],)).fetchone()[0]
         H.turn_finish(c, H.KEEPER, "review-turn", usage={**actual, "segments": [actual]})
-        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='verdict_move'",
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_move'",
                          (check["id"],)).fetchone()[0] == 1
     assert moved_step == "Review 1 Fixes"
 
@@ -219,7 +219,7 @@ def test_same_family_verdict_is_consumed_once_without_a_second_checker(api):
     with api.app.state.store.transaction() as c:
         _finish(c, "review-1", "rev-a", check, "claude-opus-5-5", "anthropic", "claude")
         assert H.task(c, check["id"])["status"] == "done" and _step(c, task) == "Review 1 Fixes"
-        moves = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_move' ORDER BY rowid",
+        moves = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_move' ORDER BY rowid",
                           (check["id"],)).fetchall()
         assert [json.loads(m[0])["attempt_id"] for m in moves] == ["review-1"]
         evidence = c.execute("SELECT builder_families,configured_families,checker_families "
@@ -329,8 +329,8 @@ def test_same_company_is_a_fallback_and_an_offline_reviewer_is_passed_over(api):
     busy(api, "rev-b")
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:rev-c", first["id"], status="done", note=f"VERDICT: approve PR #412 head {HEAD}")
-        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,last_seen_at) VALUES('r2','old','ana','h2',?,?)",
-                  (H.now(), H.shift(H.now(), hours=-2)))
+        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r2','old','ana','h2',?)", (H.now(),))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r2'", (H.shift(H.now(), hours=-2),))
         c.execute("UPDATE assignments SET runner_id='r2' WHERE bot='rev-a'")
     task = get(api, "tasks/" + task["id"])["task"]
     assert move(api, task, "Review 2").status_code == 200
@@ -657,7 +657,7 @@ def test_a_task_model_that_cannot_run_counts_the_bots_own_model_for_require(api)
     task = qa_ticket(api)
     task_model(api, "rev-c", "gpt-6.1-sol", "codex")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness=? WHERE id='r1'",
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'",
                   (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {"codex": {"installed": False}}}),))
     set_pool(api, task, "In QA", ["rev-c", "rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
@@ -699,7 +699,7 @@ def test_a_task_model_held_at_its_usage_limit_counts_the_bots_own_model_for_requ
     task_model(api, "rev-c", "gpt-6.1-sol", "codex")
     task_model(api, "rev-a", "claude-haiku-5-5", "claude")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness=? WHERE id='r1'", (json.dumps({"schema_version": 1, "bots": {},
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'", (json.dumps({"schema_version": 1, "bots": {},
                   "runtimes": {"codex": {"installed": True}, "claude": {"installed": False}}}),))
         login_holds.record(c, "r1", login_holds.canonical(c, "r1", "", "codex"), "codex", H.now(),
                            reset=H.shift(H.now(), hours=2))
@@ -725,7 +725,7 @@ def test_a_task_model_that_cannot_run_counts_only_the_turns_on_the_bots_own_mode
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES('earlier','rev-a',?,?,?)",
                   (H.now(), H.now(), own["id"]))
         segment(c, 'earlier', model='claude-haiku-5-5', provider='anthropic')
-        c.execute("UPDATE runners SET readiness=? WHERE id='r1'",
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'",
                   (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {"claude": {"installed": False}}}),))
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
@@ -745,7 +745,7 @@ def test_a_task_that_fell_back_to_the_builders_company_keeps_a_require_check_off
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES('fell','rev-a',?,?,?)",
                   (H.now(), H.now(), own["id"]))
         segment(c, 'fell', model='claude-sonnet-5-5', provider='anthropic')
-        c.execute("UPDATE runners SET readiness=? WHERE id='r1'",
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'",
                   (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {"claude": {"installed": False}}}),))
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")

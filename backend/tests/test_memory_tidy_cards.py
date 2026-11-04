@@ -19,7 +19,9 @@ def db():
     c.executescript(C.SCHEMA)
     c.execute("CREATE TABLE bots(id TEXT PRIMARY KEY, slug TEXT)")
     c.execute("INSERT INTO bots VALUES('ops','ops')")
-    c.executescript("CREATE TABLE assignments(bot TEXT,runner_id TEXT); CREATE TABLE runners(id TEXT,capabilities TEXT,revoked_at TEXT);")
+    c.executescript("CREATE TABLE assignments(bot TEXT,runner_id TEXT); CREATE TABLE runners(id TEXT,revoked_at TEXT); "
+                    "CREATE TABLE runner_states(runner_id TEXT PRIMARY KEY,capabilities TEXT); "
+                    "CREATE VIEW runners_with_state AS SELECT r.*,s.capabilities FROM runners r LEFT JOIN runner_states s ON s.runner_id=r.id;")
     yield c
     c.close()
 
@@ -47,7 +49,7 @@ def test_one_open_card_retry_and_new_night_replaces_without_applying(db, monkeyp
     with pytest.raises(Problem):
         offer(db, started_at='2026-11-02T17:00:00Z')
     # These are the only tables: filing has no repository/memory/job storage to mutate. Bots are only read, for the title.
-    assert {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")} == {'memory_tidy_cards', 'memory_tidy_keeps', 'bots', 'assignments', 'runners'}
+    assert {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")} == {'memory_tidy_cards', 'memory_tidy_keeps', 'bots', 'assignments', 'runners', 'runner_states'}
 
 
 def test_two_business_days_excludes_weekend_and_expires_at_boundary(db, monkeypatch):
@@ -111,7 +113,7 @@ def test_named_reviewer_sees_card_after_both_private_tasks_close_and_sweep(api):
 def test_human_needs_you_and_discard_do_not_change_tasks_or_enqueue_work(api):
     with api.app.state.store.transaction() as c:
         card = offer(c)
-        before = {t: c.execute('SELECT count(*) FROM ' + t).fetchone()[0] for t in ('jobs', 'messages', 'task_events')}
+        before = {t: c.execute('SELECT count(*) FROM ' + t).fetchone()[0] for t in ('jobs', 'messages', 'history_events')}
     assert any(i['id'] == card['id'] and i['kind'] == 'memory_tidy' for i in get(api, 'needs-you')['items'])
     post(api, 'memory-tidy/cards/' + card['id'] + '/decide', {'decision': 'keep'}, expected=409)
     assert get(api, 'memory-tidy/cards')['cards'][0]['status'] == 'open'
@@ -161,7 +163,7 @@ def capable_computer(api):
     joined = runner(api)
     with api.app.state.store.transaction() as c:
         rid = c.execute('SELECT id FROM runners ORDER BY created_at DESC LIMIT 1').fetchone()[0]
-        c.execute('UPDATE runners SET capabilities=? WHERE id=?', ('["memory_tidy_keep_v1"]', rid))
+        c.execute('UPDATE runner_states SET capabilities=? WHERE runner_id=?', ('["memory_tidy_keep_v1"]', rid))
         c.execute('INSERT OR REPLACE INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,?,?,?)',
                   ('ops', rid, 1, H.now(), 'human:ana'))
     return rid, joined['token']

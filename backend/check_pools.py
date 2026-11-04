@@ -86,13 +86,13 @@ def capture_attempt(c, turn_id):
     finished_owner = check.get("owner_id")
     head = str(check.get("verdict_head") or "").lower()
     if not head:
-        event = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
+        event = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
                           "ORDER BY created_at DESC,rowid DESC LIMIT 1", (check["id"],)).fetchone()
         head = str(event[0] if event else "").split(",")[0].lower()
     from . import check_independence
     result = check_independence.capture_attempt(c, ticket_id, check["id"], head, turn_id)
     verdict = str(check.get("verdict") or "").lower()
-    decided = c.execute("SELECT created_at FROM task_events WHERE task_id=? AND field='verdict' "
+    decided = c.execute("SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict' "
                         "ORDER BY created_at DESC,rowid DESC LIMIT 1", (check["id"],)).fetchone()
     started = c.execute("SELECT started_at FROM turns WHERE id=?", (turn_id,)).fetchone()
     from . import verdict_moves
@@ -105,7 +105,8 @@ def capture_attempt(c, turn_id):
     current = H.task(c, check["id"])
     if current and current.get("status") in H.ACTIVE_STATUSES and current.get("owner_id") == finished_owner:
         return result
-    done = c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='check_pool_freed' AND new=? LIMIT 1",
+    done = c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_pool_freed' "
+                     "AND new=? LIMIT 1",
                      (check["id"], turn_id)).fetchone()
     if not done:
         H._task_event(c, check["id"], H.KEEPER, "check_pool_freed", None, turn_id, "")
@@ -216,7 +217,7 @@ def online(c, slug):
                     "WHERE b.id=?", (slug,)).fetchone()
     if not row or row["state"] != "active" or row["status"] in HELD:
         return False
-    seen = c.execute("SELECT r.last_seen_at FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    seen = c.execute("SELECT r.last_seen_at FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                      "WHERE a.bot=? AND r.revoked_at IS NULL", (slug,)).fetchone()
     return bool(seen and seen[0] and seen[0] >= H.shift(H.now(), minutes=-ONLINE_MINUTES))
 
@@ -470,7 +471,7 @@ def has_open_check(c, ticket, step, heads):
         found = step_flow.child_check(c, child, ticket)
         if not found or found["id"] != step["id"]:
             continue
-        seen = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
+        seen = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
                          "ORDER BY created_at DESC, rowid DESC LIMIT 1", (child_id,)).fetchone()
         judged = set(filter(None, (seen[0] if seen else "").split(",")))
         if heads and judged and not set(heads) & judged:

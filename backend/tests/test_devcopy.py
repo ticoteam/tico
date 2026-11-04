@@ -241,3 +241,43 @@ def test_a_copy_of_a_database_from_before_usage_facts_keeps_what_the_migration_m
     with closing(sqlite3.connect(dest)) as c:
         assert [c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
                 for t in ("turn_usage_segments", "usage_limits", "usage_pools")] == [1, 1, 1]
+
+
+def test_a_copy_of_a_database_from_before_the_history_move_keeps_its_change_logs_for_the_move(tmp_path):
+    """devcopy prunes before the copy is migrated: the five change logs migration 0064 moves are kept whole (their rows,
+    and a deleted task's trash snapshot of them), so the move still has every row to copy into history_events."""
+    import json
+    from backend.tests.test_history_events import OLD, migration
+    stamp = "2020-01-01T00:00:00.000000Z"
+    source = source_db(tmp_path)
+    snapshot = json.dumps({"rows": {"task_events": [{"_rowid": 1, "id": "t9", "task_id": "task-9", "field": "status",
+                                                     "old": "open", "new": "done", "actor": "human:ana",
+                                                     "created_at": stamp}]}})
+    with closing(sqlite3.connect(source)) as c, c:
+        # Before 0064: no history table, the five logs are there, and the migration has not run.
+        c.execute("DROP TABLE history_events")
+        c.execute("DELETE FROM schema_migrations WHERE version='0064_history_events'")
+        for statement in OLD:
+            c.execute(statement)
+        c.execute("INSERT INTO task_events VALUES('t1','task-1','2026-01-01T00:00:00Z','human:ana','status','open',"
+                  "'done','',NULL,NULL)")
+        c.execute("INSERT INTO task_events VALUES('t2','task-1',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)")
+        c.execute("INSERT INTO goal_events(id, goal_id, created_at, actor, field, old, new, note) "
+                  "VALUES('g1','goal-1',?,'human:ana','status','on_track','at_risk','')", (stamp,))
+        c.execute("INSERT INTO task_trash(task_id, number, title, status, private, deleted_at, deleted_by, rows) "
+                  "VALUES('task-9', 9, 'Gone', 'done', 1, ?, 'human:ana', ?)", (stamp, snapshot))
+    dest = tmp_path / "copy" / "hub.sqlite"
+    removed, loose = devcopy.build(source, dest, days=30)
+    assert loose == [] and not {"task_events", "goal_events", "task_trash"} & set(removed)
+    with closing(sqlite3.connect(dest)) as c:
+        assert c.execute("SELECT count(*) FROM task_events").fetchone()[0] == 2
+        assert c.execute("SELECT count(*) FROM goal_events").fetchone()[0] == 1
+        assert "task_events" in json.loads(c.execute("SELECT rows FROM task_trash").fetchone()[0])["rows"]
+        # The move the dev server runs on its first start takes every one of them.
+        migration().up(c)
+        assert [r[0] for r in c.execute("SELECT id FROM history_events WHERE subject_type='task' ORDER BY rowid")] == [
+            "t1", "t2"]
+        assert c.execute("SELECT subject_id, kind, created_at FROM history_events WHERE id='t2'").fetchone() == (
+            "task-1", None, None)
+        assert c.execute("SELECT id FROM history_events WHERE subject_type='goal'").fetchall() == [("g1",)]
+        assert not {"task_events", "goal_events"} & {r[0] for r in c.execute("SELECT name FROM sqlite_master")}

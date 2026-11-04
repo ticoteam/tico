@@ -330,15 +330,17 @@ def marks(conn, rows):
     found = {}
     for chunk in (snoozed[i:i + 500] for i in range(0, len(snoozed), 500)):
         for e in conn.execute(
-                f"SELECT task_id,max(created_at) created_at FROM task_events WHERE field='snoozed_until' AND new IS NOT NULL "
-                f"AND task_id IN ({','.join('?' * len(chunk))}) GROUP BY task_id", chunk):
+                f"SELECT subject_id AS task_id,max(created_at) created_at FROM history_events WHERE subject_type='task' "
+                f"AND kind='snoozed_until' AND new IS NOT NULL "
+                f"AND subject_id IN ({','.join('?' * len(chunk))}) GROUP BY subject_id", chunk):
             found.setdefault(e["task_id"], {})["snoozed_since"] = e["created_at"]
     for chunk in (manual[i:i + 500] for i in range(0, len(manual), 500)):
         # An owner's hold is the latest move a person or bot made into it: the move to Blocked, or a step move that
         # declared the hold over one Tico found (task_blocked.transition).
         for e in conn.execute(
-                f"SELECT task_id,actor,max(created_at) created_at FROM task_events WHERE field IN ('status','step') AND actor<>? "
-                f"AND task_id IN ({','.join('?' * len(chunk))}) GROUP BY task_id", (H.KEEPER, *chunk)):
+                f"SELECT subject_id AS task_id,actor_id AS actor,max(created_at) created_at FROM history_events "
+                f"WHERE subject_type='task' AND kind IN ('status','step') AND actor_id<>? "
+                f"AND subject_id IN ({','.join('?' * len(chunk))}) GROUP BY subject_id", (H.KEEPER, *chunk)):
             found.setdefault(e["task_id"], {})["blocked_by"] = e["actor"]
     return found
 

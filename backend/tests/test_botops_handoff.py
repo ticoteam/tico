@@ -52,7 +52,7 @@ def test_a_bot_hands_botops_the_persons_own_request_and_botops_acts_as_them(api,
         H.task_update(c, "bot:ops", task["id"], status="open", note="one more thing")
     assert get(api, "qa-handoff-identity", attempt["token"]) == {"actor": "bot:ops", "role": "bot"}
     with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM task_events WHERE task_id=? AND field='status'", (task["id"],))
+        c.execute("DELETE FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status'", (task["id"],))
 
     # Once the message is more than a week old it lends nothing: BotOps has only Ops' rights again.
     with api.app.state.store.transaction() as c:

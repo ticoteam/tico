@@ -15,7 +15,7 @@ from typing import Literal
 from fastapi import Query, Request
 from pydantic import BaseModel, Field
 
-from . import delivery, org_rule_check, reach, teammate_access, thread_search, threads
+from . import delivery, org_rule_check, reach, teammate_access, thread_rail, thread_search, threads
 from .store import H, Problem
 
 # How a person's message reaches the bot across a bot's Home or a DM with it (backend/delivery.py). Optional: with none
@@ -36,6 +36,7 @@ class ThreadCreate(BaseModel):
     kind: str = "chat"
     task_id: str | None = None
     body: str | None = None                       # a first message, posted with the thread
+    pin_for_members: bool = False                 # pin it for its starter and every person added
 
 
 class ThreadPatch(BaseModel):
@@ -44,6 +45,7 @@ class ThreadPatch(BaseModel):
     audience: str | None = None
     audience_group_id: str | None = None
     retention_days: int | None = None             # sent as null: keep its messages for good
+    pinned_for_everyone: bool | None = None       # a manager pins the root for everyone who reads it, or unpins it
 
 
 class ThreadPost(BaseModel):
@@ -329,6 +331,30 @@ def install(app, store, auth, mutate, rule_check):
             v = threads.viewer(auth, request.state.identity)
             return threads.search(c, v, q, limit=limit or 20, before=before)
 
+    @app.get("/api/v2/threads/rail")
+    def rail(request: Request, cursor: str | None = None, limit: int | None = None):
+        """The threads the viewer is in, by title: `pinned` (first page), then `threads`, paged. Never a 1:1 DM, a Home,
+        a task's thread or a meeting. The first page also has Catch up's count and the unread in each one-teammate DM."""
+        v = threads.viewer(auth, request.state.identity)
+        with store.read_transaction() as c:
+            return thread_rail.rail(c, v, cursor=cursor, limit=limit)
+
+    @app.get("/api/v2/threads/browse")
+    def browse(request: Request, q: str | None = None, cursor: str | None = None, limit: int | None = None):
+        """Company and team threads the viewer may read and is not in, newest activity first, `q` matching the title.
+        Following one (PUT .../follow) puts it in the rail."""
+        v = threads.viewer(auth, request.state.identity)
+        with store.read_transaction() as c:
+            return thread_rail.browse(c, v, q=q, cursor=cursor, limit=limit)
+
+    @app.get("/api/v2/threads/catch-up")
+    def catch_up(request: Request, cursor: str | None = None, limit: int | None = None):
+        """Each thread with something new for the viewer, and each open Needs attention item, mentions first, with its
+        new messages in tree order. `count` (at most 99) is the badge. POST .../read-all reads one."""
+        v = threads.viewer(auth, request.state.identity)
+        with store.read_transaction() as c:
+            return thread_rail.catch_up(c, v, cursor=cursor, limit=limit)
+
     @app.get("/api/v2/threads/home/{actor}")
     def home_thread(request: Request, actor: str):
         """A teammate's Home (`actor` = bot:<slug>, human:<id> or group:<id>, in the path), made on first use. The viewer
@@ -380,7 +406,10 @@ def install(app, store, auth, mutate, rule_check):
         it creates, and answers with the hold)."""
         who = request.state.identity
         start = {"title": body.title, "audience": body.audience, "audience_group_id": body.audience_group_id,
-                 "members": body.members, "task_id": body.task_id, "kind": body.kind}
+                 "members": body.members, "task_id": body.task_id, "kind": body.kind,
+                 **({"pin_for_members": True} if body.pin_for_members else {})}
+        if body.body and not body.parent_message_id and body.audience in ("members", "team", "company"):
+            threads.require_name(who.actor, body.audience, body.title, 0)      # before the rule check spends a call
         def audience(c):
             if body.parent_message_id:
                 thread_id = (H.message(c, body.parent_message_id) or {}).get("conversation_id")
@@ -397,7 +426,8 @@ def install(app, store, auth, mutate, rule_check):
             if not body.body:
                 return threads.create(c, v, title=body.title, audience=body.audience,
                                       audience_group_id=body.audience_group_id, members=body.members,
-                                      parent_message_id=body.parent_message_id, task_id=body.task_id, kind=body.kind)
+                                      parent_message_id=body.parent_message_id, task_id=body.task_id, kind=body.kind,
+                                      pin_for_members=body.pin_for_members)
             if body.parent_message_id:
                 # A sub-thread's first message: post makes the sub-thread only once the message goes through.
                 parent = H.message(c, body.parent_message_id)
@@ -426,6 +456,8 @@ def install(app, store, auth, mutate, rule_check):
                 threads.set_audience(c, v, thread_id, body.audience, audience_group_id=body.audience_group_id)
             if "retention_days" in body.model_fields_set:
                 threads.set_retention(c, v, thread_id, body.retention_days)
+            if body.pinned_for_everyone is not None:
+                thread_rail.set_pinned_for_everyone(c, v, thread_id, body.pinned_for_everyone)
             return threads.get(c, v, thread_id)
         return mutate(request, body, work)
 
@@ -516,6 +548,18 @@ def install(app, store, auth, mutate, rule_check):
         who = request.state.identity
         return mutate(request, body, lambda c: threads.follow(c, threads.viewer(auth, who), thread_id,
                                                               notify=body.notify))
+
+    @app.put("/api/v2/threads/{thread_id}/pin")
+    def pin(request: Request, thread_id: str):
+        """Pin a root thread for me. Reading it is enough. The answer is the thread view."""
+        who = request.state.identity
+        return mutate(request, Nothing(), lambda c: thread_rail.pin(c, threads.viewer(auth, who), thread_id))
+
+    @app.delete("/api/v2/threads/{thread_id}/pin")
+    def unpin(request: Request, thread_id: str):
+        """Unpin a root thread for me, over a pin for everyone too. The answer is the thread view."""
+        who = request.state.identity
+        return mutate(request, Nothing(), lambda c: thread_rail.unpin(c, threads.viewer(auth, who), thread_id))
 
     @app.delete("/api/v2/threads/{thread_id}/follow")
     def unfollow(request: Request, thread_id: str):

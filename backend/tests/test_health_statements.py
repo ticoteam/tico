@@ -49,7 +49,8 @@ def loop(api, count, start=0):
             c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,created_at,updated_at,private) "
                       "VALUES(?,?,?,?,?,?,?,0)", (tid, "Looping " + tid, "human:ana", "bot:few-00", "open", OLD, OLD))
             for k in range(22):
-                c.execute("INSERT INTO task_events(id,task_id,created_at,actor,field,old,new) VALUES(?,?,?,?,?,?,?)",
+                c.execute("INSERT INTO history_events(id,subject_type,subject_id,created_at,actor_id,kind,old,new) "
+                          "VALUES(?,'task',?,?,?,?,?,?)",
                           (uuid.uuid4().hex, tid, H.shift(H.now(), minutes=-k), "human:ana", "status", "a", "b"))
 
 
@@ -125,7 +126,7 @@ def fleet(api, prefix, count):
                 "ready": n % 2 == 0, "runtime": "codex",
                 "problems": [] if n % 2 == 0 else ["Codex is not signed in"],
                 "tools": [{"env": "STRIPE_KEY", "credential": "missing", "service": "stripe"}]}
-        c.execute("UPDATE runners SET readiness=?, last_seen_at=? WHERE id=?",
+        c.execute("UPDATE runner_states SET readiness=?, last_seen_at=? WHERE runner_id=?",
                   (json.dumps(doc), H.now(), machine["runner_id"]))
     for n in range(count):                                    # computers that check in: where a bot could move
         heartbeat(api, runner(api, label=f"{prefix} Mac {n:02d}")["runner_id"], seconds_ago=5, runtimes=RUNTIMES)

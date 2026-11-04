@@ -13,6 +13,7 @@ owner. Every route is one BotOps may call as the requester (backend/botops_act.p
 """
 import base64
 import json
+import re
 import secrets
 from urllib.parse import quote
 
@@ -44,13 +45,27 @@ def folder(c, bot):
     return H.bot_folder(bot, _json(row["config"] if row else None))
 
 
+_NUMBER = re.compile(r"-\d+$")
+_NUMBERED_NAME = re.compile(r"\s+\d+$")
+
+
 def free_slug(c, original):
-    base = original[:70] + "-copy"
-    for n in range(1, 100):
-        slug = base if n == 1 else f"{base}-{n}"
+    """The copy's slug: the original's name with the first free number from 2, so `builder` gives `builder-2`, and a copy
+    of `builder-2` gives `builder-3`."""
+    base = _NUMBER.sub("", original)[:70]
+    for n in range(2, 100):
+        slug = f"{base}-{n}"
         if not H.resolve_bot(c, slug):
             return slug
     raise Problem("duplicate", "Give the copy a name of its own (slug)", 409)
+
+
+def free_display_name(c, original):
+    """The copy's display name: the original's with the first number from 2 that no bot has, so "Builder" gives "Builder 2"."""
+    base = (_NUMBERED_NAME.sub("", original.strip()) or original.strip())[:90]
+    taken = {(row["display_name"] or "").strip().lower() for row in c.execute("SELECT display_name FROM bots")}
+    names = [f"{base} {n}".strip() for n in range(2, 100)]
+    return next((name for name in names if name.lower() not in taken), names[-1])
 
 
 def model_settings(c, settings_admin, settings, bot, config):
@@ -146,7 +161,7 @@ def install(app, store, auth, mutate, settings_admin, place_now):
             row = settings_admin._config(c, bot)
             config = _json(row["config"])
             slug = body.slug or free_slug(c, original["slug"])
-            display = body.display_name.strip() or ("Copy of " + original["display_name"])[:100]
+            display = body.display_name.strip() or free_display_name(c, original["display_name"])
             choice, effort, harness = model_settings(c, settings_admin, settings, original, config)
             created = settings_admin.create_bot(c, who, M.BotDefinitionCreate(
                 slug=slug, display_name=display, description=row["description"] or "",

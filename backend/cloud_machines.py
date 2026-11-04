@@ -25,7 +25,7 @@ One row per bot (`cloud_machines`): where it runs (`mode` cloud, or computer: an
 machine (`placement` shared, the default, or own), its own machine's size, Always on and Pause after, and that machine
 as HQ last described it. The shared machine is one more row, keyed SHARED, with the company's size, Always on and Pause
 after for it. A bot's placement defaults by role when its row is made (`default_placement`): `own` for a bot from a
-template in OWN_TEMPLATES (the video producer) or a Builder (display name "Builder" or "Builder (...)"), `shared`
+template in OWN_TEMPLATES (the video producer) or a Builder (the `builder` template, a copy of one, or a bot named "Builder", "Builder 2" or "Builder (...)"), `shared`
 for every other, the rest of Engineering included; a person switches it either way. Off a cloud company (cloud_access.state is None) there are no rows, the option
 is hidden and nothing here runs; on one, the same until HQ has listed its sizes (`offered`). On one, a bot with no
 computer defaults to a cloud machine (placement.auto_place; a setup that finished before HQ listed its sizes is placed
@@ -87,6 +87,7 @@ machine; a shared machine's facts are its member bots' together:
 import hashlib
 import json
 import logging
+import re
 import secrets
 import threading
 import time
@@ -119,8 +120,9 @@ CREATE TABLE IF NOT EXISTS cloud_machine_codes(
 MODES = ("cloud", "computer")
 PLACEMENTS = ("shared", "own")
 SHARED = "_shared"              # the shared machine's row and HQ key: no bot id has an underscore
-OWN_TEMPLATES = ("video-producer",)     # heavy work (renders, encodes) whatever department the bot is in
-OWN_TITLE = "builder"                   # a Builder ("Builder", "Builder (Claude)"): long builds, tests and toolchains
+OWN_TEMPLATES = ("video-producer", "builder")     # heavy work (renders, encodes, builds) whatever department the bot is in
+COPY_HOPS = 20                                     # how far back through copies of copies a template is looked for
+OWN_NAME = re.compile(r"builder(?: \(.*| \d+)?")  # a Builder by name: "Builder", "Builder 2", "Builder (Claude)"
 SIZES = ("small", "default", "large", "xlarge")       # the names before HQ has listed its own
 STATES = ("starting", "running", "stopping", "stopped", "deleted", "failed")
 ON = ("starting", "running")
@@ -312,21 +314,31 @@ def save(c, key, **fields):
               (*fields.values(), key))
 
 
-def default_placement(c, bot):
-    """Where a bot's cloud machine is when nobody has chosen: its own for a template in OWN_TEMPLATES or a Builder (a
-    display name of "Builder", or "Builder (...)"), the shared one for every other bot, the rest of Engineering
-    included (leads, reviewers and QA run short turns). Read once, when its row is made: renaming it later moves no
-    machine."""
+def _config_of(c, bot):
     found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     try:
         config = json.loads(found["config"] or "{}") if found else {}
     except ValueError:
         config = {}
-    if isinstance(config, dict) and config.get("template") in OWN_TEMPLATES:
-        return "own"
+    return config if isinstance(config, dict) else {}
+
+
+def default_placement(c, bot):
+    """Where a bot's cloud machine is when nobody has chosen: its own for a template in OWN_TEMPLATES (the video producer,
+    the Builder), for a copy of one of those (back through `copied_from`, a copy of a copy included), or for a bot
+    named as a Builder ("Builder", "Builder 2", "Builder (...)"); the shared one for every other bot, the rest of
+    Engineering included (leads, reviewers and QA run short turns). Read once, when its row is made: renaming it later moves no machine."""
+    seen, at = set(), bot
+    while at and at not in seen and len(seen) < COPY_HOPS:     # the bot, then the bot it was copied from, and so on
+        seen.add(at)
+        config = _config_of(c, at)
+        if config.get("template") in OWN_TEMPLATES:
+            return "own"
+        source = config.get("copied_from")
+        at = source.get("bot") if isinstance(source, dict) else None
     named = c.execute("SELECT display_name FROM bots WHERE id=?", (bot,)).fetchone()
     name = ((named["display_name"] if named else "") or "").strip().lower()
-    return "own" if name == OWN_TITLE or name.startswith(OWN_TITLE + " (") else "shared"
+    return "own" if OWN_NAME.fullmatch(name) else "shared"
 
 
 def adopt(c, bot, actor=H.KEEPER):

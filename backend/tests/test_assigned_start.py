@@ -22,7 +22,7 @@ def clock(monkeypatch):
 def advance(api, clock, hours):
     clock[0] = H.shift(clock[0], hours=hours)
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET last_seen_at=?', (H.now(),))
+        c.execute('UPDATE runner_states SET last_seen_at=?', (H.now(),))
 
 
 def sweep(api):
@@ -272,7 +272,7 @@ def observe_for(api, clock, hours):
     with store.transaction() as c:
         while clock[0] < until:
             clock[0] = min(until, H.shift(clock[0], seconds=queue_refusals.MAX_GAP_SECONDS))
-            c.execute('UPDATE runners SET last_seen_at=?', (H.now(),))
+            c.execute('UPDATE runner_states SET last_seen_at=?', (H.now(),))
             queue_refusals.observe(c, store.settings)
 
 
@@ -629,7 +629,7 @@ def test_overdue_reads_its_page_in_fixed_statements_not_per_task(api, clock, n):
     found, seen = traced_overdue(api)
     assert sorted(row['id'] for row in found) == sorted(t['id'] for t in tasks)
     # The page's assignment and ledger rows come in one statement each, not one per task.
-    assert [s for s in seen if s.startswith('SELECT id,created_at FROM task_events WHERE task_id=')] == []
+    assert [s for s in seen if s.startswith("SELECT id,created_at FROM history_events WHERE subject_type='task' AND subject_id=")] == []
     assert [s for s in seen if s.startswith('SELECT detail FROM events WHERE target=')] == []
     # A short page is the last one: no second, empty page query.
     assert sum(s.startswith('SELECT t.* FROM tasks t JOIN bots b') for s in seen) == 1
@@ -644,8 +644,9 @@ def fleet(store, bots, tasks, attempts, *, days=30):
     with store.transaction() as c:
         c.execute("INSERT INTO conversations(id,kind,subject,created_at,last_message_at) VALUES('fleet-conv','task','',?,?)",
                   (now, now))
-        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,last_seen_at,readiness) "
-                  "VALUES('fleet-runner','fleet','ana','fleet-token',?,?,'{}')", (now, now))
+        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) "
+                  "VALUES('fleet-runner','fleet','ana','fleet-token',?)", (now,))
+        c.execute("UPDATE runner_states SET last_seen_at=?,readiness='{}' WHERE runner_id='fleet-runner'", (now,))
         for slug in slugs:
             c.execute("INSERT INTO bots(id,slug,display_name,state,created_at) VALUES(?,?,?,'active',?)",
                       (slug, slug, slug, now))

@@ -81,8 +81,8 @@ def _entered(c, ids):
     out = {}
     for part in H.chunks(sorted(ids)):
         out.update(dict(c.execute(
-            f"SELECT task_id, max(created_at) FROM task_events WHERE task_id IN ({','.join('?' * len(part))}) "
-            "AND field IN ('step','status') GROUP BY task_id", part).fetchall()))
+            f"SELECT subject_id, max(created_at) FROM history_events WHERE subject_type='task' "
+            f"AND subject_id IN ({','.join('?' * len(part))}) AND kind IN ('step','status') GROUP BY subject_id", part).fetchall()))
     return out
 
 
@@ -287,7 +287,7 @@ def _outages(c, out, typ, rows, at):
             out.add("bot:" + slug, "outage", f"{row['slug']} is {row['status']}", row["updated_at"] or at,
                     bot=row["slug"])
         elif not check_pools.online(c, slug):
-            seen = c.execute("SELECT max(r.last_seen_at) FROM assignments a JOIN runners r ON r.id=a.runner_id "
+            seen = c.execute("SELECT max(r.last_seen_at) FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                              "WHERE a.bot=? AND r.revoked_at IS NULL", (slug,)).fetchone()[0]
             out.add("bot:" + slug, "outage", f"{row['slug']}'s computer is offline", seen or at, bot=row["slug"])
 
