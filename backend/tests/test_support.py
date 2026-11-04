@@ -1236,7 +1236,7 @@ def test_a_request_a_person_sent_under_approval_before_the_upgrade_is_back_in_th
         c.execute("INSERT INTO health_reports(signature, ticket_id, approval_id, created_at) VALUES('sig-sync', ?, ?, ?)",
                   (watched, monitored, "2026-01-01T00:00:00Z"))
     assert api.get("/api/v2/support/tickets", headers=riley).json()["tickets"] == []      # under approval: , so unlisted
-    migration = importlib.import_module("backend.migrations.0072_person_draft_keys")
+    migration = importlib.import_module("backend.migrations.0073_person_draft_keys")
     with api.app.state.store.transaction() as c:
         migration.up(c)
         migration.up(c)                                           # a second run changes nothing
