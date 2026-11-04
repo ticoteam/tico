@@ -165,9 +165,16 @@ def suggest(auth, onboarding, c, who, team, briefing=""):
     words, common = R._words(text), R._common(list(members.values()))
     raw = {row["template"]: row for row in read_cards(onboarding.settings)}
     suggested = set(ranked["suggested_default"])
-    shown = picked[:ROLES]
+    # A role the team already fills is always shown (as on the team), whatever its rank; the other slots go in rank order.
+    shown, open_slots = [], ROLES - sum(1 for t in picked if t in filled)
+    for template in picked:
+        if template in filled:
+            shown.append(template)
+        elif open_slots > 0:
+            shown.append(template)
+            open_slots -= 1
     # The rest of the department, the recommender's leftovers first, as the alternatives a role can take instead.
-    rest = picked[ROLES:] + sorted((t for t in members if t not in picked),
+    rest = [t for t in picked if t not in shown] + sorted((t for t in members if t not in picked),
                                                 key=lambda t: ({"default": 0, "common": 1}.get(members[t]["suggest"], 2),
                                                                members[t]["name"].lower()))
     pool = [t for t in rest if t not in filled and t not in shown][:ALTERNATIVES]
