@@ -14,7 +14,7 @@ import statistics
 import time
 
 from backend import bot_settings as BS, threads
-from backend.store import H
+from backend.store import H, Problem
 from backend.tests import test_api
 from backend.tests.test_api import headers
 
@@ -53,10 +53,8 @@ def seed(api):
                 for k in range(POSTS):
                     who = rnd.choice(people + ["bot:" + b for b in BOTS])
                     text = f"Note {k} on it" + (" @ana" if rnd.random() < 0.15 else "")
-                    try:
+                    with contextlib.suppress(Problem):   # a thread that takes no posts from this person
                         threads.post(c, who, tid, text)
-                    except Exception:
-                        pass
     with store.transaction() as c:
         now = H.now()
         rows = []
