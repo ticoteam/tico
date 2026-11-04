@@ -164,8 +164,20 @@ const BOOT_MARKS: [&str; 8] = ["head", "bundle-start", "boot", "paint-cached", "
 /// No time in a report is longer than ten minutes.
 const BOOT_MS_MAX: u64 = 600_000;
 
+/// A read's path as the page writes it (ui/app/boot-timing.js bootPath): `/api/`, then `v2/` if there, the resource's
+/// name, and `:id` for every part after it, so the log can never name a bot, task or person. `/api/v2/messaging/bots/ops`
+/// is refused; the page sends `/api/v2/messaging/:id/:id`.
+fn boot_path_ok(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/api/") else { return false };
+    let mut parts = rest.split('/').peekable();
+    if parts.peek() == Some(&"v2") { parts.next(); }
+    let name = |p: &str| p == ":id" || (p.len() <= 24 && p.starts_with(|c: char| c.is_ascii_lowercase())
+        && p.chars().all(|c| c.is_ascii_lowercase() || c == '-'));
+    path.len() <= 96 && parts.next().is_some_and(name) && parts.all(|p| p == ":id")
+}
+
 /// The page's `bootTiming` report as one log line. Only its known fields reach the log: whole milliseconds of at most
-/// ten minutes, the page as `#/word`, and API paths of plain characters. Anything else refuses the whole report, so
+/// ten minutes, the page as `#/word`, and API paths in boot_path_ok's shape. Anything else refuses the whole report, so
 /// a page can neither add lines to the log nor fill it.
 pub(crate) fn boot_line(body: Option<&Value>, since_built: Option<u128>) -> Result<String, String> {
     let refuse = || "The open's timing is not in the expected form.".to_string();
@@ -216,8 +228,7 @@ pub(crate) fn boot_line(body: Option<&Value>, since_built: Option<u128>) -> Resu
         Some(value) => value.as_array().filter(|reads| reads.len() <= BOOT_READS).ok_or_else(refuse)?.iter().map(|read| -> Result<String, String> {
             let read = read.as_object().filter(|r| r.keys().all(|key| ["path", "ms", "app", "auth"].contains(&key.as_str())))
                 .ok_or_else(refuse)?;
-            let path = read.get("path").and_then(Value::as_str).filter(|path| path.len() <= 96 && path.starts_with("/api/")
-                && path.chars().all(|c| c.is_ascii_alphanumeric() || "/:-_.".contains(c))).ok_or_else(refuse)?;
+            let path = read.get("path").and_then(Value::as_str).filter(|path| boot_path_ok(path)).ok_or_else(refuse)?;
             let mut text = format!("{path} {} ms", ms(read.get("ms").ok_or_else(refuse)?)?);
             let server: Vec<String> = [("app", maybe_ms(read.get("app"))?), ("auth", maybe_ms(read.get("auth"))?)].into_iter()
                 .filter_map(|(name, at)| at.map(|at| format!("{name} {at}"))).collect();
@@ -282,12 +293,17 @@ mod boot_timing_tests {
             serde_json::json!({"html": "fast"}),
             serde_json::json!({"bundle": {"bytes": 1}}), serde_json::json!({"bundle": {"bytes": 1, "ms": 1, "url": "x"}}),
             read("/api/me\n"), read("/api/me?token=1"), read("/other"), read(&format!("/api/{}", "a".repeat(100))),
+            read("/api/v2/messaging/bots/ops"), read("/api/v2/places/p_4f2a"), read("/api/tasks/t1/files"), read("/api/Me"),
+            read("/api/v2/"), read("/api/me/"), read("/api/v2/places/:id/"), read("/api/v2/places/:id/x"),
             serde_json::json!({"server": many}),
             serde_json::json!({"server": [{"path": "/api/me", "ms": 1, "body": "x"}]}),
         ] {
             assert!(boot_line(Some(&body), None).is_err(), "{body}");
         }
         assert!(boot_line(None, None).is_err());
+        for path in ["/api/me", "/api/v2/needs-you", "/api/v2/messaging/:id/:id", "/api/:id"] {
+            assert!(boot_line(Some(&read(path)), None).is_ok(), "{path}");
+        }
         let long = serde_json::json!({"route": "#/home", "pad": "x".repeat(BOOT_TIMING_MAX)});
         assert_eq!(boot_line(Some(&long), None), Err("The open's timing is too long.".into()));
     }

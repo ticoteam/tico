@@ -2,24 +2,40 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// What #main showed once it settled (boot-timing.js bootPaintWatch's test: content, no skeleton), kept in this browser's
-// IndexedDB: one entry per org (this origin), naming whose screen it is (the org's owner, the person's id and email) and
-// the bundle it was drawn by. The next open reads it alongside the boot reads and shows it as soon as /me answers as
-// that same person, before the roster and the page's own read; until /me answers nothing is shown, so another person
-// signed in here never sees it. route() then draws the page as always, hidden under a still copy of that screen, and
-// the copy goes the moment the new page settles (or after boot-timing's wait). The copy is inert: nothing on it
-// can be clicked or focused, and it holds no frames, media or dialogs (a visual frame still waits for the desktop
-// app's ACK), and no typed text (innerHTML carries no input's value).
-// The entry goes when this browser signs out (a sign-out link, or a lapsed session), when /me answers as anyone else
-// or no one, and when the bundle or SNAP_SCHEMA changes; a screen over SNAP_MAX_BYTES is not kept.
-// Under automation (navigator.webdriver) it is off unless the page sets window.ticoBootSnap = true first: a browser
-// test that loads a page twice would otherwise meet the copy, a second #main, on its second load.
-const SNAP_DB = 'tico-boot', SNAP_STORE = 'screens', SNAP_SCHEMA = 1;
+// What #main showed once it settled (boot-timing.js bootPaintWatch's test: content, none of its loading rows), kept in
+// this browser's IndexedDB: one entry per org (this origin), naming whose screen it is (the org's owner, the person's
+// id and email) and the bundle it was drawn by. The next open reads it alongside the boot reads and shows it as soon
+// as /me answers as that same person, before the roster and the page's own read; until /me answers nothing is shown,
+// so another person signed in here never sees it.
+// Only the read-mostly pages are kept (snapRouteOk): Home, Overview, the task list, the threads list and a team's
+// page. Never Settings, keys, sign-ins, connections, setup, mail, a task or a chat. What is kept holds no frames,
+// media, dialogs or scripts, nothing typed (no field's value, no textarea or editable text, no password field), nothing
+// marked data-secret, and no code or pre block inside a settings, secret, credential or token card.
+// The screen is shown in a shadow root over #main's box: its ids, labels and radio groups live there, out of the
+// page's own id space, so `$('#main')` and getElementById only ever find the real page; the host is aria-hidden,
+// inert and takes no pointer. route() draws the page into #main as always, hidden under it, and the copy goes the
+// moment that page settles, the person moves, the wait ends (boot-timing.js) or SNAP_SHOW_MAX_MS after it was shown,
+// whatever boot is still waiting on.
+// The entry goes, and a copy on screen with it, when this browser signs out (a sign-out link, or a lapsed session),
+// when /me answers as anyone else or no one, and when the bundle or SNAP_SCHEMA changes; a screen over
+// SNAP_MAX_BYTES is not kept.
+// Under automation (navigator.webdriver) it is off unless the page sets window.ticoBootSnap = true first, so a browser
+// test that loads a page twice never meets a copy it did not ask for.
+const SNAP_DB = 'tico-boot', SNAP_STORE = 'screens', SNAP_SCHEMA = 2;
 const SNAP_MAX_BYTES = 256 * 1024;
-// A new page settles this long after the last address change before it is kept.
-const SNAP_SETTLE_MS = 1500;
-const SNAP = {db: null, who: '', shown: '', done: false, copy: null, timer: 0};
+// A new page settles this long after the last address change before it is kept; one still loading is tried again.
+const SNAP_SETTLE_MS = 1500, SNAP_SAVE_TRIES = 8;
+// The longest a kept screen stays up, from the moment it is shown.
+const SNAP_SHOW_MAX_MS = 12000;
+const SNAP = {db: null, who: '', shown: '', done: false, copy: null, timer: 0, watch: 0};
 const snapOn = () => { try { return typeof indexedDB !== 'undefined' && (!navigator.webdriver || window.ticoBootSnap === true); } catch { return false; } };
+// The pages kept: Home, Overview, Tasks (its list, any view), Threads (the list) and a team's page.
+function snapRouteOk(hash) {
+  const [page] = String(hash || '').split('?');
+  if ([HOME, OVERVIEW, TASKS, THREADS_ROUTE].includes(page)) return true;
+  const team = page.startsWith(TEAM_PAGE) ? page.slice(TEAM_PAGE.length) : '';
+  return !!team && !team.includes('/');
+}
 // The bundle that draws the page (its ?v=); the separate files of a development checkout have none.
 const SNAP_VERSION = (() => {
   const js = document.querySelector('script[src*="/tico/ui/app.bundle.js"]');
@@ -62,9 +78,10 @@ function snapTx(mode, work) {
 }
 const snapRead = () => snapOn() ? snapTx('readonly', s => s.get(location.origin)).catch(() => null) : Promise.resolve(null);
 const snapForget = () => snapOn() ? snapTx('readwrite', s => s.delete(location.origin)).catch(() => {}) : Promise.resolve();
-// Signed out: nothing more is kept in this page, and what was kept goes (session.js signedOut, the sign-out links).
+// Signed out, or someone else: nothing more is kept in this page, a copy on screen goes now, and what was kept goes.
 function bootSnapDrop() {
-  SNAP.who = '';
+  SNAP.who = ''; SNAP.done = true;
+  bootSnapRelease();
   return snapForget();
 }
 
@@ -75,83 +92,107 @@ function bootSnapShow(meRead) {
     if (!kept || !me || SNAP.done || SESSION.out) return;     // no answer (offline): shown later, or not at all
     if (!authenticatedConfigPerson(me) || kept.who !== snapWho(me) || kept.version !== SNAP_VERSION) { void snapForget(); return; }
     const main = document.getElementById('main');
-    if (kept.route !== location.hash || !main || main.childElementCount || typeof kept.html !== 'string') return;
-    main.className = typeof kept.cls === 'string' ? kept.cls : '';
-    main.innerHTML = kept.html;
-    main.inert = true;
-    main.setAttribute('aria-busy', 'true');
-    SNAP.shown = kept.route;
-    bootMark('paint-cached');
+    if (kept.route !== location.hash || !snapRouteOk(kept.route) || !main || main.childElementCount || typeof kept.html !== 'string') return;
+    snapPaint(main, kept);
   });
 }
-// Just before route(): the kept screen, if it is up, becomes a still copy over #main while route() draws under it.
-// A late read of the kept screen no longer draws. Boot opening another page (a first run) takes it down at once.
-function bootSnapHandOff() {
-  SNAP.done = true;
-  const main = document.getElementById('main');
-  if (!SNAP.shown || !main) return;
-  if (SNAP.shown !== location.hash) { bootSnapClear(main); return; }
-  const box = main.getBoundingClientRect(), copy = main.cloneNode(true);
-  copy.setAttribute('aria-hidden', 'true');
-  copy.dataset.bootSnap = '';
-  Object.assign(copy.style, {position: 'fixed', left: box.left + 'px', top: box.top + 'px', width: box.width + 'px',
-    height: box.height + 'px', margin: '0', zIndex: '5', pointerEvents: 'none', overflow: 'hidden'});
-  main.after(copy);           // after it, so $('#main') and getElementById stay the page's own
-  bootSnapClear(main);
+// The copy: a host over #main's box holding, in its own shadow root, the page's stylesheets and a <main id="main"> with
+// the kept screen, so the page's #main rules draw it as it was. It shows once those stylesheets are in (from the cache).
+function snapPaint(main, kept) {
+  const box = main.getBoundingClientRect(), host = document.createElement('div');
+  host.dataset.bootSnap = '';
+  host.setAttribute('aria-hidden', 'true');
+  host.inert = true;
+  Object.assign(host.style, {position: 'fixed', left: box.left + 'px', top: box.top + 'px', width: box.width + 'px',
+    height: (box.height || Math.max(0, innerHeight - box.top)) + 'px', margin: '0', zIndex: '5', pointerEvents: 'none',
+    overflow: 'hidden', visibility: 'hidden'});
+  const root = host.attachShadow({mode: 'open'});
+  const sheets = [...document.querySelectorAll('link[rel="stylesheet"], style')].map(el => el.cloneNode(true));
+  const screen = document.createElement('main');
+  screen.id = 'main';
+  screen.className = typeof kept.cls === 'string' ? kept.cls : '';
+  screen.style.cssText = 'height:100%;overflow:hidden;margin:0';
+  screen.innerHTML = kept.html;
+  root.append(...sheets, screen);
+  main.after(host);
   main.style.visibility = 'hidden';
-  SNAP.copy = copy;
+  SNAP.copy = host; SNAP.shown = kept.route;
+  clearTimeout(SNAP.watch);
+  SNAP.watch = setTimeout(bootSnapRelease, SNAP_SHOW_MAX_MS);
+  const loads = sheets.filter(el => el.tagName === 'LINK').map(el => new Promise(done => { el.onload = el.onerror = done; }));
+  void Promise.race([Promise.all(loads), new Promise(done => setTimeout(done, 400))]).then(() => {
+    if (SNAP.copy !== host) return;
+    host.style.visibility = '';
+    bootMark('paint-cached');
+  });
   // Any move of the person's own (another page, Back) shows that page as it draws.
   window.addEventListener('hashchange', bootSnapRelease, {once: true});
 }
-// #main as boot found it, for route() or boot's own message to draw in.
-function bootSnapClear(main) {
-  SNAP.shown = '';
-  main.innerHTML = ''; main.className = '';
-  main.inert = false; main.removeAttribute('aria-busy');
+// Just before route(): a late read of the kept screen no longer draws, and boot opening another page (a first run)
+// takes the copy down at once.
+function bootSnapHandOff() {
+  SNAP.done = true;
+  if (SNAP.copy && SNAP.shown !== location.hash) bootSnapRelease();
 }
-// The new page settled, the wait ended, or the person moved on: the copy goes and the page shows.
+// The new page settled, the wait ended, the person moved on or signed out: the copy goes and the page shows.
 function bootSnapRelease() {
   SNAP.done = true;
+  clearTimeout(SNAP.watch);
   const copy = SNAP.copy;
+  SNAP.copy = null; SNAP.shown = '';
   if (!copy) return;
-  SNAP.copy = null;
   copy.remove();
   const main = document.getElementById('main');
   if (main) main.style.visibility = '';
 }
 
-// After boot knows who is signed in: from now on the screen is kept as it settles.
-function bootSnapWho(me) { SNAP.who = authenticatedConfigPerson(me) ? snapWho(me) : ''; }
-// The screen as it is now, if it settled; nothing that could run or load on its own, and nothing typed.
+// After boot knows who is signed in: from now on the screen is kept as it settles. Anyone else's goes at once.
+function bootSnapWho(me) {
+  const who = authenticatedConfigPerson(me) ? snapWho(me) : '';
+  if (!who) { void bootSnapDrop(); return; }
+  SNAP.who = who;
+}
+// What a kept screen may never hold: anything that runs or loads on its own, and anything private.
+const SNAP_DROP = 'iframe,frame,object,embed,video,audio,canvas,script,noscript,dialog,template,img[src^="blob:"],'
+  + 'input[type="password"],[data-secret],'
+  + ':is([class*="setting"],[class*="secret"],[class*="credential"],[class*="token"],[class*="api-key"]) :is(pre,code)';
+// The screen as it is now, if it settled and is one kept; null when it cannot be kept yet.
 function snapScreen() {
   const main = document.getElementById('main');
-  if (!main || SNAP.copy || !main.childElementCount || main.querySelector('[aria-busy="true"]')) return null;
+  if (!main || SNAP.copy || !snapRouteOk(location.hash) || !main.childElementCount || main.querySelector(BOOT_SKELETONS)) return null;
   const copy = main.cloneNode(true);
-  copy.querySelectorAll('iframe,frame,object,embed,video,audio,canvas,script,dialog,template,img[src^="blob:"]').forEach(el => el.remove());
+  copy.querySelectorAll(SNAP_DROP).forEach(el => el.remove());
   copy.querySelectorAll('[autofocus]').forEach(el => el.removeAttribute('autofocus'));
+  copy.querySelectorAll('input[value]').forEach(el => el.removeAttribute('value'));
+  copy.querySelectorAll('textarea, [contenteditable]:not([contenteditable="false"])').forEach(el => el.replaceChildren());
   const html = copy.innerHTML;
   // UTF-8 is never shorter than its UTF-16 length, so the length alone rules most big screens out.
   if (html.length > SNAP_MAX_BYTES || new TextEncoder().encode(html).length > SNAP_MAX_BYTES) return {html: null};
   return {html, cls: main.className};
 }
-function bootSnapSave() {
+// Keep the screen now: on leaving (pagehide, hidden), and after a page settles. One still loading is tried again a
+// few times; a page that is never kept leaves the older entry, which shows only on its own address.
+function bootSnapSave(tries = 0) {
   clearTimeout(SNAP.timer);
   if (!snapOn() || !SNAP.who || SESSION.out) return;
   const screen = snapScreen();
-  if (!screen) return;
+  if (!screen) {
+    if (tries && tries < SNAP_SAVE_TRIES) SNAP.timer = setTimeout(() => bootSnapSave(tries + 1), SNAP_SETTLE_MS);
+    return;
+  }
   const who = SNAP.who;
   // A screen too big to keep takes the older one with it: the next open must not show a page from before it.
-  if (screen.html === null) { void snapTx('readwrite', s => s.delete(location.origin)).catch(() => {}); return; }
+  if (screen.html === null) { void snapForget(); return; }
   const entry = {who, version: SNAP_VERSION, route: location.hash, cls: screen.cls, html: screen.html, at: Date.now()};
   void snapTx('readwrite', s => s.put(entry, location.origin)).catch(() => {});
 }
 function bootSnapSaveSoon() {
   clearTimeout(SNAP.timer);
-  SNAP.timer = setTimeout(bootSnapSave, SNAP_SETTLE_MS);
+  SNAP.timer = setTimeout(() => bootSnapSave(1), SNAP_SETTLE_MS);
 }
 window.addEventListener('hashchange', bootSnapSaveSoon);
 document.addEventListener('visibilitychange', () => { if (document.hidden) bootSnapSave(); });
-window.addEventListener('pagehide', bootSnapSave);
+window.addEventListener('pagehide', () => bootSnapSave());
 // Signing out leaves no screen behind, as decide.js leaves no unsent action (the same links).
 document.addEventListener('click', e => {
   const link = e.target.closest?.('a[href]');

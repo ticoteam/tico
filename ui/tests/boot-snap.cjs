@@ -1,6 +1,8 @@
 // The last screen comes back the moment the same person opens the app again (ui/app/boot-snap.js): it is kept once the
-// page settles, shown as soon as /me answers as that person (before the roster), stays still and inert while the new
-// page draws under it, and goes when that page settles. Another person, or a sign-out, never sees it.
+// page settles (only read-mostly pages, nothing private), shown as soon as /me answers as that person (before the
+// roster) in a shadow root over #main, out of the page's id space, while the new page draws into the real #main under
+// it, and goes when that page settles, or at most SNAP_SHOW_MAX_MS after it was shown. Another person, or a sign-out,
+// never sees it, and a sign-out takes a copy on screen down at once.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -64,6 +66,14 @@ const {t} = require('./support/load.cjs');
     };
     const heading = () => page.getByRole('heading', {name: 'Tasks', exact: true});
 
+    const copyState = () => page.evaluate(() => {
+      const host = document.querySelector('[data-boot-snap]'), main = document.getElementById('main');
+      const inner = host?.shadowRoot?.querySelector('main');
+      return {host: !!host, inert: host?.inert, hidden: host?.getAttribute('aria-hidden'), text: inner?.textContent || '',
+        innerId: inner?.id, mains: document.querySelectorAll('#main').length, mainKids: main.childElementCount,
+        mainShown: main.style.visibility, routed: performance.getEntriesByName('tico:route').length};
+    });
+
     await page.goto('https://tico-ui.test/#/tasks', {waitUntil: 'domcontentloaded'});
     await heading().waitFor();
     const first = await keptAs(entry => entry?.route === '#/tasks', 'the settled screen is kept');
@@ -72,27 +82,50 @@ const {t} = require('./support/load.cjs');
     assert.doesNotMatch(first.html, /<(?:iframe|script|dialog|video|object)\b/i, 'nothing that runs or loads on its own');
     assert.ok(new TextEncoder().encode(first.html).length <= 256 * 1024);
 
-    // Again, with the roster held: the kept screen is up before it, still and out of reach.
+    // Only read-mostly pages are kept, and nothing private on them is.
+    assert.deepEqual(await page.evaluate(() => ['#/home', '#/overview', '#/tasks', '#/tasks?view=board', '#/threads', '#/team/eng',
+      '#/settings', '#/settings/keys', '#/task/t1', '#/thread/x', '#/bot/ops/dm', '#/mail', '#/welcome', '#/team/eng/x', '']
+      .map(snapRouteOk)), [true, true, true, true, true, true, false, false, false, false, false, false, false, false, false]);
+    await page.evaluate(() => {
+      const bits = document.createElement('div');
+      bits.id = 'private-bits';
+      bits.innerHTML = '<div data-secret>sk-live-secret</div><input value="typed-secret"><input type="password" value="pw-secret">'
+        + '<textarea>draft-secret</textarea><div contenteditable="true">edit-secret</div>'
+        + '<div class="settings-card"><code>code-secret</code><pre>pre-secret</pre></div><p>kept-words</p>';
+      document.getElementById('main').append(bits);
+      bootSnapSave();
+    });
+    const scrubbed = await keptAs(entry => /kept-words/.test(entry?.html || ''), 'the screen is kept again');
+    assert.doesNotMatch(scrubbed.html, /secret/, 'no secret, value, draft or settings code is kept');
+    await page.evaluate(() => { document.getElementById('private-bits').remove(); bootSnapSave(); });
+    await keptAs(entry => entry && !/kept-words/.test(entry.html), 'kept without the test bits');
+
+    // Again, with the roster held: the kept screen is up before it, in a copy outside #main's id space.
     held = [];
     await page.reload({waitUntil: 'domcontentloaded'});
     await page.waitForFunction(() => performance.getEntriesByName('tico:paint-cached').length === 1);
-    const early = await page.evaluate(() => {
-      const main = document.getElementById('main');
-      return {inert: main.inert, busy: main.getAttribute('aria-busy'), text: main.textContent,
-        routed: performance.getEntriesByName('tico:route').length, held: true};
-    });
-    assert.equal(early.inert, true);
-    assert.equal(early.busy, 'true');
-    assert.match(early.text, /Tasks/);
-    assert.equal(early.routed, 0, 'shown before the roster answered');
+    const early = await copyState();
+    assert.deepEqual({...early, text: /Tasks/.test(early.text)}, {host: true, inert: true, hidden: 'true', text: true,
+      innerId: 'main', mains: 1, mainKids: 0, mainShown: 'hidden', routed: 0}, 'shown before the roster, the real #main empty');
     assert.ok(held.length > 0, 'the roster is still on its way');
-    // The roster answers: the page draws under a still copy, which goes once it settles.
+    // The roster answers: the page draws into the real #main under the copy, which goes once it settles.
     const answers = held; held = null; answers.forEach(answer => answer());
     await page.waitForFunction(() => performance.getEntriesByName('tico:paint-fresh').length === 1);
     await page.waitForFunction(() => !document.querySelector('[data-boot-snap]'));
-    const after = await page.evaluate(() => ({mains: document.querySelectorAll('main#main').length,
-      hidden: document.getElementById('main').style.visibility, inert: document.getElementById('main').inert}));
-    assert.deepEqual(after, {mains: 1, hidden: '', inert: false});
+    const after = await copyState();
+    assert.deepEqual({mains: after.mains, shown: after.mainShown, drawn: after.mainKids > 0}, {mains: 1, shown: '', drawn: true});
+    await heading().waitFor();
+
+    // A roster that never answers: the copy goes on its own, counted from when it was shown.
+    held = [];
+    await page.reload({waitUntil: 'domcontentloaded'});
+    await page.waitForFunction(() => performance.getEntriesByName('tico:paint-cached').length === 1);
+    const shownAt = Date.now();
+    await page.waitForFunction(() => !document.querySelector('[data-boot-snap]'), null, {timeout: t(20000)});
+    assert.ok(Date.now() - shownAt > 8000, 'it stayed up until the wait ended');
+    const stalled = await copyState();
+    assert.deepEqual({routed: stalled.routed, shown: stalled.mainShown}, {routed: 0, shown: ''}, 'down while boot still waits');
+    const late = held; held = null; late.forEach(answer => answer());
     await heading().waitFor();
 
     // Someone else signed in here: nothing of Ana's is shown, and her screen is gone.
@@ -100,21 +133,30 @@ const {t} = require('./support/load.cjs');
     await page.reload({waitUntil: 'domcontentloaded'});
     await keptAs(entry => entry === null, "another person's open drops the kept screen");
     assert.equal(await page.evaluate(() => performance.getEntriesByName('tico:paint-cached').length), 0);
-    assert.equal(await page.evaluate(() => document.getElementById('main').childElementCount), 0, 'nothing drawn before the roster');
+    const forBoState = await copyState();
+    assert.deepEqual({host: forBoState.host, kids: forBoState.mainKids}, {host: false, kids: 0}, 'nothing drawn before the roster');
     const forBo = held; held = null; forBo.forEach(answer => answer());
     await heading().waitFor();
     const second = await keptAs(entry => entry?.route === '#/tasks', 'the new person gets their own');
     assert.equal(JSON.parse(second.who)[2], 'bo');
 
-    // Signing out leaves no screen behind (the navigation itself is not followed).
-    await page.evaluate(() => {
-      document.querySelector('#sign-out').hidden = false;
+    // Signing out while the copy is up takes it down at once, and leaves no screen behind (the navigation itself is
+    // not followed).
+    held = [];
+    await page.reload({waitUntil: 'domcontentloaded'});
+    await page.waitForFunction(() => performance.getEntriesByName('tico:paint-cached').length === 1);
+    const out = await page.evaluate(() => {
+      const link = document.querySelector('#sign-out');
+      link.hidden = false;
       window.addEventListener('click', e => { if (e.target.closest('#sign-out')) e.preventDefault(); });
-      document.querySelector('#sign-out').click();
-      window.dispatchEvent(new Event('pagehide'));
+      link.click();
+      const main = document.getElementById('main');
+      return {host: !!document.querySelector('[data-boot-snap]'), kids: main.childElementCount, shown: main.style.visibility};
     });
+    assert.deepEqual(out, {host: false, kids: 0, shown: ''}, 'nothing of the screen is left on the page');
     await keptAs(entry => entry === null, 'sign-out drops the kept screen');
+    const rest = held; held = null; rest.forEach(answer => answer());
     assert.deepEqual(errors, []);
-    console.log('boot snap: the same person sees their last screen at once; nobody else, and nothing after sign-out');
+    console.log('boot snap: the same person sees their last screen at once, outside #main; nothing private, nobody else, nothing after sign-out');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
