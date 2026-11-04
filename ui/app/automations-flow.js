@@ -9,7 +9,7 @@ const AU_STEP_ICONS = {filter: 'filter_alt', decide: 'account_tree', llm: 'auto_
   paths: 'alt_route', action: 'arrow_forward'};
 const AU_ACTIONS = {archive: 'Archive', leave_for_you: 'Leave for you', draft_reply: 'Draft reply', send_reply: 'Send reply',
   create_task: 'Create task', label: 'Label', forward: 'Forward', wake_bot: 'Wake a bot', note: 'Note', post_update: 'Post update',
-  call_webhook: 'Call a webhook', assign: 'Assign'};
+  call_webhook: 'Call a webhook', assign: 'Assign', unsubscribe: 'Unsubscribe'};
 // A task event's automation offers the five task triggers and the four Actions the task-trigger rules run (Dev 666).
 const AU_TASK_EVENTS = ['task.created', 'task.step_changed', 'task.done', 'task.declined', 'task.closed'];
 const AU_TASK_ACTION_KEYS = ['note', 'wake_bot', 'create_task', 'call_webhook'];

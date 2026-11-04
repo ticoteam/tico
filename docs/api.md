@@ -134,6 +134,11 @@ Tico does not rate-limit ordinary calls. What it does enforce: writes are limite
 imports 20 MB, `413 too_large`), a few actions have a daily budget (`429`), and each open live stream costs the
 server a small read every second. [custom-frontend.md](custom-frontend.md#rate-limits) has the guidance.
 
+File imports have limits of their own. A conversion stops after 30 seconds, or when it needs more than 1 GiB of memory.
+The import then fails with `422 import_failed`, and its `detail` says to split the file. Two conversions run at once.
+A third import gets `503 imports_busy` at once, and it is retryable. A converted file over 1,000,000 characters also fails
+with `422 import_failed`. The accepted types and the menu are in [Docs](docs.md#internal-docs).
+
 ## Tags
 
 `GET /api/v2/tags` lists tags and templates; `?is_template=true` selects templates and `false`
@@ -153,7 +158,7 @@ Task `labels` remain a list of keys. Task responses also include `tags` with the
 metadata and notes. `GET /api/v2/tasks/labels` preserves `labels` and adds `tags` for those keys.
 `task_tags` is the source of truth; the old `labels` column is kept for one release but
 is no longer read or written. All tag changes are audited in `events`, and task tag changes
-keep the `labels` entry in `task_events`. See [Tags and release checklists](using-tico.md#tags-and-release-checklists).
+keep the `labels` entry in the task's history (`history_events`). See [Tags and release checklists](using-tico.md#tags-and-release-checklists).
 
 ## Task pipelines
 

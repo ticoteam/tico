@@ -80,7 +80,7 @@ def refuse_second(c, actor, parent, title, snapshots=None):
         other_step = check_of(c, parent, other.get("title"))
         if not other_step or other_step["id"] != step["id"] or other["status"] not in H.ACTIVE_STATUSES:
             continue
-        seen = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
+        seen = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
                          "ORDER BY created_at DESC, rowid DESC LIMIT 1", (child_id,)).fetchone()
         judged = set(filter(None, (seen[0] if seen else "").split(",")))
         if wanted and judged and not wanted & judged:

@@ -31,7 +31,7 @@ PAGE_MAX = 100
 WORDS = 200
 TASK_ACTIONS = ("task.create", "task.update", "task.close")
 RESTORE_ACTION = "assistant.change.restore"
-TASK_FIELD_KEY = {"status": "status", "owner": "owner_id"}     # a task_events field -> the tasks column it sets
+TASK_FIELD_KEY = {"status": "status", "owner": "owner_id"}     # a task history field (kind) -> the tasks column it sets
 
 
 def install(app, store, auth, mutate, settings):
@@ -89,10 +89,6 @@ def listing(c, auth, who, days, limit, before, settings):
     last = shown[-1] if len(rows) > limit and shown else None
     return {"actor": who.actor, "days": days, "changes": shown,
             "next": f"{last['at']}|{last['id']}" if last else None}
-
-
-def has_column(c, table, column):
-    return any(r[1] == column for r in c.execute(f"PRAGMA table_info({table})"))
 
 
 def describe(c, auth, who, kind, row, settings):
@@ -189,18 +185,18 @@ def can_see(c, auth, who, task_id):
 
 
 def task_field_rows(c, who, row, detail):
-    """The task_events rows (status, owner) that this event wrote, by the person's Assistant. A row belongs to the first
-    task event at or after it: it is later than the task's previous event and no later than this one. So a note-only
-    update right after a close reads none of the close's rows. A status row must carry the value the event set; an owner
-    row is the event's when it is the only owner change in its window."""
-    if not has_column(c, "task_events", "via"):
-        return []
+    """The task's history rows (status, owner) that this event wrote, by the person's Assistant, read as the task's
+    history has always been read (H.TASK_EVENT_COLUMNS). A row belongs to the first task event at or after it: it is later
+    than the task's previous event and no later than this one. So a note-only update right after a close reads none of the
+    close's rows. A status row must carry the value the event set; an owner row is the event's when it is the only owner
+    change in its window."""
     at, task = row["created_at"], row["target"]
     previous = c.execute("SELECT MAX(created_at) FROM events WHERE target=? AND action IN (?,?,?) AND created_at<?",
                          (task, *TASK_ACTIONS, at)).fetchone()[0] or ""
     rows = [dict(r) for r in c.execute(
-        "SELECT * FROM task_events WHERE task_id=? AND actor=? AND via='assistant' AND field IN ('status','owner') "
-        "AND created_at<=? AND created_at>? ORDER BY created_at DESC", (task, who.actor, at, previous))]
+        f"SELECT {H.TASK_EVENT_COLUMNS} FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id=? "
+        "AND via='assistant' AND kind IN ('status','owner') AND created_at<=? AND created_at>? ORDER BY created_at DESC",
+        (task, who.actor, at, previous))]
     want = "closed" if row["action"] == "task.close" else detail.get("status")
     out = [r for r in rows if r["field"] == "status" and want is not None and r["new"] == want][:1]
     out += [r for r in rows if r["field"] == "owner"][:1]

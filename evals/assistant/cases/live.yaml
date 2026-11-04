@@ -1,4 +1,4 @@
-# Live cases: three asks from the owner's real Assistant chat on Nov 3, where the Assistant did badly. Each case is independent.
+# Live cases: asks from the owner's real Assistant chat on Nov 3, where the Assistant did badly. Each case is independent.
 # Owner Dana; company Acme; bots are named by slug. The canned records are the ones the chat saw. Main has offered 100k as a
 # Compact at choice since #2313 (Nov 3); the record here offers it, as the live hub does.
 
@@ -141,3 +141,136 @@
     say the access question is settled. If it is unsure which question she meant, it asks her one short question, such as
     whether she means only the Terra model or the access question too. It does not file a second task for Terra and does not
     message Head of Engineering. The reply is short and plain, with the task linked as [title](#/task/<id>) if it names the task.
+
+- id: live-routing-instructions
+  group: live
+  prompt: "i dont think the upgrade manager tickets should go to me they should go to the dev board\nwell, \"send to tico support\" definitely doesn't need my approval"
+  history:
+    - {from: "human:dana", body: "What needs me?"}
+    - {from: "assistant", body: "17 need you: 10 tasks and 7 approvals.\n- 10 tasks from Upgrade Manager, assigned to you, e.g. [Upgrade the Node runtime to 22.12 in the runner image](#/task/3a1f0c21-9300-4000-8000-000000000101).\n- 7 \"Send this to Tico support?\" approvals from BotOps, waiting on your click in Needs you."}
+  hub:
+    - match: '^needs-you show'
+      out:
+        total: 17
+        by_kind: {task: 10, approval: 7}
+        by_bot: [{bot: upgrade-manager, count: 10}, {bot: botops, count: 7}]
+    - match: '^team show'
+      out:
+        company: Acme
+        teams:
+          - {name: Engineering, bots: [{slug: head-of-engineering, display_name: Head of Engineering, job: "Runs the dev board: triage, assignment and releases of engineering work"}, {slug: botops, display_name: BotOps, job: "Builds and fixes bots"}]}
+          - {name: Operations, bots: [{slug: upgrade-manager, display_name: Upgrade Manager, job: "Files runtime and dependency upgrades"}]}
+    - match: '^task list'
+      out:
+        tasks:
+          - {id: 3a1f0c21-9300-4000-8000-000000000101, title: "Upgrade the Node runtime to 22.12 in the runner image", status: open, owner: "human:dana", requester: "bot:upgrade-manager", created: "2026-11-02T14:10:00Z", updated: "2026-11-03T08:05:00Z"}
+          - {id: 3a1f0c21-9300-4000-8000-000000000102, title: "Bump the Postgres client to 16.4 in the hub image", status: open, owner: "human:dana", requester: "bot:upgrade-manager", created: "2026-11-02T14:12:00Z", updated: "2026-11-03T08:05:00Z"}
+          - {id: 3a1f0c21-9300-4000-8000-000000000103, title: "Upgrade Python to 3.13 in the hub CLI", status: open, owner: "human:dana", requester: "bot:upgrade-manager", created: "2026-11-02T14:13:00Z", updated: "2026-11-03T08:05:00Z"}
+          - {id: 3a1f0c21-9300-4000-8000-000000000104, title: "Patch libssl in the TIDY server base image", status: open, owner: "human:dana", requester: "bot:upgrade-manager", created: "2026-11-02T15:00:00Z", updated: "2026-11-03T08:06:00Z"}
+          - {id: 3a1f0c21-9300-4000-8000-000000000105, title: "Upgrade the Rust toolchain to 1.92 for runner-rs", status: open, owner: "human:dana", requester: "bot:upgrade-manager", created: "2026-11-02T15:02:00Z", updated: "2026-11-03T08:06:00Z"}
+          - {id: 3a1f0c21-9300-4000-8000-000000000106, title: "Bump React to 19.2 in the web app", status: open, owner: "human:dana", requester: "bot:upgrade-manager", created: "2026-11-02T15:05:00Z", updated: "2026-11-03T08:06:00Z"}
+          - {id: 3a1f0c21-9300-4000-8000-000000000107, title: "Upgrade Litestream to 0.5.1 on the hub", status: open, owner: "human:dana", requester: "bot:upgrade-manager", created: "2026-11-02T16:20:00Z", updated: "2026-11-03T08:07:00Z"}
+          - {id: 3a1f0c21-9300-4000-8000-000000000108, title: "Upgrade ffmpeg to 7.1 in the recorder image", status: open, owner: "human:dana", requester: "bot:upgrade-manager", created: "2026-11-02T16:22:00Z", updated: "2026-11-03T08:07:00Z"}
+          - {id: 3a1f0c21-9300-4000-8000-000000000109, title: "Move the HQ Docker base image to the 2026-10 release", status: open, owner: "human:dana", requester: "bot:upgrade-manager", created: "2026-11-02T16:30:00Z", updated: "2026-11-03T08:08:00Z"}
+          - {id: 3a1f0c21-9300-4000-8000-000000000110, title: "Upgrade pnpm to 10 in CI", status: open, owner: "human:dana", requester: "bot:upgrade-manager", created: "2026-11-02T16:31:00Z", updated: "2026-11-03T08:08:00Z"}
+        next_offset: null
+    - match: '^message list'
+      out:
+        actor: "human:dana"
+        messages:
+          - {id: e0a4b7f2-9300-4000-8000-000000000201, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Runner image build failed with exit 137 during npm install (build 4411).", refs: {approval: 5b2e7d10-9300-4000-8000-000000000001}, created: "2026-11-03T07:40:00Z"}
+          - {id: e0a4b7f2-9300-4000-8000-000000000202, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Hub CLI test job hangs on the Python 3.13 wheel for psycopg (run 9120).", refs: {approval: 5b2e7d10-9300-4000-8000-000000000002}, created: "2026-11-03T07:41:00Z"}
+          - {id: e0a4b7f2-9300-4000-8000-000000000203, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? TIDY server container restarts every 40 minutes after the libssl patch (incident 2231).", refs: {approval: 5b2e7d10-9300-4000-8000-000000000003}, created: "2026-11-03T07:42:00Z"}
+          - {id: e0a4b7f2-9300-4000-8000-000000000204, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Recorder image pull times out from the Bogota cell (pull 77).", refs: {approval: 5b2e7d10-9300-4000-8000-000000000004}, created: "2026-11-03T07:43:00Z"}
+          - {id: e0a4b7f2-9300-4000-8000-000000000205, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Rust 1.92 breaks the runner-rs build on arm64 (build 4418).", refs: {approval: 5b2e7d10-9300-4000-8000-000000000005}, created: "2026-11-03T07:44:00Z"}
+          - {id: e0a4b7f2-9300-4000-8000-000000000206, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Web app bundle is 14 percent larger after React 19.2 (report 8850).", refs: {approval: 5b2e7d10-9300-4000-8000-000000000006}, created: "2026-11-03T07:45:00Z"}
+          - {id: e0a4b7f2-9300-4000-8000-000000000207, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Litestream 0.5.1 fails to restore the hub replica (restore log 330).", refs: {approval: 5b2e7d10-9300-4000-8000-000000000007}, created: "2026-11-03T07:46:00Z"}
+        more_messages: false
+        tasks: []
+        notices: []
+    - match: '^approval read-back\b.*5b2e7d10'
+      out: {ok: true, posted: true, approvals: 7}
+    - match: '^approval approve\b.*5b2e7d10'
+      exit: 1
+      out: {error: {code: approve_not_asked, message: "Approving is the person's own decision: their message must name it, and the approval must be on a read-back they said yes to."}}
+    - match: '^task bulk owner\b(?=.*\bhead-of-engineering\b)(?=.*(upgrade-manager|(?:.*?3a1f0c21){10})).*--dry-run'
+      out: {ok: true, dry_run: true, matched: 10, changed: 10, owner: head-of-engineering}
+    - match: '^task bulk owner\b(?=.*\bhead-of-engineering\b)(?=.*(upgrade-manager|(?:.*?3a1f0c21){10}))'
+      out: {ok: true, dry_run: false, matched: 10, changed: 10, owner: head-of-engineering}
+  must:
+    - '^task (bulk owner\b.*\b(bot:)?head-of-engineering\b|update \S+ .*--owner[= ](bot:)?head-of-engineering\b)'
+    - '^rules add\b(?=.*--kind[= ]internal\b)(?=.*--who\b)(?=.*--text\b).*[Uu]pgrade'
+  must_not:
+    - '^approval (approve|decline)\b'
+    - '^message send(?! -h\b| --help)'
+    - '^question (ask|answer)\b'
+    - '^task (close|bulk close)\b'
+    - '^task create\b'
+  reply: |
+    Acts on both in this one turn. (a) The Upgrade Manager tasks: moves the 10 tasks from Dana to
+    Head of Engineering, the dev board, with one bulk owner change (a dry run first is fine) or one task update each. It touches
+    only those 10, not any other work of hers, and closes none. (b) A standing rule: one internal rule (`rules add --kind internal`)
+    that Upgrade Manager files its tasks to Engineering, not to Dana. (c) The 7 "Send this to Tico support?" approvals: she said they
+    don't need her approval, so it sends them for her the only way the server allows, one read-back of all 7
+    (`approval read-back` with every id) as the turn's last step, and does not decline them. It may point to the owner's switch
+    "Bots send reports to the Tico team without asking" for future ones. It does not claim they were sent
+    before her yes, and it does not ask her to confirm the move or the rule. The reply is short: what changed with counts and
+    links, and "say undo to put it back". Every count matches the record (10 tasks, 7 approvals).
+
+- id: live-those-from-chat
+  group: live
+  prompt: "those basically don't seem to need me at all"
+  history:
+    - {from: "human:dana", body: "What does BotOps need from me?"}
+    - {from: "assistant", body: "BotOps has 5 things for you: 3 \"Send this to Tico support?\" approvals, Pangram being out of credits ([Top up Pangram credits, or switch the AI-text checker](#/task/7d4a1c90-9300-4000-8000-000000000001)), and choosing whether to resume SEO's stopped run ([Resume SEO's stopped run, or leave it stopped](#/task/7d4a1c90-9300-4000-8000-000000000002))."}
+    - {from: "page", body: "They asked from the \"Upgrade Manager\" page (#/bot/upgrade-manager)."}
+  hub:
+    - match: '^needs-you show'
+      out:
+        total: 5
+        by_kind: {task: 2, approval: 3}
+        by_bot: [{bot: botops, count: 5}]
+    - match: '^team show'
+      out:
+        company: Acme
+        teams:
+          - {name: Engineering, bots: [{slug: head-of-engineering, display_name: Head of Engineering, job: "Runs the dev board: triage, assignment and releases of engineering work"}, {slug: botops, display_name: BotOps, job: "Builds and fixes bots"}]}
+          - {name: Operations, bots: [{slug: upgrade-manager, display_name: Upgrade Manager, job: "Files runtime and dependency upgrades"}]}
+    - match: '^task list'
+      out:
+        tasks:
+          - {id: 7d4a1c90-9300-4000-8000-000000000001, title: "Top up Pangram credits, or switch the AI-text checker", status: open, owner: "human:dana", requester: "bot:botops", created: "2026-11-03T06:10:00Z", updated: "2026-11-03T07:00:00Z"}
+          - {id: 7d4a1c90-9300-4000-8000-000000000002, title: "Resume SEO's stopped run, or leave it stopped", status: open, owner: "human:dana", requester: "bot:botops", created: "2026-11-03T06:20:00Z", updated: "2026-11-03T07:00:00Z"}
+        next_offset: null
+    - match: '^message list'
+      out:
+        actor: "human:dana"
+        messages:
+          - {id: e0a4b7f2-9300-4000-8000-000000000301, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Export to CSV times out for accounts with more than 40k rows (report 8817).", refs: {approval: 6c1f8a20-9300-4000-8000-000000000001}, created: "2026-11-03T07:20:00Z"}
+          - {id: e0a4b7f2-9300-4000-8000-000000000302, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Invoice PDF renders blank on Safari 19 (report 8829).", refs: {approval: 6c1f8a20-9300-4000-8000-000000000002}, created: "2026-11-03T07:21:00Z"}
+          - {id: e0a4b7f2-9300-4000-8000-000000000303, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Calendar sync drops all-day events in Europe/Lisbon (report 8842).", refs: {approval: 6c1f8a20-9300-4000-8000-000000000003}, created: "2026-11-03T07:22:00Z"}
+        more_messages: false
+        tasks: []
+        notices: []
+    - match: '^approval decline\b.*6c1f8a20'
+      out: {ok: true, decision: declined}
+    - match: '^task (close|bulk close|update)\b.*7d4a1c90'
+      out: {ok: true}
+    - match: '^approval approve\b.*6c1f8a20'
+      exit: 1
+      out: {error: {code: approve_not_asked, message: "Approving is the person's own decision: their message must name it, and the approval must be on a read-back they said yes to."}}
+  must:
+    - '^approval decline\b'
+    - '^task (close|bulk close|update)\b'
+  must_not:
+    - '^approval approve\b'
+    - '^message send(?! -h\b| --help)'
+    - '^question (ask|answer)\b'
+    - '^task create\b'
+    - 'reply:\bpage\b'
+  reply: |
+    Reads "those" as the five BotOps items it listed in this chat, not the page she is on, and never mentions a page. It does
+    not argue with her and acts on all five in this turn: it declines the 3 "Send this to Tico support?" approvals, and closes
+    the Pangram and SEO tasks or hands them back to BotOps to decide. It does not stop after some and ask about the rest. The
+    reply says what it cleared with counts and links (3 approvals, 2 tasks) and "say undo to put it back", in two to four
+    short lines. It does not message BotOps, does not answer a BotOps question, and creates no task.

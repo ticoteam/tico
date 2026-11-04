@@ -443,7 +443,7 @@ def default_for(c, slug, declared):
     if any(fnmatchcase(slug, p) for p in MONITOR_SLUGS):
         return MONITOR, {}, None
     if any(fnmatchcase(slug, p) for p in REVIEWER_SLUGS):
-        # The Builder is called pr-reviewer in the starter factory and owns the Dev tickets: it stays a doer.
+        # The starter's pr-reviewer was the Builder before the builder template: an install that kept it owns the Dev tickets.
         if slug == "pr-reviewer" and _owns_dev_tickets(c, slug):
             return DOER, preset, None
         return REVIEWER, {}, None

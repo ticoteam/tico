@@ -243,7 +243,7 @@ def test_nothing_is_dated_after_an_early_build(early):
                 count = db.execute(
                     f'SELECT count(*) FROM "{table}" WHERE typeof("{column}")=\'text\' AND "{column}" > ? '
                     f'AND "{column}" LIKE \'20__-__-__T%\'' +
-                    (" AND field NOT IN ('check_back_at','check_back_explicit','check_back_imported')" if table == "task_events" and column in ("old", "new") else ""), (cut,)).fetchone()[0]
+                    (" AND NOT (subject_type='task' AND kind IN ('check_back_at','check_back_explicit','check_back_imported'))" if table == "history_events" and column in ("old", "new") else ""), (cut,)).fetchone()[0]
                 if count:
                     later.append((table, column, count))
     assert later == []

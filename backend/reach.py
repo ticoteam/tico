@@ -634,8 +634,8 @@ def _held(c, task_id, field, current, before):
     """Who held a task's `field` (owner, waiting_on) at any point before `before`, and at that moment: the values its
     changes moved between, and its value then (the one the first later change moved away from, else today's)."""
     out, later = set(), None
-    for r in c.execute("SELECT old, new, created_at FROM task_events WHERE task_id=? AND field=? ORDER BY created_at",
-                       (task_id, field)):
+    for r in c.execute("SELECT old, new, created_at FROM history_events WHERE subject_type='task' AND subject_id=? "
+                       "AND kind=? ORDER BY created_at", (task_id, field)):
         if before and r["created_at"] >= before:
             later = r["old"] if later is None else later
             continue

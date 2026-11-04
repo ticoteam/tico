@@ -13,10 +13,12 @@ from .outage import Outage, log
 
 ROOT = Path(__file__).resolve().parents[1]
 MAIL_BATCH = 100
+KNOWN_SENDER_RECHECK = 600      # seconds: a hub that refused known_sender is sent the field again after this
+MAIL_ROUNDS = 20       # claim rounds one pass makes for a mailbox while each round's actions succeed (chains)
 CALENDAR_FIELDS = ("occurrence_id", "event_id", "title", "start", "end", "attendees", "meeting_url")
 MAIL_FIELDS = ("thread_id", "epoch", "date", "from_addr", "from_header", "to", "cc", "subject",
                "snippet", "labels", "body", "body_truncated", "attachments", "list_id",
-               "is_internal", "has_unsubscribe", "rule_hits")
+               "is_internal", "has_unsubscribe", "rule_hits", "known_sender")
 
 
 def owner_handle(config=None):
@@ -126,10 +128,17 @@ def mail_umask():
     return {"umask": 0o002} if isolation.enabled() else {}
 
 
+def without_known_sender(body):
+    """The mail batch with `known_sender` taken off every message."""
+    return dict(body, messages=[{k: v for k, v in m.items() if k != "known_sender"} for m in body["messages"]])
+
+
 class ConnectorPublisher:
     def __init__(self, config, *, client=None, fetch=None, mail=None, event=None, google=None, action=None):
         self.config = config
         self.client = client or Client(config["url"], config["token"], timeout=35, retries=1)
+        # When a hub last refused known_sender (one from before the field); None while it takes the field.
+        self.refused_known_sender_at = None
         # The script this checkout ships, not one named after a company's folder: an environment
         # whose workspace is ~/Companies/Acme has no `tico` beside it.
         self.script = ROOT / "scripts/mail.sh"
@@ -311,27 +320,36 @@ class ConnectorPublisher:
 
     def mail_action_tick(self):
         """Carry out the mail actions automations queued for the mailboxes this computer reads, and report each.
-        The hub answers 404 while the redesign is off and 403 for a mailbox another computer reads."""
+        A chain's next action is claimed once the one before it is done, so a claim round whose actions all came out
+        ok is followed by another (up to MAIL_ROUNDS); a round with a failure waits for the next pass, which is where
+        a failed action's retry comes. The hub answers 404 while the redesign is off and 403 for a mailbox another
+        computer reads."""
         if self.mail_boxes is None:
             self.mail_boxes = [box["address"] for box in self.client.get("connectors/mail/targets").get("mailboxes") or []]
         done = 0
         for address in self.mail_boxes:
             if self.stop.is_set():
                 break
-            try:
-                claimed = self.client.post("automations/mail-actions/claim", {"mailbox": address})
-            except APIError as exc:
-                if exc.status in (403, 404):
-                    continue
-                raise
-            for action in claimed.get("actions") or []:
-                answer = self.run_action(action)
-                body = {"ok": bool(answer.get("ok")), "detail": str(answer.get("detail") or "")[:1000],
-                        "retry": bool(answer.get("retry", True))}
-                body.update({k: str(answer[k])[:200] for k in ("message", "draft", "thread") if answer.get(k)})
-                self.client.post(f"automations/mail-actions/{action['id']}/result", body,
-                                 key=f"mail-action-{action['id']}-{action.get('attempt', 0)}")
-                done += 1
+            for _ in range(MAIL_ROUNDS):
+                try:
+                    claimed = self.client.post("automations/mail-actions/claim", {"mailbox": address})
+                except APIError as exc:
+                    if exc.status in (403, 404):
+                        break
+                    raise
+                actions = claimed.get("actions") or []
+                ok = bool(actions)
+                for action in actions:
+                    answer = self.run_action(action)
+                    ok = ok and bool(answer.get("ok"))
+                    body = {"ok": bool(answer.get("ok")), "detail": str(answer.get("detail") or "")[:1000],
+                            "retry": bool(answer.get("retry", True))}
+                    body.update({k: str(answer[k])[:200] for k in ("message", "draft", "thread") if answer.get(k)})
+                    self.client.post(f"automations/mail-actions/{action['id']}/result", body,
+                                     key=f"mail-action-{action['id']}-{action.get('attempt', 0)}")
+                    done += 1
+                if not ok:
+                    break
         return done
 
     def mail_cli(self, args):
@@ -497,7 +515,7 @@ class ConnectorPublisher:
                     "synced_at": datetime.now(timezone.utc).isoformat()}
             if history_id:
                 body["history_id"] = str(history_id)
-            self.client.post("connectors/mail/messages", body)
+            self._post_mail(body)
             self.run_mail(["sync", "ack", *ids, "--as", self.owner, "--mailbox", address, "--json"])
             posted += len(ids)
         return posted
@@ -509,6 +527,30 @@ class ConnectorPublisher:
             if key in row and row[key] is not None:
                 message[key] = row[key]
         return message
+
+    def _post_mail(self, body):
+        """Post one mail batch. Runners and hubs update on their own schedules, so a hub from before `known_sender`
+        can get a batch that has it: its message model forbids fields it does not know. Such a refusal posts the
+        batch once more without the field. For KNOWN_SENDER_RECHECK seconds after a refusal the field is left off;
+        then it is sent again, so a hub updated since takes it. The first refusal is logged. A refusal of the batch
+        without the field too is not about the field, and it raises as before."""
+        held = self.refused_known_sender_at is not None and \
+            self.clock() - self.refused_known_sender_at < KNOWN_SENDER_RECHECK
+        if held:
+            body = without_known_sender(body)
+        try:
+            self.client.post("connectors/mail/messages", body)
+        except APIError as exc:
+            if exc.status != 422 or not any("known_sender" in m for m in body["messages"]):
+                raise
+            self.client.post("connectors/mail/messages", without_known_sender(body))
+            if self.refused_known_sender_at is None:
+                log("Tico connectors: this hub predates the known_sender mail field; mail goes to it without the "
+                    "field, so senders show as unknown until the hub is updated")
+            self.refused_known_sender_at = self.clock()
+            return
+        if any("known_sender" in m for m in body["messages"]):
+            self.refused_known_sender_at = None     # the hub took the field: it is (now) a hub that takes it
 
     def run(self):
         cloud = Outage("Tico connectors", "refresh failed", "refresh still failing", "refresh working again")
