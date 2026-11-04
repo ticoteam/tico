@@ -295,8 +295,8 @@ text at the doors it comes in by, before a bot reads it. Change it in **Settings
 | Documents | A document or a link that Counsel reads to suggest rules (Rules › External): the file's text, or the page the link fetches | Warn |
 | Slack | A message a person sends a bot in Slack (a DM or an @mention), and a message in a channel linked to a thread, with its edits | Warn |
 
-Each door is **Off**, **Warn** or **Hold**. Mail is only ever marked, so it offers Off and Warn. Only the decision
-model's score can hold an item: the pattern check only warns. Every door defaults to Warn, which only observes:
+Each door is **Off**, **Warn** or **Hold**. Mail is only ever marked, so it offers Off and Warn, and Slack cannot be set
+to Hold. Only the decision model's score can hold an item: the pattern check only warns. Every door defaults to Warn, which only observes:
 nothing is held until you set a door to Hold. The six defaults are one constant,
 `DEFAULTS` in `backend/screening.py`; Hold becomes the default for webhooks, ideas and watchers once the live eval
 (`python -m evals.screening.run --live`) and a week of `screening.warned` rows show the hold line is safe.
@@ -313,9 +313,12 @@ The check has four layers. Two of them can be switched off in the same card:
   every item, free. A match only warns, never holds, and counts only when the decision model did not answer: they
   misfire on code and on writing about attacks.
 - **The decision model** reads text of 200 characters or more against the `injection-screen` question set
-  (`questions/injection-screen.json`). At or over its `hold` line (85%), on a door set to Hold, the item becomes a task
-  for a person titled `Held: ...`: the bot is not woken and nothing is deleted. Hand the task to the bot to release it;
-  close it if it is an attack. At or over `warn` (50%), the bot's copy starts with a line saying the text looks like a
+  (`questions/injection-screen.json`). A webhook, watcher, idea or automation turn at or over the hold line (85%), on a
+  door set to Hold, becomes a task for a person titled `Held: ...`: the bot is not woken and nothing is deleted. Hand the
+  task to the bot to release it; close it if it is an attack. With no person to hold it, it goes to its bot with the
+  warning line instead. A document at or over the hold line, on a door set to Hold, becomes a read task for Counsel,
+  labelled held, with its text left out. Slack cannot be set to Hold, so no Slack message is held; at Warn it gets no
+  line. At or over `warn` (50%), the bot's copy starts with a line saying the text looks like a
   prompt injection and is data. Mail at the hold line gets that line too, and a held automation turn is recorded as
   step `held`.
 - **Who gets a held item.** Whoever made the webhook's automation or rule, else the automation's owner, else the bot's
@@ -329,6 +332,7 @@ The check has four layers. Two of them can be switched off in the same card:
   to a person.
 - **Audit.** Each model call is one `judge.call` row labelled `injection-screen@1`, and each hold or warning one
   `screening.held` or `screening.warned` event, with the score and kind, never the text. Settings lists the newest.
+  Slack writes no `screening` event, since a Slack message is never held and at Warn it gets no line.
 - **Test** runs eight built-in samples, four attacks and four lookalikes (code, a security article, an ordinary
   request), through the model and shows which it got right. Each sample counts against the person's decision budget.
 
