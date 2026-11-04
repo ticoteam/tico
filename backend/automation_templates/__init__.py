@@ -30,6 +30,18 @@ ROLES = {
 NEEDS_ACTOR = ("create_task", "draft_reply", "send_reply")
 # The actions a Slack channel shows nothing for (automation_actions._slack): a group hears only Slack channels.
 NO_OP_IN_SLACK = ("archive", "leave_for_you", "label", "forward")
+# The message a choose step's turn is asked about, named by the fields the trigger carries (automations.on_mail and
+# on_slack). Each {{field}} is quoted as data after the instructions (automation_flow.render_prompt), never read as them.
+MESSAGE_PART = {
+    "mail": ("\n\nThe message to handle: id {{message.id}} in thread {{message.thread}}, from {{message.from}} "
+             "({{message.from_name}}), subject {{message.subject}}. Its body:\n{{message.body}}"),
+    "slack": "\n\nThe message to handle: from {{message.from}} in {{message.inbox}}. Its text:\n{{message.text}}",
+}
+
+
+def _message_part(inbox):
+    """The part of a choose step's prompt that names the message: Slack for a `slack:` inbox, mail otherwise."""
+    return MESSAGE_PART["slack" if str(inbox or "").strip().lower().startswith("slack:") else "mail"]
 
 
 def load(tid):
@@ -64,17 +76,19 @@ def _candidates(found, role):
     return [slug for template in ROLES[role] for slug in found.get(template, [])]
 
 
-def _takes_task(c, actor, bot, title):
+def _takes_task(c, actor, bot, title, routine=False):
     """Whether H.task_create would take a task from `actor` for bot `bot` (a bot id), asked without recording a refusal.
     The gates are task_create's own, in its order: the actor is not an onboarding bot (_learner); the bot is active
     (_reach) and not onboarding (_learning); and no task rule refuses it, a synced harness or a profile that takes no such
     task (task_taking_refusal). With no actor at all (a group with no lead) none is taken. `title` is the template's, its
-    placeholders not yet filled in, so a Reviewer, whose profile takes only review and QA requests, is skipped here."""
+    placeholders not yet filled in, so a Reviewer, whose profile takes only review and QA requests, is skipped here.
+    `routine` asks as a routine's own run does (automation_actions.start_turn files a turn that way): a Reviewer or a
+    Monitor then takes it, and a Responder or a synced bot still does not."""
     if not actor or (H.is_bot(actor) and H._onboarding(c, H.actor_id(actor))):
         return False
     if (H.bot(c, bot) or {}).get("state") != "active" or H._onboarding(c, bot):
         return False
-    return H.task_taking_refusal(c, actor, "bot:" + bot, title, None, False) is None
+    return H.task_taking_refusal(c, actor, "bot:" + bot, title, None, routine) is None
 
 
 def _title(args, dest):
@@ -191,7 +205,8 @@ def _prune(steps, gone, no_actor=False):
 
 
 def _as_sort(step, tpl):
-    """A group has no turn to answer a choose with, so its llm step with choose becomes Sort: a choice over the same
+    """A group, or a bot that cannot run its own turn, has none to answer a choose with, so its llm step with choose becomes
+    Sort: a choice over the same
     destinations, then a filter that sends the thread to the one chosen (the default when the answer is missing)."""
     choose = step.get("choose")
     if step["type"] != "llm" or choose is None:
@@ -204,7 +219,7 @@ def _as_sort(step, tpl):
     names = {dest["id"]: dest["name"] for dest in tpl["destinations"]}
     criteria = {dest: (spec.get("criteria") or {}).get(dest) or names.get(dest, dest) for dest in to}
     rules = [{"when": [{"field": f"{out}.route", "op": "is", "value": dest, "min": 0.5}], "to": dest,
-              "next": "end", "stop": True} for dest in to if dest != default]
+              "next": "end", "stop": True} for dest in to]
     rules.append({"when": [], "to": default, "next": "end", "stop": True})
     return [{"id": step["id"], "type": "decide", "level": "high", "out": out, "questions": {"route": {
                 "type": "choice", "instructions": spec.get("instructions") or "Where does this message belong? Pick the one that fits best.",
@@ -251,12 +266,16 @@ def fill(c, tid, owner, inbox, settings=None):
     if not actor and not _useful(destinations, steps):
         raise Problem("invalid", f"{owner} has no lead to act as, so the {tpl['name']} template would do nothing in its "
                       "Slack channel. Give the group a lead first.", 422)
-    if kind == "group":
+    # A group owns no turn. A bot owns one only if start_turn could file it: the gate a routine's task passes, asked as the
+    # bot itself (onboarding, a Responder's or a synced bot's profile). Without a turn the choose becomes Sort (plan v2.1).
+    turn = kind == "person" or (kind == "bot" and _takes_task(c, "bot:" + ident, ident, tpl["name"], routine=True))
+    if not turn:
         steps = [kept for step in steps for kept in _as_sort(step, tpl)]
     else:
         for step in steps:
             if step["type"] == "llm":
                 step["as"] = ("assistant:" if kind == "person" else "bot:") + ident
+                step["prompt"] = step["prompt"] + _message_part(inbox)
     return {"name": tpl["name"], "owner": owner, "enabled": False,
             "trigger": {"type": "message", "inbox": str(inbox or "").strip()}, "steps": steps,
             "destinations": destinations}

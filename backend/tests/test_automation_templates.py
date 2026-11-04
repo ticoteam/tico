@@ -6,8 +6,10 @@ import json
 from urllib.parse import urlencode
 
 from backend import automation_actions as AA
+from backend import automation_engine as E
 from backend import automation_flow as F
 from backend import automation_templates as T
+from backend.tests.automation_fakes import Services
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
 from backend.tests.test_automation_cli import cli
 
@@ -49,6 +51,36 @@ def fill(api, tid, owner, inbox, token="ana-test", expected=200):
 
 def by_id(items):
     return {item["id"]: item for item in items}
+
+
+# The judge answers no to every question, so a message falls through the route to the draft turn.
+NO = {qid: {"type": "noul", "noul": 0.0} for qid in ("only_founder", "meet", "bug", "money", "partner", "nothing")}
+MAIL = {"message": {"source": "mail", "mailbox": "ana@acme.example", "id": "m9", "thread": "t9",
+                    "from": "sender@acme.example", "from_name": "Sender Example", "subject": "Board pack",
+                    "snippet": "Deck attached", "body": "Can you send the deck by Friday?"}}
+SLACK = {"message": {"source": "slack", "inbox": "slack:#general", "channel": "C1", "ts": "1.1", "thread_ts": "1.1",
+                     "from": "person:ben", "text": "Can you send the deck by Friday?"}}
+
+
+def run_to_turn(flow, payload):
+    """The filled flow run on one message until it waits for its draft turn: the turn the services were asked for."""
+    services = Services(answers=NO)
+    run = E.execute(flow, payload, services)
+    assert run["status"] == "waiting", run
+    return services.turns[-1]
+
+
+def bot_flow(api, bot, inbox="ana@acme.example"):
+    with api.app.state.store.read() as c:
+        flow = T.fill(c, "founder", f"bot:{bot}", inbox, api.app.state.store.settings)
+    F.check(flow)
+    return flow
+
+
+def assert_sorted_draft(flow):
+    draft = by_id(flow["steps"])["draft"]
+    assert draft["type"] == "decide" and "as" not in draft
+    assert list(F.choosing(flow["steps"])) == []
 
 
 def test_every_template_is_a_flow_the_hub_checks_once_filled(api):
@@ -112,6 +144,12 @@ def test_a_group_owner_gets_sort_and_its_lead_runs_the_task_and_meeting_routes(a
     sort = by_id(flow["steps"])["draft"]
     assert sort["type"] == "decide" and sort["level"] == "high"
     assert set(sort["questions"]["route"]["criteria"]) == {"me", "legal", "engineering", "finance", "marketing", "archive"}
+    route = by_id(flow["steps"])["draft_route"]["rules"]
+    criteria = list(sort["questions"]["route"]["criteria"])
+    assert [rule["to"] for rule in route[:-1]] == criteria                    # one route per criterion, in its order
+    assert all(rule["when"] == [{"field": "draft.route", "op": "is", "value": dest, "min": 0.5}]
+               for rule, dest in zip(route[:-1], criteria))
+    assert route[-1] == {"when": [], "to": "me", "next": "end", "stop": True}  # the default, when nothing matches
     assert by_id(flow["destinations"])["engineering"]["then"][0]["args"]["owner"] == "bot:cpo"       # the task route
     route = by_id(flow["steps"])["route"]["rules"]
     assert any(a["do"] == "draft_reply" for rule in route for a in rule.get("then", []))            # the meeting route
@@ -257,3 +295,51 @@ def test_the_founder_finance_rule_reads_the_wording_and_names_no_vendor(api):
     assert [cond["field"] for cond in rule["when"]] == ["message.subject", "message.snippet"]
     text = json.dumps([T.load(tid) for tid in T.ORDER]).lower()
     assert not any(name in text for name in ("kapitus", "plaid", "mercury"))
+
+
+def test_the_draft_turn_is_asked_about_the_mail_it_handles(api):
+    set_templates(api, STAFF)
+    turn = run_to_turn(fill(api, "founder", "person:ana", "ana@acme.example"), MAIL)
+    assert "Board pack" in turn["prompt"] and "Can you send the deck by Friday?" in turn["prompt"]
+
+
+def test_the_draft_turn_is_asked_about_the_slack_text_it_handles(api):
+    set_templates(api, STAFF)
+    listed(api, "general")
+    turn = run_to_turn(fill(api, "founder", "person:ana", "slack:#general"), SLACK)
+    assert "Can you send the deck by Friday?" in turn["prompt"]
+
+
+def test_the_turn_task_body_carries_the_mail_subject_and_body(api):
+    set_templates(api, STAFF)
+    flow = bot_flow(api, "coo")
+    prompt = run_to_turn(flow, MAIL)["prompt"]
+    with api.app.state.store.transaction() as c:
+        started = AA.start_turn(c, {"id": "auto_founder", "flow": flow}, "run_1", "draft", "bot:coo", prompt, None)
+        body = c.execute("SELECT body FROM tasks WHERE id=?", (started["ref"],)).fetchone()["body"]
+    assert "Board pack" in body and "Can you send the deck by Friday?" in body
+
+
+def test_a_bot_that_can_run_its_own_turn_keeps_the_draft_choose(api):
+    set_templates(api, STAFF)
+    draft = by_id(bot_flow(api, "coo")["steps"])["draft"]
+    assert draft["as"] == "bot:coo" and draft["choose"]["mode"] == "draft"
+    assert "{{message.subject}}" in draft["prompt"] and "{{message.body}}" in draft["prompt"]
+
+
+def test_an_onboarding_bot_owner_gets_sort_for_its_draft(api):
+    set_templates(api, STAFF)
+    onboarding(api, "cpo")                                  # start_turn's task would be refused: onboarding
+    assert_sorted_draft(bot_flow(api, "cpo"))
+
+
+def test_a_responder_bot_owner_gets_sort_for_its_draft(api):
+    set_templates(api, STAFF)
+    set_config(api, "product-design", "profile", "responder")   # its profile takes no task, a routine's included
+    assert_sorted_draft(bot_flow(api, "product-design", "ben@acme.example"))
+
+
+def test_a_bot_owner_on_a_synced_harness_gets_sort_for_its_draft(api):
+    set_templates(api, STAFF)
+    set_config(api, "finance", "harness", "dots")          # works on another platform: no task reaches it
+    assert_sorted_draft(bot_flow(api, "finance"))

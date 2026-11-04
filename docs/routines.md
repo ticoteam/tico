@@ -149,7 +149,9 @@ like any other: its roles (`legal_lead`, `support_lead`, ...) are resolved on th
 use is taken out. A role goes to the first active bot on the chart that can take the work: one that is still onboarding,
 takes no tasks under its profile, or runs on a synced harness is passed over. A wake the owner may not tell becomes a
 task for the first bot that takes one. A destination no bot can reach goes, with the rules and questions that point at
-it. A group owner gets Sort (a choice over the destinations) where a person or bot gets choose. A group with no lead to
-act as loses the actions that need one (tasks, replies); when nothing it would do can run in its Slack channel, the fill
-is refused with a 422. Nothing is saved: the filled flow comes back off, and `hub automation create --file -` saves it.
+it. A group owner gets Sort (a choice over the destinations, one route each and a default) where a person or a bot gets
+choose. A bot gets choose only if it can run its own turn: an onboarding bot, one whose profile is Responder, or one on a
+synced harness gets Sort instead. The choose's prompt names the message (its subject and body by mail, its text in
+Slack). A group with no lead to act as loses the actions that need one (tasks, replies); when nothing it would do can run
+in its Slack channel, the fill is refused with a 422. Nothing is saved: the filled flow comes back off, and `hub automation create --file -` saves it.
 The same fill is `GET /api/v2/automations/templates/{id}?owner=...&inbox=...`.
