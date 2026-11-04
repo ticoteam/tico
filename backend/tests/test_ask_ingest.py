@@ -1121,7 +1121,8 @@ def test_a_replay_shows_a_bot_task_only_where_the_viewer_may_read_it(gate):
         assert A._shown(c, "human:priya", "human:ben", it, lambda c, task: True)
 
 
-def test_a_handoff_replays_on_the_day_it_was_put_on_them(gate):
+@pytest.mark.parametrize("owner_event_at", ["2026-10-06T09:00:00", "2026-10-06T09:00:00.200"])
+def test_a_handoff_replays_on_the_day_it_was_put_on_them(gate, owner_event_at):
     """A task the filter acted on counts on the day its ask row was written, not the day the bot created the task."""
     api, model, token = gate
     with api.app.state.store.transaction() as c:
@@ -1139,7 +1140,7 @@ def test_a_handoff_replays_on_the_day_it_was_put_on_them(gate):
         # Let it through makes it theirs: it still counts on the day it was put on them, under the bot that asked.
         # The handoff is an owner change, recorded in the history as the hub writes it, then the task's owner.
         H.history_event(c, "task", kept["id"], "bot:ops", "owner", "bot:ops", "human:ben",
-                        created_at="2026-10-06T09:00:00.200")
+                        created_at=owner_event_at)
         c.execute("UPDATE tasks SET owner_id='human:ben' WHERE id=?", (kept["id"],))
         human = H.task_create(c, "human:priya", "Priya's task the bot handed on", "", "bot:ops", lint=False)
         c.execute("UPDATE tasks SET created_at='2026-10-05T11:00:00' WHERE id=?", (human["id"],))
