@@ -832,7 +832,7 @@ mod window_state_tests {
     fn the_app_decides_when_the_main_window_shows() {
         let flags = frame_flags();
         assert!(!flags.contains(StateFlags::VISIBLE));
-        assert_eq!(flags, StateFlags::SIZE | StateFlags::POSITION);
+        assert_eq!(flags.bits(), (StateFlags::SIZE | StateFlags::POSITION).bits());
     }
 
     #[test]
