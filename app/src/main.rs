@@ -405,32 +405,18 @@ async fn remove_org(app: &App, id: &str) {
     };
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     let Some(removed) = removed else { return };
+    // Its page is closed. Its store is noted for deletion before anything else, so a deletion that fails (or a quit
+    // first) is retried at the next launch; the org is no longer in the list, so nothing keeps the store.
     #[cfg(target_os = "macos")]
-    {
-        match removed.store_id() {
-            Some(store) => {
-                // A store Tico sign-in filled for an org that never opened is still held: let go of it first.
-                signin::release_store(app, store);
-                // A page that just closed holds its store for a moment, so try again a few times before clearing.
-                let mut removed_store = app.remove_data_store(*store.as_bytes()).await;
-                for _ in 0..6 {
-                    if removed_store.is_ok() { break; }
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    removed_store = app.remove_data_store(*store.as_bytes()).await;
-                }
-                if let Err(e) = removed_store {
-                    // The store is still in use: its data is cleared at least, and the list no longer names it.
-                    log::warn!("could not delete an org's data store, so clearing it instead: {e}");
-                    if let Err(e) = clear_store(app, &removed) { log::warn!("could not clear an org's data store: {e}"); }
-                }
-            }
-            // The org moved over from server.txt uses the default store, which cannot be deleted: clear it, so its
-            // sign-in goes too. Every other org has a store of its own, so nothing of theirs is in it.
-            None => {
-                if let Err(e) = clear_store(app, &removed) { log::warn!("could not clear the default data store: {e}"); }
-            }
-        }
+    let store = removed.store_id();
+    #[cfg(target_os = "macos")]
+    match store {
+        Some(store) => signin::note_removed_store(app, store),
+        // The org moved over from server.txt uses the default store, which cannot be deleted: clear it now, so its
+        // sign-in goes too. Every other org has a store of its own, so nothing of theirs is in it.
+        None => if let Err(e) = clear_store(app, &removed) { log::warn!("could not clear the default data store: {e}"); },
     }
+    // The next org opens (and the rail drops the removed one) before the store is deleted, which can take seconds.
     if was_open {
         match active_org(app) {
             Some(next) => {
@@ -442,19 +428,28 @@ async fn remove_org(app: &App, id: &str) {
                 let state = app.state::<AppState>();
                 // Checked again under the lock: an org added meanwhile opens through its own switch, which waits on it.
                 let _changing = state.changing.lock().unwrap();
-                if active_org(app).is_some() { return refresh_chrome(app); }
-                select_connection(&state, None);
-                *state.status.lock().unwrap() = HubStatus::default();
-                state.shown.lock().unwrap().clear();
-                // The setup window first, so that the app keeps a window while the main one goes.
-                let _ = build_server_window(app);
-                if let Some(window) = main_window(app) {
-                    let _ = window.destroy();
+                if active_org(app).is_none() {
+                    select_connection(&state, None);
+                    *state.status.lock().unwrap() = HubStatus::default();
+                    state.shown.lock().unwrap().clear();
+                    // The setup window first, so that the app keeps a window while the main one goes.
+                    let _ = build_server_window(app);
+                    if let Some(window) = main_window(app) {
+                        let _ = window.destroy();
+                    }
                 }
             }
         }
     }
     refresh_chrome(app);
+    #[cfg(target_os = "macos")]
+    if let Some(store) = store {
+        if !signin::delete_store(app, store).await {
+            // Still in use: its data is cleared at least, and the next launch deletes it.
+            log::warn!("could not delete an org's data store, so clearing it now; the next launch deletes it");
+            if let Err(e) = clear_store(app, &removed) { log::warn!("could not clear an org's data store: {e}"); }
+        }
+    }
 }
 
 #[tauri::command]
@@ -463,11 +458,20 @@ fn rail_orgs(app: App, webview: tauri::Webview) -> Result<Value, String> {
     Ok(rail_list(&app))
 }
 
+/// A click on an org in the rail, sent for every click (the rail's own idea of the open org can be a draw behind).
+/// Not async, so it runs on the main thread in the order the clicks came, and numbers each one there; the switch
+/// itself runs apart, and a click that a later one overtook does nothing (`windows::switch_for_click`).
 #[tauri::command]
-async fn rail_switch(app: App, webview: tauri::Webview, id: String) -> Result<(), String> {
+fn rail_switch(app: App, webview: tauri::Webview, id: String) -> Result<(), String> {
     only_rail(&webview)?;
     timing::click(&app, &id, "click");
-    switch_to(&app, &id).map_err(|e| e.to_string())
+    let click = windows::next_click();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = windows::switch_for_click(&app, &id, click) {
+            log::warn!("could not switch organization: {e}");
+        }
+    });
+    Ok(())
 }
 
 /// The pointer rested on an org in the rail (`id`), or left it (none): its page is built hidden ahead of a click.

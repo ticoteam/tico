@@ -241,13 +241,27 @@ pub(crate) fn close(app: &App) {
 async fn discard(app: &App, stores: &[Uuid]) {
     #[cfg(target_os = "macos")]
     for store in stores {
-        release_store(app, *store);
-        if remove_store(app, *store).await {
-            note_pending(app, &[], &[*store]);
-        } else {
+        if !delete_store(app, *store).await {
             log::warn!("could not delete a data store that is no longer used; the next launch tries again");
         }
     }
+}
+
+/// A removed org's store is to be deleted: noted first, so that the next launch deletes it if this run cannot.
+#[cfg(target_os = "macos")]
+pub(crate) fn note_removed_store(app: &App, store: Uuid) {
+    note_pending(app, &[store], &[]);
+}
+
+/// Deletes a store nobody uses and forgets it, trying a few times; false (and still noted) when it is still in use.
+#[cfg(target_os = "macos")]
+pub(crate) async fn delete_store(app: &App, store: Uuid) -> bool {
+    release_store(app, store);
+    let deleted = remove_store(app, store).await;
+    if deleted {
+        note_pending(app, &[], &[store]);
+    }
+    deleted
 }
 
 #[cfg(target_os = "macos")]
@@ -291,8 +305,9 @@ fn login_answer(status: u16, location: Option<&Url>, issuer: &Url) -> bool {
 }
 
 /// Adds the picked servers as orgs, signed in through the issuer's session, and opens the first new one (or, when
-/// every pick is already an org, the first of those). Only this sign-in's own window is used or closed, and if that
-/// window goes before the orgs are added, nothing is added.
+/// every pick is already an org, the first of those). A pick that is an org already gets the fresh session too, so an
+/// expired one signs in again. Only this sign-in's own window is used or closed, and if that window goes before the
+/// orgs are added, nothing is added or renewed.
 async fn finish(app: &App, session: &Session, picks: Option<Picks>) {
     let done = || {
         if let Some(window) = app.get_webview_window(&session.label) {
@@ -313,12 +328,19 @@ async fn finish(app: &App, session: &Session, picks: Option<Picks>) {
     let prepared: Vec<Uuid> = fresh.iter().map(|(_, store)| *store).collect();
     // Whether each new server has the hub's own sign-in, asked while the session is copied.
     let probes: Vec<_> = fresh.iter().map(|(hub, _)| tauri::async_runtime::spawn(has_login(hub.clone(), picks.issuer.clone()))).collect();
+    // The picks that are orgs already, asked the same.
+    let known: Vec<(String, Url)> = {
+        let state = app.state::<AppState>();
+        let list = state.orgs.lock().unwrap();
+        picks.orgs.iter().filter_map(|hub| list.find_hub(hub).map(|org| (org.id.clone(), hub.clone()))).collect()
+    };
+    let known_probes: Vec<_> = known.iter().map(|(_, hub)| tauri::async_runtime::spawn(has_login(hub.clone(), picks.issuer.clone()))).collect();
     #[cfg(target_os = "macos")]
     if !fresh.is_empty() {
         note_pending(app, &prepared, &[]);
         let host = picks.issuer.host_str().unwrap_or_default().to_string();
         match app.get_webview_window(&session.label) {
-            Some(window) => match copy_cookies(&window, host, prepared.clone()).await {
+            Some(window) => match copy_cookies(&window, host, prepared.iter().copied().map(Some).collect()).await {
                 Some(count) => log::info!("Tico sign-in: {count} session cookie(s) copied to {} new organization(s)", fresh.len()),
                 None => log::warn!("Tico sign-in: the session could not be copied; the new organizations ask to sign in"),
             },
@@ -363,6 +385,13 @@ async fn finish(app: &App, session: &Session, picks: Option<Picks>) {
             #[cfg(not(target_os = "macos"))]
             let _ = kept;
             discard(app, &unused).await;
+            let mut probed = Vec::with_capacity(known.len());
+            for ((id, hub), probe) in known.into_iter().zip(known_probes) {
+                probed.push((id, hub, probe.await.unwrap_or(false)));
+            }
+            let renewed = renew(app, session, &picks.issuer, &probed).await;
+            // Pages open now load again on the new session; one the switch below opens starts on it anyway.
+            let open_pages: Vec<String> = renewed.iter().filter(|id| crate::windows::org_page(app, id).is_some()).cloned().collect();
             if let Some(id) = open {
                 if let Err(e) = switch_to(app, &id) {
                     log::warn!("could not open the organization: {e}");
@@ -372,9 +401,60 @@ async fn finish(app: &App, session: &Session, picks: Option<Picks>) {
                     let _ = setup.close();
                 }
             }
+            for id in &open_pages {
+                crate::windows::renew_page(app, id);
+            }
             done();
         }
     }
+}
+
+/// Puts this sign-in's session into the stores of the picks that were orgs already, each into that org's own store
+/// (the default store for the org moved over from server.txt), and has each open on the hub's sign-in next where it
+/// has one. The orgs whose session was renewed.
+#[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+async fn renew(app: &App, session: &Session, issuer: &Url, known: &[(String, Url, bool)]) -> Vec<String> {
+    let targets = {
+        let state = app.state::<AppState>();
+        let list = state.orgs.lock().unwrap();
+        renew_targets(list.orgs(), known)
+    };
+    if targets.is_empty() {
+        return Vec::new();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let host = issuer.host_str().unwrap_or_default().to_string();
+        let Some(window) = app.get_webview_window(&session.label) else { return Vec::new() };
+        match copy_cookies(&window, host, targets.iter().map(|(_, store, _)| *store).collect()).await {
+            Some(count) => log::info!("Tico sign-in: {count} session cookie(s) copied to {} organization(s) already added", targets.len()),
+            None => {
+                log::warn!("Tico sign-in: the session could not be copied to the organizations already added");
+                return Vec::new();
+            }
+        }
+        let state = app.state::<AppState>();
+        let mut list = state.orgs.lock().unwrap();
+        for (id, _, login) in &targets {
+            if *login {
+                list.mark_sign_in(id);
+            }
+        }
+        targets.into_iter().map(|(id, _, _)| id).collect()
+    }
+    // Only macOS gives an org a store of its own, which the session is copied into.
+    #[cfg(not(target_os = "macos"))]
+    Vec::new()
+}
+
+/// Where a renewed session goes: each pick `(org id, server, has the hub's sign-in)` that is still that org, at that
+/// server, with the org's own store (`None`: the default store, which only that org uses).
+fn renew_targets(orgs: &[Org], known: &[(String, Url, bool)]) -> Vec<(String, Option<Uuid>, bool)> {
+    known.iter().filter_map(|(id, hub, login)| {
+        let org = orgs.iter().find(|org| &org.id == id)?;
+        let same = org.hub().is_some_and(|at| at.origin() == hub.origin());
+        same.then(|| (id.clone(), org.store_id(), *login))
+    }).collect()
 }
 
 /// The prepared stores that orgs were added on, and the ones left unused.
@@ -479,13 +559,14 @@ pub(crate) fn release_store(app: &App, store: Uuid) {
     });
 }
 
-/// Copies the sign-in window's cookies for `host` into each of `stores`, as the same NSHTTPCookie objects (they are
+/// Copies the sign-in window's cookies for `host` into each of `stores` (`None` is the default store, which only the
+/// org moved over from server.txt uses), as the same NSHTTPCookie objects (they are
 /// HttpOnly, so they are not rebuilt). The count of cookies copied, or None when WebKit did not finish in time; a
 /// WebKit answer that comes after that does nothing. Everything WebKit runs on the main thread, which hands each call
 /// to a callback and returns at once; only the answer is awaited here (see cookies.rs for why the main thread never
 /// waits).
 #[cfg(target_os = "macos")]
-async fn copy_cookies(window: &tauri::WebviewWindow, host: String, stores: Vec<Uuid>) -> Option<usize> {
+async fn copy_cookies(window: &tauri::WebviewWindow, host: String, stores: Vec<Option<Uuid>>) -> Option<usize> {
     use block2::RcBlock;
     use objc2::MainThreadMarker;
     use objc2_foundation::{NSArray, NSHTTPCookie, NSUUID};
@@ -517,9 +598,15 @@ async fn copy_cookies(window: &tauri::WebviewWindow, host: String, stores: Vec<U
                 return;
             }
             for store in &stores {
-                // The org's store, by the id its page will open with (macOS 14).
-                let target = WKWebsiteDataStore::dataStoreForIdentifier(&NSUUID::from_bytes(*store.as_bytes()), mtm);
-                KEPT.with(|kept| kept.borrow_mut().insert(*store, target.clone()));
+                let target = match store {
+                    // The org's store, by the id its page will open with (macOS 14), held until that page opens.
+                    Some(store) => {
+                        let target = WKWebsiteDataStore::dataStoreForIdentifier(&NSUUID::from_bytes(*store.as_bytes()), mtm);
+                        KEPT.with(|kept| kept.borrow_mut().insert(*store, target.clone()));
+                        target
+                    }
+                    None => WKWebsiteDataStore::defaultDataStore(mtm),
+                };
                 let jar = target.httpCookieStore();
                 for cookie in &picked {
                     let (left, sender, count) = (left.clone(), sender.clone(), picked.len());
@@ -717,5 +804,27 @@ mod tests {
         let (kept, unused) = split_stores(&[a, b, c], &[org("o_aaaaaaaa", Some(c)), org("o_bbbbbbbb", Some(a))]);
         assert_eq!((kept, unused), (vec![a, c], vec![b]));
         assert_eq!(split_stores(&[a], &[]), (vec![], vec![a]));
+    }
+
+    #[test]
+    fn a_renewed_session_goes_only_into_each_picked_orgs_own_store() {
+        let (acme_store, tidy_store) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut tidy = org("o_bbbbbbbb", Some(tidy_store));
+        tidy.url = "https://tidy.example.com/".into();
+        let mut legacy = org("o_cccccccc", None);
+        legacy.url = "https://old.example.com/".into();
+        let orgs = [org("o_aaaaaaaa", Some(acme_store)), tidy, legacy];
+        let picked = [
+            ("o_aaaaaaaa".to_string(), url("https://acme.example.com/"), true),
+            ("o_cccccccc".to_string(), url("https://old.example.com/"), false),
+            // Removed since it was picked, or now at another server: nothing goes to it.
+            ("o_dddddddd".to_string(), url("https://gone.example.com/"), true),
+            ("o_bbbbbbbb".to_string(), url("https://acme.example.com/"), true),
+        ];
+        assert_eq!(renew_targets(&orgs, &picked), [
+            ("o_aaaaaaaa".to_string(), Some(acme_store), true),
+            ("o_cccccccc".to_string(), None, false),
+        ], "TIDY was not picked, so its store gets nothing");
+        assert!(renew_targets(&orgs, &[]).is_empty());
     }
 }

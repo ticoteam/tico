@@ -299,6 +299,13 @@ impl Orgs {
         true
     }
 
+    /// The org's next page opens on the hub's sign-in: Tico sign-in renewed its session.
+    pub fn mark_sign_in(&mut self, id: &str) {
+        let Some(org) = self.doc.orgs.iter_mut().find(|org| org.id == id && !org.sign_in) else { return };
+        org.sign_in = true;
+        let _ = self.write_to(&self.doc);
+    }
+
     /// Keeps the name and email an org's page reported, trimmed and capped.
     pub fn set_details(&mut self, id: &str, name: &str, email: &str) {
         let (name, email) = (clip(name), clip(email));
@@ -514,6 +521,10 @@ mod tests {
         assert!(reread.take_sign_in(&added[0].id));
         assert!(!reread.take_sign_in(&added[0].id), "only the first page");
         assert!(!std::fs::read_to_string(&path).unwrap().contains("sign_in"));
+        // A renewed session flags an org already added, once more.
+        reread.mark_sign_in(&by_address.id);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("sign_in"));
+        assert!(reread.take_sign_in(&by_address.id) && !reread.take_sign_in(&by_address.id));
         // Files written before the flag existed read as not flagged.
         assert!(!parse(r#"{"version":1,"orgs":[{"id":"o_0000000a","url":"https://acme.example.com/"}]}"#).unwrap().orgs[0].sign_in);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());

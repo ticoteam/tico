@@ -4,12 +4,15 @@ const { invoke } = window.__TAURI__.core;
 const list = document.querySelector('#orgs');
 
 const host = url => { try { return new URL(url).hostname; } catch { return url || ''; } };
+// Whole characters (grapheme clusters, or code points without Intl.Segmenter): an emoji is never cut in half.
+const segmenter = typeof Intl !== 'undefined' && Intl.Segmenter ? new Intl.Segmenter(undefined, {granularity: 'grapheme'}) : null;
+const chars = text => segmenter ? Array.from(segmenter.segment(text), part => part.segment) : Array.from(text);
 // Two letters: the first of each of the first two words of the name, or the start of the address.
 function initials(org) {
   const words = (org.name || '').trim().split(/\s+/).filter(Boolean);
-  if (words.length > 1) return (words[0][0] + words[1][0]).toUpperCase();
+  if (words.length > 1) return (chars(words[0])[0] + chars(words[1])[0]).toUpperCase();
   const word = words[0] || host(org.url).split('.')[0] || '?';
-  return word.slice(0, 2).toUpperCase();
+  return chars(word).slice(0, 2).join('').toUpperCase();
 }
 // A stable color per address (FNV-1a over the host), one of eight that read on both themes.
 function tone(url) {
@@ -56,9 +59,10 @@ function render(orgs) {
     button.title = `${label}\n${org.email || 'Not signed in'}`;
     button.setAttribute('aria-label', label);
     button.setAttribute('aria-current', String(!!org.active));
-    button.addEventListener('click', () => { if (!org.active) invoke('rail_switch', { id: org.id }).catch(() => {}); });
+    // Always sent: `active` is from the last draw, which a quick A, B, A outruns. The app does nothing for the org
+    // already on screen, and takes clicks in the order they came.
+    button.addEventListener('click', () => invoke('rail_switch', { id: org.id }).catch(() => {}));
     button.addEventListener('pointerenter', () => {
-      if (org.active) return;
       clearTimeout(hoverTimer);
       hoverTimer = setTimeout(() => {
         hovered = org.id;

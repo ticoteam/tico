@@ -415,22 +415,23 @@ pub(crate) fn note_shown(order: &mut Vec<String>, id: &str, keep: usize) -> Vec<
 
 /// Makes another org the open one: its page replaces the old one in the main window. A page already built (a
 /// prefetch) is shown at once, as far as it has loaded; otherwise a new one opens. The old page closes once the new
-/// one is on screen. No restart and no new sign-in: the org's own store keeps its sign-in.
+/// one is on screen. No restart and no new sign-in: the org's own store keeps its sign-in. The org becomes the open
+/// one only once its page exists: if the page cannot open, the old org and its page stay.
 pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
     timing::begin(app, id);
     let state = app.state::<AppState>();
     let _changing = state.changing.lock().unwrap();
     timing::mark(app, id, "lock");
-    let (org, was_open) = {
-        let mut orgs = state.orgs.lock().unwrap();
-        if orgs.get(id).is_none() {
-            return Ok(());
-        }
-        let was_open = orgs.active().is_some_and(|org| org.id == id);
-        orgs.set_active(id);
-        (orgs.active().cloned(), was_open)
+    let (org, was_open, previous) = {
+        let orgs = state.orgs.lock().unwrap();
+        let Some(org) = orgs.get(id).cloned() else { return Ok(()) };
+        let previous = orgs.active().map(|org| org.id.clone());
+        (org, previous.as_deref() == Some(id), previous)
     };
-    let Some(org) = org else { return Ok(()) };
+    let Some(home) = Home::of(&org) else {
+        log::warn!("could not open an org: its address is not usable");
+        return Ok(());
+    };
     let live = org_page(app, &org.id);
     let showing = {
         let prefetched = state.prefetch.lock().unwrap().org.clone();
@@ -443,23 +444,32 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
         refresh_chrome(app);
         return Ok(());
     }
-    let Some(home) = Home::of(&org) else { return Ok(()) };
+    if main_window(app).is_none() {
+        // The window opens on the open org, so the org is made the open one first, and put back if that fails.
+        state.orgs.lock().unwrap().set_active(id);
+        if let Err(e) = build_window(app) {
+            log::warn!("could not open the window for an org: {e}");
+            if let Some(previous) = &previous {
+                state.orgs.lock().unwrap().set_active(previous);
+            }
+            return Err(e);
+        }
+        show_when_painted(app);
+    } else if let Some(page) = &live {
+        layout_page(app, page);
+        let _ = page.show();
+        let _ = page.set_focus();
+        state.orgs.lock().unwrap().take_sign_in(id);
+    } else if let Err(e) = open_org_webview(app, &org, true) {
+        log::warn!("could not open an org's page, so the open org stays: {e}");
+        return Err(e);
+    }
+    state.orgs.lock().unwrap().set_active(id);
     state.prefetch.lock().unwrap().take(id);
     // The connection follows the open org, and the status starts over.
     select_org(&state, Config::new(home.hub.clone()), live.is_some());
     *state.status.lock().unwrap() = crate::hub::HubStatus::default();
-    if main_window(app).is_none() {
-        build_window(app)?;
-        show_when_painted(app);
-    } else if let Some(page) = &live {
-        layout(app);
-        let _ = page.show();
-        let _ = page.set_focus();
-        state.orgs.lock().unwrap().take_sign_in(id);
-    } else {
-        open_org_webview(app, &org, true)?;
-        layout(app);
-    }
+    layout(app);
     timing::shown(app, id);
     let gone = note_shown(&mut state.shown.lock().unwrap(), id, KEEP_ALIVE);
     for other in gone.iter().filter(|other| other.as_str() != id) {
@@ -469,6 +479,39 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
     }
     refresh_chrome(app);
     Ok(())
+}
+
+/// Numbers a rail click, in the order the clicks came.
+pub(crate) fn next_click() -> u64 {
+    static CLICKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    CLICKS.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The switch a rail click asks for, unless a later click already ran: switches wait on each other, and the last
+/// click is the one that must win (A, B, A ends on A). Clicks run one at a time, in number order as far as they
+/// overtake each other.
+pub(crate) fn switch_for_click(app: &App, id: &str, click: u64) -> tauri::Result<()> {
+    static LAST: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+    let mut last = LAST.lock().unwrap();
+    if !newer_click(&mut last, click) {
+        timing::finish(app, id, "a later click came first");
+        return Ok(());
+    }
+    switch_to(app, id)
+}
+
+/// Whether `click` comes after every click that ran, noting it as the last if so.
+pub(crate) fn newer_click(last: &mut u64, click: u64) -> bool {
+    if click <= *last {
+        return false;
+    }
+    *last = click;
+    true
+}
+
+/// Puts a page in the open page's place, beside the rail.
+fn layout_page(app: &App, page: &Webview) {
+    let _ = page.set_bounds(page_bounds(app, true));
 }
 
 /// The open org's server becomes the connection. Its page's visual allowance comes along when the page was already
@@ -626,6 +669,19 @@ pub(crate) fn forget_page(app: &App, id: &str) {
     }
 }
 
+/// Loads org `id`'s open page again after Tico sign-in renewed its session: on the hub's sign-in when the org has
+/// one, so it goes straight in, otherwise on its usual first page.
+pub(crate) fn renew_page(app: &App, id: &str) {
+    let Some(page) = org_page(app, id) else { return };
+    let (org, sign_in) = {
+        let state = app.state::<AppState>();
+        let mut list = state.orgs.lock().unwrap();
+        (list.get(id).cloned(), list.take_sign_in(id))
+    };
+    let Some(home) = org.as_ref().and_then(Home::of) else { return };
+    let _ = page.navigate(first_page(Config::new(home.hub.clone()).start_url(), &home.hub, sign_in));
+}
+
 /// Whether the main window is waiting for its first org page to paint before it shows.
 static AWAITING_PAINT: AtomicBool = AtomicBool::new(false);
 /// The longest the window waits for that.
@@ -711,6 +767,16 @@ mod page_tests {
         assert!(!prefetch.take("c"));
         assert!(prefetch.take("b") && prefetch.org.is_none());
         assert!(!prefetch.is_latest(close), "clicked: the close is off");
+    }
+
+    #[test]
+    fn the_last_rail_click_wins_whichever_order_the_switches_run_in() {
+        // A (1), B (2), A (3): the switches race for their turn, and 3 runs before 2.
+        let mut last = 0;
+        assert!(newer_click(&mut last, 1));
+        assert!(newer_click(&mut last, 3));
+        assert!(!newer_click(&mut last, 2), "B ran after the later A: it does nothing");
+        assert!(newer_click(&mut last, 4));
     }
 
     #[test]
