@@ -3321,6 +3321,7 @@ export type ModelSubscription = {
   updated_at: string;
   usage: {
   cost_usd_month: number | null;
+  reason?: string | null;
   resets_at?: string | null;
   used_pct: number | null;
   window: "5h" | "week" | null;
