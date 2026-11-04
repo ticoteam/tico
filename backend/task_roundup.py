@@ -305,12 +305,14 @@ def _asks_back(c, slug, actor, at):
     out = []
     for when, ask_id in found:
         key = _key("ask", slug, ask_id)
-        ask = c.execute("SELECT m.id, m.body, m.recipient_id, cv.task_id FROM messages m "
-                        "LEFT JOIN conversations cv ON cv.id=m.conversation_id WHERE m.id=?", (ask_id,)).fetchone()
+        ask = c.execute("SELECT id, body, recipient_id, refs, conversation_id FROM messages WHERE id=?", (ask_id,)).fetchone()
         if not ask or _mark(c, key) is not None:
             continue
         who = H.actor_name(c, ask["recipient_id"]) or H.actor_id(ask["recipient_id"])
-        task = H.task(c, ask["task_id"]) if ask["task_id"] else None
+        # The task the question is about, as the message names it (its refs, else its task conversation): a question
+        # asked from a Home room names its task in refs only.
+        tid = H.message_task_id({"refs": H._json(ask["refs"], {})}, H.conversation(c, ask["conversation_id"]))
+        task = H.task(c, tid) if tid else None
         if task and (not H.task_private_readable(c, actor, task) or H.task_private(c, task)):
             line = (f"- a private task {task['id'][:8]}: a question to a person had no answer in two business days; "
                     "ask again as a fresh question with a date, or drop it.")
@@ -352,7 +354,9 @@ def _late(c, slug, actor, at, shared):
     out = []
     for item in _shared(shared, "late", lambda: step_age.late_items(c, at)):
         row = item["row"]
-        if item["to"] != actor or not H.task_private_readable(c, actor, row) or _running(c, slug, row):
+        # A ticket its manager cannot read by its parties' bot access (H.bot_reads_task) is named nowhere, not even as private.
+        if (item["to"] != actor or not H.task_private_readable(c, actor, row) or not H.bot_reads_task(c, actor, row)
+                or _running(c, slug, row)):
             continue
         key = _key("late", slug, row["id"])
         if not _stale(c, key, at, timedelta(days=RELIST_DAYS)):

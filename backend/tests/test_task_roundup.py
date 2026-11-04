@@ -898,3 +898,36 @@ def test_a_list_cut_at_its_cap_keeps_its_group_order_and_counts_the_rest(api, mo
         assert lines[1].startswith(f"- {due['id'][:8]} Chase the quote: Follow-up time set by ")
         assert lines[2].startswith(f"- {oldest['id'][:8]} Old errand two: Quiet for 3 days")
         assert lines[3] == "- and 1 more" and len(lines) == 4
+
+
+def test_a_question_about_a_private_task_asked_from_a_home_room_names_neither_the_task_nor_the_question(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        private = H.task_create(c, H.human_actor("ana"), "Confidential merger plan", "Keep it quiet.", "bot:finance",
+                                lint=False, private=True)
+        settle(c, private["id"], "finance", ago(days=8))
+        home = H.open_conversation(c, H.human_actor("ana"), [H.human_actor("ana"), H.bot_actor("finance")], kind="chat")
+        question = H.say(c, H.bot_actor("finance"), H.human_actor("ana"), "Is the merger price still 40 million?",
+                         conversation_id=home, kind="ask", refs={"task": private["id"]})
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (ago(days=8), question["id"]))
+        complete_jobs(c)
+        assert still_needed.sweep(c, H.shift(DAY, hours=3)) == {"bot:finance": [question["id"]]}
+        assert "finance" in task_roundup.run(c, NOON)["woke"]
+        body = only_list(c)
+        assert f"- a private task {private['id'][:8]}: a question to a person had no answer" in body
+        for secret in ("merger", "Confidential", "40 million", "Keep it quiet"):
+            assert secret not in body, secret
+
+
+def test_a_late_ticket_its_manager_cannot_read_by_its_owner_bots_access_is_named_nowhere(api):
+    from backend import bot_access as A, bot_settings as BS
+    store = api.app.state.store
+    with store.transaction() as c:
+        ticket = late_manager_ticket(c)
+        only_ana = A.audience({"people": ["ana"]})
+        c.execute("INSERT INTO bot_config(bot,owner_id,access) VALUES('cpo','ana',?) ON CONFLICT(bot) DO UPDATE SET access=excluded.access",
+                  (A.stored({"see": A.OPEN_LEVEL, "read": only_ana, "write": only_ana}),))
+        BS.write(c, "cpo", {})
+        assert not H.bot_reads_task(c, H.bot_actor("coo"), H.task(c, ticket["id"]))
+        assert "coo" not in task_roundup.run(c, DAY)["woke"]
+        assert lists(c, "coo") == [], "no title, no step, no line"
