@@ -68,7 +68,8 @@ mid-stop lets it lapse, and a start clears it.
 4. The server sees a cloud code. For a bot's own machine it names the computer "&lt;bot&gt; (cloud)", closes it to
    every other bot (`accepts_member_bots=0`, and placement never offers one bot's machine to another) and assigns
    the bot to it. For the shared machine it names it "Shared cloud machine", opens it to member bots and assigns
-   every bot on it.
+   every bot on it. A computer a person renamed keeps that name when its machine is made again (PR 2481,
+   `backend/cloud_machines.py`).
 5. Later boots (a resume after an idle stop) find `~/.config/tico/runner.json` and only start the units.
 
 A retried enroll with the same code returns the same runner, so a boot that lost the server's answer just tries
