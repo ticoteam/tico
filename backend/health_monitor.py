@@ -32,7 +32,6 @@ from fastapi import Request
 from pydantic import Field
 
 from . import diagnostics, login_holds, models_preset, providers, runner_versions, team_rules
-from .auth import Identity
 from .models import Contract
 from .store import H, Problem
 from . import bot_settings as BS
@@ -876,13 +875,13 @@ def report(c_factory, support, auth, settings, who, key):
     if filed and filed["ticket_id"]:
         if row["occurrences"] <= filed["reported_occurrences"]:
             return {"signature": row["signature"], "ticket": filed["ticket_id"], "again": True}
-        # The ticket is whoever filed it: the owner, or the person who approved it (Support.file_approved).
+        # HQ hears it with the ticket's own secret, whoever filed it: the owner, or the person who approved it
+        # (Support.file_approved). The person's chat does not list such a ticket (support.OWN): this line is the team's.
         with store.read() as c:
-            holder = c.execute("SELECT actor FROM support_tickets WHERE id=?", (filed["ticket_id"],)).fetchone()
-        holder = Identity(holder["actor"], "human") if holder and holder["actor"] != owner.actor else owner
-        support.write(holder, filed["ticket_id"],
-                      f"[Health Monitor] Seen again ({row['occurrences']} times), last at {row['last_seen_at'][:16]} UTC. "
-                      f"Signature {row['signature']}.")
+            kept_ticket = c.execute("SELECT * FROM support_tickets WHERE id=?", (filed["ticket_id"],)).fetchone()
+        if kept_ticket:
+            support.note(kept_ticket, f"[Health Monitor] Seen again ({row['occurrences']} times), last at "
+                                      f"{row['last_seen_at'][:16]} UTC. Signature {row['signature']}.")
         with store.transaction() as c:
             c.execute("UPDATE health_reports SET reported_occurrences=? WHERE signature=?",
                       (row["occurrences"], row["signature"]))

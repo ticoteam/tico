@@ -150,7 +150,7 @@ def test_demo_mode_and_the_off_switch_refuse_everything(environment, hq, monkeyp
     for call in (lambda: file(api), lambda: api.get("/api/v2/support/compose", headers=signed_in()),
                  lambda: api.post("/api/v2/support/tickets/refresh", headers=signed_in())):
         assert call().status_code == 409
-    assert api.get("/api/v2/support/tickets", headers=signed_in()).json() == {"enabled": False, "tickets": [], "unread": 0, "unread_own": 0}
+    assert api.get("/api/v2/support/tickets", headers=signed_in()).json() == {"enabled": False, "tickets": [], "unread": 0}
     assert hq.seen == []
     # A ticket filed while support was on: once it is off, nothing about it, or anything else, reaches HQ.
     api = environment()
@@ -472,11 +472,10 @@ def test_a_bot_drafts_a_person_approves_and_the_bot_sends_one_ticket_owned_by_th
     (request,) = hq.seen
     assert set(json.loads(request.content)) == {"message", "version", "install_id", "source"}    # no email, no diagnostics
     assert json.loads(request.content)["source"] == "bot_report"        # a bot's report a person approved
-    # The approver's ticket: on their Support page, counted for them, not the bot's.
+    # The approver's ticket is kept under their name, but a bot's report is not in their chat (support.OWN).
     with api.app.state.store.read() as c:
         assert [tuple(x) for x in c.execute("SELECT actor FROM support_tickets")] == [(approver,)]
-    mine = api.get("/api/v2/support/tickets", headers=signed_in()).json()["tickets"]
-    assert [t["id"] for t in mine] == [sent["ticket"]["id"]]
+    assert api.get("/api/v2/support/tickets", headers=signed_in()).json()["tickets"] == []
     # Again: the same ticket back, nothing more reaches HQ.
     again = send(api, bot, approval["id"])
     assert again.status_code == 200 and again.json()["ticket"]["id"] == sent["ticket"]["id"] and again.json()["again"]
@@ -1088,32 +1087,60 @@ def test_a_rule_send_leaves_no_unread_notice_for_the_default_person_and_needs_yo
     assert mid not in unread                                       # no unread notice for the default person
 
 
-def test_a_ticket_says_who_filed_it_and_only_the_persons_own_replies_count_for_the_dot(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
-    """The page opens the chat by itself only for a reply on a ticket the person wrote. `source` says who filed each
-    ticket and `unread_own` counts just those replies; `unread` still counts every reply, since the chat shows them all.
-    A bot's report the team rule sent at once is filed as a bot's. A ticket kept before `source` was stored is told apart
-    by its request key: a bot's report by its approval's key, the Health Monitor's by `health:`."""
+def test_a_bots_ticket_is_not_in_the_persons_chat_and_its_replies_do_not_count(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
+    """A bot's report is not in the person's chat (support.OWN): it is not listed, its replies do not count toward
+    `unread`, and it cannot be read, answered or deleted there. It is still filed, its replies are still pulled and kept,
+    and a bot's follow-up (note) still reaches HQ. Covers a bot's report, one kept before `source` was stored (by its
+    approval's key), and the Health Monitor's (`health:`). A key of the person's own that starts like a bot's does not
+    hide the person's ticket."""
     monkeypatch.setattr(support, "FRESH_S", 0)
     api = environment()
     mine = file(api).json()["id"]
     bot = as_bot(api)
-    r = draft(api, bot).json()                                  # the team rule is on by default: sent at once
-    assert r["sent"] is True and r["ticket"]["sent"]["source"] == "bot_report"
-    bot_ticket = r["ticket"]["id"]
-    hq_mine, hq_bot = list(hq.tickets)                          # HQ's ids, in filing order
-    hq.staff_replies(hq_mine, "Try a reload")
-    hq.staff_replies(hq_bot, "The report is with the team")
+    filed = draft(api, bot).json()                              # the team rule is on by default: sent at once
+    assert filed["sent"] is True and filed["ticket"]["sent"]["source"] == "bot_report"
+    bot_ticket = filed["ticket"]["id"]
+    older_bot = draft(api, bot, message="The checkout button does nothing").json()["ticket"]["id"]
+    health = file(api, message="Sync stalled since 0.3.47").json()["id"]
+    spoof = file(api, headers={**signed_in(), "idempotency-key": "health:sig"}, message="My own report").json()["id"]
+    with api.app.state.store.transaction() as c:                # kept before `source` was stored
+        c.execute("UPDATE support_tickets SET sent='{}' WHERE id=?", (older_bot,))
+        c.execute("UPDATE support_tickets SET request_key='health:sig', sent='{}' WHERE id=?", (health,))
+    hq_ids = list(hq.tickets)                                    # HQ's ids, in filing order
+    assert len(hq_ids) == 5
+    hq.staff_replies(hq_ids[0], "Try a reload")                  # mine
+    hq.staff_replies(hq_ids[1], "The report is with the team")  # the bot's
+    hq.staff_replies(hq_ids[2], "Fixed in 0.3.48")              # the older bot's
+    hq.staff_replies(hq_ids[3], "Thanks, fixed")                 # the Health Monitor's
+    hq.staff_replies(hq_ids[4], "Got it")                        # the person's own
     assert api.post("/api/v2/support/tickets/refresh", headers=signed_in()).status_code == 200
     listed = api.get("/api/v2/support/tickets", headers=signed_in()).json()
-    assert {t["id"]: t["source"] for t in listed["tickets"]} == {mine: "person", bot_ticket: "bot_report"}
-    assert listed["unread"] == 2 and listed["unread_own"] == 1
+    assert {t["id"] for t in listed["tickets"]} == {mine, spoof}
+    assert listed["unread"] == 2                                 # only the replies on the person's own tickets
+    with api.app.state.store.read() as c:                        # the bots' tickets are pulled and kept, not dropped
+        kept = {r["id"]: r["messages"] for r in c.execute("SELECT id, messages FROM support_tickets")}
+    assert "The report is with the team" in kept[bot_ticket] and "Fixed in 0.3.48" in kept[older_bot]
+    assert "Thanks, fixed" in kept[health]
+    for hidden in (bot_ticket, older_bot, health):
+        assert api.post(f"/api/v2/support/tickets/{hidden}/read", headers=signed_in()).status_code == 404
+        assert api.post(f"/api/v2/support/tickets/{hidden}/messages", json={"message": "Hello"},
+                        headers=signed_in()).status_code == 404
+        assert api.delete(f"/api/v2/support/tickets/{hidden}", headers=signed_in()).status_code == 404
+    assert len(hq.tickets) == 5                                  # nothing was deleted at HQ
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT * FROM support_tickets WHERE id=?", (bot_ticket,)).fetchone()
+    api.app.state.support.note(row, "[Health Monitor] Seen again (2 times)")   # the bot's follow-up still reaches HQ
+    assert json.loads(hq.seen[-1].content) == {"message": "[Health Monitor] Seen again (2 times)"}
 
-    # Tickets kept before `source` was stored, told apart by their request keys.
-    health = file(api, message="Sync stalled since 0.3.47").json()["id"]
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE support_tickets SET sent='{}' WHERE id=?", (bot_ticket,))
-        c.execute("UPDATE support_tickets SET request_key='health:sig', sent='{}' WHERE id=?", (health,))
+
+def test_bots_tickets_do_not_crowd_the_persons_own_out_of_the_list(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
+    """The chat's filter runs before the limit: three newer bot tickets do not push the person's own out of a list of two."""
+    monkeypatch.setattr(support, "LISTED", 2)
+    api = environment()
+    mine = file(api).json()["id"]
+    bot = as_bot(api)
+    for n in range(3):
+        assert draft(api, bot, message=f"Report {n}").json()["sent"] is True
     listed = api.get("/api/v2/support/tickets", headers=signed_in()).json()
-    assert {t["id"]: t["source"] for t in listed["tickets"]} == {mine: "person", bot_ticket: "bot_report",
-                                                                 health: "health_monitor"}
-    assert listed["unread"] == 2 and listed["unread_own"] == 1
+    assert [t["id"] for t in listed["tickets"]] == [mine]
+    assert listed["unread"] == 0

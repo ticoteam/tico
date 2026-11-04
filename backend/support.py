@@ -64,6 +64,13 @@ HQ_WAIT = 8
 # The sources this server names when it files (HQ's `source` field; HQ owns the full list and stores `unknown` for any
 # value it does not know): a person, a bot's report a person approved, BotOps, the Health Monitor.
 SOURCES = ("person", "bot_report", "botops", "health_monitor")
+# The person's own tickets, as SQL (`_source` says the same in Python). A bot's report, the Health Monitor's and BotOps'
+# are not: they name their source in `sent`, and a ticket kept before that was by its request key (`approval:` for a
+# bot's report, `health:` for the Health Monitor's). The person's chat lists only these; a bot's ticket is still pulled
+# and stored, and the bots' own follow-ups (note) reach HQ. The person's own keys are `idem:` (their idempotency key)
+# or `draft:` (their own approved draft), so no key of theirs can make a ticket a bot's.
+OWN = ("COALESCE(json_extract(sent,'$.source'),'person')='person' "
+       "AND COALESCE(request_key,'') NOT LIKE 'approval:%' AND COALESCE(request_key,'') NOT LIKE 'health:%'")
 RULE = "bot_reports_direct"     # the team rule: a bot's report is sent without a card (send_by_rule)
 RULE_VIA = "team rule"          # approvals.decided_via of a draft the rule decided: no person decided it
 RULE_NOTE = "team rule: bots send reports without asking"   # the decision's note, in its history
@@ -271,8 +278,8 @@ def _last_activity(row):
 
 def _source(row, sent):
     """Who filed a ticket, as HQ's `source` names it. A ticket the person wrote keeps `sent` as it always was; any other
-    filer is kept in `sent`. A ticket filed before that was kept is told apart by its request key: a bot's report a
-    person approved is `approval:`, the Health Monitor's direct report is `health:`."""
+    filer is kept in `sent`. A ticket filed before that was kept is told apart by its request key (OWN): a bot's report
+    is `approval:`, the Health Monitor's direct report is `health:`."""
     if sent.get("source") in SOURCES:
         return sent["source"]
     key = row["request_key"] or ""
@@ -449,7 +456,7 @@ class Support:
         if not hq_id or not hq_secret:
             raise Problem("support_unreachable", "Could not reach Tico support. Try again in a moment.", 502, retryable=True)
         ticket_id = "sup_" + secrets.token_hex(6)
-        # Kept with the ticket who filed it, unless it is the person's own (view() reads that back: ui/support.js).
+        # Kept with the ticket who filed it, unless it is the person's own (OWN reads it back for the chat).
         kept = sent if source == "person" else {**sent, "source": source}
         with self.store.transaction() as c:
             c.execute("INSERT INTO support_tickets(id,actor,created_at,status,message,email,sent,hq_id,hq_secret,"
@@ -573,11 +580,14 @@ class Support:
         if H.lint_support(payload) or not H.support_text_matches(payload):
             raise Problem("approval", "The approved message no longer matches its hash; nothing was sent.", 409)
         person = Identity(row["decided_by_id"], "human")
-        key = "approval:" + approval_id
+        # A bot's report a person approved is the bot's (`approval:`). A report a person asked for and sent is theirs:
+        # filed as `person` under its own key (`draft:`), so their chat lists it (OWN).
+        bot = H.is_bot(who.actor)
+        key = ("approval:" if bot else "draft:") + approval_id
         with self.store.read() as c:      # a Health Monitor report a person approved is still the Health Monitor's
             health = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='health_reports'").fetchone() \
                 and c.execute("SELECT 1 FROM health_reports WHERE approval_id=?", (approval_id,)).fetchone()
-        source = "health_monitor" if health else "bot_report"
+        source = ("health_monitor" if health else "bot_report") if bot else "person"
         if row["consumed_at"]:
             with self.store.read() as c:
                 done = c.execute("SELECT * FROM support_tickets WHERE actor=? AND request_key=?",
@@ -600,7 +610,7 @@ class Support:
         return {"ticket": ticket, "approval": approval_id, "filed_as": person.actor, "again": False}
 
     def write(self, who, ticket_id, text, attachment=""):
-        """Add a message to one of the caller's tickets."""
+        """Add a message to one of the person's own tickets (the chat's; a bot's ticket is not theirs to write on)."""
         text = clean_message(text)
         row = self._own(who, ticket_id)
         payload = {"message": text}
@@ -614,7 +624,8 @@ class Support:
         return self.one(who, ticket_id)
 
     def note(self, row, text):
-        """Tell HQ that a ticket this install filed has changed, such as a request withdrawn (backend/cloud_agents.py). It
+        """Tell HQ that a ticket this install filed has changed, such as a request withdrawn (backend/cloud_agents.py) or
+        the Health Monitor saw its problem again (backend/health_monitor.py). It
         goes with the ticket's own secret, not as a person's words; a ticket HQ already deleted has no one to hear it."""
         answer = _ask_hq("POST", f"/v1/support/{row['hq_id']}/messages", body={"message": clean_message(text)},
                          secret=self.secret(row))
@@ -622,7 +633,7 @@ class Support:
             _answer(answer, (201, 200))
 
     def remove(self, who, ticket_id):
-        """Delete the ticket at HQ, then here."""
+        """Delete one of the person's own tickets at HQ, then here."""
         row = self._own(who, ticket_id)
         answer = _ask_hq("DELETE", f"/v1/support/{row['hq_id']}", secret=self.secret(row))
         if answer.status_code not in (200, 404):        # 404: the team already deleted it
@@ -634,8 +645,11 @@ class Support:
 
     # ------------------------------------------------------------------ the list
     def _own(self, who, ticket_id):
+        """One of the person's own tickets (OWN). A bot's report is not in their chat, so it is not read, answered or
+        deleted there either. The bots' own follow-ups (note) do not come this way."""
         with self.store.read() as c:
-            row = c.execute("SELECT * FROM support_tickets WHERE id=? AND actor=?", (ticket_id, who.actor)).fetchone()
+            row = c.execute(f"SELECT * FROM support_tickets WHERE id=? AND actor=? AND {OWN}",
+                            (ticket_id, who.actor)).fetchone()
         if not row:
             raise Problem("not_found", "Ticket not found", 404)
         return row
@@ -644,14 +658,13 @@ class Support:
         return view(self._own(who, ticket_id))
 
     def listing(self, who):
+        """The person's own tickets, newest first, and the replies on them they have not seen. A bot's ticket is not
+        listed and does not count; the filter runs before LISTED, so bots' tickets never crowd the person's out."""
         with self.store.read() as c:
-            rows = c.execute("SELECT * FROM support_tickets WHERE actor=? ORDER BY created_at DESC, id DESC LIMIT ?",
+            rows = c.execute(f"SELECT * FROM support_tickets WHERE actor=? AND {OWN} ORDER BY created_at DESC, id DESC LIMIT ?",
                              (who.actor, LISTED)).fetchall()
         tickets = [view(r) for r in rows]
-        # `unread_own` counts only the replies on the person's own tickets: what the ? shows and what opens the chat.
-        # A bot's report's reply is in the chat too, and counts in `unread`.
-        return {"enabled": True, "tickets": tickets, "unread": sum(t["unread"] for t in tickets),
-                "unread_own": sum(t["unread"] for t in tickets if t["source"] == "person")}
+        return {"enabled": True, "tickets": tickets, "unread": sum(t["unread"] for t in tickets)}
 
     def _pull(self, row):
         """Ask HQ about one ticket and keep the answer. Returns False when HQ could not be reached."""
@@ -676,15 +689,16 @@ class Support:
         return True
 
     def refresh(self, who, ticket=""):
-        """Ask HQ about the caller's tickets that are due, the most recently written on first, then list them. `ticket`
+        """Ask HQ about the caller's tickets that are due: the person's own first, then the most recently written on. A
+        bot's ticket is still pulled after them, so HQ's replies to it are kept. Then list the person's own. `ticket`
         is the one a person has in view: it is due every FRESH_S whatever its pace. HQ being down, or asking us to slow
         down (429), ends the round and keeps what was known."""
         now = H.now()
         with self.store.read() as c:
-            rows = c.execute("SELECT * FROM support_tickets WHERE actor=? AND status!='gone' "
+            rows = c.execute(f"SELECT *, ({OWN}) AS own FROM support_tickets WHERE actor=? AND status!='gone' "
                              "ORDER BY created_at DESC LIMIT ?", (who.actor, LISTED)).fetchall()
         active_since = H.parse_ts(now) - timedelta(seconds=ACTIVE_S)
-        rows = sorted(rows, key=lambda r: (r["id"] == ticket, _last_activity(r)), reverse=True)
+        rows = sorted(rows, key=lambda r: (r["id"] == ticket, r["own"], _last_activity(r)), reverse=True)
         failed, asked = False, 0
         for row in rows:
             if row["id"] == ticket or (row["status"] != "closed" and _last_activity(row) > active_since):
@@ -733,7 +747,7 @@ def install(app, store, settings, census):
     def support_list(request: Request):
         who = person(request)
         if off_reason(settings):
-            return {"enabled": False, "tickets": [], "unread": 0, "unread_own": 0}
+            return {"enabled": False, "tickets": [], "unread": 0}
         return support.listing(who)
 
     @app.get("/api/v2/support/compose")
@@ -773,7 +787,9 @@ def install(app, store, settings, census):
     def support_file(request: Request, body: SupportTicket):
         who = person(request)
         require_on(settings)
-        return support.file(who, body, (request.headers.get("idempotency-key") or "")[:200])
+        # The person's own key, kept apart from the keys bots' tickets keep (approval:, health:): see OWN.
+        key = (request.headers.get("idempotency-key") or "")[:200]
+        return support.file(who, body, "idem:" + key if key else "")
 
     @app.get("/api/v2/support/setup-snapshot")
     def support_setup_snapshot(request: Request, asked_from: Literal["wizard", "health", "bot"] = "health"):

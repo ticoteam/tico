@@ -72,8 +72,8 @@
   let state = {enabled: null, tickets: [], unread: 0}, pop = null, timer, busyRefresh = null, stateRevision = 0;
   // `inFlight`: the send on its way, settled either way; `deleting`: Delete chat history running.
   let inFlight = null, deleting = false;
-  // `lastOwn`: the person's own unread replies this tab has been told of. A rise above it opens the chat once (announceReply).
-  let owner = '', lastOwn = 0, announceWaiting = false, compose = null, editor = null, opener = null, loading = null, sending = null;
+  // `lastUnread`: the unread replies this tab has been told of. A rise above it opens the chat once (announceReply).
+  let owner = '', lastUnread = 0, announceWaiting = false, compose = null, editor = null, opener = null, loading = null, sending = null;
   // The one draft: what is in the box and what goes with it. `kind` is only for a message that starts a new ticket.
   const newDraft = () => ({message: '', diag: false, perf: 24, bundle: null, key: uid(), kind: 'support', report: null});
   let draft = newDraft();
@@ -111,13 +111,12 @@
     }
     document.dispatchEvent(new CustomEvent('tico:support'));
   }
-  // The person's own tickets' unread replies (ticket.source is `person`): the ? counts these, and only these, and they open
-  // the chat. A bot's report's replies are in the chat, with no dot and no opening (backend/support.py `_source`).
-  const ownUnread = list => list.reduce((n, t) => n + (t.source === 'person' ? t.unread || 0 : 0), 0);
+  // The unread replies on the person's own tickets: the ? counts them and they open the chat. A bot's report is not in
+  // the chat at all, so its replies are not counted (backend/support.py OWN).
   function accept(data) {
-    state = {enabled: data.enabled !== false, tickets: data.tickets || [], unread: data.unread_own || 0};
-    if (state.unread > lastOwn) announceWaiting = true;
-    lastOwn = state.unread;
+    state = {enabled: data.enabled !== false, tickets: data.tickets || [], unread: data.unread || 0};
+    if (state.unread > lastUnread) announceWaiting = true;
+    lastUnread = state.unread;
     mark();
     announceReply();
     if (!isOpen()) return;
@@ -181,8 +180,8 @@
       if (revision !== stateRevision) return;
       stateRevision++;
       state.tickets = state.tickets.map(x => read.find(n => n.id === x.id) || x);
-      state.unread = ownUnread(state.tickets);
-      lastOwn = state.unread; mark(); render();
+      state.unread = state.tickets.reduce((n, t) => n + (t.unread || 0), 0);
+      lastUnread = state.unread; mark(); render();
     } catch (_) { /* unread until the chat is opened again */ }
   }
   // While a message is on its way nothing that could send it again or change it can be pressed, however often the
@@ -656,7 +655,7 @@
           state.tickets = left;
           throw new Error(`Could not delete all of your chat history; ${left.length} conversation${left.length === 1 ? '' : 's'} left. Try again.`);
         }
-        state.tickets = []; state.unread = 0; lastOwn = 0;
+        state.tickets = []; state.unread = 0; lastUnread = 0;
         deleting = false; mark(); asking(false); render(); renderComposer(); focusBox();
       } catch (error) { askErr.textContent = error.message; askErr.hidden = false; mark(); }
       finally { deleting = false; yes.disabled = !!sending; lockSending(false); }
@@ -701,7 +700,7 @@
   // Loads this person's conversation and the reply email a new ticket carries; a failure keeps what was loaded before.
   async function load() {
     const actor = typeof S === 'undefined' ? '' : S.me?.id;
-    if (owner !== actor) { stateRevision++; if (owner) browserFailures.length = 0; owner = actor; draft = newDraft(); compose = null; state = {enabled: null, tickets: [], unread: 0}; lastOwn = 0; announceWaiting = false; }
+    if (owner !== actor) { stateRevision++; if (owner) browserFailures.length = 0; owner = actor; draft = newDraft(); compose = null; state = {enabled: null, tickets: [], unread: 0}; lastUnread = 0; announceWaiting = false; }
     try {
       const revision = stateRevision;
       const data = await call('GET', '/support/tickets');
