@@ -70,7 +70,7 @@ def computer_hold(c, runner_id, now=None, status=None, row=None):
       the state its newest sample set (performance.ingest), so the queue does not flap.
     A person's own message skips this at each caller, as it skips the overload hold. `row` is the computer's runner
     row from hold_rows when the caller has it: the same columns, read once for all its computers."""
-    from .performance import MEM_HOLD_AT, MEM_HOLD_CLEAR, load_status
+    from .performance import load_status
 
     def runner():
         nonlocal row
@@ -99,9 +99,30 @@ def computer_hold(c, runner_id, now=None, status=None, row=None):
     if mem is None:
         return None
     held = runner()
-    if mem >= MEM_HOLD_AT or (mem >= MEM_HOLD_CLEAR and held and held['memory_hold']):
+    if memory_holds(mem, held and held['memory_hold']):
         return MEMORY_HOLD, f'{MEMORY_HOLD} {round(mem)}%'
     return None
+
+
+def memory_holds(mem, was_held):
+    """Whether a memory reading (percent) holds new starts: at MEM_HOLD_AT or more, or between the two bars while the
+    computer is already held (`runners.memory_hold`, set by performance.ingest in reading order)."""
+    from .performance import MEM_HOLD_AT, MEM_HOLD_CLEAR
+    return mem >= MEM_HOLD_AT or (mem >= MEM_HOLD_CLEAR and bool(was_held))
+
+
+def memory_held(c, runner_id, now=None):
+    """Whether this computer's memory alone holds new starts, whatever else computer_hold reports. Sustained memory over
+    90% also marks the computer overloaded, and computer_hold then names only the generic "computer busy": a caller that
+    gates on memory asks here. Computers that are off, revoked, silent or never sampled are not memory-held."""
+    from .performance import load_status
+    found = c.execute("SELECT memory_hold,performance,revoked_at FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
+    if not found or found['revoked_at'] is not None or found['performance'] != 'on':
+        return False
+    latest = load_status(c, runner_id, now)['latest_sample']
+    if latest is None or latest['stale'] or latest['mem_pct'] is None:
+        return False
+    return memory_holds(latest['mem_pct'], found['memory_hold'])
 
 
 def held(c, runner_id):
@@ -126,17 +147,53 @@ def held(c, runner_id):
     return out
 
 
+# The explicit state IN is what lets SQLite search attempts_runner_state (runner_id, state); the OR alone does not.
+LIVE_SQL = ("SELECT a.bot_id,count(*) FROM attempts a WHERE a.runner_id=? AND a.state IN ('leased','running') "
+            "AND (a.state='running' OR a.lease_until>?) GROUP BY a.bot_id")
+
+
+def live(c, runner_id):
+    """{bot: turns it holds on this computer}: running turns and unexpired leases, whether starting, parked on a wait
+    (login, quota, lane, pre-start) or neither. The claim gate counts these against `claim_limit`, so a computer's claimed
+    work stays bounded; work past that stays queued on the server, unleased.
+
+    Cached for the read snapshot, like `held`.
+    """
+    from . import read_cache
+    values = read_cache.cache(c)
+    key = ("start_places.live", runner_id)
+    if values is not None and key in values:
+        return values[key]
+    now = H.now()
+    out = MappingProxyType({r[0]: r[1] for r in c.execute(LIVE_SQL, (runner_id, now))})
+    if values is not None:
+        values[key] = out
+    return out
+
+
 # Without the hint SQLite walked attempts_runner_finished (every attempt ever run) to skip the GROUP BY sort:
 # 48 ms on Tico Team's 37k attempts, 0.1 ms over the live ones.
+LIVE_TOTALS_SQL = (
+    "SELECT a.runner_id,count(*) FROM attempts a INDEXED BY attempts_live_lease "
+    "WHERE a.state IN ('leased','running') AND (a.state='running' OR a.lease_until>?) GROUP BY a.runner_id")
+
+
+def live_totals(c):
+    """{runner_id: turns held} for every computer in one pass, counted as `live` counts them. Health's capacity fence
+    used to call `live` once per runner while already walking the fleet."""
+    return {r[0]: r[1] for r in c.execute(LIVE_TOTALS_SQL, (H.now(),))}
+
+
+# held() for every computer in one pass: the places in use, which is what start admission and Health's full check count
+# against the turn limit. A parked turn with its place given up does not count.
 HELD_TOTALS_SQL = (
     "SELECT a.runner_id,count(*) FROM attempts a INDEXED BY attempts_live_lease LEFT JOIN start_places p "
-    "ON p.attempt_id=a.id WHERE a.state IN ('leased','running') AND (a.state='running' OR (a.state='leased' "
-    "AND a.lease_until>? AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) GROUP BY a.runner_id")
+    "ON p.attempt_id=a.id WHERE a.state IN ('leased','running') AND (a.state='running' OR a.lease_until>?) "
+    "AND (a.state='running' OR p.start_until>? OR p.attempt_id IS NULL OR p.managed=0) GROUP BY a.runner_id")
 
 
 def held_totals(c):
-    """{runner_id: turns held} for every computer in one pass. Health's capacity fence used to call
-    `held` once per runner while already walking the fleet."""
+    """{runner_id: places in use} for every computer in one pass, counted as `held` counts them."""
     now = H.now()
     return {r[0]: r[1] for r in c.execute(HELD_TOTALS_SQL, (now, now))}
 
@@ -159,6 +216,24 @@ def turn_limit(runner):
     if TURNS_AT_ONCE in frozenset(H._json(runner["capabilities"], []) or []):
         return setting
     return min(setting, reported)
+
+
+# Claims stop once a computer holds this many times its turn limit in claimed work, waiting turns included. A parked
+# turn has no harness process and takes no start place, so a login or quota wait does not hold the computer's other
+# work; the bound only stops the server from leasing without limit.
+LIVE_CAP_FACTOR = 2
+
+
+def live_limit(runner):
+    """The most claimed turns (running, starting and parked) this computer may hold: LIVE_CAP_FACTOR x turn_limit."""
+    return LIVE_CAP_FACTOR * turn_limit(runner)
+
+
+def claim_limit(runner, body=None):
+    """The most claimed turns a claim may leave on this computer. A claim that negotiates start places gets `live_limit`:
+    a turn past its turn limit is leased and parked, holding no place. Any other claim keeps `turn_limit`, since an older
+    runner's leases start unconditionally, so its lease count is its start count. A remote computer's gate passes no body."""
+    return live_limit(runner) if getattr(body, 'start_places', False) else turn_limit(runner)
 
 
 def bot_limit(config):
@@ -201,6 +276,19 @@ def claim(c, aid):
               (aid, H.shift(H.now(), seconds=START_SECONDS)))
 
 
+def admit(c, aid, runner, settings=None):
+    """A claimed turn's start place, decided when its lease is written under the claim's write lock. The row is managed
+    from the start, with no start yet, so the new lease does not count as held while it is decided. While the computer
+    holds fewer places than its turn limit, `reserve` grants this turn one. A turn claimed past that limit holds no place
+    and is not yet waiting: it is leased (it counts toward `live_limit`), and its start is refused "computer busy" until a
+    place frees, when the runner asks for it (`reserve`, from start-place or started)."""
+    c.execute("INSERT INTO start_places(attempt_id,managed) VALUES(?,1)", (aid,))
+    attempt = c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
+    if sum(held(c, attempt['runner_id']).values()) >= turn_limit(runner):
+        return {"reserved": False}
+    return reserve(c, attempt, settings)
+
+
 def waiting(c, aid, reason):
     """Only a pre-start wait releases a place; a model already executing keeps its place."""
     if not c.execute("SELECT 1 FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
@@ -227,26 +315,20 @@ def overdue(c):
         "AND a.state IN ('leased','running') AND p.start_until<=?", (H.now(),))]
 
 
-# A person's own message, or the keeper carrier of one (threads._carrier): a keeper notice naming the message
-# (refs.carries) and its sender (refs.from). Other keeper notices (a routine, a sweep) carry none.
-PERSON_SQL = (f"(m.sender_id LIKE 'human:%' OR (m.sender_id='{H.KEEPER}' "
-              "AND json_extract(m.refs,'$.carries') IS NOT NULL AND json_extract(m.refs,'$.from') LIKE 'human:%'))")
-
-
 def from_person(c, job_id):
-    """Whether a job answers a person's own message to the bot: a chat, a message in its task, an answer to its ask, or
-    a person's message in a thread with it (its keeper carrier, PERSON_SQL). Such a turn starts on an overloaded
-    computer and ahead of the turns waiting there: the load is the bots' own work, and holding it left a person's
-    message waiting behind a hundred bot turns. A keeper notice that carries no person's message (a routine, a sweep,
-    a rule's wake), or a bot's message, is not one, even when a person's act caused it. Two primary-key reads."""
+    """Whether a job answers a person's own message to the bot: a chat, a message in its task, an answer to its ask.
+    Such a turn starts on an overloaded computer and ahead of the turns waiting there: the load is the bots' own work,
+    and holding it left a person's message waiting behind a hundred bot turns. A keeper notice (a routine, a sweep,
+    a rule's wake), or a bot's message, is not one, even when a person's act caused it; the keeper's carrier of a
+    person's message is one (H.person_sent_sql). Two primary-key reads."""
     return bool(c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
-                          f"WHERE j.id=? AND {PERSON_SQL}", (job_id,)).fetchone())
+                          f"WHERE j.id=? AND {H.person_sent_sql()}", (job_id,)).fetchone())
 
 
 def person_queued(c, runner_id):
     """Whether a person's message waits in this computer's queue: only then does a held claim look for a job."""
     return bool(c.execute("SELECT 1 FROM assignments x JOIN jobs j ON j.bot_id=x.bot AND j.state='queued' AND j.held=0 "
-                          f"JOIN messages m ON m.id=j.message_id WHERE x.runner_id=? AND {PERSON_SQL} "
+                          f"JOIN messages m ON m.id=j.message_id WHERE x.runner_id=? AND {H.person_sent_sql()} "
                           "LIMIT 1", (runner_id,)).fetchone())
 
 

@@ -117,9 +117,10 @@ def tickets(c, task_id):
     once, as (id, status, type_id, step position, closed straight from done, type has a done step)."""
     return c.execute(
         "SELECT t.id,t.status,t.type_id,s.position,"
-        # The unary + keeps SQLite on the per-task index: without ANALYZE it picks task_events(field, ts) and reads
+        # The unary + keeps SQLite on the per-task index: without ANALYZE it picks history_events(subject_type, kind, created_at) and reads
         # every status change on the server.
-        "t.status='closed' AND (SELECT e.old FROM task_events e WHERE e.task_id=t.id AND +e.field='status' "
+        "t.status='closed' AND (SELECT e.old FROM history_events e WHERE e.subject_type='task' AND e.subject_id=t.id "
+        "AND +e.kind='status' "
         "ORDER BY e.created_at DESC,e.rowid DESC LIMIT 1)='done',"
         "EXISTS (SELECT 1 FROM task_steps d WHERE d.type_id=t.type_id AND d.status='done') "
         "FROM tasks t LEFT JOIN task_steps s ON s.id=t.step_id "

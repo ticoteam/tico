@@ -2632,6 +2632,7 @@ def cmd_sync_export(args):
         rows = db.unpushed(conn, mailbox=mailbox if mailbox else None,
                            mailboxes=None if mailbox or boxes is None else boxes,
                            limit=getattr(args, "limit", None) or SYNC_LIMIT)
+        db.annotate_known_senders(conn, rows)
     finally:
         conn.close()
     payload = {"ok": True, "count": len(rows), "messages": rows}

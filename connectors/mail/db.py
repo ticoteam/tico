@@ -146,6 +146,7 @@ CREATE INDEX IF NOT EXISTS sends_day ON sends(employee, mailbox, day);
 CREATE INDEX IF NOT EXISTS sends_recipient ON sends(mailbox, recipient);
 CREATE INDEX IF NOT EXISTS messages_push ON messages(pushed_at, mailbox);
 CREATE INDEX IF NOT EXISTS messages_epoch ON messages(mailbox, epoch);
+CREATE INDEX IF NOT EXISTS messages_from ON messages(mailbox, from_addr);
 CREATE INDEX IF NOT EXISTS judge_cache_expiry ON judge_cache(expires_at);
 CREATE INDEX IF NOT EXISTS mail_check_misses_employee ON mail_check_misses(employee, created);
 """
@@ -570,6 +571,48 @@ def unpushed(conn, mailbox=None, mailboxes=None, limit=500):
         args = args + list(mailboxes)
     sql += " ORDER BY mailbox, epoch, msg_id LIMIT ?"
     return [_decode_message(r) for r in conn.execute(sql, args + [int(limit or 500)]).fetchall()]
+
+
+def first_sent_epochs(conn, mailbox):
+    """{address: epoch of the first message the mailbox's owner sent it}, over To and Cc. Only mail the provider marks
+    SENT counts: a draft, or an inbound message that claims the owner's From, does not. Only the copy this database
+    holds (sync backfills 90 days, then follows history); deleted messages do not count."""
+    owner = str(mailbox or "").strip().lower()
+    first = {}
+    rows = conn.execute("SELECT epoch, to_json, cc_json, labels_json FROM messages WHERE mailbox=? AND from_addr=? "
+                        "AND deleted_at IS NULL AND labels_json LIKE '%\"SENT\"%'", (mailbox, owner)).fetchall()
+    for row in rows:
+        try:
+            labels = json.loads(row["labels_json"] or "[]")
+        except ValueError:
+            labels = []
+        if "SENT" not in (labels if isinstance(labels, list) else []):
+            continue
+        epoch = int(row["epoch"] or 0)
+        for column in ("to_json", "cc_json"):
+            try:
+                addresses = json.loads(row[column] or "[]")
+            except ValueError:
+                addresses = []
+            for address in addresses if isinstance(addresses, list) else []:
+                key = str(address or "").strip().lower()
+                if key and (key not in first or epoch < first[key]):
+                    first[key] = epoch
+    return first
+
+
+def annotate_known_senders(conn, rows):
+    """Set `known_sender` on each row: the mailbox's owner had sent mail to the row's sender before the row's own date.
+    The owner's sends are in the copy like any other mail, so one read per mailbox answers every row: no Gmail call
+    and no scan per message. Returns the rows."""
+    firsts = {}
+    for row in rows:
+        box = row["mailbox"]
+        if box not in firsts:
+            firsts[box] = first_sent_epochs(conn, box)
+        first = firsts[box].get(str(row.get("from_addr") or "").strip().lower())
+        row["known_sender"] = first is not None and first < int(row.get("epoch") or 0)
+    return rows
 
 
 def mark_pushed(conn, mailbox, msg_ids, when=None):

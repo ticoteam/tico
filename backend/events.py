@@ -473,6 +473,16 @@ THREAD_TRIGGERS = [
     ("changes_threads_attention_followers", "UPDATE", "thread_followers",
      _changed("last_read_seq", "following"),
      _row("threads", "attention", "NEW.thread_id", ref="NEW.actor", conversation="NEW.thread_id")),
+    # `pinned` (backend/thread_rail.py): a reader's own pin goes only to that reader (`ref`), a pin for everyone (no
+    # `ref`) to everyone who reads the thread.
+    ("changes_thread_pins_insert", "INSERT", "thread_pins", None,
+     _row("threads", "pinned", "NEW.thread_id", ref="NEW.actor", conversation="NEW.thread_id")),
+    ("changes_thread_pins_update", "UPDATE", "thread_pins", _changed("pinned"),
+     _row("threads", "pinned", "NEW.thread_id", ref="NEW.actor", conversation="NEW.thread_id")),
+    ("changes_thread_pins_delete", "DELETE", "thread_pins", None,
+     _row("threads", "pinned", "OLD.thread_id", ref="OLD.actor", conversation="OLD.thread_id")),
+    ("changes_threads_pinned", "UPDATE", "conversations", _changed("pinned_for_everyone_at"),
+     _row("threads", "pinned", "NEW.id", conversation="NEW.id")),
 ]
 TRIGGERS += THREAD_TRIGGERS
 
@@ -495,6 +505,7 @@ NEEDS = {
     "changes_runner_task_links_delete": ("task_links.computer_id",),
     "changes_runner_restart": ("runners.restart_requested_at",),
     "changes_threads_insert": ("conversations.parent_id",),
+    "changes_threads_pinned": ("conversations.pinned_for_everyone_at",),
     "changes_threads_update": ("conversations.archived_at", "conversations.audience",
                                "conversations.audience_group_id"),
 }
@@ -1234,7 +1245,7 @@ def _threads(view, rows):
     the reader it names; a thread the viewer cannot read sends nothing, and an `activity` row only for a message the
     viewer reads. A call's `call.*` rows go to the people who may read the call's thread."""
     from . import calls, threads
-    out, last = [], {}
+    out, last, activity = [], {}, {}
     for row in rows:
         if str(row["kind"]).startswith("call."):
             # Tico Meet call changes (backend/calls.py): the call's thread decides who hears each one, and each is sent once.
@@ -1244,10 +1255,15 @@ def _threads(view, rows):
             continue
         if row["kind"] in ("read", "attention") and row["ref"] != view.who.actor:
             continue
+        if row["kind"] == "pinned" and row["ref"] and row["ref"] != view.who.actor:
+            continue                # one reader's own pin; a pin for everyone has no `ref`
         # Reactions are per message: one event for each message whose reactions moved.
         last[(row["subject_id"], row["kind"], row["ref"] if row["kind"] == "reactions" else None)] = row
+        if row["kind"] == "activity" and row["ref"]:
+            # Every message one thread's activity rows name, in order: the event stands for all of them.
+            activity.setdefault(row["subject_id"], {})[row["ref"]] = None
     view.prime(subject for subject, _, _ in last)
-    H.prime_messages(view.c, [row["ref"] for (_, kind, _), row in last.items() if kind == "activity" and row["ref"]])
+    H.prime_messages(view.c, [ref for refs in activity.values() for ref in refs])
     for (tid, kind, ref), row in last.items():
         if not view.conversation(tid):
             continue
@@ -1266,13 +1282,23 @@ def _threads(view, rows):
             entry["message_id"] = ref
             entry["reactions"] = view.known.reactions(threads.reactions(view.c, [ref]).get(ref, []), tid)
         elif kind == "activity":
-            if not _activity_shown(view, found, row["ref"]):
+            # The newest message the viewer reads names the event; `unread_count` is how many of them are unread for
+            # the viewer (one check each), so a list adds that many without a re-read.
+            shown = [ref for ref in (activity.get(tid) or {row["ref"]: None}) if _activity_shown(view, found, ref)]
+            if not shown:
                 continue
             entry["counters"] = {"last_seq": found.get("last_seq") or 0,
                                  "last_unread_seq": found.get("last_unread_seq") or 0}
+            entry["message_id"] = shown[-1]
+            count = sum(1 for ref in shown if _activity_unread(view, tid, ref))
+            entry.update(unread=count > 0, unread_count=count)
         elif kind == "counters":
             entry["counters"] = {"last_seq": found.get("last_seq") or 0,
                                  "last_unread_seq": found.get("last_unread_seq") or 0}
+        elif kind == "pinned":
+            own = threads.pin_rows(view.c, view.who.actor, [tid]).get(tid)
+            entry.update(actor=view.who.actor, pinned_for_everyone=bool(found.get("pinned_for_everyone_at")),
+                         pinned=threads.pinned(found.get("pinned_for_everyone_at"), own))
         elif kind == "attention":
             pass        # the reader's needs-you set moved: the client re-reads it, nothing else is sent
         elif kind == "ranked":
@@ -1287,6 +1313,20 @@ def _threads(view, rows):
             entry["thread"] = threads.view(view.c, view.reader, found)
         out.append((row, entry))
     return out
+
+
+def _activity_unread(view, thread_id, message_id):
+    """Whether the message an `activity` row is about is unread for this viewer (threads.unread_message_sql: a person's
+    message not their own, or a delivery to them that counts, past their mark), so a list bumps its row without a re-read.
+    One indexed lookup of the message and the viewer's follower row."""
+    from . import threads
+    reader = view.reader
+    actor = view.who.actor
+    floor = threads._backfill_floor(view.c, reader) if isinstance(reader, threads.Viewer) else 0
+    return view.c.execute(
+        "SELECT 1 FROM messages m LEFT JOIN thread_followers f ON f.thread_id=m.conversation_id AND f.actor=? "
+        f"WHERE m.id=? AND m.conversation_id=? AND m.seq>MAX(COALESCE(f.last_read_seq,0),{int(floor)}) "
+        f"AND {threads.unread_message_sql()}", (actor, message_id, thread_id, actor, actor)).fetchone() is not None
 
 
 def _activity_shown(view, thread, message_id):

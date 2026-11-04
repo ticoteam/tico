@@ -88,7 +88,7 @@ def test_task_actions_act_as_the_owner_with_the_automation_as_via(api):
     run = post(api, f"automations/{aid}/run", {"input": {"task": {"id": made["id"]}}})["run"]
     assert run["status"] == "ok", run
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT actor, via FROM task_events WHERE task_id=? AND note='Seen by the automation'",
+        row = c.execute("SELECT actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? AND note='Seen by the automation'",
                         (made["id"],)).fetchone()
     assert dict(row) == {"actor": "human:ana", "via": f"automation:{aid}"}
 

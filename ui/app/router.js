@@ -3,6 +3,8 @@
 'use strict';
 
 let LAST_ROUTE = '', ROUTE_FADING = false, ROUTE_SEQ = 0, ROUTE_PENDING = '', ROUTE_FADE = null;
+// The page an address draws: its path, with every thread one page (the rail stays while the thread beside it changes).
+const routePage = h => { const p = String(h || '').split('?')[0]; return p === THREADS_ROUTE || p.startsWith(THREAD_ROUTE) ? THREADS_ROUTE : p; };
 function route(hash = location.hash) {
   if (hash.startsWith('#/settings?recruit=')) {
     try {
@@ -38,7 +40,7 @@ function route(hash = location.hash) {
   main.className = '';
   // A new page fades in (opacity only); a query change within the same page does not. A view transition
   // (routeChanged) already cross-fades it, so this is the fallback for a browser without one.
-  const newPath = !from || from.split('?')[0] !== S.route.split('?')[0];
+  const newPath = !from || routePage(from) !== routePage(S.route);
   if (from && newPath && !ROUTE_FADING && main.animate && !matchMedia('(prefers-reduced-motion: reduce)').matches)
     main.animate({opacity: [0, 1]}, {duration: 120, easing: 'cubic-bezier(.2,0,0,1)'});
   document.body.classList.remove('task-peek-open');
@@ -62,7 +64,7 @@ function route(hash = location.hash) {
   if (!(S.route === UPDATES || S.route.startsWith(UPDATES + '?'))) { if (UPD) { UPD.io?.disconnect(); void updFlush(UPD); UPD = null; } updcStop(); }
   if (!S.route.startsWith('#/bot/')) botStopped();
   if (!S.route.startsWith('#/seat/')) recruitStop();
-  threadsSync();      // the Threads and DMs sidebar sections (ui/app/threads.js)
+  threadsSync();      // the sidebar's Threads link and the rail's lists (ui/app/threads.js)
   askSync();          // Ask's button: away on the Assistant page and in setup (ui/app/ask-panel.js)
   renderTree();
   if (redesignRoute(S.route)) { /* Strategy's tabs, Automations, Connections and the old addresses that moved (ui/app/redesign.js) */ }
@@ -177,7 +179,7 @@ function route(hash = location.hash) {
 // change, reduced motion, a hidden window and a browser without view transitions draw at once. An error in route()
 // still surfaces as an error (not a rejected transition).
 function routeChanged() {
-  const path = h => (h || UPDATES).split('?')[0], seq = ++ROUTE_SEQ;
+  const path = h => routePage(h || UPDATES), seq = ++ROUTE_SEQ;
   // The address changed again before its fade drew (a quick second click, a script): that address's page is drawn now
   // and this one right after it, in this task and without a fade, as they would be without the fade. An address the
   // first page writes for itself (Settings names its tab) gives way to the newer one.

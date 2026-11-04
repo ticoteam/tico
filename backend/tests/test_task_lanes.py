@@ -44,9 +44,10 @@ def test_task_lanes_run_side_by_side_and_each_lane_stays_serial(api):
 
 
 def test_a_bot_uses_all_places_and_next_place_goes_to_the_bot_with_fewest(api):
-    machine = task_bot(api, lanes=True, capacity=4, others=("finance",))
+    machine = task_bot(api, lanes=True, capacity=2, others=("finance",))
     tasks = [new_task(api, title) for title in ("first", "second", "third", "fourth", "fifth")]
-    # No per-bot cap or permanently empty place: every short start may be used.
+    # No per-bot cap or permanently empty place: every short start may be used. Twice the two places is the claim
+    # bound, so four turns lease and the fifth task waits for a free place.
     assert [claim(api, machine)["bot"] for _ in range(4)] == ["ops"] * 4
     assert claim(api, machine) is None
     assert get(api, "tasks/" + tasks[4]["id"])["waiting_for"] == "Waiting for a free turn on Test Mac"

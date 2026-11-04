@@ -312,7 +312,7 @@ def test_a_push_recorded_while_github_is_read_refuses_the_stale_green_read(api, 
     r = waive(api, row)
     assert r.status_code == 422 and url + ' changed while GitHub was read' in r.text, r.text
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='qa_waiver'", (row['id'],)).fetchall()
+        assert not c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='qa_waiver'", (row['id'],)).fetchall()
         assert not c.execute("SELECT 1 FROM messages WHERE body LIKE '%waived QA%'").fetchall()
 
 
@@ -324,7 +324,7 @@ def test_a_bot_acting_for_the_person_is_refused_and_records_nothing(api, token):
     r = waive(api, row, token)
     assert r.status_code == 403 and 'Only a person, signed in as themselves' in r.text, r.text
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='qa_waiver'", (row['id'],)).fetchall()
+        assert not c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='qa_waiver'", (row['id'],)).fetchall()
         assert not c.execute("SELECT 1 FROM messages WHERE body LIKE '%waived QA%'").fetchall()
     assert waive(api, row, 'token-test').status_code == 200
 
@@ -352,7 +352,7 @@ def test_botops_in_the_owners_own_chat_cannot_waive_a_ticket_every_gate_allows(a
     assert r.status_code == 403 and 'Only a person, signed in as themselves' in r.text, r.text
     assert api.github.reads == reads
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='qa_waiver'", (row['id'],)).fetchall()
+        assert not c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='qa_waiver'", (row['id'],)).fetchall()
         assert not c.execute("SELECT 1 FROM messages WHERE json_extract(refs,'$.qa_waiver') IS NOT NULL").fetchall()
     assert shown(api, row)['task']['qa_waivers'] == []
     direct = waive(api, row, 'ana-test')

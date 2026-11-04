@@ -1016,6 +1016,38 @@ def test_only_a_builder_by_name_gets_its_own_machine_by_default(cloud):
             assert CM.default_placement(c, "ops") == want, name
 
 
+def _config(c, bot, config):
+    assert c.execute("SELECT 1 FROM bot_config WHERE bot=?", (bot,)).fetchone(), bot
+    c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(config), bot))
+
+
+def test_a_builder_template_a_copy_of_one_or_a_numbered_builder_gets_its_own_machine(cloud):
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE bots SET display_name=? WHERE id='ops'", ("Ops",))
+        _config(c, "ops", {})
+        assert CM.default_placement(c, "ops") == "shared"
+        _config(c, "ops", {"template": "builder"})
+        assert CM.default_placement(c, "ops") == "own"
+        _config(c, "ops", {"template": "video-producer"})
+        assert CM.default_placement(c, "ops") == "own"
+        # A copy of a Builder is heavy whatever it is called.
+        _config(c, "coo", {"template": "builder"})
+        _config(c, "ops", {"copied_from": {"bot": "coo", "sha": "0" * 40}})
+        assert CM.default_placement(c, "ops") == "own"
+        _config(c, "coo", {"template": "pr-reviewer"})
+        assert CM.default_placement(c, "ops") == "shared"
+        # A copy of a copy follows the line back to the Builder it started from; a loop of copies ends.
+        _config(c, "finance", {"template": "builder"})
+        _config(c, "coo", {"copied_from": {"bot": "finance", "sha": "0" * 40}})
+        assert CM.default_placement(c, "ops") == "own"
+        _config(c, "coo", {"copied_from": {"bot": "ops", "sha": "0" * 40}})
+        assert CM.default_placement(c, "ops") == "shared"
+        for name, want in (("Builder 2", "own"), ("builder (Claude)", "own"), ("BUILDER", "own"),
+                           ("Builder 2 Ops", "shared"), ("Rebuilder", "shared")):
+            c.execute("UPDATE bots SET display_name=? WHERE id='ops'", (name,))
+            assert CM.default_placement(c, "ops") == want, name
+
+
 def test_one_shared_machine_wakes_for_any_member_and_hosts_them_all(cloud):
     adopt(cloud, "ops", "shared")
     adopt(cloud, "finance", "shared")

@@ -100,9 +100,9 @@ def test_a_return_step_an_upgrade_made_resumes_at_on_deck_and_a_chosen_one_is_ke
     assert retired['step_id'] == chosen['step_id'] == 'staging'
     assert (retired['blocked_from_step'], retired['blocked_from_status']) == (None, 'open')
     assert chosen['blocked_from_step'] == 'staging'
-    events = c.execute('SELECT count(*) FROM task_events').fetchone()[0]
+    events = c.execute("SELECT count(*) FROM history_events WHERE subject_type='task'").fetchone()[0]
     H.migrate(c)
-    assert c.execute('SELECT count(*) FROM task_events').fetchone()[0] == events
+    assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task'").fetchone()[0] == events
     for ident in ('retired', 'chosen'):
         c.execute("UPDATE tasks SET blocked_kind='dependency' WHERE id=?", (ident,))
         task_blocked.reconcile(c, ident)
