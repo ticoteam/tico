@@ -368,12 +368,14 @@ ENTRIES = TEAM_RULES + [
       value="json", card="#/usage", read="usage/limits#default", words="usd dollars spend " + _USD),
     S("pool.limit.usd", "Pool spend limit", "Usage > Pools", "admin", "confirm", "PUT", "usage/pools/{id}",
       value="json", card="#/usage", words="usd dollars spend group " + _USD),
+    S("team.queue.purge", "Clear automatic queue", "Usage > Clear automatic queue", "admin", "confirm", "POST",
+      "usage/queues/purge", value="json", card="#/usage",
+      words="queue purge clear automatic wakes waits backlog"),
 ]
 
 # Confirm entries whose route BotOps can't yet put on a Confirm card (backend/assistant.py valid_operation): a person
-# changes them in Settings until it can, rather than BotOps changing them at once. None now: each has a card, or is a
-# person's because it shows a secret once (the wake URL, a new outgoing webhook).
-NO_CARD_YET = ()
+# changes them in Settings until it can, rather than BotOps changing them at once.
+NO_CARD_YET = ("team.queue.purge",)
 _NO_CARD_WHY = " needs a person's yes, and BotOps can't ask for it on a Confirm card yet"
 ENTRIES = [(replace(e, when_held="person", why=e.name + " that sends outside" + _NO_CARD_WHY) if e.confirm_when else
             replace(e, kind="person", why=e.name + _NO_CARD_WHY)) if e.key in NO_CARD_YET else e for e in ENTRIES]

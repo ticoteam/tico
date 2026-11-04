@@ -3778,6 +3778,17 @@ export type QuestionSets = {
 }>;
 };
 
+export type QueuePurge = {
+  scope?: string;
+};
+
+export type QueuePurgeResult = {
+  cancelled: number;
+  kept_people: number;
+  scope: string;
+  still_running: number;
+};
+
 export type RanOn = {
   fallback: string | null;
   family: string | null;
@@ -9057,6 +9068,13 @@ export type PublishStrategyParams = {
 };
 export type PublishStrategyBody = StrategyPublish;
 export type PublishStrategyResponse = unknown;
+
+/** POST /api/v2/usage/queues/purge */
+export type PurgeAutomaticQueueParams = {
+  "Idempotency-Key": string;
+};
+export type PurgeAutomaticQueueBody = QueuePurge;
+export type PurgeAutomaticQueueResponse = QueuePurgeResult;
 
 /** GET /api/v2/inbound/phone-quote */
 export type QuoteInboundPhoneParams = Record<string, never>;
