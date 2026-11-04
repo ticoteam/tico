@@ -36,6 +36,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - [Sessions](sessions.md): each task a bot owns is its own session, apart from its Home thread.
 - [Company page](company-page.md): what outside people see of the company (investors, the board, the public), and who approves it.
 - [Desktop app](desktop.md), [Your Assistant](assistant.md) and [External agents](connect-an-agent.md).
+- [Pause, resume and discard a shared meeting](recorder-pause-discard.md) in Tico Recorder on a Mac.
 - Knowledge and results: [Docs](docs.md), [Librarian](librarian.md), [Market watch](market-watch.md), [Weekly briefing](market-briefing.md), [Files](files.md), [Pages](pages.md), [Meetings](meetings.md), [Listening](listening.md), [Physical mail](physical-mail.md).
 - [Task Manager](task-manager.md): the built-in helper that tidies tasks once an hour on weekdays.
 - [Bookkeeper](bookkeeper.md): the built-in helper that keeps the books, and the [Finance tools](finance-tools.md) it and every bot use.
