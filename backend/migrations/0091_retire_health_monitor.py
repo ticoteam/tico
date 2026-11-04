@@ -1,6 +1,9 @@
 """Check health replaces the Health Monitor bot: an existing one is archived, its open tasks go to BotOps, and the open
 production-check alerts go to BotOps too. Nothing is deleted, and running it again changes nothing.
 
+The saved health_scan switch is copied to check_health again: System routines remained the person's control after 0090
+seeded the step. Its read-only Automations mirror is soft-deleted; its runs stay as history.
+
 The Health Monitor was a built-in bot that Tico woke for each new finding. Check health, the Maintenance run's plain-code
 step (backend/maintenance_steps/check_health.py), files the same findings itself, one BotOps task per problem, so the bot
 has no job left. The bot is archived the way Settings > Bots archives one (backend/settings_admin.py `archive_bot`): its
@@ -20,7 +23,7 @@ writes it no more. A check that no longer fires is registered too, so the step c
 
 With no active BotOps bot the moved tasks are closed as superseded instead, each with an event that says why.
 
-Every change writes a history event (history_events, kind = the field changed) as the keeper. A bot that is already archived
+Each task change writes a history event (history_events, kind = the field changed) as the keeper. A bot that is already archived
 is skipped, and the invariant pass only touches tasks that still have an id in invariant_state, so a second run finds
 nothing to do. The Health Monitor's `health-scan` watcher belonged to its template, which is gone; its watch rows stay as
 history.
@@ -56,13 +59,37 @@ def _signature(check_id, subject=""):
 def up(conn):
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     _columns(conn, tables)
+    when = _now()
+    _health_switch(conn, tables, when)
+    _retire_health_scan(conn, tables, when)
     if "bots" not in tables:
         return
-    when = _now()
     botops = conn.execute("SELECT 1 FROM bots WHERE id=? AND state='active'", (BOTOPS,)).fetchone() is not None
     _retire_health_monitor(conn, tables, botops, when)
     _invariant_alerts(conn, tables, botops, when)
     _recount(conn, tables, (SLUG, BOTOPS), when)
+
+
+def _health_switch(conn, tables, when):
+    if not {"registry_metadata", "maintenance_steps"} <= tables:
+        return
+    row = conn.execute("SELECT value FROM registry_metadata WHERE key='system_routines'").fetchone()
+    try:
+        saved = json.loads(row[0]) if row else {}
+    except (TypeError, ValueError):
+        return
+    entry = saved.get("health_scan") if isinstance(saved, dict) else None
+    on = entry.get("on") if isinstance(entry, dict) else None
+    if isinstance(on, bool):
+        conn.execute("UPDATE maintenance_steps SET enabled=?, updated_at=?, updated_by_id='migration' "
+                     "WHERE key='check_health' AND enabled<>?", (int(on), when, int(on)))
+
+
+def _retire_health_scan(conn, tables, when):
+    if "automations" in tables:
+        conn.execute("UPDATE automations SET enabled=0, deleted_at=?, updated_at=? WHERE deleted_at IS NULL AND builtin=1 "
+                     "AND json_extract(flow,'$.readonly')=1 "
+                     "AND json_extract(flow,'$.trigger.name')='tico.builtin.job.health_scan'", (when, when))
 
 
 def _columns(conn, tables):

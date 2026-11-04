@@ -27,7 +27,7 @@ from backend import (bot_settings as BS, diagnostics, health, hosted_updates, in
 from backend.enqueue import enqueue_stored
 from backend.maintenance_steps import check_health
 from backend.store import H, Problem
-from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.test_api import api, get  # noqa: F401  (fixture)
 from backend.tests.test_goal_manager import BASE
 from backend.tests.test_onboarding import draft, environment, machine, signed_in  # noqa: F401
 from backend.tests.test_support import FakeHQ
@@ -739,6 +739,63 @@ def retire_migration():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize("saved,seeded,expected", [(False, 1, 0), (True, 0, 1), (None, 0, 0)])
+def test_the_cutover_refreshes_the_saved_health_switch_and_leaves_an_inherited_one(api, saved, seeded, expected):
+    store, migration = api.app.state.store, retire_migration()
+    with store.transaction() as c:
+        # 0090's snapshot predates the person's latest choice in System routines.
+        c.execute("UPDATE maintenance_steps SET enabled=?, cursor_at='t0', last_ran_at='t0' WHERE key='check_health'",
+                  (seeded,))
+        controls = {"task_roundup": {"on": False}}
+        if saved is not None:
+            controls["health_scan"] = {"on": saved}
+        c.execute("INSERT INTO registry_metadata(key,value) VALUES('system_routines',?) "
+                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(controls),))
+        before = M.steps_of(c)
+        migration.up(c)
+        after = M.steps_of(c)
+    assert after["check_health"]["enabled"] == expected
+    assert after["check_health"]["cursor_at"] == after["check_health"]["last_ran_at"] == "t0"
+    assert {k: v for k, v in after.items() if k != "check_health"} == {
+        k: v for k, v in before.items() if k != "check_health"}
+    if saved is None:
+        assert after == before, "no saved switch: keep the step's setting"
+    with store.transaction() as c:
+        migration.up(c)
+        assert M.steps_of(c) == after, "a replay does not re-stamp the setting"
+
+
+def test_the_cutover_retires_the_health_scan_mirror_and_its_inventory_entry(api):
+    from backend import automations, redesign_migration as RM, system_routines as SR
+
+    store, migration = api.app.state.store, retire_migration()
+    with store.transaction() as c:
+        flow = RM._mirror("Health scan", "person:ana", "job.health_scan", {"on": True},
+                          {"kind": "system_job", "id": "job:health_scan"})
+        aid = RM._save(c, RM.system_who(c), flow)
+        RM._mark(c, "system_job", "job:health_scan", "mig_old", aid, title="Health scan")
+        custom = automations._save(c, "human:ana", "auto_custom_health", {
+            **flow, "name": "My health automation", "builtin": False, "readonly": False}, None)["id"]
+        rid = SR.save(c, SR.Run("health_scan").did("All well", quiet=True))
+        history = dict(c.execute("SELECT * FROM system_runs WHERE id=?", (rid,)).fetchone())
+    assert aid in {a["id"] for a in get(api, "automations")["automations"]}
+    assert "sys_" + rid in {r["id"] for r in get(api, "automations/runs?trigger=system")["runs"]}
+    with store.transaction() as c:
+        migration.up(c)
+        retired = dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone())
+        assert retired["deleted_at"] and retired["enabled"] == 0
+        migration.up(c)
+        assert dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone()) == retired
+    listed = {a["id"] for a in get(api, "automations")["automations"]}
+    assert aid not in listed and custom in listed, "only the retired built-in mirror leaves Automations"
+    assert "sys_" + rid not in {r["id"] for r in get(api, "automations/runs?trigger=system")["runs"]}
+    get(api, "automations/" + aid, expected=404)
+    with store.read() as c:
+        assert dict(c.execute("SELECT * FROM system_runs WHERE id=?", (rid,)).fetchone()) == history
+        (entry,) = [i for i in RM.inventory(c) if i["id"] == "job:health_scan"]
+    assert entry["now"] == "removed" and entry["automation"] is None and entry["state"] == ""
 
 
 LEGACY_SCHEMA = """
