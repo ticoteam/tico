@@ -335,6 +335,7 @@ REVIEWED = {
     "PUT /api/v2/access/rules": "refused by the keys on its body (credential and Assistant rules, in admits_on_turn); the walk sends no body",
     "PUT /api/v2/usage/limits": "a spend cap, not a credential; the person sets it on their own word",
     "POST /api/v2/assistant/actions": "the Assistant's own card route: a proposal the person confirms",
+    "POST /api/v2/computers/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
 }
 
 
