@@ -842,9 +842,10 @@ fn keep_title_bar_reachable(app: &App, window: &Window) {
         let _ = window.set_position(LogicalPosition::new(fx, fy));
     } else {
         // Elsewhere a logical value is converted with the window's own scale, which is the display the plugin put it
-        // on, not the primary one. Physical pixels on the primary display land where they are meant to.
-        let _ = window.set_size(PhysicalSize::new((fw * scale).round() as u32, (fh * scale).round() as u32));
+        // on, not the primary one. Physical pixels on the primary display land where they are meant to. Moved first:
+        // Windows rescales a window that changes display, so the size is set once it is on the primary one.
         let _ = window.set_position(PhysicalPosition::new((fx * scale).round() as i32, (fy * scale).round() as i32));
+        let _ = window.set_size(PhysicalSize::new((fw * scale).round() as u32, (fh * scale).round() as u32));
     }
 }
 
