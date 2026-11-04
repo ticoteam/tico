@@ -3887,7 +3887,7 @@ def parser():
     s.add_argument("state", choices=["on", "off"])
     s.set_defaults(fn="task-manager bot")
     maintenance = sub.add_parser("maintenance", help="Maintenance: the scheduled steps, their switches and runs (docs/maintenance.md)").add_subparsers(dest="sub")
-    maintenance.add_parser("status", help="schedule, pause, monthly judge cap, and each step's switch, frequency and last run").set_defaults(fn="maintenance status")
+    maintenance.add_parser("status", help="schedule, pause, monthly judge cap, and each step's switch, frequency and last run").set_defaults(fn="maintenance")
     STEPS = ["collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream"]
     s = maintenance.add_parser("set", help="change the schedule, the pause, the monthly judge cap, or a step's switch and limits")
     s.add_argument("--schedule", choices=["hourly", "2h", "3h", "6h", "12h", "daily"], help="how often the run starts")

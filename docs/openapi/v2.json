@@ -57967,8 +57967,8 @@
             "anyOf": [
               {
                 "type": "integer",
-                "maximum": 500.0,
-                "minimum": 0.0
+                "maximum": 20.0,
+                "minimum": 1.0
               },
               {
                 "type": "null"

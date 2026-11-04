@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from . import dream
+from . import maintenance_limits as L
 from . import system_routines as SR
 from .shared_bots import route
 from .store import H, Problem
@@ -219,10 +220,14 @@ def run(store, auth, at, limit=MAX_PER_RUN, report=None):
                 if landing != "bot:" + v.bot:      # a branch takes it: this bot's own pass does not start it
                     held.append(v.name)
                     continue
+                if not L.allow(c, v.bot):          # the Maintenance wake limits (maintenance_limits.py)
+                    held.append(v.name)
+                    continue
                 row, _ = dream.start(c, auth.identity_for_actor(c, actor), landing, create, reason=reason(again))
                 if row is None:
                     held.append(v.name)
                     continue
+                L.record(c, v.bot)
                 started.append(v.name)
         except (Problem, H.Refused):
             held.append(v.name)

@@ -1402,3 +1402,23 @@ def test_an_alias_runs_the_same_calls_as_the_command_it_names(alias, canonical, 
         remotecli.run(hubcli.parser().parse_args(words))
         made.append(client.mock_calls)
     assert made[0] == made[1] and made[0]
+
+
+def test_maintenance_status_reads_the_one_maintenance_tool(monkeypatch):
+    """`hub maintenance status` has no tool of its own: its command name is hub_maintenance_status only in the parser's
+    listing (CLI_TOOL_ALIASES), so the dispatch must name the tool that exists, hub_maintenance."""
+    from clients import remotecli
+    reads = []
+
+    class Api:
+        def __init__(self, *args, **kw):
+            self.__dict__["_tico_is_botops"] = False
+
+        def get(self, path, **query):
+            reads.append((path, query))
+            return {}
+
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    remotecli.run(hubcli.parser().parse_args(["maintenance", "status"]))
+    assert reads == [("maintenance", {})]

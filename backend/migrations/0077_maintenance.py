@@ -69,6 +69,7 @@ SCHEMA = (
  checked INTEGER NOT NULL DEFAULT 0, found INTEGER NOT NULL DEFAULT 0, woke INTEGER NOT NULL DEFAULT 0,
  cost_usd REAL NOT NULL DEFAULT 0,
  started_at TEXT NOT NULL, finished_at TEXT,
+ window_end TEXT,
  details TEXT NOT NULL DEFAULT '{{}}')""",
     f"""CREATE TABLE IF NOT EXISTS maintenance_listings(
  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,

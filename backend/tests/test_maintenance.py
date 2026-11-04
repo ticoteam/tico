@@ -271,6 +271,8 @@ def test_the_api_saves_the_schedule_cap_and_steps_and_refuses_bad_ones(api, monk
     # suggest has no custom interval saved (learn kept the 3 hours above, so a frequency-only change to it is valid)
     patch(api, "maintenance", {"steps": [{"key": "suggest", "frequency": "custom"}]}, expected=422)
     patch(api, "maintenance", {"steps": [{"key": "learn", "max_bots": 2}]}, expected=422)
+    patch(api, "maintenance", {"steps": [{"key": "dream", "max_bots": 0}]}, expected=422)
+    patch(api, "maintenance", {"steps": [{"key": "dream", "max_bots": 21}]}, expected=422)
     patch(api, "maintenance", {"schedule": "weekly"}, expected=422)
     run = api.post("/api/v2/maintenance/run", json={"step": "learn"}, headers=headers("ana-test")).json()
     assert run["started"] is True and run["run"]["step"] == "learn"
@@ -338,3 +340,96 @@ def test_a_plain_run_now_keeps_the_due_rules(api, monkeypatch):
     run, started = M.run_now(store, auth, "human:ana", wait=True)
     steps = {s["step"]: s for s in run["steps"]}
     assert started and steps["dream"]["status"] == "skipped" and steps["dream"]["reason"] == "not due"
+
+
+def test_a_stale_run_is_ended_before_the_bucket_guard_so_the_day_still_runs(api, monkeypatch):
+    """A run that went silent inside today's bucket is ended first. The daily schedule then starts today's run."""
+    store, auth = stores(api)
+    patch(api, "maintenance", {"schedule": "daily"})
+    monkeypatch.setattr(M, "_start", inline)
+    monkeypatch.setitem(M.LIVE, "dream", lambda c, ctx: result("skipped", "test"))
+    now = datetime.now(timezone.utc)
+    with store.transaction() as c:
+        c.execute("INSERT INTO maintenance_runs(id,occurrence_key,trigger,step,started_at,heartbeat_at,result) "
+                  "VALUES('quiet','schedule:quiet','schedule',NULL,?,?,'')",
+                  (M._stamp(M.bucket("daily", now)), H.shift(H.now(), hours=-2)))
+    run_id = M.tick(store, auth, now)
+    assert run_id is not None and run_id != "quiet", "the bucket's stale run does not hold the day"
+    with store.read() as c:
+        assert c.execute("SELECT result FROM maintenance_runs WHERE id='quiet'").fetchone()[0] == "abandoned"
+
+
+def test_a_step_only_run_now_does_not_hold_the_schedule_bucket(api, monkeypatch):
+    store, auth = stores(api)
+    patch(api, "maintenance", {"schedule": "daily"})
+    monkeypatch.setattr(M, "_start", inline)
+    monkeypatch.setitem(M.LIVE, "collect", lambda c, ctx: result("skipped", "nothing new"))
+    monkeypatch.setitem(M.LIVE, "dream", lambda c, ctx: result("skipped", "test"))
+    M.run_now(store, auth, "human:ana", step="collect", wait=True)
+    run_id = M.tick(store, auth, datetime.now(timezone.utc))
+    assert run_id is not None, "a step-only run does not claim the day's bucket"
+    with store.read() as c:
+        assert c.execute("SELECT step FROM maintenance_runs WHERE id=?", (run_id,)).fetchone()[0] is None
+
+
+def test_a_step_that_returns_after_its_run_was_abandoned_is_dropped(api, monkeypatch):
+    store, auth = stores(api)
+
+    def late(c, ctx):
+        with store.transaction() as tc:
+            M.recover(tc, H.shift(H.now(), minutes=60))      # the run has been silent for an hour by now
+        return result("ran", "too late")
+    monkeypatch.setitem(M.LIVE, "collect", late)
+    run, _ = M.run_now(store, auth, "human:ana", step="collect", wait=True)
+    assert run["result"] == "abandoned" and run["ok"] == 0, run
+    assert run["steps"][0]["status"] == "failed" and run["steps"][0]["reason"] == "abandoned", run["steps"]
+    assert cursor(store, "collect") is None, "the late ran does not move the cursor"
+
+
+def test_a_late_completion_reads_its_window_from_its_own_column_and_moves_the_cursor_forward_only(api, monkeypatch):
+    store, auth = stores(api)
+    monkeypatch.setitem(M.LIVE, "collect", lambda c, ctx: {**result("pending", "later"), "details": {"blob": "x" * 30000}})
+    run, _ = M.run_now(store, auth, "human:ana", step="collect", wait=True)
+    assert run["steps"][0]["details"] == {"truncated": True}, "the details were too long to keep"
+    with store.read() as c:
+        row_id, window_end = c.execute("SELECT id, window_end FROM maintenance_run_steps WHERE maintenance_run_id=?",
+                                       (run["id"],)).fetchone()
+    assert M.complete_pending(store, row_id, result("ran", "caught up")) is True
+    assert cursor(store, "collect") == window_end, "the window end comes from its own column, not the details"
+    monkeypatch.setitem(M.LIVE, "collect", lambda c, ctx: result("pending", "later"))
+    later_run, _ = M.run_now(store, auth, "human:ana", step="collect", wait=True)
+    with store.read() as c:
+        later_id, later_end = c.execute("SELECT id, window_end FROM maintenance_run_steps WHERE maintenance_run_id=?",
+                                        (later_run["id"],)).fetchone()
+    ahead = H.shift(later_end, days=1)
+    with store.transaction() as c:
+        c.execute("UPDATE maintenance_steps SET cursor_at=? WHERE key='collect'", (ahead,))
+    assert M.complete_pending(store, later_id, result("ran", "late")) is True
+    assert cursor(store, "collect") == ahead, "a ran for an older window does not move the cursor back"
+
+
+def test_a_late_completion_adds_its_cost_to_its_run_and_a_failure_marks_the_run_not_ok(api, monkeypatch):
+    store, auth = stores(api)
+    monkeypatch.setitem(M.LIVE, "collect", lambda c, ctx: {**result("pending", "later"), "cost_usd": 0.1})
+    run, _ = M.run_now(store, auth, "human:ana", step="collect", wait=True)
+    assert run["ok"] == 1 and abs(run["cost_usd"] - 0.1) < 1e-9, run
+    with store.read() as c:
+        row_id = c.execute("SELECT id FROM maintenance_run_steps WHERE maintenance_run_id=?", (run["id"],)).fetchone()[0]
+    assert M.complete_pending(store, row_id, {**result("failed", "boom"), "cost_usd": 0.25}) is True
+    after = M.get_run(store, run["id"])
+    assert abs(after["cost_usd"] - 0.35) < 1e-9 and after["ok"] == 0, after
+
+
+def test_a_run_now_with_the_same_idempotency_key_returns_the_run_it_made(api, monkeypatch):
+    store, auth = stores(api)
+    monkeypatch.setattr(M, "_start", inline)
+    monkeypatch.setitem(M.LIVE, "collect", lambda c, ctx: result("skipped", "nothing new"))
+    first, started = M.run_now(store, auth, "human:ana", step="collect", wait=True, key="k1")
+    again, started_again = M.run_now(store, auth, "human:ana", step="collect", wait=True, key="k1")
+    assert started and not started_again and again["id"] == first["id"], "a repeat of the key starts nothing"
+    other, started_other = M.run_now(store, auth, "human:ana", step="collect", wait=True)
+    assert started_other and other["id"] != first["id"], "a request without a key starts its own run"
+    keyed = {**headers("ana-test"), "Idempotency-Key": "route-k1"}
+    made = api.post("/api/v2/maintenance/run", json={"step": "collect"}, headers=keyed).json()
+    repeat = api.post("/api/v2/maintenance/run", json={"step": "collect"}, headers=keyed).json()
+    assert made["started"] is True and repeat["started"] is False and repeat["run"]["id"] == made["run"]["id"], repeat

@@ -2573,7 +2573,7 @@ class MaintenanceStepChange(Contract):
     frequency: Literal["run", "day", "week", "custom"] | None = None
     custom_every: int | None = Field(default=None, ge=1, le=999)
     custom_unit: Literal["hours", "days"] | None = None
-    max_bots: int | None = Field(default=None, ge=0, le=500)
+    max_bots: int | None = Field(default=None, ge=1, le=20)
 
 
 class MaintenanceUpdate(Contract):

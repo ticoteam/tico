@@ -5,7 +5,7 @@ Maintenance is Tico's upkeep run. A run starts when its schedule says it is due,
 ## Schedule and pause
 
 - The run starts every hour by default. The other choices are every 2, 3, 6 or 12 hours, or once a day at 05:00 company time (Los Angeles).
-- At most one scheduled run starts per schedule bucket, and none starts beside a live run.
+- At most one scheduled run starts per schedule bucket, and none starts beside a live run. A Run now for one step does not use up its bucket; the bucket's full run still starts.
 - Pause stops the schedule. Run now still works while the schedule is paused.
 
 ## Steps
@@ -21,7 +21,7 @@ In order:
 | Learn | Nightly learnings. Still on its own timer for now. Off by default. | Once a day |
 | Suggest | Still on its own timer for now. | Once a day |
 | Update | Still on its own timer for now. | Once a day |
-| Dream | The auto dream: starts a dream for up to "Most bots per run" bots (three by default). | Once a day |
+| Dream | The auto dream: starts a dream for up to "Most bots per run" bots (three by default, 1 to 20). | Once a day |
 
 A step that is not moved here yet shows "on its old timer".
 
@@ -34,14 +34,15 @@ A step that is not moved here yet shows "on its old timer".
 
 ## Run now
 
-`POST /api/v2/maintenance/run`, or `hub maintenance run [--step KEY]`. A plain Run now uses the same claim and due rules as the schedule, so a step runs only when it is due. `--step` runs that one step even when it is not due; a switched off step stays off, and a step on its old timer is skipped. A run that is already going is returned instead of a second one.
+`POST /api/v2/maintenance/run`, or `hub maintenance run [--step KEY]`. A plain Run now uses the same claim and due rules as the schedule, so a step runs only when it is due. `--step` runs that one step even when it is not due; a switched off step stays off, and a step on its old timer is skipped. A run that is already going is returned instead of a second one. With an Idempotency-Key, a repeat of the same key returns the run that key made, and starts nothing.
 
 ## Recording and recovery
 
 - Each step writes its own log row with its status (ran, skipped, failed, off or pending), reason, counts and cost.
-- A step's cursor moves only when it reports `ran`.
+- A step's cursor moves only when it reports `ran`, and only forward: a late `ran` for an older window does not move it back.
 - A step that raises is recorded as failed, and the run goes on.
-- A live run with no heartbeat for 30 minutes is abandoned. Its unfinished steps are marked failed, and the schedule can start a new run.
+- A live run with no heartbeat for 30 minutes is abandoned. Its unfinished steps are marked failed, and the schedule can start a new run. A stale run is ended before the schedule checks its bucket, so it never holds a day.
+- A step that returns after its run was abandoned has its result dropped. Its cost still counts on the run.
 
 ## Spend cap
 

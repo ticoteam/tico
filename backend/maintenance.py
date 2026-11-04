@@ -16,6 +16,8 @@ A step is a module in backend/maintenance_steps/ exposing run(c, ctx) -> dict. T
   cursor to window_end in the same transaction as its log row. `pending` leaves the cursor; complete_pending writes the
   later result against the same row.
 - A step that raises is logged as failed (a Problem's detail, else the exception's name), and the run goes on.
+- A step that returns after its run was abandoned has its result dropped; its cost still counts on the run.
+A step-only Run now does not hold its schedule bucket: the bucket's full run still starts.
 """
 import json
 import logging
@@ -142,6 +144,20 @@ def _insert(c, key, trigger, step, now):
     return run_id
 
 
+def _stale(c, now):
+    """A run whose heartbeat has gone quiet but which nothing has ended yet. recover() ends it, before any guard reads."""
+    return c.execute("SELECT 1 FROM maintenance_runs WHERE finished_at IS NULL AND heartbeat_at<? LIMIT 1",
+                     (H.shift(now, minutes=-ABANDONED_MINUTES),)).fetchone()
+
+
+def _held(c, now, start):
+    """Whether a schedule run may not start in this bucket: a run is live, or a run already claimed the bucket. A step-only
+    Run now claims nothing, so it does not hold the bucket for the schedule."""
+    return live_run(c, now) or c.execute(
+        "SELECT 1 FROM maintenance_runs WHERE started_at>=? AND result<>'abandoned' AND step IS NULL LIMIT 1",
+        (start,)).fetchone()
+
+
 def tick(store, auth, at, failures=None):
     """From the scheduler's tick: start a run when the schedule says one is due. One per bucket, none while paused, none
     beside a live run. Returns the run id it started, else None. Errors go to `failures`; a tick never raises."""
@@ -149,17 +165,14 @@ def tick(store, auth, at, failures=None):
     try:
         with store.read() as c:
             cfg = run_settings(c)
-            start = _stamp(bucket(cfg["schedule"], at))
-            # Most ticks stop here, without a write transaction.
-            if cfg["paused"] or live_run(c, now) or c.execute(
-                    "SELECT 1 FROM maintenance_runs WHERE started_at>=? AND result<>'abandoned' LIMIT 1",
-                    (start,)).fetchone():
+            # Most ticks stop here, without a write transaction. A stale run is not a stop: recover() ends it first.
+            if not _stale(c, now) and (cfg["paused"] or _held(c, now, _stamp(bucket(cfg["schedule"], at)))):
                 return None
         with store.transaction() as c:
             recover(c, now)
-            if live_run(c, now) or c.execute(
-                    "SELECT 1 FROM maintenance_runs WHERE started_at>=? AND result<>'abandoned' LIMIT 1",
-                    (start,)).fetchone():
+            cfg = run_settings(c)
+            start = _stamp(bucket(cfg["schedule"], at))
+            if cfg["paused"] or _held(c, now, start):
                 return None
             run_id = _insert(c, "schedule:" + start, "schedule", None, now)
     except Exception as exc:
@@ -171,19 +184,23 @@ def tick(store, auth, at, failures=None):
     return run_id
 
 
-def run_now(store, auth, actor, step=None, wait=False):
-    """Run now (POST /api/v2/maintenance/run, `hub maintenance run`): one run, claimed like a scheduled one. A plain run keeps the due rules. `step` runs only
-    that step, due or not (a switched off step stays off, and a step on its old timer is skipped). A run already live is returned as it is, so Run now and the schedule give one run. Returns (run, started)."""
+def run_now(store, auth, actor, step=None, wait=False, key=None):
+    """Run now (POST /api/v2/maintenance/run, `hub maintenance run`): one run, claimed like a scheduled one. A plain run keeps
+    the due rules. `step` runs only that step, due or not (a switched off step stays off, and a step on its old timer is
+    skipped). A run already live is returned as it is, so Run now and the schedule give one run. With an Idempotency-Key
+    (`key`), a repeat of the same key returns the run that key made, and starts nothing. Returns (run, started)."""
     if step is not None and step not in ORDER:
         raise Problem("invalid", f"No such Maintenance step: {step}", 422)
     now = H.now()
+    occurrence = f"run_now:{actor}:{key}" if key else "run_now:" + H.new_id()
     with store.transaction() as c:
         recover(c, now)
-        live = live_run(c, now)
-        if live:
-            run_id, started = live["id"], False
+        replay = c.execute("SELECT id FROM maintenance_runs WHERE occurrence_key=?", (occurrence,)).fetchone() if key else None
+        live = None if replay else live_run(c, now)
+        if replay or live:
+            run_id, started = (replay or live)["id"], False
         else:
-            run_id = _insert(c, "run_now:" + H.new_id(), "run_now", step, now)
+            run_id = _insert(c, occurrence, "run_now", step, now)
             H.event(c, actor, "maintenance.run_now", run_id, {"step": step})
             started = True
     if started:
@@ -247,12 +264,25 @@ def _log(store, run_id, key, status, reason, now, tally):
     tally[status] = tally.get(status, 0) + 1
 
 
+def _still_pending(c, row_id):
+    """Whether a step's row is still pending in a run that is still live. A step that returns after recover() has ended
+    its run finds neither, and its late result must not write over the abandoned row or move the cursor."""
+    return c.execute("SELECT 1 FROM maintenance_run_steps s JOIN maintenance_runs r ON r.id=s.maintenance_run_id "
+                     "WHERE s.id=? AND s.status='pending' AND r.finished_at IS NULL", (row_id,)).fetchone() is not None
+
+
+def _move_cursor(c, key, window_end, ran_at):
+    """A step's cursor moves forward only: a late `ran` for an older window does not move it back."""
+    c.execute("UPDATE maintenance_steps SET cursor_at=CASE WHEN cursor_at IS NULL OR cursor_at<? THEN ? ELSE cursor_at END, "
+              "last_ran_at=? WHERE key=?", (window_end, window_end, ran_at, key))
+
+
 def _run_step(store, auth, run_id, key, row, window_start, now, cap, tally):
     row_id = H.new_id()
     window = {"window_start": window_start, "window_end": now}
     with store.transaction() as c:
-        c.execute("INSERT INTO maintenance_run_steps(id,maintenance_run_id,step,status,reason,started_at,details) "
-                  "VALUES(?,?,?,'pending','',?,?)", (row_id, run_id, key, now, _dump(window)))
+        c.execute("INSERT INTO maintenance_run_steps(id,maintenance_run_id,step,status,reason,started_at,window_end,details) "
+                  "VALUES(?,?,?,'pending','',?,?,?)", (row_id, run_id, key, now, now, _dump(window)))
         c.execute("UPDATE maintenance_steps SET last_started_at=? WHERE key=?", (now, key))
         c.execute("UPDATE maintenance_runs SET heartbeat_at=? WHERE id=?", (H.now(), run_id))
     ctx = {"run_id": run_id, "window_start": window_start, "window_end": now, "settings": row, "now": now,
@@ -264,9 +294,14 @@ def _run_step(store, auth, run_id, key, row, window_start, now, cap, tally):
         LOG.exception("maintenance step %s failed", key)
         result = _failed(exc)
     with store.transaction() as c:
+        if not _still_pending(c, row_id):
+            # recover() ended this run while the step ran. The result is dropped; its cost still counts on the run.
+            LOG.warning("maintenance step %s returned after run %s was abandoned; its result is dropped", key, run_id)
+            c.execute("UPDATE maintenance_runs SET cost_usd=cost_usd+? WHERE id=?", (result["cost_usd"], run_id))
+            return
         _finish_row(c, row_id, result)
         if result["status"] == "ran":
-            c.execute("UPDATE maintenance_steps SET cursor_at=?, last_ran_at=? WHERE key=?", (now, H.now(), key))
+            _move_cursor(c, key, now, H.now())
         c.execute("UPDATE maintenance_runs SET cost_usd=cost_usd+?, heartbeat_at=? WHERE id=?",
                   (result["cost_usd"], H.now(), run_id))
     tally[result["status"]] = tally.get(result["status"], 0) + 1
@@ -311,26 +346,31 @@ def _finish_row(c, row_id, result):
 
 def complete_pending(store, row_id, result):
     """A pending step's later completion (the contract's `pending`), written against its own run-step row. A `ran` moves
-    the step's cursor to the window end that row kept. Returns False when the row is not pending."""
+    the step's cursor forward to the window end that row kept. The run takes this result's cost, and is not ok once a
+    step has failed. Returns False when the row is not pending."""
     result = _normal(result)
     with store.transaction() as c:
-        row = c.execute("SELECT step, details FROM maintenance_run_steps WHERE id=? AND status='pending'",
+        row = c.execute("SELECT maintenance_run_id, step, window_end FROM maintenance_run_steps WHERE id=? AND status='pending'",
                         (row_id,)).fetchone()
         if row is None:
             return False
         _finish_row(c, row_id, result)
-        if result["status"] == "ran":
-            c.execute("UPDATE maintenance_steps SET cursor_at=?, last_ran_at=? WHERE key=?",
-                      (_loads(row["details"]).get("window_end"), H.now(), row["step"]))
+        if result["status"] == "ran" and row["window_end"]:
+            _move_cursor(c, row["step"], row["window_end"], H.now())
+        c.execute("UPDATE maintenance_runs SET cost_usd=cost_usd+?, ok=CASE WHEN ?='failed' THEN 0 ELSE ok END WHERE id=?",
+                  (result["cost_usd"], result["status"], row["maintenance_run_id"]))
     return True
 
 
 def _finish(store, run_id, tally, error):
     now = H.now()
-    ok = error is None and not tally.get("failed")
     text = f"Stopped: {error}" if error else (", ".join(f"{n} {k}" for k, n in sorted(tally.items())) or "Nothing ran")
     try:
         with store.transaction() as c:
+            # ok reads the stored rows, not the tally: a pending step that failed later may already have been recorded.
+            failed = c.execute("SELECT 1 FROM maintenance_run_steps WHERE maintenance_run_id=? AND status='failed' LIMIT 1",
+                               (run_id,)).fetchone()
+            ok = error is None and failed is None
             c.execute("UPDATE maintenance_runs SET finished_at=?, ok=?, result=?, heartbeat_at=? "
                       "WHERE id=? AND finished_at IS NULL", (now, int(bool(ok)), text[:300], now, run_id))
     except Exception:
@@ -502,8 +542,9 @@ def install(app, store, auth, mutate):
     @app.post("/api/v2/maintenance/run")
     def maintenance_run(request: Request, body: M.MaintenanceRunRequest):
         """Run now: one run, due by the same rules as a scheduled one. `step` runs only that step, even when it is not due. A run already live is
-        returned instead of a second. `started` is false in that case. An owner or an admin."""
+        returned instead of a second, and a repeat of the same Idempotency-Key returns the run that key made. `started` is false in either case.
+        An owner or an admin."""
         who = request.state.identity
         may_change(auth, who)
-        run, started = run_now(store, auth, who.actor, body.step)
+        run, started = run_now(store, auth, who.actor, body.step, key=request.headers.get("idempotency-key"))
         return {"run": run, "started": started}

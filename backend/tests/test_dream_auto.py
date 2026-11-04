@@ -17,6 +17,7 @@ from backend import dream
 from backend import dream_auto as DA
 from backend import hubdb as H
 from backend import maintenance as M
+from backend import maintenance_limits as L
 from backend.maintenance_steps import dream as dream_step
 from backend.scheduler import Scheduler
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401  (fixtures)
@@ -330,6 +331,19 @@ def test_most_bots_per_run_of_zero_skips_the_dream_step(api):
     with settings(store, test_identities={}):
         out = step_result(store, api.app.state.auth, max_bots=0)
     assert out["status"] == "skipped" and out["reason"] == '"Most bots per run" is 0'
+    assert dream_rows(api, "ops") == []
+
+
+def test_the_wake_limiter_holds_a_bot_already_woken_this_run(api):
+    """A dream start is a Maintenance wake: a bot the limiter already woke this run is held, and the others still start."""
+    five_due(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        L.record(c, "ops")
+    report = {}
+    started = run(api, report=report)
+    assert "ops" in report["held"] and "ops" not in started, report
+    assert started, "the other due bots still start"
     assert dream_rows(api, "ops") == []
 
 
