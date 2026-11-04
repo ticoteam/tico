@@ -7127,10 +7127,11 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             # Keep completion notices out of ordinary Slack reply mirroring, including quiet
             # updates. One eligible notice per task/status also covers reopen/retry cycles.
             # messages, not message_refs: store.py's slack_task_completion_notices index is on json_extract(refs,'$.task').
-            duplicate = _one(conn, "SELECT 1 FROM messages WHERE json_extract(refs,'$.task')=? "
+            # A notice that names this task in a list is a notice for it too (task_ref_sql).
+            duplicate = _one(conn, f"SELECT 1 FROM messages WHERE {task_ref_sql('refs')} "
                              "AND json_extract(refs,'$.task_completion.status')=? "
                              "AND json_extract(refs,'$.task_completion.notify')=1 LIMIT 1",
-                             (task_id, status))
+                             (task_id, task_id, status))
             from . import people as P
             saved = _one(conn, "SELECT value FROM registry_metadata WHERE key='people'") if _one(
                 conn, "SELECT 1 FROM sqlite_master WHERE name='registry_metadata'") else None
@@ -7843,6 +7844,15 @@ def _task_ref_sql(path):
     MESSAGE_TASK_SQL, which callers splice under other aliases."""
     return (f"CASE WHEN json_type(m.refs,'{path}')='array' THEN json_extract(m.refs,'{path}[0]') "
             f"ELSE json_extract(m.refs,'{path}') END")
+
+
+def task_ref_sql(column, key="$.task"):
+    """SQL predicate: the JSON in `column` names the task whose id is bound to the two `?` at `key`, either as that
+    string or as an element of an array. A list names every task in it, so this matches any element, where `_task_ref`
+    (Python) and `message_refs.ref_task_id` read the first. Both `?` take the same id. The string arm is the expression
+    an index on json_extract(column, key) is built on; the array arm is not indexable."""
+    return (f"(json_extract({column},'{key}')=? OR (json_type({column},'{key}')='array' AND EXISTS "
+            f"(SELECT 1 FROM json_each({column},'{key}') WHERE value=?)))")
 
 
 # Job/status SQL: the queued message names the task; a dedicated task thread still has task_id.

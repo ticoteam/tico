@@ -421,6 +421,11 @@ def test_direct_messages_reuse_room_checks_and_match_recursive_privacy(api, worl
         (['unsupported'], False),
         ({'inputs': ['missing-fixture-message'], 'task': public}, True),
         ({'turn_id': world['attempt']['id']}, True),
+        ({'task': [public, public]}, True),
+        ({'task_id': [public, 7]}, False),
+        ({'task': [public, 'unknown-fixture-task']}, False),
+        ({'task': [public, hidden['id']]}, False),
+        ({'task': []}, False),
     ]
     with store.read() as c:
         fast, recursive = ReadIndex(c, who), ReadIndex(c, who)
@@ -1125,3 +1130,20 @@ def test_shared_room_membership_for_every_bot_is_one_pass_and_matches_each_bot(a
         finally:
             conn.close()
     assert access_reads <= 1, access_reads
+
+
+def test_a_message_whose_task_ref_is_a_list_is_visible_only_when_every_listed_task_is_known_and_undenied(api, world):
+    """The SQL gate and ReadIndex refuse a list that names an unknown, denied or non-text id, or nothing at all, and
+    accept one whose every id is known and undenied, as a scalar is accepted."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        hidden = H.task_create(c, 'human:ben', 'Hidden list source', '', 'bot:finance', private=True, lint=False)
+        public = world['coo_task']['id']
+        listed = {'known': [public], 'known-twice': [public, public], 'unknown-second': [public, 'unknown-fixture-task'],
+                  'denied-second': [public, hidden['id']], 'empty': [], 'non-text': [public, 7]}
+        ids = {name: H.say(c, 'bot:ops', 'human:ana', 'List ' + name, conversation_id=world['ana_room'],
+                           refs={'task': tasks})['id'] for name, tasks in listed.items()}
+    # Read as the bot whose granted room holds them: the private task is denied to it, the public one is not.
+    visible = column(api, "SELECT id FROM messages WHERE id IN (" + ",".join(f"'{i}'" for i in ids.values()) + ")",
+                     world["attempt"]["token"])
+    assert visible == sorted(ids[name] for name in ('known', 'known-twice'))

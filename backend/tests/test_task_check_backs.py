@@ -785,3 +785,36 @@ def test_parent_carrying_an_unread_child_result_is_repaired_and_escalated_not_qu
                          "AND kind='check_back_quiet'", (parent["id"],)).fetchone()[0] == 0
         assert len(wakes(c, parent["id"])) == H.STALL_WAKES_PER_DAY
         assert H.task(c, child["id"])["status"] == "done"
+
+
+def _delivery(c, message_id, state, bot="ops"):
+    if not c.execute("SELECT 1 FROM jobs WHERE message_id=?", (message_id,)).fetchone():
+        c.execute("INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,?,?,?)",
+                  ("job-" + message_id, message_id, bot, state, H.now()))
+    c.execute("UPDATE jobs SET state=? WHERE message_id=?", (state, message_id))
+
+
+def test_the_context_reads_the_latest_delivery_to_a_child_that_a_list_names(followups):
+    with followups.app.state.store.transaction() as c:
+        parent = task(c, private=False)
+        child = H.task_create(c, "human:ana", "Child work", "Do the child.", "bot:finance", lint=False)
+        c.execute("INSERT INTO task_relations VALUES(?,?,'parent','human:ana',?)", (child["id"], parent["id"], H.now()))
+        message = H.say(c, "human:ana", "bot:finance", "Check the child.",
+                        refs={"task": ["00000000-0000-4000-8000-000000000000", child["id"]]})["id"]
+        _delivery(c, message, "completed", bot="finance")
+        assert "latest delivery: completed" in CB.context(c, parent, "bot:ops")
+
+
+def test_a_finished_turn_that_read_a_check_back_naming_the_task_in_a_list_repairs_that_task(followups):
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        wake = c.execute("SELECT message_id FROM task_check_back_wakes WHERE task_id=?", (row["id"],)).fetchone()[0]
+        other = H.task_create(c, "human:ana", "Unrelated work", "x", "bot:ops", lint=False)
+        c.execute("UPDATE messages SET refs=json_set(refs,'$.task',json_array(?,?)) WHERE id=?", (other["id"], row["id"], wake))
+        handled(c, row["id"])
+        c.execute("INSERT INTO attempts(id,bot_id,created_at) VALUES('attempt-list','ops',?)", (H.now(),))
+        c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES('attempt-list',?)", (wake,))
+        before = CB._repairs(c, H.task(c, row["id"]))[0]
+        CB.finished_turn(c, "attempt-list", "ops", None)
+        assert CB._repairs(c, H.task(c, row["id"]))[0] == before + 1

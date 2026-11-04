@@ -309,8 +309,8 @@ def context(c, row, recipient):
     for child in shown:
         name = ("#" + str(child["number"])) if child.get("number") else child["id"][:8]
         job = c.execute("SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "WHERE json_extract(m.refs,'$.task')=? AND m.recipient_id=? ORDER BY j.created_at DESC LIMIT 1",
-                         (child["id"], child["owner_id"])).fetchone()
+                         f"WHERE {H.task_ref_sql('m.refs')} AND m.recipient_id=? ORDER BY j.created_at DESC LIMIT 1",
+                         (child["id"], child["id"], child["owner_id"])).fetchone()
         lines.append(f"  {name}: {child['status']} ({child['owner_id']}), latest delivery: {job[0] if job else 'none recorded'}")
     if H._has_table(c, "check_waits"):
         wait = c.execute("SELECT reason FROM check_waits WHERE ticket_id=? AND state='waiting' LIMIT 1", (row["id"],)).fetchone()
@@ -680,12 +680,14 @@ def finished_turn(c, aid, bot, task_id, at=None):
     at = at or H.now()
     tids = {task_id} if task_id else set()
     tids.update(r[0] for r in c.execute("SELECT id FROM tasks WHERE carried_by=? LIMIT 100", (aid,)))
-    tids.update(r[0] for r in c.execute("SELECT json_extract(m.refs,'$.task') FROM attempt_inputs i "
-                                       "JOIN messages m ON m.id=i.message_id JOIN jobs j ON j.message_id=m.id WHERE i.attempt_id=? "
+    # refs.task may be one id or a list of ids: json_each yields every id either way (one row for a scalar, none when absent)
+    tids.update(r[0] for r in c.execute("SELECT t.value FROM attempt_inputs i "
+                                       "JOIN messages m ON m.id=i.message_id JOIN jobs j ON j.message_id=m.id, "
+                                       "json_each(m.refs,'$.task') t WHERE i.attempt_id=? "
                                        "AND j.state='completed' AND json_extract(m.refs,'$.wake')='check_back' LIMIT 100", (aid,)))
-    deferred = {r[0] for r in c.execute("SELECT json_extract(m.refs,'$.task') FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
-                                      "JOIN jobs j ON j.message_id=m.id WHERE i.attempt_id=? AND j.state='queued' "
-                                      "AND json_extract(m.refs,'$.wake')='check_back' LIMIT 100", (aid,))}
+    deferred = {r[0] for r in c.execute("SELECT t.value FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
+                                      "JOIN jobs j ON j.message_id=m.id, json_each(m.refs,'$.task') t WHERE i.attempt_id=? "
+                                      "AND j.state='queued' AND json_extract(m.refs,'$.wake')='check_back' LIMIT 100", (aid,))}
     tids.difference_update(deferred - {task_id})
     for tid in tids - {None}:
         row = H.task(c, tid)
