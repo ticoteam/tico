@@ -1548,7 +1548,7 @@ mod tests {
         std::fs::write(f.base.join(".git/config.lock"), "recent").unwrap();
         let original = std::fs::read(f.base.join(".git/config")).unwrap();
         let blocked = configure_base(&f.base, &file_uri(&f.remote), "main", &settings, &prefix, &f.env, "acme/web").await;
-        assert!(matches!(blocked, Err(Fail::Msg(m)) if m.contains("config.lock") && m.contains("File exists")));
+        assert!(matches!(blocked, Err(Fail::Msg(m)) if m.contains("config") && m.contains("File exists")));
         assert_eq!(std::fs::read(f.base.join(".git/config")).unwrap(), original);
         std::fs::remove_file(f.base.join(".git/config.lock")).unwrap();
         std::fs::write(f.base.join(".git/config"), "[broken\n").unwrap();

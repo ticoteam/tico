@@ -171,14 +171,15 @@ def test_instruction_link_repair_preserves_edits_to_its_target_and_external_targ
 def test_updater_retries_an_abandoned_index_lock_but_keeps_fresh_and_open_locks(repos):
     from runner_support import git_locks
     _, checkout, _ = repos
-    lock = checkout / ".git/index.lock"
-    lock.write_text("recent")
-    assert ru.git(checkout, "add", "app.py").returncode != 0 and lock.exists()
-    old = time.time() - git_locks.OLD_S * 2
-    os.utime(lock, (old, old))
-    with lock.open():
-        assert ru.git(checkout, "add", "app.py").returncode != 0 and lock.exists()
-    assert ru.git(checkout, "add", "app.py").returncode == 0 and not lock.exists()
+    for name, command in [("index.lock", ("add", "app.py")), ("config.lock", ("config", "--local", "repair.test", "yes"))]:
+        lock = checkout / ".git" / name
+        lock.write_text("recent")
+        assert ru.git(checkout, *command).returncode != 0 and lock.exists()
+        old = time.time() - git_locks.OLD_S * 2
+        os.utime(lock, (old, old))
+        with lock.open():
+            assert ru.git(checkout, *command).returncode != 0 and lock.exists()
+        assert ru.git(checkout, *command).returncode == 0 and not lock.exists()
 
 
 def test_a_blocked_update_names_the_first_three_changed_files(repos):

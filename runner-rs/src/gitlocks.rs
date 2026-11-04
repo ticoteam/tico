@@ -61,7 +61,7 @@ async fn remove_abandoned(path: &Path, root: &Path) -> bool {
     std::fs::remove_file(path).is_ok()
 }
 
-fn metadata_root(argv: &[String], cwd: Option<&Path>) -> Option<PathBuf> {
+fn metadata_root(argv: &[String], cwd: Option<&Path>) -> Option<(PathBuf, PathBuf)> {
     let at = argv.windows(2).rfind(|p| p[0] == "-C").map(|p| Path::new(&p[1])).or(cwd)?;
     let git = at.join(".git");
     let root = if git.symlink_metadata().is_ok_and(|m| m.is_dir()) {
@@ -71,7 +71,7 @@ fn metadata_root(argv: &[String], cwd: Option<&Path>) -> Option<PathBuf> {
     } else {
         return None;
     };
-    root.canonicalize().ok()
+    Some((root.canonicalize().ok()?, at.canonicalize().ok()?))
 }
 
 /// Only the lock Git actually reports is eligible, never a sweep of a bot's checkout.
@@ -79,12 +79,21 @@ pub async fn recover(argv: &[String], cwd: Option<&Path>, stderr: &str) -> bool 
     if Path::new(&argv[0]).file_name().is_none_or(|n| n != "git") || !stderr.contains("File exists") {
         return false;
     }
-    let Some(root) = metadata_root(argv, cwd) else { return false };
+    let Some((root, at)) = metadata_root(argv, cwd) else { return false };
     let re = regex::Regex::new(r"'([^'\n]+\.lock)'").unwrap();
+    let mut paths = vec![];
     for cap in re.captures_iter(stderr) {
-        let path = Path::new(&cap[1]);
-        // Git prints absolute metadata paths for runner commands, which always use -C.
-        if path.is_absolute() && remove_abandoned(path, &root).await { return true; }
+        paths.push(PathBuf::from(&cap[1]));
+    }
+    // `git config` names its config file instead of the lock it tried to create.
+    let config = regex::Regex::new(r"could not lock config file ([^\n]+): File exists").unwrap();
+    for cap in config.captures_iter(stderr) {
+        let path = PathBuf::from(cap[1].trim_matches('\''));
+        paths.push(PathBuf::from(format!("{}.lock", path.display())));
+    }
+    for path in paths {
+        let path = if path.is_absolute() { path } else { at.join(path) };
+        if remove_abandoned(&path, &root).await { return true; }
     }
     false
 }

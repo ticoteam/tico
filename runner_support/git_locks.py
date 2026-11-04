@@ -50,10 +50,14 @@ def recover(root, stderr):
     if git_dir.is_symlink() or not git_dir.is_dir():
         return False
     git_dir = git_dir.resolve()
-    for name in re.findall(r"'([^'\n]+\.lock)'", stderr):
+    names = re.findall(r"'([^'\n]+\.lock)'", stderr)
+    names += [name.strip("'") + ".lock" for name in re.findall(r"could not lock config file ([^\n]+): File exists", stderr)]
+    for name in names:
         path = Path(name)
+        if not path.is_absolute():
+            path = Path(root).resolve() / path
         try:
-            if not path.is_absolute() or not path.parent.resolve().is_relative_to(git_dir):
+            if not path.parent.resolve().is_relative_to(git_dir):
                 continue
             before = path.lstat()
             if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or time.time() - before.st_mtime < OLD_S:
