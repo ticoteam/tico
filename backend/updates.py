@@ -320,7 +320,7 @@ def build_queue(c, day, kind, assistant=None):
 
 def cycle_done(c, day):
     """Whether today's cycle has nothing left to send or settle: no request for `day` is queued or out. The Update step
-    is pending until this is true; PR1's `complete_pending` asks it on each pass."""
+    is pending until this is true; Maintenance asks it on each tick and at the end of a run."""
     return c.execute("SELECT 1 FROM update_queue WHERE day=? AND state IN ('queued','sent') LIMIT 1", (day,)).fetchone() is None
 
 
@@ -828,9 +828,9 @@ def send_request(c, row, assistant=None, delivery=False):
 
 
 def dispatch(c, at=None, assistant=None, build=True):
-    """One step, from the scheduler's tick: build today's queue after 05:00 when `build` (the Update step builds it
-    from maintenance with build=False, once the scheduler's start is switched off), settle the request
-    that is out, and send the next one. At most one request is out at a time. With an `assistant`
+    """One step, from the scheduler's tick: settle the request that is out and send the next one. The scheduler uses
+    build=False: Maintenance's Update step builds the day's queue. Direct callers may still build it after 05:00
+    with `build`. At most one request is out at a time. With an `assistant`
     (drafting is on), a person's draft is next once no bot can be asked: the caller writes it. A bot's request
     is sent as the Update step decided it (backend/maintenance_steps/update.py): a delivery-only turn when its row
     says so, and a bot with no work is skipped on the row before it gets here."""

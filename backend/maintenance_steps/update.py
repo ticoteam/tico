@@ -8,8 +8,8 @@ bot's request before the queue's pump sends it:
 - every other bot is asked, as before.
 
 The pump (`updates.dispatch`, scheduler.py's tick) sends the rest one at a time: the step returns `pending` while any of
-today's requests is queued or out (`updates.cycle_done`). It is not wired into the scheduler yet: PR1 registers this
-step and switches off the old 05:00 start.
+today's requests is queued or out (`updates.cycle_done`). Maintenance completes the pending step once the cycle drains;
+the scheduler's pump never builds a queue itself.
 """
 from .. import updates
 from ..store import H

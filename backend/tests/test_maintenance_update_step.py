@@ -12,10 +12,11 @@ from pathlib import Path
 
 import pytest
 
-from backend import execution, maintenance_limits, updates
+from backend import execution, maintenance, maintenance_limits, updates
 from backend import models as M
 from backend import run_triggers as RT
 from backend.maintenance_steps import update as step
+from backend.scheduler import Scheduler
 from backend.store import H
 from clients.judge import gateway_writer, llm_writer
 from backend.tests.test_api import api, post  # noqa: F401
@@ -56,6 +57,64 @@ def turn(c, bot_id, writes=1, at=None, state="completed"):
               (turn_id, bot_id, at or H.now(), state, writes))
     c.execute(f"UPDATE attempts SET settled_at=?,exit='ok',{RT.SETTLE_SQL} WHERE id=?", (H.now(), turn_id))
     return turn_id
+
+
+def test_the_scheduler_only_pumps_maintenances_cycle_and_completes_its_original_step(api, monkeypatch):
+    store = api.app.state.store
+    now = ctx(api, TUESDAY)["now"]
+    monkeypatch.setattr(H, "now", lambda: now)
+    monkeypatch.setattr(updates, "writer_for", lambda *args: None)
+    with store.transaction() as c:
+        maintenance.save_settings(c, "human:ana", paused=True)
+        ops = bid(c, "ops")
+        turn(c, ops)
+    scheduler = Scheduler(store, api.app.state.execution)
+    assert not scheduler.tick(TUESDAY)["failures"]
+    with store.read() as c:
+        assert not c.execute("SELECT 1 FROM update_queue").fetchone(), "05:00 no longer starts a cycle on its own"
+    run, started = maintenance.run_now(store, api.app.state.auth, "human:ana", step="update", wait=True)
+    assert started and run["steps"][0]["status"] == "pending", run
+    with store.read() as c:
+        assert states(c)[ops] == "queued", "the step builds; the scheduler sends"
+        assert c.execute("SELECT cursor_at FROM maintenance_steps WHERE key='update'").fetchone()[0] is None
+        queued = c.execute("SELECT count(*) FROM update_queue").fetchone()[0]
+    assert not scheduler.tick(TUESDAY)["failures"]
+    with store.transaction() as c:
+        assert states(c)[ops] == "sent"
+        assert c.execute("SELECT status FROM maintenance_run_steps WHERE maintenance_run_id=?", (run["id"],)).fetchone()[0] == "pending"
+        updates.post(c, ops, "- Shipped the pricing page", day=DAY)
+    assert not scheduler.tick(TUESDAY)["failures"]
+    done = maintenance.get_run(store, run["id"])
+    assert done["steps"][0]["status"] == "ran" and done["steps"][0]["finished_at"], done
+    assert done["steps"][0]["details"]["open"] == 0 and done["steps"][0]["found"] == 1
+    assert not scheduler.tick(TUESDAY)["failures"]
+    with store.read() as c:
+        assert c.execute("SELECT cursor_at FROM maintenance_steps WHERE key='update'").fetchone()[0] == now
+        assert c.execute("SELECT count(*) FROM update_queue").fetchone()[0] == queued, "the pump never rebuilds the cycle"
+        assert c.execute("SELECT count(*) FROM events WHERE action=? AND target=?",
+                         (maintenance_limits.BOT_ACTION, ops)).fetchone()[0] == 1
+
+
+def test_the_end_of_run_completes_a_cycle_that_drained_after_the_step_returned(api, monkeypatch):
+    store = api.app.state.store
+    now = ctx(api, TUESDAY)["now"]
+    monkeypatch.setattr(H, "now", lambda: now)
+    monkeypatch.setattr(updates, "writer_for", lambda *args: None)
+    with store.transaction() as c:
+        turn(c, bid(c, "ops"))
+
+    def drained(c, context):
+        result = step.run(c, context)
+        assert result["status"] == "pending"
+        with store.transaction() as tx:
+            tx.execute("UPDATE update_queue SET state='missed', done_at=? WHERE day=? AND state='queued'", (now, DAY))
+        return result
+
+    monkeypatch.setitem(maintenance.LIVE, "update", drained)
+    run, _ = maintenance.run_now(store, api.app.state.auth, "human:ana", step="update", wait=True)
+    assert run["steps"][0]["status"] == "ran" and run["steps"][0]["details"]["open"] == 0, run
+    with store.read() as c:
+        assert c.execute("SELECT cursor_at FROM maintenance_steps WHERE key='update'").fetchone()[0] == now
 
 
 def test_a_bot_that_did_no_work_since_its_last_update_gets_no_request(api):
@@ -119,11 +178,11 @@ def test_a_bot_with_only_learnings_waiting_gets_one_delivery_turn_that_writes_no
                                                                  "suggestions": []})
     run_step(api)
     with store.transaction() as c:
-        reader, ops = bid(c, "reader"), bid(c, "ops")
+        reader = bid(c, "reader")
         row = c.execute("SELECT * FROM update_queue WHERE bot=? AND day=?", (reader, DAY)).fetchone()
         assert row["state"] == "queued" and row["delivery_only"] == 1, "no work, but learnings waiting: a delivery turn"
         c.execute("UPDATE update_queue SET state='skipped' WHERE day=? AND bot<>?", (DAY, reader))   # only this one goes out
-        assert updates.dispatch(c, TUESDAY) == reader
+        assert updates.dispatch(c, TUESDAY, build=False) == reader
         sent = c.execute("SELECT q.*, m.refs, m.body FROM update_queue q JOIN messages m ON m.id=q.message_id WHERE q.id=?",
                          (row["id"],)).fetchone()
         assert json.loads(sent["refs"])["delivery_only"] is True and "Keep the Friday cut-off" in sent["body"]
@@ -133,7 +192,7 @@ def test_a_bot_with_only_learnings_waiting_gets_one_delivery_turn_that_writes_no
                   (H.new_id(), sent["message_id"], reader, H.now()))
         assert updates.settle_sent(c, dict(sent)) is False
         assert c.execute("SELECT state FROM update_queue WHERE id=?", (row["id"],)).fetchone()["state"] == "delivered_without_update"
-        assert updates.dispatch(c, TUESDAY) is None
+        assert updates.dispatch(c, TUESDAY, build=False) is None
         assert c.execute("SELECT count(*) FROM update_queue WHERE bot=? AND day=?", (reader, DAY)).fetchone()[0] == 1
 
 
@@ -162,7 +221,7 @@ def test_the_request_is_a_taskless_notice_in_the_main_lane_path(api):
     with store.transaction() as c:
         ops = bid(c, "ops")
         c.execute("UPDATE update_queue SET state='skipped' WHERE day=? AND bot<>?", (DAY, ops))
-        assert updates.dispatch(c, TUESDAY) == ops
+        assert updates.dispatch(c, TUESDAY, build=False) == ops
         msg = c.execute("SELECT m.* FROM update_queue q JOIN messages m ON m.id=q.message_id WHERE q.bot=? AND q.day=?",
                         (ops, DAY)).fetchone()
         assert msg["sender_id"] == H.KEEPER and msg["kind"] == "notice" and msg["recipient_id"] == H.bot_actor(ops)
@@ -193,10 +252,10 @@ def test_bottom_up_order_defers_a_manager_until_its_report_has_posted(api):
         analyst, boss = bid(c, "analyst"), bid(c, "boss")
         assert states(c)[boss] == "queued", "a manager is asked: its report will post today"
         c.execute("UPDATE update_queue SET state='skipped' WHERE day=? AND bot NOT IN (?,?)", (DAY, analyst, boss))
-        assert updates.dispatch(c, TUESDAY) == analyst, "the report is asked first"
-        assert updates.dispatch(c, TUESDAY) is None, "one request out at a time: the manager waits"
+        assert updates.dispatch(c, TUESDAY, build=False) == analyst, "the report is asked first"
+        assert updates.dispatch(c, TUESDAY, build=False) is None, "one request out at a time: the manager waits"
         updates.post(c, analyst, "- Sized the market", day=DAY)
-        assert updates.dispatch(c, TUESDAY) == boss, "the manager is asked once its report has posted"
+        assert updates.dispatch(c, TUESDAY, build=False) == boss, "the manager is asked once its report has posted"
 
 
 def test_a_manager_whose_reports_have_nothing_to_do_gets_no_request(api):
@@ -223,13 +282,35 @@ def test_a_bot_the_limiter_refuses_stays_queued_for_the_next_pass_and_each_reque
         held, ops = bid(c, "held"), bid(c, "ops")
         c.execute("UPDATE update_queue SET state='skipped' WHERE day=? AND bot NOT IN (?,?)", (DAY, held, ops))
         refused.add(held)
-        assert updates.dispatch(c, TUESDAY) == ops, "the refused bot is passed over on this pass"
+        assert updates.dispatch(c, TUESDAY, build=False) == ops, "the refused bot is passed over on this pass"
         assert states(c)[held] == "queued", "a refused request is not missed: it stays queued"
         assert recorded == [ops], "one update request is one wake"
         c.execute("UPDATE update_queue SET state='posted' WHERE bot=? AND day=?", (ops, DAY))
         refused.clear()
-        assert updates.dispatch(c, TUESDAY) == held, "the next pass asks the held bot"
+        assert updates.dispatch(c, TUESDAY, build=False) == held, "the next pass asks the held bot"
         assert recorded == [ops, held]
+
+
+@pytest.mark.parametrize("limit", ["bot", "fleet"])
+def test_update_honors_the_shared_wake_ledger_and_records_the_request(api, monkeypatch, limit):
+    store = api.app.state.store
+    now = ctx(api, TUESDAY)["now"]
+    monkeypatch.setattr(H, "now", lambda: now)
+    with store.transaction() as c:
+        ops = bid(c, "ops")
+        turn(c, ops)
+    run_step(api)
+    with store.transaction() as c:
+        for bot_id in ([ops] if limit == "bot" else [f"fleet-{n}" for n in range(maintenance_limits.WAKES_PER_HOUR)]):
+            maintenance_limits.record(c, bot_id)
+        assert updates.dispatch(c, TUESDAY, build=False) is None
+        assert states(c)[ops] == "queued", "a capped wake is left for the next pass"
+    monkeypatch.setattr(H, "now", lambda: H.shift(now, minutes=61))
+    with store.transaction() as c:
+        assert updates.dispatch(c, TUESDAY, build=False) == ops
+        assert c.execute("SELECT count(*) FROM events WHERE action=? AND target=? AND created_at>?",
+                         (maintenance_limits.BOT_ACTION, ops, now)).fetchone()[0] == 1
+        assert not maintenance_limits.allow(c, ops), "the request consumed its shared wake allowance"
 
 
 def test_the_linter_checks_version_two_only(api):
@@ -334,8 +415,10 @@ def test_dispatch_with_build_off_never_starts_a_queue(api):
         turn(c, bid(c, "ops"))
         assert updates.dispatch(c, TUESDAY, build=False) is None
         assert c.execute("SELECT count(*) FROM update_queue").fetchone()[0] == 0, "the step builds the queue, not the pump"
-        assert updates.dispatch(c, TUESDAY) is not None
-        assert c.execute("SELECT count(*) FROM update_queue").fetchone()[0] > 0, "with build on, the pump builds it"
+    run_step(api)
+    with store.transaction() as c:
+        assert updates.dispatch(c, TUESDAY, build=False) is not None
+        assert c.execute("SELECT count(*) FROM update_queue").fetchone()[0] > 0
 
 
 def test_the_step_is_pending_while_a_request_is_queued_or_out_and_ran_once_the_cycle_is_done(api):
