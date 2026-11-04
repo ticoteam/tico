@@ -96,3 +96,11 @@ def test_mercury_on_openrouter_is_offered_only_as_a_meeting_model_and_priced():
     assert (row["runtime"], row["default_effort"], row["efforts"][0]) == ("pi", "low", "low")
     assert P.PRICES["mercury-3"] == (0.20, 0.02, 0.70)
     assert openrouter.MODELS["mercury-3"] == "inception/mercury-3"
+
+
+def test_gpt_6_1_terra_is_a_current_codex_model_a_bot_can_choose_and_it_is_priced():
+    row = P.MODEL_BY_ID["gpt-6.1-terra"]
+    assert (row["runtime"], row["provider"]) == ("codex", "openai") and not row.get("deprecated")
+    assert "gpt-6.1-terra" in [m["id"] for m in P.provider_models("openai")]
+    assert P.complete_choice(["openai"], "codex", "gpt-6.1-terra") == ("codex", "gpt-6.1-terra")
+    assert P.PRICES["gpt-6.1-terra"] == P.price_of("gpt-6.1-terra") == (1.0, 0.05, 5.0)
