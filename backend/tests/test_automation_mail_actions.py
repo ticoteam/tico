@@ -580,7 +580,7 @@ def test_two_rules_that_fired_and_a_destinations_mail_action_settle_into_one_rec
     assert last_run(api, aid)["steps"][0]["status"] == "waiting"
     assert computer.worker.mail_action_tick() == 2          # both queued, claimed in order, one tick
     labels = {computer.gmail.name_of(lid) for lid in computer.gmail.store["m1"]["labelIds"]}
-    assert {"hub/billing", "hub/needs-owner"} <= labels and "INBOX" not in labels
+    assert {"hub/billing", "hub/needs-owner", "INBOX"} <= labels   # leave for you labels and keeps the message in INBOX
     run = last_run(api, aid)
     assert run["status"] == "ok" and run["steps"][0]["status"] == "ok"
     out = run["steps"][0]["outputs"]
