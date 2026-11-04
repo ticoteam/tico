@@ -296,3 +296,35 @@ def test_a_bot_may_not_make_an_automation_it_may_not_change(api):
             and not a["builtin"]] == []
     own = post(api, "automations", flow(owner="bot:finance"), bot)
     assert own["enabled"] is True and own["can_edit"] is True                   # a bot's own: no BotOps, so on
+
+
+SUBPOENA = {"id": "gate", "type": "filter", "enabled": True, "rules": [
+    {"when": [{"field": "message.subject", "op": "matches", "value": "subpoena"}],
+     "then": [{"do": "note", "args": {"text": "Subpoena in"}}], "to": "legal"}]}
+LEGAL_DESTINATION = [{"id": "legal", "name": "Legal", "color": "red",
+                      "then": [{"do": "create_task", "args": {"title": "Review the subpoena"}}]}]
+
+
+def test_destinations_round_trip_and_a_version_without_them_restores_without_them(api):
+    aid = make(api)["id"]                                                  # a flow as before: no destinations
+    assert "destinations" not in get(api, f"automations/{aid}")
+    assert "names one of" in json.dumps(make(api, expected=422, steps=[SUBPOENA]))   # `to` names no destination
+    assert "every destination has an id" in json.dumps(make(api, expected=422, destinations=[
+        {"id": "Legal Team", "name": "x", "then": []}]))
+    edited = patch(api, aid, {"steps": [SUBPOENA], "destinations": LEGAL_DESTINATION})
+    assert edited["version"] == 2 and edited["destinations"] == LEGAL_DESTINATION
+    assert get(api, f"automations/{aid}")["destinations"] == LEGAL_DESTINATION
+    restored = post(api, f"automations/{aid}/versions/1/restore", {})
+    assert restored["version"] == 3 and "destinations" not in restored
+    assert "destinations" not in get(api, f"automations/{aid}")
+    assert post(api, f"automations/{aid}/versions/2/restore", {})["destinations"] == LEGAL_DESTINATION
+    # Removing the destinations alone is refused: the rule still sends its thread to `legal`, which would name nothing.
+    before = get(api, f"automations/{aid}")
+    refused = patch(api, aid, {"destinations": None}, expected=422)
+    assert "names one of" in json.dumps(refused)
+    after = get(api, f"automations/{aid}")
+    assert (after["steps"], after["destinations"]) == (before["steps"], LEGAL_DESTINATION)   # refused: nothing changed
+    # Clearing the rule's `to` and the destinations together is a valid edit, and it takes both away.
+    no_to = [{**SUBPOENA, "rules": [{k: v for k, v in SUBPOENA["rules"][0].items() if k != "to"}]}]
+    assert "destinations" not in patch(api, aid, {"steps": no_to, "destinations": None})
+    assert "destinations" not in get(api, f"automations/{aid}")

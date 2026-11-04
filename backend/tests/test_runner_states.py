@@ -36,7 +36,7 @@ def _before_the_move(path, extra=()):
             c.execute(statement)
         # A file from before 0062 has applied nothing from 0062 on: later migrations run again on boot (each is
         # idempotent), as they would on a real file that is upgraded.
-        c.execute("DELETE FROM schema_migrations WHERE version >= '0062'")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0062' AND version NOT LIKE 'legacy_%'")
 
 
 def test_an_existing_file_moves_every_state_value_off_runners_once(tmp_path):

@@ -981,6 +981,8 @@ def wake_rules_of(aid, flow):
     trigger = flow.get("trigger") or {}
     if trigger.get("type") != "event" or trigger.get("name") != "tico.wake":
         raise ValueError("its trigger stays the wake rules' own (event tico.wake)")
+    if flow.get("destinations"):   # the wake executor (rules.py) runs one action per rule; it cannot run a destination
+        raise ValueError("a wake rule takes no destinations: its one action is its outcome")
     out = []
     for n, step in enumerate(flow.get("steps") or []):
         if step.get("type") != "filter":
@@ -988,6 +990,8 @@ def wake_rules_of(aid, flow):
         for i, rule in enumerate(step.get("rules") or []):
             where = f"step {step.get('id')} rule {i + 1}"
             then = rule.get("then") or []
+            if rule.get("to") is not None or rule.get("next") is not None:
+                raise ValueError(f"{where}: a wake rule takes no 'to' or 'next': it does its one action and stops")
             if len(then) != 1:
                 raise ValueError(f"{where}: a wake rule does one thing (wake, note, archive or leave for you)")
             if rule.get("stop") is False:

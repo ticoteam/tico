@@ -7,7 +7,7 @@
 <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
 <meta name="theme-color" content="#131413">
 <link rel="preload" href="/vendor/fonts/inter-variable.woff2?v=d27c9cfb920f" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="/vendor/fonts/material-symbols-outlined.woff2?v=75c426f73215" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/vendor/fonts/material-symbols-outlined.woff2?v=6ede0ae9fbd3" as="font" type="font/woff2" crossorigin>
 <script src="/tico/ui/theme.js"></script>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
@@ -178,6 +178,8 @@
           <a class="nav-link" href="#/changelog" data-nav="changelog"><span class="nav-icon" aria-hidden="true">dynamic_feed</span>Changelog<span id="changelog-badge" class="pill" hidden></span></a>
           <a class="nav-link" href="#/settings" data-nav="settings"><span class="nav-icon" aria-hidden="true">settings</span>Settings</a>
           <button class="nav-link" id="account-tour" type="button" data-gs-tour><span class="nav-icon" aria-hidden="true">tour</span>Take the tour</button>
+          <button class="nav-link" id="org-switch" type="button" hidden><span class="nav-icon" aria-hidden="true">swap_horiz</span>Switch organization</button>
+          <button class="nav-link" id="org-add" type="button" hidden><span class="nav-icon" aria-hidden="true">add</span>Add organization</button>
           <a class="nav-link" id="sign-out" href="/api/v2/logout" hidden><span class="nav-icon" aria-hidden="true">logout</span>Sign out</a>
           <a class="nav-link" id="download-app" href="/download/mac" hidden><span class="nav-icon" aria-hidden="true">download</span>Download the app</a>
         </nav>
@@ -366,6 +368,7 @@
 <script src="/tico/ui/app/automations-editors.js"></script>
 <script src="/tico/ui/app/automations-runs.js"></script>
 <script src="/tico/ui/app/automations-overview.js"></script>
+<script src="/tico/ui/app/automations-new.js"></script>
 <script src="/tico/ui/app/usage.js"></script>
 <script src="/tico/ui/app/replay.js"></script>
 <script src="/tico/ui/app/computer-screen.js"></script>

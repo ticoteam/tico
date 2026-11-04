@@ -520,7 +520,7 @@ pub fn runtime_report(config: &Config, sign: &SignIn, assignments: &[Value], com
         }
         let default = profiles::computer_login(&config.data).map(|p| p.name).unwrap_or_default();
         let own_name = if computer_logins { default.as_str() } else { "" };
-        let own = crate::profiles::windows(own_name, runtime);
+        let own = crate::profiles::windows_for_server(own_name, runtime);
         let row = computer_row(targets, own, computer_logins);
         report.insert(runtime.into(), row);
     }

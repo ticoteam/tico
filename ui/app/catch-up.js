@@ -63,7 +63,7 @@ const cuMsgHTML = m => {
 };
 function cuCardHTML(it) {
   const t = it.thread, n = Number(it.new_count) || 0, more = Number(it.more) || 0, hash = threadOnRail(t);
-  const title = threadTitle(t), name = hash ? '#' + title : title, left = cuLeft();
+  const title = threadTitle(t, it.messages), name = hash ? '#' + title : title, left = cuLeft();
   return `<div class="cu-stack">${left > 2 ? '<span class="cu-back cu-back2"></span>' : ''}${left > 1 ? '<span class="cu-back cu-back1"></span>' : ''}
     <section class="cu-card" aria-labelledby="cu-t" data-thread="${esc(t.id)}">
       <div class="cu-card-head"><h3 id="cu-t">${hash ? threadHashHTML(t) : threadMarkHTML(t, 18)}<span>${esc(title)}</span></h3>

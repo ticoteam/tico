@@ -651,3 +651,26 @@ def test_the_threads_delivery_trigger_follows_hubdbs_task_news_rule(tmp_path):
         sql = c.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='threads_primary_delivery'").fetchone()[0]
     condition = H.delivery_counts_sql("NEW", "NEW.recipient_id", "'addressed'")
     assert " ".join(condition.split()) in " ".join(sql.split())
+
+
+def test_migration_0065_gives_the_mail_queue_its_chain_columns_and_keeps_its_rows(tmp_path):
+    """Migration 0065: the mail action queue gets the `step` and `after` columns a chain needs. A file whose queue was
+    made before them keeps its rows (their chain columns stay NULL, so nothing chains), and a second boot changes nothing."""
+    path = fresh(tmp_path)
+    new = _shape(path)
+    with sqlite3.connect(path) as c:
+        c.execute("ALTER TABLE automation_mail_actions DROP COLUMN step")
+        c.execute('ALTER TABLE automation_mail_actions DROP COLUMN "after"')
+        c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,created_at,"
+                  "result) VALUES('ma_old','auto_old','run_old','ana@acme.example','m1','archive','{}','done',"
+                  "'2026-10-01T00:00:00Z','{\"ok\": true}')")
+    _back_to_before(path, "0065")
+    boot(path)
+    assert _shape(path) == new
+    with sqlite3.connect(path) as c:
+        assert c.execute('SELECT id, state, step, "after" FROM automation_mail_actions').fetchall() == [
+            ("ma_old", "done", None, None)]
+        assert c.execute("SELECT 1 FROM schema_migrations WHERE version LIKE '0065%'").fetchone()
+    once = snapshot(path)
+    boot(path)
+    assert snapshot(path) == once

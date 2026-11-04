@@ -667,6 +667,8 @@ never send again. Unsupported methods return `manual_required`; uncertain reques
 `unknown`. The rules pass still archives unwanted mail and exposes the unsubscribe result;
 standalone `--archive` archives only after acceptance. No request is made in a dry run.
 
+An automation's `unsubscribe` action (mail only) makes the same request on the mail computer. It refuses starred mail, internal mail, people on the roster and senders the mailbox already writes to, and a refusal or an unconfirmed request fails the step. Mail actions on one message within one automation step run in order: an archive after an unsubscribe waits for it, and is skipped if it failed.
+
 Keep the processing order: scripts and filing rules, then model analysis of unresolved mail.
 Unsubscribe requires choosing unwanted subscription mail; it does not cancel a paid service.
 

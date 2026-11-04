@@ -43,12 +43,14 @@ _RULE_NAMES = {
     "bots_go_ahead": ("Bots go ahead on their recommendation when nobody answers", "confirm", ""),
     "support_access": ("Owners and admins may let Tico support in", "confirm", ""),
     "health_monitor_reports": ("Health monitor reports", "direct", ""),
+    "bot_reports_direct": ("Bots send reports to the Tico team without asking", "confirm", ""),
     "stale_review": ("Review stale tasks", "direct", ""),
     "topic_fresh": ("Keep topics fresh", "direct", ""),
     "stall_triage": ("Stalled task check", "direct", ""),
     "org_rule_checks": ("Check bot outputs against rules", "direct", ""),
 }
 _RULE_WHERE = {"health_monitor_reports": ("Settings > Health > Health monitor", _card("health")),
+               "bot_reports_direct": (GENERAL + " > Team", _card("general", "settings-team")),
                "stale_review": (RULES + " > What Tico runs on its own", _card("system", "set-system-card")),
                "topic_fresh": (RULES + " > What Tico runs on its own", _card("system", "set-system-card")),
                "stall_triage": (RULES + " > What Tico runs on its own", _card("system", "set-system-card"))}
