@@ -59567,7 +59567,11 @@
                 "type": "null"
               }
             ],
-            "description": "Only returned to page managers; null inherits where it is filed"
+            "description": "Only returned to managers on a single page read or write; null inherits where it is filed"
+          },
+          "restricted": {
+            "type": "boolean",
+            "description": "Only returned to managers, including on lists and cards"
           },
           "file_id": {
             "type": "string"

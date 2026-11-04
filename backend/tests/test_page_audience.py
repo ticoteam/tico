@@ -49,6 +49,9 @@ def test_null_preserves_visibility_and_only_managers_see_the_audience(api):
     edit(api, fid, {'people': ['cara']})
     assert 'audience' not in read(api, fid, 'cara-test').json()['page']
     assert 'audience' not in api.get('/api/v2/pages?ids=' + fid, headers=headers('cara-test')).json()['pages'][0]
+    summary = api.get('/api/v2/pages?ids=' + fid, headers=headers('ben-test')).json()['pages'][0]
+    assert 'audience' not in summary and summary['restricted']
+
 
 
 def test_restriction_hides_lists_search_cards_pins_and_bytes_and_clearing_restores(api, monkeypatch):

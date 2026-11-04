@@ -20,7 +20,7 @@ const pageBotName = x => {
 };
 // `link: false` inside a card that is itself a link: the replacing page's title without its own link.
 function pageStatusHTML(p, {link = true} = {}) {
-  const lock = p.audience && !p.audience.everyone ? '<span class="nav-icon pg-lock" aria-label="Restricted">lock</span> ' : '';
+  const lock = p.restricted ? '<span class="nav-icon pg-lock" aria-label="Restricted">lock</span> ' : '';
   if (p.replaced_by_id) {
     const title = esc(p.replaced_by_title || 'a newer page');
     return `<div class="pg-status pg-replaced">${lock}Replaced by ${link ? `<a href="${esc(pageHref(p.replaced_by_id))}">${title}</a>` : title}</div>`;

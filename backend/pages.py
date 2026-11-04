@@ -149,7 +149,7 @@ class Pages:
             return None
         return visuals.src_for(self.app, self.store.settings, c, who, row["id"], version)
 
-    def view(self, c, who, row, page, cache, names_=None):
+    def view(self, c, who, row, page, cache, names_=None, *, include_audience=False):
         """The contract's page read: what the status line and a card need."""
         v = read_cache.one(c, VIEW_VERSION_SQL, (row["id"], row["current_version"]))
         updated = v["created_at"] if v else row["last_activity_at"]
@@ -161,6 +161,7 @@ class Pages:
             else:
                 replaced = None             # a replacement the reader may not see is not named
         by = v["actor"] if v else None
+        manager = self.may_manage(c, who, row)
         names_ = names_ if names_ is not None else names.lookup(c, {"bot:" + row["bot_id"], *([by] if by else [])})
         return {"file_id": row["id"], "title": row["title"], "bot_id": row["bot_id"],
                 "bot_name": names_.get("bot:" + row["bot_id"], row["bot_id"]), "version": row["current_version"],
@@ -171,7 +172,8 @@ class Pages:
                 "archived": bool(page["archived"] or row["archived"]),
                 "task_id": row["task_id"] if row["task_id"] and self.files.task_info(c, who, row["task_id"], {}) else None,
                 "src": self.src(c, who, row, row["current_version"]) if v else None,
-                **({"audience": H._json(page["audience"], None)} if self.may_manage(c, who, row) else {})}
+                **({"restricted": page["audience"] is not None} if manager else {}),
+                **({"audience": H._json(page["audience"], None)} if manager and include_audience else {})}
 
     def rows(self, c, ids):
         found = {}
@@ -194,7 +196,7 @@ class Pages:
             if not r or not self.files.visible(c, who, r, {}):
                 raise Problem("not_found", "Page not found", 404)
             # What the full view offers this reader: Archive for its managers, Delete for the owner.
-            return {"page": self.view(c, who, r, self.page_of(r), {}), "can_manage": self.may_manage(c, who, r),
+            return {"page": self.view(c, who, r, self.page_of(r), {}, include_audience=True), "can_manage": self.may_manage(c, who, r),
                     "can_delete": who.role == "owner",
                     "pinned": cards.pinned_places(cards.Ctx(c, self.auth, who, self.store.settings), fid)}
 
@@ -293,7 +295,7 @@ class Pages:
             if task and row["task_id"] == task:
                 self.pin_to_task(c, row, task)
             return {"page": self.view(c, who, row, c.execute("SELECT * FROM pages WHERE file_id=?",
-                                                              (row["id"],)).fetchone(), {}),
+                                                              (row["id"],)).fetchone(), {}, include_audience=True),
                     "unembedded": unembedded}
         return self.files.publish(request, who, fields, cleaned, extra=extra,
                                   extra_body={"cadence": cadence or "", "as_of": as_of or "", "replaces": replaces,
@@ -365,7 +367,7 @@ class Pages:
                                     detail={"page": sorted(fields), **({"restored": True} if fields.get("archived") == 0 else {})})
                 H.event(c, who.actor, "page.edit", fid, {"fields": sorted(fields)})
             r = self.rows(c, [fid])[fid]
-            return {"page": self.view(c, who, r, self.page_of(r), {})}
+            return {"page": self.view(c, who, r, self.page_of(r), {}, include_audience=True)}
         return self.files.write(request, who, {"id": fid, **body.model_dump(exclude_unset=True)}, work)
 
 

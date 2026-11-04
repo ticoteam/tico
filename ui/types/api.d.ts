@@ -3492,6 +3492,7 @@ export type Page = {
   file_id: string;
   replaced_by_id: string | null;
   replaced_by_title?: string | null;
+  restricted?: boolean;
   src: string | null;
   stale_days: number | null;
   task_id: string | null;

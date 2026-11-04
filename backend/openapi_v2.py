@@ -2335,7 +2335,8 @@ STABLE.extend([
 ])
 SCHEMAS.update({
     "Page": obj({"audience": {"anyOf": [ref("AccessAudience"), {"type": "null"}],
-                             "description": "Only returned to page managers; null inherits where it is filed"},
+                             "description": "Only returned to managers on a single page read or write; null inherits where it is filed"},
+                 "restricted": {"type": "boolean", "description": "Only returned to managers, including on lists and cards"},
                  "file_id": "s", "title": "s", "bot_id": "s", "bot_name": "s", "version": "i", "updated_at": "s",
                  "updated_by": "n", "updated_by_name": "s",
                  "cadence": {"type": "string", "enum": ["none", "daily", "weekly", "monthly"]},

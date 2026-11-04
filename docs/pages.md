@@ -112,6 +112,9 @@ Stable v2 (`docs/openapi/v2.json`, tag **Pages**):
 the caller may not read is a 404. `replaced_by` is `null` when the caller may not read the newer page. Lists carry no
 totals, so a count never says what a reader cannot see.
 
+Managers get `audience` on single-page reads and writes, and a small `restricted` flag on summaries and cards.
+Other readers get neither field.
+
 `hub page list --task ID` and MCP's `hub_page_list` include both filed and linked pages with the same paging.
 
 **Who acts.** A bot publishes during its turn. People archive and restore. BotOps archives for a person with that
