@@ -5685,7 +5685,7 @@ def create_app(settings=None):
             require_on(settings)            # nothing to draft where nothing can be sent (docs/support.md)
             # A bot's report goes without a card when the team lets bots send without asking (team rule
             # `bot_reports_direct`, backend/support.py report_now); otherwise, or for anyone else, it is drafted below.
-            sent = app.state.support.report_now(who, body.payload, (request.headers.get("idempotency-key") or "")[:200])
+            sent = app.state.support.report_now(who, body, request.headers.get("idempotency-key"))
             if sent is not None:
                 return sent
         def work(c):

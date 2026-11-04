@@ -33,11 +33,11 @@ from pydantic import Field
 
 from . import diagnostics, support_asks, team_rules
 from .census import hq_url
-from .auth import Identity
+from .auth import Identity, validate_identity
 from .models import Contract
 from .replication import rehearsal_on
 from .credentials import SEALED
-from .store import H, Problem, encode, refused
+from .store import H, Problem, digest, encode, refused
 
 log = logging.getLogger("tico.support")
 
@@ -65,6 +65,7 @@ HQ_WAIT = 8
 # value it does not know): a person, a bot's report a person approved, BotOps, the Health Monitor.
 SOURCES = ("person", "bot_report", "botops", "health_monitor")
 RULE = "bot_reports_direct"     # the team rule: a bot's report is sent without a card (report_now)
+REPORT_OPERATION = "support.report"  # the Idempotency-Key scope of a direct report (a drafted approval has its own)
 # Who may act for a person on their confirmation (`Identity.confirmed`): BotOps and the Assistant, with their yes to a
 # read-back or their tap on a Confirm card (backend/app.py, backend/auth.py). Unconfirmed, they are refused here.
 CONFIRMED_VIA = ("botops", "assistant")
@@ -446,22 +447,44 @@ class Support:
                 on_filed(c, ticket_id)
             return view(c.execute("SELECT * FROM support_tickets WHERE id=?", (ticket_id,)).fetchone())
 
-    def report_now(self, who, payload, key=""):
+    def report_now(self, who, body, key=None):
         """A bot's report, sent without a card when the team lets bots send without asking (team rule `bot_reports_direct`).
         Returns None when the rule is off or the caller is not a bot: the caller then drafts it as a `support` approval, as
         before. Otherwise it gets the checks a drafted report gets (backend/hubdb.py `lint_approval`, a quarantined bot
         refused, a refusal recorded and counted the same way) and is filed as an approved one is: the same HQ call, the same
         day limit, the same source. It is filed as the install's default person (`H.default_human`), the one whose yes a
         drafted report would ask for. A bot has no person of its own to file as; the Health Monitor files as the owner the
-        same way (backend/health_monitor.py report). `key` is the Idempotency-Key the bot sent: a retry gets the same ticket."""
-        from . import lifecycle
+        same way (backend/health_monitor.py report). `body` is the approval request and `key` its Idempotency-Key, kept as
+        `mutate` keeps a write's: scoped to the bot's attempt, bound to the request's content (another body under the key
+        is a 409), and a retry gets the same ticket. Sends are serialized as `file_approved` serializes them, and the bot is
+        checked under the write lock before anything is sent (`validate_identity`, as `mutate` checks it)."""
         with self.store.read() as c:
             if who.role != "bot" or not team_rules.load(c)[RULE]:
                 return None
-        if not key:
+        if not key or len(key) > 200:
             raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
+        content = body.model_dump()
+        with self.sending:
+            return self._report_now(who, content, key)
+
+    def _report_now(self, who, content, key):
+        from . import lifecycle
+        payload = content["payload"]
+        principal = self.store._principal(who)     # the key's scope: the bot's attempt, as `mutate` scopes it
+        hashed = digest(encode(content))
         refusal = None
         with self.store.transaction() as c:
+            validate_identity(c, who)              # the bot still holds its credential, lease and state, under the lock
+            kept = c.execute("SELECT request_hash, response FROM idempotency WHERE binding IS NULL AND actor=? "
+                             "AND operation=? AND key=?", (principal, REPORT_OPERATION, key)).fetchone()
+            if kept:
+                if kept["request_hash"] != hashed:
+                    raise Problem("idempotency_conflict", "This key was used for different content", 409)
+                answer = json.loads(kept["response"])
+                done = c.execute("SELECT * FROM support_tickets WHERE id=?", (answer["ticket_id"],)).fetchone()
+                if not done:
+                    raise Problem("idempotency_conflict", "This key's report is no longer kept", 409)
+                return {"ticket": view(done), "sent": True, "filed_as": answer["filed_as"]}
             c.execute("SAVEPOINT domain_write")
             try:
                 lifecycle.refuse_send(c, who, None, what="anything")
@@ -482,10 +505,14 @@ class Support:
         def logged(c, ticket_id):                  # in the transaction that keeps the ticket
             H.event(c, who.actor, "support.reported", ticket_id, {"as": actor})
             H.path_mentioned(c, who.actor, "support report", json.dumps(payload, sort_keys=True, default=str))
+            # The key's answer is kept with the ticket, so a retry finds this ticket, and other content is a conflict.
+            c.execute("INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)",
+                      (principal, REPORT_OPERATION, key, hashed,
+                       encode({"ticket_id": ticket_id, "filed_as": actor}), H.now()))
         ticket = self.file(Identity(actor, "human"),
                            SupportTicket(message=payload["message"],
                                          include_ids=payload.get("include_ids", True) is not False),
-                           f"bot:{who.actor}:{key}", on_filed=logged, source="bot_report")
+                           f"bot:{principal}:{key}", on_filed=logged, source="bot_report")
         return {"ticket": ticket, "sent": True, "filed_as": actor}
 
     def file_approved(self, who, approval_id):

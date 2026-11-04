@@ -839,3 +839,77 @@ def test_a_persons_token_may_decline_a_report_and_nothing_is_sent(environment, h
     with api.app.state.store.read() as c:
         assert c.execute("SELECT decision FROM approvals WHERE id=?", (declined["id"],)).fetchone()[0] == "declined"
     assert hq.seen == [] and not consumed(api, declined["id"])
+
+
+def test_a_bots_key_used_for_other_content_is_refused_and_nothing_more_is_sent(environment, hq):  # noqa: F811  (the fixture)
+    import hashlib
+    api = environment()
+    bot = as_bot(api)
+
+    def report(message, key):
+        payload = {"message": message, "content_sha256": hashlib.sha256(message.encode()).hexdigest()}
+        return api.post("/api/v2/approvals", json={"kind": "support", "payload": payload},
+                        headers={**bot, "Idempotency-Key": key})
+    first = report(REPORT, "one-key")
+    assert first.status_code == 200, first.text
+    other = report("Another report, under the same key", "one-key")
+    assert other.status_code == 409 and other.json()["error"]["code"] == "idempotency_conflict"
+    assert len(hq.seen) == 1 and len(hq.tickets) == 1
+    # The same content under the key is the same ticket, and still nothing more reaches HQ.
+    again = report(REPORT, "one-key")
+    assert again.status_code == 200 and again.json()["ticket"]["id"] == first.json()["ticket"]["id"]
+    assert len(hq.seen) == 1
+
+
+def test_concurrent_retries_of_one_bots_report_are_sent_once(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
+    import hashlib
+    import threading
+    import time
+    from backend.models import ApprovalCreate
+    api = environment()
+    as_bot(api)
+    who = Identity("bot:coo", "bot", agent="hermes")
+    payload = {"message": REPORT, "content_sha256": hashlib.sha256(REPORT.encode()).hexdigest()}
+    body = ApprovalCreate(kind="support", payload=payload)
+    entered, release = threading.Event(), threading.Event()
+
+    def slow(request):                      # the first send is still out when the retry arrives
+        entered.set()
+        release.wait(5)
+        return hq(request)
+    monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(slow))
+    answers = {}
+
+    def send(name):
+        answers[name] = api.app.state.support.report_now(who, body, "race-key")
+    first = threading.Thread(target=send, args=("first",))
+    first.start()
+    assert entered.wait(5)
+    retry = threading.Thread(target=send, args=("retry",))
+    retry.start()
+    time.sleep(0.3)                         # the retry is at the send, and waits for the first to finish
+    release.set()
+    first.join(10)
+    retry.join(10)
+    assert len(hq.seen) == 1 and len(hq.tickets) == 1
+    assert answers["first"]["ticket"]["id"] == answers["retry"]["ticket"]["id"]
+
+
+@pytest.mark.parametrize("ending", ["credential", "bot"])
+def test_a_bots_report_is_refused_once_its_credential_or_its_bot_has_ended(environment, hq, ending):  # noqa: F811  (the fixture)
+    import hashlib
+    from backend.models import ApprovalCreate
+    from backend.store import Problem
+    api = environment()
+    as_bot(api)
+    with api.app.state.store.transaction() as c:
+        if ending == "credential":
+            c.execute("UPDATE agents SET revoked_at=? WHERE bot=?", ("2026-01-02T00:00:00Z", "coo"))
+        else:
+            c.execute("UPDATE bots SET state='paused' WHERE slug=?", ("coo",))
+    payload = {"message": REPORT, "content_sha256": hashlib.sha256(REPORT.encode()).hexdigest()}
+    with pytest.raises(Problem) as ended:
+        api.app.state.support.report_now(Identity("bot:coo", "bot", agent="hermes"),
+                                         ApprovalCreate(kind="support", payload=payload), "ended-1")
+    assert ended.value.code == ("revoked" if ending == "credential" else "paused")
+    assert hq.seen == []
