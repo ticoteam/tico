@@ -5,14 +5,14 @@ listed once quiet a day, Tico's own notices and check-backs are not news, a task
 bot with nothing to list gets no message, a private task is named without its title or any detail of it, a list reaches the
 bot alone, and a quiet task is listed again only after seven days. Synthetic fixtures only."""
 import importlib
-import json
 from datetime import datetime, timezone
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import scheduler, task_check_backs, task_roundup
 from backend import task_relations as TR
-from backend.store import H, encode
+from backend.store import H
 from backend.tests.test_api import api  # noqa: F401
 
 DAY = "2026-11-03T14:00:00.000000Z"     # the 6am run (company time is Pacific, PST on this date); fixed for the tests
@@ -487,9 +487,7 @@ def test_a_retained_blocker_that_someone_else_finished_after_the_turn_counts_as_
 def test_a_bot_reached_only_through_an_external_inbox_is_sent_its_list_once_with_no_job(api):
     store = api.app.state.store
     with store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='finance'").fetchone()[0])
-        config["harness"] = "hermes"                  # an external agent with no registered computer to deliver its jobs
-        c.execute("UPDATE bot_config SET config=? WHERE bot='finance'", (encode(config),))
+        BS.update(c, "finance", {"harness": "hermes"})   # an external agent with no registered computer to deliver its jobs
         idle = task(c, "Renew the parking permit")
         settle(c, idle["id"], "finance", ago(days=2))
         complete_jobs(c)
