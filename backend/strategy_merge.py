@@ -71,7 +71,8 @@ def _asked_again(c, link, row):
         f"AND {H.MESSAGE_TASK_SQL}=? LIMIT 1",
         (row["conversation_id"], link["person"], STRATEGY_BOT, link["settled_at"], row["id"])).fetchone()
     return bool(said) or bool(c.execute(
-        "SELECT 1 FROM task_events WHERE task_id=? AND field='waiting_on' AND new=? AND created_at>? LIMIT 1",
+        "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='waiting_on' AND new=? "
+        "AND created_at>? LIMIT 1",
         (row["id"], link["person"], link["settled_at"])).fetchone())
 
 

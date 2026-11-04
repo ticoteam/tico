@@ -683,8 +683,9 @@ def market_subjects(c, delivery, saw_text):
     from . import market
     begin, end = window(c, delivery)
     out = {}
-    for e in c.execute("SELECT * FROM market_events WHERE actor=? AND created_at>=? AND created_at<=? "
-                       "AND subject_kind IN ('entity','edge') ORDER BY created_at", ("bot:" + LIBRARIAN, begin, end)).fetchall():
+    for e in c.execute(f"SELECT {market.EVENT_COLUMNS} FROM history_events WHERE actor_id=? AND created_at>=? "
+                       "AND created_at<=? AND subject_type IN ('market_entity','market_edge') ORDER BY created_at",
+                       ("bot:" + LIBRARIAN, begin, end)).fetchall():
         entity_id = e["subject_id"] if e["subject_kind"] == "entity" else (market.edge(c, e["subject_id"]) or {}).get("src")
         entity = market.entity(c, entity_id) if entity_id else None
         if not entity:

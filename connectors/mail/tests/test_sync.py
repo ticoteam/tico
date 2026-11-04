@@ -56,5 +56,70 @@ class MessageStore(unittest.TestCase):
         self.assertIsNone(row["pushed_at"])
         self.assertEqual(db.message_count(self.conn, "ana@acme.example"), 1)
 
+
+class KnownSenders(unittest.TestCase):
+    """known_sender: the owner had written to the sender before the message's own date, from the copy this
+    computer holds. The computer sets it on each batch it pushes, so the hub reads it without a Gmail call."""
+
+    OWNER = "ana@acme.example"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = db.connect(Path(self.tmp.name) / "mail.db")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def put(self, mid, sender, to, epoch, cc=None, labels=None):
+        msg = norm(mid, epoch=epoch, labels=labels or ["INBOX", "UNREAD"],
+                   **{"from": sender, "to": to, "cc": cc or []})
+        db.upsert_message(self.conn, self.OWNER, msg)
+
+    def sent(self, mid, to, epoch, cc=None):
+        """A message the owner sent: the provider marks it SENT."""
+        self.put(mid, self.OWNER, to, epoch, cc=cc, labels=["SENT"])
+
+    def known(self, *mids):
+        rows = [r for r in db.unpushed(self.conn, mailbox=self.OWNER) if r["id"] in mids]
+        return {r["id"]: r["known_sender"] for r in db.annotate_known_senders(self.conn, rows)}
+
+    def test_a_sender_the_owner_wrote_to_earlier_is_known(self):
+        self.sent("sent",["pat@customer.example"], 100)
+        self.put("later", "pat@customer.example", [self.OWNER], 200)
+        self.assertEqual(self.known("later"), {"later": True})
+
+    def test_a_message_older_than_the_first_send_is_not_known(self):
+        self.sent("sent",["pat@customer.example"], 100)
+        self.put("early", "pat@customer.example", [self.OWNER], 50)
+        self.assertEqual(self.known("early"), {"early": False})
+
+    def test_a_copy_to_the_owner_counts_and_so_does_a_cc(self):
+        self.sent("sent",[], 100, cc=["pat@customer.example"])
+        self.put("later", "pat@customer.example", [self.OWNER], 200)
+        self.assertEqual(self.known("later"), {"later": True})
+
+    def test_a_new_sender_is_not_known_and_deleted_sends_do_not_count(self):
+        self.sent("sent",["pat@customer.example"], 100)
+        db.mark_deleted(self.conn, self.OWNER, "sent")
+        self.put("later", "pat@customer.example", [self.OWNER], 200)
+        self.put("new", "kim@other.example", [self.OWNER], 300)
+        self.assertEqual(self.known("later", "new"), {"later": False, "new": False})
+
+    def test_mail_from_someone_else_does_not_count_as_a_send(self):
+        self.put("sent", "ben@acme.example", ["pat@customer.example"], 100)
+        self.put("later", "pat@customer.example", [self.OWNER], 200)
+        self.assertEqual(self.known("later"), {"later": False})
+
+    def test_a_draft_to_the_sender_does_not_make_them_known(self):
+        self.put("draft", self.OWNER, ["pat@customer.example"], 100, labels=["DRAFT"])
+        self.put("later", "pat@customer.example", [self.OWNER], 200)
+        self.assertEqual(self.known("later"), {"later": False})
+
+    def test_an_inbound_message_claiming_the_owners_from_does_not_make_the_recipient_known(self):
+        self.put("spoof", self.OWNER, ["pat@customer.example"], 100)     # INBOX, never SENT
+        self.put("later", "pat@customer.example", [self.OWNER], 200)
+        self.assertEqual(self.known("later"), {"later": False})
+
+
 if __name__ == "__main__":
     unittest.main()

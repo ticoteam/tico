@@ -4,7 +4,7 @@ A watch is one public page of one market entity (its pricing, changelog, careers
 reads each active watch through `clients/doc_fetch.py`, the same guard `hub doc fetch` uses (public addresses only,
 every redirect checked, 5 MB and 20 seconds), keeps the page's normalized text, and only when it changed by a real
 amount stores a piece of evidence, files a `market_insights` row for the Librarian to curate and writes a
-`market_events` row on the entity, so a bet that cites the entity trips the fit check (backend/strategy.py). No model
+market history row on the entity, so a bet that cites the entity trips the fit check (backend/strategy.py). No model
 is called; the Librarian reads the insight. The server does this, not a bot, because a bot's watcher has no Tico
 token to read the list.
 

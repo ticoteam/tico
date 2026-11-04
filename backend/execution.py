@@ -2169,7 +2169,8 @@ def obsolete_notices_sql():
             f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
             f"WHERE x.runner_id=? AND j.bot_id=x.bot AND j.state='queued' AND {H.unheld_sql()} AND m.id=j.message_id "
             "AND m.sender_id=? AND (m.kind='say' AND json_extract(m.refs,'$.review_gate') IS NOT NULL "
-            "AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=t.id AND e.created_at>m.created_at AND e.field='step') "
+            "AND EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=t.id "
+            "AND e.created_at>m.created_at AND e.kind='step') "
             "OR m.kind='notice' "
             "AND ((m.ref_wake='check_back' AND ("
             "t.check_back_at IS NOT json_extract(m.refs,'$.check_back_at') OR "
@@ -2187,10 +2188,10 @@ def obsolete_notices_sql():
             "AND NOT EXISTS (SELECT 1 FROM attempts fa WHERE fa.id=json_extract(m.refs,'$.filed_in') "
             "AND fa.state IN ('leased','running'))) "
             "OR ((m.ref_wake IN ('status_check','stalled','step_status') "
-            "OR json_extract(m.refs,'$.rule')='status_check') AND EXISTS (SELECT 1 FROM task_events "
-            "e WHERE e.task_id=t.id AND e.created_at>m.created_at AND e.actor<>m.sender_id)) "
-            "OR (json_extract(m.refs,'$.step_late') AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=t.id "
-            "AND e.created_at>m.created_at AND e.field='step')) "
+            "OR json_extract(m.refs,'$.rule')='status_check') AND EXISTS (SELECT 1 FROM history_events "
+            "e WHERE e.subject_type='task' AND e.subject_id=t.id AND e.created_at>m.created_at AND e.actor_id<>m.sender_id)) "
+            "OR (json_extract(m.refs,'$.step_late') AND EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' "
+            "AND e.subject_id=t.id AND e.created_at>m.created_at AND e.kind='step')) "
             "OR (json_extract(m.refs,'$.at_step') IS NOT NULL AND json_extract(m.refs,'$.at_step')<>"
             "coalesce(t.step_id,'') AND coalesce(json_extract(m.refs,'$.caused_by'),'') NOT LIKE 'human:%') "
             "OR (m.ref_wake='pr_checks_done' AND json_extract(m.refs,'$.pr_head') IS NOT NULL "
@@ -2202,6 +2203,21 @@ def obsolete_notices_sql():
             "AND r.attempt_id=j.attempt_id AND r.decision='resume') "
             "AND NOT EXISTS (SELECT 1 FROM attempts ya WHERE ya.id=j.attempt_id AND ya.started_at IS NOT NULL "
             "AND ya.state='interrupted' AND json_extract(ya.result,'$.yielded'))")
+
+
+def suppress_notice(c, job, task_id, reason):
+    """Cancel one queued keeper notice nothing needs any more: its job, its claim hold, its delivery mark, the status a
+    stop left on its bot, and a job.suppress event. The claim does this for obsolete_notices_sql; task_check_backs does it
+    for a check-back whose due time moved, so a stale one cannot hold the next notice on a computer that never wakes."""
+    c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job['id'],))
+    claim_holds.clear(c, job['id'], "Its run is no longer needed.")
+    c.execute("UPDATE messages SET delivered_at=coalesce(delivered_at,?) WHERE id=?", (H.now(), job['message_id']))
+    from .repositories import metadata
+    if (job["attempt_id"] and metadata(c, LAST_STOP + job["bot_id"]).get("attempt_id") == job["attempt_id"]
+            and (H.status(c, job["bot_id"]) or {}).get("state") == "idle"):
+        # Clearing the status also publishes the new header to already-open pages.
+        settle_status(c, job["bot_id"], "idle", "")
+    H.event(c, H.KEEPER, 'job.suppress', job['id'], {'reason': reason, 'task_id': task_id})
 
 
 HAND_BACK_WAIT = 15          # seconds before a handed-back job is handed out again, doubled for each hand-back
@@ -3492,15 +3508,7 @@ class Execution:
         for old in obsolete:
             if not prepared:
                 selected = None
-            c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (old['id'],))
-            claim_holds.clear(c, old['id'], "Its run is no longer needed.")
-            c.execute("UPDATE messages SET delivered_at=coalesce(delivered_at,?) WHERE id=?", (H.now(),old['message_id']))
-            from .repositories import metadata
-            if (old["attempt_id"] and metadata(c, LAST_STOP + old["bot_id"]).get("attempt_id") == old["attempt_id"]
-                    and (H.status(c, old["bot_id"]) or {}).get("state") == "idle"):
-                # Clearing the status also publishes the new header to already-open pages.
-                settle_status(c, old["bot_id"], "idle", "")
-            H.event(c,H.KEEPER,'job.suppress',old['id'],{'reason':'Task finished or acted on before keeper notice delivery','task_id':old['task_id']})
+            suppress_notice(c, old, old['task_id'], 'Task finished or acted on before keeper notice delivery')
         company = org_turns.observe(c, self.store.settings, detailed=False)
         if company['at_stop']:
             return {'attempt': None, 'waiting': org_turns.REASON}
@@ -5214,8 +5222,8 @@ class Execution:
             deferred = False
             if task_id and task_id != turn_task:
                 task = H.task(c, task_id)
-                outcome = c.execute("SELECT 1 FROM task_events WHERE task_id=? AND actor=? AND created_at>=? "
-                                    "AND (field='note' OR (field='status' AND new IN ('done','closed','declined'))) LIMIT 1",
+                outcome = c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id=? "
+                                    "AND created_at>=? AND (kind='note' OR (kind='status' AND new IN ('done','closed','declined'))) LIMIT 1",
                                     (task_id, actor, row["started_at"] or row["created_at"])).fetchone()
                 deferred = bool(task and task["status"] in H.ACTIVE_STATUSES and not outcome)
             state = ("queued" if deferred else "completed" if body.outcome == "completed" and answered else

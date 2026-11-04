@@ -92,7 +92,9 @@ def teammate_masks(unseen, me, inner=None, names=None, bots=()):
                                  for column in ("actor", "added_by")}
     if people and inner is not None:
         out["tasks"] = {column: masked(column, party("source.id")) for column in ("owner_id", "requester_id", "closed_by_id")}
-        out["task_events"] = {"actor": masked("actor", party("source.task_id"))}
+        # A task's history row names its actor as the task does; the other subjects are everyone's to read.
+        out["history_events"] = {"actor_id": (f"CASE WHEN source.subject_type='task' THEN "
+                                              f"{masked('actor_id', party('source.subject_id'))} ELSE source.actor_id END")}
         out["events"] = {"actor": masked("actor", f"({member('source.target')} OR {party('source.target')})")}
         # As REST and the stream say it (teammate_access.Known): the message stays, its author is not named.
         out["messages"] = {column: masked(column, member("source.conversation_id")) for column in ("sender_id", "recipient_id")}
@@ -422,7 +424,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "message_mentions": "EXISTS (SELECT 1 FROM messages readable WHERE readable.id=source.message_id)",
         "tasks": tasks,
         "tags": tag_gate, "task_tags": by_task,
-        "task_events": by_task + " AND " + content_gate(("old", "new", "note")), "task_delegations": by_task,
+        "task_delegations": by_task,
         "task_requesters": by_task, "task_reminders": by_task, "task_assets": by_task, "task_links": by_task, "task_roles": by_task,
         # A relation is read only when the caller may read both of its tasks.
         "task_relations": "from_task IN (SELECT id FROM tasks) AND to_task IN (SELECT id FROM tasks)",
@@ -450,7 +452,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "seats": "id IS NOT NULL",
         # Goals are the company's, except a bot's own: a caller reads those of bots they may read. Never a
         # bare "1" (the same reason as intake_items below).
-        "goals": goals, "goal_events": "goal_id IN (SELECT id FROM goals)", "kpis": kpis,
+        "goals": goals, "kpis": kpis,
         "kpi_readings": "kpi_id IN (SELECT id FROM kpis)", "kpi_definitions": "kpi_id IN (SELECT id FROM kpis)",
         "goal_kpis": "goal_id IN (SELECT id FROM goals)", "goal_checkins": "goal_id IN (SELECT id FROM goals)",
         # A strategy proposal carries the unpublished draft or every affected goal's title (goal_routes.strategy_visible):
@@ -460,21 +462,29 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
                               f"OR proposed_by={me})"),
         "goal_asks": "task_id IN (SELECT id FROM tasks)",
         # The company's Vision and Description and their history: everyone's to read, like the company's goals.
-        "company_profile": "id IS NOT NULL", "company_events": "id IS NOT NULL",
+        "company_profile": "id IS NOT NULL",
         # The team's strategy (backend/strategy.py): the published versions are everyone's, like the goals. The draft,
         # the live bets (their words may be unpublished) and the history of both are the owner's.
         "strategy_versions": "id IS NOT NULL" if owner else "status='published'",
         "strategy_bets": "id IS NOT NULL" if owner else "id IS NULL",
-        "strategy_events": "id IS NOT NULL" if owner else "id IS NULL",
         # A lens run (backend/lenses.py) on the draft carries the unpublished strategy's words: the owner's. Every other
         # run only discusses what is published.
         "lens_runs": "id IS NOT NULL" if owner else "on_draft=0",
         # The market graph is the company's, the same way goals are.
         "market_entities": "1", "market_edges": "1", "market_evidence": "1",
-        "market_citations": "1", "market_insights": "1", "market_events": "1",
+        "market_citations": "1", "market_insights": "1",
         # Page monitors and the weekly briefings (backend/market_watch.py, backend/market_briefing.py): public pages the
         # team watches and what the Librarian wrote about them, the market's to read.
         "market_watches": "1", "market_briefings": "1",
+        # One history table (backend/migrations/0064_history_events.py), each row read as its subject is: a task's
+        # with the task (and its words through the content gate), a goal's with the goal, the company's and the
+        # market's by everyone, the strategy's by the owner (its draft's words may be unpublished).
+        "history_events": ("CASE subject_type WHEN 'task' THEN subject_id IN (SELECT id FROM tasks) AND "
+                           + content_gate(("old", "new", "note"))
+                           + " WHEN 'goal' THEN subject_id IN (SELECT id FROM goals)"
+                           + " WHEN 'strategy' THEN " + ("1" if owner else "0")
+                           + " WHEN 'company' THEN 1 ELSE subject_type IN "
+                             "('market_entity','market_edge','market_evidence','market_document') END"),
         "market_sizes": "1", "market_figures": "1", "market_sources": "1",
         # Listening's saved posts carry third parties' names and handles (backend/listening.py):
         # Listening and the owner read them all, a receiving bot only what was routed to it.
@@ -857,7 +867,7 @@ def connect(path, c, auth, who, trace=None, seconds=None):
             # These are visible in full (predicate 1). SQLite answers count(*) by reading
             # the base table with no view context; that read is the same rows as the view.
             if table in {"market_entities", "market_edges", "market_evidence", "market_citations",
-                         "market_insights", "market_events", "market_watches", "market_briefings", "market_sizes",
+                         "market_insights", "market_watches", "market_briefings", "market_sizes",
                          "market_figures", "market_sources", "listen_runs", "task_types", "task_steps"}:
                 return sqlite3.SQLITE_OK
             # A base table is read only by its own inner view, whose name is this connection's secret.

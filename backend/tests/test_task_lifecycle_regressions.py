@@ -30,7 +30,7 @@ def eligible(c, task_id):
 
 def age(c, task_id):
     c.execute("UPDATE tasks SET created_at=?,updated_at=?,done_at=? WHERE id=?", (OLD, OLD, OLD, task_id))
-    c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (OLD, task_id))
+    c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (OLD, task_id))
     c.execute("UPDATE messages SET created_at=? WHERE conversation_id=(SELECT conversation_id FROM tasks WHERE id=?)",
               (OLD, task_id))
 
@@ -243,7 +243,7 @@ def test_opening_task_refreshes_links_without_touching_tasks_or_close_timer(api,
             assert row["updated_at"] == OLD
             assert R.untouched(c, row, 24, H.parse_ts(AT))
             assert eligible(c, task["id"])
-            history = c.execute("SELECT * FROM task_events WHERE task_id=? AND field='github' AND created_at>?", (task["id"], OLD)).fetchall()
+            history = c.execute("SELECT id, subject_id AS task_id, created_at, actor_id AS actor, kind AS field, old, new, note, action_id, via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='github' AND created_at>?", (task["id"], OLD)).fetchall()
             assert len(history) == int(merged)
             if merged:
                 assert "GitHub" in history[0]["note"] and "merged" in history[0]["new"]
@@ -260,4 +260,4 @@ def test_computed_mergeability_webhook_never_counts_as_task_activity(c, mergeabl
     assert H.task(c, task["id"])["updated_at"] == OLD
     G.pull_request(c, pr_event("closed", merged=True))
     assert H.task(c, task["id"])["updated_at"] == AT
-    assert c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='github'", (task["id"],)).fetchone()
+    assert c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='github'", (task["id"],)).fetchone()

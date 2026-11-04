@@ -93,7 +93,7 @@ def builder_jobs(api):
 def step_events(api, task):
     with api.app.state.store.read() as c:
         return [(r["actor"], r["new"]) for r in c.execute(
-            "SELECT actor,new FROM task_events WHERE task_id=? AND field='step' ORDER BY rowid", (task["id"],))]
+            "SELECT actor_id AS actor,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' ORDER BY rowid", (task["id"],))]
 
 
 def test_a_review_is_feedback_its_approval_goes_back_to_the_builder_once(api):
@@ -167,7 +167,7 @@ def test_configured_other_family_checker_fallback_verdict_still_moves(api):
         assert not eligibility["eligible"] and eligibility["known"]
         assert eligibility["builder_families"] == ["openai"]
         assert eligibility["checker_families"] == ["openai"]
-        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='verdict_wait'",
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_wait'",
                          (task["id"],)).fetchone()[0] == 1
 
 
@@ -192,7 +192,7 @@ def test_verdict_waits_for_its_exact_attempt_capture_then_moves_once(api):
         c.execute("DELETE FROM check_head_provenance WHERE check_id=?", (review["id"],))
         H.task_update(c, review["owner_id"], review["id"], status="done", note="Reviewed.",
                       verdict="approve", verdict_head=HEAD)
-        marker = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_wait' "
+        marker = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_wait' "
                            "ORDER BY rowid DESC LIMIT 1", (task["id"],)).fetchone()
         assert H._json(marker["new"], {})["attempt_id"] == turn
         assert V.step_of(c, H.task(c, task["id"])) == "Review 1"
@@ -288,7 +288,7 @@ def test_a_ticket_tagged_with_a_steps_skip_tag_passes_it_by_and_the_skip_is_reco
     assert not checks_of(api, task), "a skipped step files no check"
     assert [m["refs"].get(V.HANDOFF) for m in builder_jobs(api)] == ["merge"]
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT new FROM task_events WHERE task_id=? AND field='step_skipped'",
+        assert c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step_skipped'",
                          (task["id"],)).fetchone()[0] == "In QA"
 
 
@@ -652,7 +652,7 @@ def test_a_round_timed_out_after_a_pass_at_the_head_says_it_passed(api):
     task = _passed_at_head_behind_a_stuck_suite(api)
     with api.app.state.store.transaction() as c:
         assert V.timeouts(c, H.shift(H.now(), hours=3)) == [task["id"]]
-        note = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='round_skipped'",
+        note = c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='round_skipped'",
                          (task["id"],)).fetchone()[0]
     assert "no usable verdict" not in note and f"pass at head {HEAD[:12]}" in note, note
 

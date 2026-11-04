@@ -1,6 +1,4 @@
 """Release isolation checks must use the runner image built from the candidate."""
-import json
-from collections import defaultdict
 from types import SimpleNamespace
 
 import pytest
@@ -17,7 +15,6 @@ def test_isolation_uses_the_candidate_image_only_after_successful_builds(tmp_pat
     monkeypatch.setattr(release_checks, 'free_port', lambda: 12345)
     monkeypatch.setattr(release_checks, 'edge_networks', lambda: (True, 'edge networks: ok'))
     monkeypatch.setattr(release_checks, 'desktop_buildable', lambda: False)
-    monkeypatch.setattr(release_checks, 'collected_counts', lambda env, selection: {'all.py': 1})
 
     for builds_ok, overrides, workers, browser_jobs in (
             (True, {}, '6', None), (False, {}, '6', None),
@@ -45,10 +42,10 @@ def test_isolation_uses_the_candidate_image_only_after_successful_builds(tmp_pat
         monkeypatch.setattr(release_checks, 'Check', Check)
         assert release_checks.release(SimpleNamespace(previous=None)) == (0 if builds_ok else 1)
         output = capsys.readouterr().out
+        python_command = calls['all-python'][0]
         isolation_file = 'runner_support/tests/test_isolation_docker.py'
-        plan = json.loads((tmp_path / 'all-python-batches.json').read_text())
-        assert plan and all(f'--ignore={isolation_file}' in command for command in plan)
-        assert all(command[command.index('-n') + 1] == workers for command in plan)
+        assert f'--ignore={isolation_file}' in python_command
+        assert python_command[python_command.index('-n') + 1] == workers
         assert calls['all-browser'][1].get('TICO_UI_JOBS') == browser_jobs
         builds = {'build-server', 'build-runner', 'build-updater'}
         assert builds <= calls['all-python'][2] and builds <= calls['all-browser'][2]
@@ -97,9 +94,7 @@ def test_each_part_runs_only_its_own_slice_of_the_gate(tmp_path, monkeypatch):
         run=lambda *args, **kwargs: SimpleNamespace(stdout='a' * 40)))
     monkeypatch.setattr(release_checks, 'tempfile', SimpleNamespace(mkdtemp=lambda **kwargs: str(tmp_path)))
     monkeypatch.setattr(release_checks, 'free_port', lambda: 12345)
-    monkeypatch.setattr(release_checks, 'shard_files', lambda index, total, env, native_first=False, counts=None: [f'group{index}of{total}.py'])
-    # every file the stubbed shards list weighs one test; only all.py is collected for the whole-suite runs
-    monkeypatch.setattr(release_checks, 'collected_counts', lambda env, selection: defaultdict(lambda: 1, {'all.py': 1}))
+    monkeypatch.setattr(release_checks, 'shard_files', lambda index, total, env, native_first=False: [f'group{index}of{total}.py'])
     monkeypatch.setattr(release_checks, 'browser_shard', lambda index, total: [f'page{index}of{total}'])
     calls, edge_checks = {}, []
     monkeypatch.setattr(release_checks, 'edge_networks', lambda: edge_checks.append(len(calls)) or (True, 'ok'))
@@ -126,19 +121,17 @@ def test_each_part_runs_only_its_own_slice_of_the_gate(tmp_path, monkeypatch):
         assert set(calls) == expected
         assert edge_checks == ([0] if part == 'product' else [])   # before any stack starts, product only
         edge_checks.clear()
-        if part == 'python':   # alone on its VM, the Python slice uses every core, in batches of its own files
-            plan = json.loads((tmp_path / f'{next(iter(expected))}-batches.json').read_text())
-            assert all(command[command.index('-n') + 1] == '4' for command in plan)
-            files = [name for command in plan for name in command if name.endswith('.py') and not name.startswith('-')]
-            assert files == (['group2of4.py'] if shard else ['all.py'])
+        if part == 'python':   # alone on its VM, the Python slice uses every core
+            command = calls[next(iter(expected))]
+            assert command[command.index('-n') + 1] == '4'
+            assert ('group2of4.py' in command) == bool(shard)
         if shard and part == 'browser':   # only its own scripts, not --all
             assert calls['browser-1-of-2'][2:] == ['page1of2']
     calls.clear()
     monkeypatch.setattr(release_checks, 'time', SimpleNamespace(monotonic=iter(range(100, 200)).__next__))
     assert release_checks.release(SimpleNamespace(previous=None)) == 0
     assert set(calls) == product | {'all-python', 'all-browser'}
-    plan = json.loads((tmp_path / 'all-python-batches.json').read_text())
-    assert plan[0][plan[0].index('-n') + 1] == '2'
+    assert calls['all-python'][calls['all-python'].index('-n') + 1] == '2'
     # Given the images Release validation built, the product part tests those, pulled by digest, as their own version.
     release_checks.os.environ.update(TICO_RELEASE_VERSION='v1.2.3', TICO_RELEASE_IMAGES=','.join(
         f'{target}=ghcr.io/acme/{target}@sha256:{"b" * 64}' for target in ('server', 'runner', 'updater')))
@@ -318,12 +311,9 @@ def test_three_default_shards_collect_exactly_the_single_default_run(monkeypatch
     import sys
     from concurrent.futures import ThreadPoolExecutor
 
-    # No junit report from collection: a stray python-N-of-M.xml would sit beside the release step's real reports.
-    env = {**os.environ, 'PYTEST_ADDOPTS': release_checks.split_junit(os.environ.get('PYTEST_ADDOPTS', ''))[0]}
-
     def collect(*files):
         result = subprocess.run([sys.executable, '-m', 'pytest', '--collect-only', '-q', '-n', '0', *files],
-                                cwd=release_checks.ROOT, env=env, capture_output=True, text=True)
+                                cwd=release_checks.ROOT, env=dict(os.environ), capture_output=True, text=True)
         assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
         return result.stdout
     listing = collect()   # the single job's collection, the same command shard_files runs for the default suite
@@ -387,77 +377,3 @@ def test_the_screen_relay_borrowers_and_scripts_tico_runs_are_native():
     names = ['backend/tests/test_screen.py', 'backend/tests/test_browser_exit_relay.py',
              'runner_support/tests/test_systemd_units.py', 'backend/tests/test_api.py', 'backend/tests/test_selected_claim.py']
     assert release_checks.native_test_files(names) == set(names[:3])
-
-
-def test_batches_cut_a_shard_in_order_at_the_test_budget():
-    counts = {'a': 300, 'b': 200, 'c': 100, 'd': 500, 'e': 50}
-    assert release_checks.batches(['a', 'b', 'c', 'd', 'e'], counts, limit=400) == [['a'], ['b', 'c'], ['d'], ['e']]
-    assert release_checks.batches([], {}) == []
-
-
-def test_python_shard_runs_every_batch_in_its_own_pytest_process_even_after_a_failure(monkeypatch):
-    counts = {'a.py': 300, 'b.py': 300, 'c.py': 10}
-    runs = []
-
-    def run(cmd, **kwargs):
-        runs.append(cmd)
-        return SimpleNamespace(returncode=1 if 'a.py' in cmd else 0)
-    monkeypatch.setattr(release_checks, 'collected_counts', lambda env, selection: counts)
-    monkeypatch.setattr(release_checks, 'shard_files', lambda index, total, env, selection=(), counts=None: sorted(counts))
-    monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(run=run))
-
-    assert release_checks.python_shard(1, 1) == 1
-    assert len(runs) == 2
-    assert runs[0][-1:] == ['a.py'] and runs[1][-2:] == ['b.py', 'c.py']
-
-
-def test_run_batches_stops_at_an_interrupted_batch_but_runs_past_a_failing_one(monkeypatch):
-    def run_all(returncodes):
-        ran = []
-
-        def run(command, **kwargs):
-            ran.append(command)
-            return SimpleNamespace(returncode=returncodes[len(ran) - 1])
-        monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(run=run))
-        code = release_checks.run_batches([[f'batch{n}'] for n in range(len(returncodes))])
-        return code, len(ran)
-
-    assert run_all([0, 0]) == (0, 2)
-    assert run_all([1, 0]) == (1, 2)       # a failing batch: the rest still run, so every failure shows
-    assert run_all([0, 2, 0]) == (2, 2)    # pytest exit 2, interrupted: the run stops there
-    assert run_all([-15, 0]) == (-15, 1)   # killed by SIGTERM: the run stops there
-
-
-def test_batches_write_their_own_junit_report_when_the_release_step_names_one(tmp_path, monkeypatch):
-    env = {'PYTEST_ADDOPTS': f'--durations=25 -o junit_family=xunit1 --junitxml={tmp_path}/python-1-of-2.xml'}
-    commands = release_checks.batch_commands([['a.py'], ['b.py']], '4', ('-m', 'slow or not slow'), env)
-    assert [[arg for arg in command if arg.startswith('--junitxml=')] for command in commands] == [
-        [f'--junitxml={tmp_path}/python-1-of-2-b01.xml'], [f'--junitxml={tmp_path}/python-1-of-2-b02.xml']]
-    assert [command[-1] for command in commands] == ['a.py', 'b.py']
-    assert all(command[command.index('-m', 2) + 1] == 'slow or not slow' for command in commands)   # index 1 is python's -m
-    # With no junit report in PYTEST_ADDOPTS, no batch adds one.
-    assert not any('--junitxml' in command for command in release_checks.batch_commands([['a.py']], '4', (), {}))
-    # Collection runs with the same PYTEST_ADDOPTS but must not write the base-name report: it drops only the junit option.
-    seen = []
-
-    def collect(command, **kwargs):
-        seen.append(kwargs['env']['PYTEST_ADDOPTS'])
-        return SimpleNamespace(returncode=0, stdout='', stderr='')
-    monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(run=collect))
-    release_checks.collected_counts(env, ())
-    assert seen == ['--durations=25 -o junit_family=xunit1'] and '--junitxml' in env['PYTEST_ADDOPTS']
-
-
-def test_the_junit_report_option_is_found_in_every_form_pytest_accepts():
-    split = release_checks.split_junit
-    assert split('--durations=25 -o junit_family=xunit1 --junitxml=/r/a.xml') == (
-        '--durations=25 -o junit_family=xunit1', '/r/a.xml')   # CI's plain form: the rest is unchanged
-    assert split('--junitxml="/tmp/report dir/r.xml" -q') == ('-q', '/tmp/report dir/r.xml')
-    assert split('--junitxml /tmp/r.xml -q') == ('-q', '/tmp/r.xml')
-    assert split('--junit-xml=/tmp/r.xml') == ('', '/tmp/r.xml')
-    assert split('--durations=25') == ('--durations=25', None) and split('') == ('', None)
-    # The batch reports come out the same for the quoted and the separate forms.
-    assert release_checks.batch_commands([['a.py']], '4', (), {'PYTEST_ADDOPTS': '"--junitxml=/tmp/report dir/r.xml"'})[0][-2:] == [
-        '--junitxml=/tmp/report dir/r-b01.xml', 'a.py']
-    assert release_checks.batch_commands([['a.py']], '4', (), {'PYTEST_ADDOPTS': '--junitxml /tmp/r.xml'})[0][-2:] == [
-        '--junitxml=/tmp/r-b01.xml', 'a.py']

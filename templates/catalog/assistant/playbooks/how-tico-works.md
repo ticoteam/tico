@@ -6,7 +6,7 @@ Read this when a person asks why something is on their queue, or how to make it 
 - **A task a bot filed for the person** (`owner` is the person). Bots file these when they need a decision, a review, or a
   missing input. Most are routine output, not decisions.
 - **A bot's question** to the person. A question is answered in chat with `hub question answer`.
-- **An approval** (merge, publish, send, spend). Approvals wait until the person names them.
+- **An approval** (merge, publish, send, spend). Approvals wait until the person names them or says they don't need them.
 - **A hold**: a task marked waiting on the person.
 
 ## Who files what, by default
@@ -29,8 +29,8 @@ An org rule is a standing instruction the bots follow, and it can stop a kind of
 what bots may put on a person: the people and bots near them by default. `hub team show` shows who reports to whom.
 
 ## Approvals
-A person decides approvals. The Assistant approves only on the person's plain yes, after a read-back, and only when the person
-has turned on "My assistant can decide approvals for me".
+A person decides approvals. The Assistant approves only on the person's plain yes, after a read-back, and never once the
+person turned off "My assistant can decide approvals for me". Declining needs neither.
 
 ## Close the pile, then stop the source
 Clearing the existing items does not stop new ones. Find the source with `hub origin show`, then stop it: pause or edit its
