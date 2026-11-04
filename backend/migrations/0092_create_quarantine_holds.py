@@ -11,6 +11,7 @@ def up(conn):
         task_id TEXT REFERENCES tasks(id), conversation_id TEXT REFERENCES conversations(id),
         reason TEXT NOT NULL, refusal TEXT NOT NULL, created_at TEXT NOT NULL, released_at TEXT,
         CHECK ((task_id IS NOT NULL) <> (conversation_id IS NOT NULL)))""")
+    # Claims probe task and chat holds separately so each lookup uses its partial index.
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS quarantine_holds_task ON quarantine_holds(bot_id,task_id) "
                  "WHERE released_at IS NULL AND task_id IS NOT NULL")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS quarantine_holds_chat ON quarantine_holds(bot_id,conversation_id) "

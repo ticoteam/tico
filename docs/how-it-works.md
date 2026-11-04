@@ -316,7 +316,9 @@ only when its host acknowledged the end, reported its tools completely, and reco
 approval. Missing telemetry or any output or possible effect keeps the safe review path.
 A refusal-count quarantine holds only the responsible task or chat when every counted refusal comes from that
 one source. Its task note or chat notice says why and when the hour's cooldown ends; other tasks of the same bot
-keep running. Two or more distinct tasks/chats in the count, or any refusal with no attributable task/chat, still
+keep running. Refusals from an already held source stay contained and do not count against other work or the
+bot-wide limit. Without a run token, an external agent's writes are fenced by the task being changed.
+Two or more distinct tasks/chats in the remaining count, or any refusal with no attributable task/chat, still
 quarantine the whole bot. A run's source takes precedence over the task its refused write names. Escape quarantines
 always stop the whole bot and require a person to clear them. The cooldown resets only the held source's count;
 `hub api POST /api/v2/bots/<bot>/quarantine/clear` also clears its task/chat holds, with the same management permission.

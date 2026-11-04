@@ -214,3 +214,16 @@ def test_one_bulk_call_counts_once_toward_a_bots_quarantine(api):
         stopped = H._json(hold["refusal"], {})
         words = H.refusals_for(c, actor="bot:ops")[-1]["detail"]
     assert stopped == {"rule": "close", "detail": words}
+
+
+def test_repeated_bulk_calls_count_every_source_even_when_each_call_counts_once(api):
+    from backend.tests.test_agents import credential, hermes_bot
+    hermes_bot(api)
+    token = credential(api)["token"]
+    tasks = [task(api, title, owner="scout") for title in ("Check the export", "Check the archive")]
+    for i in range(H.QUARANTINE_AT + 1):
+        out = bulk(api, {"ids": [row["id"] for row in tasks]}, "close", token=token)
+        assert (out["changed"], out["skipped"]) == (0, 2)
+        with api.app.state.store.read() as c:
+            assert H.resolve_bot(c, "scout")["state"] == ("quarantined" if i == H.QUARANTINE_AT else "active")
+            assert c.execute("SELECT count(*) FROM quarantine_holds WHERE released_at IS NULL").fetchone()[0] == 0

@@ -30,7 +30,18 @@ def source(c, actor, task_id=None):
 def free_sql(task_sql):
     """SQL over job j and message m: a scoped quarantine holds every wake, including a person's new message."""
     return ("NOT EXISTS(SELECT 1 FROM quarantine_holds qh WHERE qh.bot_id=j.bot_id AND qh.released_at IS NULL "
-            f"AND (qh.task_id={task_sql} OR (qh.conversation_id=m.conversation_id AND {task_sql} IS NULL)))")
+            f"AND qh.task_id={task_sql}) AND "
+            "NOT EXISTS(SELECT 1 FROM quarantine_holds qh WHERE qh.bot_id=j.bot_id AND qh.released_at IS NULL "
+            f"AND qh.conversation_id=m.conversation_id AND {task_sql} IS NULL)")
+
+
+def for_task(c, bot, task_id):
+    """The task hold enforced for a writer without a run token, including an external agent."""
+    task_id = H._task_ref(task_id)
+    if not task_id:
+        return None
+    return c.execute("SELECT * FROM quarantine_holds WHERE bot_id=? AND task_id=? AND released_at IS NULL",
+                     (bot, task_id)).fetchone()
 
 
 def for_attempt(c, row):

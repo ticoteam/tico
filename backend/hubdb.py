@@ -2547,17 +2547,23 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
                   (bot_actor(slug),))
     since = max(day, (lifted or {}).get("created_at") or "")
     from . import task_quarantine
-    released = {}
-    for hold in conn.execute("SELECT task_id,conversation_id,max(released_at) AS released_at FROM quarantine_holds "
-                             "WHERE bot_id=? AND released_at>=? GROUP BY task_id,conversation_id", (slug, since)):
+    held, released = set(), {}
+    for hold in conn.execute("SELECT task_id,conversation_id,max(released_at) AS released_at, "
+                             "max(released_at IS NULL) AS held FROM quarantine_holds "
+                             "WHERE bot_id=? AND (released_at IS NULL OR released_at>=?) "
+                             "GROUP BY task_id,conversation_id", (slug, since)):
         scope = "task:" + hold["task_id"] if hold["task_id"] else "chat:" + hold["conversation_id"]
-        released[scope] = hold["released_at"]
+        if hold["held"]:
+            held.add(scope)
+        elif hold["released_at"]:
+            released[scope] = hold["released_at"]
     counted, last, total, calls, again, scopes = [], {}, 0, set(), False, set()
     for refused in _rows(conn.execute("SELECT rule, detail, created_at FROM refusals WHERE actor=? AND created_at>=? "
                                       "AND rule NOT IN ('lint','queue_full') ORDER BY created_at, id", (actor, since))):
         facts = _json(refused["detail"], {}) or {}
         scope = facts.get("scope")
-        if scope in released and refused["created_at"] < released[scope]:
+        # A scope's own hold contains its refusals, so its loop cannot stop unrelated work.
+        if scope in held or scope in released and refused["created_at"] < released[scope]:
             continue
         if refused["rule"] == "label":
             # A label refusal says who may make the change instead; retrying it is not reaching further, so
@@ -2568,6 +2574,8 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
             last[about] = parse_ts(refused["created_at"])
         # Attribution does not change whether the same refused action was retried.
         key = _dump({k: v for k, v in facts.items() if k != "scope"})
+        # Every source matters even when several refusals count as one bulk try.
+        scopes.add(scope)
         if call := facts.get("bulk"):
             # One bulk change counts once, by its first counted refusal: a single call over 50 tasks the bot may not
             # change is one refused try, not 50. Its words count as a repeat of the same refusal made one by one.
@@ -2577,7 +2585,6 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
             calls.add(call)
             key = _dump({k: v for k, v in facts.items() if k not in ("bulk", "scope")})
         total += 1
-        scopes.add(scope)
         # The target bot is paused, quarantined or planned: the sender broke nothing, and the same words come
         # back every time, so it opens no review and is no repeat. It still counts toward the day's backstop.
         if refused["rule"] != "target_inactive":
@@ -2782,9 +2789,10 @@ def _writer(conn, actor):
             at = parse_ts(timing.get("resumes_at"))
             release = "it resumes " + (at.strftime("%Y-%m-%d %H:%M UTC") if at else "after its cooldown")
         refuse(conn, actor, "quarantined", f"{actor_name(conn, actor)} is quarantined; {release}")
-    if is_bot(actor) and RUN.get():
+    if is_bot(actor):
         from . import task_quarantine
-        hold = task_quarantine.for_attempt(conn, {"id": RUN.get()})
+        hold = (task_quarantine.for_attempt(conn, {"id": RUN.get()}) if RUN.get() else
+                task_quarantine.for_task(conn, actor_id(actor), REFUSAL_TASK.get()))
         if hold:
             refuse(conn, actor, "quarantined", "This task or chat is held after repeated refusals; it resumes after "
                    "its cooldown or when a person clears quarantine. Other tasks can continue")

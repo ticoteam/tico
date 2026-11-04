@@ -114,6 +114,91 @@ def test_refusals_from_several_tasks_still_stop_every_turn(api):
         assert post(api, f"attempts/{attempt['id']}/renew", {}, machine["token"])["stop"]
 
 
+def test_a_held_tasks_refusals_do_not_count_toward_another_tasks_hold(api):
+    machine = task_bot(api, lanes=True)
+    first = new_task(api, "Check the export")
+    one = started(api, machine)
+    second = new_task(api, "Check the archive")
+    two = started(api, machine)
+    refusals(api, one, first)
+    refusals(api, two, second, count=2)
+    assert [row["task_id"] for row in holds(api)] == [first["id"]]
+    with api.app.state.store.read() as c:
+        assert H.bot(c, "ops")["state"] == "active"
+    refusals(api, two, second, count=H.QUARANTINE_AT - 1)
+    assert {row["task_id"] for row in holds(api)} == {first["id"], second["id"]}
+    with api.app.state.store.read() as c:
+        assert H.bot(c, "ops")["state"] == "active"
+
+
+@pytest.mark.parametrize("rule", ["reach", "target_inactive"])
+def test_held_scopes_are_also_contained_at_the_total_refusal_backstop(api, rule):
+    first = new_task(api, "Check the export")
+    second = new_task(api, "Check the archive")
+    with api.app.state.store.transaction() as c:
+        for task in (first, second):
+            for i in range(H.QUARANTINE_TOTAL_AT):
+                with pytest.raises(H.Refused):
+                    H.refuse(c, "bot:ops", rule, f"Refused target {i}", task=task["id"])
+                assert H.bot(c, "ops")["state"] == "active"
+                held = c.execute("SELECT task_id FROM quarantine_holds WHERE released_at IS NULL").fetchall()
+                assert (task["id"] in {row[0] for row in held}) == (i == H.QUARANTINE_TOTAL_AT - 1)
+    assert {row["task_id"] for row in holds(api)} == {first["id"], second["id"]}
+
+
+def test_unattributed_refusals_after_a_task_hold_still_quarantine_the_bot(api):
+    machine = task_bot(api, lanes=True)
+    task = new_task(api, "Check the export")
+    refusals(api, started(api, machine), task)
+    with api.app.state.store.transaction() as c:
+        for i in range(H.QUARANTINE_AT + 1):
+            with pytest.raises(H.Refused):
+                H.refuse(c, "bot:ops", "reach", "No source for this refused write")
+            assert H.bot(c, "ops")["state"] == ("quarantined" if i == H.QUARANTINE_AT else "active")
+    assert [row["task_id"] for row in holds(api)] == [task["id"]]
+
+
+def test_an_external_agent_cannot_write_a_held_task_but_can_write_another_over_mcp(api):
+    from backend.tests.test_agents import credential, hermes_bot
+    from backend.tests.test_mcp import call
+    hermes_bot(api)
+    token = credential(api)["token"]
+    first = new_task(api, "Check the export", owner="scout")
+    second = new_task(api, "Check the archive", owner="scout")
+    for _ in range(H.QUARANTINE_AT + 1):
+        row = get(api, "tasks/" + first["id"])["task"]
+        result = post(api, "tasks/" + first["id"], {"version": row["version"], "number": 993}, token, expected=403)
+        assert result["error"]["code"] == "identity"
+    assert [row["task_id"] for row in holds(api)] == [first["id"]]
+    assert call(api, "hub_task_update", {"id": first["id"], "status": "doing"}, token=token)[0]
+    assert call(api, "hub_task_comment", {"id": first["id"], "text": "Keep trying."}, token=token)[0]
+    assert not call(api, "hub_task_update", {"id": second["id"], "status": "doing"}, token=token)[0]
+    assert not call(api, "hub_task_comment", {"id": second["id"], "text": "Checked the archive."}, token=token)[0]
+    with api.app.state.store.read() as c:
+        assert H.task(c, first["id"])["status"] == first["status"]
+        assert H.task(c, second["id"])["status"] == "doing"
+    post(api, "bots/scout/quarantine/clear", {})
+    assert not call(api, "hub_task_update", {"id": first["id"], "status": "doing"}, token=token)[0]
+
+
+def test_claim_fence_uses_both_partial_quarantine_indexes(api):
+    from backend import execution
+    machine = task_bot(api, lanes=True)
+    new_task(api, "Check the export")
+    post(api, "chat/ops", {"text": "Check the archive."})
+    with api.app.state.store.read() as c:
+        # The claim's candidate joins and fences, including task and chat probes, use both partial indexes.
+        plan = [row["detail"] for row in c.execute(
+            "EXPLAIN QUERY PLAN SELECT j.id FROM jobs j JOIN assignments a ON a.bot=j.bot_id "
+            "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
+            f"LEFT JOIN tasks qt ON qt.id={H.MESSAGE_TASK_SQL} "
+            "WHERE j.state='queued' AND j.held=0 AND j.bot_id=? AND a.runner_id=? "
+            f"AND {execution.unfenced_sql()} AND {execution.scoped_sql()}", ("ops", machine["runner_id"]))]
+    assert "SEARCH qh USING INDEX quarantine_holds_task (bot_id=? AND task_id=?)" in plan, plan
+    assert "SEARCH qh USING INDEX quarantine_holds_chat (bot_id=? AND conversation_id=?)" in plan, plan
+    assert not any("SCAN qh" in step for step in plan), plan
+
+
 def test_the_running_task_is_held_instead_of_the_target_of_its_refused_write(api):
     machine = task_bot(api, lanes=True)
     source = new_task(api, "Check the export")

@@ -17,7 +17,8 @@ See [Company turn levels](computers.md#company-turn-levels) for what counts, def
 This record does not provide the separate automatic fixer.
 
 Health's **Stuck bots** check and `hub health check` name the bot, its queue split as `hub pipeline` splits it (jobs
-that can start, jobs behind an interrupted run awaiting review, jobs held on purpose), the oldest age, why it cannot
+that can start, jobs behind an interrupted run awaiting review, jobs held after repeated refusals until cooldown,
+jobs held on purpose), the oldest age, why it cannot
 start, and a fix or a command to inspect its runs. Work held on purpose never makes a bot stuck. The web Stuck list,
 Overview and the silent-computer line split the queue the same way. **Tasks not progressing** names visible bot tasks
 that nothing is set to move, the tasks Task Manager lists as stalled. Settings > Health shows the same summaries.
