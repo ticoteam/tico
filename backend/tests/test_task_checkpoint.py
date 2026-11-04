@@ -72,6 +72,10 @@ def test_an_idle_task_is_not_asked_about_and_its_bot_lists_it_on_the_roundup(api
     stale = idle(api, "Old idea")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")     # the creation wake ran: nothing is queued
+        conv = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (stale["id"],)).fetchone()[0]
+        eight = H.shift(H.now(), days=-8)     # its messages and history are as old as the idle date
+        c.execute("UPDATE messages SET created_at=? WHERE conversation_id=?", (eight, conv))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (eight, stale["id"]))
     with api.app.state.store.read() as c:
         text, _, _ = task_roundup._list(c, "ops", H.now(), {})
     assert "Old idea" in text
