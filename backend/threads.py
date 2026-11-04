@@ -1035,10 +1035,21 @@ def stamp(c, row, conv, refs):
     return row
 
 
+def _refs_of(message):
+    """A message's refs as a dict. A row read straight from the table (apply_revision) carries them as JSON text."""
+    raw = (message or {}).get("refs")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw or "{}")
+        except (TypeError, ValueError):
+            raw = {}
+    return raw if isinstance(raw, dict) else {}
+
+
 def record(c, message, conv):
     """After the insert: revision history, mentions, the deliveries beyond the primary one, wakes, followers and
     the loop guard. A carrier records nothing (it is how a delivery starts a run)."""
-    refs = message.get("refs") or {}
+    refs = _refs_of(message)
     if refs.get("carries"):
         return {}
     posting = POSTING.get()
@@ -3035,7 +3046,7 @@ def _remention(c, message, now):
                                    (message["id"],))}
     c.execute("DELETE FROM message_mentions WHERE message_id=?", (message["id"],))
     named, added, warnings = set(), [], []
-    generated = (message.get("refs") or {}).get("no_mentions")       # a generated notice's edit names no one, as its post did not
+    generated = _refs_of(message).get("no_mentions")       # a generated notice's edit names no one, as its post did not
     for actor, kind in ([] if generated else mentions(c, thread, message["body"], author=message.get("sender_id"))):
         inside = audience_has(c, thread, actor)
         named.add(actor)
@@ -3141,6 +3152,7 @@ def apply_revision(c, origin, *, body=None, deleted=False):
     if row is None:
         return None
     row = dict(row)
+    row["refs"] = _refs_of(row)              # the table's JSON text, as H.message_view decodes it
     if c.execute("SELECT 1 FROM message_revisions WHERE origin_id=? AND revision=?", (oid, revision)).fetchone():
         return None
     if row.get("deleted_at") or revision <= int(row.get("revision") or 0):
