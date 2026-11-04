@@ -117,6 +117,13 @@ pub async fn recover(argv: &[String], cwd: Option<&Path>, stderr: &str) -> bool 
     false
 }
 
+fn instruction_temporary(root: &Path, path: &Path) -> bool {
+    let Some(parent) = path.parent() else { return false };
+    let in_metadata = parent == root || parent.parent().is_some_and(|p| p.file_name().is_some_and(|n| n == "worktrees") && p.parent() == Some(root));
+    let Some(name) = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_prefix("tico-instruction-link-")) else { return false };
+    in_metadata && name.len() == 32 && name.bytes().all(|c| c.is_ascii_hexdigit())
+}
+
 /// A private mirror/config may be rebuilt only while no Git lock still has a writer or is recent.
 pub async fn idle(root: &Path) -> bool {
     let Ok(root) = root.canonicalize() else { return false };
@@ -127,7 +134,10 @@ pub async fn idle(root: &Path) -> bool {
             let Ok(entry) = entry else { return false };
             let path = entry.path();
             let Ok(m) = path.symlink_metadata() else { return false };
-            if m.file_type().is_symlink() { return false; }
+            if m.file_type().is_symlink() {
+                if instruction_temporary(&root, &path) { continue; }
+                return false;
+            }
             if m.is_dir() { pending.push(path); }
             else if path.extension().is_some_and(|s| s == "lock") && !remove_abandoned(&path, &root).await { return false; }
         }

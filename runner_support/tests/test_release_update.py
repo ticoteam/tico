@@ -111,6 +111,8 @@ def instruction_links(checkout):
 def test_flattened_instruction_links_do_not_block_a_release_update(repos):
     _, checkout, state = repos
     instruction_links(checkout)
+    # A repair interrupted by shutdown leaves only ignored Git metadata, never another dirty file.
+    (checkout / ".git/tico-instruction-link-0123456789abcdef0123456789abcdef").symlink_to("CLAUDE.md")
     before = head(checkout)
     for name, text in [("AGENTS.md", "Repository rules\n"), ("templates/employee-repo/AGENTS.md", "AGENT.md"),
                        ("templates/employee-repo/CLAUDE.md", "Bot rules\n")]:

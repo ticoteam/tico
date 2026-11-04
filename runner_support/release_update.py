@@ -66,6 +66,10 @@ def repair_instruction_links(root, g):
     Some copy/archive tools flatten the tracked AGENTS.md/CLAUDE.md links in an installed checkout.
     """
     root = Path(root).resolve()
+    metadata = g("rev-parse", "--absolute-git-dir")
+    git_dir = Path(metadata.stdout.rstrip("\n"))
+    if metadata.returncode or not git_dir.is_absolute() or not git_dir.is_dir() or git_dir.is_symlink():
+        return
     listing = g("ls-files", "--stage", "-z", "--", "AGENTS.md", "CLAUDE.md",
                 ":(glob)**/AGENTS.md", ":(glob)**/CLAUDE.md")
     if listing.returncode:
@@ -95,7 +99,8 @@ def repair_instruction_links(root, g):
                     continue
                 if content != original.stdout.encode() or content != target.read_bytes():
                     continue
-            temp = path.with_name(".tico-link-" + uuid.uuid4().hex)
+            # Preparation stays out of the working tree even if the runner is killed before replacement.
+            temp = git_dir / ("tico-instruction-link-" + uuid.uuid4().hex)
             try:
                 temp.symlink_to(link.stdout)
                 after = path.lstat()

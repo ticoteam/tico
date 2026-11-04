@@ -1359,6 +1359,9 @@ pub fn was_adopted(path: &Path) -> bool {
 /// the committed link or its unchanged target. A different edit (including a staged one) is never restored.
 pub async fn repair_instruction_links(root: &Path, env: &Env) {
     let Ok(root) = root.canonicalize() else { return };
+    let Ok(git_dir) = gitrun::git_as_bot(&root, env, &["rev-parse", "--absolute-git-dir"], 15).await else { return };
+    let git_dir = PathBuf::from(git_dir.stdout.trim_end_matches('\n'));
+    if !git_dir.is_absolute() || !real_dir(&git_dir) { return; }
     let Ok(list) = gitrun::git_as_bot(&root, env, &["ls-files", "--stage", "-z", "--", "AGENTS.md", "CLAUDE.md", ":(glob)**/AGENTS.md", ":(glob)**/CLAUDE.md"], 15).await else { return };
     if !list.ok() { return; }
     for entry in list.raw.split(|b| *b == 0) {
@@ -1383,7 +1386,8 @@ pub async fn repair_instruction_links(root: &Path, env: &Env) {
                 || std::fs::read(&target).ok().as_ref() != Some(&content)
                 || !gitrun::git_as_bot(&root, env, &["diff", "--quiet", "HEAD", "--", &relative.to_string_lossy()], 15).await.is_ok_and(|o| o.ok()) { continue; }
         }
-        let temp = path.with_file_name(format!(".tico-link-{}", uuid::Uuid::new_v4().simple()));
+        // A killed runner may leave this pointer behind; Git metadata never dirties the checkout.
+        let temp = git_dir.join(format!("tico-instruction-link-{}", uuid::Uuid::new_v4().simple()));
         if std::os::unix::fs::symlink(&link.stdout, &temp).is_err() { continue; }
         if path.symlink_metadata().is_ok_and(|m| m.ino() == before.ino() && m.mtime() == before.mtime() && m.mtime_nsec() == before.mtime_nsec())
             && std::fs::read(&path).ok().as_ref() == Some(&content) {
@@ -1567,6 +1571,8 @@ mod tests {
     #[tokio::test]
     async fn flattened_instruction_links_are_repaired_but_bot_edits_stay_and_are_named() {
         let f = RepoFixture::new();
+        let interrupted = f.base.join(".git").join(format!("tico-instruction-link-{}", uuid::Uuid::new_v4().simple()));
+        std::os::unix::fs::symlink("CLAUDE.md", &interrupted).unwrap();
         for (name, text) in [("AGENTS.md", "Repository rules\n"), ("templates/employee-repo/AGENTS.md", "AGENT.md"), ("templates/employee-repo/CLAUDE.md", "Bot rules\n")] {
             let path = f.base.join(name);
             std::fs::remove_file(&path).unwrap();
@@ -1574,6 +1580,7 @@ mod tests {
         }
         repair_instruction_links(&f.base, &f.env).await;
         assert_eq!(sh(&f.base, &["status", "--porcelain"]), "");
+        assert!(crate::gitlocks::idle(&f.base.join(".git")).await, "an interrupted instruction repair cannot block config recovery");
         std::fs::remove_file(f.base.join("AGENTS.md")).unwrap();
         std::fs::write(f.base.join("AGENTS.md"), "A bot's real instruction edit\n").unwrap();
         // Even an exact copy is work when staged deliberately as a new regular file.
