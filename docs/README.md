@@ -32,6 +32,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 ## Team member: use it every day
 
 - [Use Tico](using-tico.md): your team's address, tasks, threads, results and Needs you.
+- [Rate a bot's work](feedback-on-bot-work.md): rate a message, task or approval with Good or Not good, then tell the bot or make a rule.
 - [Threads](threads.md): where people and bots talk: the Home, DMs, sub-threads and calls.
 - [Sessions](sessions.md): each task a bot owns is its own session, apart from its Home thread.
 - [Company page](company-page.md): what outside people see of the company (investors, the board, the public), and who approves it.
