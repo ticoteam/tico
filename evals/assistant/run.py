@@ -334,8 +334,11 @@ def answer(argv, via, tool=None):
     canon = re.sub(r" --on-behalf-of \S+", "", line)
     words = canon.split()
     files, bad = {}, None
-    # `--file=-` is `--file -`, as the real parser reads it.
+    # `--file=-` is `--file -`, and `--f` or `--fi` is `--file` (the real parser takes a unique prefix; the commands
+    # in JSON_FILE_COMMANDS have no other `--f…` option).
     split = [w for a in argv for w in (a.split("=", 1) if a.startswith("--") and "=" in a else [a])]
+    if tuple(words[:2]) in JSON_FILE_COMMANDS:
+        split = ["--file" if len(w) >= 3 and "--file".startswith(w) else w for w in split]
     for i, a in enumerate(split[:-1]):
         if a.endswith("-file") or a == "--file":
             path = split[i + 1]
