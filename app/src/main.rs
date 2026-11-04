@@ -8,6 +8,7 @@
 
 mod applog;
 mod config;
+mod cookies;
 mod hub;
 mod orgs;
 mod visual_origin;
@@ -681,7 +682,7 @@ async fn check_for_update_once(app: &App) {
             Err(_) => { report_update(app, "failed", "the update feed address is invalid"); return; }
         };
         let cookie = if hub::same_origin(&connection.hub, &endpoint) {
-            Client::new(connection.clone(), active_label(app)).cookie_header(app, &endpoint)
+            Client::new(connection.clone(), active_label(app)).cookie_header(app, &endpoint).await
         } else {
             None
         };

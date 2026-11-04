@@ -34,6 +34,13 @@ tauri-plugin-process = "2"
 # unless its "fullscreen" feature is on, and Tauri does not turn it on. Same wry Tauri already uses.
 wry = { version = "0.55", default-features = false, features = ["fullscreen"] }
 
+# The badge reads the page's cookies through WebKit's own callback, so the main thread never waits for them
+# (see src/cookies.rs). The same versions wry already uses.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSHTTPCookie", "NSString"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKHTTPCookieStore"] }
+
 [dev-dependencies]
 base64 = "0.22"
 minisign = "0.10"
