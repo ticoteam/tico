@@ -1,0 +1,87 @@
+{
+  "id": "founder",
+  "name": "Founder",
+  "summary": "A founder's inbox. Rules settle the obvious mail first; five questions a small model answers in order send the rest to a person or a team; the last step reads what is left, routes it and drafts a reply for review.",
+  "sort": {
+    "instructions": "Where does this message belong? Pick the one that fits best.",
+    "criteria": {
+      "me": "Only the founder can answer it, or the call is the founder's to make",
+      "legal": "A legal matter: a subpoena, a lawsuit, a demand or a contract dispute",
+      "engineering": "A bug report or product feedback",
+      "finance": "Money: an invoice, a loan or a payment",
+      "marketing": "A partner, influencer or press ask",
+      "archive": "Nothing is asked of anyone"
+    }
+  },
+  "destinations": [
+    {"id": "me", "name": "Me", "color": "amber",
+     "then": [{"do": "leave_for_you", "args": {}}]},
+    {"id": "legal", "name": "Legal", "color": "orange",
+     "then": [{"do": "create_task", "args": {
+       "title": "Legal: {{message.subject}}",
+       "body": "From {{message.from}}. Read the thread before anything is sent.",
+       "owner": {"role": "legal_lead"}}}]},
+    {"id": "engineering", "name": "Engineering", "color": "violet",
+     "then": [{"do": "create_task", "args": {
+       "title": "Bug or feedback: {{message.subject}}",
+       "body": "From {{message.from}}.",
+       "owner": {"role": "engineering_manager"}}}]},
+    {"id": "finance", "name": "Finance", "color": "green",
+     "then": [{"do": "create_task", "args": {
+       "title": "Money: {{message.subject}}",
+       "body": "From {{message.from}}.",
+       "owner": {"role": "finance_lead"}}}]},
+    {"id": "marketing", "name": "Marketing", "color": "blue",
+     "then": [{"do": "wake_bot", "args": {
+       "bot": {"role": "marketing_lead"},
+       "title": "Partner or press ask: {{message.subject}}",
+       "text": "A partner, influencer or press ask reached the founder's inbox: {{message.subject}} from {{message.from}}. Read the thread and take the next step."}}]},
+    {"id": "archive", "name": "Archive", "color": "gray",
+     "then": [{"do": "archive", "args": {}}]}
+  ],
+  "steps": [
+    {"id": "rules", "type": "filter", "rules": [
+      {"when": [
+        {"field": "message.subject", "op": "matches", "value": "subpoena|lawsuit|cease and desist"},
+        {"field": "message.snippet", "op": "matches", "value": "subpoena|lawsuit|cease and desist"}],
+       "match": "any", "then": [{"do": "label", "args": {"name": "STARRED"}}],
+       "to": "legal", "next": "end", "stop": true},
+      {"when": [{"field": "message.from_domain", "op": "matches", "value": "^(github\\.com|linear\\.app|sentry\\.io)$"}],
+       "to": "engineering", "next": "end", "stop": true},
+      {"when": [{"field": "message.from", "op": "matches", "value": "@(kapitus|plaid|mercury)\\.com$"}],
+       "to": "finance", "next": "end", "stop": true},
+      {"when": [{"field": "message.subject", "op": "matches", "value": "receipt|your order|payment received"}],
+       "to": "archive", "next": "end", "stop": true},
+      {"when": [{"field": "message.unsubscribe", "op": "is", "value": true},
+                {"field": "message.known_sender", "op": "is_not", "value": true}],
+       "to": "archive", "next": "end", "stop": true},
+      {"when": [{"field": "message.category", "op": "is", "value": "promotions"}],
+       "to": "archive", "next": "end", "stop": true}
+    ]},
+    {"id": "ask", "type": "decide", "level": "low", "out": "q", "questions": {
+      "only_founder": {"type": "noul", "instructions": "Is this something only the founder can handle: an investor, a personal matter, or a decision only the founder can make?"},
+      "meet": {"type": "noul", "instructions": "Is someone asking to meet?"},
+      "bug": {"type": "noul", "instructions": "Is it a bug report or product feedback?"},
+      "money": {"type": "noul", "instructions": "Is it about money: invoices, loans or payments?"},
+      "partner": {"type": "noul", "instructions": "Is it a partner, influencer or press ask?"},
+      "nothing": {"type": "noul", "instructions": "Does it need nothing from anyone?"}}},
+    {"id": "route", "type": "filter", "rules": [
+      {"when": [{"field": "q.only_founder", "op": "is", "value": "yes", "min": 0.75}],
+       "then": [{"do": "label", "args": {"name": "STARRED"}}], "to": "me", "next": "end", "stop": true},
+      {"when": [{"field": "q.meet", "op": "is", "value": "yes", "min": 0.75}],
+       "then": [{"do": "draft_reply", "args": {"body": "Thanks for reaching out. I would be glad to meet. Could you send a few times that suit you?"}}],
+       "next": "end", "stop": true},
+      {"when": [{"field": "q.bug", "op": "is", "value": "yes", "min": 0.75}],
+       "to": "engineering", "next": "end", "stop": true},
+      {"when": [{"field": "q.money", "op": "is", "value": "yes", "min": 0.75}],
+       "to": "finance", "next": "end", "stop": true},
+      {"when": [{"field": "q.partner", "op": "is", "value": "yes", "min": 0.75}],
+       "to": "marketing", "next": "end", "stop": true},
+      {"when": [{"field": "q.nothing", "op": "is", "value": "yes", "min": 0.75}],
+       "to": "archive", "next": "end", "stop": true}
+    ]},
+    {"id": "draft", "type": "llm", "out": "draft",
+     "prompt": "Route this message first: me when only the founder can answer it or the call is the founder's; legal for a legal matter; engineering for a bug or product feedback; finance for money; marketing for a partner, influencer or press ask; archive when nothing is asked of anyone. If someone is waiting on the founder, write the reply in the founder's voice as the body. Never promise dates. Leave the body empty when no reply is needed. When unsure, choose me.",
+     "choose": {"to": ["me", "legal", "engineering", "finance", "marketing", "archive"], "default": "me", "mode": "draft"}}
+  ]
+}

@@ -3615,6 +3615,23 @@ def automation_guide(api, args):
     return _as_person(api).get("automations/guide")
 
 
+@tool("hub_automation_templates", "The inbox templates (founder, support, sales, blank): each with its `id`, `name` and "
+      "destination names. Read-only.", {})
+def automation_templates(api, args):
+    return _as_person(api).get("automations/templates")
+
+
+@tool("hub_automation_template", "One inbox template filled in for an owner and an inbox: the flow the hub would save, "
+      "with its roles resolved on the org chart and what the owner may not use taken out. Nothing is saved; save it "
+      "with hub_automation_create (off until turned on).",
+      {"id": _s("founder, support, sales or blank"),
+       "owner": _s("person:<id>, bot:<slug> or group:<id>"),
+       "inbox": _s("the inbox: an email address, slack:dm or slack:#<channel>")}, required=("id", "owner", "inbox"))
+def automation_template(api, args):
+    query = "&".join(f"{k}={quote(str(args[k]), safe='')}" for k in ("owner", "inbox"))
+    return _as_person(api).get(f"automations/templates/{quote(str(args['id']), safe='')}?{query}")
+
+
 @tool("hub_automation_create", "Save a new automation (version 1). Checked on save: a bad flow is refused with why. "
       "BotOps saves it off unless `enabled` is sent. A bot without rights to it saves a proposal: off, its first "
       "version pending, for a person to turn on.",

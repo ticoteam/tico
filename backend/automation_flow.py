@@ -706,6 +706,11 @@ Do not ask about anything a sensible default answers.
   cost the most). A message from the Automations page may carry its filters (`automations_filter` in its refs).
 - New: `hub automation create --file -` (the flow as JSON on stdin). Its owner is the asker unless they named another.
   It is saved off; send `"enabled": true` only when the request said to turn it on.
+- Use a template: `hub automation templates` lists the inbox templates (founder, support, sales, blank) with their
+  destinations. `hub automation template <id> --owner <ref> --inbox <address>` returns one filled in for that owner: the
+  roles it names resolved on the org chart, and the destinations the owner may not use taken out. It saves nothing. Show
+  the asker its rules and destinations in one line, then save it with `hub automation create --file -` as above. The
+  inbox must be one the owner reads; the hub refuses any other.
 - Edit: when the message names an automation (its `automation` reference), `hub automation update <id> --file -` with the
   changed fields and a `summary`. For a person it is the new live version. When the hub answers `pending`, the asker
   may not change it: it was saved as a proposal a person turns on.
