@@ -395,3 +395,23 @@ def test_a_database_before_the_migration_answers_only_a_persons_own_email(api):
         assert levels(c, "bot:coo") == {}
         assert MA.stopped(c) == set()
         assert MA.backfill(c) == {"mailboxes": 0, "accesses": 0}
+
+
+# ------------------------------------------------------------------------------- a message bot made, not assigned
+def test_making_a_message_bot_links_only_a_mailbox_its_maker_may_grant(api):
+    """Settings' add from template, a hire, BotOps (backend/message_bots.py link): the link gives the bot a grant, so a
+    member gets it only on their own email, and an admin on any."""
+    from backend import bot_settings as BS
+    from backend import message_bots
+    with tx(api) as c:
+        for slug in ("ops", "doc-updater", "finance"):
+            BS.write(c, slug, {"name": slug, "template": "inbox"})
+        assert message_bots.link(c, "human:cara", "ops", "human:cara", "Mailbox: ana@acme.example\n") is None
+        assert message_bots.link(c, "human:cara", "ops", "human:cara", "Mailbox: support@acme.example\n") is None
+        assert MA.level(c, "bot:ops", ANA) == "none" and MA._row(c, SUPPORT) is None
+        assert message_bots.link(c, "bot:coo", "ops", "bot:coo", "Mailbox: cara@acme.example\n") is None
+        assert message_bots.link(c, "human:cara", "ops", "human:cara", "Mailbox: cara@acme.example\n") == "cara"
+        assert MA.level(c, "bot:ops", CARA) == "read_write"                    # the template's read and draft
+        assert message_bots.link(c, "human:ben", "doc-updater", "human:ben", "Mailbox: support@acme.example\n") == "ben"
+        assert MA._row(c, SUPPORT)["kind"] == "shared"
+        assert MA.level(c, "bot:doc-updater", SUPPORT) != "none"

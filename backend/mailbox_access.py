@@ -652,6 +652,33 @@ def _configs(c):
     return out
 
 
+def ever_signed_in(c, person_id):
+    """Whether this roster person has ever used Tico themselves: a sign-in session, an API token, a message they sent,
+    or anything they did (an event they are the actor of). Sessions expire, the rest stays."""
+    actor = H.human_actor(person_id)
+    for table, column, value in (("oidc_sessions", "human", person_id), ("human_tokens", "human", person_id),
+                                 ("messages", "sender_id", actor), ("events", "actor", actor)):
+        if _table(c, table) and column in _columns(c, table) and c.execute(
+                f"SELECT 1 FROM {table} WHERE {column}=? LIMIT 1", (value,)).fetchone():
+            return True
+    return False
+
+
+def placeholders(c, people, configs):
+    """Roster entries that stand for a mailbox, not a person ("legal@ (mailbox)", read by Counsel): one with a message
+    bot that reads exactly their email, who has never signed in. Their mailbox is a shared inbox, linked to nobody.
+    {person_id: address}."""
+    from . import routines
+    out = {}
+    for person in people:
+        bot, email = person.get("inbox_bot"), _addr(person.get("email"))
+        if not bot or bot not in configs or not routines.MAILBOX.fullmatch(email):
+            continue
+        if _addr(routines.declared_mailbox(configs[bot]) or email) == email and not ever_signed_in(c, person["id"]):
+            out[person["id"]] = email
+    return out
+
+
 def plan(c):
     """What the backfill would write, from today's sources: ({address: {kind, person_id, connection}},
     {(address, grantee_type, grantee_id): level}). Nobody loses the access they had through a message bot, a bot.yaml
@@ -668,13 +695,15 @@ def plan(c):
     live_people = {p["id"]: p for p in everyone if not p.get("hidden")}
     configs = _configs(c)
     boxes, grants = {}, {}
+    stand_ins = placeholders(c, live_people.values(), configs)
+    not_people = set(stand_ins.values())
 
     def box(address, connection="workspace"):
         address = _addr(address)
         if not routines.MAILBOX.fullmatch(address):
             return None
         if address not in boxes:
-            kind, pid = kind_for(address, by_email)
+            kind, pid = ("shared", None) if address in not_people else kind_for(address, by_email)
             boxes[address] = {"kind": kind, "person_id": pid, "connection": connection}
         elif connection == "personal":
             boxes[address]["connection"] = "personal"
@@ -688,6 +717,10 @@ def plan(c):
             return                                      # their own mailbox: no row needed
         key = (address, kind, ident)
         grants[key] = _best(grants.get(key, "none"), level)
+
+    operator_of = {}
+    if _table(c, "bot_config") and "owner_id" in _columns(c, "bot_config"):
+        operator_of = {row["bot"]: row["owner_id"] for row in c.execute("SELECT bot, owner_id FROM bot_config")}
 
     # What each person's message bot handles (routines.message_bot_mailboxes, without dropping a mailbox two bots
     # share): the bot by what its gmail entry asked; the person, when it is not their own address, so they keep it.
@@ -703,7 +736,14 @@ def plan(c):
         declared.setdefault(person["id"], []).append(address)
         entry = next((e for e in _gmail_entries(config) if _addr(e.get("identity")) == address), None)
         give_(address, "bot", bot, manifest_level(entry))
-        if address != _addr(person.get("email")):
+        if person["id"] in stand_ins:
+            # A mailbox placeholder: the person it reports to keeps it (else the bot's operator), Read and write.
+            keeper = H.actor_id(person.get("reports_to") or "")
+            if keeper not in live_people:
+                keeper = H.actor_id(operator_of.get(bot) or "")
+            if keeper in live_people and keeper != person["id"]:
+                give_(address, "person", keeper, "read_write")
+        elif address != _addr(person.get("email")):
             give_(address, "person", person["id"], "read_write" if boxes[address]["kind"] == "shared" else "read")
 
     # Every bot's gmail entries (bot.yaml `tools:`), and `org_read: true`: read on the mailboxes below its person.
@@ -744,9 +784,7 @@ def plan(c):
     # Mail automations: their owner keeps hearing the mailbox they hear today (automations.may_read_inbox before
     # this change: a person's own email and their message bot's mailboxes; a bot's, its operator's).
     if _table(c, "automations"):
-        operators = {}
-        if "owner_id" in _columns(c, "bot_config"):
-            operators = {row["bot"]: row["owner_id"] for row in c.execute("SELECT bot, owner_id FROM bot_config")}
+        operators = operator_of
 
         def heard(person_id):
             person = live_people.get(person_id)
