@@ -48,10 +48,11 @@ assert.equal(out.steps[2].rules[2].when[0].field, 'd1.q3');
 assert.deepEqual(plain(out.steps.map(s => s.type)), ['filter', 'decide', 'filter', 'llm']);
 assert.deepEqual(plain(out.steps[3].choose), {to: ['me', 'legal', 'eng', 'archive'], default: 'me', mode: 'reply'});
 assert.equal(back.llm.mode, 'reply');
-// Back to Sort: a decide over the destinations and a filter routing each, the last rule the default.
+// Back to Sort keeps the direct structured step and suppresses its reply.
 Object.assign(back.llm, {mode: 'sort', to: ['me', 'eng'], default: 'eng'});
 const sorted = flow(back);
-assert.deepEqual(plain(sorted.steps.slice(-1)[0].rules.map(r => [r.when.length ? r.when[0].value : '', r.to])), [['me', 'me'], ['eng', 'eng'], ['', 'eng']]);
+assert.equal(sorted.steps.at(-1).type, 'llm');
+assert.deepEqual(plain(sorted.steps.at(-1).choose), {to: ['me', 'eng'], default: 'eng', mode: 'sort'});
 assert.ok(shape({...fx.inbox, ...plain(sorted)}));
 
 // Minimums as stored: a question or a Sort with none keeps none (the engine's own default), and saves without one.
@@ -167,7 +168,11 @@ assert.notEqual(bl.out, 'q', 'the questions step keeps q');
 assert.equal(bot.steps[1].out, 'q');
 // A group sorts: the old prompt instructs the template's Sort, and no llm step is left.
 const groupOld = {...clone(october), owner_id: 'group:support', trigger: {type: 'message', inbox: 'slack:#support'}};
-const groupFill = mine(templates.blank);
+// A real group fill converts the template's direct Draft to its classifier-based Sort on the server.
+const groupBoard = shape(mine(templates.blank));
+groupBoard.llm.mode = 'sort';
+groupBoard.src = {sq: 'route'};
+const groupFill = {...mine(templates.blank), ...plain(flow(groupBoard))};
 const group = plain(context.auApplyFlow(groupOld, groupFill));
 assert.deepEqual(group.steps.map(s => s.type), ['decide', 'filter']);
 assert.equal(group.steps[0].questions.route.instructions, 'My rules.');
@@ -180,13 +185,13 @@ assert.deepEqual(kept.map(s => [s.id, s.out]), [['sort', 'sort']]);
 const offOld = {...clone(october), steps: [{...october.steps[0], enabled: false}]};
 assert.equal(plain(context.auApplyFlow(offOld, mine(templates.founder))).steps.at(-1).enabled, false);
 const offGroup = {...clone(groupOld), steps: [{...october.steps[0], enabled: false}]};
-const og = plain(context.auApplyFlow(offGroup, mine(templates.blank))).steps;
+const og = plain(context.auApplyFlow(offGroup, groupFill)).steps;
 assert.deepEqual(og.map(s => s.enabled), [false, false]);
-assert.ok(plain(context.auApplyFlow(groupOld, mine(templates.blank))).steps.every(s => s.enabled !== false), 'on stays on');
+assert.ok(plain(context.auApplyFlow(groupOld, groupFill)).steps.every(s => s.enabled !== false), 'on stays on');
 // A group's prompt becomes a question's instructions, at most 8,000 characters: longer is refused, never cut.
 const sized = n => ({...clone(groupOld), steps: [{...october.steps[0], prompt: 'x'.repeat(n)}]});
-assert.equal(plain(context.auApplyFlow(sized(8000), mine(templates.blank))).steps[0].questions.route.instructions.length, 8000);
-assert.throws(() => context.auApplyFlow(sized(8001), mine(templates.blank)), /over 8,000 characters/);
+assert.equal(plain(context.auApplyFlow(sized(8000), groupFill)).steps[0].questions.route.instructions.length, 8000);
+assert.throws(() => context.auApplyFlow(sized(8001), groupFill), /over 8,000 characters/);
 // A person's turn takes the prompt as it is (an llm prompt may run to 32,000).
 const longMine = {...clone(october), steps: [{...october.steps[0], prompt: 'x'.repeat(9000)}]};
 assert.equal(plain(context.auApplyFlow(longMine, mine(templates.blank))).steps[0].prompt.length, 9000);
