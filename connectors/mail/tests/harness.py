@@ -163,7 +163,7 @@ class Stage2(unittest.TestCase):
         self._saved = {"access": access.PROJECTS, "policy_projects": pl.PROJECTS,
                        "policy_file": pl.POLICY_FILE, "review_projects": rv.PROJECTS,
                        "audit": audit_log.AUDIT_PATH, "run": pl.RUN, "hub_get": pl.HUB_GET, "hub_post": pl.HUB_POST,
-                       "server_get": pl.SERVER_GET,
+                       "server_get": pl.SERVER_GET, "runner_get": pl.RUNNER_GET,
                        "gmail": cli.open_gmail, "db": cli.open_db, "cal": cli.open_calendar,
                        "reviewer": os.environ.get("MAIL_REVIEWER"), "judge": os.environ.get("MAIL_DECISIONS")}
         access.PROJECTS = pl.PROJECTS = rv.PROJECTS = self.root
@@ -172,6 +172,8 @@ class Stage2(unittest.TestCase):
         # server-held switch itself replace this.
         pl.SERVER_GET = self.confirmed_setting
         pl.HUB_POST = lambda path, body, key=None: None    # no Tico to ask the org rule check of: sends go on
+        # An owner run reads What Tico may do over the runner's registration: all on here; test_company.py turns it off.
+        pl.RUNNER_GET = lambda path: {"company": dict.fromkeys(pl.COMPANY_FIELDS, True)}
         audit_log.AUDIT_PATH = self.root / "audit.jsonl"
         os.environ["MAIL_REVIEWER"] = "none"
         os.environ["MAIL_DECISIONS"] = "none"        # no judge either; test_judge.py injects a fake engine
@@ -192,6 +194,7 @@ class Stage2(unittest.TestCase):
         pl.HUB_GET = self._saved["hub_get"]
         pl.HUB_POST = self._saved["hub_post"]
         pl.SERVER_GET = self._saved["server_get"]
+        pl.RUNNER_GET = self._saved["runner_get"]
         rv.PROJECTS = self._saved["review_projects"]
         audit_log.AUDIT_PATH = self._saved["audit"]
         cli.open_gmail, cli.open_db = self._saved["gmail"], self._saved["db"]
