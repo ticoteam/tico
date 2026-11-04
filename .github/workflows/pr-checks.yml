@@ -22,7 +22,7 @@ concurrency:
 jobs:
   plan:
     runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
-    timeout-minutes: 12
+    timeout-minutes: 24   # installation (up to 11 minutes), artifact retries (11 minutes), and planning
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       caddy: ${{ steps.plan.outputs.caddy }}
@@ -46,7 +46,7 @@ jobs:
           mkdir -p previous-timings
           run=$(gh run list --workflow pr-checks.yml --branch main --event push --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty') || run=''
           if [ -n "$run" ]; then
-            gh run download "$run" --name pr-python-timings --dir previous-timings || echo "No measured timings yet; use collected counts this run"
+            bash scripts/ci/retry.sh --clear previous-timings -- gh run download "$run" --name pr-python-timings --dir previous-timings || echo "No measured timings yet; use collected counts this run"
           fi
       - name: Select affected tests and size measured Python and browser groups
         id: plan
