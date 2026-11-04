@@ -1,0 +1,29 @@
+{
+  "expected": [
+    {
+      "text": "Vendors of personal health records must notify consumers after a breach of unsecured health data.",
+      "quote": "The Rule requires vendors of personal health records and related entities to notify consumers",
+      "section": "Rule Summary",
+      "who_hint": "legal"
+    },
+    {
+      "text": "A service provider that has a breach must notify the entity it serves.",
+      "quote": "if a service provider to one of these entities has a breach, it must notify the entity",
+      "section": "Rule Summary",
+      "who_hint": "engineering"
+    },
+    {
+      "text": "Breaches involving 500 or more people also require notice to the media.",
+      "quote": "in the case of certain breaches involving 500 or more people, requires notice to the media",
+      "section": "Rule Summary",
+      "who_hint": "legal"
+    }
+  ],
+  "url": "https://www.ftc.gov/legal-library/browse/rules/health-breach-notification-rule",
+  "fetched_at": "2026-10-30T23:39:44Z",
+  "from": {
+    "name": "FTC Health Breach Notification Rule",
+    "kind": "government"
+  },
+  "truncated": false
+}

@@ -4,6 +4,7 @@ import pytest
 from backend.store import H
 from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_task_lanes import task_bot
+from backend.tests.hold_rows import set_holds
 
 
 def deck(api, n=5):
@@ -14,7 +15,7 @@ def deck(api, n=5):
                                 'step': typ['steps'][0]['id']}) for i in range(n)]
     # These old assignments have no pending notice: they previously needed a person's nudge.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled'")
+        c.execute("UPDATE jobs SET state='canceled'")
         for i, task in enumerate(tasks):
             c.execute('UPDATE tasks SET rank=? WHERE id=?', (n-i, task['id']))
     return tasks
@@ -22,6 +23,11 @@ def deck(api, n=5):
 
 def take(api, machine):
     return post(api, 'jobs/claim', {}, token=machine['token'])['attempt']
+
+
+def take_with_places(api, machine):
+    """A claim from a runner that negotiates start places: the claim bound is twice the computer's turn limit."""
+    return post(api, 'jobs/claim', {'start_places': True}, token=machine['token'])['attempt']
 
 
 def finish(api, machine, attempt, task):
@@ -60,7 +66,7 @@ def test_default_starts_snoozed_and_blocked_skip_then_reuse_existing_wakes(api):
     finish(api, machine, first, tasks[0])
     assert take(api, machine)['task']['id'] == tasks[1]['id']
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE tasks SET snoozed_until=? WHERE id=?', (H.shift(H.now(), seconds=-1), tasks[2]['id']))
+        set_holds(c, tasks[2]['id'], snoozed_until=H.shift(H.now(), seconds=-1))
         task_snooze.wake_ended(c, H.now())
     assert take(api, machine)['task']['id'] == tasks[2]['id']
 
@@ -104,22 +110,24 @@ def test_setting_revision_permissions_and_private_counters(api):
     assert get(api, 'bots/ops', token='ben-test')['task_flow']['going'] == 0
 
 
-@pytest.mark.parametrize('step', ['Review 1', 'Post Release QA'])
-def test_review_children_are_independent_and_uncapped_but_computer_capacity_still_applies(api, step):
+@pytest.mark.parametrize('step,kind', [('Review 1', 'review'), ('Post Release QA', 'release_qa'),
+                                       ('Second opinion', 'review')])
+def test_review_children_are_independent_and_uncapped_but_computer_capacity_still_applies(api, step, kind):
     machine = task_bot(api, lanes=True, capacity=10)
-    typ = post(api, 'task-types', {'name': 'Review flow', 'steps': [{'name': step, 'status': 'review'}]})['type']
+    typ = post(api, 'task-types', {'name': 'Review flow', 'steps': [{'name': step, 'status': 'review',
+                                                                     'flow': {'check': kind}}]})['type']
     parent = post(api, 'tasks', {'owner': 'finance', 'title': 'Implementation awaiting review', 'body': 'Review it.',
                                  'type': typ['id'], 'step': step})
     children = [post(api, 'tasks', {'owner': 'ops', 'title': f'Review change {i}', 'body': 'Review the change.',
-                 'relations': [{'kind': 'parent', 'task': parent['id']}]}) for i in range(11)]
+                 'relations': [{'kind': 'parent', 'task': parent['id']}]}) for i in range(21)]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled'")
+        c.execute("UPDATE jobs SET state='canceled'")
     set_cap(api, 1)
-    attempts = [take(api, machine) for _ in range(10)]
+    attempts = [take_with_places(api, machine) for _ in range(20)]
     assert all(attempts), 'the optional task cap never holds review children'
-    assert len({a['lane'] for a in attempts}) == 10
+    assert len({a['lane'] for a in attempts}) == 20
     assert {a['task']['id'] for a in attempts} <= {t['id'] for t in children}
-    assert take(api, machine) is None, 'reviews still share finite computer capacity'
+    assert take_with_places(api, machine) is None, 'reviews still share the computer claim bound (twice its capacity)'
 
 
 def test_another_owners_task_notice_never_starts_their_task_or_uses_our_cap(api):
@@ -143,10 +151,10 @@ def test_automatic_backfill_uses_free_places_while_waiters_still_fence_their_lan
     # The waiting worker keeps its task lane, but other tasks may use every actual place.
     second, third = claim(api, machine), claim(api, machine)
     assert [a['task']['id'] for a in (first, second, third)] == [t['id'] for t in reversed(tasks[1:])]
+    # Claims go on to twice the places (4): the last task is leased too, and the bound stops the next claim.
+    fourth = claim(api, machine)
+    assert fourth and fourth['task']['id'] == tasks[0]['id']
     assert claim(api, machine) is None
-    post(api, f"attempts/{second['id']}/started", {'thread_id': second['lane']}, machine['token'])
-    post(api, f"attempts/{second['id']}/complete", {'outcome': 'completed', 'last_seq': 0, 'text': 'Finished turn.'}, machine['token'])
-    assert claim(api, machine)['task']['id'] == tasks[0]['id']
 
 
 def test_a_bot_limited_to_one_task_starts_only_it_and_queues_no_other_start(api):
@@ -158,9 +166,9 @@ def test_a_bot_limited_to_one_task_starts_only_it_and_queues_no_other_start(api)
 
     def starts():
         with api.app.state.store.read() as c:
-            return {r[0] for r in c.execute("SELECT json_extract(m.refs_json,'$.task') FROM jobs j "
-                                            "JOIN messages m ON m.id=j.message_id WHERE j.bot='ops' "
-                                            "AND j.state='queued' AND json_extract(m.refs_json,'$.auto_start')")}
+            return {r[0] for r in c.execute("SELECT json_extract(m.refs,'$.task') FROM jobs j "
+                                            "JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops' "
+                                            "AND j.state='queued' AND json_extract(m.refs,'$.auto_start')")}
 
     control(action='scope', task_id=tasks[0]['id'])           # ranked last: the higher ranked two stay queued
     assert take(api, machine)['task']['id'] == tasks[0]['id']

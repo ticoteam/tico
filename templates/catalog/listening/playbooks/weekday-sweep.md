@@ -25,7 +25,7 @@ last sweep. Read search results only. Never click, type, submit, or sign in anyw
 or a challenge means that source is blocked for this run: record it and move on.
 
 Keep a note of every source as you go, in one of two states: returned, or blocked. You will need
-both lists in the digest and you will not remember them at the end.
+both lists in the digest and you will not remember them at the end. A query that keeps returning noise is fixed in the watchlist, as `skills/check-a-query-before-trusting-it/SKILL.md` sets out.
 
 ## 3. Sort what came back
 
@@ -46,10 +46,10 @@ cap, not the target.
 
 1. **Coverage**: which sources returned and which were blocked, named individually.
 2. **Worth a reply**: the link, one line on who they are, one line on why it matters. No draft
-   reply unless the owner has said sending is allowed, and even then a human sends it.
+   reply unless the owner has said sending is allowed, and even then a human sends it. Before a thread goes to a person, check it with `skills/check-a-reply-before-a-human-posts/SKILL.md`.
 3. **Worth writing about**: the link, one line on why, and the angle.
 4. **Real moves**: what happened with the link, why it matters for {{company_name}}, and what could
-   be done about it. Three lines each.
+   be done about it. Three lines each. Confirm each move first with `skills/confirm-a-competitor-move/SKILL.md`.
 
 A section with nothing in it is absent, not empty with a note apologising for it.
 

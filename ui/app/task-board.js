@@ -41,11 +41,16 @@ function taskBoardShows(it, state) {
 const taskOpenBlockers = t => taskBlockers(t).filter(r => !['done', 'closed', 'declined'].includes(String(r.status || '')));
 function taskBlockedStrip(it) {
   const t = it.task;
-  const hold = t.blocked_since ? `<div class="bcard-blocked">${esc(taskBlockedLine(t))}</div>` : '';
+  // A Blocked hold that is a bot's prerequisite is the bot's wait line, not a second line above it.
+  const bot = taskBotWait(t);
+  const hold = taskBlockedHold(t) && !bot ? `<div class="bcard-blocked">${esc(taskBlockedLine(t))}</div>` : '';
   const open = taskOpenBlockers(t); if (!open.length) return hold;
   const first = open[0], name = first.title ? clipLine(first.title, 48) : '#' + (first.number ?? first.id);
   const all = open.map(r => r.title || '#' + (r.number ?? r.id)).join(', ');
-  return hold + `<button type="button" class="bcard-blocked" data-board-blocked="${esc(it.key)}" title="${esc(`Blocked by ${all}`)}"><span>Blocked by ${esc(name)}</span>${open.length > 1 ? `<span class="tnum">+${open.length - 1}</span>` : ''}</button>`;
+  // A bot's prerequisite work names the bot; the reason, its age and what blocks it are the tooltip.
+  const label = bot ? `Waiting on ${clipLine(bot.name, 48)}` : `Blocked by ${name}`;
+  const tip = bot ? `${taskWaitLine(t)}\nBlocked by ${all}` : `Blocked by ${all}`;
+  return hold + `<button type="button" class="bcard-blocked" data-board-blocked="${esc(it.key)}"${bot ? ' data-board-waits-bot' : ''} title="${esc(tip)}"><span>${esc(label)}</span>${open.length > 1 ? `<span class="tnum">+${open.length - 1}</span>` : ''}</button>`;
 }
 function taskBoardFocused(items, state) {
   const focus = state.boardFocus;
@@ -102,15 +107,29 @@ function taskBoardKeys(state, ev) {
 }
 function taskBoardClick(state, ev) {
   if (TASKS_ST !== state || state.view !== 'board') return;
-  const hit = ev.target.closest('[data-board-owner],[data-board-blocked],[data-board-unfocus],[data-board-unfold],[data-board-fold],[data-card-owner]');
+  const hit = ev.target.closest('[data-board-owner],[data-board-blocked],[data-board-unfocus],[data-board-unfold],[data-board-fold],[data-card-owner],[data-board-select]');
   if (!hit) return;
   ev.stopPropagation(); ev.preventDefault();
-  if (hit.dataset.cardOwner) taskBoardOwnerMenu(state, hit);
+  if (hit.dataset.boardSelect) taskBoardSelectColumn(state, hit);
+  else if (hit.dataset.cardOwner) taskBoardOwnerMenu(state, hit);
   else if (hit.dataset.boardOwner) taskBoardOwnerToggle(state, hit.dataset.boardOwner);
   else if (hit.dataset.boardBlocked) taskBoardFocus(state, hit.dataset.boardBlocked);
   else if (hit.hasAttribute('data-board-unfocus')) { state.boardFocus = null; tasksRender(state); }
   else if (hit.dataset.boardUnfold) taskBoardFoldSet(state, hit.dataset.boardUnfold, false);
   else if (hit.dataset.boardFold) taskBoardFoldSet(state, hit.dataset.boardFold, true);
+}
+// Select all in this column: every card it shows. A type's step column is also a filter the server can run (that type,
+// that step, the open statuses a board shows), so the bulk change reaches the step's tasks as the board has them.
+function taskBoardSelectColumn(state, button) {
+  const column = button.closest('.bcol'); if (!column) return;
+  const keys = [...column.querySelectorAll('.bcard[data-task-key]')].map(card => card.dataset.taskKey);
+  const name = column.querySelector('h2')?.textContent || '';
+  const byId = tasksById(state);
+  // A finished or declined card in the column is shown, but the open statuses would miss it: its tasks go by id.
+  const open = keys.every(k => ['open', 'doing', 'waiting', 'review', 'ready'].includes(byId.get(k.slice(1))?.status || 'open'));
+  const base = button.dataset.boardStep && open
+    ? {type: button.dataset.boardType, step: button.dataset.boardStep, status: 'open,doing,waiting,review,ready'} : null;
+  tasksBulkSelectAll(state, keys, base, name ? `in ${name}` : 'in this column');
 }
 
 // ---- dragging a card, on a desktop pointer. The page carries it rather than the browser's drag and drop, so the
@@ -283,11 +302,14 @@ function taskBoardDrop(state, d) {
     ...(moving && step.status === 'done' && t.status !== 'done' ? {status: 'done'} : {})};
   const fields = {...(moving ? {step_id: stepId, step, status: t.status === 'waiting' && !BOARD_HIDDEN.has(step.status) ? 'waiting' : step.status} : {}),
     ...(rank != null ? {step_rank: rank} : {})};
-  if (moving && step.name === 'Blocked') {
+  if (moving && step.status === 'waiting') {
     void taskBlockedReason(t, d.card.querySelector('[data-open-task]')).then(reason => {
       if (reason !== null && TASKS_ST === state) taskBoardSave(state, t, {...body, note: reason}, fields, 'Not moved');
     });
-  } else taskBoardSave(state, t, body, fields, 'Not moved');
+  } else {
+    taskBoardSave(state, t, body, fields, 'Not moved');
+    if (body.status === 'done') taskDoneMotion(d.key);   // the card, now in its done column, draws its check
+  }
   return true;
 }
 // A card's change (a move, a new owner) drawn at once, before the server answers; a refusal puts it back and says why.
@@ -323,11 +345,11 @@ function taskBoardOwnerMenu(state, button) {
   const opts = new DOMParser().parseFromString(`<select>${taskOwnerOptions('')}</select>`, 'text/html').querySelectorAll('option[value]:not([value=""])');
   propMenu($('#task-card-pops'), button, {label: 'Owner', find: 'Find a person or bot', items: [...opts].map(o => {
     const actor = o.value.includes(':') ? o.value : 'bot:' + o.value;
-    return {value: o.value, text: o.textContent, html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent)}</span>`, checked: t.owner === actor, actor};
+    return {value: o.value, text: o.textContent, html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent)}</span>`, checked: t.owner_id === actor, actor};
   }), onPick: it => {
     const cur = tasksById(state).get(String(t.id));
-    if (!cur || it.actor === cur.owner) return;
-    taskBoardSave(state, cur, {version: cur.version, owner: it.value}, {owner: it.actor}, 'Not changed');
+    if (!cur || it.actor === cur.owner_id) return;
+    taskBoardSave(state, cur, {version: cur.version, owner: it.actor}, {owner_id: it.actor}, 'Not changed');
   }});
 }
 // A card as the board draws it: with its move while the server has not said otherwise (a copy no newer than the one
@@ -339,5 +361,5 @@ function taskBoardLive(state, item) {
     if (!move.pending) state.boardMoves.delete(id);
     return item;
   }
-  return {...item, task: {...item.task, ...move.fields}, ...(move.fields.owner ? {actor: move.fields.owner} : {})};
+  return {...item, task: {...item.task, ...move.fields}, ...(move.fields.owner_id ? {actor: move.fields.owner_id} : {})};
 }

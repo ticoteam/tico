@@ -3,18 +3,17 @@
 A lens is one YAML file in `backend/lenses/`: a few steps asked one at a time (text, a list, scores, a choice), what the
 result shows (sections and one chart), and what data would sharpen it. A run is one row of `lens_runs`: the answers,
 then one model call with no runner (backend/updates.py `writer_for`: the Tico AI Gateway, else the team's own key; the
-job and its stale rule are backend/strategy_setup.py's), then a validated result: a summary, sections, a chart,
-findings tied to bets, the assumptions the model made for skipped steps, proposed changes to the strategy draft, and
-what would sharpen it. The model's JSON is never trusted: every part is clipped and checked, and a part that fails is
-dropped, not kept.
+job and its stale rule are backend/strategy_setup.py's), then a validated result: a summary, sections, a chart, findings
+tied to bets, the assumptions the model made for skipped steps, proposed changes to the strategy draft, and what would
+sharpen it. The model's JSON is never trusted: every part is clipped and checked, and a part that fails is dropped, not
+kept.
 
-Who: the owner starts a run on the published version or, on their own click, on the draft. The CEO Bot may start one;
-the Librarian may start a market one. A run on the draft is the owner's alone (like the draft); every other run is
+Who: the owner starts a run on the published version or, on their own click, on the draft. The Strategy Bot may start
+one; the Librarian may start a market one. A run on the draft is the owner's alone (like the draft); every other run is
 readable by every signed-in reader, bots included, since it only discusses what is published. Changes go to the draft
-through the owner's click (`apply`, the code path of accepting a `strategy_draft` proposal); when the CEO Bot ran the
-lens, the changes are filed as one `strategy_draft` proposal (source `lens`) and the owner decides it on the usual
-card. A lens never publishes. Unversioned and idempotent (`ensure`), like the strategy tables.
-"""
+through the owner's click (`apply`, the code path of accepting a `strategy_draft` proposal); when the Strategy Bot ran
+the lens, the changes are filed as one `strategy_draft` proposal (source `lens`) and the owner decides it on the usual
+card. A lens never publishes. Unversioned and idempotent (`ensure`), like the strategy tables."""
 import functools
 import json
 import logging
@@ -34,7 +33,7 @@ from .store import Problem
 log = logging.getLogger("tico.lenses")
 
 LENSES_DIR = Path(__file__).resolve().parent / "lenses"
-CEO = "bot:goal-manager"
+STRATEGY_BOT = "bot:goal-manager"
 LIBRARIAN = "bot:librarian"
 STALE_S = 600               # a run going this long was cut off by a restart
 PROMPT_CHARS = 24_000       # the whole model input
@@ -46,8 +45,8 @@ STATES = ("running", "done", "failed", "no_model")
 POWERS = ("scale", "network", "counter-positioning", "switching", "brand", "cornered", "process", "none")
 FINDINGS = ("supports", "challenges", "gap")
 # The order the list shows, strategy first; a lens not named here follows by id.
-ORDER = ("playing-to-win", "blue-ocean", "scenarios", "seven-powers", "good-strategy", "pre-mortem", "positioning",
-         "where-to-play", "five-forces")
+ORDER = ("playing-to-win", "blue-ocean", "scenarios", "seven-powers", "good-strategy", "startup-idea", "pre-mortem",
+         "positioning", "where-to-play", "five-forces")
 TEXT_MAX = 2_000            # an answer in words
 LIST_MAX = 12               # items in a list answer
 ITEM_MAX = 200
@@ -76,9 +75,9 @@ SCHEMA = (
     "CREATE TABLE IF NOT EXISTS lens_runs (id TEXT PRIMARY KEY, lens TEXT NOT NULL, applies_to TEXT NOT NULL, "
     "on_draft INTEGER NOT NULL DEFAULT 0, strategy_n INTEGER, status TEXT NOT NULL, "
     "answers TEXT NOT NULL DEFAULT '{}', result TEXT, applied TEXT NOT NULL DEFAULT '[]', "
-    "sharpen_tasks TEXT NOT NULL DEFAULT '{}', proposal_id TEXT, created_by TEXT NOT NULL, created TEXT NOT NULL, "
-    "finished TEXT, error TEXT, claimed INTEGER NOT NULL DEFAULT 0)",
-    "CREATE INDEX IF NOT EXISTS lens_runs_created ON lens_runs(created)",
+    "sharpen_tasks TEXT NOT NULL DEFAULT '{}', proposal_id TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL, "
+    "finished_at TEXT, error TEXT, claimed INTEGER NOT NULL DEFAULT 0)",
+    "CREATE INDEX IF NOT EXISTS lens_runs_created ON lens_runs(created_at)",
 )
 
 
@@ -120,7 +119,9 @@ def _load(path):
         if raw.get("hint"):
             step["hint"] = str(raw["hint"])
         if step["input"] == "choice":
-            step["options"] = [str(o) for o in raw.get("options") or []]
+            if not all(isinstance(o, str) for o in raw.get("options") or []):
+                _bad(path, f"step {step['key']} options are words; quote a Yes or a No, which YAML reads as true or false")
+            step["options"] = list(raw.get("options") or [])
             if len(step["options"]) < 2:
                 _bad(path, f"step {step['key']} is a choice with at least two options")
         if step["input"] == "scores":
@@ -140,6 +141,8 @@ def _load(path):
     return {"id": lens_id, "name": str(data["name"]), "applies_to": data["applies_to"],
             "description": str(data.get("description") or ""), "minutes": data["minutes"],
             "listed": bool(data.get("listed")), "steps": steps,
+            # A strategy lens that weighs market size reads the sizes too, as every market lens does.
+            "market_spend": data["applies_to"] == "market" or bool(data.get("market_spend")),
             "output": {"chart": chart, "sections": [str(s) for s in output.get("sections") or []]},
             "sharpen": [str(s) for s in data.get("sharpen") or []]}
 
@@ -234,7 +237,7 @@ def _row(c, run_id):
 
 
 def _stale(row):
-    return row["status"] == "running" and H.shift(row["created"], seconds=STALE_S) < H.now()
+    return row["status"] == "running" and H.shift(row["created_at"], seconds=STALE_S) < H.now()
 
 
 def view(row, short=False):
@@ -246,7 +249,7 @@ def view(row, short=False):
            "status": row["status"], "answers": {} if short else S.loads(row["answers"], {}),
            "result": S.loads(row["result"], {}) or None, "applied": S.loads(row["applied"], []),
            "sharpen_tasks": S.loads(row["sharpen_tasks"], {}), "proposal_id": row["proposal_id"],
-           "created_by": row["created_by"], "created": row["created"], "finished": row["finished"],
+           "created_by": row["created_by"], "created_at": row["created_at"], "finished_at": row["finished_at"],
            "error": S.loads(row["error"], {}) or None}
     if short and out["result"]:
         out["result"] = {"summary": out["result"].get("summary") or ""}
@@ -265,7 +268,7 @@ def runs(c, who, lens_id=None, limit=LIMIT):
         where.append("lens=?")
         args.append(lens_id)
     sql = "SELECT * FROM lens_runs" + (" WHERE " + " AND ".join(where) if where else "")
-    rows = H._rows(c.execute(sql + " ORDER BY created DESC, id DESC LIMIT ?",
+    rows = H._rows(c.execute(sql + " ORDER BY created_at DESC, id DESC LIMIT ?",
                              (*args, max(1, min(int(limit), LIMIT_MAX)))))
     return [view(r, short=True) for r in rows]
 
@@ -282,15 +285,17 @@ def read(c, who, run_id):
 # ----------------------------------------------------------------------------- starting a run
 def start(c, who, settings, store, lens_id, answers, on="published"):
     """A new run, `running` (the caller spawns `run` once this commits) or `no_model` at once, with the answers saved.
-    The owner starts any; the CEO Bot any strategy or market lens on the published version; the Librarian a market one."""
+    The owner starts any; the Strategy Bot any strategy or market lens on the published version; the Librarian a market
+    one."""
     from . import goal_routes
     the = lens(lens_id)
     if not the:
         raise Problem("not_found", f"There is no lens {lens_id}", 404)
     owner = goal_routes.company_editor(who)
     market = the["applies_to"] == "market"
-    if not (owner or who.actor == CEO or (market and who.actor == LIBRARIAN)):
-        raise Problem("forbidden", "Only the owner, the CEO Bot and, for a market lens, the Librarian run a lens", 403)
+    if not (owner or who.actor == STRATEGY_BOT or (market and who.actor == LIBRARIAN)):
+        raise Problem("forbidden", "Only the owner, the Strategy Bot and, "
+                                   "for a market lens, the Librarian run a lens", 403)
     on_draft = on == "draft" and not market
     if on_draft and not owner:
         raise Problem("forbidden", "Only the owner runs a lens on the draft", 403)
@@ -305,10 +310,10 @@ def start(c, who, settings, store, lens_id, answers, on="published"):
     now = H.now()
     row = {"id": H.new_id(), "lens": lens_id, "applies_to": the["applies_to"], "on_draft": int(on_draft),
            "strategy_n": number, "status": "running" if model else "no_model", "answers": S.dumps(answers),
-           "created_by": who.actor, "created": now, "finished": None if model else now}
-    c.execute("INSERT INTO lens_runs (id, lens, applies_to, on_draft, strategy_n, status, answers, created_by, created, "
-              "finished) VALUES (:id, :lens, :applies_to, :on_draft, :strategy_n, :status, :answers, :created_by, "
-              ":created, :finished)", row)
+           "created_by": who.actor, "created_at": now, "finished_at": None if model else now}
+    c.execute("INSERT INTO lens_runs (id, lens, applies_to, on_draft, strategy_n, status, answers, created_by, created_at, "
+              "finished_at) VALUES (:id, :lens, :applies_to, :on_draft, :strategy_n, :status, :answers, :created_by, "
+              ":created_at, :finished_at)", row)
     S._event(c, who.actor, "lens_run", {"run_id": row["id"], "lens": lens_id, "on_draft": on_draft})
     if not model:
         S._event(c, who.actor, "lens_done", {"run_id": row["id"], "lens": lens_id, "status": "no_model"})
@@ -319,7 +324,7 @@ def stop_running(c, error=INTERRUPTED):
     """Every run still `running` becomes `failed`: at start-up (backend/app.py lifespan; no thread of this process runs
     them)."""
     for row in H._rows(c.execute("SELECT id, lens FROM lens_runs WHERE status='running'")):
-        c.execute("UPDATE lens_runs SET status='failed', finished=?, error=? WHERE id=?",
+        c.execute("UPDATE lens_runs SET status='failed', finished_at=?, error=? WHERE id=?",
                   (H.now(), S.dumps(error), row["id"]))
         S._event(c, H.KEEPER, "lens_done", {"run_id": row["id"], "lens": row["lens"], "status": "failed"})
 
@@ -351,7 +356,8 @@ INSTRUCTIONS = (
     "- assumptions: every answer you had to fill in yourself, because the team skipped the step: say what you assumed "
     "and from what. Never present an assumption as something the team said.\n"
     "- changes: at most eight changes the team could make to its strategy draft. A payload is a partial draft: "
-    "{\"summary\"?, \"vision\"?, \"sections\"?: {\"serve\"|\"sell\"|\"know\"|\"not\": markdown}, \"bets\"?: [{\"id\"? "
+    "{\"summary\"?, \"vision\"?, \"sections\"?: {\"serve\"|\"sell\"|\"proof\"|\"now\"|\"know\"|\"how\"|\"not\": "
+    "markdown}, \"bets\"?: [{\"id\"? "
     "(a bet id to change it; no id adds a bet), \"statement\", \"why\", \"rules_out\", \"wrong_if\": {\"kind\": "
     "\"text\", \"text\": \"what would show it wrong\", \"check_by\": \"YYYY-MM-DD\"}}]}. A wrong-if in words always "
     "has a check_by date. Send only fields that change; the summary stays under 400 characters, the vision under 400. "
@@ -418,10 +424,10 @@ def _market_input(c, the, bets):
 
 
 def _spend_input(c, the):
-    """For a market lens, the market's definition and its segments' sizes (backend/market_spend.py), compact: what the
+    """For a market lens (or one with `market_spend: true`), the market's definition and its segments' sizes (backend/market_spend.py), compact: what the
     market is and what each part is worth, how sure, and which one is ours. None when nothing is defined."""
     from . import market_spend as MS
-    if the["applies_to"] != "market":
+    if not the.get("market_spend", the.get("applies_to") == "market"):
         return None
     try:
         found = MS.spend(c)
@@ -582,8 +588,6 @@ def change_error(c, payload):
             return "a bet statement is one sentence"
         if item.get("wrong_if") and not _wrong_if_ok(c, item["wrong_if"]):
             return "a wrong-if is whole"
-        if not item.get("id") and item.get("status") == "active" and not (item.get("rules_out") and item.get("wrong_if")):
-            return "an active bet says what it rules out and what would show it wrong"
     return None
 
 
@@ -632,7 +636,7 @@ def clean_result(c, the, raw, bet_ids):
 
 # ----------------------------------------------------------------------------- the job
 def _finish(c, row, status, result=None, error=None, proposal_id=None):
-    c.execute("UPDATE lens_runs SET status=?, result=?, error=?, proposal_id=?, finished=? WHERE id=?",
+    c.execute("UPDATE lens_runs SET status=?, result=?, error=?, proposal_id=?, finished_at=? WHERE id=?",
               (status, S.dumps(result) if result else None, S.dumps(error) if error else None, proposal_id, H.now(),
                row["id"]))
     S._event(c, row["created_by"], "lens_done", {"run_id": row["id"], "lens": row["lens"], "status": status})
@@ -670,8 +674,8 @@ def run(store, run_id):
 
 
 def finish(c, run_id, raw):
-    """Check what the model said and save it. A run cut off before it answered writes nothing. A CEO Bot run with at
-    least one change files one `strategy_draft` proposal; an owner's never does."""
+    """Check what the model said and save it. A run cut off before it answered writes nothing. A Strategy Bot run with
+    at least one change files one `strategy_draft` proposal; an owner's never does."""
     row = _row(c, run_id)
     if not row or row["status"] != "running":
         return None
@@ -682,7 +686,7 @@ def finish(c, run_id, raw):
     if result is None:
         return _finish(c, row, "failed", error={"code": "empty", "message": "Nothing usable came back; run it again"})
     proposal_id = None
-    if row["created_by"] == CEO and result["changes"]:
+    if row["created_by"] == STRATEGY_BOT and result["changes"]:
         proposal_id = _propose(c, row, result)
     _finish(c, row, "done", result=result, proposal_id=proposal_id)
 
@@ -720,13 +724,13 @@ def merged(c, changes):
 
 
 def _propose(c, row, result):
-    """The CEO Bot's run: its changes, merged, as one `strategy_draft` proposal for the owner to decide. None when the
-    proposal is refused (the run is kept without one)."""
+    """The Strategy Bot's run: its changes, merged, as one `strategy_draft` proposal for the owner to decide. None when
+    the proposal is refused (the run is kept without one)."""
     from . import goals as G
     payload = merged(c, result["changes"])
     if not payload:
         return None
-    the = lens(row["lens"])
+    lens(row["lens"])
     payload = {**payload, "source": "lens", "lens": row["lens"]}
     c.execute("SAVEPOINT lens_proposal")
     try:
@@ -827,7 +831,7 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/lenses/{lens_id}/runs", status_code=202)
     def lens_run_start(request: Request, lens_id: str, body: M.LensRun):
-        """The owner, the CEO Bot and, for a market lens, the Librarian start a run. `on: draft` is the owner's.
+        """The owner, the Strategy Bot and, for a market lens, the Librarian start a run. `on: draft` is the owner's.
         Answers at once with the run (`running`; `no_model` when no model provider is set up, the answers saved)."""
         who = request.state.identity
         reader(who)

@@ -14,15 +14,15 @@ const {unrouted} = require('./support/routes.cjs');
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 const bots = ['lead', 'qa'].map(name => ({name, display_name: {lead: 'Head of Engineering', qa: 'QA Engineer'}[name], org_parent: '',
   host: 'keeper', status: 'active', can_chat: true, users: [{id: 'ana', name: 'Ana'}], schedules: []}));
-const task = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'bot:lead', requester: 'human:ana', status: 'doing',
-  lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created: ago(600), updated: ago(60), ...over});
+const task = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'bot:lead', requester_id: 'human:ana', status: 'doing',
+  lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created_at: ago(600), updated_at: ago(60), ...over});
 const TASKS = [
   task('t-own', 'Ship the release notes'),
-  task('t-waits', 'Turn on the screen default', {status: 'waiting', waiting_on: 'human:ana', created: ago(480)}),
-  task('t-bot-wait', 'Wait for QA', {status: 'waiting', waiting_on: 'bot:qa', blocked_reason: 'Waiting for the test machine', blocked_since: ago(480)}),
-  task('t-roadmap', 'Plan the import page', {status: 'open', type_id: 'roadmap', created: ago(30)}),
-  task('t-roadmap-done', 'Write the import spec', {status: 'done', type_id: 'roadmap', done_at: ago(1440), created: ago(3 * 1440)}),
-  task('t-qa', 'Run the release check', {owner: 'bot:qa', requester: 'bot:lead'}),
+  task('t-waits', 'Turn on the screen default', {status: 'waiting', waiting_on: 'human:ana', created_at: ago(480)}),
+  task('t-bot-wait', 'Wait for QA', {status: 'waiting', waiting_on: null, note: 'Waiting for the test machine', relations: {blocks: [{id: 't-qa', title: 'Run the release check', owner_id: 'bot:qa', status: 'doing', direction: 'in'}]}, holds: [{kind: 'blocked', reason: 'Waiting for the test machine', since: ago(480), until: null, by: 'keeper', cause: 'dependency'}]}),
+  task('t-roadmap', 'Plan the import page', {status: 'open', type_id: 'roadmap', created_at: ago(30)}),
+  task('t-roadmap-done', 'Write the import spec', {status: 'done', type_id: 'roadmap', done_at: ago(1440), created_at: ago(3 * 1440)}),
+  task('t-qa', 'Run the release check', {owner_id: 'bot:qa', requester_id: 'bot:lead'}),
 ];
 const TYPES = [{id: 'general', name: 'General', steps: []}, {id: 'roadmap', name: 'Product roadmap', role: 'product-roadmap', steps: []}];
 const OTHERS = {name: 'Assigned to Others', show_count: true, conditions: [{field: 'asked_by', value: 'this_bot'},
@@ -35,16 +35,25 @@ const CONDITIONS = {
   blocked: [{field: 'assigned_to', value: 'this_bot'}, {field: 'status', value: ['waiting']}, {field: 'waiting_on', value: 'not_me'}],
 };
 const normalized = tab => tab.builtin && tab.builtin !== 'done' && !tab.conditions ? {...tab, conditions: CONDITIONS[tab.builtin]} : tab;
-const WIDGETS = ['tasks', 'updates', 'files', 'routines'].map(id => ({id, hidden: false, height: null}));
+const WIDGETS = ['tasks', 'updates', 'files'].map(id => ({id, hidden: false, height: null}));
+const PAGES = {'page:f1': {file_id: 'f1', title: 'Weekly numbers', bot: 'lead', updated_at: ago(90), archived: false},
+  'page:f2': {file_id: 'f2', title: 'Release plan', bot: 'lead', updated_at: ago(30), archived: false}};
 // The server's filter, for the fields these fixtures use; Ana is the viewer.
-const matches = (bot, tab, t) => (t.owner === 'bot:' + bot || t.requester === 'bot:' + bot) && tab.conditions.every(({field, value}) => {
+const matches = (bot, tab, t) => (t.owner_id === 'bot:' + bot || t.requester_id === 'bot:' + bot) && tab.conditions.every(({field, value}) => {
   const who = value === 'this_bot' ? 'bot:' + bot : value === 'me' ? 'human:ana' : value;
   if (field === 'status') return value.includes(t.status);
-  if (field === 'needs') return (t.owner === 'human:ana' && ['open', 'doing', 'waiting'].includes(t.status)) || (t.status === 'waiting' && t.waiting_on === 'human:ana');
-  if (field === 'waiting_on') return t.status === 'waiting' && (value === 'me' ? t.waiting_on === 'human:ana' : value === 'not_me' ? t.waiting_on !== 'human:ana' : true);
+  if (field === 'needs') return (t.owner_id === 'human:ana' && ['open', 'doing', 'waiting'].includes(t.status)) || (t.status === 'waiting' && t.waiting_on === 'human:ana');
+  if (field === 'waiting_on') {
+    const blockers = (t.relations?.blocks || []).filter(r => r.direction === 'in' && !['done', 'closed', 'declined'].includes(r.status));
+    const person = String(t.waiting_on || '').startsWith('human:');
+    const botWait = !person && !['gate', 'worktree'].includes((t.holds || []).find(h => h.kind === 'blocked')?.cause) && !t.ask?.recipient_id?.startsWith('human:')
+      && !blockers.some(r => r.owner_id?.startsWith('human:')) && blockers[0]?.owner_id?.startsWith('bot:');
+    return t.status === 'waiting' && (value === 'me' ? t.waiting_on === 'human:ana' : value === 'not_me' ? t.waiting_on !== 'human:ana'
+      : value === 'person' ? person : value === 'bot' ? botWait : true);
+  }
   if (field === 'type') return value.includes(t.type_id || 'general');
-  if (field === 'asked_by') return t.requester === who;
-  if (field === 'assigned_to') return value === 'others' ? !['human:ana', 'bot:' + bot].includes(t.owner) : t.owner === who;
+  if (field === 'asked_by') return t.requester_id === who;
+  if (field === 'assigned_to') return value === 'others' ? !['human:ana', 'bot:' + bot].includes(t.owner_id) : t.owner_id === who;
   throw new Error('fixture has no ' + field);
 });
 
@@ -73,7 +82,7 @@ async function open(browser, viewport, colorScheme, server) {
     if (p === '/api/v2/needs-you') return json({items: [], went_away: null});
     if (p === '/api/v2/goals') return json({goals: [], chain: [], reports: [], company: []});
     if (p === '/api/v2/updates') return json({updates: q.get('bot') === 'lead' ? [{id: 'u1', bot: 'lead', day: '2026-10-23', kind: 'daily',
-      body: 'Shipped the export fix.', read: true, created: ago(600)}] : [], missed: [], unread: 0, next_before: null, today: {}});
+      body: 'Shipped the export fix.', read: true, created_at: ago(600)}] : [], missed: [], unread: 0, next_before: null, today: {}});
     if (p === '/api/v2/task-types') return json({types: TYPES});
     const layout = p.match(/^\/api\/v2\/bots\/([^/]+)\/task-tabs$/);
     if (layout) {
@@ -101,11 +110,16 @@ async function open(browser, viewport, colorScheme, server) {
       return json({bot, tabs: counted, tasks: (server.tasks || TASKS).filter(t => counted.some(c => c.ids.includes(t.id)))});
     }
     if (p === '/api/v2/tasks') {
-      const who = q.get('owner') || q.get('requester'), field = q.get('owner') ? 'owner' : 'requester';
+      const who = q.get('owner') || q.get('requester'), field = q.get('owner') ? 'owner_id' : 'requester_id';
       const status = q.get('status');
       return json({tasks: (server.tasks || TASKS).filter(t => t[field] === 'bot:' + who && (!status || status === 'all' || status.split(',').includes(t.status)))});
     }
     if (p === '/api/v2/conversations') return json({conversations: []});
+    // The sidebar's pages (backend/cards.py): what GET /api/v2/places/bot:<slug> answers for the saved widgets.
+    const pinned = decodeURIComponent(p).match(/^\/api\/v2\/places\/bot:([^/]+)$/);
+    if (pinned) return json({place: 'bot:' + pinned[1], kind: 'bot', saved: true, can_edit: pinned[1] === 'lead',
+      pins: ((server.layouts[pinned[1]] || {}).widgets || []).filter(w => PAGES[w.id]).map((w, i) => ({id: 'p' + i, item: w.id, position: i, size: 'medium', page: PAGES[w.id]}))});
+    if (p === '/api/v2/cards/choices') return json({templates: [], teams: [], kpis: [], pages: Object.values(PAGES)});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
@@ -148,7 +162,7 @@ async function open(browser, viewport, colorScheme, server) {
       await pill('Doing').click();
       // Rows come a page (here one) at a time; the counts above already leave the blocked task out of Doing.
       assert.deepEqual(await rail.locator('#t-open .ttl').allInnerTexts(), ['Ship the release notes'], at);
-      assert.deepEqual(await order(), ['tasks', 'updates', 'files', 'routines']);
+      assert.deepEqual(await order(), ['tasks', 'updates', 'files']);
       await pill('Assigned to Others').click();
       assert.deepEqual(await rail.locator('#t-c3 .trow .ttl').allInnerTexts(), ['Run the release check']);
       // One pencil, no gear or board icon.
@@ -177,7 +191,7 @@ async function open(browser, viewport, colorScheme, server) {
       assert.deepEqual(await tabTexts(), ['Needs You 1', 'Doing 2', 'Blocked 1', 'Assigned to Others 1']);
       assert.equal(await widget('files').getAttribute('data-off'), null);
 
-      // Edit again: hide Files, move Routines up by keyboard and Updates down by dragging its handle, set Tasks' height
+      // Edit again: hide Files, move Updates up by keyboard and down past Files by dragging its handle, set Tasks' height
       // then Reset it, set Updates' height by dragging its edge.
       await rail.locator('#bot-sidebar-edit').click();
       assert.equal(await rail.evaluate(el => el.classList.contains('editing')), true);
@@ -187,16 +201,16 @@ async function open(browser, viewport, colorScheme, server) {
       assert.equal(await eye.getAttribute('aria-pressed'), 'true');
       assert.equal(await eye.getAttribute('aria-label'), 'Show Files');
       assert.equal(await widget('files').locator('.bot-w-bar').isVisible(), true, 'a hidden widget stays in edit mode, to show again');
-      await widget('routines').locator('[data-w-grip]').focus();
+      await widget('updates').locator('[data-w-grip]').focus();
       await page.keyboard.press('ArrowUp');
-      assert.deepEqual(await order(), ['tasks', 'updates', 'routines', 'files']);
+      assert.deepEqual(await order(), ['updates', 'tasks', 'files']);
       const grip = await widget('updates').locator('[data-w-grip]').boundingBox(), last = await widget('files').boundingBox();
       await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
       await page.mouse.down();
       await page.mouse.move(grip.x + grip.width / 2, grip.y + 40, {steps: 4});
       await page.mouse.move(grip.x + grip.width / 2, last.y + last.height - 2, {steps: 8});
       await page.mouse.up();
-      assert.deepEqual(await order(), ['tasks', 'routines', 'files', 'updates']);
+      assert.deepEqual(await order(), ['tasks', 'files', 'updates']);
       const size = widget('tasks').locator('[data-w-size]');
       await size.focus();
       await page.keyboard.press('ArrowUp');
@@ -301,7 +315,7 @@ async function open(browser, viewport, colorScheme, server) {
         tabs: [{name: 'product tasks', show_count: true, conditions: [{field: 'status', value: ['open', 'doing', 'waiting', 'done']}, {field: 'type', value: ['roadmap']}]},
                {builtin: 'needs', name: 'Needs You', show_count: true, conditions: CONDITIONS.needs}, {builtin: 'active', name: 'Doing', show_count: false, conditions: CONDITIONS.active},
                {builtin: 'blocked', name: 'Blocked', show_count: true, conditions: CONDITIONS.blocked}],
-        widgets: [{id: 'tasks', hidden: false, height: null}, {id: 'routines', hidden: false, height: null},
+        widgets: [{id: 'tasks', hidden: false, height: null},
                   {id: 'files', hidden: true, height: null}, {id: 'updates', hidden: false, height: updatesHeight}]}});
       assert.equal(await rail.evaluate(el => el.classList.contains('editing')), false);
       await page.waitForFunction(() => document.querySelector('#cnt-c0')?.textContent.trim() === '2');
@@ -359,7 +373,7 @@ async function open(browser, viewport, colorScheme, server) {
       await page.waitForFunction(() => document.querySelector('#t-blocked .ttl')?.textContent === 'Wait for QA');
       // Outside edit mode: Files is not drawn, the rest in the new order, and Updates' height is its most.
       assert.equal(await widget('files').isHidden(), true);
-      assert.deepEqual(await order(), ['tasks', 'routines', 'files', 'updates']);
+      assert.deepEqual(await order(), ['tasks', 'files', 'updates']);
       assert.equal(await widget('updates').locator('.rail-sec').evaluate(el => getComputedStyle(el).maxHeight), updatesHeight + 'px');
       await page.evaluate(() => document.fonts.ready);
       await page.screenshot({path: `/tmp/bot-sidebar-${scheme}-${viewport.width}.png`});
@@ -369,7 +383,7 @@ async function open(browser, viewport, colorScheme, server) {
       await goto('#/bot/lead');
       await rail.locator('#bot-tab-t-c0').waitFor({state: 'attached'});
       assert.equal(await rail.evaluate(el => el.hasAttribute('data-loading')), false);
-      assert.deepEqual(await order(), ['tasks', 'routines', 'files', 'updates']);
+      assert.deepEqual(await order(), ['tasks', 'files', 'updates']);
       assert.equal(await widget('files').isHidden(), true);
       release();
       // QA: Ana may not change its sidebar, so no pencil.
@@ -385,7 +399,7 @@ async function open(browser, viewport, colorScheme, server) {
       await context.close();
     }
     // A read-only viewer gets the same default filters: one wait is Blocked 1 and Doing 0.
-    const isolated = {layouts: {}, puts: [], page: 200, tasks: [task('one-wait', 'Wait for the builder', {owner: 'bot:qa', status: 'waiting', waiting_on: 'bot:lead'})]};
+    const isolated = {layouts: {}, puts: [], page: 200, tasks: [task('one-wait', 'Wait for the builder', {owner_id: 'bot:qa', status: 'waiting', waiting_on: null, relations: {blocks: [{id: 'builder', owner_id: 'bot:lead', title: 'Build it', status: 'doing', direction: 'in'}]}})]};
     const readOnly = await open(browser, {width:1280,height:900}, 'light', isolated);
     await readOnly.page.goto('https://tico-ui.test/#/bot/qa/tasks');
     await readOnly.page.waitForFunction(() => document.querySelector('#cnt-blocked')?.textContent === '1');
@@ -398,6 +412,44 @@ async function open(browser, viewport, colorScheme, server) {
     assert.equal(await readOnly.page.locator('#t-open .trow').count(), 0);
     assert.deepEqual(readOnly.errors, []);
     await readOnly.context.close();
+    const filtered = await open(browser, {width:1280,height:900}, 'light', {puts: [], page: 200, layouts: {lead: {
+      tabs: [{name: 'Bot waits', conditions: [{field: 'waiting_on', value: 'bot'}]},
+             {name: 'People waits', conditions: [{field: 'waiting_on', value: 'person'}]}], widgets: WIDGETS}}});
+    await filtered.page.goto('https://tico-ui.test/#/bot/lead/tasks');
+    await filtered.page.waitForFunction(() => document.querySelector('#cnt-c0')?.textContent === '1');
+    await filtered.page.locator('#bot-tab-t-c0').click();
+    assert.deepEqual(await filtered.page.locator('#t-c0 .ttl').allInnerTexts(), ['Wait for QA']);
+    assert.match(await filtered.page.locator('#t-c0 .trow-waits').innerText(), /Waiting on QA Engineer: Waiting for the test machine/);
+    await filtered.page.locator('#bot-tab-t-c1').click();
+    assert.deepEqual(await filtered.page.locator('#t-c1 .ttl').allInnerTexts(), ['Turn on the screen default']);
+    assert.deepEqual(filtered.errors, []);
+    await filtered.context.close();
+    // A sidebar of pages: the built-ins hidden, a page shown with its title; Add puts another page in the draft, its
+    // cross takes one out, and Done saves them as widgets.
+    const pages = {layouts: {lead: {tabs: DEFAULT, widgets: [{id: 'page:f1', hidden: false, height: null},
+      ...WIDGETS.map(w => ({...w, hidden: true}))]}}, puts: [], page: 200};
+    const paged = await open(browser, {width: 1280, height: 900}, 'light', pages);
+    const prail = paged.page.locator('#pane-tasks');
+    const shown = () => prail.evaluate(el => [...el.querySelectorAll(':scope>.bot-w')].filter(w => w.offsetParent).map(w => w.dataset.widget));
+    await paged.page.goto('https://tico-ui.test/#/bot/lead');
+    await paged.page.waitForFunction(() => document.querySelector('#pane-tasks .bot-w[data-widget="page:f1"]')?.textContent.includes('Weekly numbers'));
+    assert.deepEqual(await shown(), ['page:f1'], 'a sidebar of pages only');
+    const pencil = await prail.locator('#bot-sidebar-edit').boundingBox(), first = await prail.locator('.bot-w[data-widget="page:f1"] .bot-pin > :first-child').boundingBox();
+    assert.ok(pencil.y + pencil.height <= first.y + 1, 'the edit icon sits above the page, not on it');
+    if (process.env.TICO_UI_SHOTS) await paged.page.screenshot({path: require('node:path').join(process.env.TICO_UI_SHOTS, 'bot-sidebar-pages.png')});
+    await prail.locator('#bot-sidebar-edit').click();
+    await prail.locator('#bot-sidebar-add').click();
+    await paged.page.locator('#bot-pin-dialog[open] [name="page"][value="f2"]').check();
+    await paged.page.locator('#bot-pin-dialog[open] [type="submit"]').click();
+    await paged.page.waitForFunction(() => document.querySelector('#pane-tasks .bot-w[data-widget="page:f2"]')?.textContent.includes('Release plan'));
+    await prail.locator('.bot-w[data-widget="page:f1"] [data-w-remove]').click();
+    assert.equal(await prail.locator('.bot-w[data-widget="page:f1"]').count(), 0);
+    await prail.locator('#bot-sidebar-done').click();
+    await paged.page.waitForFunction(() => !document.querySelector('#pane-tasks.editing'));
+    assert.deepEqual(pages.puts.at(-1).body.widgets.map(w => w.id + (w.hidden ? ' hidden' : '')), ['tasks hidden', 'updates hidden', 'files hidden', 'page:f2']);
+    assert.deepEqual(await shown(), ['page:f2']);
+    assert.deepEqual(paged.errors, []);
+    await paged.context.close();
     console.log('bot-task-tabs: ok');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

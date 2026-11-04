@@ -112,9 +112,19 @@ pub fn set_credential_names(bots: &Value) {
     *credential_names().lock().unwrap() = bots.as_object().cloned().unwrap_or_default();
 }
 
+/// The credential names each bot was granted, as the last `set_credential_names` read them: one snapshot per check.
+pub fn grant_names() -> Map<String, Value> {
+    credential_names().lock().unwrap().clone()
+}
+
 /// Whether `bot` was granted a credential named `key` (Pi's OPENROUTER_API_KEY, the Gemini CLI's GEMINI_API_KEY).
 pub fn has_grant(bot: &str, key: &str) -> bool {
-    credential_names().lock().unwrap().get(bot).and_then(|n| n.as_array()).is_some_and(|n| n.iter().any(|k| k == key))
+    has_grant_in(&credential_names().lock().unwrap(), bot, key)
+}
+
+/// `has_grant` over a snapshot from `grant_names`.
+pub fn has_grant_in(names: &Map<String, Value>, bot: &str, key: &str) -> bool {
+    names.get(bot).and_then(|n| n.as_array()).is_some_and(|n| n.iter().any(|k| k == key))
 }
 
 /// The gemini runtime's sign-in: a GEMINI_API_KEY grant for every bot that runs the Gemini CLI.
@@ -311,6 +321,7 @@ impl GeminiHost {
             .current_dir(&t.settings.cwd)
             .env_clear()
             .envs(self.env(&t.settings));
+        super::new_group(&mut command);
         command
     }
 
@@ -389,7 +400,7 @@ impl GeminiHost {
                     let mut inner = self.inner();
                     let up = inner.up && !inner.interrupted.contains(&turn);
                     match inner.threads.get_mut(&tid) {
-                        Some(t) if up && t.started => {
+                        Some(t) if up && !t.settings.require_existing_session && t.started => {
                             t.started = false;
                             t.restored = true;
                             let t = t.clone();
@@ -695,6 +706,29 @@ mod tests {
         s.env.remove("GEMINI_API_KEY");
         let thread = bare.start_thread(&s);
         assert_eq!(bare.start_turn(&thread, "x", None).unwrap_err().to_string(), "Gemini API key is not configured for this bot");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_capacity_continuation_with_a_missing_gemini_session_never_restarts() {
+        let dir = std::env::temp_dir().join(format!("fake-gemini-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cmd = fake_gemini(&dir);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = GeminiHost::new("acme", &dir.join("home"), vec![cmd], tx);
+        host.start();
+        let mut s = settings(&dir, &crate::hosts::fixtures::dir("gemini").join("turn.jsonl"));
+        s.require_existing_session = true;
+        s.env.insert("GONE".into(), "lost-session".into());
+        let thread = host.resume_thread("lost-session", &s);
+        host.start_turn(&thread, "continue", None).unwrap();
+        let events = turn_events(&mut rx).await;
+        assert!(events.iter().any(|e| e["kind"] == "turn_failed" && e["process_exit"] == true && e["exit_code"] == 1), "{events:?}");
+        assert!(!host.restored(&thread));
+        let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
+        assert_eq!(args.lines().count(), 1, "a missing continuation must not launch a second session: {args}");
+        assert!(args.contains("--resume lost-session"));
+        host.stop().await;
         std::fs::remove_dir_all(dir).unwrap();
     }
 

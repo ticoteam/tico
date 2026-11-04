@@ -26,7 +26,7 @@ const shots = process.env.TICO_SHOTS || '';
       requests: {n: 48210, errors: 3, p50: 9.5, p95: 152.6, routes: [
         {route: 'GET /api/v2/tasks', n: 21000, errors: 0, bytes: 9e8, total_ms: 1830000, max_ms: 9200, p50: 40, p95: 310, callers: {bot: 20400, human: 600}},
         {route: 'POST /api/v2/runners/{runner_id}/heartbeat', n: 24000, errors: 3, bytes: 1e6, total_ms: 240000, max_ms: 800, p50: 8, p95: 24, callers: {runner: 24000}}]},
-      slow: [{ts: now - 300, route: 'GET /api/v2/tasks', caller: 'bot', actor: 'bot:finance', ms: 9200, bytes: 4e6, status: 200}],
+      slow: [{created_at: now - 300, route: 'GET /api/v2/tasks', caller: 'bot', actor: 'bot:finance', ms: 9200, bytes: 4e6, status: 200}],
       process: {cpu_avg: 61.2, cpu_max: 99.8, rss: 512e6, threads: 70, lag_max: 2400, lag_p95: 180, wait_max: 1200, hold_max: 900, locked: 0, minutes: []},
       sql: {queries: [{sql: "SELECT t.* FROM tasks t WHERE t.status IN (?,…) AND coalesce(t.private,N)=N ORDER BY t.updated DESC LIMIT ?", n: 81000, total_ms: 1210000, max_ms: 950, p95: 61}]},
       db: {at: now - 600, bytes: 1.07e9, wal_bytes: 4.2e7, free_bytes: 1e6, growth_24h: 1.2e7},

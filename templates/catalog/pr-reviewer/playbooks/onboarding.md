@@ -1,7 +1,7 @@
 # Setup
 
 Runs once, on the first message or task you receive, while `state.md` says onboarding has not
-finished. Budget 30 minutes. The outcome is six recorded answers, draft reviews for the ten newest open pull requests on the task, and the first routine checked.
+finished. Budget 30 minutes. The outcome is five recorded answers, draft reviews for the ten newest open pull requests on the task, and the first routine checked.
 
 ---
 
@@ -23,15 +23,14 @@ What you do (read open pull requests and write evidence-backed reviews), that re
 Numbered, each with its one-line why. Offer a default so a human can answer "fine".
 
 1. Which repositories should I review, and which branches count (for example main only)? Why: Sets the scope of the queue. I never look at a repository I was not given.
-2. What do you check in review here: tests, security, style, migrations, performance, docs? Is there a written standard or a pull request template? Why: Becomes knowledge/standards.md. I review against your standard, not mine.
+2. What do you check in review here, and which paths need extra checks (auth, payments, migrations, infrastructure)? Is there a written standard or a pull request template? Why: Becomes knowledge/standards.md. Those paths are marked at the top of the queue with who should look.
 3. How large should a pull request be before you ask the author to split it? (Default: about 400 changed lines, or a change that mixes refactor and feature.) Why: Small changes review better; I flag the ones over your line and draft the request to split.
-4. Which paths need extra review checks (auth, payments, migrations, infrastructure)? Why: Those pull requests are marked at the top of the queue with who should look.
-5. Which comment style do you want: plain, or labelled like 'issue (blocking):' and 'nit:'? (Default: labelled.) Why: Labels tell an author what blocks a merge and what is a preference.
-6. Who receives the weekday queue, and by what hour? (Default: you, weekdays at 09:00.) Why: Sets the recipient and the first routine's schedule.
+4. Which comment style do you want, and which problems should block a merge? (Default: labelled, such as 'issue (blocking):' and 'nit:'. Blocking means it ships a bug, breaks a stated rule, or costs money or data to undo.) Why: Authors need to know what stops a merge and what is a preference.
+5. Who receives the weekday queue, and by what hour? (Default: you, weekdays at 09:00.) Why: Sets the recipient and the first routine's schedule.
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/standards.md` (what to check, in your team's words), the risky paths and their named reviewers, and the comment style. Start `knowledge/patterns.md` empty.
+Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/standards.md`: what to check, in your team's words, the risky paths and their named reviewers, the comment style and the blocking definition. Start `knowledge/patterns.md` empty.
 
 ## 5. Do the first piece of work now
 
@@ -39,13 +38,13 @@ Take the ten newest open pull requests and follow `playbooks/review-a-pull-reque
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will send you the review queue every weekday at 09:00, with a review for each pull request; public comments stay drafts until a person turns mail sending on in Tico." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send you the review queue every weekday at 09:00, with a review for each pull request; public comments stay drafts until a person turns mail sending on in Tico." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

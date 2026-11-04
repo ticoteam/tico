@@ -11,7 +11,7 @@ const TASK_GROUP_DEFAULT = {list: 'status', foryou: 'need'};
 // What it takes groups your own Needs you only: it follows the server's queue, which is yours alone.
 const taskGroupsFor = (view, state) => TASK_GROUPS.filter(([k]) => k !== 'need' || (view === 'foryou' && (!state || tasksNeedsQueue(state, view))));
 const tasksEmptyFilters = () => Object.fromEntries(TASK_FILTER_FIELDS.map(([k]) => [k, []]));
-const isTasksRoute = r => [TASKS, BOARD, ISSUES, RECURRING].includes(String(r || '').split('?')[0]);
+const isTasksRoute = r => [TASKS, BOARD, ISSUES].includes(String(r || '').split('?')[0]);
 const PHONE = '(max-width:760px)';
 // Small inline icons (the icon font is a fixed subset; these never need it).
 const TL_ICON = {
@@ -30,19 +30,26 @@ const TL_ICON = {
   chart: '<svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M2 12h10M4 10V7M7 10V3.5M10 10V5.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
   pin: '<svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M5 1.8h4M5.6 1.8v3.6L3.6 8h6.8L8.4 5.4V1.8M7 8v4.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   caret: '<svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true" focusable="false"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  all: '<svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><rect x="2" y="2" width="10" height="10" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4.6 7.2l1.7 1.6 3.2-3.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
+// A bot in the address is `bot:<id>`; an old link's slug (or a bare name) is moved to its id.
+const tasksBotActor = v => {
+  if (v === 'me' || v === 'all' || (v.includes(':') && !v.startsWith('bot:'))) return v;
+  const ref = v.replace(/^bot:/, '');
+  return 'bot:' + (botByRef(ref)?.id || ref);
 };
 function tasksFiltersFromURL(state) {
   const query = new URLSearchParams(String(location.hash).split('?')[1] || '');
   state.filters = tasksEmptyFilters();
   for (const k of Object.keys(state.filters)) {
     const raw = query.get(k);
-    if (raw) state.filters[k] = [...new Set(raw.split(',').map(s => s.trim()).filter(Boolean))];
+    if (raw) state.filters[k] = [...new Set(raw.split(',').map(s => s.trim()).filter(Boolean).map(v => k === 'owner' || k === 'asked' ? tasksBotActor(v) : v))];
   }
   state.urlType = query.get('type') || '';
   state.urlView = query.get('view') || '';
   // An address with any of these says whose tasks the first tab shows (Me when it names nobody).
   if ([...query.keys()].length) {
-    state.who = query.get('who') || 'me';
+    state.who = tasksBotActor(query.get('who') || 'me');
     state.side = query.get('side') === 'asked' ? 'asked' : 'plate';
     state.whoFixed = true;
   }
@@ -147,13 +154,13 @@ function tasksMigrateOldFilters(state, saved) {
   let changed = false;
   if (old.filter === 'mine') changed = add('owner', 'me') || changed;
   if (old.filter === 'asked') changed = add('asked', 'me') || changed;
-  if (old.bot) changed = add('owner', old.bot.includes(':') ? old.bot : 'bot:' + old.bot) || changed;
+  if (old.bot) changed = add('owner', tasksBotActor(old.bot)) || changed;
   if (old.label) changed = add('tag', old.label) || changed;
   return changed || Object.keys(old).some(k => old[k] != null && old[k] !== '' && old[k] !== 'all');
 }
 // the team a task's owner sits in (a group: backend/groups.py)
 function taskTeam(t) {
-  const slug = actorSlug(t?.owner), pid = actorPerson(t?.owner);
+  const slug = actorSlug(t?.owner_id), pid = actorPerson(t?.owner_id);
   if (slug) return teamOf(slug) || '';
   if (pid) return (S.people || []).find(p => p.id === pid)?.team || '';
   return '';
@@ -166,7 +173,7 @@ function taskRepos(t) {
 }
 const resolveMe = v => v === 'me' ? myActor() : v;
 function taskPassesFilters(t, f) {
-  if (f.owner?.length && !f.owner.some(v => resolveMe(v) === t.owner || (!v.includes(':') && t.owner === 'bot:' + v))) return false;
+  if (f.owner?.length && !f.owner.some(v => resolveMe(v) === t.owner_id || (!v.includes(':') && t.owner_id === 'bot:' + v))) return false;
   if (f.asked?.length && !f.asked.some(v => resolveMe(v) === taskRequester(t))) return false;
   if (f.team?.length && !f.team.includes(taskTeam(t) || 'none')) return false;
   if (f.tag?.length && !f.tag.some(v => (t.labels || []).includes(v))) return false;
@@ -198,15 +205,15 @@ function taskItems(state, view = state.view) {
   state.memo?.set(view, out);
   return out;
 }
-// Your Needs you count: the tasks, then the approvals and questions asked outside any task.
-// While only some pages of Needs you are held, the server's count of the whole list.
-const tasksMyCount = active => needsAll() ? active.filter(it => taskNeedsViewer(it.task) && !needsFolded(it.id)).length + looseAsks().length + pendingApprovals().length + staleCards().length
+// Your Needs you count: the tasks, then the approvals, questions and stale check outside any task, less what was just
+// answered on a card. While only some pages of Needs you are held, the server's count of the whole list.
+const tasksMyCount = active => needsAll() ? active.filter(it => taskNeedsViewer(it.task) && !needsFolded(it.id) && !decideGone('task:' + it.id)).length + needsExtras().length
   : S.v2.needsCount;
 function tasksCounts(state) {
   if (state.loading) return {};
   const active = taskItems(state, 'list');
   return {foryou: tasksNeedsQueue(state, 'foryou') ? tasksMyCount(active) : taskItems(state, 'foryou').length, list: active.length,
-    snoozed: taskItems(state, 'snoozed').length, recurring: typeof routineItems === 'function' ? routineItems(state).length : 0};
+    snoozed: taskItems(state, 'snoozed').length};
 }
 
 // ---- whose tasks the first tab shows: Me (Needs you, in the server's queue with its asks and approvals), Everyone
@@ -216,7 +223,7 @@ function tasksWhoKnown(who) {
   if (who === 'me' || who === 'all') return true;
   const pid = actorPerson(who), slug = actorSlug(who);
   if (pid) return !(S.people || []).length || S.people.some(p => p.id === pid);
-  if (slug) return !(S.emps || []).length || S.emps.some(e => e.name === slug);
+  if (slug) return !(S.emps || []).length || !!botRow(slug);
   return false;
 }
 // 'me', 'all' or an actor id; anyone this install does not know is Me
@@ -234,11 +241,11 @@ const tasksPlateView = state => state.view === 'foryou' && state.side !== 'asked
 function taskOnPlate(t, actor) {
   if (!t || !actor || taskFinished(t)) return false;
   if (actor === myActor()) return taskNeedsViewer(t);
+  if (t.status === 'declined') return taskDeclinedToWho(t, actor);
   const on = t.status === 'waiting' && t.waiting_on ? t.waiting_on : '';
-  return (on ? on === actor : t.owner === actor) || (t.ask?.to_actor === actor && !t.ask?.older)
-    || (t.status === 'declined' && taskRequester(t) === actor && !actorPerson(t.owner));
+  return (on ? on === actor : t.owner_id === actor) || (t.ask?.recipient_id === actor && !t.ask?.older);
 }
-const taskAskedBy = (t, actor) => !!actor && taskRequester(t) === actor && t.owner !== actor;
+const taskAskedBy = (t, actor) => !!actor && taskRequester(t) === actor && t.owner_id !== actor;
 function tasksFirstTabHas(state, it) {
   const key = tasksWhoKey(state), t = it.task;
   if (state.side === 'asked') return taskAskedBy(t, tasksWhoActor(state));
@@ -291,8 +298,8 @@ function tasksWhoMenu(state, anchor, toggle = true) {
   for (const p of people) { const team = p.team || ''; if (!teams.has(team)) teams.set(team, []); teams.get(team).push(p); }
   const order = [...teams.keys()].sort((a, b) => (b === (mine?.team || null)) - (a === (mine?.team || null)) || (a === '') - (b === '') || taskTeamLabel(a).localeCompare(taskTeamLabel(b)));
   const name = p => p.name || titleCase(p.id);
-  const bots = (S.emps || []).filter(e => e.status !== 'archived' && !isHiddenBot(e.name))
-    .sort((a, b) => String(botDisplayName(a.name)).localeCompare(String(botDisplayName(b.name))));
+  const bots = (S.emps || []).filter(e => e.status !== 'archived' && !isHiddenBot(e.id))
+    .sort((a, b) => String(botDisplayName(a.id)).localeCompare(String(botDisplayName(b.id))));
   const html = `<div class="tl-menu tl-who-menu" role="group" aria-label="Whose tasks">
     <div class="tl-seg" role="group" aria-label="Show">${[['plate', 'On their plate'], ['asked', 'Asked by them']].map(([k, label]) =>
       `<button type="button" data-who-side="${k}" aria-pressed="${(k === 'asked') === asked}">${esc(label)}</button>`).join('')}</div>
@@ -304,7 +311,7 @@ function tasksWhoMenu(state, anchor, toggle = true) {
         ${teams.get(team).sort((a, b) => name(a).localeCompare(name(b))).map(p => opt('human:' + p.id, actorFace('human:' + p.id, 16), name(p), count('human:' + p.id), `${name(p)} ${p.email || ''} ${taskTeamLabel(team)}`)).join('')}</div>`).join('')}
       ${bots.length ? `<button type="button" class="tl-mi tl-who-more" data-who-bots>${bots.length} bot${bots.length === 1 ? '' : 's'}</button>
         <div class="tl-who-team tl-who-bots" hidden><div class="tl-menu-h" aria-hidden="true">Bots</div>
-        ${bots.map(e => opt('bot:' + e.name, actorFace('bot:' + e.name, 16), botDisplayName(e.name), count('bot:' + e.name), `${botDisplayName(e.name)} ${e.name}`)).join('')}</div>` : ''}
+        ${bots.map(e => opt('bot:' + e.id, actorFace('bot:' + e.id, 16), botDisplayName(e.id), count('bot:' + e.id), `${botDisplayName(e.id)} ${e.slug}`)).join('')}</div>` : ''}
       <div class="tl-menu-none" hidden>Nobody by that name</div>
     </div></div>`;
   tasksMenu(state, anchor, html, pop => {
@@ -352,7 +359,7 @@ function tasksFilterOptions(state, field) {
     return [...(withMe && me ? [{value: 'me', label: 'You', face: actorFace(me, 16)}] : []),
       ...list.map(a => ({value: a, label: actorLabel(a), face: actorFace(a, 16)}))];
   };
-  if (field === 'owner') return actorOpts(tasks.map(t => t.owner), true);
+  if (field === 'owner') return actorOpts(tasks.map(t => t.owner_id), true);
   if (field === 'asked') return actorOpts(tasks.map(taskRequester), true);
   if (field === 'team') {
     const ids = [...new Set([...tasks.map(t => taskTeam(t) || 'none'), ...selected])];
@@ -399,14 +406,14 @@ function tasksGroupsFor(items, by, state) {
   }
   if (by === 'status') {
     return taskStatusGroups(items).map(g => ({key: g.key, label: g.label, items: g.items, icon: '',
-      create: g.owner ? {owner: g.owner} : g.key === 'doing' ? {} : null}));
+      create: g.owner ? {owner_id: g.owner} : g.key === 'doing' ? {} : null}));
   }
   const byId = tasksById(state);
   for (const it of items) {
     const t = it.task;
     if (by === 'owner') {
       add('o:' + it.actor, () => ({label: actorLabel(it.actor), icon: actorFace(it.actor, 16), actor: it.actor,
-        create: {owner: actorSlug(it.actor) || it.actor}}), it);
+        create: {owner_id: actorSlug(it.actor) || it.actor}}), it);
     } else if (by === 'requester') {
       const who = taskRequester(t) || '';
       add('a:' + who, () => ({label: actorLabel(who) || 'Unknown', icon: actorFace(who, 16), actor: who, chat: chatOf(who), chatName: actorLabel(who)}), it);
@@ -417,7 +424,7 @@ function tasksGroupsFor(items, by, state) {
       const pid = taskParentId(t);
       const parent = pid && (byId.get(pid) || (t.parent && String(t.parent.id) === pid ? t.parent : null));
       add('p:' + (pid || 'none'), () => pid ? {label: parent?.title || 'Parent task', icon: '',
-        create: parent ? {parent: {id: pid, title: parent.title, owner: parent.owner}} : null}
+        create: parent ? {parent: {id: pid, title: parent.title, owner_id: parent.owner_id}} : null}
         : {label: 'No parent', icon: '', last: true}, it);
     } else if (by === 'tag') {
       const labels = t.labels || [];
@@ -477,30 +484,33 @@ function taskListRowHTML(it, ctx, depth = 0) {
   // The amber "Waiting" chip already says the status, so the status word stays out (an empty pad keeps the columns).
   const waitsOnMe = !!taskWaitingOn(t) && taskWaitingOn(t) === me;
   // who asked: a tiny face beside the owner's when it is not you (and not already the group's heading)
-  const showAsker = ctx.by !== 'requester' && asker && asker !== me && asker !== t.owner && (t.owner === me || !!actorPerson(asker));
+  const showAsker = ctx.by !== 'requester' && asker && asker !== me && asker !== t.owner_id && (t.owner_id === me || !!actorPerson(asker));
   // a subtask shown away from its parent says whose it is
   const pid = taskParentId(t);
   const parent = pid && depth === 0 ? (tasksById(state).get(pid) || t.parent) : null;
-  const when = ctx.done ? (it.closed || it.updated) : it.updated;
+  const when = ctx.done ? (it.closed || it.updated_at) : it.updated_at;
   const ageText = ctx.done ? ageShort(when) : taskAge(t);
   const ageTitle = ctx.done ? `${t.status === 'closed' ? 'Closed' : 'Done'} ${fmt(when)}` : taskAgeTitle(t);
   const need = tasksNeedsQueue(state) ? needsItem(t.id) : null;
+  // A task answered on a card (a question with options, a yes/no, a recommendation) opens its card, not the peek.
+  const card = need ? decideCardKey(need) : '';
   // What a row shows is drawn here; its selection, cursor and peek are painted on afterwards (tasksSelectionPaint,
   // tasksCursorPaint), so an unchanged row keeps the same signature and the poll leaves it alone.
   void selected;
-  const row = tasksSigned(`<div class="tl-row${failed ? ' failed' : ''}${note?.mine ? ' mine' : ''}" data-task-key="${esc(key)}" role="listitem" aria-level="${depth + 1}" style="--depth:${depth}" title="${esc(taskRowTip(t))}">
+  const fb = fbTaskKey(t);             // a bot asked for it: 👍 / 👎 on hover or a long press (ui/app/feedback.js)
+  const row = tasksSigned(`<div class="tl-row${failed ? ' failed' : ''}${note?.mine ? ' mine' : ''}" data-task-key="${esc(key)}"${card ? ` data-need-card="${esc(card)}"` : ''}${fb ? ` data-fb-press="${esc(fb)}"` : ''} role="listitem" aria-level="${depth + 1}" style="--depth:${depth}" title="${esc(taskRowTip(t))}">
     ${ctx.select ? `<input type="checkbox" class="tl-check" data-select="${esc(key)}" tabindex="-1" aria-label="Select ${esc(it.title)}">` : '<span class="tl-check-pad"></span>'}
     ${kids.length ? `<button type="button" class="tl-chev${open ? ' open' : ''}" data-expand="${esc(key)}" tabindex="-1" aria-expanded="${open ? 'true' : 'false'}" aria-label="${open ? 'Hide' : 'Show'} subtasks of ${esc(it.title)}">${TL_ICON.chev}</button>` : '<span class="tl-chev-pad"></span>'}
-    <button type="button" class="tl-open" data-open-task="${esc(key)}" tabindex="-1"${kids.length ? ` aria-expanded="${open ? 'true' : 'false'}"` : ''}><span class="tl-title">${esc(it.title)}</span></button>
+    <button type="button" class="tl-open" data-open-task="${esc(key)}" tabindex="-1"${kids.length ? ` aria-expanded="${open ? 'true' : 'false'}"` : ''}><span class="tl-title">${esc(it.title)}</span>${fbMarkHTML(fb)}</button>
     ${parent?.title ? `<span class="tl-parent" title="Part of ${esc(parent.title)}"><span aria-hidden="true">↳ </span><span class="tl-parent-t">${esc(parent.title)}</span></span>` : ''}
     ${refused ? `<span class="tl-note tl-refused" role="alert" data-task-refused title="${esc(refused)}"><span class="tl-note-text">${esc(refused)}</span></span>`
       : note ? `<span class="tl-note" title="${esc(note.text)}"><span class="tl-note-ic">${TL_ICON.note}</span><span class="tl-note-text">${esc(note.text)}</span></span>` : '<span class="tl-fill"></span>'}
     <span class="tl-chips">${need?.folded?.length ? `<span class="tl-folded" title="${esc(`Also waiting on this: ${need.folded.map(f => f.title).join('; ')}`)}">+${need.folded.length}</span>` : ''}${waitsOnMe ? '<span class="tl-waiting" title="Its bot is waiting on you">Waiting</span>' : taskStatusLabel(t) === 'Waiting' ? '' : taskWaitTag(t)}${taskChipsHTML(t)}</span>
     ${need?.recommend ? recommendButton(need.recommend, 'tl-rec', t.version) : ''}
     ${ctx.by === 'status' ? '' : waitsOnMe && taskStatusLabel(t) === 'Waiting' ? '<span class="tl-status-pad"></span>' : taskRowStatus(t, key)}
-    <span class="tl-people">${showAsker ? `<span class="tl-asker" title="Asked by ${esc(actorLabel(asker))}">${actorFace(asker, 14)}</span>` : ''}<span class="tl-face" title="${esc(actorLabel(t.owner))}">${actorFace(t.owner, 18)}</span></span>
+    <span class="tl-people">${showAsker ? `<span class="tl-asker" title="Asked by ${esc(actorLabel(asker))}">${actorFace(asker, 14)}</span>` : ''}<span class="tl-face" title="${esc(actorLabel(t.owner_id))}">${actorFace(t.owner_id, 18)}</span></span>
     <time class="tl-age tnum" datetime="${esc(when || '')}" title="${esc(ageTitle)}">${esc(ageText)}</time>
-    ${failed ? `<span class="tl-failed" role="img" aria-label="Not changed: ${esc(failed)}" title="Not changed: ${esc(failed)}">!</span>` : ''}
+    ${failed ? `<span class="tl-failed" role="img" aria-label="Not changed: ${esc(failed)}" title="Not changed: ${esc(failed)}">!</span>` : ''}${fbButtonsHTML(fb, {row: true})}
   </div>`);
   return row + (open ? kids.map(k => taskListRowHTML(k, ctx, depth + 1)).join('') : '');
 }
@@ -531,6 +541,7 @@ async function tasksRowStatusSave(state, id, bodyFor) {
   for (let attempt = 0; t && attempt < 2; attempt++) {
     const body = bodyFor(t);
     if (!body) return;
+    if (attempt === 0 && body.status === 'done') taskDoneMotion('t' + id);   // its check draws while the list catches up
     state.refused?.delete(id);
     try { await post(`/v2/tasks/${encodeURIComponent(t.id)}`, {version: t.version, ...body}); break; }
     catch (e) {
@@ -543,22 +554,29 @@ async function tasksRowStatusSave(state, id, bodyFor) {
 }
 function tasksEmptyHTML(state, what) {
   const filtered = tasksActiveFilterCount(state) || state.q;
-  return `<div class="tl-empty">${filtered ? 'No tasks match.' : esc(what)}${filtered ? ' <button type="button" class="linkish" data-clear-filters>Clear filters</button>' : ''}${window.talkLineHTML?.() || ''}</div>`;
+  return `<div class="tl-empty">${filtered ? 'No tasks match.' : esc(what)}${filtered ? ' <button type="button" class="linkish" data-clear-filters>Clear filters</button>' : ''}</div>`;
 }
 function tasksListHTML(items, state) {
   const by = tasksGroupBy(state), done = tasksFinishedView(state.view);
   // Approvals and questions asked outside any task lead Needs you; a filter or a search is about tasks, so it hides them.
   const queue = tasksNeedsQueue(state);
+  // A card just answered leaves Needs you at once (decide.js), and comes back on Undo.
+  if (queue) items = items.filter(it => !decideGone('task:' + it.id));
   const cards = queue && !state.q && !tasksActiveFilterCount(state);
-  // Grouped by what it takes, approvals and questions go in their groups instead of leading the list.
+  // Grouped by what it takes, approvals and questions go in their groups, in the server's order with the tasks.
   const byNeed = by === 'need' && queue;
-  const asks = cards && !byNeed ? approvalsHTML() + staleCardsHTML() + looseAsksHTML() : '';
+  const lead = cards ? needsExtras() : [];
+  const asks = lead.length && !byNeed ? `<section class="tl-group" data-group="asks"><header class="tl-ghead"><span class="tl-gname">Approvals and questions</span><span class="tl-gcount tnum">${lead.length}</span></header>
+    <div class="tl-rows" role="list" aria-label="Approvals and questions">${lead.map(it => needRowHTML(it, {by, select: tasksCanSelect()})).join('')}</div></section>` : '';
   const extra = new Map();
-  if (cards && byNeed) for (const it of [...pendingApprovals(), ...staleCards(), ...looseAsks()]) {
+  if (byNeed) for (const it of lead) {
     const k = 'need:' + (it.need || 'do');
     extra.set(k, [...(extra.get(k) || []), it]);
   }
-  if (!items.length && asks) return `<div class="tl">${asks}</div>`;
+  // What the ask filter kept off the plate today, folded at the foot (askFilteredHTML).
+  const filtered = cards ? askFilteredHTML(state) : '';
+  if (!items.length && asks) return `<div class="tl">${asks}${filtered}</div>`;
+  if (!items.length && !extra.size && filtered) return `<div class="tl">${tasksEmptyHTML(state, 'Nothing needs you.')}${filtered}</div>`;
   if (!items.length && !extra.size) {
     const who = tasksWhoKey(state);
     const emptyWhat = queue ? 'Nothing needs you.' : state.view === 'foryou' ? who === 'all' ? 'Nothing open.' : state.side === 'asked' ? 'Nothing asked.'
@@ -582,7 +600,7 @@ function tasksListHTML(items, state) {
   const select = tasksCanSelect();
   return `<div class="tl${select ? ' can-select' : ''}" data-group-by="${esc(by)}">${asks}${groups.map((g, i) => {
     const {tops: raw, kids} = tasksNest(g.items, nest);
-    const tops = byNeed ? raw : raw.slice().sort(done ? byNewest : g.key === 'scheduled' ? (a, b) => String(a.updated).localeCompare(String(b.updated)) : byRank);
+    const tops = byNeed ? raw : raw.slice().sort(done ? byNewest : g.key === 'scheduled' ? (a, b) => String(a.updated_at).localeCompare(String(b.updated_at)) : byRank);
     const more = extra.get(g.key) || [];
     if (!tops.length && !more.length) return '';
     const ctx = {state, kids, done, by, select};
@@ -598,10 +616,16 @@ function tasksListHTML(items, state) {
         ${g.create ? `<button type="button" class="tl-gact" data-group-add="${esc(g.key)}" aria-label="New task in ${esc(g.label)}" title="New task">${TL_ICON.plus}</button>` : ''}
       </header>` : '';
     return `<section class="tl-group${collapsed ? ' collapsed' : ''}" data-group="${esc(g.key)}">${head}
-      <div class="tl-rows" id="${id}" role="list"${g.label ? ` aria-label="${esc(g.label)}"` : ' aria-label="Tasks"'}${collapsed ? ' hidden' : ''}>${more.map(it => it.kind === 'ask' ? looseAskRow(it) : it.kind === 'stale' ? staleCardHTML(it) : needsV2Item(it, false)).join('')}${tops.map(it => taskListRowHTML(it, ctx)).join('')}</div></section>`;
-  }).join('')}${done && state.doneNext != null ? '<button class="ghost tl-more" type="button" id="board-more">Show more</button>' : ''}</div>`;
+      <div class="tl-rows" id="${id}" role="list"${g.label ? ` aria-label="${esc(g.label)}"` : ' aria-label="Tasks"'}${collapsed ? ' hidden' : ''}>${byNeed ? tasksNeedRowsHTML(more, tops, ctx) : tops.map(it => taskListRowHTML(it, ctx)).join('')}</div></section>`;
+  }).join('')}${filtered}${done && state.doneNext != null ? '<button class="ghost tl-more" type="button" id="board-more">Show more</button>' : ''}</div>`;
 }
-// Done: everything finished, newest first, a page at a time (routine runs live under Recurring).
+// A need group: its items outside any task among its tasks, all in the server's order.
+function tasksNeedRowsHTML(more, tops, ctx) {
+  const at = id => needsIndex().byId.get(String(id))?.i ?? Infinity;
+  return [...more.map(it => [at(it.id), needRowHTML(it, ctx)]), ...tops.map(it => [at(it.id), taskListRowHTML(it, ctx)])]
+    .sort((a, b) => a[0] - b[0]).map(r => r[1]).join('');
+}
+// Done: everything finished, newest first, a page at a time (a schedule's runs are under Automations › Runs).
 function tasksDoneHTML(items, state) {
   const list = items.filter(it => !isRecurringTask(it.task));
   if (state.doneLoading && !list.length) return '<div class="tl-empty">Loading finished tasks…</div>';
@@ -636,7 +660,6 @@ function tasksTools(state) {
     state.who = 'me'; state.memo = new Map(); tasksURLWrite(state);
   }
   tasksPaint(tabs, tasksTabsHTML(state));
-  $('#task-bar').hidden = state.view === 'recurring';
   const who = $('#task-who-wrap');
   if (who) {
     who.hidden = state.view !== 'foryou';
@@ -676,7 +699,10 @@ function tasksTools(state) {
     mode.setAttribute('aria-pressed', String(!!state.selectMode));
     mode.textContent = state.selectMode ? 'Done' : 'Select';
   }
+  tasksBarEdge($('#task-bar'));
 }
+// A phone's filter bar scrolls sideways; while more of it is off to the right, its edge fades (task-list.css .more).
+const tasksBarEdge = bar => bar?.classList.toggle('more', bar.scrollWidth - bar.clientWidth - bar.scrollLeft > 1);
 // One popover for every menu on the page: a filter's values, the fields, Group by, and the bulk actions.
 // ↑/↓ move between its items (and in and out of its find box), Home/End jump, Enter picks, Esc closes.
 function tasksMenu(state, anchor, html, bind, toggle = true) {
@@ -791,7 +817,7 @@ function tasksVisibleKeys() {
 function tasksSelectionPrune(state) {
   if (!state.selected.size) return;
   const seen = new Set(tasksVisibleKeys());
-  for (const k of [...state.selected]) if (!seen.has(k)) state.selected.delete(k);
+  for (const k of [...state.selected]) if (!seen.has(k)) { state.selected.delete(k); state.bulkScope = null; }
   for (const k of [...(state.bulkFail?.keys() || [])]) if (!seen.has(k)) state.bulkFail.delete(k);
 }
 function tasksSelectionPaint(state) {
@@ -808,6 +834,7 @@ function tasksSelectionPaint(state) {
 }
 function tasksSelect(state, key, how = 'toggle') {
   if (!tasksCanSelect()) return;
+  state.bulkScope = null;          // a hand-picked selection is those tasks, not a filter
   if (how === 'range' && state.anchor) {
     const keys = tasksVisibleKeys(), a = keys.indexOf(state.anchor), b = keys.indexOf(key);
     if (a >= 0 && b >= 0) { for (const k of keys.slice(Math.min(a, b), Math.max(a, b) + 1)) state.selected.add(k); tasksSelectionPaint(state); return; }
@@ -818,7 +845,7 @@ function tasksSelect(state, key, how = 'toggle') {
   tasksSelectionPaint(state);
 }
 function tasksSelectionClear(state) {
-  state.selected.clear(); state.bulkFail = new Map(); state.bulkMsg = ''; state.bulkUndo = null;
+  state.selected.clear(); state.bulkFail = new Map(); state.bulkMsg = ''; state.bulkUndo = null; state.bulkScope = null;
   tasksSelectionPaint(state);
   for (const row of document.querySelectorAll('#task-body .tl-row.failed')) row.classList.remove('failed');
   document.querySelectorAll('#task-body .tl-failed').forEach(el => el.remove());
@@ -831,8 +858,11 @@ function tasksBulkBar(state) {
   const show = tasksCanSelect() && (n || state.bulkMsg);
   bar.hidden = !show;
   if (!show) { bar.innerHTML = ''; bar.dataset.html = ''; return; }
-  const busy = !!state.bulkBusy;
-  const html = `${n ? `<span class="tl-bulk-n tnum">${n} selected</span>
+  const busy = !!state.bulkBusy, scope = n && state.bulkScope;
+  // Select all: every task the list shows, when only some are picked (a board column has its own, in its header)
+  const all = n && !scope && state.view !== 'board' ? tasksVisibleKeys().filter(k => k.startsWith('t')).length : 0;
+  const html = `${n ? `<span class="tl-bulk-n tnum">${scope ? `All ${n} ${esc(scope.label)}` : `${n} selected`}</span>
+    ${all > n ? `<button type="button" data-bulk="all"${busy ? ' disabled' : ''}>Select all ${all}</button>` : ''}
     <button type="button" data-bulk="status" aria-haspopup="true"${busy ? ' disabled' : ''}>Status</button>
     <button type="button" data-bulk="owner" aria-haspopup="true"${busy ? ' disabled' : ''}>Owner</button>
     <button type="button" data-bulk="tags" aria-haspopup="true"${busy ? ' disabled' : ''}>Tags</button>
@@ -845,6 +875,43 @@ function tasksBulkBar(state) {
   bar.innerHTML = bar.dataset.html = html;
   if (focused) (bar.querySelector(`[data-bulk="${focused}"]`) || bar.querySelector('[data-bulk]'))?.focus();
 }
+// ---- all of a column or a list at once. The selection is every task shown, and with it the filter that shows them,
+// so the change is one call (POST /v2/task-bulk) and the server makes it to each task as that task's own update.
+// A filter the server cannot run (a team, a repo, a search, two owners, a fold that hides some) goes as the ids shown.
+const BULK_IDS = 100;
+const BULK_SERVER_CHIPS = {owner: 'owner', asked: 'requester', tag: 'label'};
+function tasksBulkFilter(state, base, keys) {
+  const f = state.filters || {};
+  const plain = base && state.activeComplete && !state.q && !state.boardFocus
+    && Object.entries(f).every(([k, v]) => !v?.length || (BULK_SERVER_CHIPS[k] && v.length === 1));
+  if (plain) {
+    const filter = {...base, lane: 'company'};
+    for (const [k, field] of Object.entries(BULK_SERVER_CHIPS)) {
+      const v = f[k]?.[0]; if (!v) continue;
+      filter[field] = k === 'tag' ? v : resolveMe(v).includes(':') ? resolveMe(v) : 'bot:' + v;
+    }
+    return filter;
+  }
+  return keys.length <= BULK_IDS ? {ids: keys.map(k => k.slice(1))} : null;
+}
+// What the list shows is a server filter only where it is one: the open list or Everyone's (not Needs you, a person's
+// plate, or a page of finished tasks), with every matching row unfolded.
+function tasksListBase(state, keys) {
+  const everyone = state.view === 'foryou' && tasksWhoKey(state) === 'all' && state.side !== 'asked';
+  if (state.view !== 'list' && !everyone) return null;
+  if (keys.length !== taskItems(state).length) return null;
+  return {type: state.type || 'general', status: 'open,doing,waiting,review,ready,declined'};
+}
+function tasksBulkSelectAll(state, keys, base, label) {
+  if (!tasksCanSelect() || state.bulkBusy) return;
+  keys = keys.filter(k => k.startsWith('t'));
+  if (!keys.length) return;
+  const filter = tasksBulkFilter(state, base, keys);
+  state.selected = new Set(keys); state.anchor = keys.at(-1);
+  state.bulkFail = new Map(); state.bulkUndo = null; state.bulkMsg = '';
+  state.bulkScope = filter ? {filter, label} : null;     // past the id limit, the tasks go one by one as before
+  tasksSelectionPaint(state);
+}
 // the selected tasks, in the order they show (the selection only ever holds visible rows)
 function tasksSelectedTasks(state) {
   const byId = tasksById(state);
@@ -854,9 +921,10 @@ const tasksSelectedTitle = (state, key) => tasksById(state).get(key.slice(1))?.t
 // Each task is its own update (POST /v2/tasks/{id}) with its latest version; a 409 refetches it and tries once more.
 // A failure is named, kept selected and marked; nothing is dropped quietly. No typed comment goes with a bulk change:
 // an unsent one stays in its task's box, where the person can see it, rather than leave unseen with Done.
-async function tasksBulkApply(state, describe, bodyFor) {
+async function tasksBulkApply(state, describe, bodyFor, action) {
   const tasks = tasksSelectedTasks(state);
   if (!tasks.length || state.bulkBusy || !tasksCanSelect()) return;
+  if (state.bulkScope && action) return tasksBulkServer(state, describe, action, tasks);
   tasksMenuClose();
   state.bulkBusy = true; state.bulkFail = new Map(); state.bulkUndo = null; state.bulkMsg = `Updating ${tasks.length}…`;
   tasksBulkBar(state);
@@ -869,7 +937,7 @@ async function tasksBulkApply(state, describe, bodyFor) {
       try {
         await post(`/v2/tasks/${encodeURIComponent(t.id)}`, {version: t.version, ...body});
         changed++;
-        if (describe.close) closed.push({id: t.id, title: t.title, status: t.status, step_id: t.step_id || '', owner: t.owner, typed: pipelineTypeId(t) !== 'general',
+        if (describe.close) closed.push({id: t.id, title: t.title, status: t.status, step_id: t.step_id || '', owner: t.owner_id, typed: pipelineTypeId(t) !== 'general',
           told: !!actorSlug(taskRequester(t))});
         break;
       } catch (e) {
@@ -900,6 +968,39 @@ async function tasksBulkApply(state, describe, bodyFor) {
   tasksSelectionPaint(state);
   tasksBulkSettle(state, closed.length ? 10000 : 4000);
 }
+// One call for the whole selection. The server says what changed, what already was so, and what it skipped and why:
+// a skipped task stays selected and marked, as a failed one-by-one update does. A refused call changes nothing and
+// keeps the selection to try again.
+async function tasksBulkServer(state, describe, action, tasks) {
+  const scope = state.bulkScope;
+  tasksMenuClose();
+  state.bulkBusy = true; state.bulkFail = new Map(); state.bulkUndo = null; state.bulkMsg = `Updating ${tasks.length}…`;
+  tasksBulkBar(state);
+  let out = null, error = '';
+  try { out = await post('/v2/task-bulk', {filter: scope.filter, ...action}); }
+  catch (e) { error = e.message || 'Not saved'; }
+  if (TASKS_ST !== state) return;
+  state.bulkBusy = false;
+  if (!out) { state.bulkMsg = error; toast(error, true); tasksBulkBar(state); return; }
+  const byId = tasksById(state), skipped = out.tasks?.skipped || [];
+  const failed = new Map(skipped.map(s => ['t' + s.id, s.reason || 'Not changed']));
+  state.bulkScope = null;
+  state.bulkFail = failed;
+  state.selected = new Set(failed.keys());
+  const names = skipped.map(s => s.title || '#' + s.number);
+  state.bulkMsg = [`${out.changed} ${describe.done}`, out.unchanged ? `${out.unchanged} already ${describe.already || 'so'}` : '',
+    out.skipped ? `${out.skipped} not changed: ${names.slice(0, 2).join(', ')}${names.length > 2 ? ` +${names.length - 2}` : ''}` : ''].filter(Boolean).join(', ');
+  if (describe.close) {
+    const closed = (out.tasks?.changed || []).map(c => byId.get(String(c.id))).filter(Boolean).map(t => ({id: t.id, title: t.title, status: t.status,
+      step_id: t.step_id || '', owner: t.owner_id, typed: pipelineTypeId(t) !== 'general', told: !!actorSlug(taskRequester(t))}));
+    if (closed.length) state.bulkUndo = {items: closed, until: Date.now() + 10000};
+  }
+  if (skipped.length) toast(`${skipped.length} not changed: ${skipped.map(s => `${s.title || '#' + s.number} (${s.reason})`).join('; ')}`, true);
+  await tasksLoad(state);
+  if (TASKS_ST !== state) return;
+  tasksSelectionPaint(state);
+  tasksBulkSettle(state, state.bulkUndo ? 10000 : 4000);
+}
 // The result line stays a moment (Undo for ten seconds after a Close), then goes.
 function tasksBulkSettle(state, ms) {
   clearTimeout(state.bulkTimer);
@@ -922,7 +1023,7 @@ async function tasksBulkUndo(state) {
     try {
       const fresh = (await get(`/v2/tasks/${encodeURIComponent(prev.id)}`)).task;
       const body = prev.typed && prev.step_id ? {step: prev.step_id} : {status: prev.status};
-      if (fresh.owner !== prev.owner) body.owner = actorSlug(prev.owner) || prev.owner;
+      if (fresh.owner_id !== prev.owner_id) body.owner = actorSlug(prev.owner_id) || prev.owner_id;
       await post(`/v2/tasks/${encodeURIComponent(prev.id)}`, {version: fresh.version, ...body});
       ok++;
     } catch (e) { failed.push({id: prev.id, title: prev.title, why: e.message}); }
@@ -942,14 +1043,15 @@ async function tasksBulkUndo(state) {
 function tasksBulkMenu(state, kind, anchor) {
   if (kind === 'clear') { tasksSelectionClear(state); return; }
   if (kind === 'undo') { void tasksBulkUndo(state); return; }
-  if (kind === 'close') { void tasksBulkApply(state, {close: true, done: 'closed', already: 'closed'}, t => t.status === 'closed' ? null : {close: true}); return; }
+  if (kind === 'all') { const keys = tasksVisibleKeys(); tasksBulkSelectAll(state, keys, tasksListBase(state, keys), 'matching'); return; }
+  if (kind === 'close') { void tasksBulkApply(state, {close: true, done: 'closed', already: 'closed'}, t => t.status === 'closed' ? null : {close: true}, {action: 'close'}); return; }
   if (kind === 'status') {
     tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="Set status"><div class="tl-menu-h" aria-hidden="true">Status</div>
       ${BULK_STATUSES.map(s => `<button type="button" role="menuitem" class="tl-mi" data-bulk-status="${s}"><span>${esc(STATUS_WORD[s] || s)}</span></button>`).join('')}</div>`, pop => {
       pop.onclick = ev => {
         const b = ev.target.closest('[data-bulk-status]'); if (!b) return;
         const status = b.dataset.bulkStatus, word = STATUS_WORD[status] || status;
-        void tasksBulkApply(state, {status, done: `moved to ${word}`, already: word}, t => t.status === status ? null : {status});
+        void tasksBulkApply(state, {status, done: `moved to ${word}`, already: word}, t => t.status === status ? null : {status}, {action: 'status', status});
       };
     });
   } else if (kind === 'owner') {
@@ -965,7 +1067,7 @@ function tasksBulkMenu(state, kind, anchor) {
       pop.onclick = ev => {
         const b = ev.target.closest('[data-bulk-owner]'); if (!b) return;
         const owner = b.dataset.bulkOwner, actor = owner.includes(':') ? owner : 'bot:' + owner;
-        void tasksBulkApply(state, {done: `handed to ${actorLabel(actor)}`, already: `with ${actorLabel(actor)}`}, t => t.owner === actor ? null : {owner});
+        void tasksBulkApply(state, {done: `handed to ${actorLabel(actor)}`, already: `with ${actorLabel(actor)}`}, t => t.owner_id === actor ? null : {owner: actor}, {action: 'owner', owner: actor});
       };
     });
   } else if (kind === 'tags') {
@@ -981,7 +1083,7 @@ function tasksBulkMenu(state, kind, anchor) {
         const has = (t.labels || []).includes(tag);
         if (remove ? !has : has) return null;
         return {labels: remove ? t.labels.filter(l => l !== tag) : [...(t.labels || []), tag]};
-      });
+      }, {action: 'tags', [remove ? 'remove' : 'add']: [tag]});
       pop.querySelector('.tl-menu-new').onsubmit = ev => {
         ev.preventDefault();
         const tag = ev.target.querySelector('input').value.trim().toLowerCase();
@@ -1135,10 +1237,13 @@ function tasksKeys(state, ev) {
     return;
   }
   if (key === '/') { ev.preventDefault(); $('#task-q')?.focus(); $('#task-q')?.select(); return; }
-  if (key === 'c' && !ev.shiftKey) { ev.preventDefault(); const p = tasksCreatePrefill(state); openTaskCreate(p.owner, {labels: p.labels}); return; }
-  if (key === 'x' && listy && state.cursor && tasksCanSelect()) { ev.preventDefault(); tasksSelect(state, state.cursor); return; }
+  if (key === 'c' && !ev.shiftKey) { ev.preventDefault(); const p = tasksCreatePrefill(state); openTaskCreate(p.owner_id, {labels: p.labels}); return; }
+  if (key === 'x' && listy && state.cursor?.startsWith('t') && tasksCanSelect()) { ev.preventDefault(); tasksSelect(state, state.cursor); return; }
   if (key === 'Enter' && listy && state.cursor && (!el || el === document.body || el.closest?.('.tl-row,.bcard') && !el.matches('button,a,input'))) {
-    ev.preventDefault(); taskPeekOpen(state, state.cursor); return;
+    ev.preventDefault();
+    const card = document.querySelector(`#task-body [data-task-key="${CSS.escape(state.cursor)}"]`)?.dataset.needCard;
+    if (card) decideOpen(card); else taskPeekOpen(state, state.cursor);
+    return;
   }
   if (key === 'Escape') {
     if ($('#task-peek')?.open) { ev.preventDefault(); taskPeekClose(state); return; }
@@ -1182,8 +1287,8 @@ function tasksBodyClick(state, ev) {
   if (addIn) {
     const g = tasksGroupsFor(taskItems(state), tasksGroupBy(state), state).find(x => x.key === addIn.dataset.groupAdd);
     const c = g?.create || {};
-    if (c.parent) openTaskCreate(c.parent.owner ? (actorSlug(c.parent.owner) || c.parent.owner) : '', {parent: c.parent});
-    else openTaskCreate(c.owner ? (actorSlug(c.owner) || c.owner) : '', {labels: c.labels || []});
+    if (c.parent) openTaskCreate(c.parent.owner_id ? (actorSlug(c.parent.owner_id) || c.parent.owner_id) : '', {parent: c.parent});
+    else openTaskCreate(c.owner_id ? (actorSlug(c.owner_id) || c.owner_id) : '', {labels: c.labels || []});
     return true;
   }
   if (ev.target.closest('[data-clear-filters]')) {
@@ -1196,6 +1301,13 @@ function tasksBodyClick(state, ev) {
   const row = ev.target.closest('.tl-row,.bcard');
   if (!row || ev.target.closest('a[href]')) return false;
   const key = row.dataset.taskKey;
+  // A row answered on a card opens its card (decide.js); a row outside any task has nothing to select.
+  if (row.dataset.needCard && (key?.startsWith('n') || !(tasksCanSelect() && (ev.shiftKey || ev.metaKey || ev.ctrlKey || state.selectMode)))) {
+    ev.preventDefault();
+    state.cursor = key; tasksCursorPaint(state);
+    if (!decideOpen(row.dataset.needCard) && key?.startsWith('t')) taskPeekOpen(state, key);
+    return true;
+  }
   if (tasksCanSelect() && (ev.shiftKey || ev.metaKey || ev.ctrlKey || state.selectMode)) {
     ev.preventDefault();
     tasksSelect(state, key, ev.shiftKey ? 'range' : 'toggle');

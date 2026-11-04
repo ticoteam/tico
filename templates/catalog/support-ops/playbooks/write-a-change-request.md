@@ -2,7 +2,12 @@
 
 Triggered by a task asking for a help desk change ("send billing questions to the finance queue", "add
 a macro for the new plan"), or by an audit finding. Budget 15 minutes. The outcome is one change request
-ready to apply in five minutes with the necessary Tools.
+ready to apply in five minutes by a person, or by you if a granted Tool allows it.
+
+Inputs: the task or finding, and `knowledge/config-map.md` for what already touches the same tickets.
+
+Done when: the request has the intent, the steps, a check with a test ticket, and an undo; the change is applied and
+checked, or it is on the task as steps for the person who applies it; and the config map and change log are updated.
 
 ---
 

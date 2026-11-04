@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from backend import ceo_bot, goals as G, hubdb as H, kpis as K
+from backend import strategy_bot, goals as G, hubdb as H, kpis as K
 from backend.tests.test_api import api, post  # noqa: F401
 
 NOW = datetime(2026, 10, 26, 12, tzinfo=timezone.utc)
@@ -35,7 +35,7 @@ def measure(c, goal, value):
 
 
 def checkin(c, goal, signal="at_risk", days=3):
-    c.execute("INSERT INTO goal_checkins(id, goal_id, ts, author, source_actor, body, signal) "
+    c.execute("INSERT INTO goal_checkins(id, goal_id, created_at, author, sender_id, body, signal) "
               "VALUES(?,?,?,?,?,?,?)", (H.new_id(), goal["id"], stamp(days), "human:ben", "human:ben",
                                        "The dependency is late.", signal))
 
@@ -94,7 +94,7 @@ def test_subgoal_with_no_data_stays_uncoloured_like_an_unlinked_goal(api, clock)
             assert status_events(c, goal) == []
 
 
-def test_person_colour_on_subgoal_stays_and_ceo_only_suggests(api, clock):
+def test_person_colour_on_subgoal_stays_and_strategy_only_suggests(api, clock):
     with api.app.state.store.transaction() as c:
         child = make_goal(c, make_goal(c)["id"])
         measure(c, child, 39)
@@ -105,7 +105,7 @@ def test_person_colour_on_subgoal_stays_and_ceo_only_suggests(api, clock):
     assert [(r["goal"], r["suggested"]) for r in result["suggested"]] == [(child["id"], "red")]
     with api.app.state.store.read() as c:
         row = G.goal(c, child["id"])
-        for field in ("status", "status_source", "status_by", "status_note", "status_at", "parent_id"):
+        for field in ("status", "status_source", "status_by_id", "status_note", "status_at", "parent_id"):
             assert row[field] == before[field]
         assert row["suggest_status"] == "red"
         assert row["suggest_note"] == "Activation 39% below range 40–60%"
@@ -121,7 +121,7 @@ def test_regular_checks_off_leaves_blank_auto_and_person_subgoals_untouched(api,
         G.set_status(c, ACTOR, children[2]["id"], "green", "A temporary exception.")
         for child in children:
             measure(c, child, 39)
-        ceo_bot.set_checks(c, ACTOR, False)
+        strategy_bot.set_checks(c, ACTOR, False)
         before = [G.goal(c, g["id"]) for g in children]
         history = [status_events(c, g) for g in children]
     result = post(api, "goals/refresh", {})
@@ -137,7 +137,7 @@ def test_first_pass_colours_existing_blank_subgoals_and_records_each_automatic_c
         children = [make_goal(c, parent["id"]) for _ in range(6)]
         expected = ["green", "yellow", "red", "green", "yellow", "red"]
         for index, child in enumerate(children):
-            c.execute("UPDATE goals SET created=?, updated=? WHERE id=?", (stamp(30), stamp(30), child["id"]))
+            c.execute("UPDATE goals SET created_at=?, updated_at=? WHERE id=?", (stamp(30), stamp(30), child["id"]))
             if index < 3:
                 measure(c, child, [50, 41, 39][index])
             else:
@@ -149,7 +149,7 @@ def test_first_pass_colours_existing_blank_subgoals_and_records_each_automatic_c
         for child, colour in zip(children, expected):
             row = G.goal(c, child["id"])
             assert row["status"] == colour
-            assert row["status_source"] == "auto" and row["status_by"] == G.AUTO_ACTOR
+            assert row["status_source"] == "auto" and row["status_by_id"] == G.AUTO_ACTOR
             assert row["parent_id"] == parent["id"]
             events = status_events(c, child)
             assert len(events) == 1

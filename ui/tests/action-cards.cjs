@@ -1,4 +1,4 @@
-// BotOps' Confirm cards in its chat (ui/assistant.js), fixtures only.
+// BotOps' Confirm cards in the Assistant's chat (ui/assistant.js; BotOps has no DM of its own now), fixtures only.
 //  - plain words: the card's title is the server's sentence, never the method and path; a card stored with no readable
 //    description gets a plain sentence too. The method, path and fields sit behind a closed Details.
 //  - no jump on Confirm: in a chat scrolled partway down with several cards, a click changes only that card. The thread
@@ -14,12 +14,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {assistantView} = require('./support/assistant-chat.cjs');
 
 const at = n => new Date(Date.UTC(2026, 9, 17, 9, n)).toISOString();
-const say = (id, from, body, n, refs = {}) => ({id, from_actor: from, body, refs, created: at(n), kind: 'say'});
+const say = (id, from, body, n, refs = {}) => ({id, sender_id: from, body, refs, created_at: at(n), kind: 'say'});
 
 function fixture() {
-  const card = (id, extra) => ({id, owner: 'human:ana', status: 'pending', result: null, proposed_via: 'botops', proposer: 'botops',
+  const card = (id, extra) => ({id, owner_id: 'human:ana', status: 'pending', result: null, proposed_via: 'botops', proposer: 'botops',
     diff: [], body: {}, ...extra});
   const actions = {
     act1: card('act1', {method: 'PUT', path: '/api/v2/bots/security-engineer-2/repositories',
@@ -81,6 +82,7 @@ async function open(browser, state) {
     if (p === '/api/employees') return json([{name: 'botops', display_name: 'BotOps', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/issues') return json([]);
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
+    if (p === '/api/v2/assistant' && method === 'GET') return json(assistantView('c-botops', {messages: state.messages}));
     if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with')
       ? [{id: 'c-botops', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:botops']}] : []});
     if (p === '/api/v2/conversations/c-botops/snapshot') return json({messages: state.messages, execution: null, next_before: null});
@@ -97,7 +99,7 @@ async function open(browser, state) {
       if (state.slowPost) await new Promise(done => setTimeout(done, state.slowPost));
       const action = state.actions[act[1]];
       state.decided.push([act[1], act[2]]);
-      action.status = act[2] === 'confirm' ? 'done' : 'cancelled';
+      action.status = act[2] === 'confirm' ? 'done' : 'canceled';
       // The server says how it went in the chat (assistant.py action_confirm): one more message.
       state.messages.push(say('r' + act[1], 'bot:botops', 'Done: ' + action.description, state.n++, {assistant: true, action_result: act[1]}));
       return json({action});
@@ -112,7 +114,7 @@ async function open(browser, state) {
   try {
     const state = fixture();
     const {page, errors} = await open(browser, state);
-    await page.goto('https://tico-ui.test/#/bot/botops/chat');
+    await page.goto('https://tico-ui.test/#/assistant');
     await page.waitForFunction(() => V2C?.rendered && document.querySelectorAll('#conv-thread .asst-card').length === 6);
 
     // Plain words first; the raw request only behind Details, closed.
@@ -124,7 +126,7 @@ async function open(browser, state) {
     assert.equal(await details.evaluate(d => d.open), false, 'repo: Details starts closed');
     const seen = await repo.evaluate(el => el.innerText);
     for (const raw of ['PUT', '/api/v2', 'chosen', 'full_name', '{', 'mode:']) assert.ok(!seen.includes(raw), `repo: "${raw}" is not shown before Details opens`);
-    assert.equal((await repo.locator('.asst-state').first().innerText()).includes('“'), false, 'repo: no quote that repeats the title');
+    assert.ok(!seen.includes('“'), 'repo: no quote that repeats the title');
     await details.locator('summary').click();
     const opened = await repo.evaluate(el => el.innerText);
     assert.ok(opened.includes('PUT /api/v2/bots/security-engineer-2/repositories') && opened.includes('ticoteam/tico'), 'repo: Details has the method, path and fields');
@@ -133,7 +135,12 @@ async function open(browser, state) {
     const old = page.locator('.asst-card[data-action="act2"]');
     const title = await old.locator('[data-what]').innerText();
     assert.ok(!/\/api\/|^(POST|PUT|PATCH|DELETE)\b/.test(title), 'old card: no method or path as its title, got ' + title);
-    assert.match(title, /^BotOps /, 'old card: a plain sentence naming who asks');
+    // What it does is on the card before the click: the bot's own summary, not a generic line over a hidden action.
+    assert.equal(title, 'Ops asked BotOps for this for you: Launch Ops', 'old card: its summary is the title');
+    assert.equal(await old.locator('.asst-who').innerText(), 'BotOps asks', 'old card: who asks, above the title');
+    // Two buttons and no helper line: what Confirm does is its tooltip.
+    assert.deepEqual(await old.locator('button').allInnerTexts(), ['Confirm', 'Cancel']);
+    assert.ok(!(await old.evaluate(el => el.innerText)).includes('Runs as you'), 'old card: no helper line');
     assert.ok(!(await old.evaluate(el => el.innerText)).includes('/api/v2'), 'old card: path only behind Details');
 
     // The card Chris saw: no mode word, method, path or JSON until Details opens, and the old line only there.
@@ -208,8 +215,8 @@ async function open(browser, state) {
     await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('read', 'bot:botops', 'While you read.', state.n++));
     assert.deepEqual(await page.evaluate(() => {
       const long = document.querySelector('.asst-card[data-action="actL"]');
-      return [!!document.querySelector('[data-message="read"]'), long.mark_, long.querySelector('details.asst-long').open,
-        document.activeElement === long.querySelector('details.asst-long summary')];
+      return [!!document.querySelector('[data-message="read"]'), long.mark_, long.querySelector('.asst-said details.asst-long').open,
+        document.activeElement === long.querySelector('.asst-said details.asst-long summary')];
     }), [true, 'actL', true, true], 'a rebuild keeps the card being read, open and focused');
     // A refresh asked just before a click and answered while the Confirm is on its way is dropped: a rebuild after it
     // still draws the card as running, with no live button (a second click would be refused).

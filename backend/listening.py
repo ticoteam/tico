@@ -168,7 +168,7 @@ CREATE TABLE IF NOT EXISTS listening_destinations (
   unless TEXT,
   what TEXT,
   updated_by TEXT,
-  updated TEXT)
+  updated_at TEXT)
 """
 DESTINATION_KEY = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 MARKET_SEEDED = "listening.market_seeded"    # registry_metadata: the market destination was offered once
@@ -249,10 +249,10 @@ def save_destination(conn, settings, who, key, body):
     key, entry = check_destination(conn, settings, key, body)
     now = H.now()
     conn.execute("INSERT INTO listening_destinations (key, category, threshold, receiver, readers, unless, what, "
-                 "updated_by, updated) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET "
+                 "updated_by, updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET "
                  "category=excluded.category, threshold=excluded.threshold, receiver=excluded.receiver, "
                  "readers=excluded.readers, unless=excluded.unless, what=excluded.what, "
-                 "updated_by=excluded.updated_by, updated=excluded.updated",
+                 "updated_by=excluded.updated_by, updated_at=excluded.updated_at",
                  (key, entry["category"], entry["threshold"], entry["receiver"],
                   json.dumps(entry.get("readers") or []), json.dumps(entry.get("unless")), entry["what"], who.actor, now))
     H.event(conn, who.actor, "listening.destination", key, {"category": entry["category"], "receiver": entry["receiver"]})
@@ -290,7 +290,7 @@ def seed_market(conn, settings):
                 or key in destinations(settings, None, check_questions=False):
             key += "-2"
         conn.execute("INSERT INTO listening_destinations (key, category, threshold, receiver, readers, unless, what, "
-                     "updated_by, updated) VALUES (?,?,?,?,?,?,?,?,?)",
+                     "updated_by, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
                      (key, "market", MARKET_DESTINATION["threshold"], MARKET_DESTINATION["receiver"], "[]", "null",
                       MARKET_DESTINATION["what"], H.KEEPER, H.now()))
         H.event(conn, H.KEEPER, "listening.destination", key, {"category": "market", "receiver": "bot:librarian", "seeded": True})
@@ -307,7 +307,7 @@ def destination_list(conn, settings):
     for key, cfg in sorted({**from_file, **saved}.items()):
         meta = {}
         if key in saved:
-            meta = H._one(conn, "SELECT updated_by, updated FROM listening_destinations WHERE key=?", (key,)) or {}
+            meta = H._one(conn, "SELECT updated_by, updated_at FROM listening_destinations WHERE key=?", (key,)) or {}
         rows.append({"key": key, "category": cfg["category"], "threshold": cfg["threshold"], "receiver": cfg["receiver"],
                      "readers": cfg.get("readers", []), "unless": cfg.get("unless"), "what": cfg.get("what", ""),
                      "source": "settings" if key in saved else "yaml", "overrides_yaml": key in saved and key in from_file,
@@ -318,8 +318,8 @@ def destination_list(conn, settings):
                       if q.get("type") == "noul"]
     except J.JudgeError:
         categories = []
-    bots = [{"actor": "bot:" + r["slug"], "name": r["display_name"] or r["slug"]} for r in H._rows(conn.execute(
-        "SELECT slug, display_name FROM bots WHERE state<>'archived' ORDER BY display_name, slug"))]
+    bots = [{"actor": "bot:" + r["id"], "name": r["display_name"] or r["slug"]} for r in H._rows(conn.execute(
+        "SELECT id, slug, display_name FROM bots WHERE state<>'archived' ORDER BY display_name, slug"))]
     return {"destinations": rows, "categories": categories, "receivers": bots}
 
 
@@ -376,7 +376,7 @@ def _judgment_row(row):
     if not row:
         return None
     out = dict(row)
-    out["scores"] = _loads(out.pop("scores_json"), {})
+    out["scores"] = _loads(out.pop("scores"), {})
     return out
 
 
@@ -495,6 +495,8 @@ def route(conn, row, scored, dests):
                            "VALUES (?,?,?,?, 'new', ?)", (intake_id, name, row["id"], scored["id"], H.now()))
         if cur.rowcount:
             opened.append(intake_row(conn, intake_id))
+            from . import automations
+            automations.on_listening(conn, opened[-1], row)
     return opened
 
 
@@ -508,7 +510,7 @@ def add_judgment(conn, actor, item_id, question_set, scores, dests, judged_at=No
         raise Problem("invalid", "name the question set and version, like listening-item@1", 422)
     scores = check_scores(scores)
     jid = H.new_id()
-    conn.execute("INSERT INTO listen_judgments (id, item_id, question_set, scores_json, judged_at) VALUES (?,?,?,?,?)",
+    conn.execute("INSERT INTO listen_judgments (id, item_id, question_set, scores, judged_at) VALUES (?,?,?,?,?)",
                  (jid, item_id, question_set, json.dumps(scores, sort_keys=True), judged_at or H.now()))
     scored = judgment(conn, jid)
     opened = route(conn, row, scored, dests)
@@ -634,6 +636,35 @@ def stats(conn, since=None):
     saved = conn.execute("SELECT count(*) FROM listen_items WHERE first_seen_at>=?", (since,)).fetchone()[0]
     routed = conn.execute("SELECT count(DISTINCT item_id) FROM intake_items WHERE created_at>=?", (since,)).fetchone()[0]
     return {"since": since, "coverage": coverage, "destinations": verdicts, "saved": saved, "routed": routed}
+
+
+RECENT_MAX = 25
+RECENT_TEXT = 240
+
+
+def timeline(conn, who, dests, since):
+    """Market › Listening's chart and list (redesign only): posts first seen each UTC day by source, and the newest
+    posts routed to a destination the caller reads, one row per post, its text clipped."""
+    days = {}
+    for r in conn.execute("SELECT substr(first_seen_at,1,10) day, source, count(*) n FROM listen_items "
+                          "WHERE first_seen_at>=? GROUP BY day, source", (since,)):
+        days.setdefault(r["day"], {})[r["source"]] = r["n"]
+    allowed = list(dests) if sees_everything(who) else destinations_of(who.actor, dests)
+    recent = []
+    if allowed:
+        marks = ",".join("?" * len(allowed))
+        for r in conn.execute(f"SELECT item_id, group_concat(destination) dests, max(created_at) at FROM intake_items "
+                              f"WHERE destination IN ({marks}) AND created_at>=? GROUP BY item_id "
+                              f"ORDER BY at DESC LIMIT ?", (*allowed, since, RECENT_MAX)):
+            post = item(conn, r["item_id"])
+            if not post:
+                continue
+            text = " ".join(str(post["content"] or "").split())
+            recent.append({"item_id": post["id"], "source": post["source"], "url": post["url"],
+                           "author": post["author"] or "", "published_at": post["published_at"],
+                           "text": text if len(text) <= RECENT_TEXT else text[:RECENT_TEXT - 1] + "…",
+                           "destinations": sorted(set(r["dests"].split(","))), "at": r["at"]})
+    return {"daily": [{"day": d, "sources": days[d]} for d in sorted(days)], "recent": recent}
 
 
 # ----------------------------------------------------------------------------- Decisions
@@ -849,8 +880,11 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            require_reader(who, destinations(store.settings, c))
-            return stats(c, since)
+            dests = destinations(store.settings, c)
+            require_reader(who, dests)
+            out = stats(c, since)
+            out.update(timeline(c, who, dests, out["since"]))
+            return out
 
     @app.get("/api/v2/intake")
     def intake_list(request: Request, destination: str | None = None, status: str | None = "new", limit: int = 100):

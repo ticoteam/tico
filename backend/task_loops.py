@@ -11,20 +11,22 @@ LOOP_HOURS = 24         # ... within this many hours flag a task
 FLAG_KEY = "task-loop:"  # registry_metadata: when a task's people were last told
 
 
-def looping(c, at=None):
-    """[{task_id, title, private, changes, movers: [(actor, count)]}], busiest first. Uses task_events_field_ts."""
+def looping(c, at=None, limit=20):
+    """[{task_id, title, private, changes, movers: [(actor, count)]}], busiest first (at most `limit`, 20 unless a reader
+    names fewer). Uses history_events_kind."""
     since = H.shift(at or H.now(), hours=-LOOP_HOURS)
     out = []
-    for row in c.execute("SELECT task_id, count(*) AS n FROM task_events WHERE field='status' AND ts>=? "
-                         "GROUP BY task_id HAVING n>=? ORDER BY n DESC LIMIT 20", (since, LOOP_CHANGES)).fetchall():
+    for row in c.execute("SELECT subject_id AS task_id, count(*) AS n FROM history_events WHERE subject_type='task' "
+                         "AND kind='status' AND created_at>=? GROUP BY subject_id HAVING n>=? ORDER BY n DESC LIMIT ?",
+                         (since, LOOP_CHANGES, limit)).fetchall():
         task = H.task(c, row["task_id"])
         if not task:
             continue
         movers = [(r[0], r[1]) for r in c.execute(
-            "SELECT actor, count(*) FROM task_events WHERE task_id=? AND field='status' AND ts>=? "
-            "GROUP BY actor ORDER BY 2 DESC LIMIT 5", (row["task_id"], since))]
+            "SELECT actor_id, count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
+            "AND kind='status' AND created_at>=? GROUP BY actor_id ORDER BY 2 DESC LIMIT 5", (row["task_id"], since))]
         out.append({"task_id": task["id"], "title": task["title"], "private": bool(H.task_private(c, task)),
-                    "owner": task["owner"], "requester": task["requester"], "changes": row["n"], "movers": movers})
+                    "owner_id": task["owner_id"], "requester_id": task["requester_id"], "changes": row["n"], "movers": movers})
     return out
 
 
@@ -50,7 +52,7 @@ def flag(c, at=None):
         task = H.task(c, item["task_id"])
         body = (f"This task {describe(item)}. That is unusual and may be a bug: two automations or rules undoing "
                 "each other. Nothing is blocked; check what keeps moving it.")
-        for person in dict.fromkeys([task["owner"], task["requester"]]):
+        for person in dict.fromkeys([task["owner_id"], task["requester_id"]]):
             if person and person != H.KEEPER:
                 H._wake(c, task, person, body, quiet_bots=True, quiet=True)
         save_metadata(c, key, {"at": now})

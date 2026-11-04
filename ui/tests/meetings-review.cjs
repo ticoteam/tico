@@ -6,8 +6,8 @@ const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 const evidence = process.env.TICO_REVIEW_EVIDENCE;
-const row = (id, title, owner, review_state, privateMeeting = false) => ({id, title, owner, review_state, private: privateMeeting,
-  kind: 'meeting', status: 'done', source: privateMeeting ? 'granola' : 'zoom', can_edit: true, started: '2026-10-01T14:00:00Z',
+const row = (id, title, owner, review_state, privateMeeting = false) => ({id, title, owner: owner, review_state, private: privateMeeting,
+  kind: 'meeting', status: 'done', client: privateMeeting ? 'tico-recorder' : null, source: privateMeeting ? 'granola' : 'zoom', can_edit: true, started: '2026-10-01T14:00:00Z',
   notes: 'Review the plan and next steps.', turns: [{speaker: 'Sam', start_ms: 0, text: 'The plan is ready.'}],
   participants: [{name: 'Sam'}], outbox: {doc: [], task: [], feature: []}});
 async function open(browser, viewport, scheme, role = 'owner') {
@@ -37,7 +37,7 @@ async function open(browser, viewport, scheme, role = 'owner') {
     if (p === '/api/v2/updates/unread') return json({unread: 0, meetings_pending: pending().length});
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
-    if (p === '/api/v2/setup/getting-started') return json({items: [], complete: true, dismissed: true, tour_seen: true, cards_dismissed: [], owner: role === 'owner', empty: {}});
+    if (p === '/api/v2/setup/getting-started') return json({items: [], complete: true, dismissed: true, tour_seen: true, cards_dismissed: [], owner_id: role === 'owner', empty: {}});
     if (p === '/api/meetings/sources') return json({sources: []});
     if (p === '/api/v2/meetings/granola') return json({state: 'off', connected: false});
     if (p === '/api/v2/meetings/settings') {
@@ -103,6 +103,7 @@ async function shot(page, name) {
         await page.locator('[data-note-row=two] .note-title').click();
         await page.locator('#meet-review-private').waitFor();
         assert.equal(await page.locator('#meet-review-private').inputValue(), 'private');
+        assert.match(await page.locator('#notes-detail').innerText(), /From Tico Recorder/);
         assert.equal(await page.locator('#meet-send, #meet-sections').count(), 0, 'Pending has no Send or Push controls');
         await page.locator('[data-note-section=transcript]').click();
         assert.match(await page.locator('#notes-detail').innerText(), /The plan is ready/);

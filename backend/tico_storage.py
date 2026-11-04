@@ -27,7 +27,7 @@ and reading back a small object (company_storage.check). Keys are sealed with th
 company's own; no read returns them.
 
 Reads. A picture, video or audio file whose bytes are in Tico's bucket is not streamed through this server: after
-the usual access check the reader is sent (302) to a link on the company's address that lasts five minutes
+the usual access check the reader is sent (302) to a link on the company's address that lasts four minutes
 (`edge_link`), which Tico's edge checks before serving it from the bucket:
     https://<address><path>?e=<unix expiry>&k=<signing key id>&s=<sig>
 `<path>` is the file's key below the company's folder (`/blobs/<2 hex>/<sha256>`), and `<sig>` base64url (no
@@ -51,7 +51,7 @@ the slots and `VISUAL_COPY`, so a new reporter or a new app address gets a new c
 overwritten. The copy is made when the file is uploaded there (`Blobs._landing`), when Move existing files copies it
 there (`copy_one`), or else on its first view, and is checked like a moved file: S3's SHA-256 of what it received,
 size, type and disposition, and the metadata, by a body-less HEAD. After the usual access check a reader is sent to a
-five-minute link to it; the app's own address never serves a page or SVG. A first view reads the original once through
+four-minute link to it; the app's own address never serves a page or SVG. A first view reads the original once through
 the company's address (counted as delivery, as the view itself would be); uploads and moves have the bytes in hand. A
 place that no longer takes new files (credits out, stopped) makes no copy: such a file with none yet stays a card.
 """
@@ -85,12 +85,12 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS tico_storage(
  id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL CHECK(state IN ('off','on','credits_out','stopped')),
  bucket TEXT NOT NULL DEFAULT '', prefix TEXT NOT NULL DEFAULT '', region TEXT NOT NULL DEFAULT '',
- access_key_id TEXT NOT NULL DEFAULT '', secret TEXT NOT NULL DEFAULT '', expires TEXT,
+ access_key_id TEXT NOT NULL DEFAULT '', secret TEXT NOT NULL DEFAULT '', expires_at TEXT,
  signing_key_id TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT '', keep_until TEXT,
- changed TEXT, checked TEXT, error TEXT NOT NULL DEFAULT '');
+ changed_at TEXT, checked_at TEXT, error TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS storage_moves(
  id TEXT PRIMARY KEY, target TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('running','done','failed','stopped')),
- started TEXT NOT NULL, started_by TEXT NOT NULL, finished TEXT,
+ started_at TEXT NOT NULL, started_by TEXT NOT NULL, finished_at TEXT,
  estimate_files INTEGER NOT NULL, estimate_bytes INTEGER NOT NULL,
  moved_files INTEGER NOT NULL DEFAULT 0, moved_bytes INTEGER NOT NULL DEFAULT 0, failed INTEGER NOT NULL DEFAULT 0,
  error TEXT NOT NULL DEFAULT '');
@@ -108,7 +108,9 @@ PAUSED = ("Gateway credits have run out, so new files go to the company's own st
 # How often HQ is asked while the company has file hosting, and how long before its keys expire.
 REFRESH, EARLY = 300, 600
 # How long an edge link lasts, and how long a file the bucket doesn't hold (yet) streams before it is looked for again.
-LINK_SECONDS, MISS_SECONDS = 300, 60
+# The edge refuses an expiry more than 300 seconds ahead of its own clock (infra/files-edge/request.js), so a link
+# lasts a minute less: a server clock running a little ahead never makes a link the edge refuses.
+LINK_SECONDS, MISS_SECONDS = 240, 60
 # How this server fetches from the edge (`edge_read`); a test hands in its own.
 fetch = urllib.request.urlopen
 LOG = logging.getLogger("tico.storage")
@@ -165,6 +167,17 @@ def edge(c, vault):
             "secret": signing}
 
 
+def visual_address(c):
+    """(the company's files origin, whether new pages get a copy there): `https://<address>` while Tico's bucket
+    holds files and links can be signed (`edge`), else "". Copies are made only while it takes new files (`on`); in
+    the other states a page that has one still shows from it. For the client config (onboarding.config_view)."""
+    saved = row(c)
+    if not saved or saved["state"] == "off" or not saved["bucket"] or not saved["secret"] \
+            or not saved["signing_key_id"] or not HOST.match(saved["address"] or ""):
+        return "", False
+    return "https://" + saved["address"], saved["state"] == "on"
+
+
 def active_location(c):
     """{bucket, prefix, region} of Tico's place while new files go there, or None: for Health."""
     saved = row(c)
@@ -199,7 +212,7 @@ def view(c, settings):
     if not saved:
         return {"state": "off", "label": LABEL}
     return {"state": saved["state"], "label": LABEL, "address": saved["address"], "location": _location(saved),
-            "keep_until": saved["keep_until"], "checked": saved["checked"], "changed": saved["changed"],
+            "keep_until": saved["keep_until"], "checked_at": saved["checked_at"], "changed_at": saved["changed_at"],
             "error": saved["error"]}
 
 
@@ -248,6 +261,7 @@ def parse(answer, now=None):
     token = str(given.get("session_token") or "")
     if not ACCESS_KEY.match(key) or not secret or len(secret) > 128 or not token or len(token) > 4096:
         raise ValueError("credentials")
+    # HQ's wire name (tico-services billing/files_aws.py credentials()); the stored column is expires_at.
     expires = _when(given.get("expires"), "credentials")
     if expires <= (now or datetime.now(timezone.utc)):
         raise ValueError("credentials")
@@ -257,7 +271,7 @@ def parse(answer, now=None):
         raise ValueError("signing")
     signing = (signing["key_id"], signing["secret"])
     out.update(address=address, bucket=bucket, region=region, prefix=prefix, keys=(key, secret, token),
-               expires=expires.strftime("%Y-%m-%dT%H:%M:%SZ"), signing=signing)
+               expires_at=expires.strftime("%Y-%m-%dT%H:%M:%SZ"), signing=signing)
     return out
 
 
@@ -290,8 +304,8 @@ def _plan(store, saved):
     at = None
     if saved and saved["state"] != "off":
         wait = REFRESH
-        if saved["expires"]:
-            left = (datetime.fromisoformat(saved["expires"]) - datetime.now(timezone.utc)).total_seconds() - EARLY
+        if saved["expires_at"]:
+            left = (datetime.fromisoformat(saved["expires_at"]) - datetime.now(timezone.utc)).total_seconds() - EARLY
             wait = max(60, min(wait, left))
         at = time.monotonic() + wait
     with _lock:
@@ -304,7 +318,7 @@ def sync(store, vault, blobs, settings=None, opener=None, report=False):
     from . import gateway_connection
     settings = settings or store.settings
     with store.read() as c:
-        key, base, usage = gateway_connection.key(c, vault, settings), gateway_connection.url(c, settings), totals(c)
+        (key, base, _), usage = gateway_connection.target(c, vault, settings), totals(c)
     if not key or settings.rehearsal or settings.demo:
         return None
     try:
@@ -345,29 +359,29 @@ def sync(store, vault, blobs, settings=None, opener=None, report=False):
         saved = row(c)
         if parsed is None:
             if saved:
-                c.execute("UPDATE tico_storage SET checked=?, error=? WHERE id=1", (now, error))
+                c.execute("UPDATE tico_storage SET checked_at=?, error=? WHERE id=1", (now, error))
             elif error:
                 LOG.warning("%s", error)
         elif parsed["state"] == "off" and not saved:
             pass
         else:
             fields = {"state": parsed["state"], "address": parsed["address"], "keep_until": parsed["keep_until"],
-                      "checked": now, "error": ""}
+                      "checked_at": now, "error": ""}
             if parsed.get("keys"):
                 signing = parsed["signing"] or ("", "")
                 fields.update(bucket=parsed["bucket"], prefix=parsed["prefix"], region=parsed["region"],
-                              access_key_id=parsed["keys"][0], expires=parsed["expires"], signing_key_id=signing[0],
+                              access_key_id=parsed["keys"][0], expires_at=parsed["expires_at"], signing_key_id=signing[0],
                               secret=vault.cipher.seal(c, CONTEXT, json.dumps([*parsed["keys"][1:], signing[1]])))
             elif parsed["state"] == "off":
                 # HQ keeps the files no longer: nothing is read from its bucket, and its keys are dropped.
-                fields.update(access_key_id="", secret="", expires=None, signing_key_id="")
+                fields.update(access_key_id="", secret="", expires_at=None, signing_key_id="")
             if not saved:
                 c.execute("INSERT INTO tico_storage(id,state) VALUES(1,'off')")
             # Where files go changes only with the state or the place: an answer with new keys for the same place
             # swaps them in (`Blobs.rekey`) and leaves the file store alone, so uploads and a Move carry on.
             moved = not saved or saved["state"] != parsed["state"] or not same
             if moved:
-                fields["changed"] = now
+                fields["changed_at"] = now
                 H.event(c, "system:gateway", "storage.tico", parsed["state"],
                         {"from": saved["state"] if saved else "off", "address": parsed["address"]})
             c.execute("UPDATE tico_storage SET " + ",".join(k + "=?" for k in fields) + " WHERE id=1", tuple(fields.values()))
@@ -414,7 +428,7 @@ def sync_later(store, due_only=False, report=False):
 
 # ---------------------------------------------------------------------------------------------- reads
 def edge_link(blobs, digest, size, mime, now=None):
-    """A five-minute link to the file on the company's address, or None to stream it from here. Only pictures (not
+    """A four-minute link to the file on the company's address, or None to stream it from here. Only pictures (not
     SVG), video and audio, and only once the bucket was seen to hold the file as this server would serve it."""
     found = getattr(blobs, "edge", None)
     if not found or not mime.startswith(("image/", "video/", "audio/")) or "svg" in mime or "xml" in mime:
@@ -557,6 +571,9 @@ def make_visual(blobs, digest, kind, data, ancestors):
     """Write the cleaned copy of the page or SVG `data` (the bytes of `digest`) beside it in Tico's bucket and check
     it there without reading it back. Whether it is held as made; never raises."""
     from .visuals import clean, with_reporter
+    from .live_blocks import has_live
+    if kind == "page" and has_live(data.decode("utf-8", errors="replace")):
+        return False            # a page with live blocks is filled in for each reader: it never has a shared copy
     found = getattr(blobs, "edge", None)
     at = _writable(blobs, found) if found else None
     if at is None:
@@ -602,7 +619,7 @@ def visual_ready(blobs, digest, size, mime, ancestors):
 
 
 def visual_link(blobs, digest, size, mime, ancestors, now=None):
-    """A five-minute link to the cleaned copy of a page or SVG version on the company's address, making the copy first
+    """A four-minute link to the cleaned copy of a page or SVG version on the company's address, making the copy first
     when it is missing (`make_visual`, from the file read through that address), or None: then it can't show inline
     from there. The caller has checked access already."""
     found = getattr(blobs, "edge", None)
@@ -660,20 +677,20 @@ def estimate(c, blobs):
 def _move_view(found):
     if not found:
         return None
-    out = {k: found[k] for k in ("id", "target", "state", "started", "finished", "estimate_files", "estimate_bytes",
+    out = {k: found[k] for k in ("id", "target", "state", "started_at", "finished_at", "estimate_files", "estimate_bytes",
                                  "moved_files", "moved_bytes", "failed", "error")}
     out["matches"] = found["state"] == "done" and found["moved_bytes"] == found["estimate_bytes"] and not found["failed"]
     return out
 
 
 def latest_move(c):
-    return _move_view(c.execute("SELECT * FROM storage_moves ORDER BY started DESC LIMIT 1").fetchone())
+    return _move_view(c.execute("SELECT * FROM storage_moves ORDER BY started_at DESC LIMIT 1").fetchone())
 
 
 def interrupted(store):
     """At start: a move that was running when the server stopped is stopped (the next one picks up where it left)."""
     with store.transaction() as c:
-        c.execute("UPDATE storage_moves SET state='stopped', finished=?, error=? WHERE state='running'",
+        c.execute("UPDATE storage_moves SET state='stopped', finished_at=?, error=? WHERE state='running'",
                   (H.now(), "The server restarted during the move; start it again to finish"))
 
 
@@ -692,7 +709,7 @@ def start_move(store, blobs, who, expect_bytes, stop=None, wait=False):
         move_id = H.new_id()
         label, _ = _target(at)
         try:
-            c.execute("INSERT INTO storage_moves(id,target,state,started,started_by,estimate_files,estimate_bytes) "
+            c.execute("INSERT INTO storage_moves(id,target,state,started_at,started_by,estimate_files,estimate_bytes) "
                       "VALUES(?,?,'running',?,?,?,?)", (move_id, label, H.now(), who.actor, len(items), total))
         except sqlite3.IntegrityError:  # another start got in after the check above (storage_moves_one_running)
             raise Problem("move_running", "Files are already being moved", 409) from None
@@ -734,7 +751,7 @@ def _move(store, blobs, move_id, items, at, stop):
     if state == "stopped" and not error:
         error = "Where new files go changed during the move; start it again to finish"
     with store.transaction() as c:
-        c.execute("UPDATE storage_moves SET state=?, finished=?, error=? WHERE id=?", (state, H.now(), error, move_id))
+        c.execute("UPDATE storage_moves SET state=?, finished_at=?, error=? WHERE id=?", (state, H.now(), error, move_id))
         H.event(c, "system:storage", "storage.moved", move_id, {"state": state, "files": moved, "bytes": size,
                                                                "failed": failed})
 
@@ -832,7 +849,7 @@ def export_entries(c, who, auth, files):
     for still in c.execute("SELECT poster_blob_id, thumb_blob_id FROM bot_file_versions UNION ALL "
                            "SELECT poster_blob_id, thumb_blob_id FROM blob_media"):
         seen.update(still)
-    for blob in c.execute("SELECT id, digest, name FROM blobs ORDER BY created, id"):
+    for blob in c.execute("SELECT id, digest, name FROM blobs ORDER BY created_at, id"):
         if blob["id"] in seen:
             continue
         try:
@@ -882,10 +899,10 @@ def install(app, store, auth):
     # Where pages and SVG on the company's address may be framed: the app's own address (`landed`).
     blobs.visual_ancestors = ancestors(settings)
 
-    def owner(request):
+    def owner(request, tap=False):
         who = request.state.identity
         auth.domain(who)
-        require_owner(who)
+        require_owner(who, tap)
         return who
 
     @app.post("/api/v2/system/storage/tico/check")
@@ -908,7 +925,7 @@ def install(app, store, auth):
     def storage_move(request: Request, body: Move):
         """Copy every file and every version into the place new files go to; each copy is checked before it counts,
         and nothing is deleted where it was."""
-        who = owner(request)
+        who = owner(request, tap=True)
         if settings.rehearsal or settings.demo:
             raise Problem("rehearsal", "Files can't be moved in a rehearsal or the demo", 409)
         start_move(store, blobs, who, body.expect_bytes)

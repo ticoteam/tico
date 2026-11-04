@@ -53,7 +53,35 @@ def test_group_tools_list_create_and_update_and_botops_acts_as_the_requester():
         fn["hub_group_update"]["fn"](api, {})
     except ValueError as exc:
         assert "Name the new group" in str(exc)
-    assert "hub_group_update" in hubtools.AUDIENCE and "assistant" not in hubtools.offered_to(fn["hub_group_update"])
+    assert "hub_group_update" in hubtools.AUDIENCE
+
+
+def test_the_strategy_bot_makes_an_asked_for_org_change_citing_the_persons_words():
+    fn = hubtools.BY_NAME
+    for name in ("hub_group_update", "hub_group_delete", "hub_org_reports_to"):
+        assert "assistant" in hubtools.offered_to(fn[name]) and "bot" not in hubtools.offered_to(fn[name])
+    api = _Groups("human:ana")
+    fn["hub_group_update"]["fn"](api, {"group": "seo", "lead": "bot:writer", "on_behalf_of": "turn"})
+    fn["hub_group_delete"]["fn"](api, {"group": "seo", "on_behalf_of": "turn"})
+    fn["hub_org_reports_to"]["fn"](api, {"teammate": "human:cara", "reports_to": "human:ana", "on_behalf_of": "turn"})
+    assert api.calls[-3:] == [
+        ("PATCH", "groups/seo", {"add": {"people": [], "bots": []}, "remove": {"people": [], "bots": []}, "lead": "bot:writer"}, "turn"),
+        ("DELETE", "groups/seo", None, "turn"), ("POST", "humans/cara", {"reports_to": "ana"}, "turn")]
+
+
+def test_reports_to_for_a_bot_sends_its_revision():
+    class _Bots(_Groups):
+        def get(self, path, **query):
+            return [{"slug": "writer", "revision": 7}] if path == "bots" else super().get(path, **query)
+    api = _Bots()
+    hubtools.BY_NAME["hub_org_reports_to"]["fn"](api, {"teammate": "bot:writer", "reports_to": "cmo"})
+    assert api.calls[-1] == ("POST", "bots/writer/definition", {"reports_to": "cmo", "expected_revision": 7})
+    try:
+        hubtools.BY_NAME["hub_org_reports_to"]["fn"](api, {"teammate": "writer", "reports_to": "cmo"})
+    except ValueError as exc:
+        assert "bot:<slug> or human:<id>" in str(exc)
+    else:
+        raise AssertionError("an unprefixed teammate is refused")
 
 
 def test_org_order_reads_and_sets_and_botops_sets_as_the_requester():

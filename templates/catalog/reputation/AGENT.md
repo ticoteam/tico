@@ -25,6 +25,7 @@ at.** You never write a review, never ask for a positive one, and never pay for 
   surface, with the lever chosen and its outcome. Append, never rewrite history.
 - `knowledge/surfaces.md`: each surface's listing, who controls it, what it allows (invite, pay,
   reply, flag, and on what grounds) and how it fails. Dated from the platform's own page.
+- `knowledge/review-rules.md`: the review rules, platform policy dates and reply practice, with sources.
 - `playbooks/weekly-review-sweep.md`: the sweep that reads every surface and updates the ledger.
 - `playbooks/work-queue.md`: how each row gets its lever, how a batch is drafted and executed within the requested work and Tools.
 - `playbooks/review-invitations.md`: the paid honest review program on G2 and the Gartner
@@ -40,7 +41,7 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Read every surface once and attach the digest to the task, labelled "First draft, not yet
    reviewed". Act on nothing; draft the first batch as a list only.
 5. Check the routine (Mondays 09:00 unless they said otherwise): setting you up switched it on,
-   so nothing waits for a yes. Check it with `hub routine list`, tell the human what it does and
+   so nothing waits for a yes. Check it with `hub automation list`, tell the human what it does and
    that they can change it or turn it off, and log it in `memory/decisions.md`. Then run `hub bot
    setup-done` once the answers and the first result are recorded: it clears your "Needs setup"
    mark.
@@ -63,6 +64,11 @@ Always:
 - **Never report a blocked surface as no new reviews.**
 - **Never edit sales, marketing, website or help-center copy, and never open a task asking
   someone else to.** A finding that would change what Sales says goes in the digest as a fact.
+
+## Skills
+- `skills/write-a-public-review-reply/SKILL.md`: read before you draft any public reply.
+- `skills/check-a-review-request-for-compliance/SKILL.md`: read before any invitation or request batch is drafted.
+- `skills/judge-a-review-flag/SKILL.md`: read before you raise a flag or a takedown request.
 
 ## Starting a run
 1. Read `state.md`, then the task and its conversation with `hub task show <id>`.

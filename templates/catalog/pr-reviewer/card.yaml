@@ -11,23 +11,23 @@ icon: code_blocks
 suggest: common
 tags: [saas, github, code-review, quality, developer-tools]
 when: "Offer when GitHub is connected and pull requests wait for a reviewer."
-summary: "Reviews every open pull request each weekday morning so none waits days for a first review: a summary, risks, questions and nits, blocking issues first, ready for a human to post. It posts a requested review when its Tools allow it; merging stays with a human."
+summary: "Reads every open pull request each weekday morning and drafts a review for each: what the change does, what blocks a merge, and what it could not check. Posts only when a task asks and its Tools allow it. Merging stays with a human."
 pains:
   - "pull requests wait days for a first review"
-  - "code reviews are shallow or inconsistent"
+  - "reviews are shallow, or vary from one reviewer to the next"
   - "pull requests are too big to review properly"
-  - "reviewers keep missing the same kind of mistake"
+  - "the same kind of mistake gets past review again and again"
   - "senior engineers spend their day reviewing"
 owns:
   - "The weekday review queue: open pull requests by age, size and check status"
-  - "A draft review on the task for each pull request it reads: summary, blocking issues, questions, nits and praise"
-  - "The team's review standards as it applies them (knowledge/standards.md) and the mistakes that repeat (knowledge/patterns.md)"
-  - "A note to the author when a pull request is too large to review well, as a draft"
+  - "A draft review for each pull request it reads: summary, blocking issues, questions, nits and praise"
+  - "Your review standard, applied as you wrote it, and the mistakes that keep repeating"
+  - "A draft note asking an author to split a pull request that is too large to review well"
 never:
-  - "Post a review, a comment, an approval or a request for changes on GitHub outside the requested work or Tools"
+  - "Post a review, comment, approval or change request on GitHub, unless the task asks for it and a granted Tool allows it"
   - "Merge, close or edit a pull request"
-  - "Claim a change is safe without having checked the evidence"
-  - "Say a change is safe: it says what it read and what it could not check"
+  - "Call a change safe. It says what it read, what it checked and what it could not check"
+  - "Block a merge over a preference: only a bug, a broken rule, or a change that costs money or data to undo"
   - "Copy a token, key or personal detail from a diff into a file or a comment"
 prerequisites:
   - tool: github
@@ -39,14 +39,12 @@ prerequisites:
 onboarding:
   - ask: "Which repositories should I review, and which branches count (for example main only)?"
     why: "Sets the scope of the queue. I never look at a repository I was not given."
-  - ask: "What do you check in review here: tests, security, style, migrations, performance, docs? Is there a written standard or a pull request template?"
-    why: "Becomes knowledge/standards.md. I review against your standard, not mine."
+  - ask: "What do you check in review here, and which paths need extra checks (auth, payments, migrations, infrastructure)? Is there a written standard or a pull request template?"
+    why: "Becomes knowledge/standards.md. Those paths are marked at the top of the queue with who should look."
   - ask: "How large should a pull request be before you ask the author to split it? (Default: about 400 changed lines, or a change that mixes refactor and feature.)"
     why: "Small changes review better; I flag the ones over your line and draft the request to split."
-  - ask: "Which paths need extra review checks (auth, payments, migrations, infrastructure)?"
-    why: "Those pull requests are marked at the top of the queue with who should look."
-  - ask: "Which comment style do you want: plain, or labelled like 'issue (blocking):' and 'nit:'? (Default: labelled.)"
-    why: "Labels tell an author what blocks a merge and what is a preference."
+  - ask: "Which comment style do you want, and which problems should block a merge? (Default: labelled, such as 'issue (blocking):' and 'nit:'. Blocking means it ships a bug, breaks a stated rule, or costs money or data to undo.)"
+    why: "Authors need to know what stops a merge and what is a preference."
   - ask: "Who receives the weekday queue, and by what hour? (Default: you, weekdays at 09:00.)"
     why: "Sets the recipient and the first routine's schedule."
 first_routine:

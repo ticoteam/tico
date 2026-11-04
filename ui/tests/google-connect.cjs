@@ -1,5 +1,6 @@
-// Offline browser regression: Settings > Inbox, Connect Google (ui/google-connect.js). A person connects their own
-// mailbox read only; a Workspace policy denial is shown as the admin's; only Google's own sign-in page is opened.
+// Offline browser regression: Settings > Google, Connect your account (ui/google-connect.js). A member connects their own
+// mailbox (read only with Tico's shared app) and sees no setup; a Workspace policy denial is shown as the admin's; only
+// Google's own sign-in page is opened.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -38,6 +39,9 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/v2/operations') return json({machines: [], services: []});
       if (p === '/api/v2/models') return json({models: [], harnesses: []});
       if (p === '/api/v2/me/tokens') return json({tokens: []});
+      if (p === '/api/v2/google') return json({can_admin: false, workspace: null, pending: null,
+        oauth: {configured: google.configured !== false, source: 'settings', redirect_uri: 'https://tico-ui.test/api/v2/mail/google/callback', client_id: null},
+        me: {mailbox: google.mailbox, covered_by_workspace: false}, setup: {base: 'https://tico-ui.test', reachable: true}});
       if (p === '/api/v2/mail/google') return json(google);
       if (p === '/api/v2/mail/google/connect') { writes.push(p); return json({auth_url: authUrl, mailbox: google.mailbox}); }
       if (p === '/api/v2/mail/google/disconnect') { writes.push(p); google = {...google, status: 'disconnecting'}; return json(google); }
@@ -48,6 +52,9 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('[data-settings-tab=inbox]').click();
     const pane = page.locator('#set-google');
     await pane.locator('[role=alert]').waitFor();
+    // A member is never asked how to connect Google and never sees its setup or the team: only their own account.
+    assert.equal((await pane.locator('[data-google-card=account] h3').innerText()).trim(), 'Connect your account');
+    assert.equal(await pane.locator('[data-google-choose], [data-google-card=workspace], [data-google-how], .google-team').count(), 0);
     assert.match(await pane.innerText(), /Google Workspace for acme\.example has a policy that blocks Tico/);
     assert.match(await pane.innerText(), /only to read your mail and calendar/);
 
@@ -68,6 +75,28 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('[data-settings-tab=inbox][aria-selected=true]').waitFor();
     await page.locator('#set-google [data-google-disconnect]').waitFor();
     assert.match(await page.locator('#set-google').innerText(), /Connected: Tico reads cara@acme\.example's mail and calendar, read only/);
+
+    // A read-only connection made with the company's own app is offered the write access on a reconnect, never forced.
+    const upgrade = 'Connect Google again to let Tico also label, archive and draft mail, and add calendar events.';
+    google = {...google, app: 'own', acts: {mail: false, calendar: false}, message: 'This connection only reads your mail and calendar.', hint: upgrade};
+    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
+    await page.waitForFunction(hint => (document.querySelector('#set-google')?.textContent || '').includes(hint), upgrade);
+    assert.equal(await page.locator('#set-google [data-google-connect]').count(), 1);
+    assert.equal(await page.locator('#set-google [data-google-disconnect]').count(), 1);
+    // A grant with the mail write access only says so, and is offered just the calendar one.
+    const calendarUpgrade = 'Connect Google again to let Tico also add calendar events.';
+    google = {...google, acts: {mail: true, calendar: false}, message: 'This connection can label, archive and draft mail, but only reads your calendar.', hint: calendarUpgrade, can: ['read mail', 'label and archive mail']};
+    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
+    await page.waitForFunction(hint => (document.querySelector('#set-google')?.textContent || '').includes(hint), calendarUpgrade);
+    const connectedLine = () => page.locator('#set-google p', {hasText: 'Connected:'}).innerText();
+    assert.equal(await connectedLine(), "Connected: Tico reads cara@acme.example's mail and calendar, and can also label, archive and draft mail.");
+    // Once the grant holds the write access, the offer is gone and the connected line names all of it.
+    google = {...google, acts: {mail: true, calendar: true}, message: null, hint: null, can: ['read', 'label and archive mail', 'add calendar events']};
+    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
+    await page.locator('#set-google [data-google-disconnect]').waitFor();
+    assert.equal(await connectedLine(), "Connected: Tico reads cara@acme.example's mail and calendar, and can also label, archive and draft mail, and add calendar events.");
+    assert.equal((await page.locator('#set-google').innerText()).includes(upgrade), false);
+    assert.equal((await page.locator('#set-google').innerText()).includes(calendarUpgrade), false);
     await page.locator('#set-google [data-google-disconnect]').click();
     await page.waitForFunction(() => /Disconnecting/.test(document.querySelector('#set-google')?.textContent || ''));
     assert.deepEqual(writes, ['/api/v2/mail/google/connect', '/api/v2/mail/google/connect', '/api/v2/mail/google/disconnect']);
@@ -84,7 +113,7 @@ const {unrouted} = require('./support/routes.cjs');
     // A server without Tico's Google app says so, with no button.
     google = {configured: false, mailbox: 'cara@acme.example', status: 'none'};
     await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
-    await page.waitForFunction(() => /isn't available on this Tico server/.test(document.querySelector('#set-google')?.textContent || ''));
+    await page.waitForFunction(() => /Ask an admin to set up Google/.test(document.querySelector('#set-google')?.textContent || ''));
     assert.equal(await page.locator('#set-google [data-google-connect]').count(), 0);
     assert.deepEqual(errors, []);
   } finally {

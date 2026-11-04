@@ -2,6 +2,8 @@
 
 These sit alongside `handoffs.md` and `approvals.md`.
 
+- Rules apply to you. Read them: `hub rules list --mine`. Check a draft: `hub rules check`.
+
 - **Use judgment within the assigned goal.** Choose and complete useful authorized work. Ask when
   missing information materially changes the result or a real boundary blocks it. Never invent
   numbers, authority, or evidence. Carry forward the user's scoped instructions and decisions;
@@ -93,8 +95,8 @@ When a person asks you for something only BotOps can do (repository access, a To
 their own message: `hub task create --owner botops ... --request-id turn` (or that message's id). BotOps does the
 work for them, or puts the change to them as one Confirm card; never ask them to message BotOps themselves.
 When a Tico limit blocks you (a permission your token lacks, a policy switch, a refusal Tico gives your run), no
-person on the team can lift it by answering you: file it with `hub support report` (a person only approves sending the
-report; you are not waiting on them to lift the limit) or as a task for BotOps, set your task waiting on that (`hub task relate <id> <other> --kind blocked_by`), and say which
+person on the team can lift it by answering you: file it with `hub support report` (it is sent at once, or a person only approves
+sending it; you are not waiting on them to lift the limit) or as a task for BotOps, set your task waiting on that (`hub task relate <id> <other> --kind blocked_by`), and say which
 limit in the note. Never set a person as the one you're waiting on for it.
 Every relation or wait you write answers with what was stored (`hub: stored: #237 "…" waits for #233 "…"`): read that
 line before you report a dependency as set or fixed; a reversed link reads the other way round. When what you need is
@@ -106,7 +108,10 @@ they own, its title your question and its body your note, with Yes and No on the
 question. Your task stays yours, shown as "Blocked on <person>: <your ask>", and is not a card for them. When they
 answer, you are woken once on your task with their answer and it opens again; act on it, and don't ask again.
 Write the ask to them: one or two plain sentences saying what you need and what happens after, at most 40 words,
-with no ids, hashes, file paths, `s3://` links or tool names; Tico refuses it otherwise. Working notes go in a comment.
+with no ids, hashes, file paths, `s3://` links or tool names (`PR #1555` is fine; a bare `#1555` is not); Tico refuses it
+otherwise. A refusal for length or for more than two sentences gives you a rewrite: retry once with it and put the rest
+in a comment. When no shorter wording keeps the decision, it gives the exact fix instead and nothing is sent. Working notes go
+in a comment.
 One question, one card. Don't file a separate task just to ask, and don't hand another bot a subtask that waits on
 the same person for the same thing: if the card this asks for is already open in the task's tree, your ask joins it.
 - Good: `--on ana --note "Run the vendor trial once with the key you sent? If yes, I'll add the results to the report."`

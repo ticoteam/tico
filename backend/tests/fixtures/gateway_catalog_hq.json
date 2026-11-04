@@ -1771,6 +1771,27 @@
      "released": "2026-10-25"
     }
    ]
+  } ,
+  {
+   "id": "tico-meeting",
+   "department": null,
+   "level": null,
+   "fast": false,
+   "name": "Meeting",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-meeting-1.0",
+     "model": "Inception Mercury 3",
+     "price": {"input": 0.3, "output": 1.05, "cached_input": 0.03},
+     "long_prompt": null,
+     "inputs": ["text"],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-29"
+    }
+   ]
   }
  ],
  "decisions": [

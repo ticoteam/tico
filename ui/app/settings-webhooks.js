@@ -2,8 +2,7 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// Incoming (backend/triggers.py): an address a sender calls. Routines on `webhook.<id>` and rules on `webhook.received`
-// listen to it. Outgoing (backend/webhooks.py): endpoints Tico posts its events to. Through Tico Gateway
+// Incoming (backend/triggers.py): an address a sender calls; automations with a webhook trigger listen to it. Outgoing (backend/webhooks.py): endpoints Tico posts its events to. Through Tico Gateway
 // (backend/hook_relay.py): a second address for an incoming webhook, held by Tico Gateway, for a server the internet
 // cannot reach. A secret is shown once, right after it is made, and is gone from the next screen.
 const WH_PRESETS = [['none', 'None'], ['hmac', 'HMAC'], ['github', 'GitHub'], ['standard', 'Standard Webhooks'], ['stripe', 'Stripe'], ['slack', 'Slack']];
@@ -12,13 +11,14 @@ const WH_TYPE_FROM = {github: 'X-GitHub-Event', stripe: '/type', standard: '/typ
 const WH_UNHEARD = [['log', 'Log it'], ['note', 'Tell the maker']];
 const WH_OUTCOMES = {accepted: ['ok', 'Accepted'], refused: ['fail', 'Refused'], rate_limited: ['fail', 'Over limit'], replayed: ['', 'Rerun']};
 const whRefused = r => r.outcome === 'refused' || r.outcome === 'rate_limited';
-const WH_SEND_STATES = {delivered: 'ok', failed: 'fail', ready: 'waiting', sending: 'waiting', cancelled: '', withheld: ''};
+const WH_SEND_STATES = {delivered: 'ok', failed: 'fail', ready: 'waiting', sending: 'waiting', canceled: '', withheld: ''};
 const WH_TABS = [['incoming', 'Incoming'], ['outgoing', 'Outgoing'], ['gateway', 'Through Tico Gateway', 'Gateway']];
 // The open tab and item, and the one set of secrets on screen: {id, url?, signing?, relay?} for an incoming webhook,
 // {id, secret} for an endpoint. The wake address's signing secret stays until the person dismisses it.
 const WH = {tab: 'incoming', trigger: '', hook: '', shown: null, hookShown: null, wakeSecret: ''};
 let WH_RUN = 0, WH_HOOKS = null;
-// The event catalog (backend/event_catalog.py): the rules editor, the routine editor and the endpoint picker read it.
+let WH_TRIGGERS = null;          // the incoming webhooks (GET /v2/triggers), loaded when the tab opens
+// The event catalog (backend/event_catalog.py): the endpoint picker reads it.
 let EVENT_TYPES = [], EVENT_TYPES_P = null;
 function eventTypesLoad() {
   EVENT_TYPES_P ||= get('/v2/event-types').then(d => (EVENT_TYPES = d.items || [])).catch(e => { EVENT_TYPES_P = null; throw e; });
@@ -108,9 +108,12 @@ function whSubmit(dialog, fn) {
 }
 
 // ---------------------------------------------------------------------------------------------------------- Incoming
+// Finance's own triggers (consumer finance: Mercury, Stripe, QuickBooks, Xero) are managed in Finance › Sources, not here.
+const WH_FINANCE_PRESETS = ['mercury', 'stripe_finance', 'intuit', 'xero'];
 async function whTriggersFresh() {
-  ROUTINE_TRIGGERS = (await get('/v2/triggers', {fresh: true})).triggers || [];
-  return ROUTINE_TRIGGERS;
+  WH_TRIGGERS = ((await get('/v2/triggers', {fresh: true})).triggers || [])
+    .filter(t => t.consumer ? t.consumer !== 'finance' : !WH_FINANCE_PRESETS.includes(t.preset));
+  return WH_TRIGGERS;
 }
 function whCountsHTML(t) {
   return `<span class="tnum">${t.received_24h} in 24h</span>${t.refused_24h ? ` · <span class="wh-bad tnum">${t.refused_24h} refused</span>` : ''}`;
@@ -131,27 +134,13 @@ async function whTriggers(el, run) {
   el.querySelector('[data-wh-new]').onclick = () => whTriggerDialog(null);
   el.querySelectorAll('[data-wh-open]').forEach(b => { b.onclick = () => { WH.trigger = b.dataset.whOpen; WH.shown = null; void renderSettingsWebhooks(); }; });
 }
-// Who a rule wakes: its own bot on a bot row, else the bot it names. A note does not wake.
-function whRuleWakes(r) {
-  if (r.then === 'wake') return r.scope_kind === 'bot' ? r.scope_id : r.params?.bot || '';
-  if (r.then !== 'action') return '';
-  return r.params?.action === 'wake_bot' ? r.params.bot || '' : r.params?.action === 'create_task' ? r.params.owner || '' : '';
-}
-function whRuleWords(r) {
-  const types = ruleList(r.when?.type);
-  return `<b>WHEN</b> ${types.length ? 'type ' + esc(types.join(' or ')) : 'any call'} <b>THEN</b> ${esc(ruleThenWords(r))}`;
-}
 async function whTriggerDetail(el, run) {
   const id = WH.trigger, path = `/v2/triggers/${encodeURIComponent(id)}`;
-  const [list, log, rules] = await Promise.all([whTriggersFresh(), get(path + '/deliveries', {fresh: true}),
-    get('/v2/rules?event=webhook.received&limit=200', {fresh: true}).catch(() => ({rules: []}))]);
+  const [list, log] = await Promise.all([whTriggersFresh(), get(path + '/deliveries', {fresh: true})]);
   if (run !== WH_RUN) return;
   const t = list.find(x => x.id === id);
   if (!t) { WH.trigger = ''; return whTriggers(el, run); }
   const mine = whMine(t), may = mine || (t.builtin && S.me?.role === 'owner');
-  const heard = (rules.rules || []).filter(r => !r.built_in && r.event === 'webhook.received' && (!r.when?.trigger || ruleList(r.when.trigger).includes(id)));
-  const routineBots = new Set(t.routines.map(r => r.bot));
-  const twice = [...new Set(heard.filter(r => r.enabled !== false).map(whRuleWakes).filter(b => b && routineBots.has(b)))];
   const rows = log.deliveries || [];
   const actions = mine ? `<button class="ghost" type="button" data-wh-edit>Edit</button><button class="ghost" type="button" data-wh-rotate>New secret</button>
       <button class="ghost" type="button" data-wh-sign>Signing</button><button class="ghost" type="button" data-wh-delete>Delete</button>`
@@ -169,19 +158,13 @@ async function whTriggerDetail(el, run) {
       <dt>24h</dt><dd>${whCountsHTML(t)}</dd>
     </dl>
     <h4 class="wr-sub">Listeners</h4>
-    ${twice.length ? `<p class="wh-warn" role="note" data-wh-twice>${esc(twice.map(empName).join(', '))}: a routine and a rule both act on every call.</p>` : ''}
-    <div class="wh-listeners" data-wh-listeners>${t.routines.map(r => `<div class="wh-li"><span class="pill">Routine</span>
-        <a href="#" data-wh-routine="${esc(r.id)}" data-bot="${esc(r.bot)}">${esc(r.title)}</a><span class="muted">${esc(empName(r.bot))}</span></div>`).join('')}
-      ${heard.map(r => `<div class="wh-li${r.enabled === false ? ' wr-off' : ''}"><span class="pill">Rule</span>
-        <span class="wr-text">${whRuleWords(r)}</span><span class="muted">${esc(ruleScopeWords(r))}</span></div>`).join('')}
-      ${t.routines.length || heard.length ? '' : '<span class="muted">None</span>'}</div>
-    ${rulesMayAdd() ? '<div class="row wh-li-add"><button class="ghost" type="button" data-wh-add-rule>Add rule</button></div>' : ''}
+    <div class="wh-listeners" data-wh-listeners><a href="${AUTOMATIONS}?q=${encodeURIComponent(t.name)}" data-wh-automations>Automations</a></div>
     <h4 class="wr-sub">Recent calls</h4>
     ${mine && rows.some(r => whRefused(r) && r.stored && !/\(recovered\)$/.test(r.reason || '')) ? `<div class="row wh-li-add"><button class="ghost" type="button" data-wh-recover
       title="Check the kept refused calls again with the current secret and preset">Recover refused calls</button></div>` : ''}
     ${rows.length ? `<div class="wh-calls" data-wh-calls>${rows.map(r => {
       const [tone, word] = WH_OUTCOMES[r.outcome] || ['', r.outcome];
-      const what = whRefused(r) ? esc(r.reason) : `${whPlural(r.tasks, 'task')} · ${whPlural(r.rules || 0, 'rule')}`;
+      const what = whRefused(r) ? esc(r.reason) : whPlural(r.tasks, 'task');
       return `<div class="wh-call" data-wh-call="${esc(r.delivery)}">
         <span class="wh-time" title="${esc(r.received_at)}">${esc(ago(r.received_at))}</span>
         <span class="wh-type">${r.type ? `<code>${esc(r.type)}</code>` : '<span class="muted">No type</span>'}</span>
@@ -205,15 +188,6 @@ async function whTriggerDetail(el, run) {
       void renderSettingsWebhooks();
     } catch (e) { toast(e.message, true); b.disabled = false; }
   });
-  on('[data-wh-add-rule]', async () => {
-    const dialog = await ruleEditor(null, {event: 'webhook.received', when: {trigger: id}});
-    dialog?.addEventListener('close', () => void renderSettingsWebhooks());
-  });
-  el.querySelectorAll('[data-wh-routine]').forEach(a => { a.onclick = async ev => {
-    ev.preventDefault();
-    const r = routineById(a.dataset.whRoutine) || ((await get(`/v2/bots/${encodeURIComponent(a.dataset.bot)}/routines`).catch(() => ({}))).routines || []).find(x => x.id === a.dataset.whRoutine);
-    if (r) routineEditorOpen({...r, employee: a.dataset.bot});
-  }; });
   el.querySelectorAll('[data-wh-call]').forEach(row => {
     const delivery = row.dataset.whCall;
     const view = row.querySelector('[data-wh-payload]'), again = row.querySelector('[data-wh-replay]');
@@ -222,7 +196,7 @@ async function whTriggerDetail(el, run) {
       again.disabled = true;
       try {
         const r = (await post(`${path}/deliveries/${encodeURIComponent(delivery)}/replay`, {})).replay;
-        toast(`Ran again: ${whPlural(r.tasks, 'task')}, ${whPlural(r.rules || 0, 'rule')}`);
+        toast(`Ran again: ${whPlural(r.tasks, 'task')}`);
         void renderSettingsWebhooks();
       } catch (e) { toast(e.message, true); again.disabled = false; }
     };
@@ -319,8 +293,7 @@ async function whRotate(t) {
   } catch (e) { toast(e.message, true); }
 }
 async function whTriggerDelete(t) {
-  const using = t.routines.length ? ` ${whPlural(t.routines.length, 'routine')} will stop running on it.` : '';
-  if (!confirm(`Delete “${t.name}”?${using}`)) return;
+  if (!confirm(`Delete “${t.name}”?`)) return;
   try {
     await post(`/v2/triggers/${encodeURIComponent(t.id)}/delete`, {});
     Object.assign(WH, {trigger: '', shown: null});
@@ -405,7 +378,7 @@ async function whFilterChoices() {
   if (routines?.task_rule_departments) WH_DEPTS = {task_rule_departments: routines.task_rule_departments};
   return {
     departments: (routines?.task_rule_departments || []).map(d => [d.id, d.name]),
-    bots: (S.emps || []).filter(e => e.status !== 'archived').map(e => [e.name, empName(e.name)]).sort((a, b) => a[1].localeCompare(b[1])),
+    bots: (S.emps || []).filter(e => e.status !== 'archived').map(e => [e.id, empName(e.id)]).sort((a, b) => a[1].localeCompare(b[1])),
     task_types: (TASK_TYPES || []).map(t => [t.id, t.name]),
   };
 }
@@ -432,11 +405,12 @@ function whFiltersValue(box) {
 // Custom headers (backend/webhooks.py HeaderIn), at most ten. A secret's value never comes back: its row says "set",
 // and left empty it keeps the value it has.
 const WH_MAX_HEADERS = 10;
+// A secret cleared when the address changed says "needs value": the endpoint is paused until it is typed or removed.
 function whHeaderRowHTML(x = {}) {
-  const kept = x.secret && x.set;
-  return `<div class="wh-hdr" data-hdr>
+  const kept = x.secret && (x.set || x.needs_value);
+  return `<div class="wh-hdr${x.needs_value ? ' wh-hdr-needs' : ''}" data-hdr${x.needs_value ? ' data-hdr-needs' : ''}>
     <input data-hdr-name maxlength="64" autocomplete="off" spellcheck="false" placeholder="Name" aria-label="Header name" value="${esc(x.name || '')}">
-    <input data-hdr-value type="${x.secret ? 'password' : 'text'}" maxlength="1000" autocomplete="new-password" spellcheck="false" aria-label="Value" placeholder="${kept ? 'set' : 'Value'}" value="${kept ? '' : esc(x.value || '')}">
+    <input data-hdr-value type="${x.secret ? 'password' : 'text'}" maxlength="1000" autocomplete="new-password" spellcheck="false" aria-label="Value" placeholder="${x.needs_value ? 'needs value' : kept ? 'set' : 'Value'}" value="${kept ? '' : esc(x.value || '')}">
     <label class="wh-hdr-secret"><input type="checkbox" data-hdr-secret${x.secret ? ' checked' : ''}> Secret</label>
     <button type="button" class="ghost" data-hdr-remove aria-label="Remove header">✕</button></div>`;
 }
@@ -486,7 +460,10 @@ async function whHookDialog(h) {
     const body = {name: String(v.get('name')).trim(), url, events: chosen, allow_http: /^http:/i.test(url) && v.has('allow_http')};
     const filter = filters ? whFiltersValue(filters) : null, sent = whHeadersValue(headers);
     if (h) {
-      await post(`/v2/webhooks/${encodeURIComponent(h.id)}/update`, {...body, ...(filter ? {filter} : {}), headers: sent, expected_revision: h.revision});
+      // A new destination while secret headers keep their values asks first: keep them, or clear them to type again.
+      const saved = await settingsDestinationSave(extra => post(`/v2/webhooks/${encodeURIComponent(h.id)}/update`,
+        {...body, ...(filter ? {filter} : {}), headers: sent, expected_revision: h.revision, ...extra}));
+      if (saved.credentials_choice === 'clear') toast('Saved. Type the secret header values again: the endpoint is paused until then.');
       dialog.close(); void renderSettingsWebhooks(); return;
     }
     if (filter && Object.values(filter).some(x => x.length)) body.filter = filter;
@@ -530,12 +507,12 @@ async function whHookDetail(el, run) {
       <button class="ghost" type="button" data-wh-catchup-do="recover" title="Send again what gave up since then">Retry failed</button>
       <button class="ghost" type="button" data-wh-catchup-do="replay" title="Send the events since then that this endpoint never got">Send missed</button></div>` : ''}
     ${items.length ? `<div class="wh-calls wh-sends" data-wh-sends>${items.map(s => `<div class="wh-call" data-wh-send="${esc(s.id)}">
-        <span class="wh-time" title="${esc(s.created)}">${esc(ago(s.created))}</span>
+        <span class="wh-time" title="${esc(s.created_at)}">${esc(ago(s.created_at))}</span>
         <span class="wh-type"><code>${esc(s.type)}</code></span>
         <span class="wh-outcome"><span class="pill ${WH_SEND_STATES[s.state] ?? ''}">${esc(s.state[0].toUpperCase() + s.state.slice(1))}</span>${s.subject ? ` <span class="muted">${esc(s.subject)}</span>` : ''}</span>
         <span class="tnum muted">${(s.attempts === 1 ? '1 try' : `${s.attempts} tries`)}</span>
         <span class="tnum muted" title="${esc(s.last_error || '')}">${s.last_status ? esc(s.last_status) : s.last_error ? 'Error' : ''}</span>
-        <span class="wh-call-ctl">${may && ['failed', 'cancelled'].includes(s.state) ? '<button class="ghost" type="button" data-wh-retry>Retry</button>' : ''}</span></div>`).join('')}</div>`
+        <span class="wh-call-ctl">${may && ['failed', 'canceled'].includes(s.state) ? '<button class="ghost" type="button" data-wh-retry>Retry</button>' : ''}</span></div>`).join('')}</div>`
       : '<div class="empty">Nothing sent yet.</div>'}`;
   const on = (sel, fn) => { const b = el.querySelector(sel); if (b) b.onclick = fn; };
   const act = async (fn, after) => { try { await fn(); after?.(); void renderSettingsWebhooks(); } catch (e) { toast(e.message, true); } };

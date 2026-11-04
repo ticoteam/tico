@@ -60,30 +60,18 @@ const {open} = require('./tasks-page.cjs');
       assert.deepEqual(v.errors, []);
       await v.page.close();
     }
-    // With open subtasks, finishing asks what becomes of them: closed with it (the server's default) or standalone.
-    // Backing out saves nothing.
+    // Open subtasks close with the parent, in one tap with no choice dialog.
     const s = await open(browser, {hash: '#/tasks'});
-    const head = s.page.locator('#task-modal .tmodal-head'), choice = s.page.locator('dialog.task-children-choice');
-    const sent = id => s.posts.filter(p => p.p === `/api/v2/tasks/${id}`).map(p => p.body);
-    const pick = async (id, kind, button) => {
-      s.tasks.find(t => t.id === id).children_summary = {total: 2, open: 2, done: 0, direct_total: 2, direct_done: 0};
+    const head = s.page.locator('#task-modal .tmodal-head');
+    for (const [id, kind, expected] of [['t-news', 'close', {version: 3, close: true}],
+                                      ['t-deck', 'done', {version: 3, status: 'done'}]]) {
       await s.page.evaluate(id => taskModalShow({...TASKS_ST.tasks.find(t => t.id === id),
         children_summary: {total: 2, open: 2, done: 0, direct_total: 2, direct_done: 0}}), id);
       await head.locator(`[data-task-finish="${kind}"]`).click();
-      await choice.waitFor();
-      assert.match(await choice.textContent(), /2 open subtasks/);
-      await choice.getByRole('button', {name: button, exact: true}).click();
-      await choice.waitFor({state: 'detached'});
-    };
-    await pick('t-news', 'close', 'Cancel');
-    assert.deepEqual(sent('t-news'), [], 'backing out saves nothing');
-    assert.ok(await s.page.evaluate(() => document.querySelector('#task-modal').open), 'the task stays open to finish later');
-    await pick('t-news', 'close', 'Keep as standalone');
-    await s.page.waitForFunction(() => !document.querySelector('#task-modal').open);
-    assert.deepEqual(sent('t-news'), [{version: 3, close: true, children: 'detach'}]);
-    await pick('t-deck', 'done', 'Close them too');
-    await s.page.waitForFunction(() => !document.querySelector('#task-modal').open);
-    assert.deepEqual(sent('t-deck'), [{version: 3, status: 'done'}], 'closing them with it is the default');
+      await s.page.waitForFunction(() => !document.querySelector('#task-modal').open);
+      assert.equal(await s.page.locator('dialog.task-children-choice').count(), 0);
+      assert.deepEqual(s.posts.filter(p => p.p === `/api/v2/tasks/${id}`).map(p => p.body), [expected]);
+    }
     assert.deepEqual(s.errors, []);
     await s.page.close();
     console.log('Done explicit closure: detail, peek, bulk, requester rights, header Done/Close and open subtasks passed');

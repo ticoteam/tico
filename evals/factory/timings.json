@@ -23,5 +23,6 @@
  "skip_qa": 36.0,
  "snoozed_ticket": 25.1,
  "stale_head": 25.1,
- "stuck_ticket": 25.2
+ "stuck_ticket": 25.2,
+ "verdict_past_open_sibling": 27.3
 }

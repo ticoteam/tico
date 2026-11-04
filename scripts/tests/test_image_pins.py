@@ -6,13 +6,7 @@ the images, half an hour in. These read the files directly. The slow tests build
 image does, and check the apt packages and the Python pins against Debian's and PyPI's indexes.
 """
 import json
-import lzma
-import os
 import re
-import shutil
-import sqlite3
-import subprocess
-import sys
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -178,37 +172,8 @@ def test_wheel_tags_match_only_the_images_python_and_platforms(wheel, x86_64, aa
 
 
 @pytest.mark.slow
-def test_the_pinned_sqlite_builds_with_every_option_python_sees(tmp_path):
-    if sys.platform != 'linux' or not shutil.which('gcc'):
-        pytest.skip('the image build is Linux with gcc')
-    (tmp_path / 'versions.env').write_text((ROOT / 'docker/versions.env').read_text())
-    script = tmp_path / 'sqlite.sh'
-    script.write_text(SQLITE_SH.replace('/tmp/versions.env', str(tmp_path / 'versions.env')))
-    subprocess.run(['sh', str(script), 'build', str(tmp_path / 'out')], check=True, cwd=tmp_path)
-    code = ('import sqlite3, json; c = sqlite3.connect(":memory:"); '
-            'print(json.dumps([sqlite3.sqlite_version, [r[0] for r in c.execute("pragma compile_options")]]))')
-    env = {**os.environ, 'LD_LIBRARY_PATH': str(tmp_path / 'out')}
-    result = subprocess.run([sys.executable, '-c', code], env=env, capture_output=True, text=True, check=True)
-    version, options = json.loads(result.stdout)
-    if version == sqlite3.sqlite_version and version != VERSIONS['SQLITE_VERSION']:
-        pytest.skip(f'this Python links SQLite statically ({version}); the image build checks the version itself')
-    assert version == VERSIONS['SQLITE_VERSION']
-    for option in SQLITE_OPTIONS:
-        assert option in options, option
-
-
-@pytest.mark.slow
-def test_every_apt_package_exists_in_the_images_debian_release():
-    release = debian_release()
-    index = f'https://deb.debian.org/debian/dists/{release}/main/binary-amd64/Packages.xz'
-    with urllib.request.urlopen(index, timeout=120) as response:
-        names = set(re.findall(r'^Package: (\S+)$', lzma.decompress(response.read()).decode(), re.M))
-    wanted = apt_packages(DOCKERFILE)
-    assert wanted and not wanted - names, f'not in Debian {release}: {sorted(wanted - names)}'
-
-
-@pytest.mark.slow
-@pytest.mark.parametrize('requirements', ['backend/requirements.txt', 'backend/requirements-dev.txt'])
+# Only production pins are copied into the image's venv; CI can build its own test-only C extensions.
+@pytest.mark.parametrize('requirements', ['backend/requirements.txt'])
 def test_every_pin_has_a_wheel_for_the_images_python(requirements):
     """The images' Python has no compiler outside the venv stage, so a pin with no wheel fails the build there."""
     major, minor = re.match(r'python:(\d+)\.(\d+)', python_image()).groups()

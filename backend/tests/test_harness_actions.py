@@ -3,6 +3,7 @@ runner the way the browser sign-in is."""
 
 from backend.tests.test_api import api, assign, get, post, put, runner  # noqa: F401
 from backend.tests.test_model_login import stored  # noqa: F401  (a row reader shared with the sign-in tests)
+from backend import bot_settings as BS
 
 HARNESS = {"name": "Codex", "runtime": "codex", "installed": True, "version": "0.158.0", "managed": True,
            "source": "tools", "pinned": False, "pin": "", "authenticated": "ready", "update_available": True,
@@ -111,10 +112,8 @@ def test_what_a_bot_there_runs_on_its_fallback_included_cannot_be_turned_off(api
     assign(api, r, "cpo")
     # A branch bot: its fallback is its original's (shared_bots.follow), as the runner reads it.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='finance'", (encode(
-            {"name": "finance", "fallback": {"harness": "gemini", "model": "gemini-3-pro"},
-             "task_model": {"harness": "grok", "runtime": "grok", "model": "grok-4.6"}}),))
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'", (encode({"name": "cpo", "shared_from": "finance"}),))
+        BS.write(c, 'finance', {'name': 'finance', 'fallback': {'harness': 'gemini', 'model': 'gemini-3-pro'}, 'task_model': {'harness': 'grok', 'runtime': 'grok', 'model': 'grok-4.6'}})
+        BS.write(c, 'cpo', {'name': 'cpo', 'shared_from': 'finance'})
     beat(api, r, codex=HARNESS, **{"gemini-cli": {**HARNESS, "name": "Gemini CLI", "runtime": "gemini"}},
          grok={**HARNESS, "name": "Grok Build", "runtime": "grok"})
     choose = lambda harness, enabled, **kw: post(api, f"runners/{r['runner_id']}/harness-choices",
@@ -144,7 +143,7 @@ def test_a_computer_with_no_bots_needs_only_the_one_default_it_installs(api):
     # With a bot, what it runs on: here the company's first provider's.
     company(api, enabled=["xai", "openai"], runtime="", model="")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json='{\"name\": \"cpo\"}' WHERE bot='cpo'")
+        BS.write(c, "cpo", {"name": "cpo"})
     assign(api, r, "cpo")
     assert machine(api, r)["needed_runtimes"] == ["grok"]
 
@@ -167,3 +166,19 @@ def test_a_move_to_a_computer_without_the_harness_is_not_refused_it_installs_the
     assert (answer["can_run"], answer["problem"]) == (None, "Codex is installing on Ben Mac")
     answer = verdict(state="failed", detail="npm is not installed on this computer")
     assert answer["can_run"] is False and "could not be installed" in answer["problem"]
+
+
+def test_choices_and_recent_batch_match_per_runner_lookups(api):
+    """Operations listing should not query harness tables once per computer."""
+    from backend import harness_actions
+    a, b = online(api), online(api)
+    ask(api, a)
+    ask(api, b, action="update", harness="codex")
+    post(api, f"runners/{a['runner_id']}/harness-choices", {"harness": "codex", "enabled": False})
+    with api.app.state.store.read() as c:
+        by_choice = harness_actions.choices_by_runner(c)
+        by_recent = harness_actions.recent_by_runner(c)
+        assert by_choice[a["runner_id"]] == harness_actions.choices(c, a["runner_id"])
+        assert by_choice.get(b["runner_id"], {}) == harness_actions.choices(c, b["runner_id"])
+        assert by_recent[a["runner_id"]] == harness_actions.recent(c, a["runner_id"])
+        assert by_recent[b["runner_id"]] == harness_actions.recent(c, b["runner_id"])

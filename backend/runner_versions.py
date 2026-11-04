@@ -15,7 +15,7 @@ stuck gets a nudge.
 from . import releases
 from .store import H
 
-MIN_RUNNER_RELEASE = "0.1.0"
+MIN_RUNNER_RELEASE = "0.4.0"
 NUDGE_AFTER_S = 3600
 KINDS = ("mac", "linux", "docker")
 LABELS = {"current": "Up to date", "updating": "Updating", "needs_update": "Needs update",
@@ -25,7 +25,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS runner_versions(
  runner_id TEXT PRIMARY KEY REFERENCES runners(id), release TEXT NOT NULL DEFAULT '',
  kind TEXT NOT NULL DEFAULT '', update_state TEXT NOT NULL DEFAULT '', update_target TEXT NOT NULL DEFAULT '',
- update_error TEXT NOT NULL DEFAULT '', reported TEXT NOT NULL);
+ update_error TEXT NOT NULL DEFAULT '', reported_at TEXT NOT NULL);
 """
 
 
@@ -34,7 +34,7 @@ def ensure_schema(c):
     and the server release its owner was last told about."""
     H.add_column(c, "runner_versions", "commit_sha", "TEXT NOT NULL DEFAULT ''")
     H.add_column(c, "runner_versions", "outdated_since", "TEXT")
-    H.add_column(c, "runner_versions", "nudged", "TEXT NOT NULL DEFAULT ''")
+    H.add_column(c, "runner_versions", "nudged_at", "TEXT NOT NULL DEFAULT ''")
     H.add_column(c, "runner_versions", "outdated_for", "TEXT NOT NULL DEFAULT ''")
     H.add_column(c, "runner_versions", "update_since", "TEXT")
     H.add_column(c, "runner_versions", "update_running", "INTEGER")
@@ -92,16 +92,14 @@ def record(c, runner_id, body):
     release = clean(body.release)
     update = body.update
     since = update_since(c, runner_id, update.state if update else "")
-    c.execute("INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,update_error,reported,commit_sha) "
+    c.execute("INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,update_error,reported_at,commit_sha) "
               "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(runner_id) DO UPDATE SET release=excluded.release,"
               "kind=excluded.kind,update_state=excluded.update_state,update_target=excluded.update_target,"
-              "update_error=excluded.update_error,reported=excluded.reported,commit_sha=excluded.commit_sha",
+              "update_error=excluded.update_error,reported_at=excluded.reported_at,commit_sha=excluded.commit_sha",
               (runner_id, release, body.kind or "", update.state if update else "", update.target if update else "",
                update.error if update else "", H.now(), body.commit or ""))
     c.execute("UPDATE runner_versions SET update_since=?,update_running=?,update_handed_back=? WHERE runner_id=?",
               (since, update.running if update else None, update.handed_back if update else None, runner_id))
-    if body.checkout is None:   # it follows the server's release now, not main: an old "behind main" note is stale
-        c.execute("UPDATE runners SET checkout_json=NULL WHERE id=?", (runner_id,))
     nudge(c, runner_id)
 
 
@@ -111,8 +109,8 @@ def nudge(c, runner_id, server=None):
     first. A computer its owner pinned to a release is not nudged; its row still says Outdated.
     Returns whether a notice went out."""
     server = releases.version() if server is None else server
-    row = c.execute("SELECT v.release,v.update_error,v.update_state,v.outdated_since,v.outdated_for,v.nudged,r.label,"
-                    "r.operator FROM runner_versions v JOIN runners r ON r.id=v.runner_id WHERE v.runner_id=?",
+    row = c.execute("SELECT v.release,v.update_error,v.update_state,v.outdated_since,v.outdated_for,v.nudged_at,r.label,"
+                    "r.owner_id FROM runner_versions v JOIN runners r ON r.id=v.runner_id WHERE v.runner_id=?",
                     (runner_id,)).fetchone()
     if not row:
         return False
@@ -125,13 +123,13 @@ def nudge(c, runner_id, server=None):
     if not since:
         since = now
         c.execute("UPDATE runner_versions SET outdated_since=?,outdated_for=? WHERE runner_id=?", (since, server, runner_id))
-    if (row["nudged"] == server or H.shift(since, seconds=NUDGE_AFTER_S) > now or not row["operator"]
+    if (row["nudged_at"] == server or H.shift(since, seconds=NUDGE_AFTER_S) > now or not row["owner_id"]
             or row["update_state"] == "pinned"):
         return False
-    c.execute("UPDATE runner_versions SET nudged=? WHERE runner_id=?", (server, runner_id))
+    c.execute("UPDATE runner_versions SET nudged_at=? WHERE runner_id=?", (server, runner_id))
     have = f"Tico {row['release']}" if releases.parse(row["release"]) else "a build that is not a Tico release"
     why = f" Its last update error: {row['update_error']}" if row["update_error"] else ""
-    H.notice(c, H.KEEPER, H.human_actor(row["operator"]),
+    H.notice(c, H.KEEPER, H.human_actor(row["owner_id"]),
              f"Your computer {row['label']} runs {have}; this server runs Tico {server}. It updates itself between "
              f"turns; when it stays behind, Settings > Computers says why.{why}")
     H.event(c, H.KEEPER, "runner.outdated", "runner:" + runner_id, {"release": row["release"], "server": server})
@@ -156,12 +154,21 @@ def update_since(c, runner_id, state):
     return now
 
 
+VERSION_SQL = "SELECT * FROM runner_versions WHERE runner_id=?"
+
+
+def _version(c, runner_id):
+    """One runner_versions row for the current read snapshot (Health drain lines and holding_since share it)."""
+    from .read_cache import one
+    return one(c, VERSION_SQL, (runner_id,))
+
+
 def holding_since(c, runner_id):
     """Since when this computer has taken no new work because it is updating, or None while it still takes work.
     New runners report drain counts as soon as they stop claiming. Older runners keep claiming for UPDATE_DRAIN_S.
     An `updating` runner claims nothing, whatever release it is on (a Docker update still settling reports it on the
     new release)."""
-    row = c.execute("SELECT update_state,update_since FROM runner_versions WHERE runner_id=?", (runner_id,)).fetchone()
+    row = _version(c, runner_id)
     if not row or row["update_state"] not in ("waiting", "updating") or not row["update_since"]:
         return None
     progress = drain_progress(c, runner_id)
@@ -173,16 +180,20 @@ def holding_since(c, runner_id):
 
 def drain_progress(c, runner_id):
     """Counts only, safe wherever a computer's update hold is already visible. Old runners report neither."""
-    row = c.execute("SELECT update_state,update_running,update_handed_back FROM runner_versions WHERE runner_id=?",
-                    (runner_id,)).fetchone()
+    row = _version(c, runner_id)
     if not row or row["update_state"] not in ("waiting", "updating") or row["update_running"] is None:
         return ""
     return f"{row['update_running']} running, {row['update_handed_back'] or 0} handed back"
 
 
 def paused(c, runner_id):
-    """Why this computer must not claim work, or "" when it may."""
-    row = c.execute("SELECT release FROM runner_versions WHERE runner_id=?", (runner_id,)).fetchone()
+    """Why this computer must not claim work, or "" when it may.
+
+    Claim waiter order asks once per candidate computer; reuse the release row for the
+    current read snapshot via `read_cache.one`.
+    """
+    from .read_cache import one
+    row = one(c, "SELECT release FROM runner_versions WHERE runner_id=?", (runner_id,))
     if not row or not incompatible(row["release"]):
         return ""
     return (f"This computer runs Tico {row['release']}, which this server ({releases.version()}) cannot work with; "
@@ -190,7 +201,18 @@ def paused(c, runner_id):
 
 
 def load(c):
-    return {r["runner_id"]: dict(r) for r in c.execute("SELECT * FROM runner_versions")}
+    """{runner_id: row} for every computer. Cached for the current read snapshot so Health /
+    `/computers` / Operations callers that ask once per machine (via `computer_details`) do not
+    re-SELECT the whole table each time."""
+    from . import read_cache
+    values = read_cache.cache(c)
+    key = "runner_versions.load"
+    if values is not None and key in values:
+        return values[key]
+    out = {r["runner_id"]: dict(r) for r in c.execute("SELECT * FROM runner_versions")}
+    if values is not None:
+        values[key] = out
+    return out
 
 
 # What a runner before this release said when nothing supervised it; the line now says how to fix that.

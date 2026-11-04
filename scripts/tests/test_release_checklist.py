@@ -12,18 +12,18 @@ PR = {"number": 12, "head": HEAD, "merge_commit": "d" * 40, "merged_at": "2026-0
 
 
 def message(task, body, *, actor=None, ident="receipt", created="2026-01-02T00:00:00Z", **fields):
-    return {"id": ident, "body": body, "from_actor": actor or task["owner"], "created": created,
+    return {"id": ident, "body": body, "sender_id": actor or task["owner_id"], "created_at": created,
             "refs": {"task": task["id"]}, **fields}
 
 
 def child(role, *, head=HEAD, verdict="approve"):
-    task = {"id": role, "owner": "bot:checker", "title": f"{role}: PR #12", "status": "done", "links": []}
+    task = {"id": role, "owner_id": "bot:checker", "title": f"{role}: PR #12", "status": "done", "links": []}
     task["messages"] = [message(task, f"VERDICT: {verdict} PR #12 head {head}")]
     return task
 
 
 def complete():
-    task = {"id": "dev-ticket", "number": 7, "title": "Improve tasks", "owner": "bot:builder",
+    task = {"id": "dev-ticket", "number": 7, "title": "Improve tasks", "owner_id": "bot:builder",
             "step": {"name": "Pending Release"}, "tags": [{"key": "qa", "label": "QA"}],
             "links": [{"kind": "pr", "url": PR["url"]}],
             "children": [child("Review 1"), child("Review 2"), child("QA"), child("Docs")]}
@@ -177,12 +177,12 @@ def test_receipts_are_collected_from_real_ticket_sources(where):
     task['messages'] = []
     text = f'Tests: base {BASE} head {HEAD}: 356 pass / 0 fail'
     if where == 'note':
-        task.update(note=text, updated='2026-01-04')
+        task.update(note=text, updated_at='2026-01-04')
     elif where == 'keeper':
         task['messages'] = [message(task, 'Ready for review. ' + text, actor='keeper')]
     else:
         child = task['children'][0]
-        child['messages'].append(message(child, text, actor=task['owner'] if where.endswith('builder') else child['owner']))
+        child['messages'].append(message(child, text, actor=task['owner_id'] if where.endswith('builder') else child['owner_id']))
     result = build(task)
     assert result['gaps'] == 0
     evidence = result['prs'][0]['tickets'][0]['test_receipts']
@@ -210,7 +210,7 @@ def test_mixed_note_scopes_failures_and_pending_to_the_named_head_result():
             'Two original existing-fixture failures were corrected before final validation. '
             'Independent Review 1 and hosted checks pending. '
             'Full suite, browsers/native builds and installed behavior not run.')
-    task.update(note=text, updated='2026-01-04')
+    task.update(note=text, updated_at='2026-01-04')
     assert build(task)['gaps'] == 0
     task['note'] = text.replace('185 passed, 0 failed', '183 passed, 2 failing/errored')
     assert 'Tests: recorded failure' in '\n'.join(build(task)['prs'][0]['gaps'])

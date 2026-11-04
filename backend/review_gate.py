@@ -8,10 +8,18 @@ from jwt.exceptions import InvalidKeyError
 
 from . import test_receipts
 
-REVIEW = re.compile(r"^Review [12](?:\b|:)", re.I)
-# The children whose owners only review: they comment and give a verdict, and never move the ticket. QA is not one: QA
-# sends a ticket back to QA Fixes and on to Pending Release and Done (docs/software-factory.md).
-REVIEWER_CHILD = re.compile(r"^(?:Review [12]|Security)(?:\b|:)", re.I)
+
+
+def is_review(c, parent, title):
+    """A request titled for one of the parent board's review steps (backend/step_flow.titled)."""
+    from . import step_flow
+    return step_flow.is_kind(c, parent, str(title or "").strip(), "review")
+
+
+def check_of(c, parent, title):
+    """The check step a request with this title is for on the parent's board: one open request per check step."""
+    from . import step_flow
+    return step_flow.titled(c, (parent or {}).get("type_id"), str(title or "").strip()) if parent else None
 
 
 def reviewing(c, actor, row):
@@ -19,18 +27,18 @@ def reviewing(c, actor, row):
     ticket's owner. A person is never one here (a person may move any ticket they could move before)."""
     from . import hubdb as H
     from . import task_relations as TR
-    if not H.is_bot(actor) or actor == row["owner"] or not engineering(c, row):
+    if not H.is_bot(actor) or actor == row["owner_id"] or not engineering(c, row):
         return None
     for child_id in TR.child_ids(c, row["id"]):
         child = H.task(c, child_id)
-        if child and child["owner"] == actor and REVIEWER_CHILD.match(str(child.get("title") or "").strip()):
+        # The children whose owners only review: they comment and give a verdict, and never move the ticket. QA is not
+        # one: QA sends a ticket back to its fixes step and on to the merge (docs/software-factory.md).
+        from .check_pools import is_security
+        if child and child["owner_id"] == actor and (is_review(c, row, child.get("title")) or is_security(child.get("title"))):
             return child
     return None
 
 
-# One open request per kind of check on a ticket: Review 1, Review 2, QA or Post Release QA (a Security check can be
-# asked again).
-ONE_OPEN = re.compile(r"^(Review [12]|QA|Post Release QA)(?:\b|:)", re.I)
 
 
 def heads(c, parent, snapshots=None):
@@ -39,7 +47,7 @@ def heads(c, parent, snapshots=None):
     from . import hubdb as H
     out = set()
     for pr in links(c, parent):
-        detail = (snapshots or {}).get(pr["id"]) or H._json(pr.get("detail_json"), {}) or {}
+        detail = (snapshots or {}).get(pr["id"]) or H._json(pr.get("detail"), {}) or {}
         head = str(detail.get("head_sha") or "").lower()
         if not detail.get("error") and test_receipts.SHA.fullmatch(head):
             out.add(head)
@@ -52,13 +60,14 @@ def refuse_second(c, actor, parent, title, snapshots=None):
     second reviewer turn. A push gives a new head, and with it a new check."""
     from . import hubdb as H
     from . import task_relations as TR
-    kind = ONE_OPEN.match(str(title).strip())
-    if not kind:
+    step = check_of(c, parent, title)
+    if not step:
         return
-    kind = " ".join(kind[1].lower().split())
+    from . import step_flow
+    kind = step_flow.label(step)
     wanted = heads(c, parent, snapshots)
     from . import check_pools
-    for wait in check_pools.waiting(c, parent["id"], kind):
+    for wait in check_pools.waiting(c, parent["id"], step["id"]):
         judged = set(filter(None, wait["heads"].split(",")))
         if wanted and judged and not wanted & judged:
             continue
@@ -68,18 +77,17 @@ def refuse_second(c, actor, parent, title, snapshots=None):
                  "you need not file another.")
     for child_id in TR.child_ids(c, parent["id"]):
         other = H.task(c, child_id)
-        other_kind = ONE_OPEN.match(str(other.get("title") or "").strip())
-        if (not other_kind or " ".join(other_kind[1].lower().split()) != kind
-                or other["status"] not in H.ACTIVE_STATUSES):
+        other_step = check_of(c, parent, other.get("title"))
+        if not other_step or other_step["id"] != step["id"] or other["status"] not in H.ACTIVE_STATUSES:
             continue
-        seen = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
-                         "ORDER BY ts DESC, rowid DESC LIMIT 1", (child_id,)).fetchone()
+        seen = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
+                         "ORDER BY created_at DESC, rowid DESC LIMIT 1", (child_id,)).fetchone()
         judged = set(filter(None, (seen[0] if seen else "").split(",")))
         if wanted and judged and not wanted & judged:
             continue
-        who = H.actor_id(other["owner"])
+        who = H.actor_id(other["owner_id"])
         H.refuse(c, actor, "duplicate",
-                 f"{kind.title() if kind != 'qa' else 'QA'} is already open on this ticket"
+                 f"{kind} is already open on this ticket"
                  f"{' for this head' if wanted else ''}: task {other['id']}, with {who}. Wait for its verdict; "
                  "if the code changed, push the new head first, and if that check is no longer needed, close it.")
 
@@ -94,8 +102,9 @@ def remember_heads(c, actor, child_id, parent, snapshots=None):
 
 def engineering(c, row):
     from .roadmap_flow import ENGINEERING
-    return bool(row and c.execute("SELECT 1 FROM task_types WHERE id=? AND (role=? OR name='Dev tickets')",
-                                  (row.get("type_id"), ENGINEERING)).fetchone())
+    from .read_cache import one
+    return bool(row and one(c, "SELECT 1 FROM task_types WHERE id=? AND (role=? OR name='Dev tickets')",
+                            (row.get("type_id"), ENGINEERING)))
 
 
 def links(c, row):
@@ -107,13 +116,14 @@ def links(c, row):
 def mint_failure(exc, repo):
     """Describe a failed token request without exposing exception text or response bodies."""
     from .store import Problem
-    from .github_app import MISSING_KEY
+    from .github_app import MISSING_KEY, rate_limited
 
     status = None
     code = None
     auth = isinstance(exc, InvalidKeyError)
     timeout = isinstance(exc, (TimeoutError, httpx.TimeoutException))
     retryable = timeout
+    limited = False
     if isinstance(exc, Problem):
         code = exc.code
         # A transport failure has no GitHub HTTP response; 502 is Tico's own envelope status.
@@ -124,10 +134,12 @@ def mint_failure(exc, repo):
             MISSING_KEY, "The stored GitHub App key could not be decrypted"}
         timeout |= exc.extra.get("timed_out") is True
         retryable |= exc.retryable
+        limited = exc.extra.get("rate_limited") is True
     elif isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
-    auth |= status in (401, 403)
-    retryable = not auth and (timeout or retryable or status in (408, 429)
+        limited = rate_limited(exc.response)
+    auth = not limited and (auth or status in (401, 403))
+    retryable = not auth and (limited or timeout or retryable or status in (408, 429)
                              or isinstance(status, int) and 500 <= status < 600)
     # Only fixed-format diagnostic fields are safe to include; never copy Problem.detail.
     cause = []
@@ -137,6 +149,8 @@ def mint_failure(exc, repo):
         cause.append(f"HTTP {status}")
     if timeout:
         cause.append("timed out")
+    if limited:
+        cause.append("rate limited")
     if not cause:
         cause.append(type(exc).__name__)
     action = "the GitHub App could not sign in" if auth else "GitHub token request failed"
@@ -147,9 +161,11 @@ def mint_failure(exc, repo):
 
 
 def answered_cause(why):
-    """Cause flags for GitHub's answer to a content read (backend/move_retry.py): a 401 or 403 needs access help;
-    a 408, 429 or 5xx is temporary. Any other failure carries no cause. `why` is this module's own fixed-format
+    """Cause flags for GitHub's answer to a content read (backend/move_retry.py): a 401 or plain 403 needs access help;
+    a rate limit, 408 or 5xx is temporary. Any other failure carries no cause. `why` is this module's own fixed-format
     string, never a remote body."""
+    if why == "GitHub answered 403 rate limited":
+        return {"retryable": True, "auth": False}
     match = re.fullmatch(r"GitHub answered (\d+)", why or "")
     status = int(match[1]) if match else None
     if status in (401, 403):
@@ -161,6 +177,7 @@ def answered_cause(why):
 
 def snapshot(service, prs):
     from . import hubdb as H
+    from .github_app import rate_limited
     """Read current PR heads and all checks outside the database write lock.
 
     An unconfigured GitHub integration uses its signed-webhook link snapshot.
@@ -186,7 +203,8 @@ def snapshot(service, prs):
             def read(path, params=None):
                 response = service._call("GET", base + path, headers=headers, params=params)
                 if response.status_code != 200:
-                    raise ValueError(f"GitHub answered {response.status_code}")
+                    limited = " rate limited" if response.status_code == 403 and rate_limited(response) else ""
+                    raise ValueError(f"GitHub answered {response.status_code}{limited}")
                 return response.json()
             data = read(f"/pulls/{pr['number']}")
             head = data["head"]["sha"]
@@ -229,6 +247,10 @@ def snapshot(service, prs):
             cause = mint_failure(exc, repo)
             out[pr["id"]] = {"error": True, "why": "GitHub read failed: " + type(exc).__name__,
                              "retryable": cause["retryable"], "auth": cause["auth"]}
+    if any(r.get("head_sha") and not r.get("error") for r in out.values()):
+        from . import source_outages
+        with service.store.transaction() as c:
+            source_outages.github_read(c, prs, out)
     return out
 
 
@@ -239,7 +261,7 @@ def receipt_author(c, row, actor, parents, owner_email):
     if not H.task_private_readable(c, actor, row):
         return False
     if H.is_bot(actor):
-        return H.is_bot(row["owner"]) and above(parents, H.actor_id(actor), H.actor_id(row["owner"]))
+        return H.is_bot(row["owner_id"]) and above(parents, H.actor_id(actor), H.actor_id(row["owner_id"]))
     if H.is_human(actor) and (person := H.human(c, actor)):
         return (H._task_party(c, actor, row) or H.can_move(c, actor)
                 or bool(owner_email and (person.get("email") or "").lower() == owner_email.lower()))
@@ -251,7 +273,7 @@ def evidence(c, row, actor, receipt_owner=None):
     from . import task_privacy as privacy
     from .read_cache import configs
     if receipt_owner is None:
-        owner = c.execute("SELECT value_json FROM registry_metadata WHERE key='owner'").fetchone()
+        owner = c.execute("SELECT value FROM registry_metadata WHERE key='owner'").fetchone()
         receipt_owner = (H._json(owner[0], {}) or {}).get("email") if owner else None
     author_cache = {}
     parents = {r["bot"]: r["reports_to"] or "" for r in configs(c)}
@@ -259,28 +281,30 @@ def evidence(c, row, actor, receipt_owner=None):
         messages = []
         authors = set()
         conv = H.conversation(c, item.get("conversation_id"))
-        for raw in c.execute("SELECT * FROM messages WHERE conversation_id=? AND deleted_at IS NULL ORDER BY created,id",
+        for raw in c.execute("SELECT * FROM messages WHERE conversation_id=? AND deleted_at IS NULL ORDER BY created_at,id",
                              (item.get("conversation_id"),)).fetchall():
-            m = {**dict(raw), "refs": H._json(raw["refs_json"], {}) or {}}
+            m = {**dict(raw), "refs": H._json(raw["refs"], {}) or {}}
             if H.message_task_id(m, conv) != item["id"] or any(m.get(k) for k in test_receipts.REMOVED):
                 continue
             if (privacy.message_readable(c, actor, m, current=True)
-                    and privacy.message_readable(c, row["owner"], m, current=True)):
+                    and privacy.message_readable(c, row["owner_id"], m, current=True)):
                 messages.append(m)
-                author = m.get("from_actor")
+                author = m.get("sender_id")
                 if author not in author_cache:
                     author_cache[author] = receipt_author(c, row, author, parents, receipt_owner)
                 if author_cache[author]:
                     authors.add(author)
         return {**item, "messages": messages, "receipt_authors": sorted(authors)}
+    from . import step_flow
     result = collect(row)
     result["children"] = []
+    result["review_steps"] = [s["name"] for s in step_flow.checks(c, row.get("type_id"), "review")]
     from . import task_relations as TR
     for child_id in TR.child_ids(c, row["id"]):
         item = H.task(c, child_id)
-        if (REVIEW.match(item.get("title", "")) and H.task_private_readable(c, actor, item)
-                and H.task_private_readable(c, row["owner"], item)):
-            result["children"].append(collect(item))
+        if (is_review(c, row, item.get("title")) and H.task_private_readable(c, actor, item)
+                and H.task_private_readable(c, row["owner_id"], item)):
+            result["children"].append({**collect(item), "review_check": True})
     return result
 
 
@@ -315,13 +339,13 @@ def problem(c, row, actor, snapshots=None, note=None, require_pr=False, receipt_
     facts = evidence(c, row, reader or actor, receipt_owner)
     if note is not None:
         facts["note"] = note
-        facts["updated"] = H.now()
+        facts["updated_at"] = H.now()
     # CI is checked across all linked PRs before looking at any receipt.
     for pr in prs:
-        detail = snapshots.get(pr["id"], {"error": True}) if snapshots is not None else (H._json(pr.get("detail_json"), {}) or {})
+        detail = snapshots.get(pr["id"], {"error": True}) if snapshots is not None else (H._json(pr.get("detail"), {}) or {})
         head = detail.get("head_sha") or "unknown"
-        cached = H._json(pr.get("detail_json"), {}) or {}
-        changed = snapshots is not None and (pr.get("updated") or "") > detail.get("at", "") and cached.get("head_sha") != head
+        cached = H._json(pr.get("detail"), {}) or {}
+        changed = snapshots is not None and (pr.get("updated_at") or "") > detail.get("at", "") and cached.get("head_sha") != head
         if changed or detail.get("error") or not test_receipts.SHA.fullmatch(head):
             why = (detail.get("why") or "GitHub read failed" if detail.get("error")
                    else "the PR link changed while GitHub was read" if changed else "no PR head recorded")
@@ -339,7 +363,7 @@ def problem(c, row, actor, snapshots=None, note=None, require_pr=False, receipt_
                    "A failed GitHub check attempt still blocks after a passing rerun at the same head. "
                    "Have the owner or another contributor fix the failure and push a new head, then retry the review move.")
     for pr in prs:
-        detail = snapshots[pr["id"]] if snapshots is not None else (H._json(pr.get("detail_json"), {}) or {})
+        detail = snapshots[pr["id"]] if snapshots is not None else (H._json(pr.get("detail"), {}) or {})
         head = detail["head_sha"]
         checks = detail.get("checks") or {}
         # Current all-green CI is stronger evidence than prose, but only from a fresh read: the webhook-built cache
@@ -379,22 +403,25 @@ def notify(c, actor, notice):
     """After refusal rollback, keep one Builder comment per ticket/head/check kind."""
     from . import hubdb as H
     row = H.task(c, notice["task"])
-    if row:
+    from . import move_retry
+    source_wait = not notice.get('local') and (move_retry.outage(notice.get('text')) or notice.get('problem_code'))
+    if row and not source_wait:
         from .task_blocked import hold
         hold(c, row["id"], notice["text"], "gate")
-        c.execute("UPDATE tasks SET blocked_gate_json=? WHERE id=?", (
-            json.dumps({**{k: notice[k] for k in ("head", "kind", "pr")}, "at": H.now()}), row["id"]))
-    if not row or actor == row["owner"]:
+        from . import task_holds
+        task_holds.change(c, row["id"], "blocked", gate=json.dumps(
+            {**{k: notice[k] for k in ("head", "kind", "pr")}, "at": H.now()}))
+    if not row or actor == row["owner_id"]:
         return
     conv = H.conversation(c, row["conversation_id"])
     key = {k: notice[k] for k in ("kind", "head")}
-    if c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.task')=? "
-                 "AND json_extract(refs_json,'$.review_gate')=? LIMIT 1",
+    if c.execute("SELECT 1 FROM message_refs WHERE conversation_id=? AND ref_task_id=? "
+                 "AND json_extract(refs,'$.review_gate')=? LIMIT 1",
                  (conv["id"], row["id"], json.dumps(key, sort_keys=True))).fetchone():
         return
     # A temporary GitHub failure is Tico's to retry on its timer (backend/move_retry.py) and nobody's to fix: the
     # comment stays on the ticket without waking its owner for a turn with nothing to do, which by the time the
     # owner's queue reaches it reads a ticket the retry has already moved.
-    H._write_message(c, H.KEEPER, row["owner"], notice["text"], conv, "say",
+    H._write_message(c, H.KEEPER, row["owner_id"], notice["text"], conv, "say",
                      {"task": row["id"], "comment": True, "news": "blocker", "review_gate": json.dumps(key, sort_keys=True),
-                      **({"quiet": True} if notice.get("temporary") else {})}, None, None)
+                      **({"quiet": True} if source_wait else {})}, None, None)

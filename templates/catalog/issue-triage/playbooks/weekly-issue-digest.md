@@ -42,10 +42,15 @@ drafted question, themes, and what you could not read. Then:
 
     hub file publish reports/YYYY-MM-DD-issue-digest.md
 
-Apply the requested label changes described in `playbooks/triage-an-issue.md` step 6. Once the routine is
-armed, tell the recipient with `hub message send --fyi <person> "<one line and the link>"`.
+Apply the requested label changes described in `playbooks/triage-an-issue.md` step 6. Tell the recipient with `hub message send --fyi <person> "<one line and the link>"`.
 
-## 6. Finish
+## 6. Look back
+
+Compare last week's proposals with what happened: which labels were applied, which duplicates a maintainer
+closed, which missing-information requests got an answer. Each miss, with its issue number, goes to
+`memory/learnings.md`. A miss that repeats becomes a rule to check next week in `knowledge/triage-practice.md`.
+
+## 7. Finish
 
 Update the watermark in `state.md`, commit, then `hub task update <id> --status done --note` with the
 headline, counts, and the report path. Always finish it: an open routine task absorbs next Monday's.

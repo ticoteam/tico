@@ -2,7 +2,7 @@
 
 The owner registers the app with GitHub's manifest flow (nothing to copy by hand), installs it on the
 org, and from then on the hub mints short-lived installation tokens scoped to one bot repository.
-Runners fetch that token per turn (runner/git_credentials.py); no long-lived personal token is used.
+Runners fetch that token per turn (runner_support/git_credentials.py); no long-lived personal token is used.
 
 The app's private key and secrets are encrypted at rest and are never returned by any endpoint or
 written to a log. See docs/github-app.md.
@@ -16,6 +16,7 @@ import secrets
 import threading
 import time
 import uuid
+from collections import namedtuple
 from concurrent.futures import Future
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,10 +30,11 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import hubdb as H
+from . import hubdb as H, task_privacy
 from .auth import validate_identity
 from .health import GITHUB_HEALTH, note_github_token
 from .store import Problem, digest, encode
+from . import bot_settings as BS
 
 log = logging.getLogger("tico.github_app")
 
@@ -57,13 +59,30 @@ READ_PERMISSIONS = {"contents": "read", "metadata": "read"}
 # not accepted, so turns narrow to the ones it has accepted (mint_turn).
 TURN_READS = {"actions": "read", "checks": "read", "statuses": "read", "pull_requests": "read", "issues": "read",
               "deployments": "read"}
-# A write grant an Owner or admin lets run workflows (start, rerun, cancel) gets its own token: GitHub permissions are
-# token-wide, so the bot's other repositories never carry it. Never Workflows: write, so workflow files stay unedited.
-WORKFLOW_PERMISSIONS = {**TURN_PERMISSIONS, "actions": "write"}
+# A write grant an Owner or admin lets run workflows (start, rerun, cancel) gets its own token with Actions: write:
+# GitHub permissions are token-wide, so the bot's other repositories never carry it.
 WORKFLOWS_WITHHELD = ("Running workflows needs the GitHub App's Actions permission set to Read and write, accepted on "
                       "the installation; until then these repositories get the ordinary write token.")
 WORKFLOWS_REFUSED = ("GitHub refused a token with Actions: write although the installation reports it, so these "
                      "repositories get the ordinary write token; it is asked again after a minute.")
+# A write grant an Owner or admin lets edit workflow files gets Workflows: write the same way. Every other token goes
+# without it, so workflow files stay unedited there: a workflow pushed on a branch runs with the repository's secrets.
+WORKFLOW_EDITS_WITHHELD = ("Editing workflow files needs the GitHub App's Workflows permission set to Read and write, "
+                           "accepted on the installation; until then these repositories get the ordinary write token.")
+WORKFLOW_EDITS_REFUSED = ("GitHub refused a token with Workflows: write although the installation reports it, so these "
+                          "repositories get the ordinary write token; it is asked again after a minute.")
+# Each opt-in that raises a write grant's token: the grant flag, the permission raised to write, the `live` key that
+# remembers GitHub refusing it, the reasons a token answer gives, and the answer field that carries them. A grant
+# with both gets one token with both, as the git credential helper picks one token per remote.
+Raise = namedtuple("Raise", "flag permission refused_key withheld refused unknown answer")
+RAISES = (
+    Raise("run_workflows", "actions", "workflows-refused", WORKFLOWS_WITHHELD, WORKFLOWS_REFUSED,
+          "GitHub did not say whether the App may run workflows, so these repositories get the ordinary write "
+          "token; it is asked again on the next token.", "workflows_withheld"),
+    Raise("edit_workflows", "workflows", "workflow-edits-refused", WORKFLOW_EDITS_WITHHELD, WORKFLOW_EDITS_REFUSED,
+          "GitHub did not say whether the App may edit workflow files, so these repositories get the ordinary write "
+          "token; it is asked again on the next token.", "workflow_edits_withheld"),
+)
 READS_RETRY = 6 * 3600     # until the installation webhook or Check permissions says it changed
 CREATE_PERMISSIONS = {"administration": "write", "contents": "read"}
 PRODUCT_CREATE_PERMISSIONS = {"administration": "write", "metadata": "read"}
@@ -87,21 +106,10 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS github_app(
  id TEXT PRIMARY KEY, app_id INTEGER NOT NULL, slug TEXT NOT NULL, client_id TEXT NOT NULL, org TEXT NOT NULL,
  administration INTEGER NOT NULL, installation_id INTEGER, html_url TEXT NOT NULL DEFAULT '',
- ciphertext BLOB NOT NULL, nonce BLOB NOT NULL, created TEXT NOT NULL, created_by TEXT NOT NULL);
+ ciphertext BLOB NOT NULL, nonce BLOB NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS github_app_states(
  nonce TEXT PRIMARY KEY, actor TEXT NOT NULL, org TEXT NOT NULL, administration INTEGER NOT NULL,
- created REAL NOT NULL);
--- Unlike the short-lived generic idempotency cache, these operation bindings are retained so an
--- ambiguous external create can never be retried as a fresh repository write after a timeout/restart.
-CREATE TABLE IF NOT EXISTS github_product_repo_operations(
- actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL,
- request_hash TEXT NOT NULL, target_org TEXT NOT NULL, target_name TEXT NOT NULL,
- state TEXT NOT NULL CHECK(state IN ('pending','completed','rejected')),
- response_json TEXT, error_code TEXT, error_detail TEXT, error_status INTEGER,
- created TEXT NOT NULL, updated TEXT NOT NULL,
- PRIMARY KEY(actor,operation,key),
- CHECK(state!='completed' OR response_json IS NOT NULL),
- CHECK(state!='rejected' OR (error_code IS NOT NULL AND error_detail IS NOT NULL AND error_status IS NOT NULL)));
+ created_at REAL NOT NULL);
 """
 
 
@@ -355,8 +363,9 @@ class GitHubApp:
         r = self._call("GET", "/app/installations", params={"per_page": 100},
                        headers={"Authorization": "Bearer " + token})
         if r.status_code >= 300:
+            limited = rate_limited(r)
             raise Problem("github_installations", "GitHub would not list the app's installations", 502,
-                          extra={"github_status": r.status_code})
+                          retryable=limited, extra={"github_status": r.status_code, "rate_limited": limited})
         found = next((i for i in r.json() if str((i.get("account") or {}).get("login", "")).lower() == row["org"].lower()), None)
         with self.store.transaction() as c:
             c.execute("UPDATE github_app SET installation_id=? WHERE id='app'", (found["id"] if found else None,))
@@ -364,7 +373,10 @@ class GitHubApp:
 
     def live_permissions(self, refresh=False):
         """The installation's permissions as GitHub reports them now, cached briefly; None when they
-        cannot be learned (not installed, GitHub unreachable or silent), so callers keep what is stored."""
+        cannot be learned (not installed, GitHub unreachable or silent, a stored key that will not sign, or a demo,
+        which never asks GitHub), so callers keep what is stored."""
+        if self.settings.demo:
+            return None
         with self.lock:
             hit = self.live.get("permissions")
             if hit and hit[0] > time.time() and not refresh:
@@ -376,7 +388,7 @@ class GitHubApp:
                 return None
             r = self._call("GET", f"/app/installations/{installation}", headers={"Authorization": "Bearer " + token})
             permissions = r.json().get("permissions") if r.status_code < 300 else None
-        except (Problem, ValueError):
+        except (Problem, ValueError, jwt.PyJWTError):
             return None
         if not isinstance(permissions, dict):
             return None
@@ -384,11 +396,11 @@ class GitHubApp:
             self.live["permissions"] = (time.time() + LIVE_TTL, permissions)
         return permissions
 
-    def workflows_refused(self):
-        """Whether GitHub refused an Actions: write token the installation reports within LIVE_TTL: until then a token
-        request falls back at once instead of repeating the refused mints."""
+    def raise_refused(self, raised):
+        """Whether GitHub refused a token raising `raised` (a RAISES entry) the installation reports within LIVE_TTL:
+        until then a token request falls back at once instead of repeating the refused mints."""
         with self.lock:
-            until = self.live.get("workflows-refused")
+            until = self.live.get(raised.refused_key)
         return bool(until and until > time.time())
 
     def can_create_repos(self, refresh=False):
@@ -491,6 +503,9 @@ class GitHubApp:
             body["repositories"] = [r.split("/", 1)[1] for r in repos]
         r = self._call("POST", f"/app/installations/{installation}/access_tokens", json=body,
                        headers={"Authorization": "Bearer " + token})
+        if rate_limited(r):
+            raise Problem("github_token", "GitHub rate limited the installation token request; try again shortly", 502,
+                          retryable=True, extra={"github_status": r.status_code, "rate_limited": True})
         said = _said(r)
         if r.status_code in (403, 422) and "permission" in said.lower():
             raise Problem("github_app_permissions",
@@ -567,7 +582,7 @@ class GitHubApp:
                 confirmed.update({name.lower(): confirmed.get(name.lower(), time.time()) if name.lower() in missing else time.time() for name in absent})
                 save_metadata(c, 'repositories-confirmed-missing', confirmed)
                 for name in absent:
-                    c.execute('INSERT INTO repositories(id,full_name,reachable,updated) VALUES(?,?,0,?) '
+                    c.execute('INSERT INTO repositories(id,full_name,reachable,updated_at) VALUES(?,?,0,?) '
                               'ON CONFLICT(full_name) DO UPDATE SET reachable=0', (uuid.uuid4().hex, name, H.now()))
             from .repositories import repository_health
             repository_health(self)
@@ -678,7 +693,9 @@ class GitHubApp:
         row = self.row()
         if not row:
             raise Problem("github_not_connected", "GitHub is not connected. Connect it in Tools first.", 409)
-        name = "bot-" + slug.removeprefix("emp-")
+        with self.store.read() as c:      # the repository is named for the bot (H.bot_repository_name), id or slug in
+            name = H.bot_repository_name(c, slug)
+            slug = (H.resolve_bot(c, slug) or {}).get("slug", slug)
         if not self.can_create_repos(refresh=True):
             from .repo_waits import fixes
             with self.store.read() as c:
@@ -850,6 +867,17 @@ def _said(response):
         return ""
 
 
+def rate_limited(response):
+    """A 403 can be a temporary limit, so classify it before access diagnostics discard its headers and message."""
+    if response.status_code == 429:
+        return True
+    if response.status_code != 403:
+        return False
+    headers = getattr(response, "headers", {})
+    return (headers.get("x-ratelimit-remaining") == "0" or "retry-after" in headers
+            or any(word in _said(response).lower() for word in ("rate limit", "abuse")))
+
+
 def manifest(settings, name, administration):
     public = settings.public_url
     permissions = {**TURN_READS, **TURN_PERMISSIONS}       # a write a bot needs wins over the same read
@@ -864,7 +892,7 @@ def manifest(settings, name, administration):
 
 
 def extra_repos(c, bot):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (EXTRA_KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (EXTRA_KEY,)).fetchone()
     try:
         value = json.loads(row[0]).get(bot, []) if row else []
     except (ValueError, AttributeError):
@@ -873,13 +901,13 @@ def extra_repos(c, bot):
 
 
 def save_extra_repos(c, bot, repos):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (EXTRA_KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (EXTRA_KEY,)).fetchone()
     every = json.loads(row[0]) if row else {}
     if repos:
         every[bot] = repos
     else:
         every.pop(bot, None)
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (EXTRA_KEY, json.dumps(every, sort_keys=True)))
 
 
@@ -952,7 +980,7 @@ def install_github_app(app, settings, store):
         run = {"attempt": attempt_id, "rights": acting.actor if acting else None}
         if acting is None:
             return set(), run
-        bots = [r[0] for r in c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+        bots = [r[0] for r in c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                                         "WHERE b.state<>'archived' AND bc.bot<>?", (BOTOPS,))]
         if acting.actor == "bot:" + BOTOPS:
             run["own_run"] = bool(team_rules.load(c)["botops_manages_bots"] and botops_act.own_run(c, auth, attempt_id))
@@ -968,7 +996,7 @@ def install_github_app(app, settings, store):
         if who.role == "bot":
             attempts = [who.attempt_id] if who.actor == "bot:" + BOTOPS and not who.via and who.attempt_id else []
         elif who.role == "runner":
-            attempts = [r["id"] for r in c.execute("SELECT id FROM attempts WHERE bot=? AND runner_id=? "
+            attempts = [r["id"] for r in c.execute("SELECT id FROM attempts WHERE bot_id=? AND runner_id=? "
                                                    "AND state IN ('leased','running')", (BOTOPS, who.runner_id))]
         else:
             attempts = []
@@ -1016,7 +1044,8 @@ def install_github_app(app, settings, store):
         owner(request)
         from .repo_waits import resume
         service.live.pop("turn-reads", None)
-        service.live.pop("workflows-refused", None)
+        for raised in RAISES:
+            service.live.pop(raised.refused_key, None)
         view = status_view(refresh=True)
         if view.get("connected"):
             view["resumed"] = resume(service)
@@ -1038,7 +1067,7 @@ def install_github_app(app, settings, store):
                 raise Problem("github_key_missing", LOST_KEY, 409)
         nonce = secrets.token_urlsafe(24)
         with store.transaction() as c:
-            c.execute("DELETE FROM github_app_states WHERE created<?", (time.time() - STATE_TTL,))
+            c.execute("DELETE FROM github_app_states WHERE created_at<?", (time.time() - STATE_TTL,))
             c.execute("INSERT INTO github_app_states VALUES(?,?,?,?,?)", (nonce, who.actor, org, int(administration), time.time()))
         body = manifest(settings, (name or f"{settings.company_name} Tico").strip(), administration)
         action = f"https://github.com/organizations/{org}/settings/apps/new?state={nonce}"
@@ -1066,7 +1095,7 @@ def install_github_app(app, settings, store):
             # Single use, and only in the session that started it.
             if row:
                 c.execute("DELETE FROM github_app_states WHERE nonce=?", (state,))
-        if (not row or row["actor"] != who.actor or time.time() - row["created"] > STATE_TTL
+        if (not row or row["actor"] != who.actor or time.time() - row["created_at"] > STATE_TTL
                 or not secrets.compare_digest(row["nonce"], state)):
             raise Problem("github_state", "This GitHub setup link is not valid or has expired; start again from Tools", 400)
         if not code:
@@ -1104,6 +1133,7 @@ def install_github_app(app, settings, store):
         who = request.state.identity
         with store.read_transaction() as c:
             validate_identity(c, who)
+            body.bot = (H.resolve_bot(c, body.bot) or {}).get("id", body.bot)
             # A turn may ask only for its own bot; a runner only for a bot assigned to it.
             if who.role == "bot":
                 allowed = H.actor_id(who.actor) == body.bot
@@ -1138,6 +1168,9 @@ def install_github_app(app, settings, store):
                             and name.split("/")[0].lower() == row["org"].lower() and name.lower() not in missing):
                         have.add(name.lower())
                         grants.append({'full_name': name, 'access': 'write'})
+            if who.attempt_id and task_privacy.private_meeting_run(c, who.attempt_id):
+                # A private meeting's turn reads its repositories and pushes to none (task_privacy.PRIVATE_MEETING_WRITES).
+                grants = [{'full_name': g['full_name'], 'access': 'read'} for g in grants]
         issuer = reviewer.for_bot(body.bot)
         repos = [r['full_name'] for r in grants]
         write_repos = [r['full_name'] for r in grants if r['access'] == 'write']
@@ -1155,24 +1188,107 @@ def install_github_app(app, settings, store):
             # use the server-side review endpoint; the runner cannot author product commits as that App.
             read_repos += [name for name in write_repos if name.lower() != repo.lower()]
             write_repos = [name for name in write_repos if name.lower() == repo.lower()]
-        flagged = {g['full_name'].lower() for g in grants if g['access'] == 'write' and g.get('run_workflows')}
-        workflow_repos = [name for name in write_repos if name.lower() in flagged]
-        withheld = None
-        if workflow_repos:
+        # Each flagged write grant wants the raises its flags name; those the installation lacks are withheld up front.
+        wants = {}
+        for g in grants:
+            if g['access'] == 'write':
+                if asked := tuple(r for r in RAISES if g.get(r.flag)):
+                    wants[g['full_name'].lower()] = asked
+        withheld = {}
+
+        def withhold(raised, names, reason):
+            entry = withheld.setdefault(raised, {"repositories": [], "reason": reason})
+            entry["repositories"] = sorted(set(entry["repositories"]) | set(names))
+            entry["reason"] = reason
+
+        flagged = [name for name in write_repos if name.lower() in wants]
+        if flagged:
             live = issuer.live_permissions()
-            if live is not None and issuer is service:
-                # Accepted clears the setting warning at once, whatever the mint below does; whether GitHub refuses
-                # the token is learned there.
-                R.workflow_health(service, live.get("actions") == "write", refused=None)
-            if (live or {}).get("actions") == "write":
-                write_repos = [name for name in write_repos if name.lower() not in flagged]
-            else:
-                withheld = {"repositories": workflow_repos, "reason": WORKFLOWS_WITHHELD if live is not None else
-                            "GitHub did not say whether the App may run workflows, so these repositories get the "
-                            "ordinary write token; it is asked again on the next token."}
-                workflow_repos = []
+            for raised in RAISES:
+                asking = [name for name in flagged if raised in wants[name.lower()]]
+                if not asking:
+                    continue
+                if live is not None and issuer is service:
+                    # Accepted clears the setting warning at once, whatever the mint below does; whether GitHub
+                    # refuses the token is learned there.
+                    R.workflow_health(service, live.get(raised.permission) == "write", refused=None, flag=raised.flag)
+                if (live or {}).get(raised.permission) != "write":
+                    withhold(raised, asking, raised.withheld if live is not None else raised.unknown)
+                    for name in asking:
+                        wants[name.lower()] = tuple(r for r in wants[name.lower()] if r is not raised)
+        # One token per set of raises: a repository is in exactly one write token.
+        groups = {}
+        for name in flagged:
+            if wants[name.lower()]:
+                groups.setdefault(wants[name.lower()], []).append(name)
+        write_repos = [name for name in write_repos if not wants.get(name.lower())]
+        raised_repos = []
         tokens = []
         refresh_margin = GIT_CALL_REFRESH_MARGIN if body.purpose == "git" else TURN_START_REFRESH_MARGIN
+
+        def raised_token(names, wanted):
+            """`names` minted with TURN_PERMISSIONS raised by each of `wanted`, dropping (and saying why) each raise
+            GitHub refuses, down to the ordinary write token: (mint_turn's answer, the raises it carries)."""
+            # A refusal seen within LIVE_TTL falls back at once: each git call asks for a token, and would otherwise
+            # repeat three refused mints and two permission reads.
+            for raised in [r for r in wanted if issuer.raise_refused(r)]:
+                withhold(raised, names, raised.refused)
+                wanted.remove(raised)
+            kw = dict(own=repo, refresh_margin=refresh_margin, include_cache_status=True, missing=missing)
+            while wanted:
+                permissions = {**TURN_PERMISSIONS, **{r.permission: "write" for r in wanted}}
+                try:
+                    return issuer.mint_turn(names, permissions, narrow=False, **kw), wanted
+                except Problem as problem:
+                    if problem.code != "github_app_permissions":
+                        raise
+                # Either a raise went away within LIVE_TTL, or a read (Checks, Commit statuses) the installation
+                # lacks: GitHub says which now.
+                live = issuer.live_permissions(refresh=True) or {}
+                if lacking := [r for r in wanted if live.get(r.permission) != "write"]:
+                    for raised in lacking:
+                        withhold(raised, names, raised.withheld)
+                    wanted = [r for r in wanted if r not in lacking]
+                    continue
+                with issuer.lock:
+                    narrowed = issuer.live.get("turn-reads")
+                try:
+                    return issuer.mint_turn(names, permissions, **kw), wanted
+                except Problem as again:
+                    if again.code != "github_app_permissions":
+                        raise
+                # The installation reports every raise yet refuses the token: not the setting Health names. The
+                # reads the retry narrowed away on the way come back for the other tokens, unless the webhook or
+                # Check permissions reset them meanwhile.
+                with issuer.lock:
+                    current = issuer.live.get("turn-reads")
+                    if current is not narrowed and current and current[1] == {}:
+                        if narrowed:
+                            issuer.live["turn-reads"] = narrowed
+                        else:
+                            issuer.live.pop("turn-reads", None)
+                refused = wanted[-1:]
+                if len(wanted) > 1:
+                    # Asked together, GitHub does not say which raise it refuses: ask each alone, without the reads
+                    # (the retry above refused it even without them), and drop the ones refused alone (the last, if
+                    # each is accepted alone).
+                    refused = []
+                    for raised in wanted:
+                        try:
+                            issuer.mint_reachable(names, {**TURN_PERMISSIONS, raised.permission: "write"}, **kw)
+                        except Problem as alone:
+                            if alone.code != "github_app_permissions":
+                                raise
+                            refused.append(raised)
+                    refused = refused or wanted[-1:]
+                with issuer.lock:
+                    for raised in refused:
+                        issuer.live[raised.refused_key] = time.time() + LIVE_TTL
+                for raised in refused:
+                    withhold(raised, names, raised.refused)
+                wanted = [r for r in wanted if r not in refused]
+            return issuer.mint_turn(names, TURN_PERMISSIONS, **kw), []
+
         try:
             # GitHub permissions are token-wide. Never put read grants in a write token.
             if write_repos:
@@ -1183,59 +1299,20 @@ def install_github_app(app, settings, store):
                     tokens.append({'token': value, 'expires_at': expires, 'repositories': write_repos,
                                    'access': 'write', 'cached': cached,
                                    'reachability_changed': reachability_changed})
-            if workflow_repos:
-                run_actions = {}
-                # A refusal seen within LIVE_TTL falls back at once: each git call asks for a token, and would
-                # otherwise repeat three refused mints and two permission reads.
-                reason = WORKFLOWS_REFUSED if issuer.workflows_refused() else None
-                if not reason:
-                    try:
-                        run_value, run_expires, workflow_repos, cached, reachability_changed = issuer.mint_turn(
-                            workflow_repos, WORKFLOW_PERMISSIONS, narrow=False, own=repo,
-                            refresh_margin=refresh_margin, include_cache_status=True, missing=missing)
-                        run_actions = {'actions': 'write'}
-                    except Problem as problem:
-                        if problem.code != "github_app_permissions":
-                            raise
-                        # Either Actions: write went away within LIVE_TTL, or a read (Checks, Commit statuses) the
-                        # installation lacks: GitHub says which now.
-                        reason = WORKFLOWS_WITHHELD
-                        if (issuer.live_permissions(refresh=True) or {}).get("actions") == "write":
-                            with issuer.lock:
-                                narrowed = issuer.live.get("turn-reads")
-                            try:
-                                run_value, run_expires, workflow_repos, cached, reachability_changed = issuer.mint_turn(
-                                    workflow_repos, WORKFLOW_PERMISSIONS, own=repo, refresh_margin=refresh_margin,
-                                    include_cache_status=True, missing=missing)
-                                run_actions = {'actions': 'write'}
-                            except Problem as again:
-                                if again.code != "github_app_permissions":
-                                    raise
-                                # The installation reports Actions: write yet refuses it: not the setting Health
-                                # names. The reads the retry narrowed away on the way come back for the other
-                                # tokens, unless the webhook or Check permissions reset them meanwhile.
-                                with issuer.lock:
-                                    current = issuer.live.get("turn-reads")
-                                    if current is not narrowed and current and current[1] == {}:
-                                        if narrowed:
-                                            issuer.live["turn-reads"] = narrowed
-                                        else:
-                                            issuer.live.pop("turn-reads", None)
-                                    issuer.live["workflows-refused"] = time.time() + LIVE_TTL
-                                reason = WORKFLOWS_REFUSED
-                if run_actions:
-                    if issuer is service:
-                        R.workflow_health(service, True)
-                else:
-                    if issuer is service:
-                        R.workflow_health(service, reason != WORKFLOWS_WITHHELD, refused=reason == WORKFLOWS_REFUSED)
-                    withheld = {"repositories": workflow_repos, "reason": reason}
-                    run_value, run_expires, workflow_repos, cached, reachability_changed = issuer.mint_turn(
-                        workflow_repos, TURN_PERMISSIONS, own=repo, refresh_margin=refresh_margin,
-                        include_cache_status=True, missing=missing)
+            for wanted, names in sorted(groups.items(), key=lambda item: [RAISES.index(r) for r in item[0]]):
+                (run_value, run_expires, names, cached, reachability_changed), carried = raised_token(names, list(wanted))
+                if issuer is service:
+                    for raised in wanted:
+                        if raised in carried:
+                            R.workflow_health(service, True, flag=raised.flag)
+                        else:
+                            reason = withheld[raised]["reason"]
+                            R.workflow_health(service, reason != raised.withheld, refused=reason == raised.refused,
+                                              flag=raised.flag)
+                raised_repos += names
                 if run_value:
-                    tokens.append({'token': run_value, 'expires_at': run_expires, 'repositories': workflow_repos,
-                                   'access': 'write', **run_actions, 'cached': cached,
+                    tokens.append({'token': run_value, 'expires_at': run_expires, 'repositories': names,
+                                   'access': 'write', **{r.permission: 'write' for r in carried}, 'cached': cached,
                                    'reachability_changed': reachability_changed})
             if read_repos:
                 read_value, read_expires, read_repos, cached, reachability_changed = issuer.mint_turn(
@@ -1247,7 +1324,7 @@ def install_github_app(app, settings, store):
                                    'reachability_changed': reachability_changed})
             if not tokens:
                 raise Problem('github_repo_not_accessible', f'{repo} is not reachable; check the GitHub App installation', 409)
-            repos = write_repos + workflow_repos + read_repos
+            repos = write_repos + raised_repos + read_repos
             value, expires = tokens[0]['token'], tokens[0]['expires_at']
         except Problem as problem:
             if issuer is service and problem.code not in BOT_SCOPED:
@@ -1270,7 +1347,7 @@ def install_github_app(app, settings, store):
         # to a later run, which may be allowed less.
         return {"configured": True, "token": value, "expires_at": expires, "repository": repo,
                 "repositories": repos, "tokens": response_tokens, "hold": body.bot != BOTOPS,
-                **({"workflows_withheld": withheld} if withheld else {})}
+                **{raised.answer: withheld[raised] for raised in RAISES if raised in withheld}}
 
     def bot_repos(c, bot):
         if not c.execute("SELECT 1 FROM bot_config WHERE bot=?", (bot,)).fetchone():
@@ -1282,6 +1359,8 @@ def install_github_app(app, settings, store):
 
     @app.get("/api/v2/bots/{bot}/github-repos")
     def extra_get(request: Request, bot: str):
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         manager(request, bot)
         with store.read() as c:
             row, own = bot_repos(c, bot)
@@ -1290,6 +1369,8 @@ def install_github_app(app, settings, store):
 
     @app.put("/api/v2/bots/{bot}/github-repos")
     def extra_put(request: Request, bot: str, body: ExtraRepos):
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         who = manager(request, bot)
         with store.transaction() as c:
             row, own = bot_repos(c, bot)
@@ -1326,7 +1407,7 @@ def install_github_app(app, settings, store):
                     raise Problem("forbidden", "Only the owner, BotOps or a bot granted repository creation may "
                                   "create bot repositories. Ask BotOps, or ask an Owner or admin to enable "
                                   "Create bot repositories in this bot's settings.", 403)
-                row, bot = service.row(c), H.bot(c, slug)
+                row, bot = service.row(c), H.resolve_bot(c, slug)
             if not row:
                 raise Problem("github_not_connected", "GitHub is not connected. Connect it in Tools first.", 409)
             if not bot or bot.get("state") == "archived":
@@ -1353,18 +1434,18 @@ def install_github_app(app, settings, store):
             # local build and finishes on its own once the repository or the permission appears (repo_waits).
             from .repo_waits import raise_item
             with store.transaction() as c:
-                bot = H.bot(c, slug)
+                bot = H.resolve_bot(c, slug)
                 if builder:
-                    built_on.remember(c, slug, builder)
+                    built_on.remember(c, (bot or {}).get("id", slug), builder)
                 if bot and bot.get("state") != "archived" and service.row(c):
-                    found = raise_item(c, slug, service.row(c), fixer(c), "" if body.empty else template)
+                    found = raise_item(c, bot["id"], service.row(c), fixer(c), "" if body.empty else template)
                     problem.extra = {**problem.extra, "needs_you_task": found["task_id"]}
                     problem.detail += (" The owner has a Needs-you task with both fixes; the bot keeps its local "
                                        "build and finishes on its own once either is done.")
             raise
         with store.transaction() as c:
             if builder:
-                built_on.remember(c, slug, builder)
+                built_on.remember(c, (H.resolve_bot(c, slug) or {}).get("id", slug), builder)
             H.event(c, who.actor, "github.repo_created", result["repository"],
                     {"empty": True} if body.empty else {"template": template})
         return result
@@ -1375,12 +1456,13 @@ def install_github_app(app, settings, store):
         from . import repositories as R
         bot, repository = H.actor_id(who.actor), result["repository"]
         org = repository.split("/")[0]
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        bot_row = H.bot(c, bot) or {}
+        name = bot_row.get("display_name") or bot_row.get("slug") or bot
         moved = None
         c.execute("SAVEPOINT product_repo_grant")
         try:
             # Granting needs it on the team list; a bot set to every ticked repository then reaches it too.
-            c.execute("INSERT INTO repositories(id,full_name,enabled,added_by,updated) VALUES(?,?,1,?,?) "
+            c.execute("INSERT INTO repositories(id,full_name,enabled,added_by,updated_at) VALUES(?,?,1,?,?) "
                       "ON CONFLICT(full_name) DO UPDATE SET enabled=1", (uuid.uuid4().hex, repository, who.actor, H.now()))
             before = R.access(c, bot, org)
             if before["mode"] == "all" and before["all_access"] == "write":
@@ -1409,10 +1491,10 @@ def install_github_app(app, settings, store):
             access, moved = "none", None
         others = []
         if access != "none":
-            for r in c.execute("SELECT bc.bot,bc.config_json FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+            for r in c.execute(f"SELECT bc.bot,{BS.CONFIG} AS config,b.slug FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
                                "WHERE b.state<>'archived' AND bc.bot<>? ORDER BY bc.bot", (bot,)).fetchall():
-                if json.loads(r["config_json"] or "{}").get("repo_access_mode") == "all":
-                    others.append((H.bot(c, r["bot"]) or {}).get("display_name") or r["bot"])
+                if json.loads(r["config"] or "{}").get("repo_access_mode") == "all":
+                    others.append((H.bot(c, r["bot"]) or {}).get("display_name") or r["slug"])
         said = {"write": f"{name} has write access to it.",
                 "none": f"{name} could not be given access to it; an Owner or admin can give it in Settings > "
                         "Repositories."}[access]
@@ -1462,42 +1544,26 @@ def install_github_app(app, settings, store):
         request_hash = digest(encode(request_body))
 
         def existing_operation(c, *, bind=False):
-            """Replay a durable result, reject a reused key, or bind it before the GitHub POST."""
-            previous = c.execute("SELECT * FROM github_product_repo_operations "
-                                 "WHERE actor=? AND operation=? AND key=?",
+            """Replay a durable result, reject a reused key, or bind it before the GitHub POST. The binding is a row of
+            `idempotency` (binding 'github_product_repo', subject org/name), retained: the retention sweep never takes it."""
+            previous = c.execute("SELECT * FROM idempotency WHERE binding='github_product_repo' "
+                                 "AND actor=? AND operation=? AND key=?",
                                  (who.actor, operation, key)).fetchone()
             if previous:
                 if previous["request_hash"] != request_hash:
                     raise Problem("idempotency_conflict", "This key was used for different content", 409)
                 if previous["state"] == "pending":
                     raise Problem("github_create_outcome_unknown",
-                                  f"The result for {previous['target_org']}/{previous['target_name']} is unresolved. Tico will not repeat this operation automatically; check GitHub before taking another action.", 409)
-                if previous["state"] == "rejected":
+                                  f"The result for {previous['subject']} is unresolved. Tico will not repeat this operation automatically; check GitHub before taking another action.", 409)
+                if previous["state"] == "refused":
                     raise Problem(previous["error_code"], previous["error_detail"], previous["error_status"])
-                return json.loads(previous["response_json"])
-
-            # Migrate an unexpired receipt from the earlier implementation. It was written only
-            # after the external create returned, so it is complete proof and can be retained here.
-            legacy = c.execute("SELECT request_hash,response_json FROM idempotency "
-                               "WHERE actor=? AND operation=? AND key=?",
-                               (who.actor, operation, key)).fetchone()
-            if legacy:
-                if legacy["request_hash"] != request_hash:
-                    raise Problem("idempotency_conflict", "This key was used for different content", 409)
-                result = json.loads(legacy["response_json"])
-                c.execute("INSERT INTO github_product_repo_operations "
-                          "(actor,operation,key,request_hash,target_org,target_name,state,response_json,created,updated) "
-                          "VALUES(?,?,?,?,?,?,'completed',?,?,?)",
-                          (who.actor, operation, key, request_hash, body.org, name,
-                           encode(result), H.now(), H.now()))
-                return result
+                return json.loads(previous["response"])
 
             if bind:
                 stamp = H.now()
-                c.execute("INSERT INTO github_product_repo_operations "
-                          "(actor,operation,key,request_hash,target_org,target_name,state,created,updated) "
-                          "VALUES(?,?,?,?,?,?,'pending',?,?)",
-                          (who.actor, operation, key, request_hash, body.org, name, stamp, stamp))
+                c.execute("INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at,updated_at,"
+                          "binding,subject,state) VALUES(?,?,?,?,NULL,?,?,'github_product_repo',?,'pending')",
+                          (who.actor, operation, key, request_hash, stamp, stamp, f"{body.org}/{name}"))
             return None
 
         with service.product_repo_create_lock:
@@ -1533,9 +1599,10 @@ def install_github_app(app, settings, store):
                     # A definite GitHub rejection is replayable. If this write fails, the operation
                     # remains pending and future requests fail closed instead of issuing another POST.
                     with store.transaction() as c:
-                        c.execute("UPDATE github_product_repo_operations "
-                                  "SET state='rejected',error_code=?,error_detail=?,error_status=?,updated=? "
-                                  "WHERE actor=? AND operation=? AND key=? AND request_hash=? AND state='pending'",
+                        c.execute("UPDATE idempotency "
+                                  "SET state='refused',error_code=?,error_detail=?,error_status=?,updated_at=? "
+                                  "WHERE binding='github_product_repo' AND actor=? AND operation=? AND key=? "
+                                  "AND request_hash=? AND state='pending'",
                                   (problem.code, problem.detail, problem.status, H.now(),
                                    who.actor, operation, key, request_hash))
                 raise
@@ -1546,19 +1613,15 @@ def install_github_app(app, settings, store):
             try:
                 with store.transaction() as c:
                     validate_identity(c, who)
-                    current = c.execute("SELECT state,request_hash,response_json FROM github_product_repo_operations "
-                                        "WHERE actor=? AND operation=? AND key=?",
+                    current = c.execute("SELECT state,request_hash,response FROM idempotency "
+                                        "WHERE binding='github_product_repo' AND actor=? AND operation=? AND key=?",
                                         (who.actor, operation, key)).fetchone()
                     if not current or current["request_hash"] != request_hash:
                         raise Problem("idempotency_conflict", "The product-repository operation binding changed", 409)
                     if current["state"] == "completed":
-                        return json.loads(current["response_json"])
+                        return json.loads(current["response"])
                     if current["state"] != "pending":
                         raise Problem("github_create_outcome_unknown", "The product-repository operation is no longer pending; no second create was attempted", 409)
-                    previous = c.execute("SELECT request_hash FROM idempotency WHERE actor=? AND operation=? AND key=?",
-                                         (who.actor, operation, key)).fetchone()
-                    if previous and previous["request_hash"] != request_hash:
-                        raise Problem("idempotency_conflict", "This key was used for different content", 409)
                     if who.role == "bot":
                         result = bot_created(c, who, result)
                     H.event(c, who.actor, "github.product_repo_created", result["repository"],
@@ -1566,12 +1629,9 @@ def install_github_app(app, settings, store):
                              "installation_access": result["installation_access"],
                              **({"bot_access": result["bot_access"], "owner_notified": result.pop("_notified"),
                                  "moved_to_chosen": result.pop("_moved")} if who.role == "bot" else {})})
-                    if not previous:
-                        c.execute("INSERT INTO idempotency VALUES(?,?,?,?,?,?)",
-                                  (who.actor, operation, key, request_hash, encode(result), H.now()))
-                    c.execute("UPDATE github_product_repo_operations "
-                              "SET state='completed',response_json=?,updated=? "
-                              "WHERE actor=? AND operation=? AND key=? AND state='pending'",
+                    c.execute("UPDATE idempotency SET state='completed',response=?,updated_at=? "
+                              "WHERE binding='github_product_repo' AND actor=? AND operation=? AND key=? "
+                              "AND state='pending'",
                               (encode(result), H.now(), who.actor, operation, key))
             except Problem:
                 raise

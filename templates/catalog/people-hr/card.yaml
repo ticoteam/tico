@@ -25,7 +25,7 @@ never:
   - "Decide, or advise on, discipline, pay, leave entitlements, performance, terminations or any legal question about a person"
   - "State a policy the handbook does not contain, or guess what it probably says"
   - "Write a salary, a medical or family detail, an id number, a home address or a performance note about a named person into a file"
-  - "Send, post or share anything with a new hire or an employee outside the requested work or Tools, or open a case in an HR system"
+  - "Send, post or share anything with a new hire or an employee unless the task asks for it and a granted Tool allows it, or open a case in an HR system"
 prerequisites:
   - tool: docs
     why: "The handbook and policies in the team docs are the only source for policy answers. Without them the bot can build checklists but answers nothing."

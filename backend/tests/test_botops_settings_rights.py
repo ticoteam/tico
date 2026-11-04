@@ -1,5 +1,5 @@
 """BotOps changes a team setting with the rights of the person who asked, never its own (docs/permissions.md): the
-release schedule, the Task Manager, quiet task triage, the team's run budget, task types, tags and incoming triggers.
+release schedule, the Task Manager, stalled task check, the team's run budget, task types, tags and incoming triggers.
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """
@@ -18,7 +18,7 @@ def test_an_owner_changes_team_settings_through_botops_and_a_member_is_refused(a
     err, made = mcp(api, "hub_task_type_create", {"name": "Ops", "default_visibility": "private"}, ana["token"])
     assert not err and made["type"]["default_visibility"] == "private", made
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT actor,detail_json FROM events WHERE action='task_type.create' ORDER BY rowid DESC "
+        row = c.execute("SELECT actor,detail FROM events WHERE action='task_type.create' ORDER BY rowid DESC "
                         "LIMIT 1").fetchone()
         assert row["actor"] == "human:ana", dict(row)            # hers, via BotOps
     finish(api, botops, ana)

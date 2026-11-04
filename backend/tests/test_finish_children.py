@@ -1,12 +1,13 @@
-"""No open subtask stays under a finished task: closing or finishing a parent closes its open subtasks all the way
-down, or with children=detach makes them standalone tasks. Each is the actor's own close or detach, so a bot ends
-only what it may end, and reopening the parent leaves them as they are, on the record."""
+"""Closing or finishing a task closes open descendants, with the usual history and close permissions."""
+import json
+
+import pytest
+
 from backend import hubdb as H
 from backend import task_relations as TR
-from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401  (fixtures)
+from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
 
-ANA, CMO, SEO = "human:ana", "bot:cmo", "bot:seo"
-FINISHED = ("done", "closed", "declined")
+ANA, BEN, CMO, SEO = "human:ana", "human:ben", "bot:cmo", "bot:seo"
 
 
 def hub(path):
@@ -20,117 +21,116 @@ def make(c, actor, title, owner, parent=None):
     return H.task_create(c, actor, title, "", owner, parent_id=parent and parent["id"], lint=False)
 
 
-def status(c, row):
-    return H.task(c, row["id"])["status"]
+def history(c, row):
+    return [dict(r) for r in c.execute(
+        "SELECT * FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY created_at,rowid", (row["id"],))]
 
 
-def open_under_finished(c):
-    """Every open task whose parent is finished: what this feature never leaves behind."""
-    return [r[0] for r in c.execute(
-        "SELECT kid.id FROM task_relations r JOIN tasks kid ON kid.id=r.from_task JOIN tasks up ON up.id=r.to_task "
-        f"WHERE r.kind='parent' AND up.status IN {FINISHED} AND kid.status NOT IN {FINISHED}")]
+def finish(c, parent, operation):
+    if operation == "close":
+        return H.task_close(c, ANA, parent["id"], note="Launch cancelled")
+    if operation == "bot_close":
+        return H.task_close(c, CMO, parent["id"], note="Launch cancelled")
+    if operation == "done":
+        return H.task_update(c, CMO, parent["id"], status="done", note="Page is live")
+    return H.task_update(c, ANA, parent["id"], step=operation)
 
 
-def children_said(c, row):
-    return [r[0] for r in c.execute("SELECT new FROM task_events WHERE task_id=? AND field='children' ORDER BY ts,rowid",
-                                    (row["id"],))]
-
-
-def test_closing_a_parent_closes_its_open_subtasks_all_the_way_down_and_wakes_no_parent(tmp_path):
+@pytest.mark.parametrize("operation", ["close", "bot_close", "done", "Shipped", "Cancelled"])
+def test_finish_closes_nested_open_subtasks_and_preserves_finished_subtasks(tmp_path, operation):
     c = hub(tmp_path / "hub.db")
-    parent = make(c, ANA, "Launch the pricing page", CMO)
+    board = H.type_create(c, ANA, "Launch", [{"name": "Build", "status": "doing"},
+                         {"name": "Shipped", "status": "done"}, {"name": "Cancelled", "status": "closed"}],
+                          numbered=True, mover=True)
+    parent = H.task_create(c, CMO if operation == "bot_close" else ANA, "Launch the pricing page", "", CMO,
+                           type=board["id"], step="Build", lint=False)
     copy = make(c, CMO, "Write the pricing copy", SEO, parent)
     proof = make(c, CMO, "Proofread the pricing copy", SEO, copy)
-    shipped = make(c, CMO, "Pick the plan names", SEO, parent)
-    H.task_update(c, SEO, shipped["id"], status="done", note="Picked")
-    late = make(c, CMO, "Check the plan names in German", SEO, shipped)    # open under a done subtask
-    H.task_close(c, ANA, parent["id"], note="Launch cancelled")
-    assert [status(c, t) for t in (parent, copy, proof, shipped, late)] == ["closed", "closed", "closed", "done", "closed"]
-    assert open_under_finished(c) == []
-    # Each says why, and points at the task whose close it was.
-    assert H.task(c, proof["id"])["note"] == "Closed with its parent task"
-    assert c.execute("SELECT new FROM task_events WHERE task_id=? AND field='closed_with'",
-                     (proof["id"],)).fetchone()[0] == parent["id"]
-    assert children_said(c, parent) == ["Closed with it: Write the pricing copy; Proofread the pricing copy; "
-                                        "Check the plan names in German"]
-    # The subtasks closing one by one tell nobody that all subtasks are done: the parent itself was closed.
-    assert not c.execute("SELECT 1 FROM messages WHERE json_extract(refs_json,'$.wake')='subtask_finished'").fetchone()
+    H.task_update(c, SEO, proof["id"], status="doing")
+    finished = []
+    for state in ("closed", "done", "declined"):
+        kid = make(c, CMO, f"Check the {state} plan", SEO, parent)
+        if state == "closed":
+            H.task_close(c, CMO, kid["id"], note="Already cancelled")
+        else:
+            H.task_update(c, SEO, kid["id"], status=state, note="Already finished")
+        finished.append(kid)
+    # Descendants below finished children still close, without rewriting the finished children.
+    late = make(c, CMO, "Check the plan names in German", SEO, finished[0])
+    before = [(H.task(c, kid["id"]), history(c, kid)) for kid in finished]
+    result = finish(c, parent, operation)
+    assert result["status"] == ("done" if operation in ("done", "Shipped") else "closed")
+    for kid in (copy, proof, late):
+        after = H.task(c, kid["id"])
+        assert after["status"] == "closed"
+        assert after["note"] == f"Closed with #{parent['number']}"
+        records = history(c, kid)
+        assert any(e["kind"] == "status" and e["new"] == "closed" and e["note"] == after["note"] for e in records)
+        assert any(e["kind"] == "closed_with" and e["new"] == parent["id"] for e in records)
+        closed = c.execute("SELECT detail FROM events WHERE action='task.close' AND target=?", (kid["id"],)).fetchall()
+        assert len(closed) == 1 and json.loads(closed[0][0])["with_parent"] == parent["id"]
+        assert TR.parent_of(c, kid["id"]) == (copy["id"] if kid == proof else finished[0]["id"] if kid == late else parent["id"])
+    assert [(H.task(c, kid["id"]), history(c, kid)) for kid in finished] == before
+    assert not c.execute("SELECT 1 FROM messages WHERE json_extract(refs,'$.wake')='subtask_finished'").fetchone()
+    H.task_update(c, ANA, parent["id"], status="open", note="One more change")
+    assert all(H.task(c, kid["id"])["status"] == "closed" for kid in (copy, proof, late))
+    assert any(e["kind"] == "children" and e["new"].startswith("Still closed") for e in history(c, parent))
+    c.close()
 
 
-def test_a_bot_finishing_its_task_closes_the_subtasks_it_filed_and_reopening_keeps_them_closed(tmp_path):
+def test_a_bot_finishing_its_task_closes_a_persons_subtask_with_one_parent_notice(tmp_path):
     c = hub(tmp_path / "hub.db")
     parent = make(c, ANA, "Launch the pricing page", CMO)
     ask = make(c, CMO, "Approve the final copy", ANA, parent)
-    done = H.task_update(c, CMO, parent["id"], status="done", note="Page is live")
-    assert (done["status"], status(c, ask)) == ("done", "closed")
-    assert open_under_finished(c) == []
-    # Ana hears it on the parent's notice, which names what closed with it, not once per subtask.
-    told = [r[0] for r in c.execute("SELECT body FROM messages WHERE to_actor=? AND body NOT LIKE 'New task%'", (ANA,))]
+    H.task_update(c, CMO, parent["id"], status="done", note="Page is live")
+    assert H.task(c, ask["id"])["status"] == "closed"
+    told = [r[0] for r in c.execute("SELECT body FROM messages WHERE recipient_id=? AND body NOT LIKE 'New task%'", (ANA,))]
     assert told == ["Finished: Launch the pricing page\nPage is live\nClosed with it: Approve the final copy"]
-    # Reopening the parent does not reopen the subtask; the record says it stays closed.
-    H.task_update(c, ANA, parent["id"], status="open", note="One more change")
-    assert status(c, ask) == "closed"
-    assert children_said(c, parent)[-1] == "Still closed from when it closed: Approve the final copy"
+    c.close()
 
 
-def test_detach_leaves_open_subtasks_open_and_standalone_with_their_own_subtrees(tmp_path):
+@pytest.mark.parametrize("operation", ["close", "done"])
+def test_private_subtask_refuses_the_whole_finish_without_detaching_or_leaking_its_title(tmp_path, operation):
     c = hub(tmp_path / "hub.db")
     parent = make(c, ANA, "Plan the offsite", CMO)
-    venue = make(c, ANA, "Book the venue", SEO, parent)
-    deposit = make(c, ANA, "Pay the venue deposit", SEO, venue)
-    menu = make(c, ANA, "Pick the menu", SEO, parent)
-    H.task_update(c, SEO, menu["id"], status="done", note="Picked")
-    wine = make(c, ANA, "Order the wine", SEO, menu)                       # open under a done subtask
-    H.task_update(c, ANA, parent["id"], status="done", note="Planned", children="detach")
-    assert [status(c, t) for t in (parent, venue, deposit, menu, wine)] == ["done", "open", "open", "done", "open"]
-    # The open ones leave the finished tree; a detached task keeps its own subtasks.
-    assert (TR.parent_of(c, venue["id"]), TR.parent_of(c, wine["id"])) == (None, None)
-    assert TR.parent_of(c, deposit["id"]) == venue["id"] and TR.parent_of(c, menu["id"]) == parent["id"]
-    assert open_under_finished(c) == []
-    assert children_said(c, parent) == ["Made standalone: Book the venue; Order the wine"]
+    visible = make(c, CMO, "Book the venue", SEO, parent)
+    secret = H.task_create(c, CMO, "Compare confidential salaries", "", CMO,
+                           parent_id=parent["id"], private=True, lint=False)
+    assert not H.task_private_readable(c, ANA, secret)
+    before = [(H.task(c, kid["id"]), history(c, kid)) for kid in (parent, visible, secret)]
+    with pytest.raises(H.Refused, match="a private subtask") as exc:
+        if operation == "close":
+            H.task_close(c, ANA, parent["id"])
+        else:
+            H.task_update(c, ANA, parent["id"], status="done")
+    assert secret["title"] not in str(exc.value)
+    assert [(H.task(c, kid["id"]), history(c, kid)) for kid in (parent, visible, secret)] == before
+    assert TR.parent_of(c, secret["id"]) == parent["id"]
+    # A reader unrelated to the parent cannot gain close authority through its children.
+    with pytest.raises(H.Refused):
+        H.task_close(c, BEN, parent["id"], mover=False)
+    c.close()
 
 
-def test_a_private_subtask_the_closer_cannot_read_goes_standalone_unnamed(tmp_path):
-    c = hub(tmp_path / "hub.db")
-    parent = make(c, ANA, "Plan the offsite", CMO)
-    secret = H.task_create(c, CMO, "Compare the venue salaries", "", CMO, parent_id=parent["id"], private=True, lint=False)
-    assert not H.task_private_readable(c, ANA, H.task(c, secret["id"]))
-    # Ana's close is not held up by a task she cannot see, and does not end it either.
-    H.task_close(c, ANA, parent["id"])
-    assert (status(c, parent), status(c, secret), TR.parent_of(c, secret["id"])) == ("closed", "open", None)
-    assert children_said(c, parent) == ["Made standalone: a private subtask"]
-    assert open_under_finished(c) == []
-
-
-def test_a_bot_may_not_end_a_subtask_it_may_not_close_and_the_finish_rolls_back(api):
+@pytest.mark.parametrize("operation", ["close", "done"])
+def test_bot_cannot_close_a_persons_subtask_and_api_finish_rolls_back(api, operation):
     _, _, attempt = setup_attempt(api, "ops")
-    parent = post(api, "tasks", {"owner": "ops", "title": "Ship the refund page", "body": "x"})
-    # A person files a subtask under the bot's task: the bot may neither close nor detach it.
+    parent = post(api, "tasks", {"owner": "ops", "title": "Ship the refund page", "body": "x"},
+                  token=attempt["token"] if operation == "close" else "ana-test")
+    with api.app.state.store.transaction() as c:
+        own = H.task_create(c, "bot:ops", "Draft the refund copy", "", "bot:cpo", parent_id=parent["id"], lint=False)
     child = post(api, "tasks", {"owner": "cpo", "title": "Approve the refund copy", "body": "x",
                                 "relations": [{"task": parent["id"], "kind": "parent"}]})
-    for children in (None, "detach"):
-        version = get(api, "tasks/" + parent["id"])["task"]["version"]
-        body = {"version": version, "status": "done", "note": "Shipped", **({"children": children} if children else {})}
-        r = api.post("/api/v2/tasks/" + parent["id"], json=body, headers=headers(attempt["token"]))
-        assert r.status_code >= 400, r.text
-        assert "Approve the refund copy" in r.text
-        # Nothing of the finish stays: the parent is not done over an open subtask.
-        assert get(api, "tasks/" + parent["id"])["task"]["status"] == "open"
-        assert get(api, "tasks/" + child["id"])["task"]["status"] == "open"
-    # The person who asked for both closes the parent, and the subtask with it.
-    version = get(api, "tasks/" + parent["id"])["task"]["version"]
-    post(api, "tasks/" + parent["id"], {"version": version, "close": True})
-    assert get(api, "tasks/" + child["id"])["task"]["status"] == "closed"
-
-
-def test_a_person_detaches_over_the_api_and_a_bad_choice_is_refused(api):
-    parent = post(api, "tasks", {"owner": "ops", "title": "Ship the refund page", "body": "x"})
-    child = post(api, "tasks", {"owner": "cpo", "title": "Approve the refund copy", "body": "x",
-                                "relations": [{"task": parent["id"], "kind": "parent"}]})
-    version = get(api, "tasks/" + parent["id"])["task"]["version"]
-    post(api, "tasks/" + parent["id"], {"version": version, "close": True, "children": "keep"}, expected=422)
-    post(api, "tasks/" + parent["id"], {"version": version, "close": True, "children": "detach"})
-    after = get(api, "tasks/" + child["id"])["task"]
-    assert after["status"] == "open"
     with api.app.state.store.read() as c:
-        assert TR.parent_of(c, child["id"]) is None
+        before = [(H.task(c, kid["id"]), history(c, kid)) for kid in (parent, own, child)]
+    body = {"version": parent["version"], "note": "Shipped", **({"close": True} if operation == "close" else {"status": "done"})}
+    response = api.post("/api/v2/tasks/" + parent["id"], json=body, headers=headers(attempt["token"]))
+    assert response.status_code >= 400, response.text
+    assert child["title"] in response.text
+    with api.app.state.store.read() as c:
+        assert [(H.task(c, kid["id"]), history(c, kid)) for kid in (parent, own, child)] == before
+        assert TR.parent_of(c, child["id"]) == parent["id"]
+    version = get(api, "tasks/" + parent["id"])["task"]["version"]
+    post(api, "tasks/" + parent["id"], {"version": version, **({"close": True} if operation == "close" else {"status": "done"})})
+    assert get(api, "tasks/" + child["id"])["task"]["status"] == "closed"
+    assert get(api, "tasks/" + own["id"])["task"]["status"] == "closed"

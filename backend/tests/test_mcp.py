@@ -1,13 +1,19 @@
 """The hub's MCP door: same tools as the `hub` CLI, same rules, no privileged path."""
 
+import asyncio
 import base64
 import hashlib
 import json
+import threading
+from urllib.parse import urlencode
 
 import pytest
 
+from backend.mcp import ApiProblem, InProcessApi
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, restrict, runner, setup_attempt  # noqa: F401
-from clients import hubcli, hubtools
+from clients import bot_files as BF, hubcli, hubtools
+from clients.tico import MultipartBody
+from backend import bot_settings as BS
 
 
 def rpc(api, method, params=None, token="ana-test", rid=1):
@@ -58,10 +64,17 @@ def test_every_cli_command_has_a_tool_of_the_same_name():
         groups = [a for a in parser._actions if getattr(a, "choices", None) and not isinstance(a.choices, (list, tuple))]
         if not groups:
             return {prefix}
-        return {leaf for word, sub in groups[0].choices.items() for leaf in leaves(sub, prefix + "_" + word.replace("-", "_"))}
+        return {leaf for word, sub in unique(groups[0].choices) for leaf in leaves(sub, prefix + "_" + word.replace("-", "_"))}
+    def unique(choices):
+        # An alias (`tasks` for `task`) is the same parser under another name: it adds no tool of its own.
+        seen = set()
+        for word, sub in choices.items():
+            if id(sub) not in seen:
+                seen.add(id(sub))
+                yield word, sub
     names = set()
     for action in hubcli.parser()._subparsers._group_actions:
-        for word, sub in action.choices.items():
+        for word, sub in unique(action.choices):
             names |= leaves(sub, "hub_" + word.replace("-", "_"))
     # Repository convenience commands select one of the explicit read/write MCP tools.
     for command, tools in hubtools.CLI_TOOL_ALIASES.items():
@@ -70,6 +83,99 @@ def test_every_cli_command_has_a_tool_of_the_same_name():
             names.update(tools)
     assert names - hubtools.SHELL_ONLY == set(hubtools.BY_NAME), names ^ set(hubtools.BY_NAME)
     assert hubtools.SHELL_ONLY <= names
+
+
+THREAD_READS = {"hub_thread_list", "hub_thread_show", "hub_thread_search", "hub_thread_members_list",
+                "hub_thread_home", "hub_thread_dm", "hub_thread_catch_up", "hub_thread_bot_status"}
+THREAD_WRITES = {"hub_thread_create", "hub_thread_post", "hub_thread_reply", "hub_thread_edit", "hub_thread_sub",
+                 "hub_thread_follow", "hub_thread_unfollow", "hub_thread_read", "hub_thread_members_add",
+                 "hub_thread_members_remove", "hub_thread_update", "hub_thread_link_slack", "hub_thread_dm_group",
+                 "hub_thread_react", "hub_thread_unreact", "hub_thread_open_earlier", "hub_thread_task",
+                 "hub_thread_delete", "hub_thread_upload", "hub_thread_slack_resume", "hub_thread_pin",
+                 "hub_thread_unpin"}
+
+
+def test_every_thread_tool_is_listed_with_a_schema_a_caller_can_check(api):
+    tools = {t["name"]: t for t in rpc(api, "tools/list")["result"]["tools"]}
+    assert THREAD_READS | THREAD_WRITES <= set(tools)
+    for name in THREAD_READS | THREAD_WRITES:
+        schema = tools[name]["inputSchema"]
+        assert schema["additionalProperties"] is False, name
+        assert set(schema.get("required", [])) <= set(schema["properties"]), name
+        assert ("operation_id" in schema["properties"]) == (name in THREAD_WRITES), name
+    assert tools["hub_thread_post"]["inputSchema"]["properties"]["kind"]["enum"] == ["say", "ask"]
+    assert tools["hub_thread_update"]["inputSchema"]["properties"]["audience"]["enum"] == ["members", "team", "company"]
+    assert "with" in tools["hub_thread_list"]["inputSchema"]["properties"]
+
+
+def test_link_slack_reaches_the_slack_bridge_and_an_unknown_thread_is_not_found(api):
+    isError, payload = call(api, "hub_thread_link_slack", {"thread": "t1", "channel": "#ops"})
+    assert isError is True
+    assert payload["error"] == "not_found"
+
+
+class RecordingApi:
+    """The API a thread tool calls, with each request recorded as (method, route, body) and no server behind it."""
+    def __init__(self):
+        self.calls = []
+
+    def get(self, path, **query):
+        self.calls.append(("GET", path, {k: v for k, v in query.items() if v is not None}))
+        return {}
+
+    def post(self, path, body=None, key=None):
+        self.calls.append(("POST", path, body))
+        return {}
+
+    def call(self, method, path, body=None, key=None, query=None, delegate=False):
+        self.calls.append((method, path, body))
+        return {}
+
+
+def test_thread_tools_reach_the_routes_of_the_contract():
+    recorder = RecordingApi()
+    run = lambda name, args: hubtools.BY_NAME[name]["fn"](recorder, args)
+    run("hub_thread_home", {"actor": "bot:ops"})
+    run("hub_thread_list", {"with": "human:ben", "limit": 5})
+    run("hub_thread_dm_group", {"members": ["human:ana", "bot:coo"], "body": "Hi"})
+    run("hub_thread_dm_group", {"members": ["human:cara"]})
+    run("hub_thread_react", {"message_id": "m7", "emoji": ":+1:"})
+    run("hub_thread_unreact", {"message_id": "m7", "emoji": ":+1:"})
+    run("hub_thread_open_earlier", {"thread_id": "th1"})
+    run("hub_thread_task", {"message_id": "m7", "title": "Ship it", "owner": "bot:ops", "operation_id": "op1"})
+    run("hub_thread_pin", {"thread": "th1"})
+    run("hub_thread_unpin", {"thread": "th1"})
+    run("hub_thread_catch_up", {"limit": 5})
+    run("hub_thread_dm_group", {"members": ["human:ana", "bot:coo"], "title": "Launch"})
+    run("hub_thread_post", {"thread": "th1", "text": "Yes", "reply_to": "m7", "operation_id": "op2"})
+    run("hub_thread_show", {"thread": "th1", "flat": True})
+    run("hub_thread_bot_status", {"thread": "th1"})
+    assert recorder.calls == [
+        ("GET", "threads/home/bot:ops", {}),
+        ("GET", "threads", {"with": "human:ben", "limit": 5}),
+        ("POST", "threads/dm", {"members": ["human:ana", "bot:coo"], "body": "Hi"}),
+        ("POST", "threads/dm", {"members": ["human:cara"], "body": None}),
+        ("PUT", "messages/m7/reactions/:+1:", None),
+        ("DELETE", "messages/m7/reactions/:+1:", None),
+        ("POST", "threads/th1/open-earlier", {}),
+        ("POST", "threads/messages/m7/task", {"title": "Ship it", "owner": "bot:ops"}),
+        ("PUT", "threads/th1/pin", None),
+        ("DELETE", "threads/th1/pin", None),
+        ("GET", "threads/catch-up", {"limit": 5}),
+        ("POST", "threads/dm", {"members": ["human:ana", "bot:coo"], "body": None, "title": "Launch"}),
+        ("POST", "threads/th1/messages", {"text": "Yes", "kind": "say", "in_reply_to": "m7"}),
+        ("GET", "threads/th1/timeline", {"flat": 1}),
+        ("GET", "threads/th1/bot-status", {}),
+    ]
+
+
+def test_a_group_dm_needs_at_least_one_member(api):
+    tools = {t["name"]: t for t in rpc(api, "tools/list")["result"]["tools"]}
+    schema = tools["hub_thread_dm_group"]["inputSchema"]
+    assert schema["required"] == ["members"] and schema["properties"]["members"]["minItems"] == 1
+    isError, payload = call(api, "hub_thread_dm_group", {"members": []})
+    assert isError is True
+    assert payload["error"] == "validation" and "members" in payload["detail"]
 
 
 def test_task_update_status_choices_follow_the_api_and_bot_restrictions():
@@ -91,6 +197,38 @@ def test_task_update_status_choices_follow_the_api_and_bot_restrictions():
     assert set(OWNER_STATUSES) <= set(hubtools.TASK_UPDATE_STATUSES)
 
 
+def test_renamed_task_flags_still_take_their_older_names():
+    """`brief` (update, done) and `wake: false` (close) were both `quiet`; an older caller's `quiet` still sends the
+    same request, through the MCP schema check and the CLI."""
+    class Api:
+        def __init__(self):
+            self.bodies = []
+
+        def get(self, path, **query):
+            return {"actor": "human:ana", "role": "human"} if path == "me" else {"task": {"version": 3}}
+
+        def post(self, path, body=None, key=None):
+            self.bodies.append(body)
+            return {"task": {"id": "t1"}}
+
+    def sent(name, args):
+        args = {"id": "t1", **args}
+        assert hubtools.argument_error(args, hubtools.BY_NAME[name]["inputSchema"]) is None, args
+        api = Api()
+        hubtools.BY_NAME[name]["fn"](api, args)
+        return api.bodies[-1].get("quiet", False)
+
+    for name in ("hub_task_update", "hub_task_done"):
+        assert sent(name, {"brief": True}) is sent(name, {"quiet": True}) is True
+        assert sent(name, {}) is False
+    assert sent("hub_task_close", {"wake": False}) is sent("hub_task_close", {"quiet": True}) is True
+    assert sent("hub_task_close", {"wake": True}) is sent("hub_task_close", {}) is False
+    cli = hubcli.parser()
+    assert cli.parse_args(["task", "update", "t1", "--quiet"]).brief is True
+    assert cli.parse_args(["task", "done", "t1", "--quiet"]).brief is True
+    assert cli.parse_args(["task", "create", "--owner", "ops", "--title", "T", "--quiet"]).next_run is True
+
+
 def test_tools_write_through_the_same_rules_as_http(api):
     r, msg, attempt = setup_attempt(api)
     token = attempt["token"]
@@ -109,15 +247,15 @@ def test_tools_write_through_the_same_rules_as_http(api):
     err, out = call(api, "hub_task_create", {"owner": "ana", "title": "The thing", "body": wordy, "dry_run": True}, token=token)
     assert not err and out["ok"] is True and any("verb" in w for w in out["warnings"])
     err, out = call(api, "hub_task_create", {"owner": "ana", "title": "The thing", "body": wordy}, token=token)
-    assert not err and out["task"]["owner"] == "human:ana" and any("words outside" in w for w in out["warnings"])
+    assert not err and out["task"]["owner_id"] == "human:ana" and any("words outside" in w for w in out["warnings"])
     wordy_task = out["task"]["id"]
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM tasks WHERE requester='bot:ops'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM tasks WHERE requester_id='bot:ops'").fetchone()[0] == 1
         assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'refus%' AND actor='bot:ops'").fetchone()[0] >= 1
 
     err, task = call(api, "hub_task_create", {"owner": "cpo", "title": "Review the runtime", "body": "Please.",
                                                "operation_id": "op-1"}, token=token)
-    assert not err and task["task"]["owner"] == "bot:cpo"
+    assert not err and task["task"]["owner_id"] == "bot:cpo"
     err, again = call(api, "hub_task_create", {"owner": "cpo", "title": "Review the runtime", "body": "Please.",
                                                 "operation_id": "op-1"}, token=token)
     assert not err and again["task"]["id"] == task["task"]["id"]
@@ -236,10 +374,10 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
         assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Sign the settlement%' "
                          "OR title LIKE 'Renew the vendor%'").fetchone()[0] == 0
     made = out["task"]
-    assert (made["owner"], made["requester"], made["status"], made["waiting_on"]) == ("bot:ops", "bot:ops", "waiting", "human:ana")
+    assert (made["owner_id"], made["requester_id"], made["status"], made["waiting_on"]) == ("bot:ops", "bot:ops", "waiting", "human:ana")
     assert [o["label"] for o in out["question"]["ask"]["questions"][0]["options"]] == ["Yes", "No"]
     item = next(i for i in get(api, "needs-you")["items"] if i["id"] == made["id"])
-    assert item["kind"] == "question" and item["ask"]["from_actor"] == "bot:ops"
+    assert item["kind"] == "question" and item["ask"]["sender_id"] == "bot:ops"
 
 
 def test_a_private_question_goes_to_any_person_and_only_they_and_the_bot_read_it(api):
@@ -254,7 +392,7 @@ def test_a_private_question_goes_to_any_person_and_only_they_and_the_bot_read_it
     r = api.post("/api/v2/task-questions", json=ask, headers=headers(attempt["token"], "private-ben"))
     assert r.status_code == 200, r.text
     made = r.json()["task"]
-    assert made["private"] and (made["owner"], made["requester"], made["waiting_on"]) == ("bot:ops", "human:ben", "human:ben")
+    assert made["private"] and (made["owner_id"], made["requester_id"], made["waiting_on"]) == ("bot:ops", "human:ben", "human:ben")
     assert get(api, f"tasks/{made['id']}", token="ben-test")["task"]["id"] == made["id"]
     get(api, f"tasks/{made['id']}", token="cara-test", expected=404)
     get(api, f"tasks/{made['id']}", token="ana-test", expected=404)    # who started the run is not a party
@@ -290,17 +428,17 @@ def test_a_question_asked_from_a_run_on_the_bots_own_task_is_filed_under_it(api)
     with api.app.state.store.read() as c:
         from backend import hubdb as H, task_relations as TR
         assert TR.parent_of(c, made["id"]) == work["id"]
-        assert H.task(c, work["id"])["owner"] == "bot:ops"
+        assert H.task(c, work["id"])["owner_id"] == "bot:ops"
     cards = [i["id"] for i in get(api, "needs-you")["items"]]
     assert made["id"] in cards and work["id"] not in cards
 
 
 # ------------------------------------------------------------------ the computer list
-SUMMARY_FIELDS = {"id", "label", "online", "last_seen", "operator", "release", "version", "wanted_release", "update",
+SUMMARY_FIELDS = {"id", "label", "online", "last_seen_at", "owner_id", "release", "version", "wanted_release", "update",
                   "readiness", "warnings", "errors"}
 
 
-def heavy_heartbeat(api, r, bots, n, release="0.3.56", update=None, huge=""):
+def heavy_heartbeat(api, r, bots, n, release="0.4.56", update=None, huge=""):
     """What a busy computer reports: runtime catalogs, every bot's readiness with instruction warnings, a long error
     history and its repositories (synthetic, at the sizes the models allow)."""
     models = ["model-" + str(m) for m in range(30)]
@@ -336,7 +474,8 @@ def add_bots(api, slugs, runner_id=None):
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, bots, [])
         for slug, config in bots.items():
-            c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,?,'ana')", (slug, encode(config)))
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (slug,))
+            BS.write(c, slug, config)
             if runner_id:
                 c.execute("INSERT INTO assignments VALUES(?,?,1,?,'human:ana')", (slug, runner_id, H.now()))
 
@@ -350,15 +489,15 @@ def eleven_computers(api):
         mine = slugs[n * 3:n * 3 + 3]
         for bot in mine:
             assign(api, r, bot)
-        heavy_heartbeat(api, r, mine, n, release="0.3.50" if n == 1 else "0.3.56",
+        heavy_heartbeat(api, r, mine, n, release="0.4.50" if n == 1 else "0.4.56",
                         update={"state": "failed", "error": "download refused"} if n == 2 else
-                        {"state": "updating", "target": "0.3.56"} if n == 3 else None, huge="bot-13")
+                        {"state": "updating", "target": "0.4.56"} if n == 3 else None, huge="bot-13")
         computers.append(r)
     return computers
 
 
 def test_the_computer_list_is_a_short_summary_and_one_computer_reads_in_capped_pages(api, monkeypatch):
-    monkeypatch.setenv("TICO_VERSION", "0.3.56")
+    monkeypatch.setenv("TICO_VERSION", "0.4.56")
     computers = eleven_computers(api)
     add_bots(api, [f"helper-with-a-long-name-{k:03d}" for k in range(300)], computers[5]["runner_id"])
     assert len(json.dumps(get(api, "computers"))) > 200_000                 # the Computers page keeps everything
@@ -425,3 +564,112 @@ def test_a_member_reads_neither_a_computer_nor_a_bot_they_cannot_see_in_the_summ
     assert call(api, "hub_computer_list", {"computer": "Ana Mac"}, token="ben-test")[0]
     err, everything = call(api, "hub_computer_list", {"computer": "Shared Mac"})
     assert not err and set(everything["readiness"]["bots"]) == {"ops", "finance"}         # the owner still reads it
+
+
+@pytest.fixture
+def door(api):
+    """The server's own MCP door for a caller: an InProcessApi on a loop of its own, the app answering through it."""
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    yield lambda token: InProcessApi(api.app, loop, "Bearer " + token, "http://testserver")
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join()
+    loop.close()
+
+
+def test_a_bot_sends_raw_bodies_through_the_door_and_they_arrive_as_sent(api, door, monkeypatch, tmp_path):
+    """The tools that send a file as its own body (publish a file or a page, attach it to a task, import it) run on the
+    server's door as they do from the CLI: the bytes and name arrive unchanged, under the bot's own rights."""
+    _, _, attempt = setup_attempt(api)
+    bot, token = door(attempt["token"]), attempt["token"]
+    monkeypatch.setattr(BF, "checkout_root", lambda cwd=None: tmp_path)
+    text = "# Pipeline\n\nAcme grew 12%.\n".encode()
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "pipeline.md").write_bytes(text)
+
+    made = hubtools.files_publish_path(bot, {"path": "reports/pipeline.md", "operation_id": "op-read-1"})
+    assert api.get("/api/v2/files/" + made["file"]["id"], headers=headers(token)).content == text
+    assert "pipeline.md" in api.get("/api/v2/bots/ops/files", headers=headers("ana-test")).text
+
+    # A streamed file (a file object, read a block at a time) is the same file.
+    with (tmp_path / "reports" / "pipeline.md").open("rb") as stream:
+        copy = bot.request("POST", "/api/v2/files/uploads?" + urlencode({"name": "pipeline-copy.md"}), raw=stream,
+                           key="op-stream-1")
+    assert api.get("/api/v2/files/" + copy["file"]["id"], headers=headers(token)).content == text
+
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "pages" / "weekly.html").write_text("<h1>Weekly</h1><p>Pipeline grew to 42 deals.</p>")
+    shown = hubtools.pages_publish_path(bot, {"path": "pages/weekly.html", "title": "Weekly", "cadence": "weekly"})
+    assert shown["page"]["title"] == "Weekly"
+    assert "42 deals" in api.get("/api/v2/files/" + shown["page"]["file_id"], headers=headers(token)).text
+
+    # An import is copied from S3 by the bot's computer; the server stores the bytes it is sent with their source.
+    source = "s3://acme-exports/q3/pipeline.md"
+    imported = bot.request("POST", "/api/v2/files/imports?" + urlencode({"source": source, "etag": "etag-1",
+                                                                       "name": "pipeline.md"}),
+                           raw=b"# From S3\n", key="op-import-1")
+    assert api.get("/api/v2/files/" + imported["file"]["id"], headers=headers(token)).content == b"# From S3\n"
+
+    # Several files in one multipart body, as a task attachment sends them.
+    task = post(api, "tasks", {"owner": "ops", "title": "Plan", "body": "Write the plan."})
+    (tmp_path / "notes.txt").write_bytes(b"Notes for the plan.\n")
+    attached = bot.request("POST", f"/api/v2/tasks/{task['id']}/files",
+                           raw=MultipartBody({"file": tmp_path / "notes.txt"}, {"name": "notes.txt"}),
+                           key="op-multi-1")
+    assert api.get("/api/v2/files/" + attached["file_id"], headers=headers(token)).content == b"Notes for the plan.\n"
+
+
+def test_a_raw_body_gets_the_callers_own_rights_as_over_http(api, door):
+    http = api.post("/api/v2/files/uploads?name=plan.md", content=b"# Plan",
+                    headers={**headers("ana-test"), "Content-Type": "application/octet-stream"})
+    assert http.status_code == 403
+    with pytest.raises(ApiProblem) as refused:
+        door("ana-test").request("POST", "/api/v2/files/uploads?name=plan.md", raw=b"# Plan", key="op-person-1")
+    assert refused.value.status == 403
+
+
+def test_a_raw_file_over_the_servers_limit_is_refused_before_it_is_sent(api, door, tmp_path):
+    _, _, attempt = setup_attempt(api)
+    big = tmp_path / "big.md"
+    with big.open("wb") as stream:
+        stream.truncate(27_000_001)              # a bot's raw upload stops at 27 MB (backend/app.py: published)
+    with big.open("rb") as stream, pytest.raises(ApiProblem) as refused:
+        door(attempt["token"]).request("POST", "/api/v2/files/uploads?name=big.md", raw=stream, key="op-big-1")
+    assert refused.value.status == 413 and refused.value.code == "too_large"   # the Content-Length check, up front
+
+
+def test_raw_file_position(api, door, tmp_path):
+    """A file passed after its header was read is sent whole: its Content-Length is the file's size, so its bytes are
+    too (as Client.request rewinds a file before sending it)."""
+    _, _, attempt = setup_attempt(api)
+    path = tmp_path / "plan.md"
+    expected = b"# Plan\nComplete document.\n"
+    path.write_bytes(expected)
+    with path.open("rb") as source:
+        source.read(7)
+        made = door(attempt["token"]).request(
+            "POST", "/api/v2/files/uploads?name=plan.md",
+            raw=source, key="repro-file-position",
+        )
+    response = api.get(
+        "/api/v2/files/" + made["file"]["id"],
+        headers=headers(attempt["token"]),
+    )
+    assert response.status_code == 200
+    assert response.content == expected
+
+
+def test_a_raw_body_and_a_json_body_are_one_or_the_other():
+    with pytest.raises(ValueError):
+        InProcessApi(None, None, "Bearer unused", "http://testserver").request(
+            "POST", "/api/v2/files/uploads", body={"name": "plan.md"}, raw=b"# Plan")
+
+
+def test_a_query_field_named_path_reaches_the_query_string(api, door):
+    """`get(path, **query)` takes the URL path positionally, so a query field may be called `path` (`hub file approved
+    <path>` asks file-approvals that way). The server answers from the query: no file has these bytes, so not approved,
+    with the digest echoed back. A path it did not receive would be a 422 instead."""
+    _, _, attempt = setup_attempt(api)
+    answer = door(attempt["token"]).get("file-approvals", path="reports/pipeline.md", digest="0" * 64)
+    assert answer["approved"] is False and answer["digest"] == "0" * 64

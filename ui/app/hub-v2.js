@@ -16,7 +16,7 @@ const V2_PILL = {running: 'in-progress', waiting_human: 'needs', waiting_bot: 'w
                  limited: 'waiting', crashed: 'fail', quarantined: 'fail', idle: ''};
 const V2_KIND = {decision: 'Decision', approval: 'Approval', review: 'Review', declined: 'Declined',
                  question: 'Question', task: 'Task', notice: 'Message', setup: 'Set up'};
-const hostOf = slug => String(S.emps.find(e => e.name === slug)?.host || 'dispatcher');
+const hostOf = slug => String(botRow(slug)?.host || 'dispatcher');
 const isKeeper = slug => hostOf(slug) === 'keeper';
 const v2StatusOf = slug => S.v2.status[slug] || null;
 const actorSlug = a => String(a || '').startsWith('bot:') ? String(a).slice(4) : '';
@@ -51,18 +51,18 @@ const taskSourceLine = t => {
   if (src.kind === 'bot') return 'Added by ' + src.label + ' (bot)';
   return 'Added by ' + src.label;
 };
-const taskRequester = t => t.requester === 'keeper' ? t.origin_actor || t.requester : t.requester;
+const taskRequester = t => t.requester_id === 'keeper' ? t.origin_actor || t.requester_id : t.requester_id;
 // Hide the generated attachment trailer and rename the schedule footer; authored text stays intact.
 const taskBody = t => {
   const raw = String(t.body || '');
   const body = (t.attachments || []).length ? raw.replace(/\n\nAttachments \(untrusted source material; authenticated downloads\):\n[^]*$/, '') : raw;
-  if (t.requester !== 'keeper' || !actorSlug(t.owner) || !body.startsWith(`Run playbook ${t.title}.`)) return body;
+  if (t.requester_id !== 'keeper' || !actorSlug(t.owner_id) || !body.startsWith(`Run playbook ${t.title}.`)) return body;
   return body.replace(/\n\n_Created by the keeper from schedule `([^`\n]+)`\._$/, '\n\n_Created by ' + assistantName() + ' from schedule `$1`._');
 };
 const actorChip = a => {
   const slug = actorSlug(a);
-  return slug && S.emps.some(e => e.name === slug)
-    ? `<a class="chip" href="#/bot/${esc(slug)}">${avatar(slug, 16)}<span>${empName(slug)}</span></a>`
+  return slug && botRow(slug)
+    ? `<a class="chip" href="#/bot/${encodeURIComponent(slug)}">${avatar(slug, 16)}<span>${empName(slug)}</span></a>`
     : `<span class="chip">${personCircle(actorLabel(a), 16)}<span>${esc(actorLabel(a))}</span></span>`;
 };
 const v2Firstline = body => String(body || '').split('\n').map(s => s.trim()).find(Boolean) || '';
@@ -84,6 +84,9 @@ async function v2Refresh() {
   if (st) { const el = $('#side-update'); if (el) el.hidden = !st.updating; }
   if (needs && typeof OVERVIEW_PAGE !== 'undefined' && OVERVIEW_PAGE) overviewNeedsDraw();
   if (needs && !needs.unchanged && typeof BOT !== 'undefined' && BOT && isKeeper(BOT.slug)) botNeedsChanged(BOT.slug);
+  if (needs && !needs.unchanged && typeof DEC !== 'undefined' && DEC) decideRefresh(DEC, S.v2.needs || []);   // the open Needs you card
+  if (needs && !needs.unchanged && typeof askPeek === 'function') askPeek();   // a peek beside Ask's dot
+  if (needs && !needs.unchanged && typeof notifyNewThreadNeeds === 'function') notifyNewThreadNeeds(S.v2.needs || []);
 }
 // Needs you as the page holds it: the first items of the list, a page at a time (GET /v2/needs-you?limit=), in the
 // server's order, with its version, its whole count, each bot's count over the whole list (`bots`) and where the next
@@ -107,10 +110,16 @@ function v2NeedsOne(id) {
   return NEEDS_ONE.get(key).read;
 }
 const needsOneHeld = id => NEEDS_ONE.get(String(id))?.it || null;
+// The first list held: a page drawn before it (a task opened from a link) fills its question box then. A read that
+// fails holds no list, so the wait goes on to the next one that answers.
+let needsFirstDone = null;
+const NEEDS_FIRST = new Promise(done => { needsFirstDone = done; });
+const needsFirstIn = () => !needsFirstDone;
 function needsTake(needs) {
   NEEDS_ONE.clear();
   S.v2.needs = needs.items || []; S.v2.needsVersion = needs.version || null;
   S.v2.needsCount = needs.count ?? S.v2.needs.length; S.v2.needsNext = needs.next || null; S.v2.needsBots = needs.bots || null;
+  if (needsFirstDone) { const done = needsFirstDone; needsFirstDone = null; done(); }
 }
 let NEEDS_READ = 0, NEEDS_KEPT = 0;
 async function v2NeedsRead() {
@@ -184,10 +193,11 @@ const clockTime = at => new Date(at).toLocaleTimeString([], {hour: 'numeric', mi
 // bot's own words, never that something was read or edited: the check reads only the text it refused.
 function quarantineWhy(slug) {
   const q = v2StatusOf(slug)?.quarantine || {}, r = q.review || {};
-  if (q.auto) return `It hit repeated refused actions and resumes by itself ${q.resumes_at ? `at ${clockTime(q.resumes_at)}` : 'within an hour'}.`;
+  if (q.why) return q.why;
+  if (q.auto) return `Quarantined for repeated refused writes (rule 8): resumes by itself ${q.resumes_at ? `at ${new Date(q.resumes_at).toISOString().slice(0, 16).replace('T', ' ')} UTC` : 'after its cooldown'}; a person who manages it can clear it sooner.`;
   const found = r.found === 'secrets/' ? 'a secrets/ path' : r.found ? `another bot's folder (${r.found})` : "a secrets path or another bot's folder";
   const what = r.what ? `${/^[aeiou]/i.test(r.what) ? 'an' : 'a'} ${r.what}` : 'repeated writes';
-  return `The safety check stopped ${what} that named ${found}. It matched text only; nothing was sent or changed.`;
+  return `Quarantined until a person clears it. The safety check stopped ${what} that named ${found}. It matched text only; nothing was sent or changed.`;
 }
 const QUARANTINE_RESUME_NOTE = 'Resume releases this pause; the checks stay on.';
 async function quarantineResume(slug) {
@@ -202,7 +212,7 @@ async function limitRetry(slug) {
   await v2Refresh();
   toast(`${empName(slug)} will try again now`);
 }
-const limitRetryButton = (slug, cls = 'linkish') => v2StatusOf(slug)?.state === 'limited' && settingsCanManageBot(S.emps.find(x => x.name === slug))
+const limitRetryButton = (slug, cls = 'linkish') => v2StatusOf(slug)?.state === 'limited' && settingsCanManageBot(botRow(slug))
   ? ` <button type="button" class="${cls}" data-limit-retry>Try now</button>` : '';
 // Release: Tico stopped the bot (backend/bot_stops.py: five fast failed runs, or over its run budget) and a person
 // who manages it lets it run again (POST /v2/bots/{bot}/release, which clears both). One click, wherever it shows.
@@ -211,7 +221,7 @@ async function botRelease(slug) {
   await v2Refresh();
   toast(`${empName(slug)} released`);
 }
-const botMayRelease = slug => settingsCanManageBot((S.emps || []).find(x => x.name === slug));
+const botMayRelease = slug => settingsCanManageBot(botRow(slug));
 const botReleaseButton = (slug, cls = 'linkish') => botMayRelease(slug)
   ? ` <button type="button" class="${cls}" data-bot-release="${esc(slug)}">Release</button>` : '';
 // Every Release button (the chat line, the bot page, Health) goes through one listener; each page redraws its own.
@@ -234,13 +244,13 @@ function pausedNotice(slug) {
   const when = since => since ? ` since ${clockTime(since)}` : '';
   if (s.bot_state === 'quarantined') {
     // A refusal-count quarantine lifts itself after an hour; anything else waits for a person (backend/hubdb.py).
-    const q = s.quarantine || {}, e = S.emps.find(x => x.name === slug);
+    const q = s.quarantine || {}, e = botRow(slug);
     const resume = e && settingsCanManageBot(e) ? ' <button type="button" class="linkish" data-quarantine-resume>Resume bot</button>' : '';
-    const at = q.since || s.since, paused = (at ? ` paused at ${clockTime(at)}` : ' is paused') + (q.auto ? '' : ' for review');
+    const at = q.since || s.changed_at, paused = (at ? ` paused at ${clockTime(at)}` : ' is paused') + (q.auto ? '' : ' for review');
     const who = q.auto || resume ? '' : ' A person who manages it can resume it.';
     return `${empName(slug)}${esc(paused)}. ${esc(quarantineWhy(slug) + who)} Your messages are saved and run when it's back.${resume}`;
   }
-  let why = PAUSED_WHY[s.state], since = s.since;
+  let why = PAUSED_WHY[s.state], since = s.changed_at;
   if (s.state === 'paused' && /^Paused: over /.test(s.focus || '')) why = s.focus.replace(/^Paused: /, '');     // a spend limit (Usage)
   if (s.state === 'crashed')
     return s.last_stop ? `${empName(slug)}: ${esc(s.last_stop.text)}`
@@ -257,11 +267,11 @@ function pausedNotice(slug) {
 // The 30 s refresh reloads the health issues, not the roster, so the two warnings follow the
 // issue the server raises and only the quiet line reads the roster's last-seen time.
 function agentNotice(slug) {
-  const e = S.emps.find(x => x.name === slug); if (!e?.agent) return '';
+  const e = botRow(slug); if (!e?.agent) return '';
   const a = e.agent, name = agentKind(a);
   // A Grok Bot or Dots is synced in by the agent itself (docs/external-agent-sync.md): its history is copied
   // here, and what its person writes here goes to it with the next sync.
-  if (a.synced) return `${empName(slug)} syncs from ${a.label || 'its platform'}${a.last_seen ? ` · last synced ${ago(a.last_seen)}` : ''} — your messages reach it at the next sync`;
+  if (a.synced) return `${empName(slug)} syncs from ${a.label || 'its platform'}${a.last_seen_at ? ` · last synced ${ago(a.last_seen_at)}` : ''} — your messages reach it at the next sync`;
   const issue = (S.status?.health_issues || []).find(i => i.kind === 'agent' && i.bot === slug);
   if (issue ? /no agent credential/.test(issue.title) : !a.credential)
     return `${empName(slug)} is a ${name} with no credential yet — messages wait until one is created in Settings and installed on its computer`;
@@ -271,15 +281,16 @@ function agentNotice(slug) {
   return `${empName(slug)} is a ${name}; it reads its messages on its own schedule · reporting in`;
 }
 function agentQuiet(slug) {
-  return !(S.status?.health_issues || []).some(i => i.kind === 'agent' && i.bot === slug) && !!S.emps.find(x => x.name === slug)?.agent?.credential;
+  return !(S.status?.health_issues || []).some(i => i.kind === 'agent' && i.bot === slug) && !!botRow(slug)?.agent?.credential;
 }
 function pausedRender() {
-  const el = $('#conv-paused'); if (!el || !V2C) return;
-  const text = pausedNotice(V2C.slug);
-  const agent = text ? '' : agentNotice(V2C.slug);
+  // The Assistant's chat (V2C), or a bot page, whose Home and DM are threads (ui/app/bot-page.js).
+  const el = $('#conv-paused'), slug = V2C?.slug || (typeof BOT !== 'undefined' && BOT?.slug); if (!el || !slug) return;
+  const text = pausedNotice(slug);
+  const agent = text ? '' : agentNotice(slug);
   patchLiveHTML(el, text || agent); el.hidden = !(text || agent);
-  el.classList.toggle('agent', !text && !!agent && agentQuiet(V2C.slug));
-  const resume = el.querySelector('[data-quarantine-resume]'), slug = V2C.slug;
+  el.classList.toggle('agent', !text && !!agent && agentQuiet(slug));
+  const resume = el.querySelector('[data-quarantine-resume]');
   if (resume) resume.onclick = async () => {
     resume.disabled = true;
     try {

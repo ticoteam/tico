@@ -1,0 +1,49 @@
+{
+  "created": [
+    {
+      "name": "Mail for another team forwarded to Omar",
+      "owner": "person:dana",
+      "enabled": false,
+      "trigger": {
+        "type": "message",
+        "inbox": "dana@acme.example"
+      },
+      "steps": [
+        {
+          "id": "triage",
+          "type": "decide",
+          "enabled": true,
+          "set": "mail-triage@1",
+          "level": "low",
+          "out": "d1"
+        },
+        {
+          "id": "sort",
+          "type": "filter",
+          "enabled": true,
+          "rules": [
+            {
+              "when": [
+                {
+                  "field": "d1.bucket",
+                  "op": "is",
+                  "value": "route",
+                  "min": 0.7
+                }
+              ],
+              "then": [
+                {
+                  "do": "forward",
+                  "args": {
+                    "to": "omar@acme.example"
+                  }
+                }
+              ],
+              "stop": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

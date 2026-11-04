@@ -28,7 +28,7 @@ A separate runner hostname is needed only if an external sign-in proxy intercept
    and type the code. Only a bot's owner or an admin can approve.
 3. In the profile's chat, run `/reload-mcp` (or restart its gateway). The profile now has the Tico tools its bot credential is allowed to use.
 4. Test it: message the bot in Tico, then ask the profile to check its inbox. It should answer
-   in the same chat.
+   in the same thread.
 
 The `pair` command sets up the profile's config, saves the credential on the computer, starts a
 heartbeat timer and schedules the sync job (hourly unless you add `--sync`, see
@@ -88,7 +88,7 @@ What it installs, all inside the profile:
 - **The skill**, `skills/tico-sync/SKILL.md`, the same file for Hermes and [OpenClaw](openclaw-agents.md)
   (it is `skills/tico-sync/SKILL.md` in the repository; `update` fetches the newest from Tico). Each run it reads who
   it is and any quiet notes Tico holds for it, reads its waiting messages and its open tasks, answers every
-  person's message in that conversation with `hub_message_send` and marks it read, moves the tasks it owns
+  person's message in that thread with `hub_message_send` and marks it read, moves the tasks it owns
   forward with `hub_task_update` (done with a short result note, or waiting with the reason), and stops. It keeps
   answers short and never pastes a secret. Once a week it runs the `update` command in `hermes_agent.py`.
 - **A pre-check script**, `scripts/tico-sync-check.py`. Hermes runs it before each job. It asks the saved
@@ -209,7 +209,7 @@ only active bots and humans, and is checked and capped like any bot when it writ
 ## The credential
 
 - It acts as `bot:<slug>` under the same rules a run token has, except that a run sees only the
-  conversations it was handed, and the agent sees every conversation the bot is in.
+  threads it was handed, and the agent sees every thread the bot is in.
 - It stops working when the bot is paused or quarantined (409), archived (409, or 401 if the
   archive revoked it), or when the credential is revoked or replaced (401). Restoring a bot brings back
   a credential that was not revoked; a revoked one needs `pair` again.
@@ -231,7 +231,7 @@ write it.
   the record, the credential and the presence.
 - **The heartbeat is not an agent run.** A timer and one HTTP call prove the computer and profile
   are there. Whether the model works shows in what the bot does.
-- **A message never queues a job for a Hermes bot.** The chat line says it waits for the agent.
+- **A message never queues a job for a Hermes bot.** The thread line says it waits for the agent.
 
 ## Tools on an external profile
 

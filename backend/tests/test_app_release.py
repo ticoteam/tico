@@ -65,3 +65,40 @@ def test_company_s3_publish_with_prefix_and_quiet_output(tmp_path, monkeypatch, 
         main(["--version", "1.2.3", "--bucket", "acme-files", "--base", "https://runner.example.com",
               "--complete", "--quiet", str(tmp_path)])
     assert not calls
+
+
+def test_recorder_manifest_is_mac_only_and_named_for_the_recorder(tmp_path):
+    names = ["Tico-Recorder.app.tar.gz", "Tico-Recorder_0.2.0_universal.dmg", "Tico-Recorder.dmg"]
+    for name in names:
+        (tmp_path / name).write_bytes(b"bundle")
+    (tmp_path / "Tico-Recorder.app.tar.gz.sig").write_text("recorder-signature")
+    output = tmp_path / "recorder-latest.json"
+    subprocess.run([sys.executable, str(ROOT / "scripts/app_release.py"), "--github", "--kind", "recorder",
+                    "--version", "0.2.0", "--tag", "v0.2.0", "--output", str(output), str(tmp_path)],
+                   check=True, capture_output=True)
+    value = json.loads(output.read_text())
+    assert value["app_kind"] == "recorder"
+    assert set(value["platforms"]) == {"darwin-aarch64", "darwin-x86_64"}
+    assert value["platforms"]["darwin-x86_64"]["url"].endswith("/Tico-Recorder.app.tar.gz")
+    assert value["installers"]["mac"]["url"].startswith("https://github.com/ticoteam/tico/releases/download/v0.2.0/")
+    windows = tmp_path / "windows"
+    windows.mkdir()
+    (windows / "Tico Recorder-setup.exe").write_bytes(b"bundle")
+    (windows / "Tico Recorder-setup.exe.sig").write_text("windows-signature")
+    from scripts.app_release import main
+    with pytest.raises(SystemExit, match="Recorder releases need"):
+        main(["--github", "--kind", "recorder", "--version", "0.2.0", "--output", str(tmp_path / "x.json"), str(windows)])
+
+
+def test_a_new_version_drops_updates_signed_for_the_previous_one():
+    mac = {"platforms": {"darwin-aarch64": {"file": "Tico.app.tar.gz", "bytes": 6, "signature": "mac-1.1.0"}},
+           "installers": {}}
+    previous = {"version": "1.0.0", "installers": {"windows": {"file": "Tico-setup.exe", "bytes": 6}},
+                "platforms": {"windows-x86_64": {"signature": "win-1.0.0", "url": "https://hub/1.0.0/Tico-setup.exe"},
+                              "linux-x86_64": {"signature": "linux-1.0.0", "url": "https://hub/1.0.0/Tico.AppImage"}}}
+    value = manifest("1.1.0", "https://hub", [mac], previous)
+    assert set(value["platforms"]) == {"darwin-aarch64"}
+    assert value["installers"]["windows"]["file"] == "Tico-setup.exe"
+    # A second publish of the same version (another platform's build) keeps what the first one brought.
+    again = manifest("1.1.0", "https://hub", [], value)
+    assert again["platforms"] == value["platforms"]

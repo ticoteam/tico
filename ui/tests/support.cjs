@@ -1,10 +1,10 @@
-// Offline browser regression: the Support pop-up. The ? opens it over the current screen (a bottom sheet on a phone)
-// on the latest request that isn't Closed or Removed; Esc, ✕ and a click outside close it and give focus back; unsent
-// words survive. The box shows exactly what it will send under Attach details, Enter files the request (Shift+Enter is
-// a new line) or continues the latest one, Your requests lists each request with its status badge and an unread dot,
-// a reply puts a count on the ? and opening the conversation reads it, a failed send says so in place, the trash asks
-// first, and nothing a request says is rendered as HTML. Report this, Chat with us, Want help setting up? and old
-// #/help links open it; with support off it says so and offers nothing to send.
+// Offline browser regression: the Tico team chat (ui/support.js). The ? beside Search (in the phone's More drawer, beside
+// the Search row) opens one ongoing conversation with the Tico team: every ticket's messages merged in time order as
+// bubbles (theirs with the writer's name when it changes, a date line where the day changes), one box and a paperclip
+// for diagnostics. No list, no form, no statuses. Sending writes to the open ticket, or starts a new one with the
+// message (email and install details filled in). A reply on the person's own request opens the chat once and puts a dot on the ?; a bot's report is not in the chat at all. A #/support
+// link, Report this, Want help setting up?, old #/help links and Let the Tico team in all work through it; with
+// support off the ? is gone and the chat says so. Nothing a message says is rendered as HTML.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {html, uiFile, beta} = require('./support/page.cjs');
@@ -14,13 +14,18 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
 const INSTALL = '6f1c2a9e-3b7d-4c58-9a10-2d4e8b7f5a63';
 const DIAGNOSTICS_TEXT = '{\n  "format": 1,\n  "versions": {\n    "tico": "0.2.17"\n  }\n}';
 const HOSTILE = '<img src=x onerror="window.__pwned=1"> <b>bold</b>';
-const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a moment.';
+const UNREACHABLE = 'Not sent. Could not reach the Tico team. Try again in a moment.';
+// No help-desk words anywhere in the chat.
+const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Open|Answered|Closed|sup_/;
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
     const visit = async ({enabled = true, seed = [], native = false, feedback = null, viewport = {width: 1440, height: 900}, access = null, hash = '#/tasks', theme = 'light', keyboard = false, userAgent} = {}) => {
-      const ctx = await browser.newContext({viewport, serviceWorkers: 'block', userAgent});
+      // The fixtures are minutes and days before now; a browser whose local time is near midnight would put 'an hour
+      // ago' on yesterday. A fixed-offset zone where it is about noon keeps every day line where the test expects it.
+      const noon = `Etc/GMT${(h => (h > 0 ? '+' : '-') + Math.abs(h))(new Date().getUTCHours() - 12)}`.replace('-0', '+0');
+      const ctx = await browser.newContext({viewport, serviceWorkers: 'block', userAgent, timezoneId: noon});
       await ctx.addInitScript(v => localStorage.setItem('tico.theme', v), theme);   // ui/theme.js
       // A phone keyboard, as iOS Safari reports it: the layout viewport keeps its size while window.visualViewport
       // shrinks to what is left above the keyboard and pans (offsetTop); pinch zoom divides its height by the scale.
@@ -44,10 +49,14 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
       const errors = [], calls = [];
       // `seen`: how many of a request's replies the person has read (POST tickets/<id>/read).
       // `gate`: a promise that holds a follow-up's POST until the test resolves it (a slow HQ).
-      const hq = {tickets: seed, seen: {}, reply: false, fail: false, abort: false, pollFail: false, confirm: true, asked: [], access, gate: null, refreshGate: null, refreshStarted: null};
+      const hq = {full: [], tickets: seed, seen: Object.fromEntries(seed.map(t => [t.id, t.seen || 0])), reply: false, fail: false, abort: false, pollFail: false, confirm: true, asked: [], access, accessGate: null, gate: null, refreshGate: null, refreshStarted: null};
       const unread = t => t.messages.filter(m => m.from === 'staff').length - (hq.seen[t.id] || 0);
-      const out = t => ({...t, unread: unread(t)});
-      const view = () => ({enabled, tickets: hq.tickets.map(out), unread: hq.tickets.reduce((n, t) => n + unread(t), 0)});
+      // A bot's report (sent.source) is not in the person's chat, as the server lists it: not listed, not counted.
+      const source = t => t.sent?.source || 'person';
+      const listedTickets = () => hq.tickets.filter(t => source(t) === 'person');
+      const out = t => ({...t, source: 'person', unread: unread(t)});
+      const view = () => ({enabled, tickets: listedTickets().slice(0, 50).map(out),   // the server lists at most 50
+      unread: listedTickets().reduce((n, t) => n + unread(t), 0)});
       page.on('pageerror', e => errors.push(e.message));
       page.on('dialog', d => { hq.asked.push(d.message()); return hq.confirm ? d.accept() : d.dismiss(); });
       await page.route('**/*', async route => {
@@ -64,14 +73,19 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
         if (p.startsWith('/api/v2/support/')) {
           const rest = p.slice('/api/v2/support/'.length), body = req.postData() ? JSON.parse(req.postData()) : null;
           calls.push(req.method() + ' ' + rest + (body ? ' ' + JSON.stringify(body) : ''));
+          if (rest === 'access' && req.method() === 'GET' && hq.accessGate) await hq.accessGate;
           if (rest === 'access' && req.method() === 'GET') return json(hq.access || {available: false, off_reason: 'TICO_SUPPORT_ACCESS', active: null, last: null, sessions: []});
           if (rest === 'access') {
             hq.access.active = hq.access.last = {id: 'sa_1', ticket_id: body.ticket_id, tier: body.tier, started_by: 'human:ana', seconds_left: body.hours * 3600 - 48 * 60};
             hq.access.sessions = [hq.access.active, ...(hq.access.sessions || [])];
             return json(hq.access.active);
           }
-          if (rest === 'access/sa_1/stop') { hq.access.active = null; return json({}); }
-          if (rest === 'access/sa_1/log') return json({log: [{ts: new Date().toISOString(), by: 'support-agent', method: 'GET', path: '/api/v2/health' + HOSTILE, status: 200}]});
+          if (rest === 'access/sa_1/stop') {
+            const stopped = {...hq.access.active, seconds_left: 0, ended_at: new Date().toISOString(), end_reason: 'stopped'};
+            hq.access.active = null; hq.access.sessions = hq.access.sessions.map(x => x.id === stopped.id ? stopped : x);
+            return json(stopped);
+          }
+          if (rest === 'access/sa_1/log') return json({log: [{created_at: new Date().toISOString(), by: 'support-agent', method: 'GET', path: '/api/v2/health' + HOSTILE, status: 200}]});
           if (rest === 'setup-snapshot') calls.push('asked from ' + new URL(req.url()).searchParams.get('asked_from'));
           if (rest === 'setup-snapshot') return json({message: "I'd like help setting up Tico.\n\nSetup snapshot (asked from the setup wizard):\n- Steps done: 2 of 5; left: Add a computer, Sign in a model, First bot ready\n- Computer online: no\n- Model signed in: no\n- First bot ready: no\n- Bots in Needs setup: 3", kind: 'setup'});
           if (rest === 'feedback') return json({moment: body.moment, answered: !!body.answer, ticket: null});
@@ -83,23 +97,32 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
           if (rest === 'tickets/refresh') {
             if (hq.pollFail) return json({error: {detail: 'Could not reach Tico support. Try again in a moment.'}}, 502);
             if (hq.reply && hq.tickets[0] && !hq.tickets[0].messages.some(m => m.from === 'staff'))
-              Object.assign(hq.tickets[0], {status: 'answered', messages: [...hq.tickets[0].messages, {id: 1, created: new Date().toISOString(), from: 'staff', body: 'Try the latest release. ' + HOSTILE}]});
+              Object.assign(hq.tickets[0], {status: 'answered', messages: [...hq.tickets[0].messages, {id: 1, created_at: new Date().toISOString(), from: 'staff', body: 'Try the latest release. ' + HOSTILE}]});
             const snapshot = view();
             if (hq.refreshGate) { hq.refreshStarted?.(); await hq.refreshGate; return json(snapshot); }
             return json(view());
           }
           if (rest === 'tickets' && req.method() === 'POST') {
-            const ticket = {id: 'sup_' + (hq.tickets.length + 1), created: new Date().toISOString(), status: 'open', message: body.message, email: body.email,
+            // An Idempotency-Key seen before gets the same ticket back, as HQ does; `loseCreate` drops one reply after saving.
+            const key = req.headers()['idempotency-key'];
+            (hq.createKeys ||= []).push(key);
+            const again = hq.tickets.find(x => x.key === key);
+            if (again) return json(out(again));
+            const ticket = {key, id: 'sup_' + (hq.tickets.length + 1), created_at: new Date().toISOString(), status: 'open', message: body.message, email: body.email,
                             sent: body.include_ids ? {version: '0.2.17', install_id: INSTALL} : {}, messages: []};
             hq.tickets.unshift(ticket);
+            if (hq.loseCreate) { hq.loseCreate = false; return json({error: {detail: 'Could not reach Tico support. Try again in a moment.'}}, 502); }
             return json(out(ticket));
           }
           const id = decodeURIComponent(rest.split('/')[1] || ''), ticket = hq.tickets.find(x => x.id === id);
           if (rest.endsWith('/read')) { hq.seen[id] = ticket.messages.filter(m => m.from === 'staff').length; return json(out(ticket)); }
           if (rest.endsWith('/messages') && hq.gate) await hq.gate;
+          // `full`: tickets HQ refuses follow-ups to (60 messages), as backend/support.py passes HQ's 409 on.
+          if (rest.endsWith('/messages') && hq.full?.includes(id)) return json({error: {code: 'support_closed', detail: 'This request is closed.'}}, 409);
           if (rest.endsWith('/messages') && hq.abort) return route.abort('connectionrefused');
           if (rest.endsWith('/messages') && hq.fail) return json({error: {detail: 'Could not reach Tico support. Try again in a moment.'}}, 502);
-          if (rest.endsWith('/messages')) { ticket.messages.push({id: ticket.messages.length + 1, created: new Date().toISOString(), from: 'person', body: body.message}); return json(out(ticket)); }
+          if (rest.endsWith('/messages')) { ticket.messages.push({id: ticket.messages.length + 1, created_at: new Date().toISOString(), from: 'person', body: body.message}); return json(out(ticket)); }
+          if (req.method() === 'DELETE' && hq.deleteGate) await hq.deleteGate;
           if (req.method() === 'DELETE') { hq.tickets = hq.tickets.filter(x => x.id !== id); return json({deleted: true}); }
         }
         if (p === '/api/employees' || p === '/api/issues') return json([]);
@@ -114,755 +137,402 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
       await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
       return {page, ctx, errors, calls, hq};
     };
-    // The ? (or the phone's ? tab) opens Support; it is ready once the box (or the "turned off" line) shows.
-    const openSupport = async (page, via = '#help-open') => {
-      await page.locator(via).click();
-      await page.locator('#support-pop[open] [data-compose]:not([hidden]) [name=message], #support-pop[open] [data-off]:not([hidden])').first().waitFor();
+    // A link to #/support, as an Assistant reply carries ("Talk to the Tico team"), opens the chat over the page (the
+    // app's click handler for any such link, ui/app/ask-panel.js); it is ready once the box (or the "turned off" line)
+    // shows. Focus goes back to the link on closing.
+    const supportLink = page => page.evaluate(() => {
+      if (document.getElementById('t-support')) return;
+      const a = Object.assign(document.createElement('a'), {id: 't-support', href: '#/support', textContent: 'Talk to the Tico team'});
+      a.style.cssText = 'position:fixed;top:4px;left:50%;z-index:30';
+      document.body.append(a);
+    });
+    const openSupport = async page => {
+      await supportLink(page);
+      await page.locator('#t-support').click();
+      await page.locator('#support-pop[open] [data-view]:not([hidden]) [name=message], #support-pop[open] [data-off]:not([hidden])').first().waitFor();
       await page.waitForFunction(() => !document.querySelector('#support-pop [data-connection]')?.textContent);
     };
     const active = page => page.evaluate(() => ({id: document.activeElement?.id, name: document.activeElement?.getAttribute('name'), inPop: !!document.activeElement?.closest('#support-pop')}));
 
-    let v = await visit();
-    const {page} = v;
-    // The ? opens the pop-up over Tasks: bottom-left beside the sidebar, about 400 px wide, the address unchanged.
-    await openSupport(page);
-    const pop = page.getByRole('dialog', {name: 'Support'});
-    assert.equal(await pop.count(), 1, 'a dialog named Support');
-    assert.equal(await page.evaluate(() => location.hash), '#/tasks');
-    assert.equal(await page.locator('#help-page, #support-rail').count(), 0, 'no Help page');
+    const at = m => new Date(Date.now() - m * 60000).toISOString();
+    const noSideways = page => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth
+      && [...document.querySelectorAll('#support-pop *')].every(x => x.getBoundingClientRect().right <= innerWidth + 1));
+
+    // ---- A computer, no conversation yet.
+    let v = await visit({viewport: {width: 1280, height: 800}});
+    let {page} = v;
+    // The ? sits right after Search's icon at the end of the Ask row, the same size.
+    const q = page.locator('#support-open');
+    await q.waitFor();
+    const row = await page.evaluate(() => {
+      const b = id => document.getElementById(id).getBoundingClientRect(), q = b('support-open'), s = b('search-open');
+      return {prev: document.getElementById('support-open').previousElementSibling?.id, gap: q.left - s.right, dy: Math.abs(q.top - s.top), w: q.width, h: q.height, sw: s.width, sh: s.height};
+    });
+    assert.equal(row.prev, 'search-open');
+    assert.ok(row.gap >= 0 && row.gap < 8 && row.dy < 2 && row.w === row.sw && Math.abs(row.h - row.sh) < 1, `next to Search, the same size: ${JSON.stringify(row)}`);
+    assert.deepEqual([await q.getAttribute('aria-label'), await q.getAttribute('title'), await q.innerText()], ['Tico team', 'Tico team', 'help']);
+    await q.click();
+    const pop = page.getByRole('dialog', {name: 'Tico team'});
+    await pop.locator('[name=message]').waitFor();
+    assert.equal(await page.evaluate(() => location.hash), '#/tasks', 'the page behind stays');
     const box0 = await pop.boundingBox(), side = await page.locator('#side').boundingBox();
-    assert.ok(box0.x >= side.x + side.width && box0.x - (side.x + side.width) < 30, 'beside the sidebar');
-    assert.ok(900 - (box0.y + box0.height) < 30, 'at the bottom');
-    assert.ok(Math.abs(box0.width - 400) <= 2 && box0.height <= 640, `about 400 px wide and at most 640 px tall (${box0.width}x${box0.height})`);
+    assert.ok(box0.x >= side.x + side.width && box0.x - (side.x + side.width) < 30 && Math.abs(box0.width - 400) <= 2 && box0.height <= 640, `a panel beside the sidebar: ${JSON.stringify(box0)}`);
     assert.deepEqual(await active(page), {id: 'support-message', name: 'message', inPop: true}, 'focus in the box');
-    // The link row: docs in a new tab, What's new with its count, Your requests.
-    const docs = pop.getByRole('link', {name: 'View docs'});
-    assert.equal(await docs.getAttribute('href'), 'https://github.com/ticoteam/tico/blob/main/docs/README.md');
-    assert.equal(await docs.getAttribute('target'), '_blank');
-    assert.equal(await pop.locator('[data-whats-new]').innerText(), "What's new (2)");
-    assert.equal(await pop.locator('[data-mine]').innerText(), 'Your requests');
-    // No requests yet: an empty chat and the box; Attach details closed, with the diagnostics on for a new request.
-    assert.equal(await pop.locator('.support-empty').innerText(), 'Ask us anything. A person at Tico reads every message.');
-    assert.equal(await pop.locator('[data-head]').isVisible(), false);
-    const form = pop.locator('[data-compose]'), box = form.locator('[name=message]'), attach = form.locator('[data-attach]');
-    assert.equal(await box.getAttribute('placeholder'), 'Message Tico support…');
+    // The header: the headset and "Tico team", a close button. No list, form, subject, status or ticket words.
+    assert.equal(await pop.locator('.support-head h2').innerText(), 'Tico team');
+    assert.equal(await pop.locator('.support-head .support-av').innerText(), 'headset_mic');
+    assert.equal(await pop.locator('[data-requests], [data-list], [data-mine], [data-new], [name=email], [name=subject], .support-badge').count(), 0, 'no list, form or statuses');
+    assert.equal(await pop.locator('[data-delete]').isHidden(), true, 'nothing to delete yet');
+    const box = pop.locator('[name=message]');
+    assert.equal(await box.getAttribute('placeholder'), 'Message the Tico team');
     assert.equal(await box.getAttribute('maxlength'), '4000');
-    assert.equal(await attach.evaluate(el => el.open), false, 'Attach details is closed by default');
-    assert.equal(await attach.locator('[data-attach-label]').innerText(), 'Details attached');
-    assert.equal(await form.locator('[name=diag]').isChecked(), true);
-    await attach.locator('[data-attach-label]').click();
-    assert.match(await form.locator('[data-sent]').innerText(), /^Sends to updates\.tico\.team: message, email ana@acme\.example, version 0\.2\.17, install ID .*redacted diagnostics\.$/);
-    await form.locator('[data-preview]').click();
+    assert.equal(await pop.locator('[data-thread]').innerText(), '', 'an empty chat: just the box');
+    assert.doesNotMatch(await pop.innerText(), DESK);
+    // Shift+Enter is a new line; Enter sends. No conversation open: a new ticket, its details filled in for the person.
+    await box.fill('The board will not load.');
+    await box.press('Shift+Enter');
+    await box.pressSequentially(HOSTILE);
+    assert.ok(!v.calls.some(c => c.startsWith('POST tickets {')), 'Shift+Enter does not send');
+    await box.press('Enter');
+    await pop.locator('.support-msg.you').waitFor();
+    const filed = JSON.parse(v.calls.find(c => c.startsWith('POST tickets {')).slice('POST tickets '.length));
+    assert.deepEqual(filed, {message: 'The board will not load.\n' + HOSTILE, diagnostics: '', email: 'ana@acme.example', include_ids: true});
+    assert.equal(await box.inputValue(), '', 'the box empties');
+    assert.equal(await pop.locator('.support-msg.you .support-body').innerText(), 'The board will not load.\n' + HOSTILE);
+    assert.equal(await page.evaluate(() => window.__pwned), undefined, 'text, never HTML');
+    assert.doesNotMatch(await pop.innerText(), DESK);
+    assert.deepEqual(await pop.locator('.support-day').allInnerTexts(), ['Today']);
+    // The next message continues that conversation.
+    await box.fill('Still blank.');
+    await box.press('Enter');
+    await pop.locator('.support-msg.you', {hasText: 'Still blank.'}).waitFor();
+    assert.ok(v.calls.includes('POST tickets/sup_1/messages {"message":"Still blank.","diagnostics":""}'), 'a reply, not a new ticket');
+    assert.equal(v.calls.filter(c => c.startsWith('POST tickets {')).length, 1);
+    // Tab stays inside the chat, both ways.
+    await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Shift+Tab');
+    assert.equal((await active(page)).inPop, true);
+    // Esc closes it and gives focus back to the ?; words typed but not sent are there again on reopening.
+    await box.fill('half a thought');
+    // The close event (which hands focus back to the ?) is dispatched after Escape: wait for it, so it cannot take focus
+    // from a field the test focuses later.
+    await page.evaluate(() => { window.__closed = new Promise(done => document.getElementById('support-pop').addEventListener('close', done, {once: true})); });
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => window.__closed);
+    await page.locator('#support-pop').waitFor({state: 'hidden'});
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'support-open');
+    // A reply while the person is typing in another field: the ? gets its dot and the chat waits. It opens by itself once
+    // the field is left (the unsent words are still in its box), and opening reads the reply. No notice, no toast.
+    const focused = await page.evaluate(() => {
+      window.__focus = [];
+      for (const type of ['focusin', 'focusout']) document.addEventListener(type, e => window.__focus.push(type + ' ' + (e.target.id || e.target.tagName)), true);
+      const i = Object.assign(document.createElement('input'), {id: 't-elsewhere'}); document.body.append(i); i.focus();
+      return document.activeElement?.id;
+    });
+    assert.equal(focused, 't-elsewhere', 'the field being typed in has focus');
+    v.hq.reply = true;
+    await page.evaluate(() => window.supportPoll());
+    await page.locator('#support-open.has-unread').waitFor();
+    const {log, ...waiting} = await page.evaluate(() => ({unread: window.supportState().unread, active: document.activeElement?.id,
+      open: document.getElementById('support-pop').open, label: document.getElementById('support-open').getAttribute('aria-label'), log: window.__focus.slice()}));
+    assert.deepEqual(waiting, {unread: 1, active: 't-elsewhere', open: false, label: 'Tico team, 1 new'},
+      `the reply waits while the field has focus; focus: ${JSON.stringify(log)}; calls: ${v.calls.slice(-6).join(' | ')}`);
+    assert.equal(await page.locator('#ask-row').evaluate(el => getComputedStyle(el, '::after').content), 'none', 'no count on Ask');
+    await page.evaluate(() => document.getElementById('t-elsewhere').blur());
+    await pop.locator('.support-msg.them').waitFor();
+    assert.equal(await box.inputValue(), 'half a thought', 'unsent words survive');
+    await page.locator('#support-open:not(.has-unread)').waitFor();
+    assert.ok(v.calls.includes('POST tickets/sup_1/read'));
+    assert.equal(await page.locator('.toast', {hasText: 'replied'}).count(), 0, 'no notice for the reply');
+    // Theirs: the name above, in a bubble on the left; text, never HTML.
+    assert.equal(await pop.locator('.support-msg.them .support-who').innerText(), 'Tico team');
+    assert.match(await pop.locator('.support-msg.them .support-body').innerText(), /^Try the latest release\. <img src=x/);
+    const sides = await pop.evaluate(el => { const b = s => el.querySelector(s).getBoundingClientRect(), t = el.querySelector('[data-thread]').getBoundingClientRect();
+      return {them: b('.support-msg.them').left - t.left, you: t.right - b('.support-msg.you').right}; });
+    assert.ok(sides.them < 20 && sides.you < 30, `theirs left, mine right: ${JSON.stringify(sides)}`);
+    // A send that fails says so in place and keeps the words: HQ down, or no connection at all.
+    v.hq.fail = true;
+    await box.fill('Are you there?');
+    await box.press('Enter');
+    await pop.locator('[data-error]', {hasText: UNREACHABLE}).waitFor();
+    assert.equal(await box.inputValue(), 'Are you there?');
+    v.hq.fail = false; v.hq.abort = true;
+    await box.press('Enter');
+    await pop.locator('[data-error]', {hasText: UNREACHABLE}).waitFor();
+    v.hq.abort = false;
+    await box.press('Enter');
+    await pop.locator('.support-msg.you', {hasText: 'Are you there?'}).waitFor();
+    assert.equal(await pop.locator('[data-error]').isVisible(), false);
+    // A click outside closes it, and so does ✕.
+    await page.mouse.click(1200, 100);
+    await page.locator('#support-pop').waitFor({state: 'hidden'});
+    await page.evaluate(() => window.supportPoll());
+    assert.equal(await page.locator('#support-pop').evaluate(el => el.open), false, 'opened once, not again');
+    await q.click();
+    await pop.getByRole('button', {name: 'Close'}).click();
+    await page.locator('#support-pop').waitFor({state: 'hidden'});
+    assert.deepEqual(v.errors, []);
+    await v.ctx.close();
+
+    // ---- Two earlier conversations, one closed: one chat, oldest at the top, newest at the bottom, a date line per day
+    // and the writer's name when it changes. A closed one never stops the person writing: the next message goes to the
+    // one still open.
+    // Within an hour after midnight the newest replies would straddle two days: then the whole seed sits in yesterday.
+    const sinceMidnight = (Date.now() - new Date().setHours(0, 0, 0, 0)) / 60000, shift = sinceMidnight < 61 ? sinceMidnight + 120 : 0;
+    const atDay = m => at(m + shift);
+    v = await visit({viewport: {width: 1280, height: 800}, seed: [
+      {id: 'sup_2', created_at: atDay(60), status: 'answered', message: 'Bots stopped', sent: {},
+        messages: [{id: 1, created_at: atDay(50), from: 'staff', author_name: 'Mia', body: 'Restarted the runner.'},
+                   {id: 2, created_at: atDay(49), from: 'staff', author_name: 'Mia', body: 'Try now.'},
+                   {id: 3, created_at: atDay(40), from: 'staff', body: 'Anything else?'}]},
+      {id: 'sup_1', created_at: atDay(3 * 24 * 60), status: 'closed', message: 'Can bots share a computer?', sent: {diagnostics: 'x'},
+        messages: [{id: 1, created_at: atDay(3 * 24 * 60 - 4), from: 'staff', body: 'Yes.'}, {id: 2, created_at: atDay(3 * 24 * 60 - 5), from: 'person', body: 'Thanks'}]},
+    ]});
+    ({page} = v);
+    // Replies that were waiting when the page opened: the chat opens by itself, once, with them. It reads them as it
+    // opens, so the count is not waited on (it passes through 4 and back to 0 before a wait could see it).
+    const chat = page.locator('#support-pop');
+    await chat.locator('.support-msg.them', {hasText: 'Anything else?'}).waitFor();
+    const order = await chat.locator('[data-thread] > *').evaluateAll(els => els.map(el => el.matches('.support-day') ? 'day'
+      : (el.matches('.you') ? 'me: ' : 'them: ') + [...el.children].map(c => c.textContent).join(' | ')));
+    assert.deepEqual(order.filter(x => x !== 'day'), ['me: Can bots share a computer? | Diagnostics attached', 'them: Tico team | Yes.', 'me: Thanks',
+      'me: Bots stopped', 'them: Mia | Restarted the runner.', 'them: Try now.', 'them: Tico team | Anything else?'], `in time order: ${order}`);
+    // Days are the browser's own (its time zone may not be this script's): count them there.
+    const seen = await page.evaluate(times => ({days: new Set(times.map(t => new Date(t).toDateString())).size,
+      today: new Date(times[0]).toDateString() === new Date().toDateString()}),
+      [atDay(40), atDay(49), atDay(50), atDay(60), atDay(3 * 24 * 60), atDay(3 * 24 * 60 - 4), atDay(3 * 24 * 60 - 5)]);
+    assert.equal(order.filter(x => x === 'day').length, seen.days, 'a date line for each day');
+    assert.equal(await chat.locator('.support-day').last().innerText(), seen.today ? 'Today' : 'Yesterday');
+    assert.ok(await chat.locator('[data-thread]').evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 4), 'opens at the newest');
+    assert.doesNotMatch(await chat.innerText(), DESK);
+    await page.locator('#support-open:not(.has-unread)').waitFor();
+    assert.deepEqual(v.calls.filter(c => c.endsWith('/read')).sort(), ['POST tickets/sup_1/read', 'POST tickets/sup_2/read'], 'every reply on screen is read');
+    assert.ok(v.calls.includes('POST tickets/refresh {"ticket":"sup_2"}'), 'the open conversation is asked about');
+    await chat.locator('[name=message]').fill('All good now');
+    await chat.locator('[name=message]').press('Enter');
+    await chat.locator('.support-msg.you', {hasText: 'All good now'}).waitFor();
+    assert.ok(v.calls.includes('POST tickets/sup_2/messages {"message":"All good now","diagnostics":""}'));
+    assert.ok(!v.calls.some(c => c.startsWith('POST tickets {')));
+    // Diagnostics, from the paperclip: reviewed and edited first, attached as one small line, sent with the next message.
+    await chat.getByRole('button', {name: 'Attach diagnostics'}).click();
     const dialog = page.locator('dialog.support-modal');
     await dialog.locator('[data-use]:not([disabled])').waitFor();
     assert.equal(await dialog.locator('textarea').inputValue(), DIAGNOSTICS_TEXT);
+    await dialog.locator('[name=perf]').selectOption('168');
+    await page.waitForFunction(() => document.querySelector('dialog.support-modal [data-use]') && !document.querySelector('dialog.support-modal [data-use]').disabled);
+    assert.equal(v.calls.filter(c => c === 'GET diagnostics').length, 2, 'a new window captures again');
     await dialog.locator('textarea').fill('{"format":1}');
     assert.equal(await dialog.locator('[data-use]').isDisabled(), true);
     await dialog.locator('[data-save]').click();
     await dialog.locator('[data-use]:not([disabled])').waitFor();
     await dialog.locator('[data-use]').click();
-    assert.equal(await pop.isVisible(), true, 'closing Review and edit leaves Support open');
-    // Shift+Enter is a new line; Enter sends.
-    await box.fill('The board will not load.');
-    await box.press('Shift+Enter');
-    await box.pressSequentially(HOSTILE);
-    assert.equal(await box.inputValue(), 'The board will not load.\n' + HOSTILE);
-    assert.ok(!v.calls.some(c => c.startsWith('POST tickets {')), 'Shift+Enter does not send');
-    await box.press('Enter');
-    await pop.locator('.support-msg.you').waitFor();
-    const sent = JSON.parse(v.calls.find(c => c.startsWith('POST tickets {')).slice('POST tickets '.length));
-    assert.equal(sent.diagnostics, 'e'.repeat(64), 'the edited preview is sent');
-    assert.equal(sent.message, 'The board will not load.\n' + HOSTILE);
-    // The chat now shows the new request: its title and status above, a You bubble, the delivered line.
-    assert.equal(await form.locator('[name=diag]').isChecked(), false, 'follow-up attachments are opt-in');
-    assert.equal(await attach.locator('[data-attach-label]').innerText(), 'Attach details');
-    assert.match(await pop.locator('[data-title]').innerText(), /^The board will not load\.$/, 'the first line is the title');
-    assert.match(await pop.locator('[data-status] .support-badge').innerText(), /Open/);
-    assert.equal(await pop.locator('.support-msg.you .support-who').innerText().then(s => s.split(' · ')[0]), 'You');
-    assert.equal(await pop.locator('.support-delivered').innerText(), 'Delivered to Tico support. Their reply will appear here.');
-    assert.match(await pop.locator('[data-thread]').innerText(), /<img src=x/);
-    assert.equal(await page.locator('[data-thread] img, [data-thread] b, [data-requests] img').count(), 0);
-    assert.equal(await page.evaluate(() => window.__pwned), undefined);
-
-    // Tab stays inside the pop-up, both ways.
-    for (const key of ['Tab', 'Shift+Tab']) for (let i = 0; i < 20; i++) {
-      await page.keyboard.press(key);
-      assert.equal((await active(page)).inPop, true, `${key} stays in the pop-up`);
-    }
-    // Esc closes it and gives focus back to the ?; words typed but not sent are there again on reopening.
-    await box.fill('Draft kept while closed');
-    await page.keyboard.press('Escape');
-    await pop.waitFor({state: 'hidden'});
-    assert.equal((await active(page)).id, 'help-open', 'focus back on the ?');
-    await openSupport(page);
-    assert.equal(await box.inputValue(), 'Draft kept while closed');
-    // A click outside closes it, and so does ✕.
-    await page.mouse.click(1300, 300);
-    await pop.waitFor({state: 'hidden'});
-    assert.equal((await active(page)).id, 'help-open');
-    await openSupport(page);
-    await pop.getByRole('button', {name: 'Close'}).click();
-    await pop.waitFor({state: 'hidden'});
-    assert.equal((await active(page)).id, 'help-open');
-    assert.equal(await page.evaluate(() => location.hash), '#/tasks', 'nothing behind it changed');
-
-    // A reply arrives while it is closed: a count on the ? and the toast, which opens the pop-up on that request.
-    const help = page.locator('#help-open');
-    assert.equal(await help.getAttribute('data-support-unread'), null);
-    assert.equal(await help.getAttribute('aria-label'), 'Support');
-    v.hq.reply = true;
-    await page.evaluate(() => window.supportPoll());
-    assert.equal(await help.getAttribute('data-support-unread'), '1');
-    assert.equal(await help.evaluate(el => getComputedStyle(el, '::after').content), '"1"');
-    assert.equal(await help.getAttribute('aria-label'), 'Support, 1 new reply');
-    const replied = page.locator('.toast', {hasText: 'Tico support replied.'});
-    await replied.getByRole('button', {name: 'Open'}).click();
-    await pop.locator('.support-msg.staff').waitFor();
-    await page.waitForFunction(() => !document.querySelector('#help-open')?.hasAttribute('data-support-unread'));
-    assert.ok(v.calls.includes('POST tickets/sup_1/read'));
-    assert.equal(await help.getAttribute('aria-label'), 'Support');
-    assert.match(await pop.locator('.support-msg.staff .support-who').innerText(), /^Tico support/);
-    assert.match(await pop.locator('.support-msg.staff').innerText(), /Try the latest release/);
-    assert.equal(await pop.locator('.support-msg.staff img').count(), 0);
-    assert.equal(await box.inputValue(), 'Draft kept while closed');
-    // Enter on the latest open request continues it: no new request.
-    await attach.locator('[data-attach-label]').click();
-    await form.locator('[name=diag]').check();
-    await form.getByRole('button', {name: 'Send'}).click();
-    await page.waitForFunction(() => document.querySelectorAll('#support-pop .support-msg').length === 3);
-    assert.ok(v.calls.some(c => c.startsWith('POST tickets/sup_1/messages') && c.includes('"diagnostics":"' + 'd'.repeat(64))));
-    assert.equal(v.calls.filter(c => c.startsWith('POST tickets {')).length, 1, 'still one request');
-    // Your requests: the list, newest first, with status and unread dot; the back arrow returns to the chat.
-    await pop.locator('[data-mine]').click();
-    const requests = pop.locator('[data-requests] .support-item');
-    assert.equal(await requests.count(), 1);
-    assert.equal(await requests.locator('.support-badge').innerText(), 'Answered');
-    assert.equal(await pop.locator('[data-compose]').isVisible(), false);
-    await pop.getByRole('button', {name: 'Back to the chat'}).click();
-    assert.equal(await box.isVisible(), true);
-
-    // A send that fails says so where the person is looking, and keeps the message: HQ down, or no connection at all.
-    for (const how of ['fail', 'abort']) {
-      v.hq[how] = true;
-      await box.fill('Is anyone there?');
-      await box.press('Enter');
-      await form.locator('[data-error]:not([hidden])').waitFor();
-      assert.equal(await form.locator('[data-error]').innerText(), UNREACHABLE, how);
-      assert.equal(await box.inputValue(), 'Is anyone there?');
-      assert.equal(await form.getByRole('button', {name: 'Send'}).isDisabled(), false);
-      assert.equal(await pop.locator('.support-msg').count(), 3);
-      v.hq[how] = false;
-    }
-    // A check for replies that fails says so; what was loaded stays.
-    v.hq.pollFail = true;
-    await page.evaluate(() => window.supportPoll());
-    assert.equal(await pop.locator('[data-connection]').innerText(), 'Could not check for replies just now. Tico will try again.');
-    assert.equal(await pop.locator('.support-msg').count(), 3);
-    v.hq.pollFail = false;
-    await page.evaluate(() => window.supportPoll());
-    assert.equal(await pop.locator('[data-connection]').isVisible(), false);
-
-    await page.screenshot({path: '/tmp/tico-support-desktop.png'});
-    // What's new opens its page and closes the pop-up.
-    await pop.locator('[data-whats-new]').click();
-    await pop.waitFor({state: 'hidden'});
-    assert.equal(await page.evaluate(() => location.hash), '#/changelog');
-    // A phone: the ? tab opens a bottom sheet, nothing sideways.
-    await page.setViewportSize({width: 390, height: 844});
-    await page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity), null, {timeout: t(5000)});
-    await openSupport(page, '#mobile-support');
-    const sheet = await pop.boundingBox();
-    assert.ok(sheet.x === 0 && sheet.width === 390 && Math.abs(sheet.y + sheet.height - 844) < 2, `a bottom sheet (${JSON.stringify(sheet)})`);
-    assert.ok(sheet.height > 844 * 0.8, 'fills most of the screen');
-    assert.equal(await pop.evaluate(el => el.scrollWidth <= el.clientWidth && [...el.querySelectorAll('*')].every(x => x.getBoundingClientRect().right <= innerWidth + 1)), true, 'no horizontal scroll');
-    for (const sel of ['[data-compose] [name=message]', '[data-docs]', '[data-mine]', '.support-msg.staff']) assert.equal(await pop.locator(sel).first().isVisible(), true, sel);
-    await page.waitForTimeout(300);
-    await page.screenshot({path: '/tmp/tico-support-phone.png'});
-    // Swiping the sheet down closes it, back to the ? tab.
-    await pop.locator('.support-head').evaluate(el => {
-      const at = y => [new Touch({identifier: 1, target: el, clientX: 200, clientY: y})];
-      el.dispatchEvent(new TouchEvent('touchstart', {bubbles: true, touches: at(120), changedTouches: at(120)}));
-      el.dispatchEvent(new TouchEvent('touchmove', {bubbles: true, touches: at(320), changedTouches: at(320)}));
-      el.dispatchEvent(new TouchEvent('touchend', {bubbles: true, touches: [], changedTouches: at(320)}));
-    });
-    await pop.waitFor({state: 'hidden'});
-    assert.equal((await active(page)).id, 'mobile-support');
-    // The trash asks first; saying no keeps the request.
-    await openSupport(page, '#mobile-support');
-    const trash = pop.getByRole('button', {name: 'Delete request'});
-    v.hq.confirm = false;
+    await dialog.waitFor({state: 'detached'});
+    assert.match(await chat.locator('[data-report]').innerText(), /^description\s+Diagnostics\s+Review\s+close$/, 'one small line over the box');
+    await chat.locator('[name=message]').fill('Logs attached');
+    await chat.locator('[name=message]').press('Enter');
+    await chat.locator('.support-msg.you', {hasText: 'Logs attached'}).waitFor();
+    assert.ok(v.calls.includes(`POST tickets/sup_2/messages {"message":"Logs attached","diagnostics":"${'e'.repeat(64)}"}`), 'the edited capture goes with it');
+    assert.equal(await chat.locator('[data-report]').count(), 0, 'the next message starts with none');
+    // Access isn't allowed on this server: nothing about it shows.
+    assert.equal(await chat.locator('[data-access]').isHidden(), true, 'no standing access-off line');
+    assert.doesNotMatch(await chat.innerText(), /Access for/);
+    // Delete chat history: asked inside the chat (Cancel keeps everything), then every ticket deleted and the chat empty.
+    const trash = chat.getByRole('button', {name: 'Delete chat history'});
+    const boxes = await page.evaluate(() => { const b = s => document.querySelector(s).getBoundingClientRect(); return [b('#support-pop [data-delete]').right, b('#support-pop [data-close]').left]; });
+    assert.ok(boxes[0] <= boxes[1], 'left of Close');
     await trash.click();
-    assert.equal(v.hq.asked.length, 1);
-    assert.ok(!v.calls.some(c => c.startsWith('DELETE')));
-    v.hq.confirm = true;
+    const confirmBox = chat.getByRole('alertdialog', {name: 'Delete chat history?'});
+    await confirmBox.waitFor();
+    assert.equal(await chat.locator('[data-view]').isHidden(), true);
+    await confirmBox.getByRole('button', {name: 'Cancel'}).click();
+    await chat.locator('.support-msg.you', {hasText: 'Logs attached'}).waitFor();
+    assert.ok(!v.calls.some(c => c.startsWith('DELETE')), 'Cancel deletes nothing');
+    page.on('dialog', d => { throw new Error('window dialog: ' + d.message()); });
     await trash.click();
-    await pop.locator('.support-empty').waitFor();
-    assert.ok(v.calls.includes('DELETE tickets/sup_1'));
+    await confirmBox.getByRole('button', {name: 'Delete'}).click();
+    await confirmBox.waitFor({state: 'hidden'});
+    assert.deepEqual(v.calls.filter(c => c.startsWith('DELETE')).sort(), ['DELETE tickets/sup_1', 'DELETE tickets/sup_2'], "each ticket's DELETE");
+    assert.equal(await chat.locator('.support-msg, .support-day').count(), 0, 'the chat is empty');
+    assert.equal(await chat.locator('[name=message]').getAttribute('placeholder'), 'Message the Tico team');
+    assert.equal(await trash.isHidden(), true, 'nothing left to delete');
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
-    // Existing requests: it opens on the one with the most recent message that isn't Closed or Removed, at its newest
-    // message; Your requests lists them newest first with their badges and dots, and the ? counts every unread reply.
-    const at = m => new Date(Date.now() - m * 60000).toISOString();
-    const reply = (id, m) => ({id, created: at(m), from: 'staff', body: 'Reply ' + id});
-    v = await visit({seed: [
-      {id: 'sup_a', created: at(300), status: 'closed', message: 'Old question', messages: [reply(1, 1)], sent: {}},
-      {id: 'sup_b', created: at(100), status: 'open', message: 'Waiting question\nIt still fails after a restart.', messages: [], sent: {}},
-      {id: 'sup_c', created: at(400), status: 'answered', message: 'Answered question', messages: [reply(1, 50), reply(2, 5)], sent: {}},
-      {id: 'sup_d', created: at(2), status: 'gone', message: 'Removed question', messages: [], sent: {}},
-    ]});
-    await v.page.waitForFunction(() => document.querySelector('#help-open')?.getAttribute('data-support-unread') === '3');
-    assert.ok(!v.calls.some(c => c.endsWith('/read')), 'nothing is read until a conversation is shown');
+    // ---- Only closed conversations: the next message starts a new one.
+    v = await visit({seed: [{id: 'sup_1', created_at: at(90), status: 'closed', message: 'Old', sent: {}, messages: []}]});
     await openSupport(v.page);
-    const vpop = v.page.locator('#support-pop');
-    assert.equal(await vpop.locator('[data-title]').innerText(), 'Answered question');
-    assert.equal(await vpop.locator('[data-status]').innerText(), 'Answered');
-    await v.page.waitForFunction(() => document.querySelector('#help-open')?.getAttribute('data-support-unread') === '1');
-    assert.equal(await vpop.locator('[data-mine]').innerText(), 'Your requests (4)', 'every request in the list');
-    // Access off on the server says so in words, under the open request.
-    assert.equal(await vpop.locator('[data-view] [data-access]').innerText(), 'Support access is turned off on this server.');
-    assert.deepEqual(v.calls.filter(c => c.endsWith('/read')), ['POST tickets/sup_c/read'], 'the request shown is read');
-    await vpop.locator('[data-mine]').click();
-    const rows = await vpop.locator('[data-requests] .support-item').evaluateAll(els => els.map(el =>
-      [el.querySelector('.support-item-title').textContent, el.querySelector('.support-badge').textContent, !!el.querySelector('.support-dot')]));
-    assert.deepEqual(rows, [['Old question', 'Closed', true], ['Removed question', 'Removed', false], ['Answered question', 'Answered', false], ['Waiting question', 'Open', false]]);
-    // The first line is the title; the lines after it are a muted preview. Access off on the server says so in words.
-    assert.equal(await vpop.locator('.support-item', {hasText: 'Waiting question'}).locator('.support-item-body').innerText(), 'It still fails after a restart.');
-    assert.equal(await vpop.locator('.support-item-body').count(), 1);
-    // A closed request opens to read, with no box (and nothing about support access).
-    await vpop.locator('[data-requests] .support-item').first().click();
-    assert.equal(await vpop.locator('[data-title]').innerText(), 'Old question');
-    assert.equal(await vpop.locator('[data-compose]').isVisible(), false);
-    assert.equal(await vpop.locator('[data-access]').isVisible(), false);
-    assert.match(await vpop.locator('[data-closed]').innerText(), /This request is closed/);
-    // New request starts an empty one, even with open requests about.
-    await vpop.getByRole('button', {name: 'New request'}).click();
-    assert.equal(await vpop.locator('[data-title]').innerText(), 'New request');
-    assert.equal(await vpop.locator('.support-empty').innerText(), 'Ask us anything. A person at Tico reads every message.');
-    assert.equal((await active(v.page)).name, 'message');
-    // A long conversation opens at its newest reply. Scrolled up to read, a new reply doesn't move it: the pill offers it.
-    const long = v.hq.tickets.find(x => x.id === 'sup_c');
-    for (let i = 3; i < 30; i++) long.messages.push({...reply(i, 4), body: `Reply ${i}\n` + 'More detail. '.repeat(20)});
+    await v.page.locator('#support-pop .support-msg.you', {hasText: 'Old'}).waitFor();
+    await v.page.locator('#support-message').fill('New thing');
+    await v.page.locator('#support-message').press('Enter');
+    await v.page.locator('#support-pop .support-msg.you', {hasText: 'New thing'}).waitFor();
+    assert.equal(JSON.parse(v.calls.find(c => c.startsWith('POST tickets {')).slice('POST tickets '.length)).message, 'New thing');
+    assert.equal((await active(v.page)).id, 'support-message');
     await v.page.keyboard.press('Escape');
-    await v.page.evaluate(() => window.supportPoll());
-    await openSupport(v.page);
-    const thread = vpop.locator('[data-thread]'), gap = () => thread.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight);
-    await v.page.waitForFunction(() => document.querySelectorAll('#support-pop .support-msg').length === 30);
-    assert.ok(await gap() < 2, 'opens at the newest reply');
-    await thread.hover();
-    await v.page.mouse.wheel(0, -600);
-    await v.page.waitForFunction(() => { const el = document.querySelector('[data-thread]'); return el.scrollHeight - el.scrollTop - el.clientHeight > 300; });
-    const top = await thread.evaluate(el => el.scrollTop);
-    long.messages.push({...reply(30, 0), body: 'A new reply while you read'});
-    await v.page.evaluate(() => window.supportPoll());
-    await v.page.waitForFunction(() => document.querySelectorAll('#support-pop .support-msg').length === 31);
-    assert.equal(await thread.evaluate(el => el.scrollTop), top, 'a reader scrolled up is not moved');
-    const pill = vpop.locator('.stick-pill');
-    await pill.waitFor();
-    await pill.click();
-    await v.page.waitForFunction(() => { const el = document.querySelector('[data-thread]'); return el.scrollHeight - el.scrollTop - el.clientHeight < 2; });
-    assert.equal(await pill.isVisible(), false);
-    // Deleting the shown request moves the chat to the next latest open one.
-    await vpop.getByRole('button', {name: 'Delete request'}).click();
-    await v.page.waitForFunction(() => document.querySelector('#support-pop [data-title]')?.textContent === 'Waiting question');
-    assert.equal(await pill.isVisible(), false, 'no stale pill after the conversation changes');
-    // Only closed requests left: the empty chat names the last one, and View it opens it.
-    v.hq.tickets = v.hq.tickets.filter(x => x.id === 'sup_a');
-    await v.page.keyboard.press('Escape');
-    await v.page.evaluate(() => window.supportPoll());
-    await openSupport(v.page);
-    assert.equal(await vpop.locator('.support-empty').innerText(), 'Ask us anything. A person at Tico reads every message.\n\nYour last request, Old question, is closed. View it');
-    assert.equal(await vpop.locator('[data-compose]').isVisible(), true, 'a new request can be started');
-    await vpop.getByRole('button', {name: 'View it'}).click();
-    assert.equal(await vpop.locator('[data-title]').innerText(), 'Old question');
-    assert.match(await vpop.locator('[data-thread]').innerText(), /Reply 1/);
+    assert.equal((await active(v.page)).id, 't-support', 'focus back on the link');
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
-    // A send still on its way when the pop-up is closed and reopened: nothing can send it twice or change it, and the
-    // outcome shows in the composer on screen, whether it lands while open or while closed.
-    v = await visit({seed: [{id: 'sup_s', created: at(30), status: 'open', message: 'Slow line', messages: [], sent: {}}]});
-    const slow = v.page.locator('#support-pop');
-    const hold = () => { let go; v.hq.gate = new Promise(r => { go = r; }); return () => { v.hq.gate = null; go(); }; };
-    const posted = () => v.calls.filter(c => c.startsWith('POST tickets/sup_s/messages')).length;
-    await openSupport(v.page);
-    let release = hold();
-    await slow.locator('[name=message]').fill('First words');
-    await slow.locator('[name=message]').press('Enter');
-    await v.page.waitForFunction(() => document.querySelector('#support-pop .support-send')?.getAttribute('aria-busy') === 'true');
-    await v.page.keyboard.press('Escape');
-    let releaseRefresh;
-    v.hq.refreshGate = new Promise(resolve => { releaseRefresh = resolve; });
-    const staleRefreshStarted = new Promise(resolve => { v.hq.refreshStarted = resolve; });
-    await openSupport(v.page);
-    await staleRefreshStarted;
-    assert.equal(await slow.locator('[name=message]').isDisabled(), true, 'the box stays locked while the send is on its way');
-    assert.equal(await slow.locator('.support-send').isDisabled(), true);
-    assert.equal(await slow.locator('.support-send').getAttribute('aria-busy'), 'true');
-    await slow.locator('[data-compose]').evaluate(f => f.requestSubmit());
-    release();
-    await slow.locator('.support-msg.you', {hasText: 'First words'}).waitFor();
-    const staleResponse = v.page.waitForResponse(response => response.url().includes('/support/tickets/refresh'));
-    releaseRefresh();
-    await staleResponse;
-    await v.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    assert.equal(await slow.locator('.support-msg.you', {hasText: 'First words'}).count(), 1, 'an older reopen refresh cannot erase a completed send');
-    v.hq.refreshGate = null;
-    v.hq.refreshStarted = null;
-    assert.equal(posted(), 1, 'sent once');
-    assert.equal(await slow.locator('[name=message]').isDisabled(), false);
-    assert.equal(await slow.locator('[name=message]').inputValue(), '');
-    // Fails while open after a reopen: the Not sent line is in the composer on screen, with the words kept.
-    v.hq.fail = true;
-    release = hold();
-    await slow.locator('[name=message]').fill('Second words');
-    await slow.locator('[name=message]').press('Enter');
-    await v.page.waitForFunction(() => document.querySelector('#support-pop .support-send')?.getAttribute('aria-busy') === 'true');
-    await v.page.keyboard.press('Escape');
-    await openSupport(v.page);
-    release();
-    await slow.locator('[data-compose] [data-error]:not([hidden])').waitFor();
-    assert.equal(await slow.locator('[data-compose] [data-error]').innerText(), UNREACHABLE);
-    assert.equal(await slow.locator('[name=message]').inputValue(), 'Second words');
-    assert.equal(await slow.locator('[name=message]').isDisabled(), false);
-    // Fails while closed: reopening shows it.
-    release = hold();
-    await slow.locator('[name=message]').press('Enter');
-    await v.page.waitForFunction(() => document.querySelector('#support-pop .support-send')?.getAttribute('aria-busy') === 'true');
-    await v.page.keyboard.press('Escape');
-    release();
-    await v.page.waitForFunction(() => !document.querySelector('#support-pop .support-send')?.hasAttribute('aria-busy'));
-    await openSupport(v.page);
-    assert.equal(await slow.locator('[data-compose] [data-error]').innerText(), UNREACHABLE);
-    assert.equal(await slow.locator('[name=message]').inputValue(), 'Second words');
-    v.hq.fail = false;
-    assert.equal(posted(), 3);
-    assert.deepEqual(v.errors, []);
-    await v.ctx.close();
-
-    // A Report this (or a setup snapshot) while a new request's diagnostics are still being captured: the request goes
-    // with the words and attachment it had when Send was pressed, and the newer one waits, unsent, with its own.
-    v = await visit();
-    const holdCapture = () => { let go; v.hq.captureGate = new Promise(r => { go = r; }); return () => { v.hq.captureGate = null; go(); }; };
-    const newTickets = () => v.calls.filter(c => c.startsWith('POST tickets {')).map(c => JSON.parse(c.slice('POST tickets '.length)));
-    const reportsCaptured = () => v.calls.filter(c => c.startsWith('POST diagnostics/capture {')).map(c => JSON.parse(c.slice('POST diagnostics/capture '.length)).report?.kind);
-    await v.page.evaluate(() => talkToUs({kind: 'toast', title: 'Could not save'}));
-    await v.page.waitForFunction(() => document.querySelector('#support-pop [name=message]')?.value === 'Error: details attached. ');
-    let releaseCapture = holdCapture();
-    v.hq.captureId = 'f'.repeat(64);
-    await v.page.locator('[data-compose] [name=message]').pressSequentially('Every time.');
-    await v.page.locator('[data-compose] [name=message]').press('Enter');
-    await v.page.waitForFunction(() => document.querySelector('#support-pop .support-send')?.getAttribute('aria-busy') === 'true');
-    await v.page.keyboard.press('Escape');
-    await v.page.evaluate(() => talkToUs({kind: 'health', title: 'Computers: None online'}));
-    await v.page.locator('#support-pop[open] [data-compose] [name=message]').waitFor();
-    await v.page.waitForTimeout(200);
-    assert.equal(await v.page.locator('[data-compose] [name=message]').inputValue(), 'Error: details attached. Every time.', 'the send on its way is not changed');
-    assert.equal(await v.page.locator('[data-compose] [name=message]').isDisabled(), true);
-    releaseCapture();
-    await v.page.waitForFunction(() => document.querySelector('#support-pop [name=message]')?.value === 'Health: details attached. ');
-    assert.deepEqual(newTickets().map(t => [t.message, t.diagnostics]), [['Error: details attached. Every time.', 'f'.repeat(64)]], 'sent once, as pressed');
-    assert.deepEqual(reportsCaptured(), ['toast']);
-    assert.match(await v.page.locator('[data-report]').innerText(), /Attached: Health Computers: None online/);
-    assert.equal(await v.page.locator('[data-compose] [name=message]').isDisabled(), false);
-    assert.equal(await v.page.locator('#support-pop [data-title]').innerText(), 'New request');
-    // Sent in turn, it captures its own attachment; a setup snapshot meanwhile waits the same way.
-    releaseCapture = holdCapture();
-    v.hq.captureId = 'a'.repeat(64);
-    await v.page.locator('[data-compose] [name=message]').press('Enter');
-    await v.page.waitForFunction(() => document.querySelector('#support-pop .support-send')?.getAttribute('aria-busy') === 'true');
-    await v.page.evaluate(() => supportStart('Help me set up.', 'setup'));
-    await v.page.waitForTimeout(200);
-    releaseCapture();
-    await v.page.waitForFunction(() => document.querySelector('#support-pop [name=message]')?.value === 'Help me set up.');
-    assert.deepEqual(newTickets().map(t => [t.message, t.diagnostics, t.kind]),
-      [['Error: details attached. Every time.', 'f'.repeat(64), undefined], ['Health: details attached. ', 'a'.repeat(64), undefined]]);
-    assert.deepEqual(reportsCaptured(), ['toast', 'health']);
-    v.hq.captureId = null;
-    assert.deepEqual(v.errors, []);
-    await v.ctx.close();
-
-    // Opening on Your requests or on another request's reply reads only what it shows: the chat left open last time is
-    // not read on the way.
-    v = await visit({seed: [
-      {id: 'sup_a', created: at(60), status: 'answered', message: 'Question A', messages: [reply(1, 30)], sent: {}},
-      {id: 'sup_b', created: at(90), status: 'open', message: 'Question B', messages: [], sent: {}}]});
-    await openSupport(v.page);
-    assert.equal(await v.page.locator('#support-pop [data-title]').innerText(), 'Question A');
-    await v.page.waitForFunction(() => !document.querySelector('#help-open')?.hasAttribute('data-support-unread'));
-    await v.page.keyboard.press('Escape');
-    v.hq.tickets.find(x => x.id === 'sup_a').messages.push(reply(2, 2));
-    v.hq.tickets.find(x => x.id === 'sup_b').messages.push(reply(1, 1));
-    await v.page.evaluate(() => window.supportPoll());
-    await v.page.waitForFunction(() => document.querySelector('#help-open')?.getAttribute('data-support-unread') === '2');
-    const reads = () => v.calls.filter(c => c.endsWith('/read'));
-    const before = reads().length;
-    await v.page.evaluate(() => window.supportOpen({list: true}));
-    await v.page.locator('#support-pop[open] [data-list]:not([hidden])').waitFor();
-    await v.page.waitForTimeout(300);
-    assert.deepEqual(reads().slice(before), [], 'Your requests reads nothing');
-    assert.equal(await v.page.locator('#help-open').getAttribute('data-support-unread'), '2');
-    await v.page.keyboard.press('Escape');
-    await v.page.locator('.toast', {hasText: 'Tico support replied.'}).last().getByRole('button', {name: 'Open'}).click();
-    await v.page.waitForFunction(() => document.querySelector('#support-pop [data-title]')?.textContent === 'Question B');
-    await v.page.waitForFunction(() => document.querySelector('#help-open')?.getAttribute('data-support-unread') === '1');
-    await v.page.waitForTimeout(300);
-    assert.deepEqual(reads().slice(before), ['POST tickets/sup_b/read'], "B's reply reads only B");
-    assert.deepEqual(v.errors, []);
-    await v.ctx.close();
-
-    // Inside the desktop app: a request carries the app's version labelled apart from the server's, and diagnostics
-    // carry the end of the app's log.
-    // The page reports whether the app runs on a Mac from its user agent, so the test pins one rather than the host's.
-    v = await visit({native: true, userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'});
-    await openSupport(v.page);
-    await v.page.locator('[data-attach-label]').click();
-    assert.match(await v.page.locator('[data-sent]').textContent(), /version 0\.2\.17, app version 0\.3\.48, install ID/);
-    await v.page.locator('[data-compose] [name=message]').fill('The app did not update.');
-    await v.page.locator('[data-compose] [name=message]').press('Enter');
-    await v.page.locator('.support-msg.you').waitFor();
-    const captured = JSON.parse(v.calls.find(c => c.startsWith('POST diagnostics/capture {')).slice('POST diagnostics/capture '.length));
-    assert.deepEqual(captured.app, {version: '0.3.48', lines: ['2026-10-16T06:47:31Z WARN tico_app: update check failed: 401'], mac: false});
-    const filed = JSON.parse(v.calls.find(c => c.startsWith('POST tickets {')).slice('POST tickets '.length));
-    assert.equal(filed.app_version, '0.3.48');
-    assert.equal(filed.diagnostics, 'c'.repeat(64));
-    assert.deepEqual(v.errors, []);
-    await v.ctx.close();
-
-    // Letting Tico support in, under the open request: the dialog offers only what this person may give, the banner
-    // and the request show the tier and the time left in the same words, the banner opens the request it started from,
-    // the log under that request lists what support did (as text, its time as the app's event times read), another
-    // request shows none of it, and Stop ends it.
-    v = await visit({seed: [{id: 'sup_9', created: new Date().toISOString(), status: 'open', message: 'Bots stopped', messages: [], sent: {}},
-                            {id: 'sup_8', created: at(600), status: 'closed', message: 'Old question', messages: [], sent: {}}],
+    // ---- Letting the Tico team in, over the box: only what this person may give; the banner and the chat say the tier
+    // and the time left in the same words; the banner opens the chat; Stop ends it at once.
+    v = await visit({seed: [{id: 'sup_9', created_at: at(1), status: 'open', message: 'Bots stopped', messages: [], sent: {}}],
                      access: {available: true, off_reason: '', active: null, last: null, sessions: [], can_start: true, can_full: false}});
     await openSupport(v.page);
-    const strip = v.page.locator('#support-pop [data-view] [data-access]');
-    await strip.getByRole('button', {name: 'Let Tico support in'}).waitFor();
-    assert.equal(await strip.innerText(), 'Let Tico support in');
-    assert.ok(await strip.evaluate(el => el.getBoundingClientRect().top >= document.querySelector('#support-pop [data-thread]').getBoundingClientRect().bottom
-      && el.getBoundingClientRect().bottom <= document.querySelector('#support-pop [data-compose]').getBoundingClientRect().top), 'under the conversation, over the box');
-    await v.page.locator('#support-pop [data-mine]').click();
-    await v.page.locator('#support-pop [data-list]:not([hidden])').waitFor();
-    assert.equal(await v.page.locator('#support-pop [data-list] [data-access]').count(), 0, 'not in Your requests');
-    await v.page.locator('#support-pop [data-back]').click();
-    await strip.getByRole('button', {name: 'Let Tico support in'}).click();
-    assert.equal(await v.page.locator('dialog[aria-label="Let Tico support in"] [name=tier][value=full]').isDisabled(), true, 'full access is the owner\'s to give');
-    await v.page.locator('dialog[aria-label="Let Tico support in"] [name=hours]').selectOption('4');
-    await v.page.locator('dialog[aria-label="Let Tico support in"] [type=submit]').click();
+    const strip = v.page.locator('#support-pop [data-access]');
+    await strip.getByRole('button', {name: 'Let the Tico team in'}).click();
+    const letIn = v.page.locator('dialog[aria-label="Let the Tico team in"]');
+    assert.equal(await letIn.locator('[name=tier][value=full]').isDisabled(), true, "full access is the owner's to give");
+    await letIn.locator('[name=hours]').selectOption('4');
+    await letIn.locator('[type=submit]').click();
     await v.page.locator('#support-access-banner:not([hidden])').waitFor();
     assert.ok(v.calls.includes('POST access {"ticket_id":"sup_9","tier":"app","hours":4}'));
-    assert.equal(await v.page.locator('#support-access-banner [data-access-left]').innerText(), 'Tico support has access (App only), 3 h 12 min left');
+    assert.equal(await v.page.locator('#support-access-banner [data-access-left]').innerText(), 'Tico team has access (App only), 3 h 12 min left');
     await strip.locator('.support-access-log li').waitFor();
-    assert.equal(await strip.locator('.support-access-on').innerText(), 'Tico support has access (App only), 3 h 12 min left · Stop');
+    assert.equal(await strip.locator('.support-access-on').innerText(), 'Tico team has access (App only), 3 h 12 min left · Stop');
     assert.match(await strip.locator('.support-access-log li').innerText(), /^just now Support Agent · GET \/api\/v2\/health<img src=x/);
-    assert.ok(await strip.locator('.support-access-log li time').getAttribute('title'), 'the full time on hover');
-    await v.page.keyboard.press('Escape');
-    await v.page.locator('#support-pop').waitFor({state: 'hidden'});
-    // From a closed request, the banner opens the one the session started from.
-    await v.page.evaluate(() => window.supportOpen({ticket: 'sup_8'}));
-    await v.page.waitForFunction(() => document.querySelector('#support-pop [data-title]')?.textContent === 'Old question');
-    assert.equal(await strip.isVisible(), false, 'another request shows none of it');
     await v.page.keyboard.press('Escape');
     await v.page.locator('#support-access-banner [data-access-left]').click();
-    await v.page.waitForFunction(() => document.querySelector('#support-pop[open] [data-title]')?.textContent === 'Bots stopped');
-    assert.equal(await strip.locator('.support-access-log li').count(), 1);
-    await v.page.keyboard.press('Escape');
-    await v.page.locator('#support-access-banner [data-access-stop]').click();
+    await v.page.locator('#support-pop[open]').waitFor();
+    let releaseAccess;
+    v.hq.accessGate = new Promise(resolve => { releaseAccess = resolve; });
+    await strip.getByRole('button', {name: 'Stop'}).click();
     await v.page.locator('#support-access-banner').waitFor({state: 'hidden'});
-    assert.ok(v.calls.includes('POST access/sa_1/stop {}'));
+    await strip.getByRole('button', {name: 'Let the Tico team in'}).waitFor();
+    releaseAccess(); v.hq.accessGate = null;
     assert.equal(await v.page.evaluate(() => window.__pwned), undefined);
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
-    // A phone in the dark theme: no Talk to us anywhere, the ? tab in its place; reviewing and editing the
-    // diagnostics still works in the sheet.
-    v = await visit({viewport: {width: 390, height: 844}, theme: 'dark'});
-    assert.deepEqual(await v.page.locator('#mobile-nav .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Tasks', 'Updates', 'Support', 'More']);
-    assert.equal(await v.page.getByText('Talk to us').count(), 0);
-    assert.equal(await v.page.locator('#mobile-support .mobile-nav-icon').innerText(), 'help');
-    await openSupport(v.page, '#mobile-support');
-    assert.deepEqual(await active(v.page), {id: 'support-message', name: 'message', inPop: true});
-    const dark = await v.page.locator('#support-pop').evaluate(el => [getComputedStyle(el).backgroundColor, getComputedStyle(el).color]);
-    assert.notDeepEqual(dark[0], 'rgb(255, 255, 255)', 'the dark theme reaches the pop-up');
-    await v.page.locator('[data-attach-label]').click();
-    await v.page.locator('[data-compose] [data-preview]').click();
-    const phoneDialog = v.page.locator('dialog.support-modal');
-    await phoneDialog.locator('[data-use]:not([disabled])').waitFor();
-    assert.equal(await phoneDialog.locator('textarea').inputValue(), DIAGNOSTICS_TEXT);
-    await phoneDialog.locator('textarea').fill('{"format":1,"note":"phone"}');
-    await phoneDialog.locator('[data-save]').click();
-    await phoneDialog.locator('[data-use]:not([disabled])').waitFor();
-    await phoneDialog.locator('[data-use]').click();
-    await phoneDialog.waitFor({state: 'detached'});
-    assert.equal(await v.page.locator('[data-compose] [name=diag]').isChecked(), true);
-    await v.page.waitForTimeout(300);
-    await v.page.screenshot({path: '/tmp/tico-support-phone-dark.png'});
+    // ---- A phone: the ? in the More drawer, a 44 px icon at the Search row's end; the chat a full page above the tab
+    // bar, square, with a close control; nothing sideways.
+    v = await visit({viewport: {width: 390, height: 844}, theme: 'dark', seed: [{id: 'sup_3', created_at: at(20), status: 'answered', message: 'Phone question', sent: {}, seen: 1,
+      messages: [{id: 1, created_at: at(10), from: 'staff', body: 'A longer answer that wraps over a few lines on a phone screen, with a link-like-word-that-is-very-long-indeed'}]}]});
+    ({page} = v);
+    await page.locator('#mobile-more').click();
+    await page.locator('#search-open').waitFor();
+    const drawer = await page.evaluate(() => { const b = id => document.getElementById(id).getBoundingClientRect(), q = b('support-open'), s = b('search-open');
+      return {gap: q.left - s.right, dy: Math.abs(q.top + q.height / 2 - s.top - s.height / 2), w: q.width, h: q.height, right: q.right, sameParent: document.getElementById('support-open').parentElement === document.getElementById('search-open').parentElement}; });
+    assert.ok(drawer.sameParent && drawer.gap >= 0 && drawer.gap < 8 && drawer.dy < 2 && drawer.w >= 44 && drawer.h >= 44 && drawer.right <= 390, `beside Search in the drawer: ${JSON.stringify(drawer)}`);
+    await page.locator('#support-open').click();
+    const phone = page.locator('#support-pop');
+    await phone.locator('.support-msg.them').waitFor();
+    assert.equal(await page.evaluate(() => document.body.classList.contains('drawer')), false, 'the drawer gets out of the way');
+    const sheet = await phone.boundingBox(), bar = await page.locator('#mobile-nav').boundingBox();
+    assert.ok(sheet.x === 0 && sheet.y === 0 && sheet.width === 390 && Math.abs(sheet.y + sheet.height - bar.y) < 2, `a full page above the tab bar: ${JSON.stringify([sheet, bar])}`);
+    assert.equal(await phone.evaluate(el => getComputedStyle(el).borderTopLeftRadius), '0px', 'square, like a page');
+    const close = await phone.getByRole('button', {name: 'Close'}).boundingBox();
+    assert.ok(close.width >= 44 && close.height >= 44 && close.y < 60, `a close control in the header: ${JSON.stringify(close)}`);
+    assert.ok(await noSideways(page), 'no horizontal scroll at 390 px');
+    assert.equal(await phone.locator('[name=message]').evaluate(el => getComputedStyle(el).fontSize), '16px', 'Safari does not zoom in on the box');
+    assert.notEqual(await phone.evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(255, 255, 255)', 'the dark theme reaches it');
+    await phone.getByRole('button', {name: 'Close'}).click();
+    await phone.waitFor({state: 'hidden'});
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
-
-    // An iPhone (390x844) with the keyboard up: the box is 16 px so Safari doesn't zoom in on it, and the sheet fills
-    // exactly what is visible above the keyboard: the box, Send and the newest reply on screen, nothing of the page
-    // behind it showing and the page not scrolling under it. With the keyboard down it is the usual bottom sheet again.
-    v = await visit({viewport: {width: 390, height: 844}, keyboard: true, seed: [{id: 'sup_9', created: at(30), status: 'answered', message: 'Roadmap suggestions go to an archived bot.', sent: {},
-      messages: [reply(1, 25), {id: 2, created: at(20), from: 'person', body: 'Still there on 0.3.54.'},
-        {id: 3, created: at(10), from: 'staff', body: 'The setting now decides who gets suggestions.\n\nAfter that, it is safe to turn public roadmap suggestions back on. Reply here if anything still goes to the archived bot.'}]}]});
-    await openSupport(v.page, '#mobile-support');
-    const kpop = v.page.locator('#support-pop'), kbox = kpop.locator('[data-compose] [name=message]');
-    await kbox.focus();
-    assert.ok(parseFloat(await kbox.evaluate(el => getComputedStyle(el).fontSize)) >= 16, 'the box is at least 16 px: no zoom on focus');
-    assert.equal(await v.page.evaluate(() => document.querySelector('meta[name=viewport]').content.includes('user-scalable=no') || /maximum-scale=1(\D|$)/.test(document.querySelector('meta[name=viewport]').content)), false, 'zoom itself stays allowed');
-    const sheetAt = () => kpop.evaluate(el => {
-      const r = el.getBoundingClientRect(), inside = (sel, all) => { const b = (all ? [...el.querySelectorAll(sel)].at(-1) : el.querySelector(sel)).getBoundingClientRect(); return {top: b.top, bottom: b.bottom}; };
-      const thread = inside('[data-thread]'), newest = el.querySelector('.support-msg') ? inside('.support-msg', true) : null;   // a new request has none
-      // Every point along the top and bottom edges and down both sides is the sheet, not the page behind it.
-      const probes = [];
-      for (let x = 2; x < innerWidth; x += 48) probes.push([x, r.top + 1], [x, r.bottom - 1]);
-      for (let y = r.top + 1; y < r.bottom; y += 40) probes.push([2, y], [innerWidth - 2, y]);
-      return {top: r.top, bottom: r.bottom, height: r.height, pad: parseFloat(getComputedStyle(el).paddingBottom), box: inside('[name=message]'), send: inside('[type=submit]'), thread, newest,
-        covered: probes.every(([x, y]) => el.contains(document.elementFromPoint(x, y))), bodyScroll: getComputedStyle(document.body).overflowY};
-    });
-    const sheetIs = async (top, bottom, why) => {
-      await v.page.waitForFunction(([a, b]) => { const r = document.getElementById('support-pop').getBoundingClientRect(); return Math.abs(r.top - a) < 1 && Math.abs(r.bottom - b) < 1; },
-        [top, bottom], {timeout: t(3000)}).catch(() => {});   // asserted below
-      const k = await sheetAt();
-      assert.ok(Math.abs(k.top - top) < 1 && Math.abs(k.bottom - bottom) < 1, `${why}: ${top}-${bottom} (${JSON.stringify(k)})`);
-      return k;
-    };
-    assert.equal((await sheetAt()).pad, 34, 'keyboard down: the sheet keeps clear of the home bar');
-    // Safari leaves 844 - 386 = 458 px above the keyboard and its bar, panned down 120 px to keep the box in view.
+    // With the keyboard up the chat ends at the keyboard: the box and Send stay in view.
+    v = await visit({viewport: {width: 390, height: 844}, keyboard: true});
+    await v.page.evaluate(() => window.__keys(844));
+    await openSupport(v.page);
     await v.page.evaluate(() => window.__keys(458, 120));
-    await sheetIs(120, 578, 'the sheet fills what is visible above the keyboard');
-    await v.page.waitForTimeout(100);   // the thread re-pins to its newest reply on the resize (ui/app/stick-scroll.js)
-    let k = await sheetAt();
-    assert.equal(k.pad, 0, 'keyboard up: no home-bar gap above the keyboard');
-    for (const part of ['box', 'send']) assert.ok(k[part].top >= 120 && k[part].bottom <= 578, `${part} visible above the keyboard (${JSON.stringify(k[part])})`);
-    assert.ok(k.newest.top >= k.thread.top - 1 && k.newest.bottom <= k.thread.bottom + 1, `the newest reply is whole on screen (${JSON.stringify(k)})`);
-    assert.ok(k.newest.bottom <= k.box.top, 'above the box');
-    assert.equal(k.covered, true, 'nothing of the page behind shows around the sheet');
-    assert.equal(k.bodyScroll, 'hidden', 'the page behind does not scroll while the sheet is open');
-    await v.page.screenshot({path: '/tmp/tico-support-phone-keyboard.png'});
-    // Pinch zoom (2x) with the keyboard up: the sheet keeps the 458 px above the keyboard, on the bottom of the page
-    // where panning reaches it, and zoom itself still works.
-    const SHEET = 844 * 0.92;   // the usual bottom sheet: 92dvh
-    await v.page.evaluate(() => window.__keys(229, 300, 2));
-    await sheetIs(844 - 458, 844, 'zoomed with the keyboard up');
-    // The keyboard goes down while still zoomed: the usual bottom sheet, not the keyboard-sized one from before the zoom.
-    await v.page.evaluate(() => window.__keys(422, 200, 2));
-    k = await sheetIs(844 - SHEET, 844, 'keyboard down while zoomed');
-    assert.equal(k.pad, 34, 'and the home-bar gap is back');
-    // Closed and opened again while zoomed: the same.
-    await v.page.keyboard.press('Escape');
-    await kpop.waitFor({state: 'hidden'});
-    await openSupport(v.page, '#mobile-support');
-    await sheetIs(844 - SHEET, 844, 'reopened while zoomed');
-    // The keyboard comes up while already zoomed: the space above it, on the bottom of the page.
-    await v.page.evaluate(() => window.__keys(229, 100, 2));
-    await sheetIs(844 - 458, 844, 'keyboard up while already zoomed');
-    // Zoomed back out with the keyboard up, Safari panned 300 px: the sheet follows the visible area again.
-    await v.page.evaluate(() => window.__keys(458, 300));
-    await sheetIs(300, 758, 'zoomed out with the keyboard up');
-    // The keyboard goes down: the usual bottom sheet, most of the screen.
-    await v.page.evaluate(() => window.__keys(844, 0));
-    k = await sheetIs(844 - SHEET, 844, 'back to the bottom sheet');
-    assert.equal(k.pad, 34, 'with the home-bar gap');
-    // A long reply, then the "Want help setting up?" snapshot, with the keyboard up: the box grows only into the room
-    // the short sheet has left, so it and Send stay above the keyboard, and the rest scrolls inside the box.
-    const fitsAbove = async (why) => {
-      await v.page.waitForTimeout(50);
-      const s = await sheetAt();
-      for (const part of ['box', 'send']) assert.ok(s[part].top >= 120 && s[part].bottom <= 578, `${why}: ${part} above the keyboard (${JSON.stringify(s)})`);
-      assert.ok(s.thread.bottom - s.thread.top >= 119, `${why}: the thread keeps its room (${JSON.stringify(s.thread)})`);
-    };
-    await v.page.evaluate(() => window.__keys(458, 120));
-    await sheetIs(120, 578, 'keyboard up again');
-    await kbox.fill(Array.from({length: 30}, (_, i) => `Line ${i + 1} of a long reply about the archived bot.`).join('\n'));
-    await fitsAbove('long reply');
-    const snapshot = "I'd like help setting up Tico.\n\nSetup snapshot (asked from the setup wizard):\n- Steps done: 2 of 5; left: Add a computer, Sign in a model, First bot ready\n- Computer online: no\n- Model signed in: no\n- First bot ready: no\n- Bots in Needs setup: 3";
-    await v.page.evaluate(m => window.supportStart(m, 'setup'), snapshot);
-    await v.page.waitForFunction(m => document.querySelector('#support-pop[open] #support-message')?.value === m, snapshot);
-    await fitsAbove('setup snapshot');
-    if (process.env.TICO_SCREENSHOT_DIR) await v.page.screenshot({path: require('node:path').join(process.env.TICO_SCREENSHOT_DIR, 'phone-help-box-keyboard-light.png')});
-    // Keyboard down: the whole snapshot shows, nothing left to scroll.
-    await v.page.evaluate(() => window.__keys(844, 0));
-    await sheetIs(844 - SHEET, 844, 'keyboard down after the snapshot');
-    await v.page.waitForTimeout(50);
-    assert.ok(await kpop.locator('[data-compose] [name=message]').evaluate(box => box.scrollHeight <= box.clientHeight + 1), 'keyboard down: the snapshot shows whole');
-    await v.page.keyboard.press('Escape');
-    await kpop.waitFor({state: 'hidden'});
-    assert.notEqual(await v.page.evaluate(() => getComputedStyle(document.body).overflowY), 'hidden', 'closing the sheet lets the page scroll again');
+    await v.page.waitForFunction(() => document.querySelector('#support-pop').getBoundingClientRect().height <= 458 + 1);
+    const send = await v.page.locator('#support-pop .support-send').boundingBox();
+    assert.ok(send.y + send.height <= 458 + 1, `Send above the keyboard: ${JSON.stringify(send)}`);
+    await v.page.evaluate(() => window.__keys(844));
+    await v.page.waitForFunction(() => Math.abs(document.querySelector('#support-pop').getBoundingClientRect().bottom - document.querySelector('#mobile-nav').getBoundingClientRect().top) < 2);
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
-    // A computer in the dark theme, and keyboard only: Tab to the ?, Enter, focus in the box.
-    v = await visit({theme: 'dark', seed: [{id: 'sup_5', created: at(30), status: 'answered', message: 'Can bots share a computer?', sent: {},
-      messages: [reply(1, 20), {id: 2, created: at(10), from: 'person', body: 'Thanks, and two?'}]}]});
-    assert.equal(await v.page.getByText('Talk to us').count(), 0, 'no Talk to us in the sidebar');
-    await v.page.locator('#help-open').focus();
-    await v.page.keyboard.press('Enter');
-    await v.page.locator('#support-pop[open]').waitFor();
-    await v.page.waitForFunction(() => document.activeElement?.id === 'support-message');
-    await v.page.waitForTimeout(300);
-    await v.page.screenshot({path: '/tmp/tico-support-desktop-dark.png'});
-    await v.page.keyboard.press('Escape');
-    assert.equal((await active(v.page)).id, 'help-open');
-    assert.deepEqual(v.errors, []);
-    await v.ctx.close();
-
-    // An old #/help link: Overview with the pop-up open over it, no Help page.
+    // ---- An old #/help link: Overview with the chat open over it.
     v = await visit({hash: '#/help'});
-    await v.page.locator('#support-pop[open] [data-compose] [name=message]').waitFor();
+    await v.page.locator('#support-pop[open] [name=message]').waitFor();
     assert.equal(await v.page.evaluate(() => location.hash), '#/overview');
-    assert.equal(await v.page.locator('#help-page').count(), 0);
     await v.page.waitForFunction(() => document.activeElement?.id === 'support-message');
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
-    // Chat with us (the empty Tasks, Updates, Runs and welcome screens) opens a new request, ready to write, even when
-    // an open request is the latest.
-    v = await visit({seed: [{id: 'sup_0', created: new Date().toISOString(), status: 'open', message: 'Earlier', sent: {}, messages: []}]});
-    const line = v.page.locator('#main .talk-line').first();
-    assert.equal(await line.innerText(), 'Stuck or curious? A person at Tico reads every message. Chat with us');
-    await line.getByRole('button', {name: 'Chat with us'}).click();
-    await v.page.locator('#support-pop[open] [data-compose] [name=message]').waitFor();
-    await v.page.waitForFunction(() => document.activeElement?.name === 'message');
-    assert.equal(await v.page.locator('#support-pop [data-title]').innerText(), 'New request');
-    assert.equal(await v.page.locator('[data-report]').count(), 0, 'Chat with us attaches nothing');
+    // ---- A #/support/manage link: the chat opens with the words in the box, sent only by the person.
+    v = await visit();
+    await v.page.evaluate(() => { const a = Object.assign(document.createElement('a'), {id: 't-manage', href: '#/support/manage', textContent: 'Fully managed'});
+      a.style.cssText = 'position:fixed;top:4px;left:50%;z-index:30'; document.body.append(a); });
+    await v.page.locator('#t-manage').click();
+    await v.page.waitForFunction(() => document.querySelector('#support-pop[open] #support-message')?.value === "We'd like Tico to fully manage our company.");
+    assert.ok(!v.calls.some(c => c.startsWith('POST tickets {')));
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
-    // Report this on an error toast: a new request with the error named, attached as diagnostics, shown before sending.
+    // ---- Report this on an error toast: the chat opens with the error named and attached; sent only on Send.
     v = await visit();
     await v.page.waitForFunction(() => window.supportOn(true));      // offered once Tico knows support is on
     await v.page.evaluate(() => toast('Could not save the task "Ship it" (409)', true));
     await v.page.locator('.toast.err button', {hasText: 'Report this'}).click();
     await v.page.locator('#support-pop[open] [data-report]').waitFor();
-    assert.equal(await v.page.locator('[data-attach]').evaluate(el => el.open), true, 'Attach details is on');
-    assert.equal(await v.page.locator('[data-compose] [name=diag]').isChecked(), true, 'diagnostics on');
-    assert.match(await v.page.locator('[data-report]').innerText(), /Attached: Error Could not save the task/);
-    // The message names only the kind: the words on screen go in the redacted attachment, never unredacted in the text.
-    assert.equal(await v.page.locator('[data-compose] [name=message]').inputValue(), 'Error: details attached. ');
+    assert.match(await v.page.locator('[data-report]').innerText(), /Diagnostics: Error/);
+    // The message names only the kind: the words on screen go in the redacted attachment, never in the text.
+    assert.equal(await v.page.locator('#support-message').inputValue(), 'Error: details attached. ');
     await v.page.waitForFunction(() => document.activeElement?.name === 'message' && document.activeElement.selectionStart === document.activeElement.value.length);
-    assert.match(await v.page.locator('[data-sent]').textContent(), /redacted diagnostics with what you reported/);
     assert.ok(!v.calls.some(c => c.startsWith('POST tickets {')), 'nothing is sent yet');
-    await v.page.locator('[data-compose] [name=message]').pressSequentially('It happens every time.');
-    await v.page.locator('[data-compose] [name=message]').press('Enter');
+    await v.page.locator('#support-message').pressSequentially('It happens every time.');
+    await v.page.locator('#support-message').press('Enter');
     await v.page.locator('.support-msg.you').waitFor();
     const reported = JSON.parse(v.calls.find(c => c.startsWith('POST diagnostics/capture')).slice('POST diagnostics/capture '.length)).report;
-    assert.equal(reported.kind, 'toast');
-    assert.equal(reported.title, 'Could not save the task "Ship it" (409)');
-    assert.equal(reported.group, 'toast:Could not save the task "…" (#)', 'numbers and quoted names do not split a group');
-    const sentTicket = JSON.parse(v.calls.find(c => c.startsWith('POST tickets {')).slice('POST tickets '.length));
-    assert.equal(sentTicket.diagnostics, 'c'.repeat(64));
-    assert.equal(sentTicket.message, 'Error: details attached. It happens every time.', 'only what the person saw and typed');
-    // Report this again, with the pop-up closed or open: a new request each time, not the one just sent.
+    assert.deepEqual([reported.kind, reported.title], ['toast', 'Could not save the task "Ship it" (409)']);
+    assert.equal(JSON.parse(v.calls.find(c => c.startsWith('POST tickets {')).slice('POST tickets '.length)).diagnostics, 'c'.repeat(64));
+    // A Setup check makes a new ticket a setup one; another report in its place, or ×, gives back the kind before.
     await v.page.keyboard.press('Escape');
-    await v.page.evaluate(() => talkToUs({kind: 'run', title: 'Run failed: exit 1'}));
-    await v.page.waitForFunction(() => document.querySelector('#support-pop [name=message]')?.value === 'Failed run: details attached. ');
-    assert.equal(await v.page.locator('#support-pop [data-title]').innerText(), 'New request');
-    // A second report onto an untouched prefill takes its own kind; words the person typed stay.
-    await v.page.locator('[data-compose] [name=message]').fill('Failed run: details attached. Since Monday.');
-    await v.page.evaluate(() => talkToUs({kind: 'stuck', title: 'finance: no reply'}));
-    await v.page.waitForFunction(() => document.querySelector('#support-pop [name=message]')?.value === 'Stuck bot: details attached. Since Monday.');
-    await v.page.locator('[data-compose] [name=message]').fill('');
-    await v.page.evaluate(() => talkToUs({kind: 'run', title: 'Run failed: exit 1'}));
-    await v.page.locator('[data-report]', {hasText: 'Failed run'}).waitFor();
-    await v.page.locator('[data-unreport]').click();
-    assert.equal(await v.page.locator('[data-report]').count(), 0);
-    assert.equal(await v.page.locator('[data-compose] [name=message]').inputValue(), '', 'no "details attached" with nothing attached');
-    // A red Health line, a stuck bot and a failed run offer Report this; a fine one does not.
-    const offered = await v.page.evaluate(() => ({
-      bad: hlCheckHtml({id: 'computers', label: 'Computers', status: 'bad', summary: 'None online', fixes: []}).includes('data-report-this'),
-      ok: hlCheckHtml({id: 'version', label: 'Version', status: 'ok', summary: 'Current', fixes: []}).includes('data-report-this'),
-      stuck: hlStuckHtml([{bot: 'ops', name: 'Ops', why: 'No computer', reason: 'offline'}]).includes('data-report-this'),
-      failed: runAttemptHTML({run: 'r1', state: 'failed', reason: 'exit 2', try: 1, tries: 1}, true).includes('data-report-this'),
-      done: runAttemptHTML({run: 'r2', state: 'completed', try: 1, tries: 1}, true).includes('data-report-this')}));
-    assert.deepEqual(offered, {bad: true, ok: false, stuck: true, failed: true, done: false});
-    // Report this on a red Health line, pressed on the page behind: the pop-up opens with it attached.
-    await v.page.keyboard.press('Escape');
-    await v.page.evaluate(() => document.querySelector('#main').insertAdjacentHTML('beforeend', reportThisHTML({kind: 'health', title: 'Computers: None online'})));
-    await v.page.locator('#main .report-this').click();
-    await v.page.locator('#support-pop[open] [data-report]', {hasText: 'Health'}).waitFor();
-    assert.equal(await v.page.locator('[data-compose] [name=message]').inputValue(), 'Health: details attached. ');
-    // Setup check's Send to support: the pop-up opens with the result attached, as a setup request.
-    await v.page.keyboard.press('Escape');
-    const setup = {kind: 'setup_check', title: '1 of 2 checks fail', checks: [
-      {name: 'HTTPS certificate', status: 'bad', detail: 'could not connect to tico.acme.example:443', fix: 'Open port 443 to the server.', source: 'doctor'},
-      {name: '/healthz', status: 'ok', detail: 'ok', fix: '', source: 'doctor'}], group: 'setup_check:HTTPS certificate'};
+    v.hq.tickets[0].status = 'closed';
+    const setup = {kind: 'setup_check', title: '1 of 2 checks fail', checks: [{name: 'HTTPS certificate', status: 'bad', detail: 'no', fix: 'Open port 443.', source: 'doctor'}]};
     await v.page.evaluate(r => talkToUs(r), setup);
     await v.page.locator('#support-pop[open] [data-report]', {hasText: 'Setup check'}).waitFor();
-    assert.match(await v.page.locator('[data-sent]').textContent(), /message marked setup/, 'a Setup check goes as a setup request');
-    // Another report in its place, or Remove, gives back the kind the request had before.
-    await v.page.evaluate(() => talkToUs({kind: 'toast', title: 'Could not save'}));
-    await v.page.locator('[data-report]', {hasText: 'Error'}).waitFor();
-    assert.doesNotMatch(await v.page.locator('[data-sent]').textContent(), /marked setup/, 'an error report is not a setup request');
-    await v.page.evaluate(r => talkToUs(r), setup);
-    await v.page.locator('[data-report]', {hasText: 'Setup check'}).waitFor();
     await v.page.locator('[data-unreport]').click();
-    assert.doesNotMatch(await v.page.locator('[data-sent]').textContent(), /marked setup/);
+    assert.equal(await v.page.locator('[data-report]').count(), 0);
+    assert.equal(await v.page.locator('#support-message').inputValue(), '', 'the untouched prefill goes with it');
     await v.page.evaluate(r => talkToUs(r), setup);
     await v.page.locator('[data-report]', {hasText: 'Setup check'}).waitFor();
     await v.page.locator('[data-compose] [data-preview]').click();
     await v.page.locator('dialog.support-modal [data-use]:not([disabled])').waitFor();
     const previewed = JSON.parse(v.calls.filter(c => c.startsWith('POST diagnostics/capture')).at(-1).slice('POST diagnostics/capture '.length)).report;
-    assert.deepEqual(previewed.checks.map(c => [c.name, c.status]), [['HTTPS certificate', 'bad'], ['/healthz', 'ok']]);
+    assert.deepEqual(previewed.checks.map(c => [c.name, c.status]), [['HTTPS certificate', 'bad']]);
+    await v.page.locator('dialog.support-modal [data-use]').click();
+    await v.page.locator('#support-message').press('Enter');
+    await v.page.waitForFunction(() => document.querySelectorAll('#support-pop .support-msg.you').length === 2);
+    assert.equal(JSON.parse(v.calls.filter(c => c.startsWith('POST tickets {')).at(-1).slice('POST tickets '.length)).kind, 'setup');
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
-    // "Want help setting up?" opens a new request that starts from the snapshot, which the person reads and sends as setup.
-    v = await visit({seed: [{id: 'sup_0', created: new Date().toISOString(), status: 'open', message: 'Earlier', sent: {}, messages: []}]});
+    // ---- "Want help setting up?": the snapshot in the box, whole, for the person to read and send; twice is still once.
+    v = await visit();
     await v.page.evaluate(() => document.querySelector('#main').insertAdjacentHTML('beforeend', '<button type="button" data-setup-help="health">Want help setting up?</button>'));
     await v.page.locator('#main [data-setup-help]').click();
     await v.page.waitForFunction(() => document.querySelector('#support-pop[open] #support-message')?.value.startsWith("I'd like help setting up Tico."));
     assert.ok(v.calls.includes('asked from health'));
-    // The box grows to the whole snapshot: nothing is cut off or left to scroll.
-    assert.ok(await v.page.locator('#support-message').evaluate(box => box.scrollHeight <= box.clientHeight + 1), 'the snapshot shows whole');
-    assert.equal(await v.page.locator('#support-pop [data-title]').innerText(), 'New request');
-    assert.match(await v.page.locator('[data-sent]').textContent(), /message marked setup/);
-    assert.ok(!v.calls.some(c => c.startsWith('POST tickets {')), 'nothing is sent before the person presses Send');
-    // A Setup check attached and removed again leaves "Want help setting up?" a setup request.
-    await v.page.evaluate(() => talkToUs({kind: 'setup_check', title: '1 of 2 checks fail', checks: []}));
-    await v.page.locator('[data-unreport]').click();
-    assert.match(await v.page.locator('[data-sent]').textContent(), /message marked setup/);
-    // A second press keeps the draft as it is: one snapshot, not two.
+    assert.ok(await v.page.locator('#support-message').evaluate(el => el.scrollHeight <= el.clientHeight + 1), 'the snapshot shows whole');
     await v.page.keyboard.press('Escape');
     await v.page.locator('#main [data-setup-help]').click();
     await v.page.waitForFunction(() => document.querySelector('#support-pop[open]') && !document.querySelector('#main [data-setup-help]').disabled);
     await v.page.waitForTimeout(100);
-    assert.equal(v.calls.filter(c => c === 'asked from health').length, 2);
-    assert.equal((await v.page.locator('#support-message').inputValue()).split("I'd like help setting up Tico.").length, 2);
-    // TICO_SCREENSHOT_DIR=<dir> saves the opened snapshot at desktop and phone width, in both themes.
-    if (process.env.TICO_SCREENSHOT_DIR) for (const [size, viewport] of [['desktop', {width: 1440, height: 900}], ['phone', {width: 390, height: 844}]]) {
-      for (const theme of ['light', 'dark']) {
-        const s = await visit({viewport, theme});
-        await s.page.evaluate(() => document.querySelector('#main').insertAdjacentHTML('beforeend', '<button type="button" data-setup-help="wizard">Want help setting up?</button>'));
-        await s.page.locator('#main [data-setup-help]').click();
-        await s.page.waitForFunction(() => document.querySelector('#support-pop[open] #support-message')?.value.startsWith("I'd like help setting up Tico."));
-        await s.page.waitForTimeout(300);
-        await s.page.screenshot({path: require('node:path').join(process.env.TICO_SCREENSHOT_DIR, `${size}-help-box-${theme}.png`)});
-        await s.ctx.close();
-      }
-    }
-    await v.page.locator('[data-compose] [name=message]').press('Enter');
+    assert.equal((await v.page.locator('#support-message').inputValue()).split("I'd like help setting up Tico.").length, 2, 'one snapshot, not two');
+    assert.ok(!v.calls.some(c => c.startsWith('POST tickets {')), 'nothing sent before Send');
+    await v.page.locator('#support-message').press('Enter');
     await v.page.locator('.support-msg.you', {hasText: 'Computer online'}).waitFor();
     assert.equal(JSON.parse(v.calls.find(c => c.startsWith('POST tickets {')).slice('POST tickets '.length)).kind, 'setup');
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
-    // A Setup check first, then "Want help setting up?", then Remove: still a setup request.
-    v = await visit();
-    await v.page.evaluate(() => talkToUs({kind: 'setup_check', title: '1 of 2 checks fail', checks: []}));
-    await v.page.locator('#support-pop[open] [data-report]').waitFor();
-    await v.page.keyboard.press('Escape');
-    await v.page.evaluate(() => document.querySelector('#main').insertAdjacentHTML('beforeend', '<button type="button" data-setup-help="health">Want help setting up?</button>'));
-    await v.page.locator('#main [data-setup-help]').click();
-    await v.page.waitForFunction(() => document.querySelector('#support-message')?.value.includes("I'd like help setting up Tico."));
-    await v.page.locator('[data-unreport]').click();
-    assert.match(await v.page.locator('[data-sent]').textContent(), /message marked setup/);
+    // ---- Inside the desktop app: a new conversation carries the app's version; diagnostics the end of its log.
+    v = await visit({native: true, userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15'});
+    await openSupport(v.page);
+    await v.page.getByRole('button', {name: 'Attach diagnostics'}).click();
+    await v.page.locator('dialog.support-modal [data-use]:not([disabled])').waitFor();
+    const app = JSON.parse(v.calls.find(c => c.startsWith('POST diagnostics/capture')).slice('POST diagnostics/capture '.length)).app;
+    assert.deepEqual(app, {version: '0.3.48', lines: ['2026-10-16T06:47:31Z WARN tico_app: update check failed: 401'], mac: true});
+    await v.page.locator('dialog.support-modal [data-use]').click();
+    await v.page.locator('#support-message').fill('From the app');
+    await v.page.locator('#support-message').press('Enter');
+    await v.page.locator('.support-msg.you').waitFor();
+    const fromApp = JSON.parse(v.calls.find(c => c.startsWith('POST tickets {')).slice('POST tickets '.length));
+    assert.deepEqual([fromApp.app_version, fromApp.diagnostics], ['0.3.48', 'c'.repeat(64)]);
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
-    // "How is Tico working for you?": Send files the answer as feedback, and the question goes.
+    // ---- "How is Tico working for you?": Send files the answer as feedback, and the question goes.
     v = await visit({feedback: {moment: 'day_7', question: 'How is Tico working for you?'}});
     const ask = v.page.locator('#feedback-ask');
     await ask.waitFor();
@@ -873,23 +543,152 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
-    // Support turned off: the ? still opens the pop-up, with the link row and the "turned off" line and no box.
-    v = await visit({enabled: false});
+    // ---- A full conversation: HQ refuses the follow-up (409), so the same message starts a new one, shown as sent.
+    v = await visit({seed: [{id: 'sup_1', created_at: at(30), status: 'answered', message: 'Long thread', sent: {}, messages: []}]});
+    v.hq.full = ['sup_1'];
     await openSupport(v.page);
-    const offPop = v.page.getByRole('dialog', {name: 'Support'});
-    assert.equal(await offPop.locator('[data-off]').innerText(), 'Contact support is turned off on this Tico server, so requests cannot be sent from here.');
-    assert.equal(await offPop.locator('[name=message]').isVisible(), false);
-    assert.equal(await offPop.getByRole('button', {name: 'New request'}).isVisible(), false);
-    assert.equal(await offPop.getByRole('link', {name: 'View docs'}).isVisible(), true);
-    assert.equal(await offPop.locator('[data-whats-new]').isVisible(), true);
-    assert.equal((await active(v.page)).inPop, true, 'focus is in the pop-up');
+    {
+      const chat = v.page.locator('#support-pop');
+      await chat.locator('[name=message]').fill('One more thing');
+      await chat.locator('[name=message]').press('Enter');
+      await chat.locator('.support-msg.you', {hasText: 'One more thing'}).waitFor();
+      assert.ok(v.calls.includes('POST tickets/sup_1/messages {"message":"One more thing","diagnostics":""}'));
+      assert.ok(v.calls.includes('POST tickets {"message":"One more thing","diagnostics":"","email":"ana@acme.example","include_ids":true}'), v.calls.join('\n'));
+      assert.equal(await chat.locator('[data-error]').isHidden(), true, 'no error shown');
+      assert.equal(await chat.locator('[name=message]').inputValue(), '');
+      // The next message goes to the new conversation.
+      await chat.locator('[name=message]').fill('And another');
+      await chat.locator('[name=message]').press('Enter');
+      await chat.locator('.support-msg.you', {hasText: 'And another'}).waitFor();
+      assert.ok(v.calls.includes('POST tickets/sup_2/messages {"message":"And another","diagnostics":""}'));
+      assert.deepEqual(v.errors, []);
+    }
+    await v.ctx.close();
+
+    // ---- The new conversation is saved but its reply is lost: Send again repeats that creation (same key), no second one.
+    v = await visit({seed: [{id: 'sup_1', created_at: at(30), status: 'answered', message: 'Long thread', sent: {}, messages: []}]});
+    Object.assign(v.hq, {full: ['sup_1'], loseCreate: true});
+    await openSupport(v.page);
+    {
+      const chat = v.page.locator('#support-pop');
+      await chat.locator('[name=message]').fill('One more thing');
+      await chat.locator('[name=message]').press('Enter');
+      await chat.locator('[data-error]').waitFor();
+      await chat.locator('[name=message]').press('Enter');
+      await chat.locator('.support-msg.you', {hasText: 'One more thing'}).waitFor();
+      assert.equal(v.hq.createKeys.length, 2);
+      assert.equal(v.hq.createKeys[0], v.hq.createKeys[1], 'the retry carries the first creation\'s key');
+      assert.equal(v.hq.tickets.filter(t => t.message === 'One more thing').length, 1, 'one new conversation');
+      assert.equal(await chat.locator('[name=message]').inputValue(), '');
+    }
+    await v.ctx.close();
+
+    // ---- Same, but the chat is closed and opened again first: it now shows the saved conversation, and Send still
+    // repeats the creation rather than adding the message to it.
+    v = await visit({seed: [{id: 'sup_1', created_at: at(30), status: 'answered', message: 'Long thread', sent: {}, messages: []}]});
+    Object.assign(v.hq, {full: ['sup_1'], loseCreate: true});
+    await openSupport(v.page);
+    {
+      let chat = v.page.locator('#support-pop');
+      await chat.locator('[name=message]').fill('One more thing');
+      await chat.locator('[name=message]').press('Enter');
+      await chat.locator('[data-error]').waitFor();
+      await v.page.keyboard.press('Escape');
+      await chat.waitFor({state: 'hidden'});
+      await openSupport(v.page);
+      chat = v.page.locator('#support-pop');
+      await chat.locator('.support-msg.you', {hasText: 'One more thing'}).first().waitFor();
+      assert.equal(await chat.locator('[name=message]').inputValue(), 'One more thing', 'the unsent words are still in the box');
+      await chat.locator('[name=message]').press('Enter');
+      await v.page.waitForFunction(() => document.querySelector('#support-pop [name=message]')?.value === '');
+      assert.equal(v.calls.filter(c => c.startsWith('POST tickets/sup_2/messages')).length, 0, 'not added to the new conversation');
+      assert.equal(v.hq.createKeys.length, 2);
+      assert.equal(v.hq.createKeys[0], v.hq.createKeys[1]);
+      const made = v.hq.tickets.find(t => t.message === 'One more thing');
+      assert.ok(made && made.messages.length === 0, 'the message is there once');
+    }
+    await v.ctx.close();
+
+    // ---- Delete chat history with 51 conversations: the list holds 50, so it lists and deletes again until empty.
+    v = await visit({seed: Array.from({length: 51}, (_, i) => ({id: 'old_' + i, created_at: at(100 + i), status: 'closed', message: 'Old ' + i, sent: {}, messages: []}))});
+    await openSupport(v.page);
+    {
+      const chat = v.page.locator('#support-pop');
+      await chat.locator('.support-msg.you', {hasText: 'Old 0'}).waitFor();
+      await chat.getByRole('button', {name: 'Delete chat history'}).click();
+      let release; v.hq.deleteGate = new Promise(r => { release = r; });
+      await chat.getByRole('alertdialog').getByRole('button', {name: 'Delete'}).click();
+      await v.page.waitForFunction(() => [...document.querySelectorAll('#support-pop [data-compose] :is(textarea, [type=submit])')].every(el => el.disabled));
+      assert.equal(await chat.getByRole('alertdialog').getByRole('button', {name: 'Delete'}).isDisabled(), true, 'once');
+      release(); v.hq.deleteGate = null;
+      await chat.getByRole('alertdialog').waitFor({state: 'hidden'});
+      assert.equal(v.calls.filter(c => c.startsWith('DELETE')).length, 51, 'all 51 deleted');
+      assert.ok(v.calls.includes('DELETE tickets/old_50'), 'the 51st too');
+      assert.ok(v.calls.filter(c => c === 'GET tickets').length >= 3, 'listed again until empty');
+      assert.equal(v.hq.tickets.length, 0);
+      assert.equal(await chat.locator('.support-msg').count(), 0, 'the chat is empty');
+      assert.deepEqual(v.errors, []);
+    }
+    await v.ctx.close();
+
+    // ---- Delete chat history while a message is on its way: Delete waits for it, then that conversation goes too.
+    v = await visit({seed: [{id: 'sup_1', created_at: at(30), status: 'answered', message: 'First', sent: {}, messages: []}]});
+    await openSupport(v.page);
+    {
+      const chat = v.page.locator('#support-pop');
+      let release; v.hq.gate = new Promise(r => { release = r; });
+      await chat.locator('[name=message]').fill('Slow one');
+      await chat.locator('[name=message]').press('Enter');
+      await v.page.waitForFunction(() => document.querySelector('#support-pop [data-compose] [name=message]').disabled);
+      await chat.getByRole('button', {name: 'Delete chat history'}).click();
+      const yes = chat.getByRole('alertdialog').getByRole('button', {name: 'Delete'});
+      assert.equal(await yes.isDisabled(), true, 'Delete waits while a message is on its way');
+      release(); v.hq.gate = null;
+      await v.page.waitForFunction(() => !document.querySelector('#support-pop [data-confirm-yes]').disabled);
+      await yes.click();
+      await chat.getByRole('alertdialog').waitFor({state: 'hidden'});
+      assert.ok(v.calls.includes('DELETE tickets/sup_1'));
+      assert.equal(v.hq.tickets.length, 0);
+      assert.equal(await chat.locator('.support-msg').count(), 0, 'the sent message does not come back');
+      await v.page.waitForTimeout(300);
+      assert.equal(await chat.locator('.support-msg').count(), 0);
+      assert.equal(await chat.locator('[name=message]').isDisabled(), false, 'the box works again');
+      assert.deepEqual(v.errors, []);
+    }
+    await v.ctx.close();
+
+    // ---- A bot's report the team answered is not in the person's chat: no bubble, no read, no dot, no opening. The
+    // person's own ticket (sup_2, no reply) shows the chat has listed what it lists before the bot's absence is checked.
+    v = await visit({seed: [
+      {id: 'sup_1', created_at: at(30), status: 'answered', message: 'Bot report', sent: {source: 'bot_report'},
+        messages: [{id: 1, created_at: at(5), from: 'staff', body: 'The report is with the team.'}]},
+      {id: 'sup_2', created_at: at(10), status: 'open', message: 'My own question', sent: {}, messages: []}]});
+    await v.page.waitForFunction(() => window.supportState().enabled === true);
+    await v.page.evaluate(() => window.supportPoll());
+    // The chat is built the first time it opens: before that there is no dialog to look at.
+    assert.equal(await v.page.evaluate(() => !!document.getElementById('support-pop')?.open), false, 'a bot report does not open the chat');
+    assert.equal(await v.page.locator('#support-open.has-unread').count(), 0, 'nor a dot on the ?');
+    assert.equal(await v.page.evaluate(() => window.supportState().unread), 0, 'nor a count');
+    await openSupport(v.page);
+    await v.page.locator('#support-pop .support-msg.you', {hasText: 'My own question'}).waitFor();
+    assert.equal(await v.page.getByText('The report is with the team.').count(), 0, 'the bot report is not in the chat');
+    assert.equal(await v.page.locator('#support-pop .support-msg.them').count(), 0, 'no reply from the team in the chat');
+    assert.ok(!v.calls.some(c => c.includes('tickets/sup_1')), 'nothing is read or answered on it');
+    assert.deepEqual(v.errors, []);
+    await v.ctx.close();
+
+    // ---- Support turned off: no ?; a #/support link still opens the chat, which says so, with no box.
+    v = await visit({enabled: false});
+    await v.page.waitForFunction(() => window.supportOn(true) === false);
+    await v.page.locator('#support-open').waitFor({state: 'hidden'});
+    await openSupport(v.page);
+    const off = v.page.getByRole('dialog', {name: 'Tico team'});
+    assert.equal(await off.locator('[data-off]').innerText(), 'Messages to the Tico team are off on this Tico server.');
+    assert.equal(await off.locator('[name=message]').isVisible(), false);
     await v.page.keyboard.press('Escape');
-    assert.equal((await active(v.page)).id, 'help-open');
-    // Report this and Chat with us are not offered: an error toast has nothing to report to.
-    await v.page.waitForFunction(() => !window.supportOn());
+    assert.equal((await active(v.page)).id, 't-support');
     await v.page.evaluate(() => toast('Could not save', true));
-    assert.equal(await v.page.locator('.toast.err button').count(), 0);
-    assert.equal(await v.page.evaluate(() => talkLineHTML()), '');
+    assert.equal(await v.page.locator('.toast.err button').count(), 0, 'Report this is not offered');
     assert.ok(!v.calls.some(c => c.startsWith('POST')));
     assert.deepEqual(v.errors, []);
     await v.ctx.close();

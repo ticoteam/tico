@@ -12,7 +12,7 @@ No docs were changed; drafts are for the docs owner to commit.
 ### 1. Set up reminders (how-to) is wrong. Caused by #398, merged 2026-09-22
 - Wrong: "Reminders are sent by email 24 hours before class." Now clients can also choose text.
 - Draft fix: `reports/drafts/2026-09-30-set-up-reminders.md` (old text, new text, two new steps, the expected result).
-- To verify: whether text reminders are on by default. Question for Sam Ortiz is on the task.
+- To verify: whether text reminders are on by default. Question for the docs owner is on the task.
 
 ### 2. Reset your booking link (how-to) is missing. Caused by #405, merged 2026-09-23
 - No page covers the new Settings option. Draft: `reports/drafts/2026-09-30-reset-booking-link.md`, a how-to of 5 steps.

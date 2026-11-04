@@ -7,6 +7,7 @@ from backend import hubdb as H
 from backend import release_flow as RF
 from backend.store import encode
 from backend.tests.test_github import PR, api, get, headers, hook, pr_event, post  # noqa: F401
+from backend import bot_settings as BS
 
 RELEASE_URL = "https://github.com/ticoteam/tico/releases/tag/v1.2.3"
 
@@ -17,8 +18,8 @@ def _team(api):
         bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in ("cpo", "cmo", "qab")}
         H.sync_registry(c, bots, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}]})
         for slug, template in (("cmo", RF.MANAGER), ("cpo", RF.WRITER), ("qab", RF.QA)):
-            c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
-                      (slug, encode({**bots[slug], "template": template}), "product", "ana"))
+            c.execute('INSERT OR REPLACE INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, 'product', 'ana'))
+            BS.write(c, slug, {**bots[slug], 'template': template})
         dev = H.type_create(c, "human:ana", "Dev tickets", numbered=True, steps=[
             {"name": "In QA", "status": "review"}, {"name": "Pending Release", "status": "review"},
             {"name": "Post Release QA", "status": "review"}, {"name": "Done", "status": "done"}])
@@ -36,15 +37,15 @@ def _ticket(api, dev, title, number=412, tags=()):
 
 def _tasks(api, owner, prefix="Release:"):
     with api.app.state.store.read() as c:
-        return [r["title"] for r in c.execute("SELECT title FROM tasks WHERE owner=? AND title LIKE ?",
+        return [r["title"] for r in c.execute("SELECT title FROM tasks WHERE owner_id=? AND title LIKE ?",
                                               (H.bot_actor(owner), prefix + "%"))]
 
 
 def _release_wakes(api, ticket):
     with api.app.state.store.read() as c:
-        return [(r["body"], r["refs_json"]) for r in c.execute(
-            "SELECT m.body, m.refs_json FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs_json,'$.wake')='release_published'", (ticket["id"],))]
+        return [(r["body"], r["refs"]) for r in c.execute(
+            "SELECT m.body, m.refs FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+            f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs,'$.wake')='release_published'", (ticket["id"],))]
 
 
 def test_the_daily_hour_sends_one_task_and_nothing_when_nothing_is_pending(api):
@@ -114,7 +115,7 @@ def test_a_published_release_gives_the_writer_one_task_and_qa_a_wake_per_ticket(
     wakes = {json.loads(r)["role"]: json.loads(r) for _, r in _release_wakes(api, tested)}
     assert wakes["qa"]["rule"] == "release_published" and not wakes["qa"].get("quiet"), "QA's wake is the named event"
     with api.app.state.store.read() as c:
-        written = c.execute("SELECT refs_json FROM messages WHERE body LIKE 'New task from%Docs for v1.2.3%'").fetchall()
+        written = c.execute("SELECT refs FROM messages WHERE body LIKE 'New task from%Docs for v1.2.3%'").fetchall()
     assert [json.loads(r[0])["rule"] for r in written] == ["release_published"], "the writer's docs task wakes under it too"
     docs = [t for t in _tasks(api, "cpo", "Docs for")]
     assert docs == ["Docs for v1.2.3: 2 tickets"], "one docs task for the release, however many tickets or replays"
@@ -129,7 +130,7 @@ def test_a_private_ticket_is_counted_but_never_named_in_the_docs_task(api):
     hook(api, "release", {"action": "published", "release": {"tag_name": "v1.2.3", "html_url": RELEASE_URL},
                           "repository": {"full_name": "ticoteam/tico"}})
     with api.app.state.store.read() as c:
-        body = c.execute("SELECT body FROM tasks WHERE owner='bot:cpo' AND title LIKE 'Docs for%'").fetchone()["body"]
+        body = c.execute("SELECT body FROM tasks WHERE owner_id='bot:cpo' AND title LIKE 'Docs for%'").fetchone()["body"]
     assert "Visual replies" in body and "1 private ticket, not named here" in body
     assert "Acme payroll" not in body and "/413" not in body
 
@@ -145,6 +146,53 @@ def test_qa_hears_a_private_ticket_shipped_on_its_own_qa_subtask(api):
                           "repository": {"full_name": "ticoteam/tico"}})
     with api.app.state.store.read() as c:
         woke = c.execute("SELECT m.body FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-                         f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.to_actor='bot:qab' "
-                         "AND json_extract(m.refs_json,'$.wake')='release_published'", (check["id"],)).fetchall()
+                         f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.recipient_id='bot:qab' "
+                         "AND json_extract(m.refs,'$.wake')='release_published'", (check["id"],)).fetchall()
     assert len(woke) == 1 and "QA: payroll export" in woke[0][0] and "Acme payroll export" not in woke[0][0]
+
+
+def test_a_published_release_withdraws_the_undecided_asks_at_or_below_it_in_its_channel(api):
+    """The webhook path: an ask for an older or the same version goes, a newer or prerelease ask and another
+    repository's stay, and a decided ask is never touched."""
+    _team(api)
+    store = api.app.state.store
+
+    def ask(c, task, tag, repo="ticoteam/tico", commit=None):
+        url = f"https://github.com/{repo}/releases/tag/{tag}"
+        return H.approval_request(c, H.bot_actor("cmo"), "publish", {
+            "url": url, "version": tag.lstrip("v"), "commit": commit or tag, "content_sha256": "a" * 64}, task_id=task["id"])
+
+    with store.transaction() as c:
+        task = H.task_create(c, H.human_actor("ana"), "Release", "Cut it.", H.bot_actor("cmo"), lint=False)
+        asks = {name: ask(c, task, *args) for name, args in {
+            "old": ("v1.0.0",), "same": ("v1.2.3", "ticoteam/tico", "b2"), "newer": ("v1.3.0",),
+            "pre": ("v1.2.3-rc.1",), "other": ("v1.0.0", "ticoteam/other")}.items()}
+        decided = ask(c, task, "v0.9.0")
+        H.approval_decide(c, H.human_actor("ana"), decided["id"], "approved")
+    hook(api, "release", {"action": "published", "release": {"tag_name": "v1.2.3", "html_url": RELEASE_URL},
+                          "repository": {"full_name": "ticoteam/tico"}})
+    with store.read() as c:
+        got = {name: H.approval(c, a["id"])["decision"] for name, a in asks.items()}
+        told = [r["body"] for r in c.execute("SELECT body FROM messages WHERE recipient_id=? AND body LIKE 'Withdrawn:%'",
+                                             (H.bot_actor("cmo"),))]
+        kept = H.approval(c, decided["id"])["decision"]
+    assert got == {"old": "withdrawn", "same": "withdrawn", "newer": None, "pre": None, "other": None}
+    assert sorted(told) == ["Withdrawn: your publish approval. v1.2.3 already shipped."] * 2, "the bot hears it quietly"
+    assert kept == "approved"
+
+
+def test_a_release_in_another_connected_repository_withdraws_its_own_older_asks_at_once(api):
+    """Only the server's release repository gets the ticket and docs follow-ups; the older asks of any repository
+    are withdrawn as soon as its release publishes."""
+    _team(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        task = H.task_create(c, H.human_actor("ana"), "Release", "Cut it.", H.bot_actor("cmo"), lint=False)
+        older = H.approval_request(c, H.bot_actor("cmo"), "publish", {
+            "url": "https://github.com/acme/other/releases/tag/v1.0.0", "version": "1.0.0", "commit": "o1",
+            "content_sha256": "a" * 64}, task_id=task["id"])
+    hook(api, "release", {"action": "published", "release": {"tag_name": "v1.2.3",
+                          "html_url": "https://github.com/acme/other/releases/tag/v1.2.3"},
+                          "repository": {"full_name": "acme/other"}})
+    with store.read() as c:
+        assert H.approval(c, older["id"])["decision"] == "withdrawn"

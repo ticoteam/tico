@@ -1,11 +1,15 @@
 //! The computer screen (capability `screen_v1`): a virtual display people can watch, and with the hub's
 //! `control` mode drive, from the web app. Off unless this computer's owner turned it on here: `TICO_SCREEN=1`, or
-//! `tico-runner screen on` (runner.json `screen: true`). The hub keeps its own off/view/control setting on top.
+//! `tico-runner screen on` (runner.json `screen: true`). A cloud machine (cloud_machine.rs) is on by default, unless
+//! runner.json says `screen` or TICO_SCREEN is set. The hub keeps its own off/view/control setting on top.
 //!
 //! While on, on Linux, the runner supervises an `Xvfb` on the first free display from `:99` (or exactly
 //! `TICO_SCREEN_DISPLAY`'s), a window manager and two `x11vnc`, one taking input and one
 //! view-only. Neither listens on TCP: each serves a unix socket in a fresh directory only the runner's user can enter,
-//! so no bot and no other VNC server can stand in for either. They run with that directory as HOME, a clean
+//! so no bot and no other VNC server can stand in for either. That holds only where bots run as another user: on a
+//! cloud machine they share the runner's user (cloud_machine.rs, docs/cloud-machines.md), who can enter that
+//! directory, so a bot there can reach both sockets directly. The hub's mode still decides who may open a session.
+//! They run with that directory as HOME, a clean
 //! environment, and x11vnc's rc files, external commands and remote control off, so nothing a bot writes reaches
 //! them. A session the hub opens (the stream's `screen_open`, or the 10 s poll of `runners/me/screen/sessions`
 //! while on) is one websocket to the hub, with the runner's own token, piped to the socket its `control` flag picks
@@ -76,11 +80,15 @@ const XVFB_WAIT: Duration = Duration::from_secs(10);
 
 // ------------------------------------------------------------------------------------------ the local lock
 
-/// Whether the owner turned the screen on here, and what says so. `TICO_SCREEN`, when set, wins over runner.json.
-pub fn lock_from(config: Option<&Value>, env: Option<&str>) -> (bool, &'static str) {
+/// Whether the owner turned the screen on here, and what says so. `TICO_SCREEN`, when set, wins over runner.json. On a
+/// cloud machine (`cloud`) with no `screen` key in runner.json, the screen is on by default.
+pub fn lock_from(config: Option<&Value>, env: Option<&str>, cloud: bool) -> (bool, &'static str) {
     let word = |s: &str| matches!(s.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes");
     if let Some(e) = env.filter(|e| !e.trim().is_empty()) {
         return (word(e), "TICO_SCREEN");
+    }
+    if config.is_none() && cloud {
+        return (true, "cloud machine");
     }
     let on = match config {
         Some(Value::Bool(b)) => *b,
@@ -94,7 +102,7 @@ pub fn lock_from(config: Option<&Value>, env: Option<&str>) -> (bool, &'static s
 /// The lock as it stands now, read from the registration file (so `screen on|off` reaches a running runner).
 pub fn lock(config_path: &Path) -> (bool, &'static str) {
     let data: Value = std::fs::read_to_string(config_path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
-    lock_from(data.get("screen"), std::env::var("TICO_SCREEN").ok().as_deref())
+    lock_from(data.get("screen"), std::env::var("TICO_SCREEN").ok().as_deref(), crate::cloud_machine::detected())
 }
 
 /// The programs a screen needs that are not on PATH.
@@ -713,12 +721,25 @@ mod tests {
 
     #[test]
     fn the_lock_is_off_unless_turned_on_and_the_environment_wins() {
-        assert_eq!(lock_from(None, None), (false, "runner config"));
-        assert_eq!(lock_from(Some(&json!(true)), None), (true, "runner config"));
-        assert!(!lock_from(Some(&json!("off")), None).0);
-        assert_eq!(lock_from(Some(&json!(true)), Some("0")), (false, "TICO_SCREEN"));
-        assert_eq!(lock_from(None, Some("1")), (true, "TICO_SCREEN"));
-        assert_eq!(lock_from(Some(&json!(true)), Some(" ")), (true, "runner config"));
+        assert_eq!(lock_from(None, None, false), (false, "runner config"));
+        assert_eq!(lock_from(Some(&json!(true)), None, false), (true, "runner config"));
+        assert!(!lock_from(Some(&json!("off")), None, false).0);
+        assert_eq!(lock_from(Some(&json!(true)), Some("0"), false), (false, "TICO_SCREEN"));
+        assert_eq!(lock_from(None, Some("1"), false), (true, "TICO_SCREEN"));
+        assert_eq!(lock_from(Some(&json!(true)), Some(" "), false), (true, "runner config"));
+    }
+
+    #[test]
+    fn a_cloud_machine_has_its_screen_on_unless_its_owner_chose_otherwise() {
+        // No choice made: on, with its own source.
+        assert_eq!(lock_from(None, None, true), (true, "cloud machine"));
+        // An explicit choice in runner.json (`screen off` included) stands.
+        assert_eq!(lock_from(Some(&json!(false)), None, true), (false, "runner config"));
+        // TICO_SCREEN wins over the cloud default, both ways.
+        assert_eq!(lock_from(None, Some("0"), true), (false, "TICO_SCREEN"));
+        assert_eq!(lock_from(None, Some("1"), true), (true, "TICO_SCREEN"));
+        // Anywhere else the screen stays off without a choice.
+        assert_eq!(lock_from(None, None, false), (false, "runner config"));
     }
 
     #[test]

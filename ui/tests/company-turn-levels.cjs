@@ -1,4 +1,4 @@
-// Synthetic Settings click-through. Server permissions are covered by test_org_turns.py;
+// Synthetic Settings > Models > Limits click-through. Server permissions are covered by test_org_turns.py;
 // spec 15 still requires installed/live acceptance after publication.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -42,23 +42,23 @@ const {unrouted} = require('./support/routes.cjs');
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
         return json(unrouted(p));
       });
-      await page.goto('https://tico-ui.test/#/settings/devices');
+      await page.goto('https://tico-ui.test/#/settings/models');
       const warning = page.locator('#turn-levels-form [name=warning_per_person]');
       const stop = page.locator('#turn-levels-form [name=stop_per_person]');
       await warning.waitFor();
       assert.equal(await warning.inputValue(), '40');
       assert.equal(await stop.inputValue(), '100');
-      assert.match(await page.locator('#set-turn-levels').innerText(), /warning at 160, stop at 400/);
+      assert.match(await page.locator('#set-turn-levels').innerText(), /4 people · 12 of 400 in use/);
       await warning.fill('45'); await stop.fill('110');
       await page.evaluate(async () => { await loadSettings(); await renderSettingsTurnLevels(); });
       assert.equal(await warning.inputValue(), '45', 'polling keeps an edited warning');
       assert.equal(await stop.inputValue(), '110', 'polling keeps an edited stop');
-      await page.getByRole('button', {name: 'Save turn levels', exact: true}).click();
-      await page.waitForFunction(() => document.querySelector('[data-turn-levels-status]')?.textContent.includes('Warning at 180; stop at 440'));
+      await page.locator('#turn-levels-form button[type=submit]').click();
+      await page.waitForFunction(() => document.querySelector('[data-turn-levels-status]')?.textContent.includes('Warn at 180 · stop at 440'));
       assert.deepEqual(writes, [{warning_per_person: 45, stop_per_person: 110}]);
       await warning.fill('111');
-      await page.getByRole('button', {name: 'Save turn levels', exact: true}).click();
-      assert.match(await page.locator('[data-turn-levels-status]').innerText(), /must not exceed/);
+      await page.locator('#turn-levels-form button[type=submit]').click();
+      assert.match(await page.locator('[data-turn-levels-status]').innerText(), /must not be above/);
       assert.equal(writes.length, 1);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
       // Admin to member is a same-role change: it must rebuild the Settings shell too.

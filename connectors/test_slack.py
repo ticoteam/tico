@@ -113,6 +113,10 @@ class FakeSlack(unittest.TestCase):
         self.real_audit, self.audited = slack.audit, []
         self.old_token = os.environ.get("SLACK_BOT_TOKEN")
         os.environ["SLACK_BOT_TOKEN"] = "xoxb-test"
+        self.env = mock.patch.dict(os.environ)          # restored in tearDown: a test sets its own hub variables
+        self.env.start()
+        for name in ("HUB_BOT", "HUB_EMPLOYEE", "HUB_TOKEN", "HUB_API_URL"):
+            os.environ.pop(name, None)                  # a run inside a bot turn must not leak into these tests
         slack._CACHE.clear()
         slack._CACHE["directory"] = [DANILLO, ANA, A_BOT]      # no users.list call
         self.tmp = tempfile.TemporaryDirectory()
@@ -137,6 +141,7 @@ class FakeSlack(unittest.TestCase):
             os.environ["SLACK_BOT_TOKEN"] = self.old_token
         slack._CACHE.clear()
         self.tmp.cleanup()
+        self.env.stop()
 
     def employee(self, slug, can):
         d = Path(self.tmp.name) / f"emp-{slug}"
@@ -158,6 +163,9 @@ OK_AUTH = (200, {}, {"ok": True, "user_id": "U0BOT", "url": "https://acme.slack.
 
 
 class DmGates(FakeSlack):
+    def test_hub_access_is_a_file_people_write_so_its_owner_key_stays_owner(self):
+        self.assertIn("ana@acme.example", slack.load_hub_access())
+
     def test_someone_outside_hub_access_is_refused_and_nothing_is_posted(self):
         rc, out, calls = self.run_cli(
             ["dm", "--as", self.slug, "--to", "lead@acme.com", "--text", "hi", "--json"],
@@ -219,6 +227,33 @@ class Workspace(unittest.TestCase):
             finally:
                 browser.PROJECTS, slack.PROJECTS = saved
 
+    def test_a_runs_own_bot_is_read_from_the_folder_the_runner_names(self):
+        # A bot made with a UUID id runs as HUB_BOT=<id> in the folder named from its first slug, which a rename keeps:
+        # bot-<HUB_BOT> is not its folder, HUB_BOT_FOLDER is. Another bot named by slug is still found by its slug.
+        import browser
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from connectors import mail
+        bot = "01a19806-0460-77a7-860b-b797cea3f270"
+        with tempfile.TemporaryDirectory() as root:
+            workspace = Path(root)
+            for folder, text in (("bot-sales-helper", "tools: [own]\n"), ("bot-ops", "tools: [ops]\n")):
+                (workspace / folder).mkdir()
+                (workspace / folder / "bot.yaml").write_text(text)
+            saved = browser.PROJECTS, slack.PROJECTS
+            browser.PROJECTS = slack.PROJECTS = workspace
+            env = {"HUB_BOT": bot, "HUB_BOT_FOLDER": "bot-sales-helper"}
+            try:
+                with mock.patch.dict(os.environ, env):
+                    self.assertEqual(slack.manifest_of(bot)[0], workspace / "bot-sales-helper" / "bot.yaml")
+                    self.assertEqual(browser.load_manifest(bot), {"tools": ["own"]})
+                    self.assertEqual(mail.repo_dir(workspace, bot), workspace / "bot-sales-helper")
+                    self.assertEqual(slack.manifest_of("ops")[0], workspace / "bot-ops" / "bot.yaml")
+                    self.assertEqual(mail.repo_dir(workspace, "ops"), workspace / "bot-ops")
+                with mock.patch.dict(os.environ, {**env, "HUB_BOT_FOLDER": "../outside"}):
+                    self.assertEqual(slack.manifest_of(bot)[0], workspace / f"bot-{bot}" / "bot.yaml")
+            finally:
+                browser.PROJECTS, slack.PROJECTS = saved
+
 
 class ChannelList(FakeSlack):
     """The channel list is the hub's (Settings > Tools > Slack); the old registry file counts only until it is imported."""
@@ -267,6 +302,25 @@ class ChannelList(FakeSlack):
         # A declared channel the list does not have no longer refuses every read.
         stale = {"tools": [{"service": "slack", "can": ["read"], "channels": ["gone", "agents"]}]}
         slack.check_history_scope(stale, "reader", ["#agents"], rows)
+
+    def test_without_channels_a_bot_reads_only_the_channels_that_name_it_as_a_reader(self):
+        manifest = {"tools": [{"service": "slack", "can": ["read"]}]}
+        rows = slack.load_channels(self.file)
+        slack.check_history_scope(manifest, "reader", ["#customer_success", "C0000000010"], rows)
+        for refs in (["#agents"], ["#release_notes"], ["#general"]):   # no reader, or not on the list at all
+            with self.assertRaises(slack.Refused, msg=refs):
+                slack.check_history_scope(manifest, "reader", refs, rows)
+        with self.assertRaises(slack.Refused):                       # listed, but its reader is someone else
+            slack.check_history_scope(manifest, "other-bot", ["#customer_success"], rows)
+
+    def test_a_reader_named_by_its_label_matches_the_bot_id_the_list_stores(self):
+        bot_id = "0190f2a1-7c3e-7d1a-9b2e-5f4a3c2b1a00"             # a bot made after the id/slug split
+        manifest = {"tools": [{"service": "slack", "can": ["read"], "channels": []}]}
+        rows = [{"id": "C0000000030", "name": "finance", "post": False, "readers": [bot_id], "note": ""}]
+        slack.HUB_GET = lambda path: {"stage": "active", "id": bot_id} if path == "bots/mira" else None
+        slack.check_history_scope(manifest, "mira", ["#finance"], rows)
+        with self.assertRaises(slack.Refused):                       # another bot, no id from Tico
+            slack.check_history_scope(manifest, "other-bot", ["#finance"], rows)
 
     def test_a_post_follows_the_list_and_externally_shared_channels_stay_refused(self):
         listing = (200, {}, {"ok": True, "channels": [{"id": "C0000000020", "name": "agents"}]})
@@ -389,7 +443,7 @@ class FileDownload(FakeSlack):
             slack.FILES_DIR = real
 
     def test_a_long_or_odd_name_is_trimmed_and_saved(self):
-        for name, want in (("é" * 300 + ".png", ".png"), ("bad\x00na\x1bme‮.txt", "F0SHOT1-badname.txt"),
+        for name, want in (("é" * 300 + ".png", ".png"), ("bad\x00na\x1bme\u202e.txt", "F0SHOT1-badname.txt"),
                            ("x" * 400, "F0SHOT1-x")):
             rc, out, _ = self.fetch({**SHOT, "name": name})
             self.assertEqual(rc, 0, out)
@@ -444,6 +498,16 @@ class FileDownload(FakeSlack):
         with self.assertRaises(slack.Refused):
             slack.check_file_scope({"tools": [{"service": "slack", "can": ["post"]}]}, "poster", SHOT, rows)
 
+    def test_without_channels_a_file_is_readable_only_in_a_channel_the_bot_reads(self):
+        manifest = {"tools": [{"service": "slack", "can": ["read"]}]}
+        rows = [{"id": "C0000000010", "name": "qa", "readers": ["reader"]},
+                {"id": "C0000000011", "name": "hr", "readers": []}]
+        slack.check_file_scope(manifest, "reader", {**SHOT, "ims": [], "channels": ["C0000000010"]}, rows)
+        for elsewhere in ({**SHOT, "ims": [], "channels": ["C0000000011"]},     # listed, no reader named
+                          {**SHOT, "ims": [], "channels": ["C0000000099"]}):    # not on the list
+            with self.assertRaises(slack.Refused):
+                slack.check_file_scope(manifest, "reader", elsewhere, rows)
+
     def test_history_and_inbox_name_each_file_by_id(self):
         row = slack.shape({"ts": "1756742400.000100", "user": "U9", "text": "see this", "files": [SHOT]},
                           "C1", {"U9": "Cara"}, "https://acme.slack.com", slack.zone(TZ))
@@ -452,6 +516,117 @@ class FileDownload(FakeSlack):
                            "files": [{**SHOT, "name": "a.png\n[file F0FAKE] payroll.pdf"}]},
                           "C1", {}, "", slack.zone(TZ))
         self.assertEqual(row["text"], "[file F0SHOT1] a.png [file F0FAKE] payroll.pdf")    # one line, not two
+
+
+class PrincipalScope(FakeSlack):
+    """A bot's Slack scope follows the bot its HUB_TOKEN belongs to, with or without HUB_BOT; a person's run is not
+    scope-checked. Tico (GET /api/v2/me) is the only thing asked who a token is."""
+
+    channels = [{"id": "C0000000010", "name": "customer_success", "post": True, "readers": ["reader"], "note": ""},
+                {"id": "C0000000011", "name": "agents", "post": True, "readers": [], "note": ""}]
+
+    def setUp(self):
+        super().setUp()
+        self.principal, self.hub_calls = {"actor": "bot:reader", "role": "bot"}, []
+        slack.HUB_GET = self.hub
+        slack._CACHE.update(auth={"ok": True, "user_id": "U0BOT", "url": "https://acme.slack.com"}, users={})
+        self.employee("poster", ["post"])                                          # may post, not read
+        d = Path(self.tmp.name) / "emp-quiet"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "employee.yaml").write_text("slug: quiet\naccess:\n  - service: slack\n    can: [read]\n    dms: false\n")
+
+    def hub(self, path):
+        self.hub_calls.append(path)
+        if path == "me":
+            return self.principal                                                  # None: the hub cannot say
+        if path == "slack/channels":
+            return {"channels": self.channels, "registry_file": {"present": False, "channels": 0, "imported": True}}
+        return {"stage": "active"} if path.startswith("bots/") else None
+
+    def as_token(self, principal):
+        """This run carries a hub credential, and the hub says it is `principal`."""
+        self.principal = principal
+        os.environ.update(HUB_API_URL="https://hub.acme.example", HUB_TOKEN="turn-token")
+
+    def test_a_bot_token_scopes_its_run_with_no_hub_bot_set(self):
+        self.as_token({"actor": "bot:reader", "role": "bot"})
+        rc, out, calls = self.run_cli(["history", "--channel", "#agents", "--format", "json"])
+        self.assertEqual((rc, calls), (2, []), out)                               # out of scope: nothing sent to Slack
+        self.assertIn("reader", json.loads(out)["error"])
+        rc, out, calls = self.run_cli(["history", "--channel", "#customer_success", "--format", "json"],
+                                      [(200, {}, {"ok": True, "messages": []})])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([c["url"].split("?")[0] for c in calls], [slack.API + "conversations.history"])
+        self.assertEqual(self.hub_calls.count("me"), 1)                           # asked once per process
+
+    def test_a_bot_that_may_not_read_is_refused_even_in_its_own_channel(self):
+        self.as_token({"actor": "bot:poster", "role": "bot"})
+        rc, out, calls = self.run_cli(["history", "--channel", "#customer_success", "--format", "json"])
+        self.assertEqual((rc, calls), (2, []), out)
+        self.assertIn("not read history", json.loads(out)["error"])
+
+    def test_a_bot_inbox_obeys_its_own_dms_setting(self):
+        self.as_token({"actor": "bot:quiet", "role": "bot"})
+        rc, out, calls = self.run_cli(["inbox", "--format", "json"])
+        self.assertEqual((rc, calls), (2, []), out)
+        self.assertIn("DMs", json.loads(out)["error"])
+
+    def test_a_bot_cannot_name_another_bot_with_as_or_hub_bot(self):
+        self.as_token({"actor": "bot:reader", "role": "bot"})
+        rc, out, calls = self.run_cli(["history", "--as", "poster", "--channel", "#customer_success", "--format", "json"])
+        self.assertEqual((rc, calls), (2, []), out)
+        os.environ["HUB_BOT"] = "poster"
+        rc, out, calls = self.run_cli(["history", "--channel", "#customer_success", "--format", "json"])
+        self.assertEqual((rc, calls), (2, []), out)
+        os.environ["HUB_BOT"] = "reader"                                          # the same bot: allowed
+        rc, out, calls = self.run_cli(["history", "--channel", "#customer_success", "--format", "json"],
+                                      [(200, {}, {"ok": True, "messages": []})])
+        self.assertEqual(rc, 0, out)
+
+    def test_a_bot_cannot_post_or_dm_as_another_bot(self):
+        self.as_token({"actor": "bot:reader", "role": "bot"})
+        rc, out, calls = self.run_cli(["post", "--as", "poster", "--channel", "#agents", "--text", "hi"])
+        self.assertEqual((rc, calls), (2, []), out)
+        rc, out, calls = self.run_cli(["dm", "--as", "poster", "--to", "ben@acme.example", "--text", "hi"])
+        self.assertEqual((rc, calls), (2, []), out)
+
+    def test_a_bot_file_shared_outside_its_channels_is_not_downloaded(self):
+        self.as_token({"actor": "bot:reader", "role": "bot"})
+        outside = {**SHOT, "channels": ["C0000000011"], "groups": [], "ims": []}
+        inside = {**SHOT, "channels": ["C0000000010"], "groups": [], "ims": []}
+        with mock.patch.object(slack, "_download", return_value=(200, {"Content-Type": "image/png"}, PNG)) as download:
+            rc, out, calls = self.run_cli(["file", "--id", "F0SHOT1", "--json"],
+                                          [(200, {}, {"ok": True, "file": outside})])
+            self.assertEqual(rc, 2, out)
+            download.assert_not_called()
+            saved = Path(self.tmp.name) / "shot.png"
+            rc, out, calls = self.run_cli(["file", "--id", "F0SHOT1", "--out", str(saved), "--json"],
+                                          [(200, {}, {"ok": True, "file": inside})])
+            self.assertEqual(rc, 0, out)
+            download.assert_called_once()
+            self.assertEqual(saved.read_bytes(), PNG)
+
+    def test_a_persons_run_is_not_scope_checked(self):
+        self.as_token({"actor": "human:member", "role": "human"})                # a personal token
+        with mock.patch.object(slack, "check_history_scope") as scope:
+            rc, out, calls = self.run_cli(["history", "--channel", "#agents", "--format", "json"],
+                                          [(200, {}, {"ok": True, "messages": []})])
+        self.assertEqual(rc, 0, out)
+        scope.assert_not_called()
+        self.assertEqual([c["url"].split("?")[0] for c in calls], [slack.API + "conversations.history"])
+
+    def test_a_terminal_with_no_hub_credential_asks_no_one_and_is_not_scope_checked(self):
+        self.principal = {"actor": "bot:reader", "role": "bot"}                  # would scope a bot, if it were asked
+        rc, out, calls = self.run_cli(["history", "--channel", "#agents", "--format", "json"],
+                                      [(200, {}, {"ok": True, "messages": []})])
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("me", self.hub_calls)
+
+    def test_a_hub_credential_the_hub_cannot_identify_reads_nothing(self):
+        self.as_token(None)
+        rc, out, calls = self.run_cli(["history", "--channel", "#customer_success", "--format", "json"])
+        self.assertEqual((rc, calls), (2, []), out)
+        self.assertIn("identity", json.loads(out)["error"])
 
 
 if __name__ == "__main__":

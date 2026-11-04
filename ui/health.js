@@ -64,8 +64,9 @@ function hlCheckHtml(check) {
   const checkButton = owner
     ? `<button class="ghost" type="button" data-hl-check-updates${HL_CHECKING ? ' disabled' : ''}>${HL_CHECKING ? 'Checking…' : 'Check for updates'}</button>` : '';
   // Update now beside the check when a newer release is out: the same update the sidebar's New version starts (notices.js).
+  // None when Tico runs this server's updates (`managed`).
   const u = S.config?.update, busy = typeof nvBusy !== 'undefined' && nvBusy;
-  const update = owner && u?.available && u.latest && typeof nvStart === 'function'
+  const update = owner && u?.available && u.latest && !u.managed && typeof nvStart === 'function'
     ? `<button class="primary" type="button" data-hl-update${busy ? ' disabled' : ''}>Update now</button>` : '';
   const result = (owner && HL_CHECK_MSG
     ? `<p class="hl-check-result${HL_CHECK_MSG.error ? ' err' : ''}" role="status">${esc(HL_CHECK_MSG.text)}</p>` : '')
@@ -88,7 +89,7 @@ function hlCredentialFix(source) {
 function hlComputerHtml(machine) {
   const models = machine.runtimes.map(row => {
     const state = row.rejected ? `sign-in rejected${row.rejected_at ? ' ' + esc(ago(row.rejected_at)) : ''}${row.rejected_reason ? ' (' + esc(row.rejected_reason) + ')' : ''}. ${hlCredentialFix(row.credential_source)}`
-      : row.ready ? 'signed in' : row.installed ? 'not signed in' : 'not installed';
+      : row.plan ? (row.plan === 'api' ? 'company API key' : 'company plan') : row.ready ? 'signed in' : row.installed ? 'not signed in' : 'not installed';
     const login = row.signable
       ? ` <button class="ghost" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(row.name)}" data-machine="${esc(machine.label)}">Sign in</button>` : '';
     // Red only when the team or an assigned bot needs it; the server sends only relevant harnesses.
@@ -96,8 +97,8 @@ function hlComputerHtml(machine) {
     return `<li data-ready="${row.ready}"${bad ? ' class="hl-model-bad"' : ''}>${esc(harnessWords(row.name))}: ${state}${login}</li>`;
   }).join('');
   return `<li class="hl-computer" data-online="${machine.online}"><span class="hl-dot ${machine.online ? 'on' : 'off'}" aria-hidden="true"></span>
-    <div><strong>${esc(machine.label)}</strong> <span class="muted">${machine.online ? 'online' : 'offline'}${machine.last_seen ? ', last seen ' + esc(ago(machine.last_seen)) : ', never seen'}</span>
-    ${window.runnerUpdateHtml?.(machine.update, machine.version) || ''}
+    <div><strong>${esc(machine.label)}</strong> <span class="muted">${machine.online ? 'online' : machine.resting ? 'stopped until work comes' : 'offline'}${machine.last_seen_at ? ', last seen ' + esc(ago(machine.last_seen_at)) : ', never seen'}</span>
+    ${window.runnerUpdateHtml?.(machine.update, machine.release || machine.update?.release || machine.version) || ''}
     <ul class="hl-models">${models || '<li class="muted">No models reported</li>'}</ul></div></li>`;
 }
 
@@ -121,20 +122,24 @@ function hlStorageHtml(st) {
 // How often the hourly scan has seen a finding, and when it last did: seeing it again counts and wakes nobody.
 function hlSeen(f) {
   const n = Number(f.occurrences) || 1;
-  return `seen ${n.toLocaleString()} time${n === 1 ? '' : 's'}, last ${ago(f.last_seen)}`;
+  return `seen ${n.toLocaleString()} time${n === 1 ? '' : 's'}, last ${ago(f.last_seen_at)}`;
 }
 
 // The owner: the optional Health Monitor (backend/health_monitor.py). One switch turns it on or off; the second is the team
 // rule that lets it file Tico bug reports without a Needs you card.
 function hlMonitorHtml(m) {
   if (!m) return '';
-  // A stopped bot's finding (run_hold:<bot>, turn_budget:<bot>) carries the same Release as the bot's page.
-  const stopped = f => { const m = /^(?:run_hold|turn_budget):(.+)$/.exec(f.key || ''); return m && typeof botReleaseButton === 'function' ? botReleaseButton(m[1], 'ghost') : ''; };
+  // A stopped bot's finding (run_hold:<bot>, turn_budget:<bot>) carries the same Release as the bot's page. So does
+  // one for queued runs it could not start (claim_failed:<bot>), which the bot's page does not show.
+  const stopped = f => {
+    const m = /^(?:run_hold|turn_budget|claim_failed):(.+)$/.exec(f.key || '');
+    return m && typeof botReleaseButton === 'function' ? botReleaseButton(m[1], 'ghost') : '';
+  };
   const found = (m.findings || []).slice(0, 8).map(f => `<li data-hl-finding="${esc(f.key)}"><strong>${esc(f.title)}</strong>
-    <span class="muted">${f.kind === 'setup' ? 'BotOps fixes it' : f.ticket_id ? 'reported to Tico' : f.approval_id ? 'report waiting in Needs you' : 'Tico bug'} · since ${esc(ago(f.first_seen))} · ${esc(hlSeen(f))}</span>${stopped(f)}</li>`).join('');
+    <span class="muted">${f.kind === 'setup' ? 'being fixed' : f.ticket_id ? 'reported to Tico' : f.approval_id ? 'report waiting in Needs you' : 'Tico bug'} · since ${esc(ago(f.first_seen_at))} · ${esc(hlSeen(f))}</span>${stopped(f)}</li>`).join('');
   return `<section class="hl-monitor" data-hl-monitor="${m.on ? 'on' : 'off'}">
     <label class="hl-monitor-row"><input type="checkbox" role="switch" data-hl-monitor-switch${m.on ? ' checked' : ''}>
-      <span><strong>Health Monitor</strong> <span class="muted">checks this install every hour, has BotOps fix setup problems and reports Tico bugs to the Tico team. It wakes a model only when it finds something new or worse; seeing a problem again only adds to its count.</span></span></label>
+      <span><strong>Health Monitor</strong> <span class="muted">checks this install every hour, gets setup problems fixed and reports Tico bugs to the Tico team. It wakes a model only when it finds something new or worse; seeing a problem again only adds to its count.</span></span></label>
     <label class="hl-monitor-row"><input type="checkbox" role="switch" data-hl-monitor-rule${m.reports_without_asking ? ' checked' : ''}${m.on ? '' : ' disabled'}>
       <span>Health Monitor may file Tico bug reports without asking <span class="muted">(only the finding and the redacted diagnostics, never task or message text)</span></span></label>
     ${m.on && found ? `<ul class="hl-bots">${found}</ul>` : ''}</section>`;
@@ -160,13 +165,17 @@ function hlQueueWords(row) {
 // Bots with queued work that is not starting, or left in setup for a day (backend/health.py `_stuck`): who, why, and
 // one fix. Overview shows the same rows.
 window.hlStuckHtml = function hlStuckHtml(rows) {
-  return (rows || []).map(row => `<li class="hl-stuck" data-stuck="${esc(row.bot)}" data-reason="${esc(row.reason)}">
-    <a href="#/bot/${esc(row.bot)}">${esc(row.name)}</a> <span class="muted">${esc(row.why)}${row.reason === 'slow' && row.oldest ? ' · ' + esc(ago(row.oldest)) : ''}${hlQueueWords(row).map(words => ' · ' + words).join('')}</span>
-    ${row.fix ? hlFixHtml(row.fix) : ''}${['run_hold', 'budget'].includes(row.reason) && typeof botReleaseButton === 'function' ? botReleaseButton(row.bot, 'ghost') : ''}${hlReportHtml({kind: 'stuck', title: `${row.name}: ${row.why}`, detail: row.why, ref: row.bot, group: 'stuck:' + row.reason})}</li>`).join('');
+  return (rows || []).map(row => {
+    // Refused words are manager-only context, not support diagnostics.
+    const reportWhy = row.reason === 'quarantined' ? 'Quarantined: queued work waits for the quarantine to clear.' : row.why;
+    return `<li class="hl-stuck" data-stuck="${esc(row.bot)}" data-reason="${esc(row.reason)}">
+    <a href="#/bot/${esc(encodeURIComponent(row.bot))}">${esc(row.name)}</a> <span class="muted">${esc(row.why)}${row.reason === 'slow' && row.oldest ? ' · ' + esc(ago(row.oldest)) : ''}${hlQueueWords(row).map(words => ' · ' + words).join('')}</span>
+    ${row.fix ? hlFixHtml(row.fix) : ''}${['run_hold', 'budget'].includes(row.reason) && typeof botReleaseButton === 'function' ? botReleaseButton(row.bot, 'ghost') : ''}${hlReportHtml({kind: 'stuck', title: `${row.name}: ${reportWhy}`, detail: reportWhy, ref: row.bot, group: 'stuck:' + row.reason})}</li>`;
+  }).join('');
 };
 
 async function hlStuckMove(button) {
-  const e = (S.emps || []).find(row => row.name === button.dataset.stuckMove);
+  const e = botRow(button.dataset.stuckMove);
   if (!e) { toast('Open Settings > Bots to move this bot', true); return; }
   if (!await settingsConfirmTransition(e, 'machine', button.dataset.machine)) return;
   await settingsBeginTransition(button, e, {kind: 'machine', runner_id: button.dataset.runner,
@@ -180,7 +189,7 @@ async function hlStuckFinish(button) {
   button.disabled = true; button.textContent = 'Finishing…';
   try {
     const result = await post(`/v2/bots/${encodeURIComponent(slug)}/onboarded`, {});
-    const bot = (S.emps || []).find(e => e.name === slug);
+    const bot = botRow(slug);
     if (bot) bot.onboarding_state = result.onboarding_state;
     toast(`${botDisplayName(slug)} finished onboarding`);
     void hlRefresh();
@@ -194,7 +203,7 @@ function hlPageDraw() {
   const host = $('#hl-page');
   if (!host) return;
   if (!HL) { host.innerHTML = '<div class="empty">Nothing to show yet.</div>'; return; }
-  const bots = list => list.map(row => `<li><a href="#/bot/${esc(row.bot)}">${esc(row.name)}</a> <span class="muted">${row.reason === 'no_computer' ? 'no computer is online' : row.reason === 'computer_offline' ? esc(row.computer) + ' is offline' : 'waiting since ' + esc(ago(row.oldest))}${hlQueueWords(row).map(words => ', ' + words).join('')}</span></li>`).join('');
+  const bots = list => list.map(row => `<li><a href="#/bot/${esc(encodeURIComponent(row.bot))}">${esc(row.name)}</a> <span class="muted">${row.reason === 'no_computer' ? 'no computer is online' : row.reason === 'computer_offline' ? esc(row.computer) + ' is offline' : 'waiting since ' + esc(ago(row.oldest))}${hlQueueWords(row).map(words => ', ' + words).join('')}</span></li>`).join('');
   // A stuck bot is listed once, with its reason; "waiting" keeps only the offline ones with nothing queued.
   const stuck = HL.stuck || [], idle = (HL.waiting || []).filter(row => !stuck.some(s => s.bot === row.bot));
   // Settings' own checks that need nobody (ui/app/settings.js shows only the ones that do).
@@ -240,7 +249,7 @@ function hlMetricsHtml(m) {
     <td class="tnum">${r.n.toLocaleString()}</td><td class="tnum">${hlMs(r.p95)}</td><td class="tnum">${hlMs(r.total_ms)}</td></tr>`);
   const sql = (m.sql?.queries || []).slice(0, 8).map(q => `<tr><td class="hl-code" title="${esc(q.sql)}">${esc(q.sql)}</td>
     <td class="tnum">${q.n.toLocaleString()}</td><td class="tnum">${hlMs(q.p95)}</td><td class="tnum">${hlMs(q.total_ms)}</td></tr>`);
-  const slow = (m.slow || []).slice(0, 5).map(r => `<li><span class="hl-code">${esc(r.route)}</span> <span class="tnum">${hlMs(r.ms)}</span> <span class="muted">${esc(r.caller)} · ${esc(hlAt(r.ts))}</span></li>`).join('');
+  const slow = (m.slow || []).slice(0, 5).map(r => `<li><span class="hl-code">${esc(r.route)}</span> <span class="tnum">${hlMs(r.ms)}</span> <span class="muted">${esc(r.caller)} · ${esc(hlAt(r.created_at))}</span></li>`).join('');
   const stall = stalls.slice(0, 3).map(e => {
     const loop = (e.threads?.busy || []).find(t => t.loop);
     return `<li><details><summary><span class="err">Stalled ${esc(String(e.stalled_s))} s</span> <span class="muted">${esc(hlAt(e.at))}</span></summary>
@@ -281,7 +290,7 @@ async function hlCheckUpdates() {
 
 // Setup check: `tico-setup doctor`'s checks run by the server against its own address, and Health's failing lines
 // (POST /v2/support/setup-check, backend/setup_check.py). It sits beside the Health list, not in it, so the minute's
-// redraw of that list keeps the result on screen; Send to support attaches it to a request (ui/support.js).
+// redraw of that list keeps the result on screen; Send to Tico team attaches it to a message in the Tico team chat (ui/support.js).
 const hlSetupCheckHTML = () => `<section class="card hl-setup" id="hl-setup-check" aria-labelledby="hl-setup-h"><header><h2 id="hl-setup-h">Setup check</h2></header>
   <p class="muted">Runs the installer's checks from here and says how to fix what fails.</p>
   <button class="ghost" type="button" data-hl-setup-check>Setup check</button>
@@ -301,7 +310,7 @@ async function hlSetupCheck(button) {
       <ul class="hl-list">${rows.map(c => `<li class="hl-check ${esc(c.status)}" data-hl-setup-row="${esc(c.status)}"><span class="nav-icon hl-icon" aria-hidden="true">${HL_ICONS[c.status] || HL_ICONS.unknown}</span>
         <div class="hl-main"><strong>${esc(c.name)}</strong><p>${esc(c.detail)}</p>${c.status !== 'ok' && c.fix ? `<p class="hl-setup-fix">Fix: ${esc(c.fix)}</p>` : ''}</div></li>`).join('')}</ul>
       <p class="muted">${esc(r.doctor_only || '')}</p>
-      ${window.supportOn?.() && window.talkToUs ? '<button class="ghost" type="button" data-hl-setup-send>Send to support</button>' : ''}`;
+      ${window.supportOn?.() && window.talkToUs ? '<button class="ghost" type="button" data-hl-setup-send>Send to Tico team</button>' : ''}`;
     host.querySelector('[data-hl-setup-send]')?.addEventListener('click', () => window.talkToUs({kind: 'setup_check', title: head, checks: rows,
       group: 'setup_check:' + rows.filter(c => c.status === 'bad').map(c => c.name).join(',')}));
   } catch (e) {
@@ -319,13 +328,15 @@ window.hlMount = function hlMount() {
 
 window.hlBoot = function () {
   void hlRefresh();
-  // Every minute, or every 2 while live events flow (the tab is in use and nothing is broken).
+  // Every 2 minutes. Health classifies each computer's queue; the old 60 s cadence while live was
+  // down multiplied that work across tabs. Returning to the tab still refreshes at once.
   let at = 0;
   setInterval(() => {
-    if (document.hidden || !S.me?.cloud || (typeof liveConnected === 'function' && liveConnected() && Date.now() - at < 119000)) return;
+    if (document.hidden || !S.me?.cloud || Date.now() - at < 119000) return;
     at = Date.now(); void hlRefresh();
   }, 60000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.me?.cloud) void hlRefresh(); });
+  // A shown tab reads once: the refresh also restarts the 2-minute timer, so the next tick does not read again.
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.me?.cloud) { at = Date.now(); void hlRefresh(); } });
 };
 
 document.addEventListener('change', event => {

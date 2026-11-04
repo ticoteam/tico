@@ -1,7 +1,7 @@
 //! Docker Gateway identities. A slot is returned only after its processes and files are cleaned.
 //! The supervisor owns the pool and private parent; bot code cannot allocate or replace either.
 use std::collections::BTreeSet;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
@@ -311,7 +311,7 @@ fn walk(parent: i32, name: &CStr, uid: u32, destination: Option<(u32, u32)>, bud
             if pinned.st_uid != uid { return Ok(()); }
             if pinned.st_mode & libc::S_IFMT == libc::S_IFDIR { return Err(std::io::Error::other("cleanup entry changed type")); }
             let (owner, group) = destination.unwrap_or_else(|| unsafe { (libc::geteuid(), libc::getegid()) });
-            let empty = CString::new("").unwrap();
+            let empty = std::ffi::CString::new("").unwrap();
             if unsafe { libc::fchownat(fd.as_raw_fd(), empty.as_ptr(), owner, group, libc::AT_EMPTY_PATH | libc::AT_SYMLINK_NOFOLLOW) } != 0 {
                 return Err(std::io::Error::last_os_error());
             }
@@ -319,7 +319,7 @@ fn walk(parent: i32, name: &CStr, uid: u32, destination: Option<(u32, u32)>, bud
                 // Another name for this inode may survive the unlink. Now supervisor-owned, it is stripped of every
                 // permission (the turn's umask left it group-readable) so no sibling can read it through that name.
                 if pinned.st_mode & libc::S_IFMT != libc::S_IFLNK {
-                    let path = CString::new(format!("/proc/self/fd/{}", fd.as_raw_fd())).unwrap();
+                    let path = std::ffi::CString::new(format!("/proc/self/fd/{}", fd.as_raw_fd())).unwrap();
                     if unsafe { libc::chmod(path.as_ptr(), 0) } != 0 { return Err(std::io::Error::last_os_error()); }
                 }
                 if unsafe { libc::unlinkat(parent, name.as_ptr(), 0) } != 0 { return Err(std::io::Error::last_os_error()); }

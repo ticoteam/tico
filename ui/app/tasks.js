@@ -4,8 +4,8 @@
 
 // ----------------------------------------------------------------- tasks (#/tasks)
 // One page for every piece of work the team owes: Tico's tasks, shown as **Needs you**, **Open** (a list),
-// a **Board**, **Recurring** (the routines, one row each) and **Done**. `#/board`, `#/issues` and `#/recurring`
-// open the matching view. No priority: every task has a rank in its owner's queue. Labels stand in for projects.
+// a **Board** and **Done**. `#/board` and `#/issues` open the matching view; scheduled work is Automations.
+// No priority: every task has a rank in its owner's queue. Labels stand in for projects.
 // A task's thread is comments, not chat: one flat list with the author on every line.
 // The list (ui/app/task-list.js) draws one line per task; this file holds what the list, the board, the
 // task's header and the subtask rows share, so a task reads the same wherever it shows.
@@ -17,21 +17,22 @@ const COMPANY_COLS = [
 ];
 const STATUS_WORD = {open: 'Open', doing: 'Doing', waiting: 'Waiting', review: 'In review', ready: 'Ready to ship',
                      done: 'Done', closed: 'Closed', declined: 'Declined'};
-const BOARD_COLS = [...COMPANY_COLS, ['done', 'Done', 'Finished in the last 7 days']];   // legacy name, kept for the routine rows
 // The view tabs: labelled, with counts. The keys are the routes' and the saved preference's.
-const TASK_VIEWS = [['foryou', 'Needs you'], ['list', 'Open'], ['board', 'Board'], ['recurring', 'Routines'], ['snoozed', 'Snoozed'], ['done', 'Done'], ['closed', 'Closed']];
+const TASK_VIEWS = [['foryou', 'Needs you'], ['list', 'Open'], ['board', 'Board'], ['snoozed', 'Snoozed'], ['done', 'Done'], ['closed', 'Closed']];
 // Done and Closed share one feed of finished tasks, newest first; each shows its own status.
 const tasksFinishedView = view => view === 'done' || view === 'closed';
 const DONE_CAP = 20;                // The Done list shows 20 at a time
 const ACTIVE_TASK_STATUSES = 'open,doing,waiting,review,ready,declined';
 let TASKS_ST = null;
-const teamOf = slug => S.emps.find(e => e.name === slug)?.team || '';
+const teamOf = id => botRow(id)?.team || '';
+// A run of a schedule (a routine before it became an automation): not work a person asked for, so Done lists leave it out.
+const isRecurringTask = t => !!t.routine_id || /from schedule/.test(String(t.body || ''));
 const isRecurringIssue = i => (i.labels || []).some(l => /^type:recurring$/i.test(l)) || /_Created by dispatcher from schedule/.test(i.body || '');
 const hasFiles = i => /s3:\/\//.test(i.body || '');
 const canMove = () => !!S.me?.mover;
 const taskFinished = t => ['done', 'closed'].includes(String(t?.status || ''));
 function taskAskToPerson(t) {
-  return !!(t?.ask?.body && actorPerson(t.ask.to_actor));
+  return !!(t?.ask?.body && actorPerson(t.ask.recipient_id));
 }
 // A task's relations (the server's `relations`, by kind; each {id, title, status, owner, direction}). `out` is the
 // task's own side: its parent, what it blocks, what it duplicates or follows up; `in` the other; related is `both`.
@@ -40,13 +41,16 @@ const taskParent = t => taskRels(t, 'parent', 'out')[0] || null;
 const taskParentId = t => taskParent(t)?.id ? String(taskParent(t).id) : '';
 const taskBlockers = t => taskRels(t, 'blocks', 'in');
 // The related count a board card shows: everything but its parent (subtasks have their own ring).
+// What holds a task, by kind (docs/tasks.md, Holds): `blocked` (cause manual, dependency, gate…) or `snoozed`.
+const taskHold = (t, kind) => (t?.holds || []).find(h => h.kind === kind);
+const taskBlockedHold = t => taskHold(t, 'blocked');
 const taskRelCount = t => Object.entries(t?.relations || {}).reduce((n, [kind, rows]) => n + (kind === 'parent' ? 0 : rows.length), 0);
 function taskBlockedReason(t, source = document.activeElement) {
   return new Promise(resolve => {
     const opener = source, dialog = document.createElement('dialog');
     dialog.className = 'tmodal task-block-reason';
     dialog.innerHTML = `<form class="tmodal-body"><h2>Block task</h2>
-      <label>What is it waiting for?<textarea name="reason" required maxlength="1000" rows="3">${esc(t.blocked_reason || '')}</textarea></label>
+      <label>What is it waiting for?<textarea name="reason" required maxlength="1000" rows="3">${esc(taskBlockedHold(t)?.reason || '')}</textarea></label>
       <div class="row"><button type="button" data-cancel>Cancel</button><button class="primary" type="submit">Block</button></div></form>`;
     let value = null;
     dialog.querySelector('form').onsubmit = event => {
@@ -62,12 +66,32 @@ function taskBlockedReason(t, source = document.activeElement) {
 }
 function taskBlockedLine(t) {
   const blocker = taskBlockers(t).find(b => !['done', 'closed', 'declined'].includes(b.status));
-  const reason = t.blocked_reason === 'Waiting on a dependency' && blocker?.title
-    ? `Waiting for ${blocker.title}` : t.blocked_reason || 'Waiting on a hold';
-  return `${reason} · since ${fmt(t.blocked_since)}`;
+  const hold = taskBlockedHold(t);
+  const reason = hold?.reason === 'Waiting on a dependency' && blocker?.title
+    ? `Waiting for ${blocker.title}` : hold?.reason || 'Waiting on a hold';
+  return `${reason} · since ${fmt(hold?.since)}`;
+}
+// A waiting task held by a bot doing prerequisite work: a bot owns its first open blocker, the one `--on bot:<slug>`
+// must name (backend/hubdb.py _waiting_bot). Its reason is the owner's note, else what the blocker is. A task only
+// blocked, not set waiting, still reads "Blocked by". A task that also waits on a person (`waiting_on` on a person's
+// task, an open question to them, or any open blocker they own, which is how the ask card a bot's task files for them
+// is served) keeps their ask, so its note is never shown as a bot's reason. A reader who cannot open the first
+// blocker is served only the ones after it, so a second bot's task there is named instead. That wait is the task's
+// Blocked hold, so it carries the hold's age; a review-gate or worktree hold is something else and says its own why.
+function taskBotWait(t) {
+  const open = r => !['done', 'closed', 'declined'].includes(String(r.status || ''));
+  if (t?.status !== 'waiting' || ['gate', 'worktree'].includes(taskBlockedHold(t)?.cause) || actorPerson(t.waiting_on)
+      || taskAskToPerson(t) || taskBlockers(t).some(r => open(r) && actorPerson(r.owner_id))) return null;
+  const b = taskBlockers(t).find(open);
+  if (!b || !actorSlug(b.owner_id)) return null;
+  const note = String(t.note || '').split('\n').map(s => s.trim()).find(Boolean) || '';
+  return {name: actorLabel(b.owner_id), reason: note || b.title || '', blocker: b,
+    since: taskBlockedHold(t) ? ` · since ${fmt(taskBlockedHold(t).since)}` : ''};
 }
 function taskWaitLine(t) {
-  if (t?.blocked_since) return taskBlockedLine(t);
+  const bot = taskBotWait(t);
+  if (bot) return `Waiting on ${bot.name}${bot.reason ? `: ${bot.reason}` : ''}${bot.since}`;
+  if (taskBlockedHold(t)) return taskBlockedLine(t);
   const blocker = taskBlockers(t)[0];
   if (blocker?.title) return `Blocked by: ${blocker.title}`;
   const ask = String(t?.ask?.body || '').split('\n').map(s => s.trim()).find(Boolean);
@@ -83,7 +107,7 @@ function hubColumn(t) {
   const status = String(t.status || 'open');
   if (status === 'done' || status === 'closed') return 'done';
   if (status === 'declined') return 'needs';
-  if (actorPerson(t.owner) || taskAskToPerson(t) || taskWaitingOn(t)) return 'needs';
+  if (actorPerson(t.owner_id) || taskAskToPerson(t) || taskWaitingOn(t)) return 'needs';
   if (status === 'waiting' || taskBlockers(t).length) return 'waiting';
   return 'doing';
 }
@@ -93,7 +117,7 @@ function taskWaitsOn(t) {
   if (!t || taskFinished(t)) return null;
   if (taskNeedsViewer(t)) return myActor();
   if (hubColumn(t) !== 'needs') return null;
-  const pid = actorPerson(t.ask?.to_actor) || actorPerson(t.owner) || actorPerson(taskWaitingOn(t))
+  const pid = actorPerson(t.ask?.recipient_id) || actorPerson(t.owner_id) || actorPerson(taskWaitingOn(t))
     || (t.status === 'declined' ? actorPerson(taskRequester(t)) : '');
   return pid && (S.people || []).some(p => p.id === pid) ? 'human:' + pid : '';
 }
@@ -121,26 +145,26 @@ function personShortName(pid) {
 const needsWho = t => {
   const who = taskWaitsOn(t);
   if (who != null) return needsWords(who);
-  const pid = actorPerson(t?.ask?.to_actor) || actorPerson(t?.owner);   // a partial row (a person's page passes only the owner)
+  const pid = actorPerson(t?.ask?.recipient_id) || actorPerson(t?.owner_id);   // a partial row (a person's page passes only the owner)
   return needsWords(pid ? 'human:' + pid : '');
 };
 // One shape for the list, the sort and the columns.
 const issueItem = i => ({kind: 'issue', key: `i${i.number}`, n: i.number, title: i.title || '',
-  slug: i.owner, actor: `bot:${i.owner}`, team: teamOf(i.owner), needs: !!i.needs_human,
-  rank: null, updated: i.updatedAt, closed: i.state === 'CLOSED' ? i.closedAt : '', lane: 'company',
+  slug: i.owner_id, actor: `bot:${i.owner_id}`, team: teamOf(i.owner_id), needs: !!i.needs_human,
+  rank: null, updated_at: i.updatedAt, closed: i.state === 'CLOSED' ? i.closedAt : '', lane: 'company',
   issue: i});
 const taskItem = t => {
-  const slug = actorSlug(t.owner);
-  return {kind: 'hub', key: `t${t.id}`, id: t.id, title: t.title || '', slug, actor: t.owner,
-          team: slug ? teamOf(slug) : 'people', needs: !!actorPerson(t.owner),
+  const slug = actorSlug(t.owner_id);
+  return {kind: 'hub', key: `t${t.id}`, id: t.id, title: t.title || '', slug, actor: t.owner_id,
+          team: slug ? teamOf(slug) : 'people', needs: !!actorPerson(t.owner_id),
           rank: t.rank == null ? null : Number(t.rank), lane: t.lane || 'company', labels: t.labels || [],
-          updated: t.updated || t.created, closed: t.done_at || t.closed_at || '', task: t, col: hubColumn(t)};
+          updated_at: t.updated_at || t.created_at, closed: t.done_at || t.closed_at || '', task: t, col: hubColumn(t)};
 };
 // Rank is the order (no priority): ranked first, low to high, then the newest unranked.
 const byRank = (a, b) => (a.rank == null ? 1 : 0) - (b.rank == null ? 1 : 0)
   || (a.rank ?? 0) - (b.rank ?? 0)
-  || String(b.updated).localeCompare(String(a.updated));
-const byNewest = (a, b) => String(b.closed || b.updated).localeCompare(String(a.closed || a.updated));
+  || String(b.updated_at).localeCompare(String(a.updated_at));
+const byNewest = (a, b) => String(b.closed || b.updated_at).localeCompare(String(a.closed || a.updated_at));
 const searchWords = value => String(value || '').toLocaleLowerCase().replace(/\s+/g, ' ').trim();
 const searchIncludes = (fields, query) => {
   const haystack = searchWords(fields.filter(Boolean).join(' '));
@@ -155,23 +179,31 @@ function taskMatches(it, query) {
 // A task’s state is written in words; its owner and dependencies remain separate properties.
 // A question the server marks `older` no longer counts: it waits under Older questions. Since questions unanswered for two
 // business days go back to their bot instead (backend/still_needed.py), servers no longer mark any.
+// A declined task is on its requester's Needs you for DECLINED_NEEDS_HOURS after its last change (backend/hubdb.py
+// needs_you, the same number), and on no one's plate otherwise: its owner, its question and its waits do not hold it.
+const DECLINED_NEEDS_HOURS = 24;
+const taskDeclinedToWho = (t, pid) => t?.status === 'declined' && taskRequester(t) === pid && !actorPerson(t.owner_id)
+  && Date.now() - Date.parse(t.updated_at || '') < DECLINED_NEEDS_HOURS * 3600e3;
 function taskNeedsViewer(t) {
   const me = myActor();
-  return !!me && !!t && !taskFinished(t) && (t.owner === me || (t.ask?.to_actor === me && !t.ask?.older) || taskWaitingOn(t) === me
-    || (t.status === 'declined' && taskRequester(t) === me && !actorPerson(t.owner)));
+  if (!me || !t || taskFinished(t)) return false;
+  if (t.status === 'declined') return taskDeclinedToWho(t, me);
+  return t.owner_id === me || (t.ask?.recipient_id === me && !t.ask?.older) || taskWaitingOn(t) === me;
 }
 function taskOlderAsk(t) {
   const me = myActor();
-  return !!me && !!t && !taskFinished(t) && t.ask?.to_actor === me && !!t.ask?.older && !taskNeedsViewer(t);
+  return !!me && !!t && !taskFinished(t) && t.status !== 'declined' && t.ask?.recipient_id === me && !!t.ask?.older && !taskNeedsViewer(t);
 }
 // The person a bot's waiting task names (`hub task update --status waiting --on <person>`), or ''.
+// Who a waiting task waits on: the person it names, or the one its reconnect card is for (backend/reconnects.py).
 function taskWaitingOn(t) {
-  return t?.status === 'waiting' && actorPerson(t.waiting_on) ? t.waiting_on : '';
+  if (t?.status !== 'waiting') return '';
+  return actorPerson(t.waiting_on) ? t.waiting_on : actorPerson(t.reconnect?.person) ? t.reconnect.person : '';
 }
 // The name of a task's status: its step when its type has steps, else the status (Open, Doing, Waiting, In review…).
 function taskStatusLabel(t) {
   if (!t) return '';
-  if (t.blocked_since) return 'Blocked';
+  if (taskBlockedHold(t)) return 'Blocked';
   if (t.step?.name && pipelineTypeId(t) !== 'general') return t.step.name;
   return STATUS_WORD[t.status] || String(t.status || '');
 }
@@ -193,10 +225,10 @@ function ageShort(iso) {
 }
 // A row reads one short age: how long since the task last moved ("2h"), so a stale one stands out without a second
 // number on every row. The tooltip has when it was opened and last updated.
-const taskAge = t => ageShort(t?.updated || t?.created);
+const taskAge = t => ageShort(t?.updated_at || t?.created_at);
 function taskAgeTitle(t) {
-  return [t?.created ? `Open ${fmt(t.created)}` : '',
-    t?.updated || t?.created ? `Updated ${fmt(t.updated || t.created)}` : ''].filter(Boolean).join(' · ');
+  return [t?.created_at ? `Open ${fmt(t.created_at)}` : '',
+    t?.updated_at || t?.created_at ? `Updated ${fmt(t.updated_at || t.created_at)}` : ''].filter(Boolean).join(' · ');
 }
 // Subtask progress: "1/3" beside a ring that fills as they finish (children_summary from the server, else parts).
 function taskSubProgress(t) {
@@ -241,28 +273,43 @@ function parseServerTime(value) {
 }
 // A task's due date is one of two things. For a bot's task it is when the bot looks again (the scheduler wakes it
 // then: a parked task), shown as a muted "Wakes Oct 2". For a person's open task it is a deadline: amber within two
-// days, red once passed.
+// days, red once passed. A task a due-date routine opened (`occurrence` set) is that day's deadline whoever owns it.
+// An occurrence of a due routine (backend/automation_actions.py) is due at the last second of its due day in the
+// trigger's zone, and that day is the routine's due_on: it reads as that calendar day in any viewer's zone. A step that
+// set its own due keeps the instant, as any task does. Null for other tasks.
+// "Oct 20", with the year only when it isn't this one ("Oct 20, 2028"), so a far-off date can't pass for a past one.
+function shortDay(at) {
+  return at.toLocaleDateString(undefined, {month: 'short', day: 'numeric', ...(at.getFullYear() === new Date().getFullYear() ? {} : {year: 'numeric'})});
+}
+function occurrenceDay(t) {
+  const m = /:(\d{4}-\d{2}-\d{2})$/.exec(t?.occurrence || ''), due = String(t?.due_at || '');
+  if (!m || !due.startsWith(m[1] + 'T23:59:59')) return null;
+  const [y, mo, d] = m[1].split('-').map(Number);
+  return new Date(y, mo - 1, d);
+}
 function taskDueInfo(t) {
-  if (!t?.due || taskFinished(t)) return null;
-  const at = parseServerTime(t.due); if (!at) return null;
-  const day = new Date(at).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
-  if (actorSlug(t.owner)) return {at, day, kind: 'wake', late: false, words: at > Date.now() ? `Wakes ${day}` : `Woke ${day}`};
+  if (!t?.due_at || taskFinished(t)) return null;
+  const at = parseServerTime(t.due_at); if (!at) return null;
+  const shown = occurrenceDay(t) || new Date(at);
+  const day = shortDay(shown);
+  if (actorSlug(t.owner_id) && !t.occurrence) return {at, day, kind: 'wake', late: false, words: at > Date.now() ? `Wakes ${day}` : `Woke ${day}`};
   const late = at < Date.now();
   // Within the coming week a deadline reads as its weekday ("Due Wed"), further out as its date.
-  const start = d => new Date(d).setHours(0, 0, 0, 0), days = Math.round((start(at) - start(Date.now())) / 864e5);
+  const start = d => new Date(d).setHours(0, 0, 0, 0), days = Math.round((start(shown) - start(Date.now())) / 864e5);
   const when = days === 0 ? 'today' : days === 1 ? 'tomorrow' : days > 1 && days < 7
-    ? new Date(at).toLocaleDateString(undefined, {weekday: 'short'}) : day;
+    ? shown.toLocaleDateString(undefined, {weekday: 'short'}) : day;
   return {at, day, kind: 'deadline', late, soon: !late && at - Date.now() < 2 * 864e5, words: late ? `Overdue ${day}` : `Due ${when}`};
 }
 // Set aside until a date (backend/task_snooze.py): only the Snoozed view shows it until then.
 function taskSnoozed(t) {
-  return !!t?.snoozed_until && !taskFinished(t) && parseServerTime(t.snoozed_until) > Date.now();
+  const until = taskHold(t, 'snoozed')?.until;
+  return !!until && !taskFinished(t) && parseServerTime(until) > Date.now();
 }
 function snoozeDay(t) {
-  return new Date(parseServerTime(t.snoozed_until)).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+  return shortDay(new Date(parseServerTime(taskHold(t, 'snoozed')?.until)));
 }
 function snoozeChip(t) {
-  return taskSnoozed(t) ? `<span class="tl-due wake" title="Snoozed until ${esc(fmt(t.snoozed_until))}">Snoozed to ${esc(snoozeDay(t))}</span>` : '';
+  return taskSnoozed(t) ? `<span class="tl-due wake" title="Snoozed until ${esc(fmt(taskHold(t, 'snoozed').until))}">Snoozed to ${esc(snoozeDay(t))}</span>` : '';
 }
 function dueChip(t) {
   const due = taskDueInfo(t); if (!due) return '';
@@ -295,7 +342,7 @@ function actorFace(actor, size = 18) {
 // The row's tooltip: who added it, who has it, and the note in full.
 function taskRowTip(t) {
   const lines = [t.title || ''];
-  const meta = [taskStatusLabel(t), `Owner: ${actorLabel(t.owner)}`, taskSourceLine(t)];
+  const meta = [taskStatusLabel(t), `Owner: ${actorLabel(t.owner_id)}`, taskSourceLine(t)];
   if (taskParent(t)?.title) meta.push(`Part of ${taskParent(t).title}`);
   lines.push(meta.filter(Boolean).join(' · '));
   const note = taskWaitLine(t);
@@ -330,6 +377,28 @@ function taskRelChip(t) {
 // A Dev ticket at a working step says how long it has been there; past four hours it turns amber, when its manager is
 // told (backend/step_age.py). Time spent waiting is not counted: the server restarts the clock when it comes back.
 const STEP_LATE_MS = 4 * 3600e3;
+// Status belongs to the bot, not the ticket: its live changes must also reach an unchanged card or open page.
+function taskBuilderActors(t) {
+  if (!t || taskFinished(t) || t.status === 'declined' || pipelineType(t)?.role !== 'engineering') return [];
+  return [...new Set([t.owner_id, ...(t.roles?.builder || [])].map(actorSlug).filter(Boolean))];
+}
+function taskBuilderNoticesHTML(actors, names = false) {
+  names ||= actors.length > 1;
+  return actors.map(slug => {
+    const status = v2StatusOf(slug);
+    const text = status?.bot_state === 'quarantined' ? status.quarantine?.builder_notice : '';
+    return text ? `<div class="task-builder-notice">${names ? `<strong>${esc(botDisplayName(slug))}</strong>: ` : ''}${esc(text)}</div>` : '';
+  }).join('');
+}
+function taskBuilderNotices(actors, names = false) {
+  return actors.length ? `<div class="task-builder-notices" data-task-builders="${esc(JSON.stringify(actors))}"${names ? ' data-builder-names' : ''}>${taskBuilderNoticesHTML(actors, names)}</div>` : '';
+}
+function taskBuilderNoticesRefresh() {
+  for (const slot of document.querySelectorAll('[data-task-builders]')) {
+    const html = taskBuilderNoticesHTML(JSON.parse(slot.dataset.taskBuilders), slot.hasAttribute('data-builder-names'));
+    if (slot.innerHTML !== html) slot.innerHTML = html;
+  }
+}
 function taskStepAge(t) {
   const since = Date.parse(t?.step_since || ''); if (!since) return '';
   const late = Date.now() - since >= STEP_LATE_MS, age = ageShort(t.step_since);
@@ -342,15 +411,16 @@ function taskCard(it) {
   const t = it.task, st = TASKS_ST;
   const chips = t ? taskChipsHTML(t, {maxTags: 2}) : '', refused = taskRefused(st, t);
   void st;   // selection, cursor and peek are painted on (task-list.js), so the card's signature only changes with its content
-  return tasksSigned(`<div class="bcard" data-task-key="${esc(it.key)}">${t ? taskBlockedStrip(it) + taskCoverHTML(t) : ''}
+  return tasksSigned(`<div class="bcard" data-task-key="${esc(it.key)}"${t?.status === 'done' ? ' data-done' : ''}>${t ? taskBlockedStrip(it) + taskCoverHTML(t) : ''}
     <button class="bcard-open" type="button" data-open-task="${esc(it.key)}" title="${esc(t ? taskRowTip(t) : it.title)}" tabindex="-1">
       <span class="bcard-title">${esc(it.title)}</span></button>
+    ${taskBuilderNotices(taskBuilderActors(t))}
     ${t?.building_started_at ? `<div class="muted bcard-clock">Building ${esc(Math.floor(((t.building_seconds || 0) + Math.max(0, (Date.now() - Date.parse(t.building_started_at)) / 1000)) / 60))}m</div>` : ''}
     <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? taskWaitTag(t) + taskStepAge(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
       ${t && taskPropRights(t).edit
         ? `<button type="button" class="tl-face bcard-owner" data-card-owner="${esc(it.key)}" aria-haspopup="true" aria-label="${esc(`Owner: ${actorLabel(it.actor)}. Change`)}" title="${esc(actorLabel(it.actor))}">${actorFace(it.actor, 16)}</button>`
         : `<span class="tl-face" aria-hidden="true">${actorFace(it.actor, 16)}</span>`}
-      <span class="age tnum" title="${esc(fmt(it.updated))}">${esc(ageShort(it.updated))}</span></div>
+      <span class="age tnum" title="${esc(fmt(it.updated_at))}">${esc(ageShort(it.updated_at))}</span></div>
     ${refused ? `<p class="bcard-err" role="alert" data-task-refused>${esc(refused)}</p>` : ''}
   </div>`);
 }
@@ -374,7 +444,7 @@ function taskStatusGroups(items, {always = []} = {}) {
   // Needs you follows the server's queue (what a person asked for first); the rest keep their rank.
   const needOrder = new Map((S.v2?.needs || []).map((item, index) => [String(item.id), index]));
   const byNeed = (a, b) => (needOrder.get(String(a.id)) ?? Infinity) - (needOrder.get(String(b.id)) ?? Infinity) || byRank(a, b);
-  return keys.map(key => ({key, items: (buckets.get(key) || []).sort(key === 'scheduled' ? (a, b) => String(a.updated).localeCompare(String(b.updated))
+  return keys.map(key => ({key, items: (buckets.get(key) || []).sort(key === 'scheduled' ? (a, b) => String(a.updated_at).localeCompare(String(b.updated_at))
     : key === 'needsme' ? byNeed : byRank),
     label: key === 'needsme' ? 'Needs you' : key === 'needs-someone' ? 'Needs someone' : key.startsWith('needs:') ? needsWords(key.slice(6))
       : COMPANY_COLS.find(([k]) => k === key)?.[1] || key,
@@ -399,8 +469,12 @@ function boardColumnsHTML(columns, {head = ''} = {}) {
       <button type="button" class="bfold-open" data-board-unfold="${esc(column.fold)}" title="${esc(column.hint || 'Show')}" aria-label="${esc(`Show ${column.name}`)}"><h2>${esc(column.name)}</h2><span class="cnt tnum">${esc(String(count))}</span></button>
     </section>`;
     const fold = column.foldable ? `<button type="button" class="bfold-x" data-board-fold="${esc(column.foldable)}" aria-label="Fold" title="Fold">${TL_ICON.caret}</button>` : '';
+    const scope = column.scope ? ` data-board-type="${esc(column.scope.type)}" data-board-step="${esc(column.scope.step)}"` : '';
+    const all = column.items.length && tasksCanSelect()
+      ? `<button type="button" class="bcol-all" data-board-select="${esc(column.id)}"${scope} aria-label="${esc(`Select all in ${column.name}`)}" title="Select all in this column">${TL_ICON.all}</button>` : '';
     return `<section class="bcol${empty ? ' is-empty' : ''}" data-col="${esc(column.id)}"${drop} aria-label="${esc(column.name)}${column.hint ? `: ${esc(column.hint)}` : ''}">
-      <header${column.hint ? ` title="${esc(column.hint)}"` : ''}><h2>${esc(column.name)}</h2><span class="cnt tnum">${count}</span>${RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : ''}${fold}</header>
+      <header${column.hint ? ` title="${esc(column.hint)}"` : ''}><h2>${esc(column.name)}</h2><span class="cnt tnum">${count}</span>${RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : ''}${all}${fold}</header>
+      ${taskBuilderNotices([...new Set(column.items.flatMap(it => taskBuilderActors(it.task)))], true)}
       ${empty ? '' : `<div class="bcol-body">${column.items.map(taskCard).join('') || '<div class="empty">Nothing here</div>'}</div>`}
     </section>`;
   }).join('')}</div>`;
@@ -434,6 +508,6 @@ let GOAL_OPTIONS = null;
 async function goalOptions() {
   if (GOAL_OPTIONS) return GOAL_OPTIONS;
   const r = await v2Get('/v2/goals?all=1');
-  GOAL_OPTIONS = (r?.goals || []).map(g => ({id: g.id, title: g.title, owner: g.owner, parent_id: g.parent_id, rank: g.rank, status: g.status}));
+  GOAL_OPTIONS = (r?.goals || []).map(g => ({id: g.id, title: g.title, owner_id: g.owner_id, parent_id: g.parent_id, rank: g.rank, status: g.status}));
   return GOAL_OPTIONS;
 }

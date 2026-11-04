@@ -20,7 +20,7 @@ const SCENE = `export function createBuilding(data) {
     const page = await browser.newPage({viewport: {width: 1280, height: 860}, serviceWorkers: 'block'});
     const errors = [], replays = [], mode = {fail: false, cut: false};
     page.on('pageerror', e => errors.push(e.message));
-    const bot = (name, over) => ({name, display_name: name.toUpperCase(), host: 'keeper', status: 'active', operator: 'ana', can_chat: true,
+    const bot = (name, over) => ({name, display_name: name.toUpperCase(), host: 'keeper', status: 'active', owner_id: 'ana', can_chat: true,
       machine: {runner_id: 'alpha', label: 'Garden Mac'}, my_access: {see: true, read: true}, ...over});
     const bots = [bot('writer'), bot('editor'), bot('vault', {my_access: {see: true, read: false}})];
     await page.route('**/*', async route => {
@@ -61,7 +61,7 @@ const SCENE = `export function createBuilding(data) {
     });
     // Opened by its address, the campus is drawn once the team has loaded (switching the hash earlier would draw it
     // before the roster arrives and draw it again after).
-    await page.goto('http://tico-ui.test/#/overview');
+    await page.goto('http://tico-ui.test/#/overview/campus');
     const frame = page.frameLocator('#overview-frame');
     await frame.locator('body[data-scene-ready]').waitFor();
     const scene = page.frames().find(f => f.url().includes('/overview/index.html'));
