@@ -92,6 +92,7 @@ from .credential_cards import install_credential_cards, scrub_attempt
 from .github import PATH as GITHUB_WEBHOOK_PATH
 from .triggers import PATH as TRIGGER_HOOK_PATH
 from .store import H, P, Problem, Store, bot_readiness, encode, message_page, refused, repo_url, task_message_page
+from . import bot_settings as BS
 
 
 
@@ -1073,7 +1074,7 @@ def create_app(settings=None):
         its own. BotOps does it as the person whose chat message started its turn, checked with their rights;
         with no such person (a bot built during setup) only for a bot still being built from its template."""
         auth.domain(who)
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
         if not H.bot(c, bot):
             raise Problem("not_found", "Unknown bot", 404)
         if who.actor == "bot:" + bot:
@@ -2511,7 +2512,7 @@ def create_app(settings=None):
         it, only its profile for one who may only see it. `rows` (backend/bot_rows.py) holds what
         was read for every bot in the answer."""
         row = dict(bot)
-        # runtime, model and host are the bot's config (bot_config.config); a bot with no config has none of them.
+        # runtime, model and host are the bot's declaration (bot_settings); a bot with no declaration has none of them.
         row.update({"model": "", "runtime": "", "host": "dispatcher"})
         config = rows.config(bot["id"])
         assignment = rows.assignments.get(bot["id"]) if level["read"] else None
@@ -4318,7 +4319,7 @@ def create_app(settings=None):
             return {"default": None, "default_for": None, "steer": False, "queue": False, "steers": False,
                     "goal": False}
         way, defer_for = H.comment_way(c, who.actor, row, "", mover=mover(c, who))
-        config = c.execute("SELECT config FROM bot_config WHERE bot=?", (H.actor_id(target),)).fetchone()
+        config = c.execute(BS.ONE_SQL, (H.actor_id(target),)).fetchone()
         config = json.loads(config[0] or "{}") if config else {}
         from .harnesses import steers
         from .chat_goals import may_direct, may_set, own_room
@@ -6960,10 +6961,10 @@ def create_app(settings=None):
         with store.read() as c:
             runner = execution.runner(c, request.state.identity)
             rows = c.execute(
-                "SELECT b.bot,b.team,b.owner_id,b.config,x.state,"
+                f"SELECT bc.bot,bc.team,bc.owner_id,{BS.CONFIG} AS config,x.state,"
                 "coalesce(a.generation,0) AS generation,a.runner_id "
-                "FROM bot_config b JOIN bots x ON x.id=b.bot LEFT JOIN assignments a ON a.bot=b.bot "
-                "WHERE b.owner_id=? ORDER BY b.bot", (runner["owner_id"],)).fetchall()
+                f"FROM bot_config bc {BS.JOIN} JOIN bots x ON x.id=bc.bot LEFT JOIN assignments a ON a.bot=bc.bot "
+                "WHERE bc.owner_id=? ORDER BY bc.bot", (runner["owner_id"],)).fetchall()
             result = []
             company = Providers.load(c, settings)
             for row in rows:
@@ -7685,7 +7686,7 @@ def create_app(settings=None):
             nonlocal bot
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             settings_admin._manager(c, who, bot)
-            config = c.execute("SELECT * FROM bot_config WHERE bot=?", (bot,)).fetchone()
+            config = c.execute(BS.ROW_SQL + " WHERE bc.bot=?", (bot,)).fetchone()
             if not config:
                 raise Problem("not_found", "Bot not found", 404)
             if config["revision"] != body.expected_revision:
@@ -7824,7 +7825,7 @@ def create_app(settings=None):
             if risky(who) and closed_computer(c, who, bot, body.runner_id):
                 return propose_card(c, who, "POST", "/api/v2/bots/" + bot + "/placement",
                                     body.model_dump(exclude={"on_behalf_of"}), placement_summary(c, bot, body.runner_id))
-            config = c.execute("SELECT * FROM bot_config WHERE bot=?", (bot,)).fetchone()
+            config = c.execute(BS.ROW_SQL + " WHERE bc.bot=?", (bot,)).fetchone()
             if not config:
                 raise Problem("not_found", "Bot not found", 404)
             if config["revision"] != body.expected_revision:
@@ -7876,7 +7877,7 @@ def create_app(settings=None):
             if not choice:
                 raise Problem("model", "Choose one of the supported models", 422)
             settings_admin.refuse_retired(choice)
-            row = c.execute("SELECT * FROM bot_config WHERE bot=?", (bot,)).fetchone()
+            row = c.execute(BS.ROW_SQL + " WHERE bc.bot=?", (bot,)).fetchone()
             if not row:
                 raise Problem("not_found", "Bot not found", 404)
             if row["revision"] != body.expected_revision:
@@ -7909,8 +7910,8 @@ def create_app(settings=None):
             config.update({"model": choice["id"], "runtime": runtime, "harness": harness,
                            "reasoning_effort": effort,
                            "model_managed_by": "cloud"})
-            c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?",
-                      (encode(config), bot))
+            BS.write(c, bot, config)
+            c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
             c.execute("UPDATE bots SET effort=? WHERE id=?", (effort, bot))
             # Its shared copies follow it, so any bot may have moved onto another tool.
             model_login.hold_removals(c, settings)
@@ -8093,7 +8094,7 @@ def create_app(settings=None):
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if not (auth.operator(c, who, bot) or auth.bot_manager(c, who, bot)):
                 raise Problem("forbidden", "You do not manage this bot", 403)
-            config = c.execute("SELECT * FROM bot_config WHERE bot=?", (bot,)).fetchone()
+            config = c.execute(BS.ROW_SQL + " WHERE bc.bot=?", (bot,)).fetchone()
             if config["revision"] != body.expected_revision:
                 raise Problem("version_conflict", "Bot configuration changed; refresh before controlling it", 409)
             if body.action in ("scope", "unscope"):

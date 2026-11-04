@@ -447,9 +447,6 @@ def _strategy(raw):
     keys = [s["key"] for s in segments]
     if len(set(keys)) != len(keys):
         raise DraftError("strategy.market.segments has two entries with the same key")
-    for flag in ("ours", "next"):
-        if sum(1 for s in segments if s[flag]) > 1:
-            raise DraftError("only one segment is marked %s" % flag)
     parents = {s["key"]: s["parent"] for s in segments}
     for segment in segments:
         seen, at = {segment["key"]}, segment["parent"]

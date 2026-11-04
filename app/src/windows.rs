@@ -245,6 +245,11 @@ fn open_org_webview(app: &App, org: &Org) -> tauri::Result<()> {
         }
     }
     window.add_child(builder, LogicalPosition::new(0.0, 0.0), LogicalSize::new(1240.0, 820.0))?;
+    // The page now holds its own store, so a store Tico sign-in held for it can go.
+    #[cfg(target_os = "macos")]
+    if let Some(store) = home.store {
+        crate::signin::release_store(app, store);
+    }
     Ok(())
 }
 

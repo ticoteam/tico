@@ -32,6 +32,7 @@ TABLES = {
     rows.HomeMergeRow: "home_merges",
     rows.HomeMergeMessageRow: "home_merge_messages",
     rows.HistoryEventRow: "history_events",
+    rows.BotSettingsRow: "bot_settings",
 }
 
 

@@ -7,6 +7,7 @@ import hashlib
 import json
 
 from .store import H
+from . import bot_settings as BS
 
 PREFIX = 'source-outage:'
 
@@ -56,8 +57,8 @@ def sync(c, settings):
     from . import execution, login_holds, move_retry, performance
     seen = set()
     queued = [dict(r) for r in c.execute(
-        "SELECT j.bot_id,count(*) n,a.runner_id,b.config FROM jobs j JOIN assignments a ON a.bot=j.bot_id "
-        "JOIN bot_config b ON b.bot=j.bot_id WHERE j.state='queued' GROUP BY j.bot_id,a.runner_id,b.config")]
+        f"SELECT j.bot_id,count(*) n,a.runner_id,{BS.CONFIG} AS config FROM jobs j JOIN assignments a ON a.bot=j.bot_id "
+        f"JOIN bot_config bc ON bc.bot=j.bot_id {BS.JOIN} WHERE j.state='queued' GROUP BY j.bot_id,a.runner_id")]
     counts = {}
     for row in queued:
         config = H._json(row['config'], {}) or {}

@@ -97,6 +97,7 @@ from backend.webhooks_v3_schema import SCHEMA as WEBHOOKS_V3_SCHEMA
 from backend.webhooks_v4_schema import SCHEMA as WEBHOOKS_V4_SCHEMA
 from backend.webhooks_v5_schema import SCHEMA as WEBHOOKS_V5_SCHEMA
 from backend.webhooks_v6_schema import SCHEMA as WEBHOOKS_V6_SCHEMA
+from . import bot_settings as BS
 
 HUB_DIR = Path(__file__).resolve().parent.parent
 ROOT = HUB_DIR.parent                       # employees are siblings of the hub
@@ -2798,7 +2799,7 @@ def held_for(conn, actor, target):
         return False
     if (bot(conn, actor_id(target)) or {}).get("state") != "quarantined":
         return False
-    row = _one(conn, "SELECT reports_to, config FROM bot_config WHERE bot=?", (actor_id(target),)) or {}
+    row = _one(conn, f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (actor_id(target),)) or {}
     boss = str(row.get("reports_to") or (_json(row.get("config"), {}) or {}).get("reports_to") or "")
     return bool(boss) and not boss.startswith("human:") and actor_id(boss) == actor_id(actor)
 
@@ -2838,7 +2839,7 @@ def task_taking_refusal(conn, actor, target, title=None, parent=None, routine=Fa
     if not is_bot(target) or not _has_table(conn, "bot_config"):
         return
     from .harnesses import SYNCED_HARNESSES, resolve_harness
-    row = _one(conn, "SELECT b.display_name,bc.config FROM bots b JOIN bot_config bc ON bc.bot=b.id "
+    row = _one(conn, f"SELECT b.display_name,{BS.CONFIG} AS config FROM bots b JOIN bot_config bc ON bc.bot=b.id {BS.JOIN} "
                      "WHERE b.id=?", (actor_id(target),))
     if row and resolve_harness(_json(row["config"], {}) or {}) in SYNCED_HARNESSES:
         name = row["display_name"] or actor_id(target)
@@ -3732,7 +3733,7 @@ def task_manager_acts(conn, actor, row):
     it. A private task it is not on stays unreadable (task_private_readable), so this never widens privacy."""
     if actor != TASK_MANAGER or not row:
         return False
-    built = _one(conn, "SELECT json_extract(config,'$.template') AS template FROM bot_config WHERE bot=?",
+    built = _one(conn, f"SELECT s.template AS template FROM bot_config bc {BS.JOIN} WHERE bot=?",
                  ("task-manager",)) if _has_table(conn, "bot_config") else None
     return (built or {}).get("template") == "task-manager" and task_private_readable(conn, actor, row)
 
@@ -3878,7 +3879,7 @@ def bot_folders_taken(conn):
     """Every folder name a bot's checkout has or may have on a computer, lowercased (a Mac's disk ignores case): each
     bot's recorded folder, its older `emp-<id>` one, and the folder its recorded repository clones into."""
     taken = set()
-    for row in conn.execute("SELECT b.id, bc.config, bc.repo FROM bots b LEFT JOIN bot_config bc ON bc.bot=b.id"):
+    for row in conn.execute(f"SELECT b.id, {BS.CONFIG} AS config, bc.repo FROM bots b LEFT JOIN bot_config bc ON bc.bot=b.id {BS.JOIN}"):
         try:
             declared = json.loads(row["config"]) if row["config"] else {}
         except ValueError:
@@ -3916,13 +3917,13 @@ def folder_clash(conn, bot_id, runner_id):
         except ValueError:
             value = {}
         return value if isinstance(value, dict) else {}
-    mine = _one(conn, "SELECT config FROM bot_config WHERE bot=?", (bot_id,))
+    mine = _one(conn, BS.ONE_SQL, (bot_id,))
     config = declared(mine["config"] if mine else None)
     if config.get("shared_from"):
         return None
     folder = bot_folder(bot_id, config).lower()
-    for row in conn.execute("SELECT b.id, b.slug, bc.config FROM assignments a JOIN bots b ON b.id=a.bot "
-                            "LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE a.runner_id=? AND a.bot<>?",
+    for row in conn.execute(f"SELECT b.id, b.slug, {BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
+                            f"LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} WHERE a.runner_id=? AND a.bot<>?",
                             (runner_id, bot_id)):
         other = declared(row["config"])
         if not other.get("shared_from") and bot_folder(row["id"], other).lower() == folder:
@@ -3938,7 +3939,7 @@ def bot_repository_name(conn, ref):
     slug = str((found or {}).get("slug") or ref or "").removeprefix("emp-")
     if not found:
         return "bot-" + slug
-    row = _one(conn, "SELECT config, repo FROM bot_config WHERE bot=?", (found["id"],))
+    row = _one(conn, f"SELECT {BS.CONFIG} AS config,bc.repo FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (found["id"],))
     try:
         declared = json.loads(row["config"]) if row and row["config"] else {}
     except ValueError:
@@ -3957,8 +3958,14 @@ def migrate_task_privacy(conn):
     if not had_privacy:
         humans = {row[0] for row in conn.execute('SELECT id FROM humans')}
         bots = {row[0] for row in conn.execute('SELECT slug FROM bots')}
-        configs = {row[0]: _json(row[1]) for row in conn.execute('SELECT bot,config FROM bot_config')} \
-            if _has_table(conn, 'bot_config') else {}
+        # Numbered step 23 runs on a file from before migration 0070 (the declaration still in bot_config.config);
+        # the store's cloud step 57 runs after the migrations (the declaration in bot_settings).
+        if not _has_table(conn, 'bot_config'):
+            configs = {}
+        elif 'config' in {row[1] for row in conn.execute('PRAGMA table_info(bot_config)')}:
+            configs = {row[0]: _json(row[1]) for row in conn.execute('SELECT bot,config FROM bot_config')}
+        else:
+            configs = {row[0]: _json(row[1]) for row in conn.execute(f'SELECT bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN}')}
         def sensitive_or_unknown(actor):
             if actor == KEEPER:
                 return False
@@ -8020,7 +8027,7 @@ def tasks_only(conn, actor):
     """
     if not is_bot(actor) or not _has_table(conn, "bot_config"):
         return False
-    row = _one(conn, "SELECT config FROM bot_config WHERE bot=?", (actor_id(actor),))
+    row = _one(conn, BS.ONE_SQL, (actor_id(actor),))
     if not row or not row.get("config"):
         return False
     return (_json(row["config"], {}) or {}).get("bot_contact") == "tasks"
@@ -8289,7 +8296,7 @@ def _session_lanes(conn, row):
     slug = actor_id(row["owner_id"])
     config = {}
     if _has_table(conn, "bot_config"):
-        found = _one(conn, "SELECT config FROM bot_config WHERE bot=?", (slug,))
+        found = _one(conn, BS.ONE_SQL, (slug,))
         config = _json(found["config"], {}) if found else {}
     from .shared_bots import follow   # the followed config is the one the runner keys sessions on
     root = session_root(conn, slug, row["id"], follow(conn, slug, config))
@@ -8374,7 +8381,8 @@ def _escalate_stuck(conn, row, count):
 
 def _setup_person(conn, slug):
     """The person who finishes a bot's setup: who made it, else its operator, else the default person."""
-    row = _one(conn, "SELECT * FROM bot_config WHERE bot=?", (slug,)) if _has_table(conn, "bot_config") else None
+    row = _one(conn, "SELECT created_by, owner_id FROM bot_config WHERE bot=?", (slug,)) \
+        if _has_table(conn, "bot_config") else None
     made = str((row or {}).get("created_by") or "")
     for who in (made if is_human(made) else "", human_actor((row or {}).get("owner_id") or ""),
                 human_actor(default_human(conn))):

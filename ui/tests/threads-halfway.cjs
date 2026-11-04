@@ -50,7 +50,8 @@ const dmThread = {id: 't-dm-ops', title: 'Chat with Ops', audience: 'personal', 
 const dmMessages = () => [{id: 'd1', seq: 1, thread_id: 't-dm-ops', sender_id: 'human:ana', body: 'Can you check the Acme invoices?', created_at: at(2), reply_to: null,
   routed: {to: [{actor: 'bot:ops', name: 'Ops'}]}}];
 
-async function open(browser, {phone = false} = {}) {
+// `twin`: a second bot named Ops, so the names that tell bots apart add the slug.
+async function open(browser, {phone = false, twin = false} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
   const seen = {errors: [], posts: [], stops: [], timelines: [], reacts: []};
@@ -69,7 +70,8 @@ async function open(browser, {phone = false} = {}) {
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', registered: true});
-    if (p === '/api/employees') return json(['ops', 'fin', 'qa'].map(name => ({name, display_name: name === 'qa' ? 'QA' : name[0].toUpperCase() + name.slice(1),
+    if (p === '/api/employees') return json(['ops', 'fin', 'qa', ...(twin ? ['ops2'] : [])].map(name => ({name,
+      display_name: name === 'qa' ? 'QA' : name === 'ops2' ? 'Ops' : name[0].toUpperCase() + name.slice(1),
       host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: [], my_access: {see: true, read: true, write: true}})));
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}, {id: 'bea', name: 'Bea', email: 'bea@acme.example'},
       {id: 'cy', name: 'Cy', email: 'cy@acme.example'}, {id: 'zed', name: ZED, email: 'zed@acme.example'}], org_groups: [{id: 'ops', name: 'Ops team', my_access: {see: true, read: true, write: true}}]});
@@ -270,11 +272,13 @@ let browser = null;
 
   // ---- a bot's DM with the bot working, desktop: its placeholder, its status, and the thread's actions in the top line
   {
-    const {page, seen} = await open(browser);
+    const {page, seen} = await open(browser, {twin: true});
     await page.goto('https://tico-ui.test/#/bot/ops/dm');
     await page.locator('#bot-thread .th-status-working').waitFor();
-    assert.equal(await page.locator('#bot-thread .thv-composer .p-text').getAttribute('placeholder'), 'Message Ops');
+    assert.equal(await page.locator('#bot-thread .thv-composer .p-text').getAttribute('placeholder'), 'Message Ops', 'the name alone, never its slug');
     await page.locator('#bot-top #bot-top-acts [data-thv-menu]').waitFor();
+    assert.equal(await page.locator('#bot-top-acts [data-thv-menu]').getAttribute('aria-label'), 'Thread settings');
+    assert.equal(await page.locator('#bot-more-btn .nav-icon').count(), 0, 'Info is not a second ⋮ beside the ⋯');
     const [top, menu] = [await box(page.locator('#bot-top')), await box(page.locator('#bot-top-acts [data-thv-menu]'))];
     assert.ok(menu.y >= top.y && menu.y + menu.height <= top.y + top.height + 0.5, 'the menu sits in the top line');
     assert.equal(await page.locator('#pane-chat .bot-talk-bar .thv-menu-btn').count(), 0, 'no box of its own under the tabs');
@@ -386,6 +390,20 @@ let browser = null;
     await page.locator('#bot-thread .th-status-working').waitFor();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'the bot page does not scroll sideways');
     await themed(page, 'bot-dm-working', true);
+    // The desktop-app banner takes its own room above the bot's header, at 390px and at 720px.
+    await page.evaluate(() => {
+      const n = document.getElementById('app-nudge');
+      n.querySelector('.app-nudge-text').textContent = 'Tico for Acme opens your company directly, with no server setup.';
+      n.hidden = false;
+    });
+    for (const width of [390, 720]) {
+      await page.setViewportSize({width, height: 844});
+      await page.waitForFunction(() => document.querySelector('#bot-top').getBoundingClientRect().top >= document.getElementById('app-nudge').getBoundingClientRect().bottom,
+        null, {timeout: 3000}).catch(() => {});
+      const [nudge, top] = await page.evaluate(() => ['#app-nudge', '#bot-top'].map(q => { const r = document.querySelector(q).getBoundingClientRect(); return {top: r.top, bottom: r.bottom}; }));
+      assert.ok(top.top >= nudge.bottom, `${width}px: the banner (to ${nudge.bottom}) sits above the header (from ${top.top})`);
+    }
+    await page.setViewportSize({width: 390, height: 844});
     assert.deepEqual(seen.errors, []);
     await page.close();
   }

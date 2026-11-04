@@ -4,6 +4,7 @@ and loops piled up: each escalated waiting task cost its own reads (measured her
 import json
 import uuid
 
+from backend import bot_settings as BS
 from backend.store import H
 from backend.tests.test_api import api  # noqa: F401  (the fixture)
 from backend.tests.test_api import assign, headers, post, runner
@@ -136,8 +137,8 @@ def fleet(api, prefix, count):
         H.sync_registry(c, {s: {"name": s, "runtime": "fake", "status": "active"} for s in off},
                         {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben")]})
         for s in off:
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')",
-                      (s, '{"name": "%s", "runtime": "fake"}' % s))
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (s,))
+            BS.write(c, s, {"name": s, "runtime": "fake"})
     for s in off:
         assign(api, silent, s)
         post(api, "chat/" + s, {"text": "Please summarize the current work."})

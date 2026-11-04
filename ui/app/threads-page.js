@@ -1,4 +1,4 @@
-/* ui/app/threads-page.js — New thread and New DM, a thread's Members and menu, and Make task on a message. The Threads
+/* ui/app/threads-page.js — New thread and New DM, a thread's Members and settings, and Make task on a message. The Threads
    page itself (the rail beside one thread) is ui/app/thread-rail.js.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -228,58 +228,129 @@ async function threadMembersOpen(view) {
   try { await load(); } catch (e) { status.textContent = e.message; }
 }
 
-// ----------------------------------------------------------------- the thread menu
-function threadMenuOpen(view, button) {
-  const t = view.thread; if (!t) return;
-  const manage = !!t.me?.can_manage, root = !t.parent_id;
-  const items = [
-    manage && ['rename', 'Rename'],
-    manage && root && t.audience !== 'home' && !threadIsDm(t) && ['share', 'Who can read'],
-    manage && root && !['task', 'meeting'].includes(t.audience) && ['keep', 'Keep messages'],
-    manage && 'pinned_for_everyone' in t && threadOnRail(t) && (t.pinned_for_everyone ? ['unpin-all', 'Unpin for everyone'] : ['pin-all', 'Pin for everyone']),
-    t.me?.following ? ['unfollow', 'Unfollow'] : ['follow', 'Follow'],
-    ['notify', 'Notifications'],
-    ['catchup', 'Summarize'],
-    ['read', 'Mark all read'],
-    t.earlier && ['earlier', 'Open earlier messages to Read'],
-    manage && t.audience !== 'home' && [t.archived_at ? 'unarchive' : 'archive', t.archived_at ? 'Unarchive' : 'Archive'],
-  ].filter(Boolean);
-  thvMenuShow(button, items, async key => {
-    const path = thvPath(t.id);
-    try {
-      if (key === 'rename') {
-        const title = prompt('Title', threadTitle(t));
-        if (title == null || !title.trim()) return;
-        view.thread = {...t, ...(await patch(path, {title: title.trim()}))};
-      } else if (key === 'share') { threadShareOpen(view); return; }
-      else if (key === 'keep') { threadKeepOpen(view); return; }
-      else if (key === 'notify') { threadNotifyOpen(view, button); return; }
-      else if (key === 'catchup') { await threadCatchUp(t); return; }
-      else if (key === 'earlier') { await threadEarlierOpen(view, view.id); return; }
-      else if (key === 'follow') { await put(path + '/follow', {notify: 'live'}); view.thread = {...t, me: {...t.me, following: true}}; }
-      else if (key === 'unfollow') { await writeRequest('DELETE', path + '/follow'); view.thread = {...t, me: {...t.me, following: false}}; }
-      else if (key === 'read') { await post(path + '/read-all', {}); threadsMarkedRead(t.id, Number(t.last_seq) || 0); }
-      else if (key === 'pin-all' || key === 'unpin-all') {
-        view.thread = {...t, ...(await patch(path, {pinned_for_everyone: key === 'pin-all'}))};
-      }
-      else if (key === 'archive' || key === 'unarchive') view.thread = {...t, ...(await patch(path, {archived: key === 'archive'}))};
-      threadsPut(view.thread);
-      thvDraw(view);
-    } catch (e) { toast(e.message, true); }
-  });
+// ----------------------------------------------------------------- thread settings
+// The ⋯ in a thread's header: one panel of rows, each saving as it changes, with nothing to Save. A row the viewer may not
+// use is left out.
+const THREAD_NOTIFY = [['live', 'All'], ['mentions', 'Mentions'], ['digest', 'Digest'], ['off', 'Off']];
+// Off is a lasting mute (an unfollow comes back on the next post or mention). Not following, or muted, reads as Off.
+const threadNotifyNow = t => !t.me?.following || t.me?.notify === 'muted' ? 'off' : t.me?.notify || 'live';
+function threadSettingsHTML(view) {
+  const t = view.thread, manage = !!t.me?.can_manage, root = !t.parent_id, dm = threadIsDm(t), home = t.audience === 'home';
+  const oneToOne = dm && root && !threadIsGroupDm(t);   // a group DM and a sub-thread keep their name
+  const members = root && ['members', 'personal', 'company', 'team'].includes(t.audience);
+  const n = view.memberList ? view.memberList.length + (view.memberMore ? '+' : '') : '';
+  const now = threadNotifyNow(t), days = t.retention_days ?? '';
+  const lengths = [['', 'Keep forever'], [30, '30 days'], [90, '90 days'], [365, '1 year']];
+  if (!lengths.some(([d]) => d === days)) lengths.push([days, `${days} days`]);
+  return [
+    manage && !oneToOne && !home && `<div class="ths-row ths-wide"><label class="ths-lbl" for="ths-name">Name</label>
+      <input id="ths-name" name="title" maxlength="200" autocomplete="off" value="${esc(threadTitle(t))}"></div>`,
+    manage && root && !home && !dm && `<div class="ths-row ths-wide"><span class="ths-lbl">Who can read</span>${threadAudienceHTML(t, {titled: true})}</div>
+      <div class="ths-row ths-wide tcn-host"></div>`,
+    members && `<button type="button" class="ths-row ths-link" data-ths="members"${n ? ` aria-label="Members, ${n}"` : ''}><span class="ths-lbl">Members</span>
+      <span class="ths-val">${n}<span aria-hidden="true">›</span></span></button>`,
+    `<div class="ths-row ths-wide"><span class="ths-lbl" id="ths-notify">Notifications</span><div class="nt-seg ths-seg" role="group" aria-labelledby="ths-notify">${
+      THREAD_NOTIFY.map(([k, label]) => `<button type="button" data-notify="${k}" aria-pressed="${k === now}">${label}</button>`).join('')}</div></div>`,
+    manage && 'pinned_for_everyone' in t && threadOnRail(t) && `<label class="ths-row" for="ths-pin"><span class="ths-lbl">Pin for everyone</span>
+      <input id="ths-pin" type="checkbox" role="switch" class="people-switch"${t.pinned_for_everyone ? ' checked' : ''}></label>`,
+    manage && root && !['task', 'meeting'].includes(t.audience) && `<div class="ths-row"><label class="ths-lbl" for="ths-keep">Keep messages</label>
+      <select id="ths-keep">${lengths.map(([d, label]) => `<option value="${d}"${d === days ? ' selected' : ''}>${label}</option>`).join('')}</select></div>`,
+    `<div class="ths-row ths-acts"><button type="button" class="ghost small" data-ths="catchup">Summarize</button>
+      <button type="button" class="ghost small" data-ths="read">Mark all read</button>${
+      t.earlier ? '<button type="button" class="ghost small" data-ths="earlier">Open earlier messages to Read</button>' : ''}${
+      manage && !home ? `<span class="spacer"></span><button type="button" class="ghost small" data-ths="archive">${t.archived_at ? 'Unarchive' : 'Archive'}</button>` : ''}</div>`,
+  ].filter(Boolean).join('');
 }
-// Per reader, this thread only: how much of it reaches them. Choosing one follows the thread.
-const THREAD_NOTIFY = [['live', 'Live'], ['mentions', 'Mentions'], ['digest', 'Digest'], ['muted', 'Muted']];
-function threadNotifyOpen(view, button) {
-  const now = view.thread?.me?.notify || 'live';
-  thvMenuShow(button, THREAD_NOTIFY.map(([k, label]) => [k, label, k === now]), async notify => {
-    const t = view.thread;
+function threadSettingsOpen(view) {
+  if (!view.thread) return;
+  const dlg = threadDialog('thread-settings', 'Thread settings');
+  dlg.className = 'tmodal tmodal-shell dash-dialog thd-dialog ths-dialog';
+  dlg.innerHTML = `<form>${threadDialogHead('Thread settings')}<div class="dash-form ths"></div>
+    <footer class="dash-form-foot"><span class="err" role="status" data-status></span><span class="spacer"></span><button type="button" class="primary" data-close>Done</button></footer></form>`;
+  threadDialogWire(dlg);
+  const form = dlg.querySelector('form'), box = form.querySelector('.ths'), status = form.querySelector('[data-status]');
+  const draw = () => {
+    box.innerHTML = threadSettingsHTML(view);
+    renderThreadConnect(view.thread, box.querySelector('.tcn-host'));   // Slack (ui/app/thread-connect.js)
+  };
+  // `send` answers only what changed (with `me` as its own part), merged into the thread as it is when the answer
+  // comes; saves go one at a time, so a slow one cannot put back what a later one changed. `rail`: the change shows on
+  // the rail too. A refused change puts the panel back as the server has it.
+  let queue = Promise.resolve();
+  const save = (send, {rail = true} = {}) => (queue = queue.then(async () => {
+    status.textContent = '';
     try {
-      const r = await put(thvPath(t.id) + '/follow', {notify});
-      view.thread = {...t, me: {...t.me, following: true, notify: r?.notify || notify}};
-      threadsPut(view.thread); thvDraw(view);
-    } catch (e) { toast(e.message, true); }
-  });
+      const {me, ...changed} = await send(thvPath(view.thread.id)) || {};
+      view.thread = {...view.thread, ...changed, me: {...view.thread.me, ...me}};
+      if (rail) threadsPut(view.thread);
+      thvDraw(view);
+      return true;
+    } catch (e) { status.textContent = e.message; draw(); return false; }
+  }));
+  form.onsubmit = ev => ev.preventDefault();
+  form.addEventListener('keydown', ev => { if (ev.key === 'Enter' && ev.target.id === 'ths-name') { ev.preventDefault(); ev.target.blur(); } });
+  form.onchange = ev => {
+    const el = ev.target;
+    if (el.id === 'ths-name') {
+      const title = el.value.trim();
+      if (!title || title === threadTitle(view.thread)) { el.value = threadTitle(view.thread); return; }
+      void save(async path => patch(path, {title}));
+    } else if (el.closest('.thd-aud')) {
+      const audience = box.querySelector('[name=audience]:checked')?.value || 'members', sel = box.querySelector('[name=group]');
+      if (el.name === 'group' && audience !== 'team') return;
+      // Switching to A team with more than one to choose from waits for the team, so history is never shared with
+      // one nobody picked.
+      if (el.name === 'audience' && audience === 'team' && view.thread.audience !== 'team' && sel && [...sel.options].filter(o => o.value).length > 1) {
+        if (!sel.querySelector('option[value=""]')) sel.insertAdjacentHTML('afterbegin', '<option value="">Choose a team</option>');
+        sel.value = ''; sel.focus();
+        return;
+      }
+      const group = audience === 'team' ? sel?.value || '' : null;
+      if (audience === 'team' && !group) return;
+      void save(async path => patch(path, {audience, audience_group_id: group})).then(ok => {
+        if (!ok) return;
+        if (box.querySelector('[name=group]')?.value) box.querySelector('[name=group] option[value=""]')?.remove();
+        // Only the Slack row goes with who can read: the other rows may hold changes still saving. A fresh host, so
+        // its listeners are not added twice.
+        const host = box.querySelector('.tcn-host'), fresh = host?.cloneNode(false);
+        if (host) { host.replaceWith(fresh); renderThreadConnect(view.thread, fresh); }
+      });
+    } else if (el.id === 'ths-pin') {
+      const on = el.checked;
+      void save(async path => patch(path, {pinned_for_everyone: on}));
+    } else if (el.id === 'ths-keep') {
+      const days = el.value ? Number(el.value) : null;
+      void save(async path => ({retention_days: days, ...(await patch(path, {retention_days: days}))}), {rail: false});
+    }
+  };
+  form.onclick = async ev => {
+    const seg = ev.target.closest('[data-notify]');
+    if (seg) {
+      const notify = seg.dataset.notify;
+      if (seg.getAttribute('aria-pressed') === 'true') return;
+      const level = notify === 'off' ? 'muted' : notify;
+      const ok = await save(async path => {
+        const r = await put(path + '/follow', {notify: level});
+        return {me: {following: true, notify: r?.notify || level}};
+      });
+      if (ok) box.querySelectorAll('[data-notify]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.notify === notify)));
+      return;
+    }
+    const b = ev.target.closest('[data-ths]'); if (!b) return;
+    const key = b.dataset.ths, t = view.thread;
+    if (key === 'members') { void threadMembersOpen(view); return; }
+    // The rest are one-off actions: each closes the panel, back to the thread its toast is about.
+    b.disabled = true; status.textContent = '';
+    try {
+      if (key === 'catchup') { dlg.close(); await threadCatchUp(t); return; }
+      if (key === 'earlier') { dlg.close(); await threadEarlierOpen(view, view.id); return; }
+      if (key === 'read') { await post(thvPath(t.id) + '/read-all', {}); threadsMarkedRead(t.id, Number(t.last_seq) || 0); dlg.close(); return; }
+      if (key === 'archive' && await save(async path => patch(path, {archived: !view.thread.archived_at}))) dlg.close();
+    } catch (e) { if (dlg.open) status.textContent = e.message; else toast(e.message, true); }
+    finally { b.disabled = false; }
+  };
+  draw();
+  dlg.showModal();
 }
 // A summary of what is new here and under it, in the viewer's own Assistant DM (backend/thread_catchup.py).
 async function threadCatchUp(t) {
@@ -293,44 +364,4 @@ async function threadEarlierOpen(view, homeId) {
   await post(thvPath(homeId) + '/open-earlier', {});
   toast('Earlier messages open');
   if (homeId === view.id) await thvRefresh(view);
-}
-function threadShareOpen(view) {
-  const t = view.thread;
-  const dlg = threadDialog('thread-share', 'Who can read');
-  dlg.innerHTML = `<form>${threadDialogHead('Who can read')}<div class="dash-form">${threadAudienceHTML(t, {titled: true})}<div class="tcn-host"></div></div>${threadDialogFoot('Save')}</form>`;
-  threadDialogWire(dlg);
-  renderThreadConnect(t, dlg.querySelector('.tcn-host'));   // Slack (ui/app/thread-connect.js)
-  const form = dlg.querySelector('form');
-  form.onsubmit = async ev => {
-    ev.preventDefault();
-    const audience = form.querySelector('[name=audience]:checked')?.value || 'members';
-    try {
-      const r = await patch(thvPath(t.id), {audience, audience_group_id: audience === 'team' ? form.elements.namedItem('group')?.value || null : null});
-      view.thread = {...t, ...r}; threadsPut(view.thread); thvDraw(view);
-      dlg.close();
-    } catch (e) { form.querySelector('[data-status]').textContent = e.message; }
-  };
-  dlg.showModal();
-}
-
-// How long a thread keeps its messages (PATCH retention_days; null keeps them). A length set some other way stays listed.
-function threadKeepOpen(view) {
-  const t = view.thread, now = t.retention_days ?? '';
-  const lengths = [['', 'Keep forever'], [30, '30 days'], [90, '90 days'], [365, '1 year']];
-  if (!lengths.some(([days]) => days === now)) lengths.push([now, `${now} days`]);
-  const dlg = threadDialog('thread-keep', 'Keep messages');
-  dlg.innerHTML = `<form>${threadDialogHead('Keep messages')}<div class="dash-form"><select name="days" aria-label="Keep messages">${
-    lengths.map(([days, label]) => `<option value="${days}"${days === now ? ' selected' : ''}>${label}</option>`).join('')}</select></div>${threadDialogFoot('Save')}</form>`;
-  threadDialogWire(dlg);
-  const form = dlg.querySelector('form');
-  form.onsubmit = async ev => {
-    ev.preventDefault();
-    const days = form.elements.namedItem('days').value;
-    try {
-      const r = await patch(thvPath(t.id), {retention_days: days ? Number(days) : null});
-      view.thread = {...t, retention_days: days ? Number(days) : null, ...r}; thvDraw(view);
-      dlg.close();
-    } catch (e) { form.querySelector('[data-status]').textContent = e.message; }
-  };
-  dlg.showModal();
 }

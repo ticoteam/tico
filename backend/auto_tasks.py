@@ -2,6 +2,7 @@
 from . import hubdb as H
 from . import task_privacy as privacy
 from .task_snooze import snoozed
+from . import bot_settings as BS
 
 KEY = "keep_tasks_going"
 PUT_BACK_MINUTES = 60
@@ -422,8 +423,8 @@ def missing(c, settings, runner, body, failed=None, waiting=None):
     held_bots = {(H.resolve_bot(c, b) or {}).get("id", b) for b in body.busy_bots or ()} | (
         {b for b, _ in busy} if not E.lanes_on(runner) else set())
     want = (H.resolve_bot(c, body.bot) or {}).get("id", body.bot) if body.bot is not None else None
-    bots = c.execute(f"SELECT a.bot,bc.config,bc.onboarding_state,{E.DRAINING_SQL} draining "
-                     "FROM assignments a JOIN bots b ON b.id=a.bot JOIN bot_config bc ON bc.bot=a.bot "
+    bots = c.execute(f"SELECT a.bot,{BS.CONFIG} AS config,bc.onboarding_state,{E.DRAINING_SQL} draining "
+                     f"FROM assignments a JOIN bots b ON b.id=a.bot JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} "
                      "WHERE a.runner_id=? AND b.state='active' AND (? IS NULL OR a.bot=?)",
                      (runner['id'], want, want)).fetchall()
     for bot in sorted(bots, key=lambda r: held.get(r['bot'], 0)):

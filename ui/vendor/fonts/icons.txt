@@ -103,7 +103,6 @@ mic_off
 monitor_heart
 monitoring
 more_horiz
-more_vert
 new_releases
 newspaper
 open_in_new

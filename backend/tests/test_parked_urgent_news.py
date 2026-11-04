@@ -9,6 +9,7 @@ from backend.tests.test_profiles import put
 from backend.tests.test_task_lanes import task_bot
 from backend.tests.test_urgent_news import sent_job
 from backend.tests.test_wake_rules import as_cause
+from backend import bot_settings as BS
 
 
 def parked(c, profile='lead', party='owned', incident=False):
@@ -164,7 +165,7 @@ def test_notice_does_not_release_the_task_start_gate(api):
         task, blocker = parked(c, incident=True)
         _, job = sent_job(c, task, 'bot:cpo', 'Step moved: On Deck -> In Progress', {'news': 'step_entered'})
         assert job and job['held'] == 0
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='cpo'").fetchone()[0])
+        config = BS.read(c, 'cpo')
         assert auto_tasks.refusal(c, H.task(c, task['id']), config, woken=True) == 'task_wait'
         assert wake_rules.parked(c, H.task(c, task['id'])) == 'blocked_by'
         still_blocked(c, task, blocker)

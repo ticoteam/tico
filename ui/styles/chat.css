@@ -316,8 +316,9 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
 #main.chat-layout .conv-older:empty{display:none}
 @media (max-width:760px){
   body:has(#main.chat-layout){min-height:0;height:100dvh;overflow:hidden}
-  #main.chat-layout{position:fixed;top:var(--chat-viewport-top,0px);left:0;right:0;height:var(--chat-viewport-height,100dvh);padding:max(var(--s3),env(safe-area-inset-top)) 12px calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px)}
+  #main.chat-layout{position:fixed;top:calc(var(--chat-viewport-top,0px) + var(--top-strip,0px));left:0;right:0;height:calc(var(--chat-viewport-height,100dvh) - var(--top-strip,0px));padding:max(var(--s3),env(safe-area-inset-top)) 12px calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px)}
   body.mobile-composer-focus #main.chat-layout{padding-bottom:max(var(--s2),env(safe-area-inset-bottom))}
+  body.mobile-composer-focus:has(#main.chat-layout) #topbar{display:none}   /* the keyboard is up: every line goes to the chat */
   #main.chat-layout .card.conv{padding:10px}
 
   #main.chat-layout .conv-top{margin-bottom:4px}

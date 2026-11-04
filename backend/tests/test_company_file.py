@@ -973,7 +973,7 @@ def test_a_strategy_is_let_go_of_quietly_where_the_page_can_t_help_it_and_refuse
     assert D.check({**fixture_draft(), "strategy": {"summary": "Short."}})["strategy"] == {
         **C.blank_strategy(), "summary": "Short."}
     for path, value in ((("bets", 0, "id"), "b9"), (("bets", 1, "id"), "b1"), (("market", "segments", 1, "key"), "bim"),
-                        (("market", "segments", 0, "ours"), True), (("market", "segments", 2, "method"), "guess"),
+                        (("market", "segments", 0, "ours"), "yes"), (("market", "segments", 2, "method"), "guess"),
                         (("market", "players", 0, "url"), "ftp://example.com"), (("listening", "posts", 0, "tag"), "x"),
                         (("summary",), "x" * 401), (("bets", 0, "check_by"), "soon"), (("colour",), "red")):
         bad = fixture_draft()
@@ -984,6 +984,20 @@ def test_a_strategy_is_let_go_of_quietly_where_the_page_can_t_help_it_and_refuse
         target[last] = value
         with pytest.raises(C.DraftError):
             D.check(bad)
+
+
+def test_two_segments_may_be_ours_and_two_next_and_every_mark_reads_back_through_the_file():
+    draft = fixture_draft()
+    segments = draft["strategy"]["market"]["segments"]
+    segments[0]["ours"] = True                             # gc-suites is Us beside schedules
+    segments[3]["next"] = True                             # specialty-pm is Next beside bim
+    assert [(g["key"], g["ours"], g["next"]) for g in D.check(draft)["strategy"]["market"]["segments"]] == [
+        ("gc-suites", True, False), ("schedules", True, False), ("bim", False, True), ("specialty-pm", False, True)]
+    text = C.to_yaml(draft, FIXTURE_CREATED)
+    back = C.from_yaml(text)
+    assert [(g["key"], g["ours"], g["next"]) for g in back["strategy"]["market"]["segments"]] == [
+        ("gc-suites", True, False), ("schedules", True, False), ("bim", False, True), ("specialty-pm", False, True)]
+    assert back["strategy"] == D.check(draft)["strategy"] and C.to_yaml(back, FIXTURE_CREATED) == text
 
 
 def test_the_chat_edits_the_strategy_and_the_turn_names_each_part_it_touched():

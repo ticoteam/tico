@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import hubdb as H
 from backend import invites
 from backend import migrations
@@ -71,6 +72,7 @@ def test_every_migration_adopts_a_database_that_already_has_its_change(tmp_path)
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
         c.execute("INSERT INTO audit_log VALUES('a1','2026-01-01T00:00:00.000000Z','human:ana','task_cap:1',NULL,NULL,NULL)")
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
@@ -108,6 +110,7 @@ def test_a_rename_lands_before_startup_code_that_uses_the_new_name(tmp_path):
         c.execute("CREATE UNIQUE INDEX google_connects_state ON google_connects(state) WHERE state IS NOT NULL")
         c.execute("INSERT INTO google_connects(person_id,mailbox,status,state,created_at,updated_at) "
                   "VALUES('p1','ana@acme.example','signing_in','nonce-1','t','t')")
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0003' AND version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
@@ -125,6 +128,7 @@ def test_an_existing_database_loses_the_redundant_task_indexes_once(tmp_path):
         c.execute("CREATE INDEX tasks_requester_status ON tasks(requester_id, status)")
         c.execute("CREATE INDEX tasks_private ON tasks(id) WHERE private IS NOT 0")
         # 0011 and every file after it run again (each is safe to repeat), as on a file that never had them
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0011' AND version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
@@ -143,6 +147,7 @@ def test_an_existing_database_loses_the_two_duplicate_indexes_once(tmp_path):
     with sqlite3.connect(path) as c:
         c.execute("CREATE INDEX invariants_lease ON attempts(lease_until) WHERE state IN ('leased','running')")
         c.execute("CREATE INDEX invariants_open_approvals ON approvals(created_at) WHERE decision IS NULL")
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0042' AND version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
@@ -163,6 +168,7 @@ def test_an_existing_database_loses_the_private_parties_index_and_the_parties_re
     with sqlite3.connect(path) as c:
         c.execute("CREATE INDEX tasks_private_parties ON tasks(id, requester_id, owner_id, guest, private) "
                   "WHERE private IS NOT 0")
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0042' AND version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
@@ -268,6 +274,20 @@ def test_a_changed_applied_file_refuses_to_boot(tmp_path, monkeypatch):
         boot(path)
 
 
+def test_every_shipped_migration_file_keeps_its_checksum():
+    """The fixture lists each migration that shipped (v0.5.109) with the SHA-256 of its file then. A database that applied
+    one records that checksum, and a start refuses a file whose checksum changed (`_verify`): a shipped file is never
+    edited, a fix is a new migration. A shipped file that is gone fails too."""
+    shipped = [line.split() for line in (FIXTURES / "shipped_migration_checksums.txt").read_text().splitlines()]
+    assert shipped and all(len(row) == 2 for row in shipped)
+    changed = []
+    for name, digest in shipped:
+        path = migrations.DIRECTORY / name
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            changed.append(name)
+    assert not changed, "Shipped migrations edited or removed (write a new migration instead): " + ", ".join(changed)
+
+
 @pytest.mark.parametrize("version", ["0099_from_the_future", f"legacy_user_version_{migrations.NEWEST_USER_VERSION + 1}"])
 def test_a_database_with_a_migration_this_code_does_not_know_is_refused_untouched(tmp_path, version):
     path = fresh(tmp_path)
@@ -294,9 +314,26 @@ def test_cloud_version_is_the_newest_cloud_step_store_writes():
     assert migrations.CLOUD_VERSION == newest
 
 
+def restore_config(c):
+    """Before migration 0070, the migrations 0043 and 0061 read bot_config.config, which 0070 drops: a rerun of them from
+    before 0070 needs the column back, each declaration copied into it from bot_settings. A no-op while it is there."""
+    if "config" in {row[1] for row in c.execute("PRAGMA table_info(bot_config)")}:
+        return
+    c.execute("ALTER TABLE bot_config ADD COLUMN config TEXT NOT NULL DEFAULT '{}'")
+    c.execute(f"UPDATE bot_config SET config=coalesce((SELECT {BS.CONFIG} FROM bot_settings s "
+              "WHERE s.bot_id=bot_config.bot), '{}')")
+
+
+def _config_restored(path):
+    with sqlite3.connect(path) as c:
+        restore_config(c)
+
+
 def _back_to_before(path, version):
     """The file as it was before `version` ran: the migration rows from it on are forgotten, so the next boot runs them."""
     with sqlite3.connect(path) as c:
+        if version <= "0070_bot_settings":
+            restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy_%'", (version,))
 
 
@@ -368,6 +405,7 @@ def test_an_existing_bots_runtime_model_and_host_move_into_its_config_then_the_c
     the six legacy columns are dropped. cwd, thread_id and token_hash have nothing to move."""
     path = fresh(tmp_path)
     slug = "acme-bot"
+    _config_restored(path)
     with sqlite3.connect(path) as c:
         for column in ("runtime", "model", "host", "cwd", "thread_id", "token_hash"):
             c.execute(f"ALTER TABLE bots ADD COLUMN {column} TEXT")
@@ -381,7 +419,7 @@ def test_an_existing_bots_runtime_model_and_host_move_into_its_config_then_the_c
     boot(path)
     with sqlite3.connect(path) as c:
         columns = {row[1] for row in c.execute("PRAGMA table_info(bots)")}
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+        config = json.loads(c.execute(BS.ONE_SQL, (slug,)).fetchone()[0])
     assert not {"runtime", "model", "host", "cwd", "thread_id", "token_hash"} & columns
     assert {"id", "slug", "effort", "state"} <= columns
     # boot adds its own defaults to every config (profile, wake_preset, ...); only the three keys this moves are checked
@@ -401,6 +439,7 @@ def test_a_null_config_takes_the_columns_and_one_not_an_object_stops_0043(tmp_pa
     """Migration 0043: a config of JSON null counts as {} and gets the column values; a config that is not a JSON object
     stops the migration instead of dropping a runtime or model it cannot copy."""
     path = fresh(tmp_path)
+    _config_restored(path)
     with sqlite3.connect(path) as c:
         for column in ("runtime", "model", "host", "cwd", "thread_id", "token_hash"):
             c.execute(f"ALTER TABLE bots ADD COLUMN {column} TEXT")
@@ -416,7 +455,7 @@ def test_a_null_config_takes_the_columns_and_one_not_an_object_stops_0043(tmp_pa
     _back_to_before(path, "0043")
     boot(path)
     with sqlite3.connect(path) as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='null-bot'").fetchone()[0])
+        config = json.loads(c.execute(BS.ONE_SQL, ("null-bot",)).fetchone()[0])
     assert (config.get("runtime"), config.get("model")) == ("codex", "m1")
 
 
@@ -581,6 +620,7 @@ def test_a_populated_legacy_database_moves_each_row_and_keeps_its_behaviour(tmp_
             ("rev-pending", "r1", None), ("rev-done", "r2", '{"id": 1}'),
         ])
         before = dict(c.execute("SELECT key, rowid FROM idempotency").fetchall())
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0050' AND version NOT LIKE 'legacy_%'")
     boot(path)
 

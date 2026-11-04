@@ -3,8 +3,8 @@ roots, sub-threads, task threads, one DM per bot Ana owns, and group DMs. Each k
 import collections
 import re
 
+from backend import bot_settings as BS
 from backend import hubdb
-from backend.store import encode
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helper)
 from backend.tests.test_health_reads import counted
@@ -17,8 +17,8 @@ def add_bots(api, start, count):
                 for n in range(start, start + count)}
         hubdb.sync_registry(c, bots, {"people": []})
         for slug, config in bots.items():
-            c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
-                      (slug, encode(config), None, "ana"))
+            c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)", (slug, None, "ana"))
+            BS.write(c, slug, config)
     return [f"bot:{slug}" for slug in bots]
 
 

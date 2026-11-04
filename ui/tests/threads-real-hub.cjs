@@ -86,26 +86,27 @@ async function restrictPerson(hub) {
     // Dana: Keep messages saves through the real PATCH: the server holds it, a fresh load shows it, and it clears.
     const keepDialog = async () => {
       await dana.locator('[data-thv-menu]').click();
-      await dana.locator('.thv-pop').getByText('Keep messages').click();
-      return dana.locator('#thread-keep select');
+      return dana.locator('#thread-settings[open] #ths-keep');
     };
-    const saveKeep = async () => {
-      await dana.locator('#thread-keep [type=submit]').click();
-      await dana.waitForFunction(() => !document.querySelector('#thread-keep')?.open, null, {timeout: t(15000)});
+    // The select saves as it changes; the panel then closes.
+    const setKeep = async (select, days) => {
+      const saved = dana.waitForResponse(r => r.request().method() === 'PATCH' && r.url().includes('/v2/threads/'), {timeout: t(15000)});
+      await select.selectOption(days);
+      await saved;
+      await dana.locator('#thread-settings .tmodal-x').click();
+      await dana.waitForFunction(() => !document.querySelector('#thread-settings')?.open, null, {timeout: t(15000)});
     };
     await dana.goto(hub.url + '/#/thread/' + plan.id);
     await dana.getByText(PLAN).waitFor({timeout: t(15000)});
     const keep = await keepDialog();
     assert.equal(await keep.inputValue(), '', 'a thread keeps its messages by default');
-    await keep.selectOption('90');
-    await saveKeep();
+    await setKeep(keep, '90');
     assert.equal((await api(hub, 'dana', 'GET', `/v2/threads/${plan.id}`)).retention_days, 90, 'the server holds the length');
     await dana.reload();
     await dana.getByText(PLAN).waitFor({timeout: t(15000)});
     const kept = await keepDialog();
     assert.equal(await kept.inputValue(), '90', 'a fresh load shows the saved length');
-    await kept.selectOption('');
-    await saveKeep();
+    await setKeep(kept, '');
     assert.equal((await api(hub, 'dana', 'GET', `/v2/threads/${plan.id}`)).retention_days, null, 'and it clears');
     await dana.context().close();
 
@@ -274,14 +275,13 @@ async function restrictPerson(hub) {
       assert.match(await page.locator('.thv-title').innerText(), /^#\s*Launch plan$/, `${tag}: the header's mark`);
       assert.equal(await page.locator('.thv-aud').count(), 0, `${tag}: no audience word beside a # thread`);
 
-      // Who can read: one title, a one-line team row, and no Slack with Slack off.
+      // Who can read in Thread settings: its row label is its only title, a one-line team row, and no Slack with Slack off.
       await page.goto(hub.url + '/#/thread/' + secret.id);
       await page.locator('[data-thv-menu]').click();
-      await page.locator('.thv-pop').getByText('Who can read').click();
-      const share = page.locator('#thread-share[open]');
+      const share = page.locator('#thread-settings[open]');
       await share.locator('.thd-aud-word').waitFor({timeout: t(15000)});
       await page.waitForLoadState('networkidle');
-      assert.equal(await share.locator('.thd-aud legend').count(), 0, `${tag}: the title is the only Who can read`);
+      assert.equal(await share.locator('.thd-aud legend').count(), 0, `${tag}: the row label is the only Who can read`);
       const word = await share.locator('.thd-aud-word').boundingBox();
       assert.ok(word.height < 26, `${tag}: A team stays on one line (${word.height}px)`);
       assert.equal(await share.locator('[name=tcn-channel]').count(), 0, `${tag}: no Slack with Slack off`);

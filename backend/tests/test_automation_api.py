@@ -2,6 +2,7 @@
 delete, built-ins, run now and its run record, and paged lists."""
 import json
 
+from backend import bot_settings as BS
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
 
 NOTE_STEP = {"id": "tell", "type": "action", "enabled": True, "do": "wake_bot", "args": {"bot": "ops", "text": "Look"}}
@@ -50,7 +51,8 @@ def as_bot(api, slug):
         if not found:
             c.execute("INSERT INTO bots(id,slug,display_name,created_at) VALUES(?,?,?,?)",
                       (bot_id, slug, slug, H.now()))
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')", (bot_id, '{"runtime":"fake"}'))
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (bot_id,))
+            BS.write(c, bot_id, {"runtime": "fake"})
         c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                   (bot_id, "test", "x-" + bot_id, H.now(), "human:ana"))
     api.app.state.auth.settings.test_identities[slug + "-test"] = Identity(H.bot_actor(bot_id), "bot", agent="test")

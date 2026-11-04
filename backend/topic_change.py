@@ -40,6 +40,7 @@ from clients import judge as J
 from . import rooms, team_rules
 from .judge import audit_detail, daily_cap, over_spend_cap, server_engine, used_today
 from .store import H, encode
+from . import bot_settings as BS
 
 LOG = logging.getLogger("tico.topic_change")
 _clock = time.monotonic
@@ -95,7 +96,7 @@ def last_turn(c, settings, bot):
     just cleared)."""
     from .shared_bots import follow
     from . import providers
-    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     cfg = follow(c, bot, H._json(config[0], {}) or {}) if config else {}
     runtime, model = providers.bot_choice(c, settings, cfg)
     session = c.execute("SELECT thread_id FROM bot_sessions WHERE bot=? AND runtime=? AND model=?",

@@ -11,6 +11,7 @@ from pydantic import Field
 from . import hubdb as H
 from .models import Contract
 from .store import Problem
+from . import bot_settings as BS
 
 # Anonymous suggestions waiting at Suggested, across every visitor: the per-address limit alone lets many
 # addresses queue unbounded work for the bot that receives them (the same overall cap as waiting pairings).
@@ -110,8 +111,8 @@ def suggestions_receiver(c):
             return chosen, 'chosen'
         source = 'chosen_archived' if state == 'archived' else 'chosen_inactive'
     for template, states in (('product-manager', ('active', 'planned')), ('product-lead', ('active',))):
-        row = c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.id=bc.bot "
-                        "WHERE json_extract(bc.config,'$.template')=? AND b.state IN (" + ','.join('?' * len(states)) + ") "
+        row = c.execute(f"SELECT bc.bot FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
+                        f"WHERE s.template=? AND b.state IN (" + ','.join('?' * len(states)) + ") "
                         "ORDER BY bc.bot LIMIT 1", (template, *states)).fetchone()
         if row:
             return row[0], source

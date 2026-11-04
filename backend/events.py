@@ -53,6 +53,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 
+from . import bot_settings as BS
 from . import runs
 from . import read_cache
 from . import visuals as V
@@ -355,8 +356,12 @@ RUNNER_TRIGGERS = [
      + _tell("work", "SELECT NEW.runner_id AS rid", "NEW.bot")),
     ("changes_runner_assignments_delete", "DELETE", "assignments", None,
      _tell("assignments", "SELECT OLD.runner_id AS rid", "OLD.bot")),
-    ("changes_runner_bot_config_update", "UPDATE", "bot_config", _changed("config", "owner_id", "team", "onboarding_state"),
+    ("changes_runner_bot_config_update", "UPDATE", "bot_config", _changed("owner_id", "team", "onboarding_state"),
      _bot_runner("assignments", "NEW.bot")),
+    # Its declared settings (backend/bot_settings.py): any setting, not the row's write time.
+    ("changes_runner_bot_settings_insert", "INSERT", "bot_settings", None, _bot_runner("assignments", "NEW.bot_id")),
+    ("changes_runner_bot_settings_update", "UPDATE", "bot_settings", _changed(*BS.COLUMNS, "extra"),
+     _bot_runner("assignments", "NEW.bot_id")),
     # A bot's selected connection changes its assignment and readiness even while its old login is signed out.
     ("changes_runner_subscription_insert", "INSERT", "subscription_assignments", "NEW.scope='bot'",
      _bot_runner("assignments", "NEW.target") + _bot_runner("work", "NEW.target")),

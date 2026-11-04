@@ -7,6 +7,7 @@ from backend.store import encode
 from backend.tests.test_github import api, get, headers  # noqa: F401
 from backend.tests.test_review_gate import HEAD, move, ticket as base_ticket
 from backend.tests.usage_rows import segment
+from backend import bot_settings as BS
 
 RECEIPT = f"Tests: base {'c' * 40} head {HEAD}: 9 passed, 0 failed"
 # The builder (cpo) runs on Anthropic; rev-a and rev-b on OpenAI; rev-c on Anthropic like the builder.
@@ -21,8 +22,9 @@ def team(api, seen=None):
         for slug, model in MODELS.items():
             config = {"name": slug, "runtime": "claude" if model.startswith("claude") else "codex", "model": model,
                       "status": "active", **({"profile": "reviewer"} if slug.startswith("rev-") else {})}
-            c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?) ON CONFLICT(bot) DO UPDATE "
-                      "SET config=excluded.config", (slug, encode(config), "engineering", "ana"))
+            c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?) ON CONFLICT(bot) DO NOTHING",
+                      (slug, "engineering", "ana"))
+            BS.write(c, slug, config)
         c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','box','ana','h',?)", (H.now(),))
         c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r1'", (seen or H.now(),))
         for slug in ("rev-a", "rev-b", "rev-c"):
@@ -99,10 +101,10 @@ def test_pool_candidate_model_details_show_configured_and_actual_families(api):
             "reviewer-xai": {"name": "Reviewer xAI", "runtime": "fake", "status": "active"},
             "pr-reviewer-sol": {"name": "Reviewer GPT", "runtime": "fake", "status": "active"},
         }, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}]})
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)", (
-            "reviewer-xai", encode({"runtime": "claude", "model": "claude-haiku-5-5"}), "engineering", "ana"))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)", (
-            "pr-reviewer-sol", encode({"runtime": "codex", "model": "gpt-6-sol"}), "engineering", "ana"))
+        c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', ('reviewer-xai', 'engineering', 'ana'))
+        BS.write(c, 'reviewer-xai', {'runtime': 'claude', 'model': 'claude-haiku-5-5'})
+        c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', ('pr-reviewer-sol', 'engineering', 'ana'))
+        BS.write(c, 'pr-reviewer-sol', {'runtime': 'codex', 'model': 'gpt-6-sol'})
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at) VALUES('fallback-turn','pr-reviewer-sol',?,?)",
                   (H.now(), H.now()))
         segment(c, 'fallback-turn', model='claude-opus-5-5', provider='anthropic', runtime='claude')
@@ -623,9 +625,9 @@ def task_model(api, slug, model, harness):
     from backend.tests.test_check_models import company
     company(api, "anthropic", "openai")
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+        config = BS.read(c, slug)
         config["task_model"] = {"model": model, "harness": harness}
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(config), slug))
+        BS.write(c, slug, config)
 
 
 def test_require_goes_by_the_task_model_a_check_runs_on_not_the_bots_own_model(api):
@@ -759,8 +761,7 @@ def test_require_never_gives_the_check_to_a_bot_on_a_model_a_reseller_picks(api)
     team(api)
     task = qa_ticket(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=? WHERE bot='rev-a'", (encode(
-            {"name": "rev-a", "runtime": "cursor", "model": "cursor-auto", "status": "active", "profile": "reviewer"}),))
+        BS.write(c, 'rev-a', {'name': 'rev-a', 'runtime': 'cursor', 'model': 'cursor-auto', 'status': 'active', 'profile': 'reviewer'})
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
     to_qa(api, task)
@@ -773,8 +774,7 @@ def test_prefer_ranks_a_bot_of_another_company_ahead_of_one_whose_company_is_unk
     team(api)
     task = qa_ticket(api, built=False)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=? WHERE bot='rev-b'", (encode(
-            {"name": "rev-b", "runtime": "cursor", "model": "cursor-auto", "status": "active", "profile": "reviewer"}),))
+        BS.write(c, 'rev-b', {'name': 'rev-b', 'runtime': 'cursor', 'model': 'cursor-auto', 'status': 'active', 'profile': 'reviewer'})
     set_pool(api, task, "In QA", ["rev-b", "rev-a"], limit=2)
     busy(api, "rev-a")
     to_qa(api, task)
@@ -790,8 +790,7 @@ def test_a_bot_now_on_a_model_a_reseller_picks_is_not_independent_whatever_it_ra
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at) VALUES('before','rev-c',?,?)", (H.now(), H.now()))
         segment(c, 'before', model='claude-haiku-5-5', provider='anthropic')
-        c.execute("UPDATE bot_config SET config=? WHERE bot='rev-c'", (encode(
-            {"name": "rev-c", "runtime": "cursor", "model": "cursor-auto", "status": "active", "profile": "reviewer"}),))
+        BS.write(c, 'rev-c', {"name": "rev-c", "runtime": "cursor", "model": "cursor-auto", "status": "active", "profile": "reviewer"})
         decision = assess(c, task, "rev-c")
     assert decision["eligible"] is False and decision["reason"] == "checker model-family provenance is unknown"
 
@@ -802,8 +801,7 @@ def test_require_never_gives_the_check_to_a_bot_whose_model_company_is_unknown(a
     team(api)
     task = qa_ticket(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=? WHERE bot='rev-a'",
-                  (encode({"name": "rev-a", "runtime": "fake", "status": "active", "profile": "reviewer"}),))
+        BS.write(c, 'rev-a', {'name': 'rev-a', 'runtime': 'fake', 'status': 'active', 'profile': 'reviewer'})
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
     to_qa(api, task)
@@ -818,8 +816,7 @@ def test_require_waits_while_the_builders_model_company_is_unknown(api):
     team(api)
     task = qa_ticket(api, built=False)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=? WHERE bot='cpo'",
-                  (encode({"name": "cpo", "runtime": "fake", "status": "active"}),))
+        BS.write(c, 'cpo', {'name': 'cpo', 'runtime': 'fake', 'status': 'active'})
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
     to_qa(api, task)
@@ -869,8 +866,7 @@ def test_require_never_gives_the_check_to_a_bot_now_on_a_model_of_unknown_compan
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at) VALUES('before','rev-a',?,?)", (H.now(), H.now()))
         segment(c, 'before', model='gpt-6.1-sol', provider='openai')
-        c.execute("UPDATE bot_config SET config=? WHERE bot='rev-a'",
-                  (encode({"name": "rev-a", "runtime": "fake", "status": "active", "profile": "reviewer"}),))
+        BS.write(c, 'rev-a', {"name": "rev-a", "runtime": "fake", "status": "active", "profile": "reviewer"})
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
     to_qa(api, task)
