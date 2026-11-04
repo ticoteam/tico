@@ -402,6 +402,9 @@ async fn remove_org(app: &App, id: &str) {
             }
             None => {
                 let state = app.state::<AppState>();
+                // Checked again under the lock: an org added meanwhile opens through its own switch, which waits on it.
+                let _changing = state.changing.lock().unwrap();
+                if active_org(app).is_some() { return refresh_chrome(app); }
                 select_connection(&state, None);
                 *state.status.lock().unwrap() = HubStatus::default();
                 // The setup window first, so that the app keeps a window while the main one goes.
