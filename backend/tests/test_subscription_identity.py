@@ -44,8 +44,9 @@ def usage_turn(c, tid, computer=None, bot='ops'):
         enqueue_stored(c, 'message-' + tid)
         job = c.execute('SELECT id FROM jobs WHERE message_id=?', ('message-' + tid,)).fetchone()[0]
         c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job,))
-        c.execute('INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) '
-                  "VALUES(?,?,?, ?,1,?,'completed',?,?)", (tid, job, bot, computer['runner_id'], tid, now, now))
+        # The run is one attempts row: its lease goes on the row usage_turn made above.
+        c.execute("UPDATE attempts SET job_id=?, runner_id=?, generation=1, token_hash=?, state='completed', "
+                  "lease_until=? WHERE id=?", (job, computer['runner_id'], tid, now, tid))
 
 
 def test_usage_groups_immutable_connections_and_rename_preserves_filter(api):
