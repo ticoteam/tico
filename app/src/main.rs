@@ -22,14 +22,18 @@ use std::time::Duration;
 
 use serde_json::Value;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Emitter, EventTarget, LogicalPosition, Manager, RunEvent, State, WindowEvent};
+use tauri::{AppHandle, Emitter, EventTarget, LogicalPosition, Manager, State, WindowEvent};
+#[cfg(target_os = "macos")]
+use tauri::RunEvent;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
 use bridge::{app_log, bridge};
 use config::Config;
 use hub::{Client, HubStatus};
 use orgs::{Document, Org, Orgs};
-use windows::{build_server_window, build_window, clear_store, eval, forget_owned, layout, main_window, open_search, org_label, remember_frame, reload, show_window, switch_to, sync_rail, take_owned, RAIL};
+#[cfg(target_os = "macos")]
+use windows::clear_store;
+use windows::{build_server_window, build_window, eval, forget_owned, layout, main_window, open_search, org_label, remember_frame, reload, show_window, switch_to, sync_rail, take_owned, RAIL};
 
 const USER_AGENT: &str = "TicoHub/2.0 Tauri";
 const MIN_WIDTH: u32 = 360;
@@ -343,6 +347,7 @@ async fn remove_org(app: &App, id: &str) {
         let removed = list.remove(id);
         (removed, was_open)
     };
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     let Some(removed) = removed else { return };
     for label in take_owned(app, id) {
         if let Some(window) = app.get_webview_window(&label) {

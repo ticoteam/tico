@@ -2,7 +2,9 @@
 //! follows, the window frame kept between launches, and the page's eval and reload.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(not(target_os = "linux"))]
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -195,6 +197,8 @@ pub(crate) const RAIL_WIDTH: f64 = 60.0;
 pub(crate) struct Home {
     pub id: String,
     pub hub: url::Url,
+    // Only macOS gives a page its own store.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub store: Option<Uuid>,
 }
 
@@ -251,6 +255,7 @@ fn open_org_webview(app: &App, org: &Org) -> tauri::Result<()> {
     grant_org(app, &home)?;
     let config = Config::new(home.hub.clone());
     let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), true);
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut builder = WebviewBuilder::new(org_label(&home.id), WebviewUrl::External(config.start_url()))
         .user_agent(USER_AGENT)
         // Files dropped on a page reach it (chat composers, task files): Tauri's own drop handler would swallow them on macOS.
@@ -320,6 +325,7 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
 }
 
 /// Clears one org's cookies and storage when its page is not open: through a hidden 1x1 webview on its store.
+#[cfg(target_os = "macos")]
 pub(crate) fn clear_store(app: &App, org: &Org) -> tauri::Result<()> {
     let (Some(window), Some(home)) = (main_window(app), Home::of(org)) else { return Ok(()) };
     let mut builder = WebviewBuilder::new(format!("clear-{}", home.id), WebviewUrl::External("about:blank".parse().unwrap()));
@@ -745,6 +751,7 @@ pub(crate) fn open_meeting_window(app: &App, home: &Home, id: &str) {
     let mut url = home.hub.clone();
     url.set_fragment(Some(&format!("/meetings?meeting={id}&window=1")));
     let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), false);
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
         .title("Meeting")
         .inner_size(1100.0, 820.0)
