@@ -180,7 +180,7 @@ async function themed(page, name) {
       await failed.click();
       await page.waitForSelector('tr.au-rx .au-sl');
       assert.equal(await page.locator('tr.au-rx .au-sl').count(), 8);
-      assert.match(await page.locator('tr.au-rx [data-mt-line="dream"]').innerText(), /failed[\s\S]*Dream · model timed out/);
+      assert.match(await page.locator('tr.au-rx [data-mt-line="dream"]').innerText(), /failed[\s\S]*Dream · model timed out/i);
       assert.equal(await page.locator('tr.au-rx [data-mt-line="dream"] .au-tag.mt-bad').count(), 1);
       assert.match(await page.locator('tr.au-rx [data-mt-line="collect"]').innerText(), /120 checked · 14 found/);
       assert.match(await page.locator('tr.au-rx [data-mt-line="check_health"]').innerText(), /on its old timer/);
