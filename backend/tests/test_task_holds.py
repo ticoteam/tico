@@ -85,7 +85,7 @@ def test_still_needed_returns_the_question_and_reopens_its_bot_task_without_a_se
         assert withdrawn_label(c, question["id"]).startswith(f"Withdrawn before {ana} saw it: no answer in two")
         row = H.task(c, tid)
         assert row["status"] == "open" and "nothing left to wait on" in row["note"]
-        assert notices(c, "bot:ops") == []      # still needed? sent its own one notice
+        assert notices(c, "bot:ops") == []      # still needed? sends no notice of its own: the roundup lists it
 
 
 def test_the_last_child_finishing_reopens_a_bot_task_and_one_of_two_keeps_it_waiting_on_the_other(api):
