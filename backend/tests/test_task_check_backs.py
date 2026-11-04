@@ -750,3 +750,25 @@ def test_hourly_cap_counts_repeat_wakes_as_well_as_first_ones(followups, monkeyp
         assert checked["woke"] == [] and checked["blocked"] == [row["id"]]
         assert CB.view(H.task(c, row["id"]), c)["delivery"] == "hourly_wake_cap"
         assert CB.sweep(c, H.shift(H.now(), hours=1, seconds=1))["woke"] == [row["id"]]
+
+
+def test_unread_result_is_never_quieted_and_escalates_through_the_repair_path(followups, monkeypatch):
+    """The requester reads a returned result, its turn ends, and it neither closes nor reopens it. Each pass still wakes
+    it, and every repair counts toward the stall gate, so the result escalates once instead of backing off forever."""
+    routed = []
+    monkeypatch.setattr(H, "_no_diagnosis", lambda *a: None)
+    monkeypatch.setattr(H, "_escalate_stuck", lambda c, row, count: routed.append(row["id"]))
+    with followups.app.state.store.transaction() as c:
+        row = H.task_create(c, "bot:ops", "Read the returned result", "Close it or reopen it.", "bot:finance", lint=False)
+        H.task_update(c, "bot:finance", row["id"], status="done")
+        for n in range(H.STALL_WAKES_PER_DAY):
+            due(c, H.task(c, row["id"]))
+            assert CB.sweep(c)["woke"] == [row["id"]]  # first wake, then one per pass: never quieted
+            handled(c, row["id"])
+            CB.finished_turn(c, f"attempt-{n}", "ops", row["id"])  # read it; the turn ends with it still done
+            assert CB._repairs(c, H.task(c, row["id"]))[0] == n + 1
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [] and routed == [row["id"]]  # the stall gate escalates it once
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='check_back_quiet'", (row["id"],)).fetchone()[0] == 0
+        assert len(wakes(c, row["id"])) == H.STALL_WAKES_PER_DAY

@@ -442,7 +442,9 @@ def changed(c, row):
 
 def quiet(c, row, at):
     """A keeper-set repeat with nothing new: check later on a doubling back-off from 30 minutes, capped at the 8h repair
-    cap, keeping the expected note. It is not a repair, so it never feeds the stall count that escalates work nothing moves."""
+    cap, keeping the expected note. It is not a repair, so it never feeds the stall count that escalates work nothing moves.
+    Never for a result (done or declined): a result the bot read but did not dispose of keeps the repair path, which counts
+    and escalates, so reading it cannot end its follow-up."""
     H = _H()
     state = stand(c, row)
     count = 0
@@ -599,8 +601,8 @@ def sweep(c, at=None, failures=None, task_ids=None):
                 result["blocked"].append(row["id"])
                 continue
             first = not c.execute("SELECT 1 FROM task_check_back_wakes WHERE task_id=? LIMIT 1", (row["id"],)).fetchone()
-            if not first and not explicit(c, row) and not changed(c, row):
-                quiet(c, row, at)  # keeper-set and nothing moved: back off, without counting as a repair
+            if not first and row["status"] not in RESULT and not explicit(c, row) and not changed(c, row):
+                quiet(c, row, at)  # keeper-set, not a result, and nothing moved: back off without counting as a repair
                 continue
             if first:
                 firsts = c.execute("SELECT count(*) FROM task_check_back_wakes w JOIN messages m ON m.id=w.message_id "
