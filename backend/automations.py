@@ -1200,7 +1200,7 @@ def fire(c, kind, payload, ref="", match=None, access=None, only=None):
             if (access and not access(row)) or not F.all_hold(trigger.get("filters") or [], payload):
                 _count(c, row["id"], "dropped")
                 continue
-            if chain and kind == "event" and _task_trigger(trigger):
+            if chain and kind == "event" and not row["builtin"] and _task_trigger(trigger):
                 _chained_task_event(c, row, payload, chain)
                 continue
             rid = queue(c, row, payload, ref, chain=(*chain, row["id"]))
