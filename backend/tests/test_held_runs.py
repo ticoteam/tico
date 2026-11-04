@@ -1,9 +1,13 @@
 """A held run always has someone on it, shows on Health after two hours, and its task's queued work joins its resumed
 turn (Dev 543: on Oct 23 the stall check closed BotOps's review of two held DevOps runs and nobody looked for 2.5 days,
-while Review 1 verdicts queued behind held runs on their tasks)."""
+while Review 1 verdicts queued behind held runs on their tasks). A held run is not held for good: after HELD_REVIEW_HOURS
+unreviewed it resumes once, and a resumed try held again ends quietly."""
+import json
+
 import pytest
 
 from backend.store import H
+from backend import bot_settings as BS
 from backend import task_privacy as privacy
 from backend.auth import Identity
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401 (api: the fixture)
@@ -407,3 +411,122 @@ def test_two_requests_folded_into_one_stopped_run_are_one_run_on_needs_you_and_h
     late = stopped_issue(api)                                       # the queued follow-up still waits on it
     assert late['title'] == 'ops has 1 stopped run holding up work'
     assert late['runs'][0]['title'] == 'Ship the receipts fix'
+
+
+def restart_mid_merge(api, machine, attempt):
+    """ops's run merged a pull request from a shell, then the computer restarted: held, a named outside action."""
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'merging'}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}},
+        {'seq': 2, 'kind': 'tool', 'payload': {'tool': 'Bash', 'status': 'started', 'item_id': 'b1',
+                                               'summary': 'gh pr merge 42 --squash'}},
+        {'seq': 3, 'kind': 'tool', 'payload': {'tool': 'Bash', 'status': 'completed', 'item_id': 'b1'}}]}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 3,
+         'text': 'Runner restarted during execution'}, machine['token'])
+    assert job_state(api, attempt['job_id']) == 'uncertain'
+
+
+def held_on_task(api, title='Ship the export'):
+    """The same held run, on a task of ops rather than in a chat."""
+    botops(api)
+    machine = runner(api, 'ana')
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    post(api, 'tasks', {'owner': 'ops', 'title': title, 'body': 'Build it and open the PR.'})
+    attempt = claim(api, machine)
+    restart_mid_merge(api, machine, attempt)
+    with api.app.state.store.read() as c:
+        task_id = c.execute("SELECT id FROM tasks WHERE title=?", (title,)).fetchone()[0]
+    return machine, attempt, task_id
+
+
+def decision_of(api, job_id):
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT detail FROM events WHERE action='job.auto_reconcile' AND target=? ORDER BY rowid",
+                         (job_id,)).fetchall()
+    return [json.loads(row[0]) for row in rows]
+
+
+def test_a_held_bash_run_resumes_after_four_hours_with_the_check_first_note(api):
+    """Part 2. Unreviewed for HELD_REVIEW_HOURS, the held run resumes on its own, the way an update cut does, and its
+    BotOps review closes because nothing is held any more."""
+    machine, message, attempt = held(api)
+    [review] = reviews(api)
+    assert review['status'] == 'open'
+    stopped_two_hours(api, attempt['id'], minutes=241)
+    assert [d['state'] for d in sweep(api)] == ['queued']
+    [decision] = decision_of(api, attempt['job_id'])
+    assert decision['cause'] == 'held' and decision['decision'] == 'resume'
+    assert reviews(api)[0]['status'] == 'done'
+    ready(api, machine, ['ops'])
+    body = claim(api, machine)['message']['body']
+    assert 'Check what already happened first' in body and 'merge pull request' in body
+
+
+def test_a_held_run_under_four_hours_stays_held(api):
+    machine, message, attempt = held(api)
+    stopped_two_hours(api, attempt['id'], minutes=239)
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    assert reviews(api)[0]['status'] == 'open' and decision_of(api, attempt['job_id']) == []
+
+
+def test_a_held_run_on_a_finished_task_is_dismissed(api):
+    """A task done, closed or declined dismisses its held run at once, as before; it does not wait for the four hours."""
+    machine, attempt, task_id = held_on_task(api)
+    aged(api, attempt['id'])
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, H.KEEPER, task_id, status='done', quiet=True, note='Finished by hand.')
+    assert [d['state'] for d in sweep(api)] == ['canceled']
+    [decision] = decision_of(api, attempt['job_id'])
+    assert decision['decision'] == 'dismiss' and 'already done' in decision['note']
+
+
+def test_a_resumed_try_held_again_ends_quietly_with_a_note_on_its_task(api):
+    """Resuming is offered once. The resumed try ends uncertain too: it waits out the four hours like any held run,
+    then ends quietly, with a note on the task and no BotOps task about the stopped runs."""
+    machine, attempt, task_id = held_on_task(api)
+    stopped_two_hours(api, attempt['id'], minutes=241)
+    assert [d['state'] for d in sweep(api)] == ['queued']
+    ready(api, machine, ['ops'])
+    again = claim(api, machine)
+    assert again['job_id'] == attempt['job_id'] and 'merge pull request' in again['message']['body']
+    restart_mid_merge(api, machine, again)
+    stopped_two_hours(api, again['id'], minutes=60)
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'      # held, not yet a third try
+    stopped_two_hours(api, again['id'], minutes=241)
+    assert [d['state'] for d in sweep(api)] == ['canceled']
+    assert [d['decision'] for d in decision_of(api, attempt['job_id'])] == ['resume', 'dismiss']
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM messages WHERE body LIKE 'Ended quietly:%'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Find why %'").fetchone()[0] == 0
+
+
+def test_botops_lists_and_reconciles_a_held_run_on_a_private_task_without_its_words(api):
+    """Part 1. BotOps, as itself, lists another bot's held run and clears it, though the task is private to Ana. The run
+    arrives without its words: no task, request, output or tool calls, as reconcile_job has always allowed."""
+    botops(api)
+    machine = runner(api, 'ana')
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    post(api, 'tasks', {'owner': 'ops', 'title': 'CEO permission findings', 'body': 'Private work.', 'private': True})
+    attempt = claim(api, machine)
+    stop_partway(api, machine, attempt, 'private')
+    aged(api, attempt['id'])
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    with api.app.state.store.transaction() as c:
+        BS.write(c, 'botops', {'name': 'botops', 'runtime': 'fake', 'status': 'active'})
+        c.execute("INSERT OR IGNORE INTO bot_config(bot,owner_id) VALUES('botops','ana')")
+    botops_machine = runner(api, 'ana', label='BotOps Mac')
+    assign(api, botops_machine, 'botops')
+    ready(api, botops_machine, ['botops'])
+    post(api, 'chat/botops', {'text': 'Review the held runs.'}, token='ana-test')
+    botops_turn = claim(api, botops_machine, 'botops')
+    [review] = get(api, 'bots/ops/execution-review', token=botops_turn['token'])['jobs']
+    assert review['id'] == attempt['job_id'] and review['readable'] is False
+    assert review['task'] is None and review['request'] == '' and review['output'] == [] and review['tools'] == []
+    assert review['acted'] == ['Bash']
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'dismiss',
+         'note': 'The shell step already ran; do not repeat it.', 'acknowledge_uncertain_effects': True},
+         token=botops_turn['token'])
+    assert job_state(api, attempt['job_id']) == 'canceled'
+    assert decision_of(api, attempt['job_id'])[-1]['decision'] == 'dismiss'
