@@ -152,10 +152,30 @@ def _stale(c, now):
 
 def _held(c, now, start):
     """Whether a schedule run may not start in this bucket: a run is live, or a run already claimed the bucket. A step-only
-    Run now claims nothing, so it does not hold the bucket for the schedule."""
+    Run now claims nothing, so it does not hold the bucket for the schedule. A stale run is for recover() to release."""
     return live_run(c, now) or c.execute(
-        "SELECT 1 FROM maintenance_runs WHERE started_at>=? AND result<>'abandoned' AND step IS NULL LIMIT 1",
-        (start,)).fetchone()
+        "SELECT 1 FROM maintenance_runs WHERE started_at>=? AND result<>'abandoned' AND step IS NULL "
+        "AND (finished_at IS NOT NULL OR heartbeat_at>=?) LIMIT 1",
+        (start, H.shift(now, minutes=-ABANDONED_MINUTES))).fetchone()
+
+
+def next_due(c, at):
+    """When Maintenance needs the server up: a live run, or the first unclaimed bucket with Find stuck or Update due.
+    Other steps catch up after a wake. Paused runs schedule no wake. Stale runs do not hold a bucket. Reads only."""
+    cfg, now = run_settings(c), _stamp(at)
+    if live_run(c, now):
+        return at
+    if cfg["paused"]:
+        return None
+    steps = [row for key, row in steps_of(c).items() if key in ("find_stuck", "update") and row["enabled"]]
+    if not steps:
+        return None
+    when = next_bucket(cfg["schedule"], at) if _held(c, now, _stamp(bucket(cfg["schedule"], at))) else at
+    for _ in range(24 * 8):          # at most eight days of hourly buckets: a cadence never due wakes no one
+        if any(due(row, when) for row in steps):
+            return when
+        when = next_bucket(cfg["schedule"], when)
+    return None
 
 
 def tick(store, auth, at, failures=None):
