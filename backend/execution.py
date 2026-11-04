@@ -795,16 +795,22 @@ def restart_cause(facts):
 
 def run_limit_minutes(c, attempt_id):
     """Recognize the runner's terminal run-budget cut, never a provider quota or Gateway limit."""
-    row = c.execute("SELECT * FROM attempts WHERE id=?", (attempt_id,)).fetchone()
-    if not row or row['state'] not in ('interrupted', 'expired'):
+    row = c.execute("SELECT state,stop_requested_at,result FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    if not row or row['state'] != 'interrupted' or row['stop_requested_at']:
         return None
     result = json.loads(row['result'] or '{}')
-    if result.get('outcome') != 'interrupted':
+    if result.get('outcome') != 'interrupted' or restart_reported(c, attempt_id):
         return None
-    from .run_diagnostics import reason
-    match = re.fullmatch(r'Timeout: max_run_minutes \(([0-9]+(?:\.[0-9]+)?) minutes\)',
-                         reason(c, row, 'interrupted'))
-    return match[1] if match and float(match[1]) > 0 else None
+    # Recovery reads the terminal report, never the display reason: a pause may explain the run without making
+    # its outside actions safe to repeat. As in diagnostics, the newest terminal cause wins over earlier failures.
+    events = c.execute("SELECT payload FROM attempt_events WHERE attempt_id=? "
+                        "AND kind IN ('error','diagnostic') ORDER BY seq DESC LIMIT 50", (attempt_id,))
+    for event in events:
+        cause = json.loads(event['payload']).get('end_reason')
+        if cause:
+            match = re.fullmatch(r'Timeout: max_run_minutes \(([0-9]+(?:\.[0-9]+)?) minutes\)', str(cause))
+            return match[1] if match and float(match[1]) > 0 else None
+    return None
 
 
 def run_limit_cuts(c, job):

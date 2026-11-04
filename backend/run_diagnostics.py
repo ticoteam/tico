@@ -80,7 +80,7 @@ def reason(c, row: AttemptRow, outcome, summary=''):
     if stop_supersedes(row['stop_requested_at'], outcome):
         from .quarantine_stops import stopped_by
         # A quarantine's Stop reads as the quarantine, never as a lost computer or the keeper (Dev 573).
-        return stopped_by(c, row) or 'Canceled by ' + row['stop_requested_at']
+        return stopped_by(c, row) or f"Canceled by {row['stop_requested_at']}"
     if outcome in ('completed', 'ok'):
         return 'Finished'
     # The computer said it stopped the turn itself (its clean stop), even when its completion never reached the hub.
