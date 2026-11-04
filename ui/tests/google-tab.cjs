@@ -1,7 +1,10 @@
 // Offline browser regression: Settings > Google (ui/google-connect.js) over the contract's GET /v2/google, with a fake
-// hub (ui/tests/support/google-fake.cjs). An admin sets up the Whole Workspace key in three steps, a member sees the
-// account card only, the check polls on a 20 s timer for 10 minutes (Playwright's fake clock), disconnect and replace
-// confirm in the page, and a phone width has no sideways scroll.
+// hub (ui/tests/support/google-fake.cjs). An admin with nothing set up is asked one question (one account at a time or
+// the whole Workspace) and sees only the path picked; a path already set up skips the question. Each path's setup is a
+// prompt for the person's own agent by default (the Workspace one makes its setup code only on Make prompt), or the
+// steps by hand: the Whole Workspace key in three steps, the check polling on a 20 s timer for 10 minutes (Playwright's
+// fake clock), disconnect and replace confirming in the page. One account at a time lists the team with a link to copy,
+// and sends nothing. A member sees their own account only, and a phone width has no sideways scroll.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -28,9 +31,16 @@ const SHELL = {
 // Opens Settings > Google on a fresh page. `clock` installs Playwright's fake timers before the page loads.
 async function open(browser, fake, {width = 1440, clock = false} = {}) {
   const page = await browser.newPage({viewport: {width, height: 900}, serviceWorkers: 'block'});
-  const seen = {errors: [], dialogs: 0};
+  const seen = {errors: [], dialogs: 0, sent: []};
   page.on('pageerror', error => seen.errors.push(error.message));
   page.on('dialog', dialog => { seen.dialogs += 1; void dialog.accept(); });
+  // Every write the page makes, to any route: a copied link must add none.
+  page.on('request', request => { if (request.method() !== 'GET') seen.sent.push(`${request.method()} ${new URL(request.url()).pathname}`); });
+  // The clipboard, kept in the page so a test can read what was copied.
+  await page.addInitScript(() => {
+    window.__copied = [];
+    Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async text => { window.__copied.push(text); }}});
+  });
   if (clock) await page.clock.install({time: new Date()});
   await page.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), p = url.pathname;
@@ -52,9 +62,22 @@ async function open(browser, fake, {width = 1440, clock = false} = {}) {
   });
   await page.goto('https://tico-ui.test/#/settings');
   await page.locator('[data-settings-tab=inbox]').click();
-  await page.locator('#set-google [data-google-card]').first().waitFor();
+  await page.locator('#set-google .google-card').first().waitFor();
   return {page, seen};
 }
+
+// The admin's pick when nothing is set up yet, then (optionally) the by-hand steps instead of the agent prompt.
+async function pick(page, path, {self = false} = {}) {
+  await page.locator(`[data-google-pick=${path}]`).click();
+  await page.locator(`[data-google-card=${path === 'workspace' ? 'workspace' : 'account'}]`).waitFor();
+  if (self) await bySelf(page, path);
+}
+async function bySelf(page, path) {
+  await page.locator(`[data-google-how=self][data-google-path=${path}]`).click();
+  await page.locator(`[data-google-how=self][data-google-path=${path}][aria-pressed=true]`).waitFor();
+}
+const cards = page => page.$$eval('#set-google [data-google-card]', els => els.map(el => el.dataset.googleCard));
+const LINK = 'https://tico-ui.test/#/settings/google';
 
 const until = async (check, what, ms = 8000) => {
   const end = Date.now() + ms;
@@ -68,20 +91,122 @@ const KEY = {type: 'service_account', private_key_id: 'KEYMARK-7731', client_ema
 const keyFile = {name: 'key.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(KEY))};
 
 const scenarios = {
-  'admin starts at step 1 under the Google tab': async browser => {
+  'an admin with nothing set up is asked how, and each pick shows only its path': async browser => {
     const fake = googleFake();
     const {page, seen} = await open(browser, fake);
     assert.equal((await page.locator('[data-settings-tab=inbox]').innerText()).trim(), 'Google');
     assert.equal((await page.locator('#settings-inbox h2').innerText()).trim(), 'Google');
+    assert.match(await page.locator('[data-google-choose]').innerText(), /How do you want to connect Google\?/);
+    assert.equal(await page.locator('[data-google-pick]').count(), 2);
+    assert.deepEqual(await cards(page), [], 'no path shows before the pick');
+    await pick(page, 'accounts');
+    assert.deepEqual(await cards(page), ['account']);
+    assert.equal(await page.locator('[data-google-choose]').count(), 0);
+    await page.locator('[data-google-switch]', {hasText: 'Use the other way'}).click();
+    await page.locator('[data-google-card=workspace]').waitFor();
+    assert.deepEqual(await cards(page), ['workspace']);
     assert.equal(await page.locator('[data-ws-step=create]').count(), 1);
-    assert.equal(await page.locator('[data-ws-command]').count(), 1);
-    assert.equal(await page.locator('[data-oauth-setup]').count(), 1, 'no OAuth client yet, so the guided panel shows');
+    await page.locator('[data-google-switch]').click();
+    await page.locator('[data-google-card=account]').waitFor();
+    assert.deepEqual(await cards(page), ['account']);
+    assert.equal(writesTo(fake, '/api/v2/google/workspace/setup-code').length, 0, 'picking and switching make no code');
+    assert.deepEqual(seen.errors, []);
+  },
+
+  'one account at a time: the agent prompt is the default and names the redirect URI and this tab': async browser => {
+    const fake = googleFake();
+    const {page, seen} = await open(browser, fake);
+    await pick(page, 'accounts');
+    assert.equal(await page.locator('[data-google-how=agent][data-google-path=accounts]').getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.locator('[data-oauth-form]').count(), 0, 'the by-hand steps wait for Set it up myself');
+    const prompt = await page.locator('[data-google-prompt=accounts] textarea').inputValue();
+    assert.ok(prompt.includes('https://tico-ui.test/api/v2/mail/google/callback'), prompt);
+    assert.ok(prompt.includes(LINK), prompt);
+    assert.match(prompt, /acme\.example/);
+    await page.locator('[data-google-prompt=accounts] [data-copy-prompt]').click();
+    await page.waitForFunction(text => window.__copied.at(-1) === text, prompt);
+    await bySelf(page, 'accounts');
+    await page.locator('[data-oauth-form]').waitFor();
+    assert.equal(await page.locator('[data-google-prompt]').count(), 0);
+    assert.equal(fake.peopleReads, 0, 'no team list before Google sign-in is set up');
+    assert.deepEqual(seen.errors, []);
+  },
+
+  'Whole Workspace: Make prompt is the default, and only its click makes a code, which the prompt holds': async browser => {
+    const fake = googleFake();
+    const {page, seen} = await open(browser, fake);
+    await pick(page, 'workspace');
+    assert.equal(await page.locator('[data-google-how=agent][data-google-path=workspace]').getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.locator('[data-ws-command]').count(), 0);
+    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
+    await page.waitForTimeout(300);
+    assert.equal(writesTo(fake, '/api/v2/google/workspace/setup-code').length, 0, 'a render makes no code');
+    await page.locator('[data-ws-prompt]').click();
+    await page.locator('[data-google-prompt=workspace] textarea').waitFor();
+    const prompt = await page.locator('[data-google-prompt=workspace] textarea').inputValue();
+    assert.ok(prompt.includes('curl -fsSL https://tico-ui.test/api/v2/google/setup.sh | bash -s -- code1'), prompt);
+    assert.match(prompt, /valid \d+ minutes, one use/);
+    assert.match(prompt, /super admin of acme\.example/);
+    assert.ok(prompt.includes(LINK), prompt);
+    assert.equal(writesTo(fake, '/api/v2/google/workspace/setup-code')[0].body.domain, 'acme.example');
+    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
+    await page.waitForTimeout(300);
+    assert.equal(writesTo(fake, '/api/v2/google/workspace/setup-code').length, 1, 'a re-render makes no second code');
+    // The agent runs it; the key lands and the prompt, with its code, goes.
+    fake.state.workspace = row('pending', {generation: 2});
+    await page.locator('[data-ws-step=allow]').waitFor({timeout: 15000});
+    assert.equal(await page.locator('[data-google-prompt]').count(), 0);
+    assert.doesNotMatch(await page.locator('#set-google').innerText(), /code1/);
+    assert.deepEqual(seen.errors, []);
+  },
+
+  'a path already set up skips the question, and both show the Workspace first': async browser => {
+    const fake = googleFake();
+    fake.state.workspace = row('connected');
+    let {page, seen} = await open(browser, fake);
+    assert.equal(await page.locator('[data-google-choose]').count(), 0);
+    assert.deepEqual(await cards(page), ['workspace']);
+    await page.locator('[data-google-switch]', {hasText: 'Also set up One account at a time'}).click();
+    await page.locator('[data-google-card=account]').waitFor();
+    assert.deepEqual(await cards(page), ['workspace', 'account']);
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+    fake.state.oauth = {...fake.state.oauth, configured: true, source: 'env', client_id: 'acme-client-id'};
+    ({page, seen} = await open(browser, fake));
+    assert.equal(await page.locator('[data-google-choose]').count(), 0);
+    assert.deepEqual(await cards(page), ['workspace', 'account']);
+    assert.equal(await page.locator('[data-google-switch]').count(), 0);
+    assert.match(await page.locator('[data-acct-step=signin]').innerText(), /Done\. Set on the server\./);
+    assert.deepEqual(seen.errors, []);
+  },
+
+  'Your team: each person\'s state, and Copy link copies this tab\'s link and sends nothing': async browser => {
+    const fake = googleFake();
+    fake.state.oauth = {...fake.state.oauth, configured: true, source: 'settings', client_id: 'acme-client-id'};
+    const {page, seen} = await open(browser, fake);
+    await page.locator('.google-team li').first().waitFor();
+    assert.equal(await page.locator('[data-google-person=ana]').count(), 0, 'you are step 2, not the team list');
+    const status = id => page.locator(`[data-google-person=${id}] .google-team-status`).innerText();
+    assert.equal(await status('ben'), 'Not connected');
+    assert.equal(await status('cara'), 'Covered by Workspace');
+    assert.equal(await status('dan'), 'Connecting');
+    assert.equal(await page.locator('[data-google-person=ben] [data-copy-link]').count(), 1);
+    assert.equal(await page.locator('[data-google-person=cara] [data-copy-link]').count(), 0);
+    assert.equal(await page.locator('[data-google-person=dan] [data-copy-link]').count(), 0);
+    const before = seen.sent.length;
+    await page.locator('[data-google-person=ben] [data-copy-link]').click();
+    await page.waitForFunction(link => window.__copied.at(-1) === link, LINK);
+    await page.waitForTimeout(300);
+    const outgoing = /message|thread|mail|email|invite|notif|google|slack|sms/;
+    assert.deepEqual(seen.sent.slice(before).filter(sent => outgoing.test(sent)), [], 'copying a link sends nothing');
+    assert.deepEqual(fake.writes, [], 'nothing is written to anyone');
     assert.deepEqual(seen.errors, []);
   },
 
   'New command makes one code, and re-opening the tab makes none': async browser => {
     const fake = googleFake();
     const {page, seen} = await open(browser, fake);
+    await pick(page, 'workspace', {self: true});
     await page.locator('[data-ws-command]').click();
     await page.locator('.machine-command code', {hasText: 'bash -s -- code1'}).waitFor();
     // Settings calls the mount on every visit to the tab; it is the same call.
@@ -95,6 +220,7 @@ const scenarios = {
   'uploading the key shows the delegation step, and the key never shows': async browser => {
     const fake = googleFake();
     const {page, seen} = await open(browser, fake);
+    await pick(page, 'workspace', {self: true});
     await page.locator('[data-ws-file]').setInputFiles(keyFile);
     await page.locator('[data-ws-step=allow]').waitFor();
     const link = await page.locator('a.primary', {hasText: 'Open Google Admin'}).getAttribute('href');
@@ -110,6 +236,7 @@ const scenarios = {
   'a New command waits for the key, then the steps follow without a reload': async browser => {
     const fake = googleFake();
     const {page, seen} = await open(browser, fake);
+    await pick(page, 'workspace', {self: true});
     await page.locator('[data-ws-command]').click();
     await page.locator('.machine-command code', {hasText: 'bash -s -- code1'}).waitFor();
     // The script uploads the key on the computer, the way Cloud Shell does; the card polls until it lands.
@@ -156,24 +283,38 @@ const scenarios = {
     const fake = googleFake();
     fake.state.setup = {base: 'https://tico-ui.test', reachable: false};
     const {page, seen} = await open(browser, fake);
+    await pick(page, 'workspace');
     assert.equal(await page.locator('[data-ws-command]').count(), 0);
+    assert.equal(await page.locator('[data-google-how]').count(), 0, 'no command, so no agent prompt either');
     assert.match(await page.locator('[data-ws-step=create]').innerText(), /Cloud Shell can't reach this server/);
     assert.equal(await page.locator('[data-ws-file]').count(), 1);
     assert.deepEqual(seen.errors, []);
   },
 
-  'a member sees only the account card, and is asked to ask an admin': async browser => {
+  'a member sees only their own account, never the question or the setup': async browser => {
     const fake = googleFake();
     fake.state.can_admin = false;
-    const {page, seen} = await open(browser, fake);
+    let {page, seen} = await open(browser, fake);
+    assert.equal(await page.locator('[data-google-choose]').count(), 0);
     assert.equal(await page.locator('[data-google-card=workspace]').count(), 0);
-    assert.match(await page.locator('[data-google-card=account]').innerText(), /Ask an admin to set up Google\./);
+    assert.equal(await page.locator('[data-google-how], [data-oauth-setup], [data-google-switch]').count(), 0);
+    assert.match(await page.locator('[data-google-card=account]').innerText(), /Ask an admin to set up Google in Settings > Google\./);
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+    // With Google sign-in set up: Connect your account, and no team list.
+    fake.state.oauth = {...fake.state.oauth, configured: true, source: 'settings', client_id: 'acme-client-id'};
+    ({page, seen} = await open(browser, fake));
+    assert.equal((await page.locator('[data-google-card=account] h3').innerText()).trim(), 'Connect your account');
+    assert.equal(await page.locator('[data-google-disconnect]').count(), 1);
+    assert.equal(await page.locator('.google-team, [data-oauth-remove], [data-google-choose]').count(), 0);
+    assert.equal(fake.peopleReads, 0, 'a member never reads the team list');
     assert.deepEqual(seen.errors, []);
   },
 
   'the OAuth client panel saves, and the console links need a valid project': async browser => {
     const fake = googleFake();
     const {page, seen} = await open(browser, fake);
+    await pick(page, 'accounts', {self: true});
     await page.locator('[data-oauth-project]').fill('Bad Project!');
     assert.equal(await page.locator('[data-oauth-link=overview]').getAttribute('href'), null);
     await page.locator('[data-oauth-project]').fill('tico-mail-a1b2c3');
@@ -187,6 +328,10 @@ const scenarios = {
     await until(() => writesTo(fake, '/api/v2/google/oauth-client', 'PUT').length === 1, 'the OAuth client save');
     assert.equal(writesTo(fake, '/api/v2/google/oauth-client', 'PUT')[0].body.client_id, 'acme-client-id');
     await page.locator('[data-oauth-form]').waitFor({state: 'detached'});
+    // Step 1 is done; steps 2 and 3 fill in.
+    await page.locator('[data-acct-step=signin] [data-oauth-remove]').waitFor();
+    await page.locator('[data-acct-step=you] [data-google-disconnect]').waitFor();
+    await page.locator('.google-team li').first().waitFor();
     assert.deepEqual(seen.errors, []);
   },
 
@@ -248,6 +393,7 @@ const scenarios = {
     fake.state.workspace = row('connected');
     const {page, seen} = await open(browser, fake);
     await page.locator('[data-ws-replace]').click();
+    await bySelf(page, 'workspace');
     await page.locator('[data-ws-command]').click();
     await page.locator('[data-ws-step=create] code', {hasText: 'bash -s -- code1'}).waitFor();
     await page.locator('[data-ws-replace-cancel]').click();
@@ -264,6 +410,7 @@ const scenarios = {
     fake.state.workspace = row('connected');
     const {page, seen} = await open(browser, fake);
     await page.locator('[data-ws-replace]').click();
+    await bySelf(page, 'workspace');
     await page.locator('[data-ws-command]').click();
     await page.locator('[data-ws-step=create] code', {hasText: 'bash -s -- code1'}).waitFor();
     fake.state.pending = row('pending', {generation: 2});
@@ -314,6 +461,7 @@ const scenarios = {
     fake.state.pending = row('pending', {generation: 2});
     const {page, seen} = await open(browser, fake);
     await page.locator('[data-ws-replace]').click();
+    await bySelf(page, 'workspace');
     await page.locator('[data-ws-command]').click();
     await page.locator('[data-ws-step=create] code', {hasText: 'bash -s -- code1'}).waitFor();
     // Settings is left: nothing reads the state while the tab is hidden. The script's key uploads and is checked meanwhile.
@@ -347,7 +495,7 @@ const scenarios = {
     await page.locator('[data-oauth-remove]').click();
     await page.locator('[data-oauth-remove-confirm]').waitFor();
     await page.locator('[data-oauth-remove-yes]').click();
-    await page.locator('[data-oauth-setup]').waitFor();
+    await page.locator('[data-acct-step=signin] [data-google-prompt=accounts]').waitFor();
     assert.equal(writesTo(fake, '/api/v2/google/oauth-client', 'DELETE').length, 1);
     assert.equal(seen.dialogs, 0);
     assert.deepEqual(seen.errors, []);
@@ -360,7 +508,7 @@ const scenarios = {
     const {page, seen} = await open(browser, fake);
     assert.match(await page.locator('[data-google-card=account]').innerText(), /Sign in as a person to connect your own mailbox\./);
     assert.equal(await page.locator('[data-google-connect]').count(), 0);
-    assert.equal(await page.locator('[data-google-card=workspace]').count(), 1);
+    assert.deepEqual(await cards(page), ['account'], 'Google sign-in is set up, so that path shows alone');
     assert.deepEqual(seen.errors, []);
   },
 

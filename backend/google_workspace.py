@@ -336,6 +336,8 @@ KEEP_PATH = "/api/v2/google/workspace/key/keep"
 CHECK_PATH = "/api/v2/google/workspace/check"
 WORKSPACE_PATH = "/api/v2/google/workspace"
 OAUTH_PATH = "/api/v2/google/oauth-client"
+PEOPLE_PATH = "/api/v2/google/people"
+PEOPLE_MAX = 500                # the team list's cap; `more` says when people were left out
 KEY_KINDS = ("unauthorized_client", "other")   # a refusal about the key itself, not about one mailbox
 _BAD = []                       # epoch seconds of recent wrong codes
 _LOCKOUT = {"until": 0.0}
@@ -672,6 +674,46 @@ def _reachable(settings):
     return (urllib.parse.urlsplit(settings.runner_url).hostname or "") not in LOOPBACK
 
 
+IN_FLIGHT = ("signing_in", "ready", "finishing", "disconnecting", "revoking")
+
+
+def _person_status(grant, mailbox, row):
+    """One person's Google state for the team list, by the same rule as `authority`: a live personal grant first, then
+    the Workspace key's domain, then any Connect Google attempt under way or failed."""
+    if grant and str(grant["mailbox"] or "").lower() != mailbox:
+        grant = None                    # their mailbox changed since: that connection is for another address
+    status = grant["status"] if grant else None
+    if grant and grant["holder"] and grant["grant_hash"] and status != "disconnected":
+        return {"connected": "connected", "failed": "failing"}.get(status, "pending")
+    if row and _domain(mailbox) == row["domain"]:
+        return "workspace"
+    if status in IN_FLIGHT:
+        return "pending"
+    return "failing" if status == "failed" else "none"
+
+
+def team_statuses(c):
+    """Every person on the roster with a mailbox (people, never bots; nobody hidden or gone from the directory), and
+    whether their mailbox is connected: one read of google_connects, nothing asked of Google. Sorted by name, capped."""
+    from .views import roster
+    people = roster(c)
+    boxes = routines.message_bot_mailboxes(c, people)
+    row = active(c)
+    grants = {r["person_id"]: r for r in c.execute(
+        "SELECT person_id,mailbox,status,holder,grant_hash FROM google_connects")}
+    out = []
+    for person in people.get("people") or []:
+        if person.get("hidden") or person.get("directory_left"):
+            continue
+        mailbox = routines.mailbox_of(person, boxes)
+        if not routines.MAILBOX.fullmatch(mailbox):
+            continue
+        out.append({"person_id": person["id"], "name": person.get("name") or person["id"], "mailbox": mailbox,
+                    "status": _person_status(grants.get(person["id"]), mailbox, row)})
+    out.sort(key=lambda p: (p["name"].lower(), p["person_id"]))
+    return {"people": out[:PEOPLE_MAX], "more": len(out) > PEOPLE_MAX}
+
+
 def install(app, store):
     """Settings > Google's Workspace routes. Installed after install_credentials, so the vault is there to seal with.
     None of them goes through `mutate`: each one checks its own rights (an admin, or a setup code)."""
@@ -727,6 +769,16 @@ def install(app, store):
             return {"can_admin": administrator(c, who, settings.credential_admins), "workspace": workspace,
                     "pending": waiting, "oauth": _oauth_view(c, settings), "me": me,
                     "setup": {"base": settings.runner_url, "reachable": _reachable(settings)}}
+
+    @app.get(PEOPLE_PATH)
+    def team_google(request: Request):
+        """Settings > Google's team list, for an admin: each person with a mailbox, and whether it is connected
+        (`connected`, `none`, `pending`, `failing`, or `workspace` when the Workspace key covers it)."""
+        who = request.state.identity
+        with store.read() as c:
+            if not administrator(c, who, settings.credential_admins):
+                raise Problem("forbidden", "Only an admin sees the team's Google connections", 403)
+            return team_statuses(c)
 
     @app.post(CODE_PATH)
     def make_setup_code(request: Request, body: DomainBody):

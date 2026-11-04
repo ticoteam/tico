@@ -1,6 +1,7 @@
 // A fake of the Google tab's routes (the contract in _brief-google-contract.md) for ui/tests/google-tab.cjs.
 // answer(path, url, method, body) gives the JSON a route answers, or undefined for any other path, as threadsFake does.
-// `fake.state` is what GET /v2/google sends and a test sets it directly; `fake.personal` is the person's own state.
+// `fake.state` is what GET /v2/google sends and a test sets it directly; `fake.personal` is the person's own state, and
+// `fake.people` the team list GET /v2/google/people sends (an admin's only; `fake.peopleReads` counts its reads).
 // Every write is kept in `fake.writes` as {method, path, body}. `fake.checks` is a queue of answers for the next
 // POST /workspace/check: 'ok', 'unauthorized' (the default when the queue is empty) or 'other'.
 // Every key view and setup code carries a `generation` (row() gives 1 unless set). A new key or code takes the next one.
@@ -19,7 +20,13 @@ const row = (status, over = {}) => ({status, domain: 'acme.example', project_id:
 exports.row = row;
 exports.googleFake = () => {
   const fake = {
-    writes: [], checks: [], codes: 0, gen: 0, personal: null,
+    writes: [], checks: [], codes: 0, gen: 0, personal: null, peopleReads: 0,
+    people: [
+      {person_id: 'ana', name: 'Ana', mailbox: 'ana@acme.example', status: 'connected'},
+      {person_id: 'ben', name: 'Ben', mailbox: 'ben@acme.example', status: 'none'},
+      {person_id: 'cara', name: 'Cara', mailbox: 'cara@acme.example', status: 'workspace'},
+      {person_id: 'dan', name: 'Dan', mailbox: 'dan@acme.example', status: 'pending'},
+    ],
     state: {
       can_admin: true, workspace: null, pending: null,
       me: {mailbox: 'ana@acme.example', covered_by_workspace: false},
@@ -35,6 +42,10 @@ exports.googleFake = () => {
     const s = fake.state;
     if (method !== 'GET') fake.writes.push({method, path: p, body});
     if (p === '/api/v2/google' && method === 'GET') return structuredClone(s);
+    if (p === '/api/v2/google/people' && method === 'GET') {
+      fake.peopleReads += 1;
+      return s.can_admin ? {people: structuredClone(fake.people), more: false} : undefined;
+    }
     if (p === '/api/v2/google/workspace/setup-code' && method === 'POST') {
       fake.codes += 1;
       return {code: `code${fake.codes}`, command: `curl -fsSL https://tico-ui.test/api/v2/google/setup.sh | bash -s -- code${fake.codes}`,

@@ -412,21 +412,36 @@ See [Computer sign-in and diagnostics](install.md#linux-or-cloud-server-docker).
 
 ### Set up Google in Settings
 
-Settings > Google has two cards.
+Settings > Google first asks an admin **How do you want to connect Google?**, until one way is set up:
+
+- **One account at a time**: each person signs in with Google, starting with you.
+- **Whole Workspace**: a Google admin connects every mailbox in the domain at once.
+
+Only the way picked shows; **Use the other way** switches. Once a way is set up, Settings > Google opens on it, and
+**Also set up …** adds the other. With both set up, Whole Workspace shows first, since it covers the mailboxes. Someone
+who isn't an admin never sees the question or the setup: only **Connect your account**, or, before an admin has set
+Google up, a line asking them to.
+
+Each way's setup offers **Have my agent do it** (the default) and **Set it up myself**. The first shows a prompt to copy
+into your own coding agent (Claude Code, Codex, or any agent with a browser or `gcloud`); the second shows the steps
+below.
 
 **Whole Workspace** lets Tico read the mailboxes of your Google Workspace through one service account. A Workspace admin does this once:
 
-1. Click **New command**, click **Open Cloud Shell**, and paste the command there. If you belong to more than one organization, Cloud Shell asks which one to use. The command makes a service account in a Google Cloud project for Tico, turns on Gmail and Calendar for it, and sends its key to Tico. It never shows the key. If an organization policy blocks service account keys, the command turns that rule off for that project only.
-2. Back in Tico, click **Open Google Admin**. Add the client ID and scopes shown in Tico, then click **Authorize**.
-3. Under **Mailbox to check**, enter one covered mailbox and click **Check**. When Google accepts the key, Tico shows the mailbox as connected. If Google hasn't accepted it yet, Tico lists what to check and keeps checking every 20 seconds for 10 minutes.
+1. **Run one command in Cloud Shell.** Click **New command**, click **Open Cloud Shell**, and paste the command there (or click **Make prompt** to hand the same command to your agent, with what to do after it). If you belong to more than one organization, Cloud Shell asks which one to use. The command makes a service account in a Google Cloud project for Tico, turns on Gmail and Calendar for it, and sends its key to Tico. It never shows the key. If an organization policy blocks service account keys, the command turns that rule off for that project only. A setup command works once and expires after 30 minutes; each New command or Make prompt makes a new one, and an older one stops working. **Or upload a key file** takes a key you made yourself.
+2. **Authorize in Google Admin.** Back in Tico, click **Open Google Admin**. Add the client ID and scopes shown in Tico, then click **Authorize**. An admin clicks this themselves; an agent can't.
+3. **Check.** Under **Mailbox to check**, enter one covered mailbox and click **Check**. When Google accepts the key, Tico shows the mailbox as connected. If Google hasn't accepted it yet, Tico lists what to check and keeps checking every 20 seconds for 10 minutes.
 
 To change the key later, click **Replace key**. **Disconnect** stops Tico reading every covered mailbox.
 
-**Your account** lets each person connect their own mailbox ([Connect your Google account](#connect-your-google-account)). It needs Tico's Google app, which an admin sets up once for the server:
+**One account at a time** lets each person connect their own mailbox ([Connect your Google account](#connect-your-google-account)), in three steps:
 
-1. Enter the Google Cloud project ID, then open **Auth overview** and fill in the app name, support email and audience.
-2. Open **Create a client**, choose Web application, and add the redirect URI that Tico shows.
-3. Paste the client ID and client secret, then click **Save**.
+1. **Set up Google sign-in (once)**, for everyone on the server. The agent prompt names the redirect URI and this page; Google has no `gcloud` command for these OAuth web clients, so the agent needs a browser. By hand:
+   1. Enter the Google Cloud project ID, then open **Auth overview** and fill in the app name, support email and audience.
+   2. Open **Create a client**, choose Web application, and add the redirect URI that Tico shows.
+   3. Paste the client ID and client secret, then click **Save**.
+2. **Connect your account**: **Connect Google** for your own mailbox.
+3. **Your team**: everyone else with a mailbox, as Connected, Not connected, Connecting, Failing or Covered by Workspace. **Copy link** copies the link to Settings > Google to send them yourself; Tico sends nothing. Each person connects their own mailbox.
 
 Choose the audience in step 1:
 - **Internal**: only accounts in your domain. Gmail needs no Google verification. It needs a project in your organization.
@@ -637,7 +652,7 @@ Use these instead of the Settings steps above when you make the Google key yours
 
 **Tico's Google app on a server you run**
 
-The server's operator can set Tico's OAuth client in its environment, `TICO_GOOGLE_OAUTH_CLIENT_ID` and `TICO_GOOGLE_OAUTH_CLIENT_SECRET`, as a Web application client whose redirect URI is `<TICO_PUBLIC_URL>/api/v2/mail/google/callback`. Settings > Google can set the same client under **Your account**. When the environment sets it, the card says Set on the server and can't change it. Until one of them is set, Connect Google isn't set up on this server. A self-hosted team may use its own client the same way, or connect from the runner with `scripts/mail.sh google connect --mailbox <address> --client-file client.json` (a Desktop app client). `google status`, `google revoke` and `doctor` list, remove and check grants there.
+The server's operator can set Tico's OAuth client in its environment, `TICO_GOOGLE_OAUTH_CLIENT_ID` and `TICO_GOOGLE_OAUTH_CLIENT_SECRET`, as a Web application client whose redirect URI is `<TICO_PUBLIC_URL>/api/v2/mail/google/callback`. Settings > Google can set the same client under **One account at a time**. When the environment sets it, the card says Set on the server and can't change it. Until one of them is set, Connect Google isn't set up on this server. A self-hosted team may use its own client the same way, or connect from the runner with `scripts/mail.sh google connect --mailbox <address> --client-file client.json` (a Desktop app client). `google status`, `google revoke` and `doctor` list, remove and check grants there.
 
 ## Turning sending on
 
