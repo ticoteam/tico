@@ -625,6 +625,10 @@ STABLE = [
      "A limit on the estimated spend of a group's bots together, nested groups included; null removes a field, one left out stays. Over it, none "
      "of them takes a new job (owner and bot administrators; also the lead of the group or one above "
      "it, within the parent group's limit)", "UsagePoolLimit"),
+    ("/api/v2/usage/queues/purge", "post", "Usage", "purgeAutomaticQueue",
+     "Cancel queued automatic wakes and waits for the whole team (scope company) or one group and the groups under it "
+     "(scope group:<id>). Tasks stay on their current step. Messages from people, and keeper notices of a person's own "
+     "act, stay queued. A run that has already started finishes (owner and bot administrators)", "QueuePurgeResult"),
     ("/healthz", "get", "Health", "getLiveness", "Is the server up (no sign-in)", None),
     ("/api/v2/health", "get", "Health", "getHealth", "Checks, computers and failures (bots see counts, computers and failed runs)", "Health"),
     ("/api/v2/health-monitor", "get", "Health", "getHealthMonitor",
@@ -651,6 +655,14 @@ STABLE = [
      "business) or its daily time", "SystemRoutineUpdate"),
     ("/api/v2/system-routines/{key}/run", "post", "Health", "runSystemRoutine",
      "The owner or an admin: run one controlled system routine once, now; 409 while it is off or already running", None),
+    ("/api/v2/maintenance", "get", "Health", "getMaintenance",
+     "The Maintenance run: its schedule, pause and monthly judge cap, each step with its switch, how often it runs and its cursor, the last run, the live run, the next run, and whether the viewer may change it", None),
+    ("/api/v2/maintenance", "patch", "Health", "saveMaintenance",
+     "The owner or an admin: change the schedule, the pause or the monthly cap, and each step's switch, how often it runs or its number of bots. Only what is sent changes", "MaintenanceUpdate"),
+    ("/api/v2/maintenance/runs", "get", "Health", "listMaintenanceRuns",
+     "Maintenance runs, newest first, a page at a time, each with its step rows. Pass `next` back as `before`", None),
+    ("/api/v2/maintenance/run", "post", "Health", "runMaintenance",
+     "The owner or an admin: run now, every step or only `step`, due by the same rules as a scheduled run; a run already live is returned instead of a second one", "MaintenanceRunRequest"),
     ("/api/v2/threads/{thread_id}/catch-up", "post", "Conversations", "catchUpThread",
      "What is new in a thread (scope subtree: its sub-threads too) that you may read, summarized and posted to your "
      "Assistant DM; the newest 40 messages at most. Nothing new posts nothing", "CatchUpResult"),
@@ -1367,6 +1379,8 @@ SCHEMAS = {
                                   "with may_edit true", "additionalProperties": True},
                         "bots": {"type": "object", "additionalProperties": ref("UsageLimitView")}}),
     "BotUsageLimit": obj({"bot": "s", "limit": ref("UsageLimitView")}),
+    "QueuePurgeResult": obj({"scope": {"type": "string", "description": "company, or group:<id>"},
+                             "cancelled": "i", "kept_people": "i", "still_running": "i"}),
     "Token": obj({"access_token": "s", "token_type": "s", "expires_in": "i", "idle_timeout": "i", "person": "s"}),
     "Revoked": obj({"revoked": "b"}),
 }
