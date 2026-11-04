@@ -37,6 +37,7 @@ cloud machine" under Computer).
   `repository_unpublished`. That happens when the bot's history exists only on its current computer, GitHub does not have it,
   and the new machine has no copy. If no cloud machine exists yet, the refusal comes before one is made, so nothing is billed.
   The message says what to do: create the bot's repository on GitHub, and the computer then publishes its history.
+  The bot editor puts the machine back and shows the message in a toast.
 - A move waits, with no error, while a run is still going on the bot's old computer. The change is saved, and the bot moves
   once that run ends.
 - Bots on one machine share its disk and `sudo`: they are one trust group, like bots sharing a computer today. Put a
