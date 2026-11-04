@@ -164,6 +164,10 @@ _PARTIES = ("owner_id", "requester_id", "waiting_on", "guest")
 # (trigger name, event, table, WHEN or None, body). One list, so a new source is one more line. A table that does not exist is
 # skipped, and a trigger whose definition changed is replaced at the next start.
 TRIGGERS = [
+    ("changes_meeting_task_links_insert", "INSERT", "meeting_task_links", None,
+     _row("tasks", "meetings", "NEW.task_id")),
+    ("changes_meeting_task_links_delete", "DELETE", "meeting_task_links", None,
+     _row("tasks", "meetings", "OLD.task_id")),
     ("changes_tasks_insert", "INSERT", "tasks", None,
      _row("tasks", "insert", "NEW.id") + _needs("task", *("NEW." + p for p in _PARTIES))),
     ("changes_tasks_update", "UPDATE", "tasks", None,

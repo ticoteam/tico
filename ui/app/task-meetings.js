@@ -1,0 +1,26 @@
+'use strict';
+
+// Re-read on task redraw so a meeting's current visibility decides whether its link appears.
+function taskMeetingsAdopt(d, task) {
+  const slot = $('[data-task-meetings]', d);
+  if (!slot) return;
+  d.tmEl = slot;
+  const rows = [];
+  const load = async cursor => {
+    const query = new URLSearchParams({limit: '20'});
+    if (cursor) query.set('cursor', cursor);
+    const result = await get(`/v2/tasks/${encodeURIComponent(task.id)}/meetings?${query}`);
+    if (d.tmEl !== slot || !slot.isConnected) return;
+    rows.push(...(result.meetings || []));
+    slot.hidden = !rows.length;
+    slot.innerHTML = `<h3 class="rail-h">Meetings</h3><div class="tlinks">${rows.map(m =>
+      `<span class="tlink"><span>${esc(m.title)}</span> <span class="muted">${esc(String(m.started_at || '').slice(0, 10))}</span> <a href="#/meetings?meeting=${encodeURIComponent(m.meeting_id)}">Open</a></span>`).join('')}</div>${result.next_cursor ? '<button class="linkish" type="button" data-meetings-more>More</button>' : ''}`;
+    const more = $('[data-meetings-more]', slot);
+    if (more) more.onclick = async () => {
+      more.disabled = true;
+      try { await load(result.next_cursor); }
+      catch (e) { more.disabled = false; toast(e.message, true); }
+    };
+  };
+  load().catch(() => {});
+}

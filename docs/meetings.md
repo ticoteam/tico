@@ -1,5 +1,23 @@
 # Meetings
 
+## Linked tasks
+
+`hub meeting link <meeting> <task>...` links existing tasks. `hub meeting unlink <meeting> <task>` removes a link;
+`hub task meetings <task>` lists the meetings you can open. Their MCP equivalents are `hub_meeting_link`,
+`hub_meeting_unlink` and `hub_task_meetings`. Links preserve each meeting and task's own access.
+
+`GET /api/v2/meetings/{id}/tasks` returns `{tasks, next_cursor}`; `POST` on that path takes
+`{task_ids: [id, ...], kind: "linked"}` (up to 20). `kind: "sent"` is only for tasks you requested.
+`DELETE /api/v2/meetings/{id}/tasks/{task_id}` removes the pair. The linker, meeting owner, task owner or requester,
+or org owner may remove it. Writes require an `Idempotency-Key`.
+`GET /api/v2/tasks/{id}/meetings` returns `{meetings, next_cursor}`, newest meeting first.
+Both lists take `limit` (20 by default, at most 50) and `cursor`, cap titles at 200 characters and answers at 64 KB,
+and return no totals. Pending meetings cannot have links. Deleted meetings disappear until restored.
+
+The web meeting's **Tasks** section shows linked tasks under pending items. A task's **Meetings** section shows
+its readable meetings and is hidden when empty. Search existing tasks with `GET /api/v2/tasks?q=<title words or #N>`
+(or `hub task list --q ...`), under the task list's existing filters and access checks.
+
 **Meetings** is where the team's meeting transcripts live. Tico does not record: humans already
 have Granola, Zoom, Google Meet, Otter, Fireflies or Close for that. Tico takes what those tools
 produce, keeps it in one list, and turns it into work. How the pieces fit:

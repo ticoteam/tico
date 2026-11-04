@@ -18,7 +18,7 @@ from pydantic import Field, ValidationError
 
 from . import meetings as MS
 from . import models as M
-from . import note_outcomes
+from . import note_outcomes, task_references
 from .blobs import Blobs, brief, register
 from .files import is_file_id
 from clients import bot_files as BF
@@ -271,7 +271,7 @@ def authorized(c, who, rid, *, include_deleted=False, write=False):
     raise Problem("forbidden", "This source belongs to another person", 403)
 
 
-def view(c, who, rid, *, include_transcripts=False):
+def view(c, who, rid, *, include_transcripts=False, auth=None):
     record = authorized(c, who, rid)
     meta = record["metadata"]
     state = c.execute("SELECT * FROM media_control WHERE meeting_id=?", (rid,)).fetchone()
@@ -283,7 +283,7 @@ def view(c, who, rid, *, include_transcripts=False):
               "version": state["version"] if state else 1, "turns": meta.get("turns", []),
               "can_edit": may_write(who, record)}
     result["outcome"] = note_outcomes.outcome(c, result, who.actor, who.role == "owner")
-    result["outbox"] = outbox(c, rid)
+    result["outbox"] = outbox(c, rid, who, auth)
     if include_transcripts:
         result["transcript_sources"] = [{"id": row["id"], "source": row["source"],
             "resource_type": row["resource_type"], "transcript_index": row["transcript_index"],
@@ -299,7 +299,7 @@ def view(c, who, rid, *, include_transcripts=False):
     return result
 
 
-def outbox(c, rid):
+def outbox(c, rid, who=None, auth=None):
     """Doc updates, tasks and feature requests still on this meeting — the structured outcomes."""
     groups = {"doc": [], "task": [], "feature": []}
     try:
@@ -310,7 +310,7 @@ def outbox(c, rid):
         return groups
     for row in rows:
         groups[row["section"]].append({"id": row["id"], "text": row["text"], "status": row["status"],
-                                       "result_ref": row["result_ref"]})
+                                       "result_ref": task_references.redact(c, auth, who, dict(row))["result_ref"]})
     return groups
 
 
@@ -1064,7 +1064,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             rows = []
             for r in c.execute("SELECT id FROM meetings ORDER BY created_at DESC"):
                 try:
-                    item = view(c, who, r[0])
+                    item = view(c, who, r[0], auth=auth)
                 except Problem:
                     continue
                 if item["review_state"] != review:
@@ -1077,7 +1077,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
     @app.get("/api/meetings/{rid}")
     def read(request: Request, rid: str):
         with store.read() as c:
-            return view(c, request.state.identity, rid, include_transcripts=True)
+            return view(c, request.state.identity, rid, include_transcripts=True, auth=auth)
 
     @app.get("/api/meetings/{rid}/versions")
     def versions(request: Request, rid: str):
@@ -1095,7 +1095,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             meta = new_note(c, request.state.identity, body, uploads)
             if request.url.path == "/api/send":
                 return deliver(c, auth, request.state.identity, meta["id"], Send(bot_id=body.bot_id), [])
-            return view(c, request.state.identity, meta["id"])
+            return view(c, request.state.identity, meta["id"], auth=auth)
         return await asyncio.to_thread(write, request, body, uploads, work)
 
     def writable(who, rid):
@@ -1114,7 +1114,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             meta["attachments"] = meta.get("attachments", []) + attachments(
                 c, request.state.identity, rid, uploads)
             save(c, meta)
-            return view(c, request.state.identity, rid)
+            return view(c, request.state.identity, rid, auth=auth)
         return await asyncio.to_thread(write, request, body, uploads, work)
 
     @app.post("/api/v2/meetings/{rid}/edit")
@@ -1135,7 +1135,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 meta["private"] = bool(body.private)
             save(c, meta)
             c.execute("UPDATE media_control SET version=version+1 WHERE meeting_id=?", (rid,))
-            return view(c, request.state.identity, rid)
+            return view(c, request.state.identity, rid, auth=auth)
         return mutate(request, body, work)
 
     @app.post("/api/meetings/{rid}/send")

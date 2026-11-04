@@ -17,7 +17,7 @@ from typing import Literal
 from fastapi import Request
 from pydantic import Field
 
-from . import media
+from . import media, task_references
 from . import models as M
 from . import people as P
 from .store import H, Problem
@@ -127,10 +127,10 @@ def one(c, rid, iid):
     return row
 
 
-def listing(c, who, rid):
+def listing(c, who, rid, auth=None):
     """Every item on this meeting, grouped by section, plus whether this person may push."""
     record = media.authorized(c, who, rid)
-    rows = [view(r) for r in c.execute(
+    rows = [task_references.redact(c, auth, who, view(r)) for r in c.execute(
         "SELECT * FROM meeting_items WHERE meeting_id=? ORDER BY created_at, id", (rid,))]
     return {"id": rid, "can_push": media.may_write(who, record),
             "sections": {section: [r for r in rows if r["section"] == section] for section in SECTIONS},
@@ -311,8 +311,14 @@ def record_push(c, who, rid, iid, ref):
 
 
 # ----------------------------------------------------------------------------- routes
-def install_meeting_items(app, store, mutate, task_create):
+def install_meeting_items(app, store, mutate, task_create, auth):
     settings = store.settings
+
+    def item_answer(request, rid, body, work):
+        result = mutate(request, body, work,
+                        check=lambda c: media.authorized(c, request.state.identity, rid))
+        with store.read() as c:
+            return {**result, 'item': task_references.redact(c, auth, request.state.identity, result['item'])}
 
     @app.get("/api/v2/meetings/{rid}/items")
     @app.get("/api/meetings/{rid}/items")
@@ -320,7 +326,7 @@ def install_meeting_items(app, store, mutate, task_create):
         who = request.state.identity
         human_only(who)
         with store.read() as c:
-            return listing(c, who, rid)
+            return listing(c, who, rid, auth)
 
     @app.get("/api/v2/meetings/{rid}/comments")
     @app.get("/api/meetings/{rid}/comments")
@@ -349,7 +355,7 @@ def install_meeting_items(app, store, mutate, task_create):
         def work(c):
             record = media.authorized(c, who, rid)
             return {"item": add(c, record, who.actor, body)}
-        return mutate(request, body, work)
+        return item_answer(request, rid, body, work)
 
     @app.post("/api/v2/meetings/{rid}/items/{iid}")
     @app.post("/api/meetings/{rid}/items/{iid}")
@@ -359,7 +365,7 @@ def install_meeting_items(app, store, mutate, task_create):
         def work(c):
             media.authorized(c, who, rid)
             return {"item": edit(c, rid, who.actor, iid, body)}
-        return mutate(request, body, work)
+        return item_answer(request, rid, body, work)
 
     @app.post("/api/v2/meetings/{rid}/items/{iid}/push")
     @app.post("/api/meetings/{rid}/items/{iid}/push")
@@ -379,6 +385,6 @@ def install_meeting_items(app, store, mutate, task_create):
                 # a close match on the board is refused; `force` is the person saying they meant it
                 result = push_feature(c, settings, task_create, who, record, row, detail, body.force)
             return {"item": record_push(c, who, rid, iid, result), "pushed": True}
-        return mutate(request, body, work)
+        return item_answer(request, rid, body, work)
 
     return {"add": add, "listing": listing}
