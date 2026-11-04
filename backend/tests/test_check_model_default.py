@@ -59,7 +59,7 @@ def test_a_check_with_no_model_skips_every_maker_of_the_parents_work(api):
                                 "relations": [{"task": parent["id"], "kind": "parent"}]}, turn["token"])
     assert tuple(check_row(api, alone["id"]))[:2] == ("claude", "claude-sonnet-5-5")
     with api.app.state.store.read() as c:
-        why = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='check_model'", (alone["id"],)).fetchone()
+        why = c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model'", (alone["id"],)).fetchone()
     assert why and "other than Anthropic" in why[0] and "author's own" in why[0], why
 
 
@@ -84,14 +84,14 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
                                "relations": [{"task": own["id"], "kind": "parent"}]})
     assert check_row(api, mine["id"]) is None
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='check_model'", (mine["id"],)).fetchone()
+        assert not c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model'", (mine["id"],)).fetchone()
     # A person's task with no runs has no known author: its own model, and the history says why.
     person = post(api, "tasks", {"owner": "human:ana", "title": "Draft the launch post", "body": "Mine."})
     unknown = post(api, "tasks", {"owner": "cpo", "title": "Review my draft", "body": "Please.",
                                   "relations": [{"task": person["id"], "kind": "parent"}]})
     assert check_row(api, unknown["id"]) is None
     with api.app.state.store.read() as c:
-        why = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='check_model'", (unknown["id"],)).fetchone()
+        why = c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model'", (unknown["id"],)).fetchone()
     assert why and "author is unknown" in why[0]
 
     assign(api, machine, "cpo")
@@ -128,5 +128,5 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
                                 "relations": [{"task": parent["id"], "kind": "parent"}]})
     assert tuple(check_row(api, alone["id"]))[:2] == ("claude", "claude-sonnet-5-5")
     with api.app.state.store.read() as c:
-        why = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='check_model'", (alone["id"],)).fetchone()
+        why = c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model'", (alone["id"],)).fetchone()
     assert why and "other than Anthropic" in why[0] and "author's own" in why[0], why

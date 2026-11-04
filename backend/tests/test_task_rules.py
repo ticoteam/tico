@@ -74,7 +74,7 @@ def test_full_wait_one_history_note_and_reopen_undo(api, monkeypatch):
     assert task(api, old['id'])['status'] == task(api, edge['id'])['status'] == 'closed'
     assert task(api, young['id'])['status'] == 'done'
     with api.app.state.store.read() as c:
-        notes = c.execute('SELECT note FROM task_events WHERE task_id=?', (old['id'],)).fetchall()
+        notes = c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=?", (old['id'],)).fetchall()
         assert [r[0] for r in notes].count("Closed by rule 'Close 24h after done'") == 1
     with api.app.state.store.transaction() as c:
         H.task_update(c, 'human:ana', old['id'], status='open')
@@ -178,8 +178,8 @@ def test_history_and_scoped_message_activity_with_old_task_timestamps(api, monke
         for t in [history, *scoped, unrelated]:
             c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (shared, t['id']))
         # A step-only history touch and imported message metadata must protect without tasks.updated.
-        c.execute("INSERT INTO task_events(id,task_id,created_at,actor,field,old,new,note) "
-                  "VALUES(?,?,?,'human:ana','step','before','after','')", (H.new_id(), history['id'], recent))
+        c.execute("INSERT INTO history_events(subject_type,id,subject_id,created_at,actor_id,kind,old,new,note) "
+                  "VALUES('task',?,?,?,'human:ana','step','before','after','')", (H.new_id(), history['id'], recent))
         for t, field in zip(scoped, ('created_at', 'edited_at', 'deleted_at')):
             times = {'created_at': old, 'edited_at': None, 'deleted_at': None, field: recent}
             c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at,edited_at,deleted_at) "
@@ -190,7 +190,7 @@ def test_history_and_scoped_message_activity_with_old_task_timestamps(api, monke
             row = dict(c.execute('SELECT * FROM tasks WHERE id=?', (t['id'],)).fetchone())
             assert all(not row.get(k) or row[k] <= old for k in ('created_at', 'updated_at', 'done_at', 'checkpoint_at'))
         for t in [*scoped, unrelated]:
-            assert c.execute('SELECT max(created_at) FROM task_events WHERE task_id=?', (t['id'],)).fetchone()[0] <= old
+            assert c.execute("SELECT max(created_at) FROM history_events WHERE subject_type='task' AND subject_id=?", (t['id'],)).fetchone()[0] <= old
     assert not run(api)
     assert task(api, history['id'])['status'] == 'done'
     assert [task(api, t['id'])['status'] for t in scoped] == ['done'] * 3
@@ -212,7 +212,7 @@ def test_close_budget_is_shared_by_two_due_rules(api, monkeypatch):
         receipts = {r['job']: (r['ok'], r['result']) for r in c.execute('SELECT job,ok,result FROM system_runs')}
         assert receipts[R.DEFAULT] == (1, '20 tasks closed')
         assert receipts[second['key']] == (1, '30 tasks closed')
-        notes = c.execute("SELECT note,count(*) FROM task_events WHERE field='status' AND new='closed' GROUP BY note").fetchall()
+        notes = c.execute("SELECT note,count(*) FROM history_events WHERE subject_type='task' AND kind='status' AND new='closed' GROUP BY note").fetchall()
         assert dict(notes) == {"Closed by rule 'Close 24h after done'": 20, "Closed by rule 'Close after one day'": 30}
 
 

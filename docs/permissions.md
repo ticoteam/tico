@@ -99,7 +99,7 @@ users, team, department and who they report to), messages and tasks in answers a
 `from_person`, which read `""`), the stream's actors, and `hub sql` (`humans` rows, `humans.teams`, `bot_config`'s
 `team`, `operator`, `reports_to`, owner lists, `created_by` and the same keys in `config`,
 `conversations.participants`, `messages.sender_id` and `to_actor`, `tasks.owner_id`, `requester` and `closed_by`,
-and the `actor` of `events` and `task_events`, which read `''`), and their page, photo and access answer the same
+and the `actor` of `events` and of a task's `history_events` rows, which read `''`), and their page, photo and access answer the same
 `404` as someone who does not exist. A hidden group's people and bots are shown under the nearest group above it.
 Inside a conversation you are in, and on a task you own or asked for, everyone in it stays known to you. The owner,
 the admins and whoever manages them always see them.

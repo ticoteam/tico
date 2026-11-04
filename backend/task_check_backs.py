@@ -33,7 +33,7 @@ def _H():
 def _event(c, task_id, actor, field, old, new, note=""):
     # Appointment bookkeeping has its own deterministic identity. Adding it must not renumber the demo's
     # conversation/message ids, whose reader-set fixtures prove that existing access does not change.
-    ordinal = c.execute("SELECT coalesce(max(rowid),0)+1 FROM task_events").fetchone()[0]
+    ordinal = c.execute("SELECT coalesce(max(rowid),0)+1 FROM history_events").fetchone()[0]
     event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(["task-check-back", task_id, field, ordinal])))
     _H()._task_event(c, task_id, actor, field, old, new, note, event_id=event_id)
 
@@ -212,8 +212,8 @@ def view(row, c=None, at=None):
         out["enabled"] = enabled(c)
         if not out["enabled"]:
             return out
-        blocked = c.execute("SELECT old,new FROM task_events WHERE task_id=? AND field='check_back_blocked' "
-                            "ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
+        blocked = c.execute("SELECT old,new FROM history_events WHERE subject_type='task' AND subject_id=? "
+                            "AND kind='check_back_blocked' ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
         if blocked and blocked["old"] == stand(c, row):
             out["delivery"] = blocked["new"]
     if c is not None and due:
@@ -300,15 +300,15 @@ def stand(c, row):
     H = _H()
     base = H._stall_stand(c, row, exclude_actors=tuple(x for x in (actor_for(row),) if x))
     links = [list(r) for r in c.execute("SELECT id,state,pr_sha,pr_merged_at FROM task_links WHERE task_id=? AND kind='pr' ORDER BY id", (row["id"],))]
-    human = c.execute("SELECT id FROM task_events WHERE task_id=? AND actor LIKE 'human:%' AND field='check_back_explicit' "
-                      "ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
+    human = c.execute("SELECT id FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id LIKE 'human:%' "
+                      "AND kind='check_back_explicit' ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
     return hashlib.sha256(json.dumps([base, links, human[0] if human else None]).encode()).hexdigest()[:16]
 
 
 def blocked(c, row, cause):
     state = stand(c, row)
-    previous = c.execute("SELECT old,new FROM task_events WHERE task_id=? AND field='check_back_blocked' "
-                         "ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
+    previous = c.execute("SELECT old,new FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='check_back_blocked' ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
     if not previous or tuple(previous) != (state, cause):
         _event(c, row["id"], _H().KEEPER, "check_back_blocked", state, cause)
 
@@ -320,8 +320,8 @@ def external_wait(c, row):
 def _repairs(c, row):
     H = _H()
     state = stand(c, row)
-    recent = c.execute("SELECT field,new FROM task_events WHERE task_id=? AND field='check_back_repair' "
-                       "ORDER BY created_at DESC,rowid DESC LIMIT 12", (row["id"],)).fetchall()
+    recent = c.execute("SELECT kind AS field,new FROM history_events WHERE subject_type='task' AND subject_id=? "
+                       "AND kind='check_back_repair' ORDER BY created_at DESC,rowid DESC LIMIT 12", (row["id"],)).fetchall()
     count = 0
     for r in recent:
         if (H._json(r["new"], {}) or {}).get("stand") != state:
@@ -333,7 +333,8 @@ def _repairs(c, row):
 def _unchanged_wakes(c, row):
     state = stand(c, row)
     count = 0
-    for r in c.execute("SELECT field,new FROM task_events WHERE task_id=? AND field IN ('check_back_wake','check_back_external') "
+    for r in c.execute("SELECT kind AS field,new FROM history_events WHERE subject_type='task' AND subject_id=? "
+                       "AND kind IN ('check_back_wake','check_back_external') "
                        "ORDER BY created_at DESC,rowid DESC LIMIT 13", (row["id"],)):
         if r["field"] == "check_back_external" or r["new"] != state:
             break
@@ -347,7 +348,8 @@ def repair(c, row, at):
     delay = min(30 * 2 ** min(count, 4), 480)
     recovery = None
     if max(count, _unchanged_wakes(c, row)) >= H.STALL_WAKES_PER_DAY and not external_wait(c, row):
-        escalated = c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='check_back_escalated' AND new=? LIMIT 1",
+        escalated = c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? "
+                              "AND kind='check_back_escalated' AND new=? LIMIT 1",
                               (row["id"], state)).fetchone()
         if not escalated and not H._no_diagnosis(c, row, count):
             recovery = H._escalate_stuck(c, row, max(count, _unchanged_wakes(c, row)))
@@ -468,7 +470,8 @@ def sweep(c, at=None, failures=None, task_ids=None):
                 repair(c, row, at)
                 result["blocked"].append(row["id"])
                 continue
-            daily = c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='check_back_wake' AND created_at>=?",
+            daily = c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                              "AND kind='check_back_wake' AND created_at>=?",
                               (row["id"], H.shift(at, days=-1))).fetchone()[0]
             if daily >= WAKES_PER_TASK_DAY:
                 blocked(c, row, "daily_inspection_cap")

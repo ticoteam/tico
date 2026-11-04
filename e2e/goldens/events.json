@@ -43,6 +43,7 @@
             "last_read_seq": 0,
             "member": true,
             "notify": "live",
+            "pinned": false,
             "unread": 1
           },
           "owner_id": null,
@@ -51,6 +52,7 @@
           "path": [
             "<id1>"
           ],
+          "pinned_for_everyone": false,
           "retention_days": null,
           "root_id": "<id1>",
           "task_id": null,
@@ -113,9 +115,12 @@
           "last_unread_seq": 1
         },
         "kind": "activity",
+        "message_id": "<id2>",
         "root_id": "<id1>",
         "seq": 3,
-        "thread_id": "<id1>"
+        "thread_id": "<id1>",
+        "unread": true,
+        "unread_count": 1
       },
       "event": "threads",
       "id": "3"
@@ -164,6 +169,7 @@
             "last_read_seq": 0,
             "member": false,
             "notify": "live",
+            "pinned": false,
             "unread": 0
           },
           "owner_id": null,
@@ -172,6 +178,7 @@
           "path": [
             "<id5>"
           ],
+          "pinned_for_everyone": false,
           "retention_days": null,
           "root_id": "<id5>",
           "task_id": null,
@@ -234,9 +241,12 @@
           "last_unread_seq": 2
         },
         "kind": "activity",
+        "message_id": "<id6>",
         "root_id": "<id5>",
         "seq": 8,
-        "thread_id": "<id5>"
+        "thread_id": "<id5>",
+        "unread": false,
+        "unread_count": 0
       },
       "event": "threads",
       "id": "8"
@@ -273,6 +283,7 @@
             "last_read_seq": 3,
             "member": true,
             "notify": "live",
+            "pinned": false,
             "unread": 1
           },
           "owner_id": "human:ana",
@@ -281,6 +292,7 @@
           "path": [
             "<conversation>"
           ],
+          "pinned_for_everyone": false,
           "retention_days": null,
           "root_id": "<conversation>",
           "task_id": null,
@@ -511,6 +523,7 @@
             "last_read_seq": 6,
             "member": true,
             "notify": "live",
+            "pinned": false,
             "unread": 0
           },
           "owner_id": null,
@@ -519,6 +532,7 @@
           "path": [
             "<id12>"
           ],
+          "pinned_for_everyone": false,
           "retention_days": null,
           "root_id": "<id12>",
           "task_id": "<task>",
@@ -824,9 +838,12 @@
           "last_unread_seq": 10
         },
         "kind": "activity",
+        "message_id": "<id21>",
         "root_id": "<id12>",
         "seq": 79,
-        "thread_id": "<id12>"
+        "thread_id": "<id12>",
+        "unread": false,
+        "unread_count": 0
       },
       "event": "threads",
       "id": "79"
@@ -971,6 +988,7 @@
             "last_read_seq": 12,
             "member": true,
             "notify": "live",
+            "pinned": false,
             "unread": 0
           },
           "owner_id": null,
@@ -979,6 +997,7 @@
           "path": [
             "<id23>"
           ],
+          "pinned_for_everyone": false,
           "retention_days": null,
           "root_id": "<id23>",
           "task_id": "<open_task>",
@@ -1094,9 +1113,12 @@
           "last_unread_seq": 12
         },
         "kind": "activity",
+        "message_id": "<id26>",
         "root_id": "<id23>",
         "seq": 97,
-        "thread_id": "<id23>"
+        "thread_id": "<id23>",
+        "unread": false,
+        "unread_count": 0
       },
       "event": "threads",
       "id": "97"
@@ -1290,9 +1312,12 @@
           "last_unread_seq": 17
         },
         "kind": "activity",
+        "message_id": "<id28>",
         "root_id": "<conversation>",
         "seq": 105,
-        "thread_id": "<conversation>"
+        "thread_id": "<conversation>",
+        "unread": false,
+        "unread_count": 0
       },
       "event": "threads",
       "id": "105"
@@ -1344,6 +1369,7 @@
             "last_read_seq": 14,
             "member": true,
             "notify": "live",
+            "pinned": false,
             "unread": 2
           },
           "owner_id": null,
@@ -1352,6 +1378,7 @@
           "path": [
             "<id30>"
           ],
+          "pinned_for_everyone": false,
           "retention_days": null,
           "root_id": "<id30>",
           "task_id": null,
@@ -1494,9 +1521,12 @@
           "last_unread_seq": 16
         },
         "kind": "activity",
+        "message_id": "<id35>",
         "root_id": "<id30>",
         "seq": 127,
-        "thread_id": "<id30>"
+        "thread_id": "<id30>",
+        "unread": true,
+        "unread_count": 2
       },
       "event": "threads",
       "id": "127"
@@ -1656,9 +1686,12 @@
           "last_unread_seq": 17
         },
         "kind": "activity",
+        "message_id": "<id38>",
         "root_id": "<conversation>",
         "seq": 137,
-        "thread_id": "<conversation>"
+        "thread_id": "<conversation>",
+        "unread": true,
+        "unread_count": 1
       },
       "event": "threads",
       "id": "137"

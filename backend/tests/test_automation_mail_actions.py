@@ -406,3 +406,44 @@ def test_no_computer_claims_or_reports_for_a_mailbox_not_published_yet(api, comp
     post(api, "automations/mail-actions/ma_1/result", {"ok": True, "detail": "sent"}, computer.token, expected=403)
     computer.sync()                                          # published: now it is this computer's
     assert len(claim(api, computer.token)["actions"]) == 1
+
+
+# ---------------------------------------------------------------------------------------------- mail fields, end to end
+def test_the_sync_carries_the_mail_fields_to_the_trigger(api, computer):
+    """The real sync and publish: the owner's earlier send makes the sender known to a later message only; a category
+    label, a calendar part and an .ics file come through the hub copy as the trigger reads them."""
+    now, day, person = int(time.time() * 1000), 86_400_000, "person@customer.example"
+    store = computer.gmail.store
+    store["sent-1"] = fake.message("sent-1", "t-person", {"From": BOX, "To": person, "Subject": "Pricing"},
+                                   body="Here it is.", labels=("SENT",), epoch_ms=now - 2 * day)
+    store["early"] = fake.message("early", "t-early", {"From": person, "To": BOX, "Subject": "Hello"},
+                                  body="Hi.", epoch_ms=now - 3 * day)
+    store["reply"] = fake.message("reply", "t-person", {"From": person, "To": BOX, "Subject": "Re: Pricing"},
+                                  body="Thanks.", epoch_ms=now - day)
+    store["promo"] = fake.message("promo", "t-promo", {"From": "Deals <deals@shop.example>", "To": BOX,
+                                                       "Subject": "Sale"}, body="50% off.",
+                                  labels=("INBOX", "CATEGORY_PROMOTIONS"), epoch_ms=now - 2 * 3_600_000)
+    store["invite"] = fake.message("invite", "t-invite", {"From": "Ben <ben@partner.example>", "To": BOX,
+                                                         "Subject": "Invite"},
+                                   parts=[fake.part("text/plain", "Join us."),
+                                          fake.part("text/calendar", "BEGIN:VCALENDAR\r\nEND:VCALENDAR")],
+                                   labels=("INBOX", "CATEGORY_SOCIAL"), epoch_ms=now - 3_600_000)
+    store["ics"] = fake.message("ics", "t-ics", {"From": "Cal <cal@vendor.example>", "To": BOX, "Subject": "Meeting"},
+                                parts=[fake.part("text/plain", "See attached."),
+                                       fake.part("application/octet-stream", filename="meeting.ics", size=120)],
+                                epoch_ms=now - 1_800_000)
+    aid = automate(api, {"id": "sort", "type": "filter", "rules": [{"when": [{"field": "message.subject",
+                                                                             "op": "contains", "value": "zz-never"}],
+                                                                  "then": [{"do": "archive"}]}]})
+    assert computer.sync() == len(store)
+    with api.app.state.store.read() as c:
+        seen = {r["trigger_ref"].rsplit(":", 1)[-1]: json.loads(r["saved_state"])["payload"]["message"]
+                for r in c.execute("SELECT trigger_ref, saved_state FROM automation_runs WHERE automation_id=?", (aid,))}
+    assert set(seen) == set(store)
+    assert seen["reply"]["known_sender"] is True and seen["reply"]["from_domain"] == "customer.example"
+    assert seen["early"]["known_sender"] is False            # the owner wrote to this sender only after it arrived
+    assert seen["sent-1"]["known_sender"] is False
+    assert seen["promo"]["category"] == "promotions" and seen["promo"]["is_calendar_invite"] is False
+    assert seen["invite"]["category"] == "social" and seen["invite"]["is_calendar_invite"] is True
+    assert seen["ics"]["is_calendar_invite"] is True and seen["ics"]["attachments"] == ["meeting.ics"]
+

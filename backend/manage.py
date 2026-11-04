@@ -21,6 +21,9 @@ from .store import H, P, Problem, Store, encode, repo_url
 
 CORE_HISTORY = ("conversations", "messages", "tasks", "task_events", "turns", "meetings",
                 "meeting_versions", "meeting_deliveries")
+# A legacy source's task_events rows are the new database's task rows in history_events
+# (backend/migrations/0064_history_events.py); the report keeps the source's name for them.
+HISTORY_COUNTS = {"task_events": "SELECT count(*) FROM history_events WHERE subject_type='task'"}
 
 
 def registry_dir():
@@ -85,7 +88,7 @@ def migrate_legacy(source, destination, runtime, projects, *, queue_backlog=Fals
         store.enqueue_existing()
     archives = import_text_archives(store, runtime)
     with store.transaction() as c:
-        counts = {table: c.execute('SELECT count(*) FROM "' + table + '"').fetchone()[0]
+        counts = {table: c.execute(HISTORY_COUNTS.get(table) or 'SELECT count(*) FROM "' + table + '"').fetchone()[0]
                   for table in CORE_HISTORY}
         expected = {table: source_report["tables"].get(table, 0) for table in CORE_HISTORY}
         if counts != expected:
