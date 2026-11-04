@@ -172,10 +172,15 @@ def _step(flow, state, thread, services):
 
 def _chain(services, chain, values, step, key, first):
     """Run one chain of actions in order, each as an effect keyed `<key>.<m>` where m counts from `first` across the
-    step. A refused action ends the chain (what follows it may depend on it); the list keeps it as the last entry."""
+    step. A refused action ends the chain (what follows it may depend on it); the list keeps it as the last entry.
+    Each entry is (action, source, plain). A plain action produces under the step's own id, as every action always
+    has: a due-date run's task is one per step, so the first rule that fires keeps that identity. Any other action
+    produces under its own effect key, so two rules that fire in one run never share a task."""
     done = []
-    for action, source in chain:
-        result = _act(services, action["do"], action.get("args") or {}, values, step, f"{key}.{first + len(done)}")
+    for action, source, plain in chain:
+        m = first + len(done)
+        producer = step["id"] if plain else f"{step['id']}@{key}.{m}"
+        result = _act(services, action["do"], action.get("args") or {}, values, step, f"{key}.{m}", producer)
         done.append({**result, **source})
         if not result.get("ok"):
             break
@@ -192,13 +197,15 @@ def _filter(flow, state, thread, step, services):
     for n, rule in enumerate(step.get("rules") or []):
         if not F.all_hold(rule.get("when") or [], values, rule.get("match", "all")):
             continue
+        first_rule = not fired
         fired.append(n)
-        chain = [(action, {"from": "rule", "rule": n}) for action in rule.get("then") or []]
+        chain = [(action, {"from": "rule", "rule": n}, first_rule) for action in rule.get("then") or []]
         if rule.get("to") is not None:
             if rule["to"] not in destinations:   # check() refuses a flow that names none; a run never reaches this
                 raise ValueError(f"no destination named {rule['to']}")
             dest = destinations[rule["to"]]
-            chain += [(action, {"from": "destination", "destination": dest["id"]}) for action in dest.get("then") or []]
+            chain += [(action, {"from": "destination", "destination": dest["id"]}, False)
+                      for action in dest.get("then") or []]
         actions += _chain(services, chain, values, step, key, len(actions))
         if any(not action.get("ok") for action in actions):
             failed = True
@@ -220,12 +227,14 @@ def _filter(flow, state, thread, step, services):
 NOTICE_TEXT = {"wake_bot": ("text", "prompt"), "note": ("text", "note")}
 
 
-def _act(services, do, args, values, step, key):
+def _act(services, do, args, values, step, key, producer=None):
+    """One action. `producer` is what the action is deduplicated under (`_chain`); the step's own id by default."""
     to_bot = do == "wake_bot" or (do == "note" and args.get("bot") and not values.get("task"))
     quoted = NOTICE_TEXT[do] if to_bot else ()
     rendered = F.render_args({k: v for k, v in args.items() if k not in quoted}, values)
     rendered.update({k: F.render_prompt(args[k], values) for k in quoted if isinstance(args.get(k), str)})
-    result = services.act(do, rendered, {"values": values, "step": step["id"], "key": key})
+    result = services.act(do, rendered, {"values": values, "step": step["id"], "key": key,
+                                         "producer": producer or step["id"]})
     return {"do": do, **result}
 
 
