@@ -2,6 +2,7 @@
    service-account key (docs/mail.md); Your account connects the person's own mailbox, read only. Google's sign-in
    opens in this tab and comes back to the server; the computer that syncs mail keeps the grant. No token, key or
    client secret stays in the browser once it is sent. */
+'use strict';
 (function () {
   'use strict';
   const POLL_MS = 5000, CHECK_EVERY_MS = 20000, CHECK_FOR_MS = 600000, KEY_MAX_BYTES = 65536;
