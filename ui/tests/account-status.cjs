@@ -18,8 +18,10 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
     const page = await browser.newPage({viewport: {width: 1280, height: 860}, serviceWorkers: 'block'});
     const errors = [];
     let status = {cloud: true, keeper_alive: true, health_issues: [
+      // A quarantined bot is BotOps's to review, so the server says needs_person false (backend/views.py): it stays in
+      // Health and never lights the dot.
       {kind: 'bot', title: 'Builder needs attention', detail: 'The bot is quarantined. It tried a refused action.', bot: 'builder',
-        severity: 'error', needs_person: true, action: 'Review the refused action, then resume the bot on its page.'},
+        severity: 'error', needs_person: false, action: 'Review the refused action, then resume the bot on its page.'},
       // Diagnostics that do not need a person never light the dot.
       {kind: 'bot', title: 'Writer needs attention', detail: 'Usage limit; resumes at 14:00 UTC', bot: 'writer',
         severity: 'warning', needs_person: false}]};
@@ -82,18 +84,17 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
 
     // The menu opens with one line per problem, worst first, each with its fix.
     const lines = page.locator('#account-menu .account-status-line');
+    // The quarantined bot is not here: BotOps reviews it, so it lives in Health only.
     assert.deepEqual(await lines.locator('.account-status-text').allInnerTexts(), [
-      'Builder needs attention: The bot is quarantined',
       "Models: Builder's Claude login was rejected",
       'Version: Tico 0.3.80 is available']);
-    assert.deepEqual(await lines.evaluateAll(rows => rows.map(row => row.dataset.level)), ['bad', 'bad', 'warn']);
-    assert.equal(await lines.nth(0).locator('a').getAttribute('href'), '#/bot/builder/more');
-    assert.equal(await lines.nth(1).locator('a').getAttribute('href'), '#/credentials');
-    assert.equal(await lines.nth(2).locator('[data-hl-click]').getAttribute('data-hl-click'), '#new-version', 'Update, as on Health');
-    assert.equal(await lines.nth(2).locator('[data-hl-click]').getAttribute('title'), 'Update');
+    assert.deepEqual(await lines.evaluateAll(rows => rows.map(row => row.dataset.level)), ['bad', 'warn']);
+    assert.equal(await lines.nth(0).locator('a').getAttribute('href'), '#/credentials');
+    assert.equal(await lines.nth(1).locator('[data-hl-click]').getAttribute('data-hl-click'), '#new-version', 'Update, as on Health');
+    assert.equal(await lines.nth(1).locator('[data-hl-click]').getAttribute('title'), 'Update');
     const text = (await page.locator('#account-menu .account-status').innerText());
     assert.doesNotMatch(text, /Writer|health_issues|uncertain_work|\bbad\b|\bwarn\b/, 'no internal words, nothing that clears itself');
-    await lines.nth(1).locator('a').click();
+    await lines.nth(0).locator('a').click();
     // Credentials live in Library › Tools: the link lands there.
     await page.waitForFunction(() => location.hash.startsWith('#/library/tools'));
     assert.equal(await page.locator('#account-menu').isHidden(), true, 'a fix closes the menu');
@@ -102,7 +103,7 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
     await page.mouse.move(0, 0);
     await dot.hover();
     await page.locator('#account-status-pop').waitFor();
-    assert.equal(await page.locator('#account-status-pop .account-status-line').count(), 3);
+    assert.equal(await page.locator('#account-status-pop .account-status-line').count(), 2);
     assert.equal(await page.locator('#account-menu').isHidden(), true);
     await page.mouse.move(700, 400);
     await page.locator('#account-status-pop').waitFor({state: 'hidden'});

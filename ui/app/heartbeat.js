@@ -5,6 +5,9 @@
 // Only urgent issues with a concrete human action interrupt the person. The full diagnostic
 // list remains in Settings, including temporary outages and bot execution reviews.
 const needsPerson = issue => issue.needs_person === true && !!(issue.action || issue.restart);
+// Health checks BotOps reviews (backend/health.py): a stopped run or a quarantined bot stays in Settings > Health and
+// never lights the person's status dot.
+const BOTOPS_CHECKS = new Set(['stopped_runs', 'quarantine']);
 // One status dot, left of the person's name in the account button (Chris, Oct 22): coloured by the worst line,
 // red when something is broken and needs the person, amber for a warning or something that clears by itself.
 // The same lines head the account menu and a hover card on the dot, one plain line each with its fix. No line, no dot.
@@ -31,7 +34,7 @@ function accountStatusLines() {
   // A computer offline for a moment (asleep, a restart) comes back by itself: Health calls it bad at once, but the
   // server asks a person only after NEEDS_YOU_MINUTES (backend/views.py, "stopped checking in"). Until a machine issue
   // needs this person, the offline checks are amber; with no computer set up at all, nothing clears, so red stays.
-  const attention = window.hlAttention?.() || [];
+  const attention = (window.hlAttention?.() || []).filter(check => !BOTOPS_CHECKS.has(check.id));
   const machineNeedsYou = (st?.health_issues || []).some(issue => issue.kind === 'machine' && needsPerson(issue));
   const computers = window.hlComputers?.();
   const noComputer = Array.isArray(computers) && !computers.length;

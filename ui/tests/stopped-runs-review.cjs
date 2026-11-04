@@ -1,7 +1,8 @@
 // A bot's stopped runs are reviewed from a control a person can reach (Dev 280). A run that holds queued work is a
 // BotOps review (backend/views.py uncertain_work, needs_person false), so Settings' System checks card leaves it out and
 // Health lists it as a note with "Review stopped runs". That opens the card: the safe pick first, the evidence folded.
-// One that holds nothing is a note under Health too. Every request is intercepted.
+// One that holds nothing is a note under Health too. Health's BotOps checks (stopped runs, a quarantined bot) stay off
+// the person's status dot. Every request is intercepted.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -43,8 +44,23 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       writer: [job('j2', 'Weekly digest', 'read', [], ['Read'])]};
     jobs.writer[0].run.final_text = '';
     jobs.writer[0].output = ['The ', 'saved ', 'answer ', 'is ', 'one paragraph.\n\nA second paragraph.'].map(text => ({kind: 'message', text}));
+    // Health's BotOps checks as the server builds them (backend/health.py): Builder's stopped runs, and a quarantined bot
+    // whose queued work waits. Both are warn or bad, yet BotOps reviews them, so neither lights the person's dot.
+    const stoppedCheck = {id: 'stopped_runs', label: 'Stopped runs nobody decided', status: 'warn',
+      summary: "Held for a check two hours or more; choose Try again or Don't retry. Builder: 2 stopped runs waiting 72 h.",
+      fixes: [{label: 'Open bots', href: '#/settings', tab: 'bots'}],
+      items: [{bot: 'builder', name: 'Builder', count: 2, hours: 72, text: 'Builder: 2 stopped runs waiting 72 h',
+        fixes: [{label: 'Review stopped runs', href: '#/bot/builder/more'}]}]};
+    const quarantineCheck = {id: 'quarantine', label: 'Quarantined bots', status: 'bad',
+      summary: '1 bot quarantined; queued work waits until the quarantine clears. Vault (vault): 1 job queued, oldest 180 min; '
+        + 'Quarantined: queued work waits for the quarantine to clear.',
+      fixes: [{label: 'Open Runs', href: '#/settings', tab: 'runs'}],
+      items: [{bot: 'vault', name: 'Vault', queued: 1, dead: 0, held: 0, oldest: '2026-10-26T03:39:09Z', oldest_minutes: 180,
+        reason: 'quarantined', text: 'Vault (vault): 1 job queued, oldest 180 min; Quarantined: queued work waits for the quarantine to clear.',
+        fixes: [{label: 'Open bot settings', href: '#/bot/vault/more'}], fix: 'hub run list vault'}]};
     // Builder's work behind its stopped runs is Health's Stuck row too, its queue split as Pipeline splits it.
-    const health = {audience: 'owner', attention: 0, checks: [], computers: [], waiting: [], slow: [], failures: [],
+    const health = {audience: 'owner', attention: 2, checks: [stoppedCheck, quarantineCheck], computers: [], waiting: [],
+      slow: [], failures: [],
       stuck: [{bot: 'builder', name: 'Builder', reason: 'uncertain', why: 'An interrupted run waits for review in Runs',
         queued: 0, dead: 3, held: 1, oldest: '2026-10-26T05:39:09Z', computer: 'Studio Mac'}],
       checked: new Date().toISOString()};
@@ -96,6 +112,17 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const stuck = await page.locator('#hl-page [data-stuck="builder"] .muted').innerText();
     assert.match(stuck, /3 behind an interrupted run · 1 held on purpose$/);
     assert.doesNotMatch(stuck, /queued/, 'nothing that can start is called queued');
+    // Health shows both BotOps checks with their own rows, and the person's dot stays dark: the checks are warn and bad
+    // (window.hlAttention), yet BotOps reviews them, so ui/app/heartbeat.js leaves them off the dot.
+    assert.deepEqual(await page.evaluate(() => window.hlAttention().map(check => check.id)), ['stopped_runs', 'quarantine']);
+    assert.equal(await page.locator('#hl-summary').innerText(), '2 issues to look at');
+    const stoppedRow = page.locator('#hl-page [data-hl-check="stopped_runs"]'), quarantineRow = page.locator('#hl-page [data-hl-check="quarantine"]');
+    assert.equal(await stoppedRow.getAttribute('data-status'), 'warn');
+    assert.match(await stoppedRow.innerText(), /Builder: 2 stopped runs waiting 72 h/);
+    assert.equal(await quarantineRow.getAttribute('data-status'), 'bad');
+    assert.match(await quarantineRow.innerText(), /Vault \(vault\): 1 job queued/);
+    assert.equal(await page.evaluate(() => document.querySelector('#heartbeat').hidden), true, 'BotOps checks never light the dot');
+    assert.equal(await page.evaluate(() => document.querySelectorAll('.account-status-line').length), 0, 'no line for them either');
 
     // A bot's stopped runs open their review card from the note: the decision first, the evidence folded.
     await builderNote.click();
