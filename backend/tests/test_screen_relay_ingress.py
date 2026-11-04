@@ -61,16 +61,25 @@ def standard_startup(root, port):
         process = subprocess.Popen([sys.executable, "-m", "backend.server", "--port", str(port)],
                                    env=env, stdout=log, stderr=log)
         try:
+            def running():
+                # Checked before any answer on the port is trusted: if another test took the port, that answer is
+                # theirs. The log is read once the process has exited, so it holds the relay's last words.
+                if process.poll() is None:
+                    return
+                text = (root / "server.log").read_text()
+                if "could not start" in text:
+                    raise PortTaken(text)
+                raise AssertionError(text)
+
             def healthy():
+                running()
                 with contextlib.suppress(httpx.HTTPError):
                     return httpx.get(origin + "/healthz", timeout=.5).status_code == 200
-                text = (root / "server.log").read_text()
-                if process.poll() is not None and "could not start" in text:
-                    raise PortTaken(text)
-                assert process.poll() is None, text
                 return False
             Service.eventually(healthy, seconds=20)
-            assert httpx.get(origin + "/control/v1/hello").status_code == 403
+            hello = httpx.get(origin + "/control/v1/hello").status_code
+            running()
+            assert hello == 403
             # On a stop, the public port answers 200 until it refuses connects, never the relay's 502 for a server
             # that no longer listens: Caddy holds a refused connect, but passes a 502 through to the visitor.
             process.terminate()
