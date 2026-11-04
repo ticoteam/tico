@@ -1,5 +1,7 @@
 """A bot's last run that ended without finishing is said plainly, never as a bare "Crashed" (Oct 22: BotOps showed a
 red Crashed for a run its computer took and never started, with nothing lost and nothing to do)."""
+import pytest
+
 from backend.tests.test_api import api, claim, expire, get, post, ready, setup_attempt  # noqa: F401 (fixture)
 from backend.store import H
 from backend.tests.test_execution_review import interrupted
@@ -149,6 +151,38 @@ def test_a_run_its_computer_never_started_after_every_try_names_the_computer(api
     stop = line["last_stop"]
     assert (stop["kind"], stop["tone"], stop["needs_person"], stop["action"]) == ("never_started", "alert", True, None)
     assert stop["text"] == "Your ops couldn't start on Test Mac; check that Computer."
+
+
+@pytest.mark.parametrize("handed_back", [False, True])
+def test_failed_starts_keep_their_retry_limit_across_server_restarts(api, monkeypatch, handed_back):
+    from backend import execution, models
+    from backend.auth import Identity
+
+    monkeypatch.setattr(execution, "PRE_START_TRIES", 2)
+    machine, message, attempt = setup_attempt(api)
+    store = api.app.state.store
+    who = Identity("runner:" + machine["runner_id"], "runner", runner_id=machine["runner_id"])
+    job_id = attempt["job_id"]
+    for _ in range(2):
+        # A new server reads the same durable jobs and attempts after each failed start.
+        restarted = execution.Execution(store, api.app.state.execution.auth)
+        with store.transaction() as c:
+            if handed_back:
+                restarted.complete(c, who, attempt["id"], models.Completion(outcome="interrupted", last_seq=0))
+            else:
+                c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (H.shift(H.now(), seconds=-1), attempt["id"]))
+                restarted.expire(c)
+            c.execute("UPDATE attempts SET finished_at=? WHERE id=?",
+                      (H.shift(H.now(), seconds=-execution.HAND_BACK_MAX - 1), attempt["id"]))
+        ready(api, machine, ["ops"])
+        attempt = claim(api, machine)
+    assert attempt is None
+    with store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (job_id,)).fetchone()[0] == "failed"
+        assert c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (job_id,)).fetchone()[0] == 2
+    replies = get(api, f"conversations/{message['conversation_id']}/messages")
+    assert [m["body"] for m in replies if m["sender_id"] == "bot:ops"] == [
+        "Your ops couldn't start on Test Mac; check that Computer"]
 
 
 def test_the_latest_failed_start_is_not_hidden_by_an_older_held_run(api):

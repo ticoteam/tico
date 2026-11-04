@@ -2531,7 +2531,6 @@ REDIRECT_CARRIERS = ("SELECT carrier_id FROM message_deliveries WHERE message_id
 class Execution:
     def __init__(self, store, auth):
         self.store, self.auth = store, auth
-        self.booted = H.now()
         # Set by create_app: onboarding gives a newly enrolled machine the bots nobody placed.
         self.runner_enrolled = None
         # Set by create_app: a readiness report finishes the go-lives that were waiting for this computer to get a
@@ -3067,7 +3066,7 @@ class Execution:
                 gateway_connection.forget(c, row["id"])
                 if row["state"] == "leased" and state == "queued" and not benched:
                     tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=? AND started_at IS NULL "
-                                      "AND state='expired' AND finished_at>=?", (row["job_id"], self.booted)).fetchone()[0]
+                                      "AND state='expired'", (row["job_id"],)).fetchone()[0]
                     if tries >= PRE_START_TRIES:
                         computer = c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
                         label = (computer["label"] if computer else None) or "its Computer"
@@ -3122,11 +3121,11 @@ class Execution:
         """A run its computer took and never started, its attempt already `expired`: its lease lapsed, or its
         computer handed it back (hand_back). Nothing ran, so nothing is held for review and the bot is not crashed:
         the job waits in the queue again and the bot's status line says so softly (last_stop). After PRE_START_TRIES
-        such runs since this server started the job fails instead, with a reason that names the computer, told to
-        the person who asked: a broken computer must not take it forever."""
+        such runs the job fails instead, with a reason that names the computer, told to the person who asked.
+        The count survives server restarts: a broken computer must not take the same job forever."""
         state, reason = "queued", ""
         tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=? AND started_at IS NULL "
-                          "AND state='expired' AND finished_at>=?", (row["job_id"], self.booted)).fetchone()[0]
+                          "AND state='expired'", (row["job_id"],)).fetchone()[0]
         bot = H.bot(c, row["bot_id"])
         if tries >= PRE_START_TRIES:
             computer = c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
