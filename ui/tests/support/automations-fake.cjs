@@ -14,11 +14,13 @@ const clone = x => JSON.parse(JSON.stringify(x));
 // A version's flow: the trigger, the steps and (a board's) destinations.
 const flowOf = a => ({trigger: clone(a.trigger), steps: clone(a.steps), ...(a.destinations ? {destinations: clone(a.destinations)} : {})});
 // The hub's own refusals that a board save could trip (backend/automation_flow.py): a decide question needs
-// instructions, a choice two options, an llm step a prompt; steps nest in paths and branches.
+// instructions, a choice two options, an llm step a prompt and a choose's default one of its to; steps nest in paths
+// and branches.
 function flowProblem(steps) {
   for (const s of steps || []) {
     if (!s || typeof s !== 'object') continue;
     if (s.type === 'llm' && !String(s.prompt ?? '').trim()) return `${s.id}: an llm step needs a prompt`;
+    if (s.type === 'llm' && s.choose && !(s.choose.to || []).includes(s.choose.default)) return `${s.id}: choose.default is one of choose.to`;
     if (s.type === 'decide') for (const [id, q] of Object.entries(s.questions || {})) {
       if (q?.instructions == null || (typeof q.instructions === 'string' && !q.instructions.trim())) return `${s.id}.${id}: a question needs instructions`;
       if (q?.type === 'choice' && (Array.isArray(q.criteria) ? q.criteria : Object.keys(q.criteria || {})).length < 2) return `${s.id}.${id}: a choice is a criteria map of at least two options`;
