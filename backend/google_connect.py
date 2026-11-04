@@ -80,6 +80,7 @@ def fingerprint(refresh_token):
 
 AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
+REVOKE_URI = "https://oauth2.googleapis.com/revoke"
 G = "https://www.googleapis.com/auth/"
 # The same list as connectors/mail/oauth.py IDENTITY_SCOPES + READ_SCOPES (backend/tests/test_google_connect.py).
 READ_SCOPES = ["openid", "email", G + "gmail.readonly", G + "calendar.events.readonly", G + "calendar.freebusy",
@@ -93,6 +94,9 @@ SERVICE_SCOPES = {"gmail": {G + "gmail.readonly"},
                                G + "calendar.calendarlist.readonly"}}
 SERVICE_ACT_SCOPES = {"gmail": {G + "gmail.modify"}, "calendar": {G + "calendar.events"}}
 READ_SERVICE_SCOPES = sorted(set().union(*SERVICE_SCOPES.values()))     # a grant from before scopes were recorded
+# Google names the identity scopes in an answer by their full address, whatever was asked (`email` comes back as
+# userinfo.email). They are not mail or calendar access, so an answer carrying them is not wider than the app's grant.
+IDENTITY_NAMES = {G + "userinfo.email", G + "userinfo.profile"}
 APPS = {"settings": "own", "env": "shared"}     # the Google app a connect signs in with, as the person is told it
 GOOGLE_SECONDS = 20
 CALLBACK = "/api/v2/mail/google/callback"
@@ -138,10 +142,17 @@ MESSAGES = {
     "reconnect": ("Tico's Google app was changed on this server, so this connection has to be made again.",
                   "Connect again."),
 }
-# Offered to a read-only connection made with the company's own app. Connecting again is the person's choice: nothing
-# is asked for without it.
-UPGRADE = ("This connection only reads your mail and calendar.",
-           "Connect Google again to let Tico also label, archive and draft mail, and add calendar events.")
+# Offered to a connection made with the company's own app that lacks some of its write access, keyed by what is
+# missing: "both", "mail" (labels, archive and drafts) or "calendar" (events). Connecting again is the person's choice:
+# nothing is asked for without it.
+UPGRADE = {
+    "both": ("This connection only reads your mail and calendar.",
+             "Connect Google again to let Tico also label, archive and draft mail, and add calendar events."),
+    "mail": ("This connection can add calendar events, but only reads your mail.",
+             "Connect Google again to let Tico also label, archive and draft mail."),
+    "calendar": ("This connection can label, archive and draft mail, but only reads your calendar.",
+                 "Connect Google again to let Tico also add calendar events."),
+}
 
 
 class ConnectorResult(M.Contract):
@@ -176,9 +187,17 @@ def grantable(source):
     return READ_SCOPES + ACT_SCOPES if source == "settings" else READ_SCOPES
 
 
+def overbroad(answer, source):
+    """The scopes in the exchange's answer that this app may not grant, empty when there are none. An answer with no
+    scope list has none."""
+    told = set(str(answer.get("scope") or "").split())
+    return told - set(grantable(source)) - IDENTITY_NAMES
+
+
 def granted_scopes(answer, source):
     """The scopes Google gave in the exchange's answer, never more than `grantable` allows that app. An answer with no
-    scope list keeps read only: the grant holds only what Google confirmed."""
+    scope list keeps read only: the grant holds only what Google confirmed. (An answer wider than the app may grant is
+    refused before this, see `overbroad`.)"""
     told = str(answer.get("scope") or "").split()
     if not told:
         return READ_SERVICE_SCOPES
@@ -196,13 +215,25 @@ def redirect_uri(settings):
     return settings.public_url.rstrip("/") + CALLBACK
 
 
-def post_token(fields):
-    """Google's token endpoint answer for `fields`. Raises urllib.error.HTTPError on a refusal, OSError when
-    Google can't be reached."""
-    request = urllib.request.Request(TOKEN_URI, data=urllib.parse.urlencode(fields).encode(),
+def post_token(fields, uri=TOKEN_URI):
+    """Google's answer to a form post to one of its OAuth endpoints: the token endpoint, or revoke (REVOKE_URI). Raises
+    urllib.error.HTTPError on a refusal, OSError when Google can't be reached."""
+    request = urllib.request.Request(uri, data=urllib.parse.urlencode(fields).encode(),
                                      headers={"Content-Type": "application/x-www-form-urlencoded"})
     with urllib.request.urlopen(request, timeout=GOOGLE_SECONDS) as answer:
         return json.loads(answer.read().decode() or "{}")
+
+
+def revoke_at_google(token):
+    """Ask Google to revoke a token this server was just given and must not keep, best effort: whether Google confirmed
+    it is returned, and the token is never logged or stored."""
+    if not token:
+        return False
+    try:
+        post_token({"token": token}, REVOKE_URI)
+        return True
+    except (urllib.error.HTTPError, OSError, ValueError):
+        return False
 
 
 def google_token(client, fields):
@@ -264,17 +295,22 @@ def expire(c):
 
 def view(row, mailbox, syncing, source):
     """What the person sees. `source` is the OAuth client a connect would use now (see app_source). A connected grant
-    shows the scopes Google gave it, and `acts` says whether they include the act scopes. A read-only grant made with
-    the company's own app is told a reconnect would add them; nothing changes until the person reconnects."""
+    shows the scopes Google gave it, and `acts` says, per service, whether the grant has that service's write access
+    (mail: labels, archive and drafts; calendar: events). A connection made with the company's own app that lacks
+    either is told what a reconnect would add; nothing changes until the person reconnects."""
     status = row["status"] if row else "none"
     out = {"configured": source is not None, "app": APPS.get(source), "mailbox": mailbox, "syncing": syncing,
-           "status": status, "scopes": grantable(source) if source else READ_SCOPES, "can": [], "acts": False,
+           "status": status, "scopes": grantable(source) if source else READ_SCOPES, "can": [],
+           "acts": {"mail": False, "calendar": False},
            "updated_at": row["updated_at"] if row else None, "kind": None, "message": None, "hint": None}
     if row and status == "connected":
-        given = json.loads(row["grant_scopes"]) if row["grant_scopes"] is not None else READ_SERVICE_SCOPES
-        out.update(can=json.loads(row["can"] or "[]"), scopes=given, acts=bool(set(given) & set(ACT_SCOPES)))
-        if source == "settings" and not out["acts"]:
-            out.update(message=UPGRADE[0], hint=UPGRADE[1])
+        given = set(json.loads(row["grant_scopes"]) if row["grant_scopes"] is not None else READ_SERVICE_SCOPES)
+        acts = {"mail": bool(given & SERVICE_ACT_SCOPES["gmail"]),
+                "calendar": bool(given & SERVICE_ACT_SCOPES["calendar"])}
+        out.update(can=json.loads(row["can"] or "[]"), scopes=sorted(given), acts=acts)
+        if source == "settings" and not all(acts.values()):
+            lacks = "both" if not any(acts.values()) else "mail" if acts["calendar"] else "calendar"
+            out.update(message=UPGRADE[lacks][0], hint=UPGRADE[lacks][1])
     if row and status == "failed":
         kind = row["kind"] or "error"
         message, hint = (policy_message(mailbox) if kind == "admin_policy" else MESSAGES.get(kind)
@@ -464,7 +500,8 @@ def install(app, store, member, mutate):
     @app.post("/api/v2/connectors/mail/google/{person_id}/exchange")
     def google_exchange(person_id: str, request: Request, body: M.Empty | None = None):
         """Trade a claimed connect's code for its grant, for the computer that claimed it, once. The code and the
-        verifier are cleared before Google is asked; the answer goes to that computer and is not kept here."""
+        verifier are cleared before Google is asked; the answer goes to that computer and is not kept here. An answer
+        with more scopes than this app may grant is refused: its grant is revoked at Google and nothing is passed on."""
         with store.transaction() as c:
             runner, named = member(c, request.state.identity)
             row = c.execute("SELECT * FROM google_connects WHERE person_id=?", (person_id,)).fetchone()
@@ -484,6 +521,12 @@ def install(app, store, member, mutate):
                           extra={"kind": "app_config"})
         answer = google_token(client, {"grant_type": "authorization_code", "code": code, "code_verifier": verifier,
                                        "redirect_uri": redirect_uri(settings)})
+        if overbroad(answer, client[2]):
+            # Google gave more access than this app may grant. Nothing is passed on or kept: the grant is revoked at
+            # Google (best effort), and the sign-in fails with no token for the computer.
+            revoke_at_google(answer.get("refresh_token") or answer.get("access_token"))
+            raise Problem("google_refused", "Google granted more access than Tico asks for, so nothing was connected",
+                          409, extra={"kind": "scope"})
         if answer.get("refresh_token"):
             # The scopes Google gave this grant, never more than this app may grant (granted_scopes), kept with its
             # fingerprint.

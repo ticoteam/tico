@@ -75,16 +75,25 @@ const {unrouted} = require('./support/routes.cjs');
 
     // A read-only connection made with the company's own app is offered the write access on a reconnect, never forced.
     const upgrade = 'Connect Google again to let Tico also label, archive and draft mail, and add calendar events.';
-    google = {...google, app: 'own', acts: false, message: 'This connection only reads your mail and calendar.', hint: upgrade};
+    google = {...google, app: 'own', acts: {mail: false, calendar: false}, message: 'This connection only reads your mail and calendar.', hint: upgrade};
     await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
     await page.waitForFunction(hint => (document.querySelector('#set-google')?.textContent || '').includes(hint), upgrade);
     assert.equal(await page.locator('#set-google [data-google-connect]').count(), 1);
     assert.equal(await page.locator('#set-google [data-google-disconnect]').count(), 1);
-    // Once the grant holds the write access, the offer is gone.
-    google = {...google, acts: true, message: null, hint: null, can: ['read', 'label and archive mail']};
+    // A grant with the mail write access only says so, and is offered just the calendar one.
+    const calendarUpgrade = 'Connect Google again to let Tico also add calendar events.';
+    google = {...google, acts: {mail: true, calendar: false}, message: 'This connection can label, archive and draft mail, but only reads your calendar.', hint: calendarUpgrade, can: ['read mail', 'label and archive mail']};
+    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
+    await page.waitForFunction(hint => (document.querySelector('#set-google')?.textContent || '').includes(hint), calendarUpgrade);
+    const connectedLine = () => page.locator('#set-google p', {hasText: 'Connected:'}).innerText();
+    assert.equal(await connectedLine(), "Connected: Tico reads cara@acme.example's mail and calendar, and can also label, archive and draft mail.");
+    // Once the grant holds the write access, the offer is gone and the connected line names all of it.
+    google = {...google, acts: {mail: true, calendar: true}, message: null, hint: null, can: ['read', 'label and archive mail', 'add calendar events']};
     await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
     await page.locator('#set-google [data-google-disconnect]').waitFor();
+    assert.equal(await connectedLine(), "Connected: Tico reads cara@acme.example's mail and calendar, and can also label, archive and draft mail, and add calendar events.");
     assert.equal((await page.locator('#set-google').innerText()).includes(upgrade), false);
+    assert.equal((await page.locator('#set-google').innerText()).includes(calendarUpgrade), false);
     await page.locator('#set-google [data-google-disconnect]').click();
     await page.waitForFunction(() => /Disconnecting/.test(document.querySelector('#set-google')?.textContent || ''));
     assert.deepEqual(writes, ['/api/v2/mail/google/connect', '/api/v2/mail/google/connect', '/api/v2/mail/google/disconnect']);

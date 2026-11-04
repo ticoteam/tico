@@ -178,11 +178,15 @@
       ? '<p class="muted">With your company\'s Google app, Connect Google can also label, archive and draft mail, and add calendar events. Tico\'s shared app only reads your mail and calendar. Sending stays off.</p>'
       : '<p class="muted">Tico asks Google only to read your mail and calendar. It can\'t send, label, archive or change anything, and sending stays off.</p>';
     const busy = ['ready', 'finishing', 'disconnecting', 'revoking'].includes(state.status);
+    // What the grant can write beyond reading: per service (state.acts = {mail, calendar}), named in the connected line.
+    const acts = state.acts || {};
+    const writes = [acts.mail && 'label, archive and draft mail', acts.calendar && 'add calendar events'].filter(Boolean);
+    const extra = writes.length === 2 ? `${writes[0]}, and ${writes[1]}` : writes[0];
     let body;
     if (!state.configured) {
       body = '<p>Connect Google isn\'t available on this Tico server yet: whoever runs it has not set up its Google app.</p>';
     } else if (state.status === 'connected') {
-      body = `<p>Connected: Tico reads ${box}'s mail and calendar${state.acts ? ', and can also label, archive, draft and add calendar events' : ', read only'}.</p>${state.message ? `<p class="muted">${esc(state.hint)}</p>` : ''}${state.syncing ? '' : '<p class="muted">No message bot reads this mailbox yet, so nothing is synced until one does.</p>'}
+      body = `<p>Connected: Tico reads ${box}'s mail and calendar${extra ? `, and can also ${extra}` : ', read only'}.</p>${state.message ? `<p class="muted">${esc(state.hint)}</p>` : ''}${state.syncing ? '' : '<p class="muted">No message bot reads this mailbox yet, so nothing is synced until one does.</p>'}
         <div class="row"><button type="button" class="ghost" data-google-connect>Reconnect</button>
         <button type="button" class="ghost" data-google-disconnect>Disconnect</button></div>
         <p class="muted">Disconnect revokes Tico's access at Google. You can also remove it at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a>.</p>`;
