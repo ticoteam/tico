@@ -174,6 +174,7 @@ PAGE_AUDIENCE_SQL = "SELECT audience FROM pages WHERE file_id=?"
 
 def page_audience_visible(c, auth, who, row, cache):
     """A page only narrows its inherited visibility, with management kept outside its audience."""
+    privacy.snapshot(c)
     page = read_cache.one(c, PAGE_AUDIENCE_SQL, (row["id"],))
     if page and page["audience"] is not None:
         from . import pages, teammate_access
