@@ -90,7 +90,7 @@ def _retire_health_scan(conn, tables, when):
         conn.execute("UPDATE automations SET enabled=0, deleted_at=?, updated_at=? WHERE deleted_at IS NULL AND builtin=1 "
                      "AND json_extract(flow,'$.readonly')=1 "
                      "AND json_extract(flow,'$.trigger.name')='tico.builtin.job.health_scan'", (when, when))
-    if "automation_runs" in tables:
+    if "automations" in tables and "automation_runs" in tables:
         # Its unfinished runs are skipped, as a delete skips them (automations.remove); a mirror holds nothing else.
         conn.execute("UPDATE automation_runs SET status='skipped', finished_at=? "
                      "WHERE status IN ('queued','waiting','running') AND automation_id IN (SELECT id FROM automations "
