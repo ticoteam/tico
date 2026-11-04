@@ -688,7 +688,7 @@ mod visual_bridge_tests {
     #[test]
     fn every_page_reports_its_capture() {
         for several in [false, true] {
-            let script = script_for("0.5.0", several);
+            let script = script_for("0.5.0", several, several);
             assert!(script.contains("name: 'capture'") && !script.contains("__ticoCapture"), "nothing the page can call to switch it off");
             assert!(script.contains("'getUserMedia', 'getDisplayMedia'"));
         }
