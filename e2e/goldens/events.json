@@ -1567,6 +1567,7 @@
         "actor": "bot:ops",
         "at": "<time>",
         "count": 1,
+        "folded_task_ids": [],
         "items": [
           {
             "actions": [
@@ -1730,6 +1731,7 @@
         "actor": "runner:<id30>",
         "at": "<time>",
         "count": 1,
+        "folded_task_ids": [],
         "items": [
           {
             "actions": [
