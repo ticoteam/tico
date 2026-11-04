@@ -122,4 +122,44 @@ assert.equal(without(f => { f.steps[0].rules[0].next = 'rule'; }), null);
 assert.equal(shape({trigger: {type: 'message'}, steps: [{id: 'f1', type: 'filter', rules: []}]}), null, 'a plain flow keeps its steps');
 const legacy = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/redesign-automations.json'), 'utf8')).automations;
 for (const a of legacy) assert.equal(shape(a), null, `${a.id} keeps its step list`);
+
+// The inbox templates (backend/automation_templates) are boards as a person's message flow, so New inbox opens one.
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../app/automations-new.js'), 'utf8'), context);
+const tdir = path.join(__dirname, '../../backend/automation_templates');
+const templates = Object.fromEntries(fs.readdirSync(tdir).filter(f => f.endsWith('.json'))
+  .map(f => [f.replace(/\.json$/, ''), JSON.parse(fs.readFileSync(path.join(tdir, f), 'utf8'))]));
+assert.deepEqual(Object.keys(templates).sort(), ['blank', 'founder', 'sales', 'support']);
+const mine = t => ({owner: 'person:dana', trigger: {type: 'message', inbox: 'dana@acme.example'}, steps: clone(t.steps),
+  destinations: clone(t.destinations)});
+for (const [id, t] of Object.entries(templates)) assert.ok(shape(mine(t)), `${id} is a board`);
+
+// Apply template: the October inbox's one llm step becomes the LLM, its own fields kept and its prompt the instructions.
+const october = {id: 'au_old', owner_id: 'person:dana', trigger: {type: 'message', inbox: 'dana@acme.example'},
+  steps: [{id: 'read', type: 'llm', as: 'assistant:dana', prompt: 'My rules.', out: 'triage', model: 'm1'}]};
+const founder = context.auApplyFlow(october, mine(templates.founder));
+const fs1 = plain(founder.steps);
+assert.deepEqual(fs1.map(s => s.id), ['rules', 'ask', 'route', 'read']);
+assert.deepEqual(fs1[3], {id: 'read', type: 'llm', as: 'assistant:dana', prompt: 'My rules.', out: 'triage', model: 'm1',
+  choose: {...templates.founder.steps[3].choose, mode: 'draft'}});
+assert.deepEqual(plain(founder.destinations), templates.founder.destinations);
+assert.ok(shape({...october, ...plain(founder)}), 'the result is a board');
+// Blank sorts with no LLM turn of its own; a person's still gets the draft turn, over the same destinations.
+const blank = plain(context.auApplyFlow(october, mine(templates.blank)));
+assert.deepEqual(blank.steps, [{...october.steps[0], choose: {to: ['me', 'archive'], default: 'me', mode: 'draft'}}]);
+// A bot's turn runs as the bot; an empty old prompt keeps the template's; a clashing out gets a fresh one.
+const botOld = {...clone(october), owner_id: 'bot:support'};
+botOld.steps[0] = {id: 'read', type: 'llm', as: 'bot:support', prompt: ' ', out: 'q'};
+const bot = plain(context.auApplyFlow(botOld, mine(templates.founder)));
+const bl = bot.steps.at(-1);
+assert.equal(bl.as, 'bot:support');
+assert.equal(bl.prompt, templates.founder.steps[3].prompt);
+assert.notEqual(bl.out, 'q', 'the questions step keeps q');
+assert.equal(bot.steps[1].out, 'q');
+// A group sorts: the old prompt instructs the template's Sort, and no llm step is left.
+const groupOld = {...clone(october), owner_id: 'group:support', trigger: {type: 'message', inbox: 'slack:#support'}};
+const groupFill = mine(templates.blank);
+const group = plain(context.auApplyFlow(groupOld, groupFill));
+assert.deepEqual(group.steps.map(s => s.type), ['decide', 'filter']);
+assert.equal(group.steps[0].questions.route.instructions, 'My rules.');
+assert.equal(context.auApplyFlow(october, {steps: [], destinations: []}), null, 'a fill that is no board applies nothing');
 console.log('automations-board-unit: ok');

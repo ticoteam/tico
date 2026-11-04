@@ -96,6 +96,11 @@ def test_a_group_owner_gets_sort_not_a_choose(api):
     sort = by_id(flow["steps"])["draft"]
     assert sort["type"] == "decide" and sort["level"] == "high"
     assert set(sort["questions"]["route"]["criteria"]) == {"me", "legal", "engineering", "finance", "marketing", "archive"}
+    # Each option routes to itself, the default too, then the default catches a missing answer: the board's Sort.
+    routes = by_id(flow["steps"])["draft_route"]["rules"]
+    assert [rule["to"] for rule in routes] == [*sort["questions"]["route"]["criteria"], "me"]
+    assert [rule["when"][0]["value"] for rule in routes[:-1]] == list(sort["questions"]["route"]["criteria"])
+    assert routes[-1]["when"] == []
 
 
 def test_blank_is_a_sort_to_me_or_archive(api):

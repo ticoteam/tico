@@ -141,7 +141,8 @@ def _prune(steps, gone):
 
 def _as_sort(step, tpl):
     """A group has no turn to answer a choose with, so its llm step with choose becomes Sort: a choice over the same
-    destinations, then a filter that sends the thread to the one chosen (the default when the answer is missing)."""
+    destinations, then a filter that sends the thread to the one chosen (the default when the answer is missing). Every
+    option has its own route, the default's too, which is the shape the board reads (ui/app/automations-flow.js)."""
     choose = step.get("choose")
     if step["type"] != "llm" or choose is None:
         return [step]
@@ -153,7 +154,7 @@ def _as_sort(step, tpl):
     names = {dest["id"]: dest["name"] for dest in tpl["destinations"]}
     criteria = {dest: (spec.get("criteria") or {}).get(dest) or names.get(dest, dest) for dest in to}
     rules = [{"when": [{"field": f"{out}.route", "op": "is", "value": dest, "min": 0.5}], "to": dest,
-              "next": "end", "stop": True} for dest in to if dest != default]
+              "next": "end", "stop": True} for dest in to]
     rules.append({"when": [], "to": default, "next": "end", "stop": True})
     return [{"id": step["id"], "type": "decide", "level": "high", "out": out, "questions": {"route": {
                 "type": "choice", "instructions": spec.get("instructions") or "Where does this message belong? Pick the one that fits best.",
