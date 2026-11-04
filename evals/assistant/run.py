@@ -52,7 +52,7 @@ OWNER = "human:dana"
 FILL = {"{{app_name}}": "Tico", "{{assistant_name}}": "Tico Assistant", "{{company_name}}": "Acme",
         "{{mailbox}}": "ops@acme.example"}
 
-FAKE_CORE = r'''import json, os, re
+FAKE_CORE = r'''import json, os, re, sys
 
 WRITE_VERBS = {"update", "delete", "archive", "restore", "label", "withdraw", "answer", "approve", "decline", "done",
                "close", "cancel", "set", "remove", "add", "bulk"}
@@ -330,13 +330,27 @@ def answer(argv, via, tool=None):
     line = " ".join(argv)
     canon = re.sub(r" --on-behalf-of \S+", "", line)
     words = canon.split()
-    files = {}
+    files, bad = {}, None
     for i, a in enumerate(argv[:-1]):
         if a.endswith("-file") or a == "--file":
+            path = argv[i + 1]
             try:
-                files[argv[i + 1]] = open(argv[i + 1]).read()[:1500]
+                # `-` is stdin, as the real CLI reads it. The MCP server's stdin is its protocol, so never there.
+                body = (sys.stdin.read() if via == "cli" and not sys.stdin.isatty() else "") if path == "-" else open(path).read()
             except Exception:
-                pass
+                continue
+            files[path] = body[:1500]
+            if path == "-" or path.endswith(".json"):
+                try:
+                    json.loads(body)
+                except ValueError:
+                    bad = bad or f"{path}: not JSON"
+    if bad:  # the real CLI refuses a payload it cannot read: nothing is written
+        text = json.dumps({"error": "validation", "detail": bad})
+        with open(os.environ["EVAL_LOG"], "a") as log:
+            log.write(json.dumps({"argv": line, "via": via, "matched": None, "files": files, "exit": 1,
+                                  "out": text[:200]}) + "\n")
+        return text, 1
     # State: what the writes in this run changed, so later reads show it (the real hub does the same).
     state_path = os.environ["EVAL_STATE"]
     try:
