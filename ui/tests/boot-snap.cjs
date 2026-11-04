@@ -151,6 +151,27 @@ const {t} = require('./support/load.cjs');
     await other.waitForFunction(() => performance.getEntriesByName('tico:paint-fresh').length === 1);
     assert.equal(await other.evaluate(() => SNAP.who !== ''), true, 'the other tab would keep its screen');
 
+    // A save the other tab queued (held behind its database) before this tab signs out writes nothing when it runs.
+    await other.evaluate(() => {
+      const real = SNAP.db || snapDb();
+      SNAP.db = new Promise(go => { window.__dbGo = () => go(real); });
+      bootSnapSave();
+    });
+    await page.evaluate(() => bootSnapDrop());
+    await other.evaluate(() => window.__dbGo());
+    await other.waitForTimeout(300);
+    assert.equal(await kept(), null, 'a save queued before the sign-out keeps nothing');
+    assert.equal(await other.evaluate(() => SNAP.banned && SNAP.who === ''), true, 'and the other tab keeps nothing more');
+
+    // Both tabs again, from a fresh load; the other tab hears nothing of the next sign-out (no BroadcastChannel).
+    await page.reload({waitUntil: 'domcontentloaded'});
+    await heading().waitFor();
+    await keptAs(entry => entry?.route === '#/tasks', 'kept again after a fresh load');
+    await other.reload({waitUntil: 'domcontentloaded'});
+    await other.getByRole('heading', {name: 'Tasks', exact: true}).waitFor();
+    await other.waitForFunction(() => performance.getEntriesByName('tico:paint-fresh').length === 1);
+    await other.evaluate(() => { snapChannel.onmessage = null; });
+
     // Signing out while the copy is up takes it down at once, and leaves no screen behind (the navigation itself is
     // not followed).
     held = [];
@@ -174,9 +195,13 @@ const {t} = require('./support/load.cjs');
     await page.evaluate(() => { bootSnapSave(); window.dispatchEvent(new Event('pagehide')); });
     await page.waitForTimeout(300);
     assert.equal(await kept(), null, 'nothing is kept again after a sign-out in this page');
-    // Nor by the other tab, which never heard a 401: the sign-out reached it, and its leaving keeps nothing.
-    const otherAfter = await other.evaluate(() => { bootSnapSave(); window.dispatchEvent(new Event('pagehide')); return SNAP.who; });
-    assert.equal(otherAfter, '', "the other tab drops whose screen it was");
+    // Nor by the other tab, which never heard a 401 nor the channel: the epoch it read at boot is old, so its save
+    // and its leaving write nothing, and it drops whose screen it was.
+    assert.equal(await other.evaluate(() => SNAP.who !== '' && !SNAP.banned), true, 'the other tab was not told');
+    await other.evaluate(() => { bootSnapSave(); window.dispatchEvent(new Event('pagehide')); });
+    await other.waitForTimeout(300);
+    assert.equal(await kept(), null, 'an old epoch keeps nothing');
+    assert.equal(await other.evaluate(() => SNAP.banned && SNAP.who === ''), true, "the other tab drops whose screen it was");
     await other.close({runBeforeUnload: true});
     await page.waitForTimeout(300);
     assert.equal(await kept(), null, 'a sign-out in one tab bans keeping in every tab open before it');
