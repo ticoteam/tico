@@ -107,7 +107,7 @@ const homes = {'bot:ops': 'h-ops', 'human:bea': 'h-bea', 'human:cy': 'h-cy', 'hu
 // one without the rail (GET /v2/threads/rail answers 404).
 let dmRows = null, callsOff = false, railOff = false, threadsOff = false, threadsGate = null;
 // Start call as the server answers it: the call it makes (after a moment), or none.
-let callMade = null;
+let callMade = null, joinRefused = false;
 async function open(browser, who, {phone = false, sse = null} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
@@ -260,6 +260,7 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
     const call = p.match(/^\/api\/v2\/calls\/([^/]+)\/(join|leave|end|token)$/);
     if (call) {
       seen.calls.push(call[2] + ':' + call[1]);
+      if (call[2] === 'join' && joinRefused) return json({error: {code: 'call_access_removed'}}, 403);
       if (call[2] === 'join') { await new Promise(r => setTimeout(r, 150)); return json({token: 'tok-' + call[1], url: 'wss://meet.acme.example', call: {id: call[1], connector: 'human:ana'}}); }
       if (call[2] === 'end') return json({error: {code: 'internal', detail: 'Could not end'}}, 500);
       return json({ok: true});
@@ -514,7 +515,13 @@ let browser = null;
     assert.ok(!seen.calls.includes('join:c5'), 'the call made while hidden is not joined: ' + seen.calls);
     assert.deepEqual(await page.evaluate(() => window.__rooms.length), 0);
     assert.equal(await page.locator('#call-bar').count(), 0);
-    callMade = null;
+    // A join the server refuses still says so: Start call's own join number is the one the join checks.
+    callMade = {id: 'c6', state: 'live', connector: 'human:ana'}; joinRefused = true;
+    await page.evaluate(() => callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'));
+    assert.ok(seen.calls.includes('join:c6'), 'the call made is joined: ' + seen.calls);
+    await page.locator('.thv-call-note', {hasText: 'Removed from call'}).waitFor();
+    await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); CALL_THREADS.set('t-plan', {...CALL_THREADS.get('t-plan'), removed: false}); thvDraw(v); });
+    callMade = null; joinRefused = false;
 
     // An older sub-thread opened by its link keeps the way back, and reads flat too.
     await page.goto('https://tico-ui.test/#/thread/t-sub');

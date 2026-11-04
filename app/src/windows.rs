@@ -579,6 +579,8 @@ pub(crate) struct Kept {
 struct KeptPage {
     org: String,
     ticket: u64,
+    // A switch is showing it again (until the switch takes it out of the kept ones): the watch leaves it be.
+    showing: bool,
     // The visual allowance the page had when it was open: it follows the page while hidden (its navigation, and
     // `visualOrigin` from the page itself) and becomes the open one again when the page is shown.
     visual: Option<VisualOrigin>,
@@ -589,7 +591,7 @@ impl Kept {
     pub(crate) fn hide(&mut self, id: &str, visual: Option<VisualOrigin>) -> u64 {
         self.serial += 1;
         self.pages.retain(|page| page.org != id);
-        self.pages.push(KeptPage { org: id.to_string(), ticket: self.serial, visual });
+        self.pages.push(KeptPage { org: id.to_string(), ticket: self.serial, showing: false, visual });
         self.serial
     }
 
@@ -603,9 +605,16 @@ impl Kept {
         self.pages.iter().any(|page| page.org == id)
     }
 
-    /// Whether `id`'s page is still hidden since the hiding with `ticket`.
+    /// Whether `id`'s page is still hidden since the hiding with `ticket`, and no switch is showing it.
     pub(crate) fn holds(&self, id: &str, ticket: u64) -> bool {
-        self.pages.iter().any(|page| page.org == id && page.ticket == ticket)
+        self.pages.iter().any(|page| page.org == id && page.ticket == ticket && !page.showing)
+    }
+
+    /// A switch is about to show `id`'s kept page.
+    pub(crate) fn showing(&mut self, id: &str) {
+        for page in self.pages.iter_mut().filter(|page| page.org == id) {
+            page.showing = true;
+        }
     }
 
     /// `id`'s close with `ticket` is due: whether the page is still hidden since that hiding (it goes now), not shown
@@ -734,6 +743,8 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
         }
         show_when_painted(app);
     } else if let Some(page) = &live {
+        // Before it shows: a capture check running now for it while kept stops nothing on it (`native_capture`).
+        state.kept.lock().unwrap().showing(id);
         layout_page(app, page);
         let _ = page.show();
         let _ = page.set_focus();
@@ -807,13 +818,13 @@ const WATCH_EVERY: Duration = Duration::from_secs(1);
 #[cfg(target_os = "macos")]
 const CAPTURE_ANSWER: Duration = Duration::from_secs(1);
 
-/// What a page's own webview says about its microphone and camera. Each platform builds only some of these.
+/// What a page's own webview says about its capture. Each platform builds only some of these.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) enum Native {
-    /// Neither is captured, nor muted.
-    Idle,
-    /// One is captured or muted: both were stopped as this was asked.
+    /// Nothing captured, nor muted: the microphone and camera, and the screen too when `screen` (WebKit told).
+    Idle { screen: bool },
+    /// Something is captured or muted: it was stopped as this was asked, unless the page was shown meanwhile.
     Capturing,
     /// No answer in time, or the webview is gone.
     Unknown,
@@ -827,17 +838,18 @@ pub(crate) enum Native {
 pub(crate) struct CaptureNote {
     pub(crate) live: bool,
     pub(crate) ever: bool,
-    /// It asked to share its screen, which WebKit does not tell the shell about.
+    /// It asked to share its screen.
     pub(crate) display: bool,
 }
 
 /// Whether a page left by a switch, or kept since one, stays kept: only when nothing says it may be capturing. On
-/// macOS WebKit's own answer decides for the microphone and camera, and a page that ever said it asked to share its
-/// screen (which WebKit cannot tell) is closed. Elsewhere a page that ever said it captured anything is closed.
-/// Closing is always safe: the page opens again where it was.
+/// macOS WebKit's own answer decides; where it cannot tell about the screen, a page that ever said it asked to share
+/// its screen is closed. Elsewhere a page that ever said it captured anything is closed. Closing is always safe: the
+/// page opens again where it was.
 pub(crate) fn keeps(native: Native, note: CaptureNote) -> bool {
     match native {
-        Native::Idle => !note.display,
+        Native::Idle { screen: true } => true,
+        Native::Idle { screen: false } => !note.display,
         Native::Unsupported => !(note.live || note.ever || note.display),
         Native::Capturing | Native::Unknown => false,
     }
@@ -851,37 +863,99 @@ pub(crate) fn note_capture(notes: &mut HashMap<String, CaptureNote>, id: &str, l
     note.display |= display;
 }
 
-/// Asks `page`'s WKWebView whether it captures the microphone or camera (captured or muted), stopping both if so,
-/// and calls `answer` with that, on the main thread. Answers whether the question went.
+/// One capture question: whoever takes it first, WebKit's answer on the main thread or the wait that gave up on it,
+/// decides. An answer that comes after the wait gave up changes nothing.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) struct Question(AtomicBool);
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+impl Question {
+    pub(crate) fn new() -> Arc<Question> {
+        Arc::new(Question(AtomicBool::new(true)))
+    }
+
+    /// Takes the question: true for the first to ask only.
+    pub(crate) fn take(&self) -> bool {
+        self.0.swap(false, Ordering::SeqCst)
+    }
+}
+
+/// WebKit's screen capture (SPI, `_displayCaptureState`, macOS 13+): `None` when this WebKit does not have it.
 #[cfg(target_os = "macos")]
-fn ask_capture(page: &Webview, answer: impl FnOnce(bool) + Send + 'static) -> bool {
+unsafe fn display_capture(view: &objc2_web_kit::WKWebView) -> Option<bool> {
+    use objc2::{msg_send, sel};
+    let has: bool = msg_send![view, respondsToSelector: sel!(_displayCaptureState)];
+    if !has {
+        return None;
+    }
+    let state: isize = msg_send![view, _displayCaptureState];
+    Some(state != 0)
+}
+
+/// Stops WebKit's screen capture, where this WebKit can (SPI, `_setDisplayCaptureState:completionHandler:`).
+#[cfg(target_os = "macos")]
+unsafe fn stop_display_capture(view: &objc2_web_kit::WKWebView) {
+    use objc2::{msg_send, sel};
+    let has: bool = msg_send![view, respondsToSelector: sel!(_setDisplayCaptureState:completionHandler:)];
+    if has {
+        let done = block2::RcBlock::new(|| {});
+        let _: () = msg_send![view, _setDisplayCaptureState: 0isize, completionHandler: &*done];
+    }
+}
+
+/// Asks `page`'s WKWebView whether it captures the microphone, camera or screen (captured or muted), and calls
+/// `answer` with (capturing, whether the screen was told), on the main thread, unless the wait already gave up
+/// (`question`). What is captured is stopped there only while `hidden()` still holds, checked right before.
+/// Answers whether the question went.
+#[cfg(target_os = "macos")]
+fn ask_capture(page: &Webview, question: Arc<Question>, hidden: impl FnOnce() -> bool + Send + 'static,
+               answer: impl FnOnce(bool, bool) + Send + 'static) -> bool {
     use objc2_web_kit::{WKMediaCaptureState, WKWebView};
     page.with_webview(move |platform| unsafe {
-        // `inner` is the page's live WKWebView while this closure runs, lent by the runtime. Both states are
-        // macOS 12+; the app needs 14.
+        if !question.take() {
+            return;
+        }
+        // `inner` is the page's live WKWebView while this closure runs, lent by the runtime. The microphone and
+        // camera states are macOS 12+; the app needs 14.
         let view = &*platform.inner().cast::<WKWebView>();
-        let on = view.microphoneCaptureState() != WKMediaCaptureState::None || view.cameraCaptureState() != WKMediaCaptureState::None;
-        if on {
+        let screen = display_capture(view);
+        let on = view.microphoneCaptureState() != WKMediaCaptureState::None
+            || view.cameraCaptureState() != WKMediaCaptureState::None || screen == Some(true);
+        if on && hidden() {
             view.setMicrophoneCaptureState_completionHandler(WKMediaCaptureState::None, None);
             view.setCameraCaptureState_completionHandler(WKMediaCaptureState::None, None);
+            stop_display_capture(view);
         }
-        answer(on);
+        answer(on, screen.is_some());
     }).is_ok()
 }
 
-/// `page`'s capture, waiting here for WebKit's answer (never on the main thread, which gives it).
+/// What WebKit answered, as a `Native`.
+#[cfg(target_os = "macos")]
+fn native_of(answer: Option<(bool, bool)>) -> Native {
+    match answer {
+        Some((true, _)) => Native::Capturing,
+        Some((false, screen)) => Native::Idle { screen },
+        None => Native::Unknown,
+    }
+}
+
+/// `page`'s capture, waiting here for WebKit's answer (never on the main thread, which gives it). For the page a
+/// switch is leaving, which nothing else shows meanwhile: the switch holds `changing`.
 fn native_capture_now(page: &Webview) -> Native {
     #[cfg(target_os = "macos")]
     {
         let (sender, answer) = std::sync::mpsc::channel();
-        if !ask_capture(page, move |on| { let _ = sender.send(on); }) {
+        let question = Question::new();
+        if !ask_capture(page, question.clone(), || true, move |on, screen| { let _ = sender.send((on, screen)); }) {
             return Native::Unknown;
         }
-        match answer.recv_timeout(CAPTURE_ANSWER) {
-            Ok(true) => Native::Capturing,
-            Ok(false) => Native::Idle,
-            Err(_) => Native::Unknown,
+        let mut got = answer.recv_timeout(CAPTURE_ANSWER).ok();
+        // Given up on, unless the answer was already on its way.
+        if got.is_none() && !question.take() {
+            got = answer.recv_timeout(CAPTURE_ANSWER).ok();
         }
+        native_of(got)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -890,26 +964,35 @@ fn native_capture_now(page: &Webview) -> Native {
     }
 }
 
-/// `page`'s capture, for a task.
-async fn native_capture(page: &Webview) -> Native {
+/// `page`'s capture, for the watch on org `id`'s page kept with `ticket`: anything captured is stopped only while the
+/// page is still that kept one, and not being shown (`Kept::holds`), as checked on the main thread right before.
+async fn native_capture(app: &App, page: &Webview, id: &str, ticket: u64) -> Native {
     #[cfg(target_os = "macos")]
     {
         let (sender, answer) = tokio::sync::oneshot::channel();
-        if !ask_capture(page, move |on| { let _ = sender.send(on); }) {
+        let question = Question::new();
+        // `kept` is never held while waiting on the main thread, so taking it there is safe; `changing` is not.
+        let (app, id) = (app.clone(), id.to_string());
+        let hidden = move || app.state::<AppState>().kept.lock().unwrap().holds(&id, ticket);
+        if !ask_capture(page, question.clone(), hidden, move |on, screen| { let _ = sender.send((on, screen)); }) {
             return Native::Unknown;
         }
-        match tokio::time::timeout(CAPTURE_ANSWER, answer).await {
-            Ok(Ok(true)) => Native::Capturing,
-            Ok(Ok(false)) => Native::Idle,
-            _ => Native::Unknown,
+        let mut answer = answer;
+        let mut got = tokio::time::timeout(CAPTURE_ANSWER, &mut answer).await.ok().and_then(Result::ok);
+        if got.is_none() && !question.take() {
+            got = tokio::time::timeout(CAPTURE_ANSWER, answer).await.ok().and_then(Result::ok);
         }
+        native_of(got)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = page;
+        let _ = (app, page, id, ticket);
         Native::Unsupported
     }
 }
+
+// A hostile org server that gets around the page's capture report could keep a screen share it was granted for up
+// to KEEP_FOR on a WebKit without `_displayCaptureState`; macOS's own screen-recording indicator stays on meanwhile.
 
 /// A kept page started a new document while hidden (a reload, or a navigation of its own): it closes, as a page
 /// hidden from the person never starts over unseen. On a task, under `changing` as every close is (the main thread,
@@ -964,7 +1047,7 @@ fn close_later(app: &App, id: String, ticket: u64) {
             }
             let Some(page) = org_page(&app, &id) else { return };
             let note = state.capture.lock().unwrap().get(&id).copied().unwrap_or_default();
-            if !keeps(native_capture(&page).await, note) {
+            if !keeps(native_capture(&app, &page, &id, ticket).await, note) {
                 break "it may be capturing".to_string();
             }
         };
@@ -1336,16 +1419,18 @@ mod page_tests {
         let idle = CaptureNote::default();
         let mut notes = HashMap::new();
         // macOS: WebKit's answer decides for the microphone and camera, whatever the page said.
-        assert!(keeps(Native::Idle, idle));
+        assert!(keeps(Native::Idle { screen: false }, idle));
         note_capture(&mut notes, "a", true, false);
-        assert!(keeps(Native::Idle, notes["a"]), "a page that says it captures, where WebKit says it does not");
+        assert!(keeps(Native::Idle { screen: false }, notes["a"]), "a page that says it captures, where WebKit says it does not");
         assert!(!keeps(Native::Capturing, idle), "a page that got around its own report");
         assert!(!keeps(Native::Unknown, idle), "no answer in time closes");
-        // A screen share, which WebKit cannot tell: asked for once, the page is never kept.
+        // A screen share, where WebKit cannot tell: asked for once, the page is never kept. Where WebKit tells, its
+        // answer decides.
         note_capture(&mut notes, "b", false, true);
         note_capture(&mut notes, "b", false, false);
         assert_eq!(notes["b"], CaptureNote { live: false, ever: false, display: true });
-        assert!(!keeps(Native::Idle, notes["b"]));
+        assert!(!keeps(Native::Idle { screen: false }, notes["b"]));
+        assert!(keeps(Native::Idle { screen: true }, notes["b"]));
         // Elsewhere: a page that ever captured anything is closed, even after its call ended.
         assert!(keeps(Native::Unsupported, idle));
         note_capture(&mut notes, "a", false, false);
@@ -1365,9 +1450,22 @@ mod page_tests {
         // Back to A opens a new page; B, capturing nothing, is kept as usual.
         let (gone, hidden, ending) = switch_keeping(&mut shown, &mut kept, true, "a");
         assert!(gone.is_empty() && ending.is_none() && hid(hidden.clone()).as_deref() == Some("b") && kept.contains("b"));
-        // While kept, its close checks it is still that hiding.
+        // While kept, its watch checks it is still that hiding, and that no switch is showing it.
         let ticket = hidden.unwrap().1;
         assert!(kept.holds("b", ticket) && !kept.holds("b", ticket + 1) && !kept.holds("a", ticket));
+        kept.showing("b");
+        assert!(!kept.holds("b", ticket) && kept.contains("b"), "being shown, it is still kept until the switch takes it");
+    }
+
+    #[test]
+    fn a_capture_question_is_settled_once() {
+        // WebKit's answer first: the wait takes nothing after it.
+        let question = Question::new();
+        assert!(question.take() && !question.take());
+        // The wait gave up first: an answer that comes later changes nothing.
+        let late = Question::new();
+        assert!(late.take());
+        assert!(!late.take(), "the late answer stops nothing");
     }
 
     #[test]

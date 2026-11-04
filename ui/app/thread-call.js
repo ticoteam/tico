@@ -67,7 +67,7 @@ async function callAction(view, kind) {
       call = call?.call || call;
     }
     if (gen !== CALL_GEN) return;
-    if (call?.id) await callJoin(id, call, threadTitle(view.thread));
+    if (call?.id) await callJoin(id, call, threadTitle(view.thread), gen);
   } catch (e) {
     if (gen !== CALL_GEN) return;
     if (callCode(e) === 'call_in_progress') { void callLoad(view); toast('A call already started here'); return; }
@@ -87,12 +87,12 @@ function callLib() {
   });
   return CALL_LIB_LOAD;
 }
-async function callJoin(threadId, call, title) {
+// `gen` is the join's number: Start call takes it at the click, so the one number runs through the whole join.
+async function callJoin(threadId, call, title, gen = ++CALL_GEN) {
   CALL_JOINS++;
-  try { await callJoinNow(threadId, call, title); } finally { CALL_JOINS--; }
+  try { await callJoinNow(threadId, call, title, gen); } finally { CALL_JOINS--; }
 }
-async function callJoinNow(threadId, call, title) {
-  const gen = ++CALL_GEN;
+async function callJoinNow(threadId, call, title, gen) {
   if (CALL) await callLeave();
   if (gen !== CALL_GEN) return;
   const j = await post(callPath(call.id) + '/join', {});
