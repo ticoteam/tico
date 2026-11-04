@@ -1727,7 +1727,7 @@ class HubServices:
             rule = self._rule_check(do, args, ctx["values"], ctx.get("step"))
             try:
                 result = self._once(ctx, lambda c, rule=rule: self._ruled(c, rule, do, args, ctx["values"],
-                                                                         step=ctx.get("step")))
+                                                                         step=ctx.get("producer") or ctx.get("step")))
                 break
             except TaskMoved:
                 continue                   # rolled back, nothing written or recorded: check it as it is now
@@ -2588,7 +2588,8 @@ def install(app, store, auth, mutate):
             # What it reads is checked when that changes; pausing or renaming one whose owner lost access still works.
             merged = {**before_cap, **changes}
             flow = _checked(c, merged, store.settings,
-                            access=any(merged.get(k) != before.get(k) for k in ("trigger", "steps", "owner")),
+                            access=any(merged.get(k) != before.get(k)
+                                       for k in ("trigger", "steps", "owner", "destinations")),
                             saved=before, aid=aid)
             if before.get("readonly"):
                 # Tico's own rules, shown read-only: the top of the org may pause or resume it, and nothing else.
