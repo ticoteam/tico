@@ -109,10 +109,18 @@ def _apply_spend(c, auth, settings, who, aid, change):
 
 def _apply_mail(c, auth, settings, who, aid, change):
     from . import mail_settings
-    # As the person who approves: mail_settings.update checks that they manage the bot (and that they are a person).
-    mail_settings.update(c, auth, who, change.bot, M.MailSettingsUpdate(outbound_send=change.outbound_send,
-                                                                        forward_to=change.forward_to))
-    return f"Mail sending for {_name(c, H.bot_actor(change.bot))} is {'on' if change.outbound_send else 'off'}."
+    # Additive: the approved addresses join the forward list the bot has, and sending stays on once it is on. The setting
+    # is not replaced by the ask. As the person who approves: mail_settings.update checks that they manage the bot.
+    current = mail_settings.stored(c, change.bot) or {"outbound_send": False, "forward_to": []}
+    targets = list(current["forward_to"])
+    have = {address.lower() for address in targets}
+    for address in change.forward_to:
+        if address.lower() not in have:
+            targets.append(address)
+            have.add(address.lower())
+    on = bool(current["outbound_send"]) or change.outbound_send
+    mail_settings.update(c, auth, who, change.bot, M.MailSettingsUpdate(outbound_send=on, forward_to=targets))
+    return f"Mail sending for {_name(c, H.bot_actor(change.bot))} is {'on' if on else 'off'}."
 
 
 APPLY = {"task_cap": _apply_cap, "spend_limit": _apply_spend, "mail_alert": _apply_mail}

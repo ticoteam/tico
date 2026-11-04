@@ -25,8 +25,9 @@ is skipped, and the invariant pass only touches tasks that still have an id in i
 nothing to do. The Health Monitor's `health-scan` watcher belonged to its template, which is gone; its watch rows stay as
 history.
 
-health_findings gets `pending` (the confirmation run of a noisy check, backend/maintenance_steps/check_health.py), added to a
-file that has the table without it. A new file has the column from maintenance_health.SCHEMA.
+health_findings gets `pending` (the confirmation run of a noisy check, backend/maintenance_steps/check_health.py), and
+health_reports gets `reported_at` (the last report of a Tico bug, which its 24-hour throttle reads). Each is added to a file
+that has the table without the column. A new file has both from maintenance_health.SCHEMA.
 
 The signature below is backend/maintenance_health.py `signature`, copied as it is: the registry key depends on it forever.
 """
@@ -54,7 +55,7 @@ def _signature(check_id, subject=""):
 
 def up(conn):
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    _pending_column(conn, tables)
+    _columns(conn, tables)
     if "bots" not in tables:
         return
     when = _now()
@@ -64,15 +65,20 @@ def up(conn):
     _recount(conn, tables, (SLUG, BOTOPS), when)
 
 
-def _pending_column(conn, tables):
+def _columns(conn, tables):
     """health_findings.pending: 1 on a noisy check's finding that waits for its confirmation run, 0 once it is filed or
-    cleared. A file with the table and no column gets it; a file with no table yet gets the table, with the column, from
-    maintenance_health.SCHEMA, so this skips it. Running it again finds the column."""
-    if "health_findings" not in tables:
+    cleared. health_reports.reported_at: when a Tico bug was last reported (a ticket or a comment), '' before. A file with
+    the table and no column gets it; a file with no table yet gets the table, with its columns, from maintenance_health.SCHEMA,
+    so this skips it. Running it again finds the columns and changes nothing."""
+    _add_column(conn, tables, "health_findings", "pending", "INTEGER NOT NULL DEFAULT 0")
+    _add_column(conn, tables, "health_reports", "reported_at", "TEXT NOT NULL DEFAULT ''")
+
+
+def _add_column(conn, tables, table, column, definition):
+    if table not in tables:
         return
-    columns = {row[1] for row in conn.execute('PRAGMA table_info("health_findings")')}
-    if "pending" not in columns:
-        conn.execute("ALTER TABLE health_findings ADD COLUMN pending INTEGER NOT NULL DEFAULT 0")
+    if column not in {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')}:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def _retire_health_monitor(conn, tables, botops, when):

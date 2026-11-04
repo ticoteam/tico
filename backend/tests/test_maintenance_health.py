@@ -25,7 +25,7 @@ from backend import (bot_settings as BS, diagnostics, health, hosted_updates, in
                      maintenance_health as MH, providers, replication, routines, support)
 from backend.enqueue import enqueue_stored
 from backend.maintenance_steps import check_health
-from backend.store import H
+from backend.store import H, Problem
 from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.test_goal_manager import BASE
 from backend.tests.test_onboarding import draft, environment, machine, signed_in  # noqa: F401
@@ -892,6 +892,18 @@ def test_without_a_health_monitor_to_retire_its_tasks_stay_and_the_invariant_ale
     assert conn.execute("SELECT count(*) FROM history_events WHERE subject_id IN ('t1','t2','t5','t6')").fetchone()[0] == 0
 
 
+def test_reported_at_is_added_to_an_existing_health_reports_table_and_kept_on_a_rerun():
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE health_reports(signature TEXT PRIMARY KEY, created_at TEXT NOT NULL, "
+                 "reported_occurrences INTEGER NOT NULL DEFAULT 1)")
+    conn.execute("INSERT INTO health_reports(signature,created_at) VALUES('hm-old','t0')")
+    migration = retire_migration()
+    migration.up(conn)
+    migration.up(conn)
+    assert "reported_at" in {row[1] for row in conn.execute('PRAGMA table_info("health_reports")')}
+    assert conn.execute("SELECT reported_at FROM health_reports").fetchall() == [("",)]
+
+
 def test_the_pending_column_is_added_once_and_a_file_with_no_table_is_skipped():
     conn = legacy_db()
     migration = retire_migration()
@@ -1147,3 +1159,232 @@ def test_event_stream_does_not_count_drops_the_runner_says_were_back_within_seco
         (found,) = [f for f in MH._runner_checks(c, api.app.state.store.settings)
                     if f["check_id"] == "event_stream"]
     assert found["detail"].startswith("3 of")
+
+
+# ------------------------------------------------------------------------------------- the review fixes (one commit)
+@pytest.fixture
+def clock(monkeypatch):
+    """The store's clock for one test: H.now() reads `clock.at`, so a report's time and a run's time are the same clock."""
+    box = SimpleNamespace(at=datetime.now(timezone.utc))
+    monkeypatch.setattr(H, "now", lambda: box.at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z")
+    return box
+
+
+@pytest.fixture
+def comments(monkeypatch):
+    """Every comment the step writes, as (task id, wake, text)."""
+    sent = []
+    real = H.task_comment
+
+    def spy(conn, actor, task_id, text, wake=True, **kwargs):
+        sent.append((task_id, wake, text))
+        return real(conn, actor, task_id, text, wake=wake, **kwargs)
+
+    monkeypatch.setattr(H, "task_comment", spy)
+    return sent
+
+
+def three_new_problems(code_findings):
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck"),
+                        item("worktree_error", key="worktree_error:A", title="Worktrees fail"),
+                        item("event_stream", key="event_stream:A", title="The event stream drops")]
+
+
+def wake_marker(api):
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT value FROM registry_metadata WHERE key=?", ("health-wake:pending",)).fetchone()
+    return json.loads(row["value"]) if row else None
+
+
+def test_the_step_reads_the_apps_settings_not_the_step_row(environment, readers, monkeypatch):
+    # The engine's ctx["settings"] is the step's own row (a dict). The readers and the report path need the app's settings.
+    api, _ = built(environment)
+    store, auth = api.app.state.store, api.app.state.auth
+    seen = {}
+
+    def view(c, who, settings, auth_, github, config):
+        seen["settings"] = settings
+        return {"checks": []}
+
+    monkeypatch.setattr(health, "view", view)
+    ctx = check_health.context(auth, store.settings, store)
+    ctx["settings"] = {"id": "check_health", "enabled": True}
+    with store.read() as c:
+        result = check_health.run(c, ctx)
+    assert seen["settings"] is store.settings
+    assert "code" not in result["details"]["notes"] and "page" not in result["details"]["notes"]
+
+
+def test_with_support_off_a_tico_bug_leaves_for_no_one_and_asks_nothing(environment, readers, code_findings, hq, monkeypatch):
+    api, _ = built(environment)
+    store = api.app.state.store
+    sig = MH.signature("push_stuck")
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG, title="Pushes are stuck")]
+    result = run(api)
+    monkeypatch.setenv("TICO_SUPPORT", "off")
+    answers = file_due(api, result)
+    assert answers[sig]["deferred"] == "support_off"
+    assert hq.seen == [] and open_approvals(api, "support") == []
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM health_reports").fetchone()[0] == 0
+
+
+def test_a_report_botops_asked_for_is_sent_once_a_person_approves_and_a_failed_send_waits(environment, readers, code_findings,
+                                                                                         hq, monkeypatch):
+    api, _ = built(environment)
+    store, support, auth, settings = api.app.state.store, api.app.state.support, api.app.state.auth, api.app.state.store.settings
+    set_rule(api, False)
+    sig = MH.signature("push_stuck")
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG, title="Pushes are stuck")]
+    first = file_due(api, run(api))[sig]
+    (approval,) = open_approvals(api, "support")
+    assert first["approval"] == approval["id"] and hq.seen == []
+    with store.read() as c:
+        asked_by = c.execute("SELECT requested_by_id FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0]
+    assert asked_by == "bot:botops"
+    with store.transaction() as c:
+        owner = auth.owner_identity(c)
+        c.execute("UPDATE approvals SET decision='approved', decided_by_id=? WHERE id=?", (owner.actor, approval["id"]))
+
+    def unreachable(who, approval_id):
+        raise Problem("support_unreachable", "Tico support is out of reach", 503)
+
+    real = support.file_approved
+    monkeypatch.setattr(support, "file_approved", unreachable)
+    waiting = MH.file_reports(store, auth, settings, support, [])
+    assert "deferred" in waiting[sig] and hq.seen == []
+    with store.read() as c:
+        assert c.execute("SELECT ticket_id FROM health_reports WHERE signature=?", (sig,)).fetchone()[0] is None
+    monkeypatch.setattr(support, "file_approved", real)
+    sent = MH.file_reports(store, auth, settings, support, [])
+    assert sent[sig]["ticket"] and len(hq.tickets) == 1
+    assert json.loads(hq.seen[-1].content)["source"] == "health_monitor"
+    with store.read() as c:
+        assert c.execute("SELECT ticket_id FROM health_reports WHERE signature=?", (sig,)).fetchone()[0] == sent[sig]["ticket"]
+    assert MH.file_reports(store, auth, settings, support, []) == {}      # sent once: nothing waits any more
+
+
+def test_a_repeat_of_a_tico_bug_is_commented_once_a_day_counted_from_the_last_report(environment, readers, code_findings, hq,
+                                                                                    clock):
+    api, _ = built(environment)
+    t0, sig = clock.at, MH.signature("push_stuck")
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG, title="Pushes are stuck")]
+    file_due(api, run(api))                                              # the ticket
+    for hours in (1, 2):
+        clock.at = t0 + timedelta(hours=hours)
+        assert file_due(api, run(api)) == {}                             # seen again, under a day from the report
+
+    def seen_again():
+        (ticket,) = hq.tickets.values()
+        return [m for m in ticket["messages"] if m["body"].startswith("[Health Monitor] Seen again")]
+
+    assert seen_again() == []
+    clock.at = t0 + timedelta(hours=25)
+    assert file_due(api, run(api))[sig]["comment"] is True and len(seen_again()) == 1
+    for hours in (26, 27):
+        clock.at = t0 + timedelta(hours=hours)
+        file_due(api, run(api))
+    assert len(seen_again()) == 1                                        # the day counts from the comment, not the ticket
+
+
+def test_three_new_problems_in_one_run_wake_botops_once(environment, readers, code_findings, comments):
+    api, _ = built(environment)
+    three_new_problems(code_findings)
+    result = run(api)
+    assert result["woke"] == 1 and len(botops_tasks(api)) == 3
+    (task_id, wake, text), = [row for row in comments if row[1]]
+    assert wake is True and text.startswith("Health wake: ")
+    assert task_id in [t["id"] for t in botops_tasks(api)]
+    assert all(f"(task {t['id']})" in text for t in botops_tasks(api))
+
+
+def test_a_wake_the_gate_refuses_waits_in_the_marker_and_the_next_allowed_run_wakes_once(environment, readers, code_findings,
+                                                                                         comments, monkeypatch):
+    api, _ = built(environment)
+    three_new_problems(code_findings)
+    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: False)
+    refused = run(api)
+    assert refused["woke"] == 0 and [row for row in comments if row[1]] == []
+    assert len(wake_marker(api)) == 3
+    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: True)
+    allowed = run(api)
+    assert allowed["woke"] == 1 and len([row for row in comments if row[1]]) == 1
+    assert wake_marker(api) is None
+
+
+def test_a_task_given_to_a_person_gets_no_comment_and_a_new_botops_task_opens(environment, readers, code_findings, comments):
+    api, _ = built(environment)
+    store = api.app.state.store
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
+    run(api)
+    (first,) = botops_tasks(api)
+    with store.read() as c:
+        person = api.app.state.auth.owner_identity(c).actor
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET owner_id=? WHERE id=?", (person, first["id"]))
+    code_findings[:] = []
+    cleared = run(api)
+    assert cleared["woke"] == 0 and [row for row in comments if row[0] == first["id"]] == []
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
+    back = run(api)
+    assert back["woke"] == 1 and said(api, first["id"], "Back:") == []
+    (new,) = [t for t in botops_tasks(api) if t["id"] != first["id"]]
+    assert new["owner_id"] == "bot:botops" and new["status"] not in ("done", "closed", "declined")
+
+
+def test_a_busy_process_keeps_its_computers_sample_time_and_clears_when_that_time_is_too_old(environment, readers, code_findings):
+    api, runner = built(environment)
+    store = api.app.state.store
+    with store.transaction() as c:
+        MH.record_idle(c, runner["runner_id"], MH.IdleLoad(sampled_at=H.now(),
+                                                            busy=[MH.IdleEntry(name="process:chrome", cpu=80.0, mb=900.0)]))
+    key = f"local_busy:{runner['runner_id']}:process:chrome"
+    sampled = H.shift(H.now(), hours=-1)
+    with store.transaction() as c:
+        c.execute("UPDATE health_findings SET first_seen_at=?, last_seen_at=? WHERE key=?", (sampled, sampled, key))
+    run(api)
+    assert finding(api, key)["last_seen_at"] == sampled and finding(api, key)["present"] == 1
+    run(api, datetime.now(timezone.utc) - timedelta(hours=1) + timedelta(hours=3))      # the sample is three hours old
+    assert finding(api, key)["present"] == 0
+
+
+def test_a_cleared_comment_that_fails_is_tried_again_on_the_next_run(environment, readers, code_findings, monkeypatch):
+    api, _ = built(environment)
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
+    run(api)
+    (task,) = botops_tasks(api)
+    real = H.task_comment
+    failures = []
+
+    def flaky(conn, actor, task_id, text, wake=True, **kwargs):
+        if not failures:
+            failures.append(text)
+            raise RuntimeError("the store is busy")
+        return real(conn, actor, task_id, text, wake=wake, **kwargs)
+
+    monkeypatch.setattr(H, "task_comment", flaky)
+    code_findings[:] = []
+    first = run(api)
+    assert len(failures) == 1 and first["woke"] == 0
+    assert registry(api, "push_stuck")["cleared"] is False and said(api, task["id"], "Cleared at") == []
+    second = run(api)
+    assert second["woke"] == 1 and len(said(api, task["id"], "Cleared at")) == 1
+    assert registry(api, "push_stuck")["cleared"] is True
+
+
+def test_the_health_page_reads_the_github_app_the_store_holds(environment, readers, monkeypatch):
+    api, _ = built(environment)
+    store = api.app.state.store
+    store.github_app = SimpleNamespace(row=lambda c: {"installation_id": 7, "org": "acme", "administration": 1})
+    health.note_github_token(store, "The App's key was refused", "Check the GitHub App's private key")
+    seen = {}
+
+    def view(c, who, settings, auth_, github, config):
+        seen["github"] = github
+        return {"checks": [health._github(c, github)]}
+
+    monkeypatch.setattr(health, "view", view)
+    run(api)
+    run(api)                                                             # a noisy check files on its second run
+    assert seen["github"] is store.github_app
+    assert finding(api, "page:github")["severity"] == "bad" and finding(api, "page:github")["present"] == 1

@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS health_findings(
  present INTEGER NOT NULL DEFAULT 1, occurrences INTEGER NOT NULL DEFAULT 1, last_woke_at TEXT NOT NULL DEFAULT '',
  severity TEXT NOT NULL DEFAULT 'warn', pending INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS health_reports(
- signature TEXT PRIMARY KEY, ticket_id TEXT, approval_id TEXT, created_at TEXT NOT NULL, reported_occurrences INTEGER NOT NULL DEFAULT 1);
+ signature TEXT PRIMARY KEY, ticket_id TEXT, approval_id TEXT, created_at TEXT NOT NULL, reported_occurrences INTEGER NOT NULL DEFAULT 1,
+ reported_at TEXT NOT NULL DEFAULT '');
 """
 SETUP, BUG = "setup", "tico-bug"
 # A finding's severity, lowest first. `bad` where the Health page says bad for the same thing; a rise wakes the bot.
@@ -805,8 +806,8 @@ def report(c_factory, support, auth, settings, who, key):
             support.note(kept_ticket, f"[Health Monitor] Seen again ({row['occurrences']} times), last at "
                                       f"{row['last_seen_at'][:16]} UTC. Signature {row['signature']}.")
         with store.transaction() as c:
-            c.execute("UPDATE health_reports SET reported_occurrences=? WHERE signature=?",
-                      (row["occurrences"], row["signature"]))
+            c.execute("UPDATE health_reports SET reported_occurrences=?, reported_at=? WHERE signature=?",
+                      (row["occurrences"], H.now(), row["signature"]))
             H.event(c, who.actor, "health_monitor.reported_again", row["signature"], {"ticket": filed["ticket_id"]})
         return {"signature": row["signature"], "ticket": filed["ticket_id"], "comment": True}
     if filed and filed["approval_id"]:
@@ -814,12 +815,13 @@ def report(c_factory, support, auth, settings, who, key):
     if not allowed:
         # The person reads the report first: a `support` approval, sent with `hub support send --approval <id>`.
         digest = hashlib.sha256(message.encode()).hexdigest()
+        now = H.now()
         with store.transaction() as c:
             approval = H.approval_request(c, who.actor, "support",
                                           {"message": message, "content_sha256": digest})
             approval_id = approval["id"] if isinstance(approval, dict) else approval
-            c.execute("INSERT INTO health_reports(signature,approval_id,created_at,reported_occurrences) VALUES(?,?,?,?)",
-                      (row["signature"], approval_id, H.now(), row["occurrences"]))
+            c.execute("INSERT INTO health_reports(signature,approval_id,created_at,reported_occurrences,reported_at) "
+                      "VALUES(?,?,?,?,?)", (row["signature"], approval_id, now, row["occurrences"], now))
         return {"signature": row["signature"], "approval": approval_id}
     if today >= REPORTS_PER_DAY:
         raise Problem("support_busy", f"The Health Monitor files at most {REPORTS_PER_DAY} new reports a day.", 429)
@@ -828,10 +830,11 @@ def report(c_factory, support, auth, settings, who, key):
     attachment = support.previews.keep(owner.actor, bundle)
     ticket = support.file(owner, SupportTicket(message=message, include_ids=True, diagnostics=attachment),
                           "health:" + row["signature"], source="health_monitor")
+    now = H.now()
     with store.transaction() as c:
-        c.execute("INSERT INTO health_reports(signature,ticket_id,created_at,reported_occurrences) VALUES(?,?,?,?) "
-                  "ON CONFLICT(signature) DO UPDATE SET ticket_id=excluded.ticket_id",
-                  (row["signature"], ticket["id"], H.now(), row["occurrences"]))
+        c.execute("INSERT INTO health_reports(signature,ticket_id,created_at,reported_occurrences,reported_at) VALUES(?,?,?,?,?) "
+                  "ON CONFLICT(signature) DO UPDATE SET ticket_id=excluded.ticket_id, reported_at=excluded.reported_at",
+                  (row["signature"], ticket["id"], now, row["occurrences"], now))
         H.event(c, who.actor, "health_monitor.reported", row["signature"], {"ticket": ticket["id"]})
     return {"signature": row["signature"], "ticket": ticket["id"]}
 
@@ -839,18 +842,51 @@ def report(c_factory, support, auth, settings, who, key):
 
 
 def file_reports(store, auth, settings, support, signatures):
-    """HQ calls for the Tico bugs the step found, one signature at a time, outside any transaction. The same report path as
-    the route (`report`), as KEEPER: a ticket once, a comment when it comes back worse, an approval when the team rule is
-    off, and at most REPORTS_PER_DAY tickets a day (the rest wait for the next run). Returns {signature: answer}."""
+    """HQ calls for the Tico bugs the step found, outside any transaction, as BotOps: the approvals it asks are BotOps's. The
+    same report path as the route (`report`): a ticket once, a comment when it comes back worse, an approval when the team
+    rule is off, and at most REPORTS_PER_DAY new tickets a day (the rest wait for the next run). First the reports a person
+    approved since the last run are sent (`_send_approved`). With support off (TICO_SUPPORT, a demo or a rehearsal copy)
+    nothing leaves for HQ and nothing is asked. Returns {signature: answer}."""
+    from .support import require_on
     if support is None:
         return {}
-    answers = {}
+    try:
+        require_on(settings)
+    except Problem:
+        return {signature: {"signature": signature, "deferred": "support_off"} for signature in signatures}
+    answers = _send_approved(store, support)
     for signature in signatures:
         try:
-            answers[signature] = report(store, support, auth, settings, SimpleNamespace(actor=H.KEEPER), signature)
+            answers[signature] = report(store, support, auth, settings, SimpleNamespace(actor="bot:" + BOTOPS), signature)
         except Problem as exc:
             answers[signature] = {"signature": signature, "deferred": exc.code if hasattr(exc, "code") else str(exc)}
     return answers
+
+
+def _send_approved(store, support):
+    """The reports BotOps asked a person to approve, which the person has approved since: each one is sent once, as that
+    approval's ticket (support.file_approved, as the asker, BotOps). Its ticket is kept on its health report. A send that
+    fails stays for the next run. Returns {signature: answer}."""
+    with store.read() as c:
+        waiting = [dict(r) for r in c.execute(
+            "SELECT h.signature, h.approval_id FROM health_reports h JOIN approvals a ON a.id=h.approval_id "
+            "WHERE h.ticket_id IS NULL AND a.requested_by_id=? AND a.decision='approved' ORDER BY h.created_at",
+            ("bot:" + BOTOPS,)).fetchall()]
+    sent = {}
+    for row in waiting:
+        try:
+            answer = support.file_approved(SimpleNamespace(actor="bot:" + BOTOPS), row["approval_id"])
+        except Exception as exc:  # noqa: BLE001 - a report that cannot be sent waits for the next run
+            log.warning("Health report %s could not be sent yet", row["signature"], exc_info=True)
+            sent[row["signature"]] = {"signature": row["signature"], "deferred": type(exc).__name__}
+            continue
+        ticket = answer["ticket"]["id"]
+        with store.transaction() as c:
+            c.execute("UPDATE health_reports SET ticket_id=?, reported_at=? WHERE signature=? AND approval_id=?",
+                      (ticket, H.now(), row["signature"], row["approval_id"]))
+            H.event(c, "bot:" + BOTOPS, "health_monitor.reported", row["signature"], {"ticket": ticket})
+        sent[row["signature"]] = {"signature": row["signature"], "ticket": ticket, "approval": row["approval_id"]}
+    return sent
 
 
 def check(store, auth, settings, support=None):

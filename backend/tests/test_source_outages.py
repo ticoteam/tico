@@ -35,7 +35,8 @@ def test_source_start_and_end_are_once_across_repeated_observations_and_restarts
         rows = notices(c)
         assert len(rows) == 1 and {r['recipient_id'] for r in rows} == {'bot:coo'}
         assert not any('private-login-name' in r['body'] or 'private-login-name' in r['refs'] for r in rows)
-        assert not c.execute("SELECT 1 FROM jobs WHERE message_id IN (?,?)", tuple(r['id'] for r in rows)).fetchone()
+        ids = [r['id'] for r in rows]
+        assert not c.execute(f"SELECT 1 FROM jobs WHERE message_id IN ({','.join('?' * len(ids))})", ids).fetchone()
         assert not c.execute("SELECT 1 FROM tasks").fetchone()
     # No process-local latch: a fresh transaction observes the saved episode.
     with api.app.state.store.transaction() as c:
@@ -88,7 +89,7 @@ def test_a_six_hour_hold_does_not_lease_again_or_hold_another_subscription(api, 
     done(api, machine, resumed)
     with api.app.state.store.transaction() as c:
         source_outages.sync(c, api.app.state.store.settings)
-        assert len(notices(c)) == 4
+        assert len(notices(c)) == 2                  # one start and one end notice, each to the engineering managers
         assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == 2
 
 
@@ -527,15 +528,15 @@ def test_github_retry_disappearing_never_claims_access_recovered(api, monkeypatc
     with api.app.state.store.transaction() as c:
         # The remembered move is gone: whether expired, canceled or closed, that proves no successful read.
         source_outages.sync(c, api.app.state.store.settings)
-        assert len(notices(c)) == 2
+        assert len(notices(c)) == 1                  # the start notice only: one to the engineering managers
         prs = [{'id': 'pr', 'repo': 'acme/project'}]
         source_outages.github_read(c, prs, {'pr': {'error': True, 'why': 'GitHub answered 403'}})
-        assert len(notices(c)) == 2
+        assert len(notices(c)) == 1
         source_outages.github_read(c, prs, {'pr': {'head_sha': 'a' * 40, 'checks': {}}})
         source_outages.github_read(c, prs, {'pr': {'head_sha': 'a' * 40, 'checks': {}}})
         source_outages.sync(c, api.app.state.store.settings)
-        assert len(notices(c)) == 4
-        assert all('available again' in row['body'] for row in notices(c)[2:])
+        assert len(notices(c)) == 2
+        assert all('available again' in row['body'] for row in notices(c)[1:])
 
 
 def test_a_pending_completion_batch_counts_past_its_bounded_identity_window(api):

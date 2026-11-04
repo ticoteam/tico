@@ -1,6 +1,8 @@
 """Proposals (redesign/CONTRACT.md §5, backend/proposals.py): a bot's change to a spend limit is an approval the top of
 the org decides; on approve the hub applies it as that person, audited with via approval:<id>, spends the approval and
 sends BotOps one notice. An org change is no proposal (test_org_by_request.py)."""
+import json
+
 from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
 from backend.tests.test_groups import add_bots, send
@@ -91,3 +93,18 @@ def test_an_approved_spend_limit_changes_only_what_it_names(api):
     assert limits["bots"]["ops"]["per_30m_usd"] == 1.5 and limits["bots"]["ops"]["daily_usd"] == 20
     pool = limits["pools"]["groups"][eng]
     assert pool["per_30m_usd"] == 3 and pool["daily_usd"] == 40
+
+
+def test_an_approved_mail_ask_adds_its_address_and_keeps_sending_on(api):
+    """A mail ask is additive: the approved address joins the forward list the bot has, and sending stays on once it is on."""
+    setup_org(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bot_mail_settings(bot,outbound_send,forward_to,updated_at,updated_by) VALUES(?,?,?,?,?)",
+                  ("ops", 1, json.dumps(["a@acme.example"]), H.now(), H.KEEPER))
+        asked = H.approval_request(c, "bot:botops", "mail_alert",
+                                   {"bot": "ops", "outbound_send": True, "forward_to": ["b@acme.example"]})
+    aid = asked["id"] if isinstance(asked, dict) else asked
+    post(api, f"approvals/{aid}", {"decision": "approved"})
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT outbound_send, forward_to FROM bot_mail_settings WHERE bot='ops'").fetchone()
+    assert row["outbound_send"] == 1 and json.loads(row["forward_to"]) == ["a@acme.example", "b@acme.example"]
