@@ -11,16 +11,26 @@ On macOS, open the universal `.dmg` and drag Tico to Applications. On Windows, r
 `.deb` package. A Mac build without Apple signing and notarization may need **Open Anyway**
 in System Settings > Privacy & Security on its first launch.
 
-The first launch asks for the **Server** address, for example `https://tico.example.com`. Enter
-your team's address and click **Connect**. Tico checks that the server is reachable and answers
-its `/healthz` check as Tico, saves the address in the app's config folder, then opens your Team.
-Sign in as you would in a browser. HTTPS is required; `http://localhost` and `http://127.0.0.1`
-are allowed for a server on your Computer. A failed check shows an error below the field.
+In the Mac app, the first launch shows **Sign in to Tico**. Click it, and a window opens at
+[app.tico.dev](https://app.tico.dev/), the account page. Sign in there. The list shows each Tico
+server that has your email address among its people: tick the ones you want, then click **Add**.
+Tico adds each one as an organization, opens the first of them, and closes the sign-in window.
+To use another account, click **Use another account** on that page. Closing the window without
+**Add** adds nothing. If the list is empty, or your server is not on Tico sign-in (a server behind
+Cloudflare Access, for example), click **Use a server address** under the button instead.
 
-Use **Change server…** in the generic app's menu to connect to another server.
-The app saves the address and restarts automatically to replace its native permissions.
-Only the selected server's origin can use native IPC; Access and external sign-in pages that
-remain in the window receive no native permissions.
+On Windows and Linux, and in the Mac app after **Use a server address**, the first launch asks for
+the **Server** address, for example `https://tico.example.com`. Enter your team's address and click
+**Connect**. Tico checks that the server is reachable and answers its `/healthz` check as Tico, saves
+the address in the app's config folder, then opens your Team. Sign in as you would in a browser.
+HTTPS is required; `http://localhost` and `http://127.0.0.1` are allowed for a server on your
+Computer. A failed check shows an error below the field.
+
+In the Mac app, choose **Add Organization…** from Tico's menu to add another organization. It opens
+the same sign-in screen. On Windows and Linux, use **Change server…** in the app's menu to connect
+to another server. The app saves the address and restarts automatically to replace its native
+permissions. Only the selected server's origin can use native IPC; Access and external sign-in pages
+that remain in the window receive no native permissions.
 
 The app can keep [signed visuals](visuals.md) inline when the selected server uses
 a separate HTTPS address for them. After sign-in, the server supplies that address
