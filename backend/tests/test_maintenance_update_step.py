@@ -12,6 +12,7 @@ import pytest
 
 from backend import execution, updates
 from backend import models as M
+from backend import run_triggers as RT
 from backend.maintenance_steps import update as step
 from backend.store import H
 from backend.tests.test_api import api, post  # noqa: F401
@@ -36,9 +37,13 @@ def states(c, day=DAY):
     return {r["bot"]: r["state"] for r in c.execute("SELECT bot, state FROM update_queue WHERE day=?", (day,))}
 
 
-def say_work(c, bot_id, text="Drafted the checklist"):
-    """A bot's own work: a message to a person (the kind `did_work` counts)."""
-    H.say(c, H.bot_actor(bot_id), "human:ana", text, kind="say")
+def turn(c, bot_id, writes=1, at=None, state="completed"):
+    """A bot's settled turn (an `attempts` row), settled the way turn_finish settles one: did_nothing comes from its writes."""
+    turn_id = H.new_id()
+    c.execute("INSERT INTO attempts(id,bot_id,created_at,state,writes) VALUES(?,?,?,?,?)",
+              (turn_id, bot_id, at or H.now(), state, writes))
+    c.execute(f"UPDATE attempts SET settled_at=?,exit='ok',{RT.SETTLE_SQL} WHERE id=?", (H.now(), turn_id))
+    return turn_id
 
 
 def test_a_bot_that_did_no_work_since_its_last_update_gets_no_request(api):
@@ -47,7 +52,7 @@ def test_a_bot_that_did_no_work_since_its_last_update_gets_no_request(api):
     with store.transaction() as c:
         idle, ops = bid(c, "idle"), bid(c, "ops")
         assert not step.did_work(c, idle, "")
-        say_work(c, ops)
+        turn(c, ops)
         assert step.did_work(c, ops, "")
         # A keeper-room reply is an answer to a wake: a wake answered with "nothing new" is no work.
         c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('wake-reply',?,?,'say',"
@@ -58,6 +63,39 @@ def test_a_bot_that_did_no_work_since_its_last_update_gets_no_request(api):
         assert c.execute("SELECT reason FROM update_queue WHERE bot=? AND day=?", (idle, DAY)).fetchone()["reason"] == updates.NO_WORK
         assert states(c)[ops] == "queued" and result["status"] == "pending" and result["details"]["asked"] >= 1
         assert step.plan_request(c, idle, DAY) == "skip"
+
+
+def test_a_wake_answered_with_nothing_new_is_no_update_request_even_with_a_memory_commit(api):
+    bot(api, "waker", "Waker")
+    store = api.app.state.store
+    with store.transaction() as c:
+        waker = bid(c, "waker")
+        turn(c, waker, writes=0)                                                     # the wake's turn: did_nothing = 1
+        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed_at,files,runner_id,reported_at) "
+                  "VALUES(?,?,?,?,?,?,?,?)", (waker, "5e1f0c2", "Rewrite state.md", "waker", H.now(), "state.md",
+                                             "runner-test", H.now()))                 # the memory commit that turn made
+        c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('waker-reply',?,?,'say',"
+                  "'Nothing new since yesterday.',?)", (H.bot_actor(waker), H.KEEPER, H.now()))
+        assert not step.did_work(c, waker, ""), "a memory commit and a reply are not work"
+        assert step.plan_request(c, waker, DAY) == "skip"
+        step.run(c, ctx(api, TUESDAY))
+        assert states(c)[waker] == "skipped", "no update request for a wake answered with nothing new"
+
+
+def test_only_a_settled_turn_that_wrote_after_the_last_update_is_work(api):
+    bot(api, "tally", "Tally")
+    bot(api, "crashed", "Crashed")
+    store = api.app.state.store
+    with store.transaction() as c:
+        tally, crashed = bid(c, "tally"), bid(c, "crashed")
+        turn(c, tally, writes=0)
+        assert not step.did_work(c, tally, ""), "a turn that did nothing is not work"
+        turn(c, tally, writes=2, at=H.shift(H.now(), hours=-5))
+        assert not step.did_work(c, tally, H.shift(H.now(), hours=-2)), "work before the bot's last update does not count"
+        assert step.did_work(c, tally, H.shift(H.now(), hours=-6)), "a settled write after `since` is work"
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,state,writes,settled_at,exit,did_nothing) "
+                  "VALUES(?,?,?,'failed',1,?,'error',0)", (H.new_id(), crashed, H.now(), H.now()))
+        assert not step.did_work(c, crashed, ""), "a failed turn is not work"
 
 
 def test_a_bot_with_only_learnings_waiting_gets_one_delivery_turn_that_writes_no_update_and_is_never_asked_again(api, monkeypatch):
@@ -89,7 +127,7 @@ def test_an_ask_that_completes_without_an_update_is_asked_again(api):
     store = api.app.state.store
     with store.transaction() as c:
         ops = bid(c, "ops")
-        say_work(c, ops)
+        turn(c, ops)
         step.run(c, ctx(api, TUESDAY))
         row = c.execute("SELECT * FROM update_queue WHERE bot=? AND day=?", (ops, DAY)).fetchone()
         assert row["delivery_only"] == 0
@@ -105,7 +143,7 @@ def test_the_request_is_a_taskless_notice_in_the_main_lane_path(api):
     store = api.app.state.store
     with store.transaction() as c:
         ops = bid(c, "ops")
-        say_work(c, ops)
+        turn(c, ops)
         step.run(c, ctx(api, TUESDAY))
         c.execute("UPDATE update_queue SET state='skipped' WHERE day=? AND bot<>?", (DAY, ops))
         assert updates.dispatch(c, TUESDAY) == ops
@@ -134,7 +172,7 @@ def test_bottom_up_order_defers_a_manager_until_its_report_has_posted(api):
     store = api.app.state.store
     with store.transaction() as c:
         analyst, boss = bid(c, "analyst"), bid(c, "boss")
-        say_work(c, analyst, "Sized the market")
+        turn(c, analyst)
         step.run(c, ctx(api, TUESDAY))
         assert states(c)[boss] == "queued", "a manager is asked: its report will post today"
         c.execute("UPDATE update_queue SET state='skipped' WHERE day=? AND bot NOT IN (?,?)", (DAY, analyst, boss))
@@ -186,7 +224,7 @@ def test_a_friday_is_the_weekly_kind(api):
     store = api.app.state.store
     with store.transaction() as c:
         ops = bid(c, "ops")
-        say_work(c, ops, "Shipped the report")
+        turn(c, ops)
         result = step.run(c, ctx(api, FRIDAY))
         kinds = {r["kind"] for r in c.execute("SELECT kind FROM update_queue WHERE day='2026-10-02'")}
         assert kinds == {"weekly"} and result["status"] == "pending"

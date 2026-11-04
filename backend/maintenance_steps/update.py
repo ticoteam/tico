@@ -13,21 +13,15 @@ they go out. It is not wired into the scheduler yet: PR1 registers this step and
 from .. import updates
 from ..store import H
 
-# What counts as work a bot did: a change to a task (a history row it wrote) or a message it sent to someone other than
-# the keeper. A keeper room reply is its answer to a wake, so a wake answered with nothing new is no work.
-MESSAGE_KINDS = ("say", "ask", "answer")
-
-
 def did_work(c, bot_id, since):
-    """Whether a bot did work after `since` (an ISO timestamp; "" for all of it). A commit is not recorded per bot in
-    the database, so a turn whose only work was a commit is not seen here."""
-    actor = H.bot_actor(bot_id)
-    if c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND actor_id=? AND created_at>? LIMIT 1",
-                 (actor, since)).fetchone():
-        return True
-    marks = ",".join("?" * len(MESSAGE_KINDS))
-    return c.execute(f"SELECT 1 FROM messages WHERE sender_id=? AND created_at>? AND kind IN ({marks}) "
-                     "AND recipient_id<>? LIMIT 1", (actor, since, *MESSAGE_KINDS, H.KEEPER)).fetchone() is not None
+    """Whether the bot settled a turn that wrote something after `since` (an ISO timestamp; "" for all of it).
+
+    Work is a settled turn with did_nothing = 0 (set when the turn settles, run_triggers.SETTLE_SQL). A failed turn is
+    not work. Messages a bot sends and the commits it makes to its memory do not count: bots reply on every wake and
+    rewrite their memory, so every woken bot would look like it worked and the zero-work skip would never fire.
+    Bounded on attempts.created_at (indexed with bot_id by attempts_bot_created)."""
+    return c.execute("SELECT 1 FROM attempts WHERE bot_id=? AND created_at>? AND did_nothing=0 "
+                     "AND coalesce(state,'')<>'failed' LIMIT 1", (bot_id, since)).fetchone() is not None
 
 
 def _since(c, bot):
