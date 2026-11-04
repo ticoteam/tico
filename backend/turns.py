@@ -79,7 +79,7 @@ def build_steps(rows):
             if agent:
                 step = {"kind": "subagent", "tool": "subagent", "text": f"{agent} · {text}" if text else agent, "at": at}
             else:
-                step = {"kind": "tool", "tool": name, "text": text, "at": at}
+                step = {"kind": "tool", "tool": name, "label": tool_label(p), "text": text, "at": at}
             if p.get("parent_id"):
                 step["nested"] = True
             if p.get("background"):
@@ -99,10 +99,48 @@ def build_steps(rows):
     return steps[:STEP_LIMIT]
 
 
+# A shell call's events name the program it runs (the runner's summary: `npm`, or `hub task close`), never its
+# arguments. These tool names are shells.
+SHELL_TOOLS = {"bash", "shell"}
+# A hub command in a plain phrase, by its two command words (the CLI's own, after `hub`).
+HUB_PHRASES = {
+    "task create": "Filing a task", "task close": "Closing a task", "task list": "Listing tasks",
+    "task show": "Reading a task", "task update": "Updating a task", "task comment": "Commenting on a task",
+    "goal show": "Reading a goal", "kpi update": "Updating a KPI", "message send": "Sending a message",
+}
+
+
+def hub_command(text):
+    """A hub call's command words ("task close", at most two), read from a shell summary ("hub task close") or an
+    MCP tool name ("mcp__hub__hub_task_close"). None for anything else."""
+    words = re.sub(r"[^A-Za-z0-9]+", " ", str(text or "")).lower().split()
+    if words[:1] == ["mcp"]:
+        words = words[1:]
+    if words[:1] != ["hub"]:
+        return None
+    words = words[1:]
+    if words[:1] == ["hub"]:  # an MCP tool named hub_<command>
+        words = words[1:]
+    return " ".join(words[:2])
+
+
 def tool_label(payload):
-    """"Ran hub task create" from a tool event: the tool's own name and nothing else. An event can
-    carry a call's arguments or output; neither is read, so neither can reach a frontend."""
-    words = " ".join(re.sub(r"[^A-Za-z0-9]+", " ", str(payload.get("tool") or payload.get("name") or "")).split())
+    """What a tool call does, in a few plain words: "Filing a task" for a hub command with a phrase, else "Ran" and
+    the program (a shell's summary: its first word, or `hub` and two words for a hub command) or the tool's own name.
+    The arguments and the output of a call are never read."""
+    name = str(payload.get("tool") or payload.get("name") or "")
+    shell = re.sub(r"[^A-Za-z0-9]+", " ", name).strip().lower() in SHELL_TOOLS
+    summary = " ".join(str(payload.get("summary") or "").split()) if shell else ""
+    command = hub_command(summary or name)
+    if command in HUB_PHRASES:
+        return HUB_PHRASES[command]
+    head = summary.split()[:1]
+    if head == ["hub"]:
+        words = " ".join(summary.split()[:3])
+    elif head:
+        words = head[0]
+    else:
+        words = " ".join(re.sub(r"[^A-Za-z0-9]+", " ", name).split())
     if words.lower().startswith("mcp "):
         words = words[4:]
     return "Ran " + (words[:TOOL_LABEL_CHARS].strip() or "a tool")

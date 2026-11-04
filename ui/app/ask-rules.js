@@ -60,6 +60,8 @@ function askToolStep(label) {
     const noun = words[0], what = ASK_STEP_NOUNS[noun] || (noun.endsWith('s') ? noun : noun + 's');
     return ASK_STEP_VERBS[verb] + ' ' + what;
   }
+  // A shell program the server named ("Ran npm"): said as the step it is.
+  if (!tico && /^[a-z0-9._-]+$/.test(raw)) return 'Running ' + raw;
   const plain = (tico ? words.join(' ') : raw).slice(0, 40);
   return plain.charAt(0).toUpperCase() + plain.slice(1);
 }

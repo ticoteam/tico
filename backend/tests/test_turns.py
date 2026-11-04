@@ -2,6 +2,7 @@
 
 import pytest
 
+from backend import turns
 from backend.store import H
 from backend.tests.test_api import api, as_member, assign, claim, get, post, ready, runner  # noqa: F401
 
@@ -81,3 +82,25 @@ def test_a_run_that_failed_before_starting_does_not_claim_later_messages(api):
     messages = {m["id"]: m for m in get(api, f"conversations/{asked['conversation_id']}/snapshot")["messages"]}
     assert "prompted_by" not in messages.get(loose["id"], {})
     assert messages[own["id"]]["prompted_by"] == "person"
+
+
+def test_a_tool_call_reads_as_its_work_in_plain_words():
+    assert turns.tool_label({"tool": "mcp__hub__hub_task_create"}) == "Filing a task"
+    assert turns.tool_label({"tool": "mcp__hub__task_create"}) == "Filing a task"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub task close"}) == "Closing a task"
+    assert turns.tool_label({"tool": "Bash", "summary": "npm"}) == "Ran npm"
+    assert turns.tool_label({"tool": "shell", "summary": "hub release now"}) == "Ran hub release now"
+    assert turns.tool_label({"tool": "Bash"}) == "Ran Bash"
+    assert turns.tool_label({"tool": "mcp__peec-ai__list_brands"}) == "Ran peec ai list brands"
+
+
+def test_a_shell_label_is_its_program_and_never_what_follows_it():
+    assert turns.tool_label({"tool": "Bash", "summary": "run.sh --key sk-live-1"}) == "Ran run.sh"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub task close --token sk-live-1"}) == "Closing a task"
+
+
+def test_a_folded_step_carries_its_label_and_keeps_its_tool_name():
+    rows = [("tool", {"tool": "Bash", "status": "started", "item_id": "b1", "summary": "npm"}, "t1"),
+            ("tool", {"tool": "Bash", "status": "completed", "item_id": "b1"}, "t2")]
+    [step] = turns.build_steps(rows)
+    assert (step["tool"], step["label"], step["text"]) == ("Bash", "Ran npm", "")

@@ -32,6 +32,7 @@ OUT_OF_BUDGET = "Out of budget"
 CAPPED = "Waiting: too many bot turns this hour"
 BUSY = "Busy with other work"
 STARTING = "Starting"
+THINKING = "Thinking"
 
 # The root's open wakes from a person's message. A bot's post in the root after the message closes it: each bot's
 # latest post in the root is read once (from the oldest open wake's seq on, by messages_thread_seq), never once per
@@ -61,8 +62,8 @@ _RUNNING_SQL = (
     "WHERE a.state IN ('leased','running')")
 # A turn's newest step, walking its UNIQUE(attempt_id, seq) key back from the end: it reads only the deltas since that
 # step, never the run's history.
-_NEWEST_STEP_SQL = ("SELECT created_at FROM attempt_events WHERE attempt_id=? AND kind IN ('tool','message') "
-                    "ORDER BY seq DESC LIMIT 1")
+_NEWEST_STEP_SQL = ("SELECT created_at FROM attempt_events WHERE attempt_id=? AND (kind IN ('tool','message') OR "
+                    "(kind='delta' AND json_extract(payload,'$.delta_kind')='thought')) ORDER BY seq DESC LIMIT 1")
 _LAST_STATUS_SQL = ("SELECT MAX(created_at) FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=?")
 _QUIET = "strftime('%Y-%m-%dT%H:%M:%fZ','now','-5 seconds')"
 
@@ -170,7 +171,8 @@ def _outside(c, actor, seen):
 
 
 def _step(c, attempt_id):
-    """The run's current step in a person's words: its latest progress line or tool, else that it is writing."""
+    """The run's current step in a person's words: its latest progress line or tool, else that it is writing, thinking or
+    starting."""
     from .turns import reply_parts
     rows = []
     for kind, payload, created in c.execute(
@@ -183,7 +185,10 @@ def _step(c, attempt_id):
         rows.append((kind, value if isinstance(value, dict) else {}, created))
     parts = reply_parts(list(reversed(rows)))
     if not parts:
-        return STARTING
+        # A run that has only thought so far is thinking; one with nothing yet is starting.
+        newest = rows[0] if rows else None
+        thinking = bool(newest) and newest[0] == "delta" and newest[1].get("delta_kind") == "thought"
+        return THINKING if thinking else STARTING
     last = parts[-1]
     if last["kind"] == "reply":
         return "Writing a reply"

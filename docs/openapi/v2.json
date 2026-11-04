@@ -48177,7 +48177,7 @@
               ],
               "additionalProperties": true
             },
-            "description": "The run's pieces so far, in order, while it is leased or running (empty otherwise). `reply` and `progress` are what the bot wrote (`progress` when a tool call follows it); `tool` is a short label such as \"Ran hub task create\", never its arguments or output"
+            "description": "The run's pieces so far, in order, while it is leased or running (empty otherwise). `reply` and `progress` are what the bot wrote (`progress` when a tool call follows it); `tool` is a short label such as \"Filing a task\" or \"Ran npm\", never its arguments or output"
           }
         },
         "required": [

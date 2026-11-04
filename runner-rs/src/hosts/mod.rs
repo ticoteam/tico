@@ -262,25 +262,127 @@ pub fn shell_outside_actions(command: &str) -> Vec<&'static str> {
         .map(|(label, _)| *label).collect()
 }
 
-/// The program a shell command runs: leading `NAME=value` assignments are skipped, a `sh -c` wrapper is unwrapped,
-/// and only the program's file name is kept. Words are split the way a shell quotes them, so a quoted value with a
-/// space stays one word; a command whose quoting does not close gives nothing, and so does one whose program could
-/// come from an expansion (`$(...)`, backticks, `${...}`), since those are not split here.
+/// Shell setup a command can open with (`cd dir && ...`, `export X=1; ...`). It says nothing about the work, so a
+/// summary reads past it to the next run.
+const SHELL_SETUP: [&str; 5] = ["cd", "export", "set", "source", "."];
+
+/// The command words the `hub` CLI defines (its subcommand names). A `hub` summary shows only these, so an argument
+/// such as a token or a note never reaches a run log.
+const HUB_WORDS: &str = "abandon accept access act action add agent answer answers api appeal apply approval approve \
+    approved archive ask ask-resolve ask-status assistant attach audience audiences audit automation \
+    bet bot bot-status branch brand brief briefing browser-exit budget bulk calendar call cap caps \
+    card card-fill catalog catch-up catchup change changelog channel chat check check-back \
+    check-names checkin checkin-list child classify close code cohort comment comment-delete \
+    comment-edit comment-moderate commit company company-page computer connections conversation copy \
+    create create-email credential cursor db decide decision decline define delete deleted \
+    deliveries delivery delta diff discard dismiss dm dm-group doc done draft due economics edges \
+    edit editions enable event-types example export external feedback fetch figure file finance find \
+    findings follow gateway get give go-live goal granola grant grokbot group growth guide guides \
+    health health-monitor held history home human icon image import inbound inbox inboxes item \
+    keep-tasks-going kpi kpis label later latest learn learned lens link link-list link-slack list \
+    listening log mail mark-read markers market mcp meeting members message metric metrics model \
+    models needs-you next note notice now numbers off on open-earlier order org origin outcome \
+    owners page pair params pause pending performance pin pipeline place post product-create profile \
+    proposal proposals propose publication-preview publish query-search question question-sets react \
+    read read-back readers readout ready reasons recent recent-runs recover redact redo refresh \
+    relate relay release remove replay reply repo repo-create report reports-to repos request \
+    requester-remove requester-save requesters research resolve respond restore resume retire retry \
+    review revoke roadmap rotate rule rule-draft rules run runs satisfied save schedule scope search \
+    seat segment send sends service-key set settings setup-done show sign size skill skip slack \
+    slack-resume sleep snooze source sources spend sql stall-triage start stats status stop strategy \
+    strategy-bot strategy-bot-decide strategy-bot-level3-offer strategy-bot-log strategy-bot-merge \
+    sub suggest-to-original suggested summary support sweep sync tag target task task-manager \
+    task-model tasks team template templates thread tick tool touch tree trigger turns-at-once type \
+    types unfollow unlink unpin unreact unsnooze untick update update-from-original upload versions \
+    wait waive-qa wake-url watch webhook whoami withdraw worktree write";
+
+/// What a shell command does, for a tool event: the program it runs, by file name, never its arguments. A `hub` run
+/// reads as `hub` and up to two of its command words. A compound line (`&&`, `||`, `|`, `;`, newlines) names its `hub`
+/// run first, else its first run past shell setup. Leading `NAME=value` assignments are skipped, a `sh -c` wrapper is
+/// unwrapped, and a command whose quoting does not close, or whose program could come from an expansion, gives nothing.
 pub fn command_program(command: &str) -> String {
-    let Some(words) = shell_words(command) else { return String::new() };
-    let Some(at) = words.iter().position(|w| !is_assignment(w)) else { return String::new() };
-    if words[..=at].iter().any(|w| w.contains("$(") || w.contains('`') || w.contains("${")) {
-        return String::new();
+    let Some(words) = chosen_words(command) else { return String::new() };
+    if words[0] == "hub" {
+        return hub_summary(&words);
     }
-    let program = words[at].rsplit('/').next().unwrap_or(&words[at]);
-    let shell = matches!(program, "sh" | "bash" | "zsh" | "dash");
-    if let (true, Some(flag), Some(inner)) = (shell, words.get(at + 1), words.get(at + 2)) {
-        if flag.starts_with('-') && flag.ends_with('c') {
-            return command_program(inner);
+    clip(&words[0])
+}
+
+/// The words of the run that names what a command does: the first `hub` run, else the first run past shell setup,
+/// else the first run.
+fn chosen_words(command: &str) -> Option<Vec<String>> {
+    let runs: Vec<Vec<String>> = command_runs(command).into_iter().filter_map(run_words).collect();
+    let hub = runs.iter().find(|words| words[0] == "hub");
+    let work = runs.iter().find(|words| !SHELL_SETUP.contains(&words[0].as_str()));
+    hub.or(work).or(runs.first()).cloned()
+}
+
+/// The runs a shell line holds: its text cut at `&&`, `||`, `|`, `;` and newlines. A separator inside quotes, inside
+/// `$(...)` or inside backticks keeps the run whole, and a lone `&` (as in `2>&1`) is not a separator.
+fn command_runs(command: &str) -> Vec<&str> {
+    let mut runs: Vec<&str> = vec![];
+    let (mut start, mut quote, mut escaped, mut depth, mut ticked) = (0, None::<char>, false, 0usize, false);
+    let mut chars = command.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if std::mem::take(&mut escaped) {
+            continue;
+        }
+        let doubled = matches!(c, '&' | '|') && matches!(chars.peek(), Some(&(_, n)) if n == c);
+        let cut = depth == 0 && !ticked;
+        match (quote, c) {
+            (Some(q), _) if c == q => quote = None,
+            (Some('\''), _) => {}
+            (_, '\\') => escaped = true,
+            (None, '\'' | '"') => quote = Some(c),
+            (None, '(') if command[..i].ends_with('$') => depth += 1,
+            (None, ')') if depth > 0 => depth -= 1,
+            (None, '`') => ticked = !ticked,
+            (None, '&' | '|') if doubled && cut => {
+                chars.next();
+                runs.push(&command[start..i]);
+                start = i + 2;
+            }
+            (None, '|' | ';' | '\n') if cut => {
+                runs.push(&command[start..i]);
+                start = i + 1;
+            }
+            _ => {}
         }
     }
-    clip(program)
+    runs.push(&command[start..]);
+    runs
 }
+
+/// The words of one shell run: leading `NAME=value` assignments dropped and the program reduced to its file name. A
+/// `sh -c` wrapper gives the words of its script instead. None when the run has no program, its quoting does not
+/// close, or its program could come from an expansion (`$(...)`, backticks, `${...}`), which is not split here.
+fn run_words(run: &str) -> Option<Vec<String>> {
+    let words = shell_words(run)?;
+    let at = words.iter().position(|w| !is_assignment(w))?;
+    if words[..=at].iter().any(|w| w.contains("$(") || w.contains('`') || w.contains("${")) {
+        return None;
+    }
+    let program = words[at].rsplit('/').next().unwrap_or(&words[at]).trim_matches(&['(', ')'][..]).to_string();
+    let shell = matches!(program.as_str(), "sh" | "bash" | "zsh" | "dash");
+    if let (true, Some(flag), Some(inner)) = (shell, words.get(at + 1), words.get(at + 2)) {
+        if flag.starts_with('-') && flag.ends_with('c') {
+            return chosen_words(inner);
+        }
+    }
+    let mut out = vec![program];
+    out.extend(words[at + 1..].iter().cloned());
+    Some(out)
+}
+
+/// `hub` and up to two of the CLI's own command words from the positional words before the first flag. Any other
+/// word is dropped, so a token or a note passed as an argument never reaches the summary.
+fn hub_summary(words: &[String]) -> String {
+    let known = words[1..].iter().take_while(|w| !w.starts_with('-'))
+        .filter(|w| HUB_WORDS.split_whitespace().any(|word| word == w.as_str()))
+        .take(2);
+    std::iter::once("hub").chain(known.map(String::as_str)).collect::<Vec<_>>().join(" ")
+}
+
 
 /// A command's words after shell quoting (single, double, backslash), or None when a quote is left open.
 fn shell_words(command: &str) -> Option<Vec<String>> {
@@ -882,6 +984,23 @@ mod tests {
         assert_eq!(tool_summary(&json!({"file_path": "/work/note.txt", "content": "secret body"})), "/work/note.txt");
         assert_eq!(tool_summary(&json!({"description": "count words", "prompt": "Count the words", "subagent_type": "general-purpose"})), "");
         assert_eq!(tool_summary(&json!({"query": "private question", "url": "https://x.example/?token=1"})), "");
+    }
+
+    #[test]
+    fn a_compound_command_names_the_work_and_never_the_arguments() {
+        assert_eq!(command_program("cd /repo && hub task close --id 42 --reason 'sk-live-1'"), "hub task close");
+        assert_eq!(command_program("export HUB_TOKEN=sk-live-1; /usr/local/bin/hub task create --title sk-live-1"), "hub task create");
+        assert_eq!(command_program("hub task note sk-live-1 close"), "hub task note");
+        assert_eq!(command_program("cd web && npm run build && hub task list"), "hub task list");
+        assert_eq!(command_program("set -e\nnpm test | tee out.log"), "npm");
+        assert_eq!(command_program("cargo test 2>&1 | tail"), "cargo");
+        assert_eq!(command_program("cd /tmp"), "cd");
+        assert_eq!(command_program("(cd web && npm test)"), "npm");
+        assert_eq!(command_program("sh -c 'cd x && cargo test'"), "cargo");
+        assert_eq!(command_program("hub task create --title \"a && hub task close\""), "hub task create");
+        assert_eq!(command_program("FOO=1 && curl x"), "curl");
+        assert_eq!(command_program("X=$(a && sk-live-1) hub task list"), "");
+        assert_eq!(tool_summary(&json!({"command": "cd web && hub task list --token sk-live-1"})), "hub task list");
     }
 
     #[test]
