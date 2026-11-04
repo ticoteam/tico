@@ -342,6 +342,23 @@ export type AutomationStats = {
   until: string;
 };
 
+export type AutomationTemplate = {
+  destinations: Array<Record<string, unknown>>;
+  enabled: boolean;
+  name: string;
+  owner: string;
+  steps: Array<Record<string, unknown>>;
+  trigger: Record<string, unknown>;
+};
+
+export type AutomationTemplates = {
+  templates: Array<{
+  destinations: Array<string>;
+  id: string;
+  name: string;
+}>;
+};
+
 export type AutomationVersions = {
   next: number | null;
   versions: Array<{
@@ -6772,6 +6789,15 @@ export type GetAutomationStatsParams = {
 export type GetAutomationStatsBody = never;
 export type GetAutomationStatsResponse = AutomationStats;
 
+/** GET /api/v2/automations/templates/{tid} */
+export type GetAutomationTemplateParams = {
+  inbox: string;
+  owner: string;
+  tid: string;
+};
+export type GetAutomationTemplateBody = never;
+export type GetAutomationTemplateResponse = AutomationTemplate;
+
 /** GET /api/v2/audiences/{audience_id}/stats/approval */
 export type GetBoardApprovalParams = {
   audience_id: string;
@@ -7826,6 +7852,11 @@ export type ListAutomationRunsParams = {
 };
 export type ListAutomationRunsBody = never;
 export type ListAutomationRunsResponse = AutomationRuns;
+
+/** GET /api/v2/automations/templates */
+export type ListAutomationTemplatesParams = Record<string, never>;
+export type ListAutomationTemplatesBody = never;
+export type ListAutomationTemplatesResponse = AutomationTemplates;
 
 /** GET /api/v2/automations/{aid}/versions */
 export type ListAutomationVersionsParams = {

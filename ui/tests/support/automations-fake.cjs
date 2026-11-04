@@ -23,12 +23,51 @@ function flowProblem(steps) {
     if (s.type === 'llm' && s.choose && !(s.choose.to || []).includes(s.choose.default)) return `${s.id}: choose.default is one of choose.to`;
     if (s.type === 'decide') for (const [id, q] of Object.entries(s.questions || {})) {
       if (q?.instructions == null || (typeof q.instructions === 'string' && !q.instructions.trim())) return `${s.id}.${id}: a question needs instructions`;
+      // clients/judge.py MAX_INSTRUCTIONS, counted in characters as Python counts them.
+      if ([...(typeof q?.instructions === 'string' ? q.instructions : JSON.stringify(q?.instructions ?? ''))].length > 8000) return `${id}: instructions over 8000 characters`;
       if (q?.type === 'choice' && (Array.isArray(q.criteria) ? q.criteria : Object.keys(q.criteria || {})).length < 2) return `${s.id}.${id}: a choice is a criteria map of at least two options`;
     }
     for (const kid of [s.steps, s.then, s.else, ...(Array.isArray(s.paths) ? s.paths.map(x => x?.steps) : [])])
       if (Array.isArray(kid)) { const bad = flowProblem(kid); if (bad) return bad; }
   }
   return '';
+}
+
+// The inbox templates (backend/automation_templates): the listing, and a fixed flow for each. Blank is the real one's
+// shape: no rules, no questions, Sort to Me or Archive. The others fill to one flow (their names aside): a rule, a
+// question, and an LLM that is a draft turn as a person's or a bot's owner, and Sort, every option routed, for a group.
+const TEMPLATES = [{id: 'founder', name: 'Founder', destinations: ['Me', 'Legal', 'Engineering', 'Archive']},
+  {id: 'support', name: 'Support desk', destinations: ['Support', 'Engineering', 'Archive']},
+  {id: 'sales', name: 'Sales', destinations: ['Sales', 'Archive']}, {id: 'blank', name: 'Blank', destinations: ['Me', 'Archive']}];
+function filledTemplate(tid, owner, inbox) {
+  const destinations = [{id: 'me', name: 'Me', color: 'amber', then: [{do: 'leave_for_you', args: {}}]},
+    {id: 'legal', name: 'Legal', color: 'orange', then: [{do: 'create_task', args: {title: 'Legal: {{message.subject}}', owner: 'bot:support'}}]},
+    {id: 'eng', name: 'Engineering', color: 'violet', then: [{do: 'create_task', args: {title: 'Bug: {{message.subject}}', owner: 'bot:eng-lead'}}]},
+    {id: 'archive', name: 'Archive', color: 'gray', then: [{do: 'archive', args: {}}]}];
+  const name = TEMPLATES.find(t => t.id === tid).name, trigger = {type: 'message', inbox};
+  if (tid === 'blank') {
+    const two = [destinations[0], destinations[3]];
+    return {name, owner, enabled: false, trigger, destinations: two, steps: [
+      {id: 'rules', type: 'filter', rules: []},
+      {id: 'sort', type: 'decide', level: 'high', out: 'sort', questions: {route: {type: 'choice',
+        instructions: 'Where does this message belong? Pick the one that fits best.', criteria: {me: 'The owner should see it', archive: 'Nothing is asked of anyone'}}}},
+      {id: 'route', type: 'filter', rules: [...two.map(d => ({when: [{field: 'sort.route', op: 'is', value: d.id, min: 0.5}], to: d.id, next: 'end', stop: true})),
+        {when: [], to: 'me', next: 'end', stop: true}]}]};
+  }
+  const to = destinations.map(d => d.id), [kind, id] = [owner.split(':')[0], owner.split(':').slice(1).join(':')];
+  const steps = [
+    {id: 'rules', type: 'filter', rules: [{when: [{field: 'message.subject', op: 'matches', value: 'subpoena|lawsuit'}], match: 'all',
+      then: [{do: 'label', args: {name: 'STARRED'}}], to: 'legal', next: 'end', stop: true}]},
+    {id: 'ask', type: 'decide', level: 'low', out: 'q', questions: {bug: {type: 'noul', instructions: 'Is it a bug report?'}}},
+    {id: 'route', type: 'filter', rules: [{when: [{field: 'q.bug', op: 'is', value: 'yes', min: 0.75}], to: 'eng', next: 'end', stop: true}]}];
+  if (kind === 'group') steps.push(
+    {id: 'draft', type: 'decide', level: 'high', out: 'draft', questions: {route: {type: 'choice', instructions: 'Where does this message belong?',
+      criteria: Object.fromEntries(destinations.map(d => [d.id, d.name]))}}},
+    {id: 'draft_route', type: 'filter', rules: [...to.map(d => ({when: [{field: 'draft.route', op: 'is', value: d, min: 0.5}], to: d, next: 'end', stop: true})),
+      {when: [], to: 'me', next: 'end', stop: true}]});
+  else steps.push({id: 'draft', type: 'llm', out: 'draft', as: (kind === 'person' ? 'assistant:' : 'bot:') + id,
+    prompt: 'Route this message first. When unsure, choose me.', choose: {to, default: 'me', mode: 'draft'}});
+  return {name, owner, enabled: false, trigger, steps, destinations};
 }
 
 // A bot's draft (`draft: true` in openAutomations): off, its version 1 pending until Turn on (CONTRACT §2).
@@ -143,14 +182,28 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/groups') return json({groups: fx.groups});
     const body = method === 'GET' ? null : req.postDataJSON?.() ?? null;
+    let m0;
     if (method !== 'GET') writes.push({method, path: p, body});
 
     if (p === '/api/v2/automations/question-sets') return json({sets: fx.question_sets});
+    // A template fill saves nothing; like the hub it refuses an owner the viewer may not make an automation for (another
+    // person) and one that can't hear the inbox (a group on an email address).
+    if (p === '/api/v2/automations/templates') return json({templates: clone(TEMPLATES)});
+    if ((m0 = p.match(/^\/api\/v2\/automations\/templates\/([^/]+)$/))) {
+      const tid = decodeURIComponent(m0[1]), owner = url.searchParams.get('owner') || '', inbox = url.searchParams.get('inbox') || '';
+      if (!TEMPLATES.some(t => t.id === tid)) return refuse(404, 'not_found', 'No such template');
+      if (!/^(person|bot|group):./.test(owner) || !inbox) return refuse(422, 'invalid', 'owner is person:<id>, bot:<slug> or group:<id>');
+      if (owner.startsWith('person:') && owner !== 'person:' + me.id) return refuse(403, 'forbidden', `You may not make an automation for ${owner}`);
+      if (owner.startsWith('group:') && inbox.includes('@')) return refuse(403, 'forbidden', `${owner} may not read ${inbox}`);
+      return json(filledTemplate(tid, owner, inbox));
+    }
     if (p === '/api/v2/automations' && method === 'POST') {
-      // A new one (Blank): the viewer's own, version 1.
-      const a = {...clone(body), id: 'au_' + (db.list.length + 1), version: 1, can_edit: true};
+      // A new one (Blank, or New inbox's): version 1.
+      const bad = flowProblem(body.steps);
+      if (bad) return refuse(422, 'invalid_flow', bad);
+      const a = {...clone(body), owner_id: body.owner, id: 'au_' + (db.list.length + 1), version: 1, can_edit: true};
       db.list.push(a);
-      db.versions[a.id] = [{n: 1, actor: 'person:' + me.id, at: new Date().toISOString(), status: 'active', flow: {trigger: clone(a.trigger), steps: clone(a.steps)}}];
+      db.versions[a.id] = [{n: 1, actor: 'person:' + me.id, at: new Date().toISOString(), status: 'active', flow: flowOf(a)}];
       return json(full(a));
     }
     if (p === '/api/v2/automations') return json({automations: db.list.map(row), next: null});
@@ -301,4 +354,4 @@ async function shot(page, name) {
   await page.screenshot({path: path.join(dir, name + '.png')});
 }
 
-module.exports = {openAutomations, PHONE, DESKTOP, sideways, shot};
+module.exports = {openAutomations, filledTemplate, PHONE, DESKTOP, sideways, shot};
