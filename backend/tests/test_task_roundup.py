@@ -392,7 +392,9 @@ def test_a_waiting_task_held_by_a_live_blocker_or_by_a_person_is_not_listed(api)
         c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (van["id"],))
         landlord = task(c, "Ask the landlord")
         settle(c, landlord["id"], "finance", ago(days=2))
-        c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana' WHERE id=?", (landlord["id"],))
+        # A waiting task on a person with a plain ask is held by that person: a note with no plain ask is a restate line instead
+        c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana', note=? WHERE id=?",
+                  ("Send the landlord the lease copy.", landlord["id"]))
         complete_jobs(c)
         assert "finance" not in task_roundup.run(c, DAY)["woke"]
         assert lists(c) == []
