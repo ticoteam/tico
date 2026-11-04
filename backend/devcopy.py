@@ -301,6 +301,16 @@ def revoke_automation_secrets(c):
                   + (", headers='[]'" if "headers" in columns else ""))
 
 
+def open_attempts(c):
+    """(WHERE clause, args) for the attempts a copy removes as still open. A run with no job has no lease, so it is open
+    until settled_at; a job-backed attempt is open until finished_at, or while its state is open. A file from before
+    migration 0071 has no settled_at and no run without a job."""
+    open_state = "finished_at IS NULL OR state IN (%s)" % ",".join("?" * len(OPEN_ATTEMPTS))
+    if "settled_at" in {row[1] for row in c.execute('PRAGMA table_info("attempts")')}:
+        return "(job_id IS NULL AND settled_at IS NULL) OR (job_id IS NOT NULL AND (%s))" % open_state, OPEN_ATTEMPTS
+    return open_state, OPEN_ATTEMPTS
+
+
 def prune(c, days, keep_automations=False):
     """Empty what can act, revoke every token, cut history to `days`. Returns {table: rows removed}."""
     removed = {}
@@ -340,12 +350,7 @@ def prune(c, days, keep_automations=False):
     if "jobs" in present:
         delete("jobs", "state IN (%s)" % ",".join("?" * len(OPEN_JOBS)), OPEN_JOBS)
     if "attempts" in present:
-        open_run = "finished_at IS NULL OR state IN (%s)" % ",".join("?" * len(OPEN_ATTEMPTS))
-        if "settled_at" in {row[1] for row in c.execute('PRAGMA table_info("attempts")')}:
-            # A run with no job has no lease, so its end is settled_at (migration 0071 makes a turn with no attempts row
-            # one): open means unsettled. A job-backed attempt keeps the rule above.
-            open_run = "(job_id IS NULL AND settled_at IS NULL) OR (job_id IS NOT NULL AND (%s))" % open_run
-        delete("attempts", open_run, OPEN_ATTEMPTS)
+        delete("attempts", *open_attempts(c))
     stamp = now()
     if days:
         cutoff = shift(stamp, days=-days)
@@ -432,8 +437,9 @@ def build(source, dest, days=30, force=False, keep_automations=False):
         left = [t for t in emptied(c, keep_automations) if c.execute(f"SELECT 1 FROM {quote(t)} LIMIT 1").fetchone()]
         if left:
             raise SystemExit("devcopy: tables not empty after pruning: " + ", ".join(left))
+        where, args = open_attempts(c)
         live = c.execute("SELECT count(*) FROM attempts WHERE token_hash NOT LIKE 'devcopy-revoked:%' "
-                         "OR finished_at IS NULL").fetchone()[0] if "attempts" in tables(c) else 0
+                         f"OR ({where})", args).fetchone()[0] if "attempts" in tables(c) else 0
         if live:
             raise SystemExit("devcopy: an unfinished or unrevoked attempt survived pruning")
         present = tables(c)
