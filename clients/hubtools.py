@@ -3654,6 +3654,9 @@ def automation_template(api, args):
 
 
 @tool("hub_automation_create", "Save a new automation (version 1). Checked on save: a bad flow is refused with why. "
+      "In Assistant chat a Message routine saves off and returns an approval action card; only the person's click "
+      "turns it on. Omit enabled or set false. Choose defaults to Draft; use Reply only when the person explicitly "
+      "asks to send replies and the inbox permits sending. "
       "BotOps saves it off unless `enabled` is sent. A bot without rights to it saves a proposal: off, its first "
       "version pending, for a person to turn on.",
       {k: v for k, v in _AUTO_FIELDS.items()}, required=("name", "owner", "trigger"), writes=True)
@@ -3662,7 +3665,9 @@ def automation_create(api, args):
     return _as_person(api).post("automations", {"steps": [], **body}, key=_key(args))
 
 
-@tool("hub_automation_update", "Change an automation. A new trigger, steps or batch times is a new version; a bot "
+@tool("hub_automation_update", "Change an automation. A new trigger, steps or batch times is a new version. "
+      "The Assistant must propose Message routine edits with hub_assistant_propose (PATCH "
+      "/api/v2/automations/<id>); pausing with enabled:false is direct. A bot "
       "without edit rights gets back `pending` (a proposal a person restores). Action args are named in `steps`. Then check `problems`.",
       {"id": _s("auto_..."), **_AUTO_FIELDS, "summary": _s("A few words on the change")},
       required=("id",), writes=True)
@@ -7721,6 +7726,7 @@ ASSISTANT_TOOLS = frozenset({
     "hub_rules_retire", "hub_task_bulk",
     # Admin jobs 42-49: groups, bot owners and access, routines, budgets, inbox audience, Pending meetings.
     "hub_automation_create", "hub_bot_access", "hub_bot_owners", "hub_finance_act", "hub_inbound_audience",
+    "hub_automation_guide", "hub_automation_templates", "hub_automation_template", "hub_inbox_send",
     "hub_meeting_approve", "hub_meeting_pending",
 })
 
