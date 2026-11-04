@@ -593,7 +593,8 @@ def test_a_bot_with_no_live_task_is_skipped_before_any_per_task_query(api, monke
         complete_jobs(c)
         asked = []
         visit = task_roundup._list
-        monkeypatch.setattr(task_roundup, "_list", lambda c, slug, at, shared: asked.append(slug) or visit(c, slug, at, shared))
+        monkeypatch.setattr(task_roundup, "_list",
+                            lambda c, slug, at, shared, skip_tasks=(): asked.append(slug) or visit(c, slug, at, shared, skip_tasks))
         assert "finance" not in task_roundup.run(c, DAY)["woke"]
         assert "finance" not in asked                                     # no live task: no per-task query at all
         live = task(c, "Plan the offsite")
@@ -1084,7 +1085,7 @@ def test_a_waiting_task_held_only_by_bots_is_listed_on_its_blocker_bots_list_not
     with store.transaction() as c:
         blocker = H.task_create(c, H.human_actor("ana"), "Finish the menu", "Ops finishes it.", H.bot_actor("ops"))["id"]
         mine = task(c, "Print the menu")["id"]
-        started(c, mine, "finance", ago(days=1))
+        settle(c, mine, "finance", ago(days=1))
         c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
         blocks(c, blocker, mine, ago(days=1))
         complete_jobs(c)
@@ -1124,7 +1125,7 @@ def test_a_waiting_task_already_listed_for_its_update_is_not_read_by_task_holds_
     with store.transaction() as c:
         blocker = H.task_create(c, H.human_actor("ana"), "Finish the menu", "Ops finishes it.", H.bot_actor("ops"))["id"]
         mine = task(c, "Print the menu")["id"]
-        started(c, mine, "finance", ago(days=1))
+        settle(c, mine, "finance", ago(days=1))
         c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
         blocks(c, blocker, mine, ago(days=1))
         complete_jobs(c)
@@ -1150,7 +1151,7 @@ def test_a_task_held_by_two_bots_is_listed_to_both_in_one_run_and_to_neither_on_
         for tid in (ops, coo):
             c.execute("UPDATE tasks SET created_at=?, updated_at=? WHERE id=?", (ago(days=2), ago(days=2), tid))
         mine = task(c, "Print the menu")["id"]
-        started(c, mine, "finance", ago(days=1))
+        settle(c, mine, "finance", ago(days=1))
         c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
         blocks(c, ops, mine, ago(days=1))
         blocks(c, coo, mine, ago(days=1))
@@ -1179,7 +1180,7 @@ def test_a_blocker_that_cannot_read_the_owners_task_gets_no_line(api, monkeypatc
         blocker = task(c, "Finish the menu", owner=H.bot_actor("ops"))["id"]
         settle(c, blocker, "ops", ago(days=3))     # ops has a list of its own (its quiet blocker), so the check is not vacuous
         mine = task(c, "Print the menu")["id"]
-        started(c, mine, "finance", ago(days=1))
+        settle(c, mine, "finance", ago(days=1))
         c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
         blocks(c, blocker, mine, ago(days=1))
         complete_jobs(c)
