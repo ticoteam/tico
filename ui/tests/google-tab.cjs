@@ -86,6 +86,18 @@ const until = async (check, what, ms = 8000) => {
     await new Promise(resolve => setTimeout(resolve, 50));
   }
 };
+// The check's next 20 s timer, once the page has set one other than `previous`. The page sets it only after it has
+// handled the answer before, so the clock may run only then: advanced earlier, it passes a timer not yet set.
+const nextCheckTimer = async (page, previous, what) => {
+  const end = Date.now() + 8000;
+  for (;;) {
+    const timer = await page.evaluate(() =>
+      [...document.querySelectorAll('*')].find(el => el._googleWatch)?._googleWatch?.timer ?? null);
+    if (timer !== null && timer !== previous) return timer;
+    if (Date.now() > end) throw new Error(`Timed out waiting for ${what}`);
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+};
 const writesTo = (fake, path, method = 'POST') => fake.writes.filter(write => write.path === path && write.method === method);
 const KEY = {type: 'service_account', private_key_id: 'KEYMARK-7731', client_email: 'tico-mail@tico-mail-a1b2c3.iam.gserviceaccount.com'};
 const keyFile = {name: 'key.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(KEY))};
@@ -336,8 +348,10 @@ const scenarios = {
     assert.match(await page.locator('[data-ws-check-result]').innerText(), /Checking again every 20 seconds/);
     const checks = () => writesTo(fake, '/api/v2/google/workspace/check');
     await until(() => checks().length === 1, 'the first check');
+    let timer = await nextCheckTimer(page, null, 'the timer after the first check');
     await page.clock.runFor(20000);
     await until(() => checks().length === 2, 'the second check after 20 s');
+    await nextCheckTimer(page, timer, 'the timer after the second check');
     await page.clock.runFor(20000);
     await page.locator('[data-ws-status]', {hasText: 'Connected · checked ana@acme.example'}).waitFor();
     assert.equal(await page.locator('[data-ws-replace]').count(), 1, 'the key is connected now');
@@ -350,7 +364,9 @@ const scenarios = {
     const {page, seen} = await open(browser, fake, {clock: true});
     await page.locator('[data-ws-check]').click();
     await until(() => writesTo(fake, '/api/v2/google/workspace/check').length === 1, 'the first check');
+    let timer = null;
     for (let tick = 1; tick <= 30; tick += 1) {
+      timer = await nextCheckTimer(page, timer, `the timer after check ${tick}`);
       await page.clock.runFor(20000);
       await until(() => writesTo(fake, '/api/v2/google/workspace/check').length === tick + 1, `check ${tick + 1}`);
     }
