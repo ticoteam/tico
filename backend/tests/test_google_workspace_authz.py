@@ -284,5 +284,7 @@ def test_a_reconnect_moves_the_grant_to_the_bot_s_computer_and_the_old_holder_ke
     assert connect.refresh(api, new["token"], mailbox=BOX, refresh_token="1//second").status_code == 200
     r = connect.refresh(api, old["token"], mailbox=BOX, refresh_token="1//first")
     assert r.status_code == 403 and r.json()["error"]["code"] == "not_this_grant"
-    assert post(api, "connectors/mail/google/claim", {"holds_mail": True}, old["token"])["connect"] is None
+    # Once the grant is the new computer's, the old one is neither holder, publisher nor bot host: the claim gate refuses it.
+    refused = post(api, "connectors/mail/google/claim", {"holds_mail": True}, old["token"], expected=403)
+    assert refused["error"]["code"] == "forbidden"
     assert get(api, "runners/connectors", old["token"])["connectors"] == []
