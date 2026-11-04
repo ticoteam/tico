@@ -83,11 +83,15 @@ def participant_sql(c, actor_sql, table='tasks'):
             f"AND r.actor={actor_sql}) AND ({sent})")
 
 
+def participant_query(c, actor_sql):
+    # Keep the caller's task id unqualified: visibility also runs over aliases and historical rows.
+    return ("SELECT tasks.id FROM task_roles audience_role JOIN tasks ON tasks.id=audience_role.task_id "
+            f"WHERE audience_role.actor={actor_sql} AND audience_role.role='participant' AND ("
+            + participant_sql(c, actor_sql) + ")")
+
+
 def participant_tasks(c, actor):
     # One indexed actor lookup per snapshot, not one query for every task/message in a list. Writes clear it.
     def build():
-        return frozenset(row[0] for row in c.execute(
-            "SELECT tasks.id FROM task_roles audience_role JOIN tasks ON tasks.id=audience_role.task_id "
-            "WHERE audience_role.actor=? AND audience_role.role='participant' AND (" + participant_sql(c, '?') + ")",
-            (actor, actor)))
+        return frozenset(row[0] for row in c.execute(participant_query(c, '?'), (actor, actor)))
     return read_cache.value(c, ('meeting_participant_tasks', actor), build, shared=True)
