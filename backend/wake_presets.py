@@ -33,6 +33,7 @@ import os
 import statistics
 
 from . import hubdb as H
+from . import bot_settings as BS
 
 # A run's tokens: its input (uncached and cached) and output, as its usage records them.
 RUN_TOKENS = "coalesce(t.input_tokens,0)+coalesce(t.cached_tokens,0)+coalesce(t.output_tokens,0)"
@@ -89,8 +90,8 @@ _DUPLICATE = " OR ".join(
    WHERE m.id=NEW.message_id AND {_SAME_EVENT} AND (coalesce(cj.state,o.state) IN ('queued','leased','running','input')
    OR a.finished_at>=strftime('%Y-%m-%dT%H:%M:%fZ',m.created_at,'-{DUPLICATE_SECONDS} seconds')))""" for earlier in _EARLIER)
 HOLD_TRIGGER = f"""CREATE TRIGGER wake_preset_hold AFTER INSERT ON jobs WHEN NEW.state='queued' BEGIN
- UPDATE jobs SET wake_preset=CASE WHEN (SELECT json_extract(config,'$.wake_preset') FROM bot_config
-   WHERE bot=NEW.bot_id)='{TOKEN_SAVER}' THEN '{TOKEN_SAVER}' ELSE '{PERFORMANCE}' END WHERE id=NEW.id;
+ UPDATE jobs SET wake_preset=CASE WHEN (SELECT wake_preset FROM bot_settings
+   WHERE bot_id=NEW.bot_id)='{TOKEN_SAVER}' THEN '{TOKEN_SAVER}' ELSE '{PERFORMANCE}' END WHERE id=NEW.id;
  UPDATE jobs SET held=1,wake_class=(SELECT CASE WHEN {_BATCH_SQL} THEN json_extract(m.refs,'$.wake_batch')
    ELSE 'sweep' END FROM messages m WHERE m.id=NEW.message_id)
    WHERE id=NEW.id AND {_PRESET_SQL} AND EXISTS(SELECT 1 FROM messages m WHERE m.id=NEW.message_id
@@ -127,9 +128,10 @@ def ensure(c):
         c.execute("DROP TRIGGER IF EXISTS wake_preset_hold")
         c.execute(HOLD_TRIGGER)
 
-    c.execute("UPDATE bot_config SET config=json_set(config,'$.wake_preset',?),revision=revision+1 "
-              "WHERE json_extract(config,'$.wake_preset') IS NULL "
-              "OR json_extract(config,'$.wake_preset')=?", (PERFORMANCE, CURRENT))
+    c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot IN (SELECT bot_id FROM bot_settings "
+              "WHERE wake_preset IS NULL OR wake_preset=?)", (CURRENT,))
+    c.execute("UPDATE bot_settings SET wake_preset=?,updated_at=? WHERE wake_preset IS NULL OR wake_preset=?",
+              (PERFORMANCE, H.now(), CURRENT))
 
 
 def values():
@@ -186,7 +188,7 @@ def numbers_for(c, bot, label, cache=None):
     if cache is not None and bot in cache:
         own = cache[bot]
     else:
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
         own = profiles.numbers(H._json(row[0], {}) if row else {})
         if cache is not None:
             cache[bot] = own
@@ -346,7 +348,7 @@ def _release(c, bot, jobs):
     if len(rooms) > DIGEST_ROOMS:
         lines.append(f"- and updates in {len(rooms) - DIGEST_ROOMS} more rooms; your open tasks list them")
     from . import profiles
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     mine = profiles.name_of(H._json(row[0], {}) if row else {})
     held_by = (f"your {profiles.SPEC[mine]['label']} profile" if mine
                else f"your {LABELS.get(jobs[0]['wake_preset'], '')} wake preset")
@@ -378,7 +380,7 @@ def _on_one_page(c, jobs):
 
 def replan(c, bot):
     """A preset change: the bot's held jobs are planned again on the new values."""
-    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     name = preset_of(H._json(config[0], {}) if config else {})
     c.execute("UPDATE jobs SET hold_until=NULL,wake_preset=? WHERE bot_id=? AND held=1 AND state='queued' "
               "AND coalesce(wake_class,'')<>'quota-reset' AND hold_reason IS NULL", (name, bot))

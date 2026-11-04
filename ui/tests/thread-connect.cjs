@@ -112,9 +112,8 @@ async function sheet(page) {
   await page.goto('https://tico-ui.test/#/thread/t-plan');
   await page.getByText('We are ready on our side.').waitFor();
   await page.locator('[data-thv-menu]').click();
-  await page.locator('.thv-pop').getByText('Who can read').click();
-  await page.locator('#thread-share[open]').waitFor();
-  return page.locator('#thread-share');
+  await page.locator('#thread-settings[open]').waitFor();
+  return page.locator('#thread-settings');
 }
 
 (async () => {

@@ -13,6 +13,7 @@ from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_onboarding import OWNER_EMAIL, environment, signed_in  # noqa: F401
 from backend.tests.test_people_access import HeaderProxy, call, person_headers, view
+from backend import bot_settings as BS
 
 NEW = "morgan@new.example"
 
@@ -248,7 +249,7 @@ def test_a_message_bot_keeps_reading_the_old_mailbox_both_ways(environment):
             assert routines.token_mailboxes(c, "coo") == [OWNER_EMAIL]
             [box] = routines.message_bot_mailboxes(c)
             assert box["address"] == OWNER_EMAIL and box["person_id"] == "morgan"
-            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='coo'").fetchone()[0])
+            config = BS.read(c, 'coo')
             assert routines.inbox_of("coo", config, routines._roster(c))["mailboxes"] == [OWNER_EMAIL]
 
 

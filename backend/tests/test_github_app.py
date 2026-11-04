@@ -21,6 +21,7 @@ from backend.auth import Identity
 from backend.config import Settings
 from backend.store import Problem, encode
 from backend.enqueue import enqueue_stored
+from backend import bot_settings as BS
 
 KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 PEM = KEY.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
@@ -153,8 +154,8 @@ def api(tmp_path, gh):
             H.sync_registry(c, bots, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}, {"id": "ben", "email": "ben@acme.example", "team": "leadership"}, {"id": "riley", "email": "riley@acme.example", "team": "leadership"}]})
             repos = {"botops": "emp-botops", "newbie": "emp-newbie", "oldie": "emp-oldie", "cpo": "emp-cpo", "cmo": "https://github.com/Acme/emp-cmo.git", "cfo": "elsewhere/emp-cfo"}
             for slug, config in bots.items():
-                c.execute("INSERT INTO bot_config(bot,config,team,owner_id,repo) VALUES(?,?,?,?,?)",
-                          (slug, encode(config), "t", "ana", repos[slug]))
+                c.execute('INSERT INTO bot_config(bot,team,owner_id,repo) VALUES(?,?,?,?)', (slug, 't', 'ana', repos[slug]))
+                BS.write(c, slug, config)
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
         client.app_state = app.state
         yield client
@@ -800,7 +801,7 @@ def test_selected_bot_repository_creation_grant_and_revocation(api, gh):
     assert gh.created_repositories == {"Acme/bot-newbie"}, "the existing bot creator keeps its bot- name contract"
     with api.app_state.store.read() as c:
         assert c.execute("SELECT actor FROM events WHERE action='github.repo_created'").fetchone()[0] == 'bot:cmo'
-        assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='cmo'").fetchone()[0]).get('create_repositories') is None
+        assert BS.read(c, 'cmo').get('create_repositories') is None
     # A local grant never replaces GitHub's own Administration permission.
     gh.permissions = {'administration': 'read', 'contents': 'write'}
     missing = create({'slug': 'newbie', 'empty': True})

@@ -4,6 +4,7 @@ import re
 
 from .rows import AttemptRow
 from .store import H
+from . import bot_settings as BS
 
 STALL_MINUTES = 5
 # The server's own cap (cap below): a silent run ends this long past its bot's max_run_minutes, on the server's clock.
@@ -144,7 +145,7 @@ def sweep(c, at=None, listening_since=None):
 
 def max_run_minutes(c, bot):
     """The bot's own limit, read as the runner reads it (runner-rs execute.rs): a number or a numeric text."""
-    row = c.execute('SELECT config FROM bot_config WHERE bot=?', (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     try:
         return float(H._json(row[0], {}).get('max_run_minutes') or MAX_RUN_MINUTES) if row else MAX_RUN_MINUTES
     except (TypeError, ValueError):

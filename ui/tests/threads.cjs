@@ -352,12 +352,13 @@ let browser = null;
     await page.locator('.thv-head .thv-pin[aria-pressed="false"]').click();
     await rail.locator('[data-list="pinned"] .tr-row[data-thread="t-plan"]').waitFor();
     assert.deepEqual(seen.pins, ['DELETE:t-plan', 'PUT:t-plan']);
-    // A manager pins it for everyone from the menu.
+    // A manager pins it for everyone from Thread settings.
     await page.locator('[data-thv-menu]').click();
-    await page.locator('.thv-pop').getByText('Pin for everyone', {exact: true}).click();
+    await page.locator('#thread-settings[open] #ths-pin').click();
     for (let i = 0; i < 40 && !seen.patches.length; i++) await page.waitForTimeout(50);
     assert.deepEqual(seen.patches, [{pinned_for_everyone: true}]);
     seen.patches.length = 0;
+    await page.keyboard.press('Escape');
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
 
     // One thread, flat: an older server's tree drawn in its order with no indent, each sub-thread reply quoting the
@@ -526,20 +527,16 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/thread/t-edit');
     await page.locator('.th-msg[data-mid="ed1"] .th-body').getByText('Open at 40.').waitFor();
 
-    // The thread menu: Summarize, and one reader's notification setting.
-    const pick = async (...labels) => {
-      await page.locator('[data-thv-menu]').click();
-      for (const label of labels) await page.locator('.thv-pop').getByText(label, {exact: true}).click();
-    };
-    await pick('Summarize');
+    // Thread settings: Summarize, and one reader's notification setting.
+    const settings = async () => { await page.locator('[data-thv-menu]').click(); return page.locator('#thread-settings[open]'); };
+    await (await settings()).locator('[data-ths="catchup"]').click();
     await page.locator('.toast', {hasText: 'Summary ready'}).waitFor();
     assert.deepEqual(seen.catchUps, [{thread: 't-edit', scope: 'subtree'}]);
-    await pick('Notifications', 'Digest');
-    await page.waitForTimeout(100);
+    await (await settings()).locator('[data-notify="digest"]').click();
+    for (let i = 0; i < 40 && !seen.follows.length; i++) await page.waitForTimeout(50);
     assert.deepEqual(seen.follows, ['digest']);
-    await page.locator('[data-thv-menu]').click();
-    await page.locator('.thv-pop').getByText('Notifications', {exact: true}).click();
-    assert.equal(await page.locator('.thv-pop [aria-checked="true"]').textContent(), 'Digest', 'the menu shows the current setting');
+    await page.keyboard.press('Escape');
+    assert.equal(await (await settings()).locator('[data-notify][aria-pressed="true"]').textContent(), 'Digest', 'the panel shows the current setting');
     await page.keyboard.press('Escape');
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
 
@@ -840,23 +837,27 @@ let browser = null;
 
     // A manager sets how long a thread keeps its messages, forever until they say otherwise.
     await page.goto('https://tico-ui.test/#/thread/t-plan');
+    // It saves as it changes, from Thread settings.
     const keep = async () => {
       await page.locator('[data-thv-menu]').tap();
-      await page.locator('.thv-pop').getByText('Keep messages').tap();
-      return page.locator('#thread-keep select');
+      return page.locator('#thread-settings[open] #ths-keep');
+    };
+    const done = async () => {
+      await page.locator('#thread-settings .tmodal-x').tap();
+      await page.waitForFunction(() => !document.querySelector('#thread-settings')?.open);
     };
     const select = await keep();
     assert.equal(await select.inputValue(), '', 'forever by default');
     await shot(page, 'keep-messages-phone');
     await select.selectOption('90');
-    await page.locator('#thread-keep [type=submit]').tap();
-    await page.waitForFunction(() => !document.querySelector('#thread-keep')?.open);
+    for (let i = 0; i < 40 && !seen.patches.length; i++) await page.waitForTimeout(50);
     assert.deepEqual(seen.patches, [{retention_days: 90}]);
+    await done();
     assert.equal(await (await keep()).inputValue(), '90');
     await select.selectOption('');
-    await page.locator('#thread-keep [type=submit]').tap();
-    await page.waitForFunction(() => !document.querySelector('#thread-keep')?.open);
+    for (let i = 0; i < 40 && seen.patches.length < 2; i++) await page.waitForTimeout(50);
     assert.deepEqual(seen.patches[1], {retention_days: null});
+    await done();
 
     // Calls off: nobody gets a control that cannot work, and no "Set up calls" note either.
     callsOff = true;

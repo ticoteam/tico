@@ -3,6 +3,7 @@ them without ask ingest, their answer wakes the bot, and the commit it makes is 
 
 import json
 
+from backend import bot_settings as BS
 from backend import ask_ingest as A
 from backend import hubdb as H
 from backend.tests import test_ask_ingest as ingest
@@ -43,7 +44,7 @@ def test_one_dream_at_a_time_through_the_task_create_path(api):
 
 def test_a_stateless_bot_is_refused(api):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.stateless',json('true')) WHERE bot='ops'")
+        BS.update(c, "ops", {"stateless": True})
     assert dream(api, expected=409)["error"]["code"] == "stateless"
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM tasks WHERE title='Dream'").fetchone()

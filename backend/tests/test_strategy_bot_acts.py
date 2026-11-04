@@ -11,6 +11,7 @@ from backend.tests.test_strategy_bot_level import level
 from backend.tests.test_strategy_bot_suggests import bot_task
 from backend.tests.test_company import bot, with_strategy_bot
 from backend.tests.test_kpis import goal_with_kpi
+from backend import bot_settings as BS
 
 OWNER, STRATEGY_BOT = "human:ana", "bot:goal-manager"
 
@@ -189,7 +190,7 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
         H.task_update(c, OWNER, back, rank=-60, mover=True)                        # ...and away and back
         H.task_update(c, OWNER, back, rank=decided, mover=True)
         H.task_update(c, OWNER, new, owner=OWNER, status="doing", mover=True)      # a person takes on what it made
-        c.execute("UPDATE bot_config SET config=? WHERE bot='coo'", ('{"harness": "dots"}',))
+        BS.write(c, 'coo', {'harness': 'dots'})
     held = task(api, ticket)["version"]
     post(api, f"strategy-bot/log/{made['id']}/undo", {}, token="ben-test", expected=403)        # an admin doesn't undo
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
@@ -289,9 +290,8 @@ def test_a_decision_never_makes_a_task_private_and_undo_puts_back_one_made_priva
         bot(api, slug)
     level(api, 3)
     with api.app.state.store.transaction() as c:
-        config = H._json(c.execute("SELECT config FROM bot_config WHERE bot='finance'").fetchone()[0], {})
-        c.execute("UPDATE bot_config SET config=? WHERE bot='finance'",
-                  (encode({**config, "private_tasks_default": True}), ))
+        config = H._json(c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='finance'").fetchone()[0], {})
+        BS.write(c, 'finance', {**config, 'private_tasks_default': True})
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
     held = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "finance"}])
     assert held["state"] == "proposed" and "keeps its tasks private" in held["left"][0]["why"]
@@ -316,9 +316,8 @@ def test_a_decision_never_creates_a_task_for_a_bot_that_keeps_its_tasks_private(
     bot(api, "finance")
     level(api, 3)
     with api.app.state.store.transaction() as c:
-        config = H._json(c.execute("SELECT config FROM bot_config WHERE bot='finance'").fetchone()[0], {})
-        c.execute("UPDATE bot_config SET config=? WHERE bot='finance'",
-                  (encode({**config, "private_tasks_default": True}), ))
+        config = H._json(c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='finance'").fetchone()[0], {})
+        BS.write(c, 'finance', {**config, 'private_tasks_default': True})
     held = decide(api, strategy_token, [{"do": "create", "owner": "finance", "title": "Review the vendor contract"}])
     assert held["state"] == "proposed" and not held["done"]
     assert "keeps its tasks private" in held["left"][0]["why"]

@@ -13,6 +13,7 @@ import pytest
 
 from backend.store import H
 from backend.tests.test_api import api, as_member, assign, claim, headers, post, ready, runner
+from backend import bot_settings as BS
 
 SECRET_TABLES = ("credentials", "credential_keys", "credential_grants", "idempotency", "runners", "runner_states",
                  "enrollments", "session_epochs", "bot_session_epochs", "settings_changes", "backup_verified_blobs",
@@ -1097,7 +1098,8 @@ def test_shared_room_membership_for_every_bot_is_one_pass_and_matches_each_bot(a
                         {"people": people})
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode({"people": people}),))
         for slug in fleet:
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,?)", (slug, "{}", "ana"))
+            c.execute('INSERT INTO bot_config(bot,owner_id) VALUES(?,?)', (slug, 'ana'))
+            BS.write(c, slug, {})
         for i, slug in enumerate(fleet):
             if i % 3 == 0:
                 restrict(c, slug, people=[f"p{i % 37}"])

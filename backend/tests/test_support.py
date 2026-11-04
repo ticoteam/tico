@@ -13,6 +13,7 @@ import pytest
 from backend import support
 from backend.auth import Identity
 from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
+from backend import bot_settings as BS
 
 
 class FakeHQ:
@@ -657,8 +658,8 @@ def test_a_setup_request_starts_from_a_snapshot_and_keeps_its_kind_even_at_an_ol
     api = environment()
     with api.app.state.store.transaction() as c:                   # a parked bot whose name must not go
         H.sync_registry(c, {"payroll": {"name": "Payroll for Acme Corp", "status": "active"}}, None)
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,owner_id,onboarding_state) "
-                  "VALUES('payroll','{}','human:test','needs_setup')")
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,owner_id,onboarding_state) VALUES('payroll','human:test','needs_setup')")
+        BS.write(c, 'payroll', {})
         c.execute("UPDATE bots SET display_name='Payroll for Acme Corp' WHERE slug='payroll'")
     owner_items = api.get("/api/v2/getting-started", headers=signed_in()).json()["items"]
     assert any("Payroll for Acme Corp" in item["label"] for item in owner_items)

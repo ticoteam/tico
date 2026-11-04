@@ -249,10 +249,10 @@ PROFILE_RULE_IDS = frozenset(r["id"] for found in PROFILE_RULES.values() for r i
 
 
 def profile_of(conn, bot):
-    """The profile a bot runs under: its `bot_config.profile`, or `doer` for a bot with none (a database from before
+    """The profile a bot runs under: its `bot_settings.profile`, or `doer` for a bot with none (a database from before
     profiles, a bot seeded since the last start)."""
     try:
-        row = conn.execute("SELECT json_extract(config,'$.profile') FROM bot_config WHERE bot=?",
+        row = conn.execute("SELECT profile FROM bot_settings WHERE bot_id=?",
                            (H.actor_id(bot),)).fetchone()
     except sqlite3.OperationalError:
         return "doer"

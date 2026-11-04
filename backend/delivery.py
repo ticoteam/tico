@@ -27,6 +27,7 @@ This module imports nothing from hubdb at load, so hubdb can import it.
 """
 
 import re
+from . import bot_settings as BS
 
 WAYS = ("steer", "queue", "defer")
 DEFER_FOR = r"^(never|[1-9][0-9]{0,5}[mhd])$"
@@ -276,7 +277,7 @@ def _fire(conn, H, bot, conversation_id, at, external):
             conn.execute(f"UPDATE deferrals SET fired_job=? WHERE id IN ({','.join('?' * len(part))})",
                          (pending[0], *part))
         return None
-    config = conn.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = conn.execute(BS.ONE_SQL, (bot,)).fetchone()
     harness = (H._json(config[0], {}) or {}).get("harness") if config else None
     if harness in external:
         # Its app delivers what it reads; Tico starts no run for it. The items wait in its rooms.

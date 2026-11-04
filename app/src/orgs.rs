@@ -167,13 +167,21 @@ pub fn startup(file: Option<PathBuf>, legacy: impl FnOnce() -> Result<Option<Url
     };
     match std::fs::read_to_string(&path) {
         Ok(text) => match parse(&text) {
-            Some(doc) => return Ok(Orgs::new(doc, Some(path))),
+            Some(doc) => return Ok(Orgs { complete: true, ..Orgs::new(doc, Some(path)) }),
             None => {
                 log::warn!("{FILE_NAME} is not readable; it is kept as {FILE_NAME}.corrupt");
                 let _ = std::fs::rename(&path, path.with_file_name(format!("{FILE_NAME}.corrupt")));
             }
         },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        // A first run: no org was ever saved, so the list made below is the whole of it.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let doc = legacy()?.map(|hub| Document::with_one(&hub)).unwrap_or_default();
+            let orgs = Orgs { complete: true, ..Orgs::new(doc, Some(path)) };
+            if !orgs.orgs().is_empty() {
+                let _ = orgs.write_to(&orgs.doc);
+            }
+            return Ok(orgs);
+        }
         Err(error) => {
             // Not overwritten: the file may be there and only unreadable for now.
             log::warn!("{FILE_NAME} could not be read: {error}");
@@ -196,12 +204,20 @@ pub struct Orgs {
     path: Option<PathBuf>,
     /// Every id handed out this run, removed orgs included: an id is never given to a second org.
     issued: HashSet<String>,
+    /// Whether this is every org saved on this Mac: orgs.json was read, or there was none yet. Not so when the list
+    /// was not read (a fixed server, HUB_URL) or could not be (unreadable, set aside as corrupt).
+    complete: bool,
 }
 
 impl Orgs {
     pub fn new(doc: Document, path: Option<PathBuf>) -> Orgs {
         let issued = doc.orgs.iter().map(|org| org.id.clone()).collect();
-        Orgs { doc, path, issued }
+        Orgs { doc, path, issued, complete: false }
+    }
+
+    /// Whether this is every org saved on this Mac, so a data store none of them uses belongs to no org.
+    pub fn is_complete(&self) -> bool {
+        self.complete
     }
 
     pub fn is_multi(&self) -> bool {
@@ -228,17 +244,36 @@ impl Orgs {
     /// Adds an org for `hub`, on a store of its own, and makes it the open one. Nothing changes if the file cannot
     /// be written, so the caller can show the error. Only a list that is kept can add.
     pub fn add(&mut self, hub: &Url) -> Result<Org, String> {
+        match self.add_all(&[(hub.clone(), Uuid::new_v4())])?.pop() {
+            Some(org) => Ok(org),
+            None => self.find_hub(hub).cloned().ok_or_else(|| SAVE_FAILED.to_string()),
+        }
+    }
+
+    /// Adds an org for each `(server, store)`, on the store given (Tico sign-in puts the session in it first), in one
+    /// write, and makes the first one added the open one. A server whose origin is already an org (or earlier in
+    /// `hubs`) is left out. Returns the orgs added; nothing changes if none is, or if the file cannot be written.
+    pub fn add_all(&mut self, hubs: &[(Url, Uuid)]) -> Result<Vec<Org>, String> {
         if !self.is_multi() {
             return Err(SAVE_FAILED.to_string());
         }
-        let org = new_org(hub, Some(Uuid::new_v4()), &self.issued);
-        let mut next = self.doc.clone();
-        next.orgs.push(org.clone());
-        next.active = Some(org.id.clone());
+        let (mut next, mut issued, mut added) = (self.doc.clone(), self.issued.clone(), Vec::new());
+        let mut origins: HashSet<String> = self.doc.orgs.iter().filter_map(Org::hub).map(|hub| hub.origin().ascii_serialization()).collect();
+        for (hub, store) in hubs {
+            if !origins.insert(hub.origin().ascii_serialization()) {
+                continue;
+            }
+            let org = new_org(hub, Some(*store), &issued);
+            issued.insert(org.id.clone());
+            next.orgs.push(org.clone());
+            added.push(org);
+        }
+        let Some(first) = added.first() else { return Ok(added) };
+        next.active = Some(first.id.clone());
         self.write_to(&next)?;
-        self.issued.insert(org.id.clone());
+        self.issued = issued;
         self.doc = next;
-        Ok(org)
+        Ok(added)
     }
 
     /// Makes `id` the open org. Applied even if the file cannot be written: the org is already open on screen.
@@ -365,6 +400,25 @@ mod tests {
     }
 
     #[test]
+    fn the_list_is_complete_only_when_orgs_json_was_read_or_never_written() {
+        let path = folder("complete");
+        let first = startup(Some(path.clone()), server("https://acme.example.com")).unwrap();
+        assert!(first.is_complete(), "a first run: no orgs.json, so no org was saved");
+        assert!(startup(Some(path.clone()), server("https://other.example.com")).unwrap().is_complete(), "orgs.json read");
+        // HUB_URL or a built-in server: orgs.json is not read, so its orgs are unknown.
+        assert!(!startup(None, server("https://override.example.com")).unwrap().is_complete());
+        // An unreadable orgs.json is set aside: its orgs are unknown too.
+        std::fs::write(&path, "{not json").unwrap();
+        assert!(!startup(Some(path.clone()), server("https://acme.example.com")).unwrap().is_complete());
+        // A path that cannot be read as a file (here a folder) leaves the list unread.
+        let _ = std::fs::remove_file(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        assert!(!startup(Some(path.clone()), server("https://acme.example.com")).unwrap().is_complete());
+        assert!(!Orgs::new(Document::default(), Some(path.clone())).is_complete());
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
     fn entries_that_cannot_be_opened_are_dropped_and_the_open_one_falls_back() {
         let text = r#"{"version":1,"active":"o_gone0000","orgs":[
             {"id":"o_aaaaaaaa","url":"ftp://acme.example.com/"},
@@ -426,6 +480,34 @@ mod tests {
         assert_eq!(saved.active.as_deref(), Some(second.id.as_str()));
         assert!(orgs.find_hub(&hub("https://acme.example.com/tico/")).is_some(), "the same origin is the same org");
         assert!(Orgs::new(Document::default(), None).add(&hub("https://acme.example.com")).is_err(), "a fixed server cannot add");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn signed_in_picks_are_added_together_on_their_given_stores_and_the_first_opens() {
+        let path = folder("add-all");
+        let mut orgs = Orgs::new(Document::default(), Some(path.clone()));
+        let kept = orgs.add(&hub("https://kept.example.com")).unwrap();
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let added = orgs.add_all(&[(hub("https://acme.example.com"), a), (hub("https://tidy.example.com"), b)]).unwrap();
+        assert_eq!(added.iter().map(|org| org.store_id().unwrap()).collect::<Vec<_>>(), [a, b]);
+        assert_ne!(added[0].id, added[1].id);
+        assert!(added.iter().all(|org| org.id != kept.id));
+        assert_eq!(orgs.active().map(|org| org.id.clone()), Some(added[0].id.clone()));
+        let saved = parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved.orgs.len(), 3);
+        assert_eq!(saved.active.as_deref(), Some(added[0].id.as_str()));
+        assert!(orgs.add_all(&[]).unwrap().is_empty());
+        // A server that became an org meanwhile (added by address) is left out, and so is a repeat within the picks.
+        let (c, d, e) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let late = orgs.add_all(&[(hub("https://acme.example.com/other/"), c), (hub("https://new.example.com"), d),
+                                  (hub("https://NEW.example.com/x/"), e)]).unwrap();
+        assert_eq!(late.len(), 1);
+        assert_eq!((late[0].store_id(), late[0].hub().unwrap().host_str()), (Some(d), Some("new.example.com")));
+        assert_eq!(orgs.orgs().len(), 4);
+        assert!(orgs.add_all(&[(hub("https://tidy.example.com"), c)]).unwrap().is_empty(), "nothing new, nothing written");
+        assert_eq!(orgs.active().map(|org| org.id.clone()), Some(late[0].id.clone()));
+        assert_eq!(orgs.add(&hub("https://kept.example.com/")).unwrap().id, kept.id, "adding a known server gives that org");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

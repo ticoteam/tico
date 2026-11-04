@@ -13,6 +13,7 @@ from backend.mcp import ApiProblem, InProcessApi
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, restrict, runner, setup_attempt  # noqa: F401
 from clients import bot_files as BF, hubcli, hubtools
 from clients.tico import MultipartBody
+from backend import bot_settings as BS
 
 
 def rpc(api, method, params=None, token="ana-test", rid=1):
@@ -473,7 +474,8 @@ def add_bots(api, slugs, runner_id=None):
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, bots, [])
         for slug, config in bots.items():
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')", (slug, encode(config)))
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (slug,))
+            BS.write(c, slug, config)
             if runner_id:
                 c.execute("INSERT INTO assignments VALUES(?,?,1,?,'human:ana')", (slug, runner_id, H.now()))
 

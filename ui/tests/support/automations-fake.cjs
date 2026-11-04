@@ -11,6 +11,15 @@ const FIXTURE = path.join(__dirname, '../fixtures/redesign-automations.json');
 
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 const clone = x => JSON.parse(JSON.stringify(x));
+// The hub stores a flow as json.dumps(flow, sort_keys=True) (backend/automations.py), so every object's keys come back
+// sorted, at any depth; arrays keep their order. A flow saved here, and one loaded from the fixture, see the same.
+const sortKeys = x => Array.isArray(x) ? x.map(sortKeys)
+  : x && typeof x === 'object' ? Object.fromEntries(Object.keys(x).sort().map(k => [k, sortKeys(x[k])])) : x;
+const sortFlow = a => {
+  const out = {...a};
+  for (const k of ['trigger', 'steps', 'destinations']) if (out[k] !== undefined) out[k] = sortKeys(out[k]);
+  return out;
+};
 // A version's flow: the trigger, the steps and (a board's) destinations.
 const flowOf = a => ({trigger: clone(a.trigger), steps: clone(a.steps), ...(a.destinations ? {destinations: clone(a.destinations)} : {})});
 // The hub's own refusals that a board save could trip (backend/automation_flow.py): a decide question needs
@@ -122,7 +131,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     role: 'member', company_role: 'member', cloud: true};
   const config = {};
   const db = {
-    list: fx.automations.map(a => ({...a, can_edit: owner && a.can_edit !== false, ...(a.can_pause != null ? {can_pause: owner && a.can_pause} : {})})),
+    list: fx.automations.map(a => ({...sortFlow(a), can_edit: owner && a.can_edit !== false, ...(a.can_pause != null ? {can_pause: owner && a.can_pause} : {})})),
     versions: {}, runs: {au_inbox: inboxRuns(), ...(system ? {[SYSTEM.id]: systemRuns()} : {})}, conv: null, messages: [],
     held: {},   // id → {release, fail}: that automation's GET waits for release(), then answers (or fails)
   };
@@ -132,7 +141,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
   }
   if (proposal) {
     const a = db.list.find(x => x.id === 'au_inbox'), steps = clone(a.steps);
-    steps.find(s => s.type === 'filter')?.rules.unshift(clone(fx.proposal.rule));
+    steps.find(s => s.type === 'filter')?.rules.unshift(sortKeys(fx.proposal.rule));
     db.versions.au_inbox.push({n: a.version + 1, actor: 'bot:support', at: '2026-10-28T09:00:00Z', status: 'pending',
       summary: fx.proposal.summary, flow: {trigger: clone(a.trigger), steps}});
   }
@@ -201,7 +210,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
       // A new one (Blank, or New inbox's): version 1.
       const bad = flowProblem(body.steps);
       if (bad) return refuse(422, 'invalid_flow', bad);
-      const a = {...clone(body), owner_id: body.owner, id: 'au_' + (db.list.length + 1), version: 1, can_edit: true};
+      const a = {...sortFlow(body), owner_id: body.owner, id: 'au_' + (db.list.length + 1), version: 1, can_edit: true};
       db.list.push(a);
       db.versions[a.id] = [{n: 1, actor: 'person:' + me.id, at: new Date().toISOString(), status: 'active', flow: flowOf(a)}];
       return json(full(a));
@@ -256,9 +265,9 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
         if (body.steps || body.trigger || body.destinations) {
           const bad = body.steps && flowProblem(body.steps);
           if (bad) return refuse(422, 'invalid_flow', bad);
-          if (body.steps) a.steps = body.steps;
-          if (body.trigger) a.trigger = body.trigger;
-          if (Array.isArray(body.destinations)) a.destinations = body.destinations;
+          if (body.steps) a.steps = sortKeys(body.steps);
+          if (body.trigger) a.trigger = sortKeys(body.trigger);
+          if (Array.isArray(body.destinations)) a.destinations = sortKeys(body.destinations);
           newVersion(a);
         }
         return json(full(a));
@@ -283,13 +292,15 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
       }
       if (rest === 'versions') {
         const status = url.searchParams.get('status');
-        return json({versions: db.versions[a.id].filter(v => !status || v.status === status)});
+        // A version's flow comes back key-sorted as the hub stores it, including one a test put in the list directly.
+        return json({versions: db.versions[a.id].filter(v => !status || v.status === status).map(v => ({...v, flow: sortFlow(v.flow)}))});
       }
       if ((m = rest.match(/^versions\/(\d+)\/restore$/)) && method === 'POST') {
         const v = db.versions[a.id].find(x => x.n === +m[1]);
         if (!v) return refuse(404, 'not_found', 'No such version');
-        a.trigger = clone(v.flow.trigger); a.steps = clone(v.flow.steps);
-        if (v.flow.destinations) a.destinations = clone(v.flow.destinations); else delete a.destinations;
+        const f = sortFlow(v.flow);
+        a.trigger = f.trigger; a.steps = f.steps;
+        if (f.destinations) a.destinations = f.destinations; else delete a.destinations;
         // A pending version turned on becomes the current one; an older one comes back as a new version. A draft (off,
         // no version live yet) is turned on by its first pending version.
         if (v.status === 'pending') {
@@ -319,14 +330,14 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
       const a = find(body.refs?.automation);
       let reply = 'Which inbox?';
       if (a) {
-        a.steps.find(s => s.type === 'filter')?.rules.unshift(clone(fx.proposal.rule));
+        a.steps.find(s => s.type === 'filter')?.rules.unshift(sortKeys(fx.proposal.rule));
         newVersion(a);
         reply = `Saved v${a.version}: receipts are archived first.`;
       } else if (!/\?/.test(body.text)) {
         const on = /turn it on/i.test(body.text);
-        db.list.push({id: 'au_new', name: 'Sales leads', owner_id: 'person:' + me.id, enabled: on, builtin: false, version: 1, can_edit: true,
+        db.list.push(sortFlow({id: 'au_new', name: 'Sales leads', owner_id: 'person:' + me.id, enabled: on, builtin: false, version: 1, can_edit: true,
           trigger: {type: 'message', inbox: 'sales@acme.example', filters: []},
-          steps: [{id: 'f1', type: 'filter', enabled: true, rules: [{when: [{field: 'message.subject', op: 'contains', value: 'demo'}], match: 'all', then: [{do: 'label', args: {name: 'Lead'}}], stop: false}]}]});
+          steps: [{id: 'f1', type: 'filter', enabled: true, rules: [{when: [{field: 'message.subject', op: 'contains', value: 'demo'}], match: 'all', then: [{do: 'label', args: {name: 'Lead'}}], stop: false}]}]}));
         db.versions.au_new = [{n: 1, actor: 'person:' + me.id, at, status: 'active', flow: {trigger: clone(db.list.at(-1).trigger), steps: clone(db.list.at(-1).steps)}}];
         reply = `Saved Sales leads: mail to sales@acme.example about a demo gets the Lead label. It is ${on ? 'on' : 'off'}.`;
       }

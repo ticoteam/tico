@@ -15,6 +15,7 @@ from backend import task_check_backs
 from backend.config import Settings
 from backend.store import Store, encode
 from clients import judge as J
+from backend import bot_settings as BS
 
 TEAM, APP, BOT_USER, BOT_ID = "T02F3S2SD", "A0BU75YSGT1", "U0BUS6WA4SY", "B0BUNG973DY"
 MARKETING, DM = "C0000000001", "D0AAAAAAA"
@@ -162,8 +163,8 @@ def hub(tmp_path):
             "default_user": "ana", "teams": {"marketing": {"root": "cmo"}, "engineering": {"root": "cto"}},
             "people": PEOPLE}),))
         for slug, entry in BOTS.items():
-            c.execute("INSERT INTO bot_config(bot,config,team,owner_id,description,reports_to) VALUES(?,?,?,?,?,?)",
-                      (slug, encode({"name": slug, "runtime": "fake"}), None, "ana", entry["description"], entry["reports_to"]))
+            c.execute('INSERT INTO bot_config(bot,team,owner_id,description,reports_to) VALUES(?,?,?,?,?)', (slug, None, 'ana', entry['description'], entry['reports_to']))
+            BS.write(c, slug, {'name': slug, 'runtime': 'fake'})
     return store
 
 
@@ -456,8 +457,8 @@ channels:
             "default_user": "ana", "teams": {"marketing": {"root": "cmo"}, "engineering": {"root": "cto"}},
             "people": PEOPLE}),))
         for slug, entry in BOTS.items():
-            c.execute("INSERT INTO bot_config(bot,config,team,owner_id,description,reports_to) VALUES(?,?,?,?,?,?)",
-                      (slug, encode({"name": slug, "runtime": "fake"}), None, "ana", entry["description"], entry["reports_to"]))
+            c.execute('INSERT INTO bot_config(bot,team,owner_id,description,reports_to) VALUES(?,?,?,?,?)', (slug, None, 'ana', entry['description'], entry['reports_to']))
+            BS.write(c, slug, {'name': slug, 'runtime': 'fake'})
     slack, engine, clock = FakeSlack(), FakeJudge(), Clock()
     gw = G.Gateway(store, slack, judge_engine=engine, clock=clock)
     gw.verify_app()
