@@ -254,7 +254,7 @@ const scenarios = {
     fake.state.workspace = row('connected', {checked_at: new Date(Date.now() - 120000).toISOString()});
     fake.checks = ['ok'];
     const {page, seen} = await open(browser, fake);
-    assert.match(await page.locator('[data-ws-connected]').innerText(), /Connected · checked 2m ago/);
+    assert.match((await page.locator('[data-ws-connected]').innerText()).replace(/\s+/g, ' '), /Connected · checked 2m ago/);
     assert.equal(await page.locator('.google-facts').count(), 0, 'no domain or client ID facts');
     await page.locator('[data-ws-recheck]').click();
     await until(() => writesTo(fake, '/api/v2/google/workspace/check').length === 1, 'the check');

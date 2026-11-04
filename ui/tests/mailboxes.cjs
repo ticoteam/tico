@@ -94,7 +94,7 @@ const scenarios = {
     const card = page.locator('#mailboxes-may');
     assert.equal(await card.locator('h2').textContent(), 'What Tico may do');
     assert.equal(await card.locator('[data-google-may-read] input').count(), 0, 'Read has no box');
-    const boxes = () => card.$$eval('[data-google-may]', els => els.map(el => [el.dataset.googleMay, el.checked]));
+    const boxes = () => card.locator('[data-google-may]').evaluateAll(els => els.map(el => [el.dataset.googleMay, el.checked]));
     assert.deepEqual(await boxes(), [['organize_mail', true], ['send_mail', false], ['change_calendar', false]]);
     await card.locator('[data-google-may=change_calendar]').check();
     const end = Date.now() + 5000;
