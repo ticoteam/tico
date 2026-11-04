@@ -8,6 +8,8 @@ import pytest
 from backend import milestone_waits as MW
 from backend.store import H
 from backend.tests.test_api import api  # noqa: F401
+from backend.enqueue import enqueue_stored
+from backend.tests.hold_rows import set_holds
 
 
 def aged(c, task_id, minutes):
@@ -298,7 +300,10 @@ def test_todays_hold_with_no_date_snooze_or_resume_still_wakes_its_parent_and_is
 
 
 def _later(c, task_id, column, hours):
-    c.execute(f"UPDATE tasks SET {column}=? WHERE id=?", (H.shift(H.now(), seconds=hours * 3600), task_id))
+    if column == "snoozed_until":
+        set_holds(c, task_id, snoozed_until=H.shift(H.now(), seconds=hours * 3600))
+    else:
+        c.execute(f"UPDATE tasks SET {column}=? WHERE id=?", (H.shift(H.now(), seconds=hours * 3600), task_id))
 
 
 @pytest.mark.parametrize("wait", ["due", "snooze", "resume", "milestone"])
@@ -384,9 +389,11 @@ def test_a_queued_child_job_held_by_the_claim_fence_does_not_silence_its_parent(
         window, hold = held_window(c)
         if reason == "uncertain":
             c.execute("UPDATE jobs SET state='uncertain' WHERE bot_id='finance'")
+            mid = H.new_id()
             c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
                       "VALUES(?,?,'bot:ops','bot:finance','notice','Continue the hold',?,?)",
-                      (H.new_id(), hold["conversation_id"], json.dumps({"task": hold["id"]}), H.now()))
+                      (mid, hold["conversation_id"], json.dumps({"task": hold["id"]}), H.now()))
+            enqueue_stored(c, mid)
         else:
             other = H.task_create(c, "bot:ops", "Run the migration", "", "bot:finance")
             c.execute("INSERT INTO bot_control(bot,claim_task) VALUES('finance',?) "

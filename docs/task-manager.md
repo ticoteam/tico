@@ -15,7 +15,7 @@ Once an hour on weekdays, 08:00 to 18:00 in the team's time zone, the server loo
 
 | Item | What it means |
 |---|---|
-| Stalled task | Nothing has moved it for an hour and it waits on nothing. Where Decide read its last messages ([stalled task check](tasks.md)) and could not tell, or found it stuck, the line says `class: unsure` or `class: stuck`. |
+| Stalled task | Nothing has moved it for an hour and it waits on nothing. |
 | Overdue ask | A question to a person is past its deadline, or has gone a business day unanswered. |
 | Review or QA ticket without a PR | A review or QA child of a ticket has no linked pull request, or a second one is open for the same parent and step. |
 | Merged or shipped, step unmoved | A ticket's pull request merged or its release shipped, but the ticket did not move. |

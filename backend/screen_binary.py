@@ -49,8 +49,8 @@ def prepare(root=ROOT, env=None):
         for path in candidates:
             if current(path, wanted):
                 return path
-        from runner.engine import _get, asset
-        from runner.release_update import checkout_release
+        from runner_support.engine import _get, asset
+        from runner_support.release_update import checkout_release
         release = checkout_release(root)
         name = asset().replace("tico-runner-", "tico-screen-relay-")
         if release and name:

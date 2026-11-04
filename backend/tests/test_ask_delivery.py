@@ -44,7 +44,7 @@ def test_a_task_waiting_on_a_person_nobody_asked_shows_in_health_until_they_are_
         c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana', note=? WHERE id=?",
                   ("Renew the Acme domain for a year? If yes, I'll pay the invoice.", tid))
         H._task_event(c, tid, "bot:ops", "waiting_on", None, "human:ana", "")
-        c.execute("UPDATE task_events SET created_at=? WHERE task_id=? AND field='waiting_on'",
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=? AND kind='waiting_on'",
                   (H.shift(H.now(), hours=-2), tid))
 
     def check():

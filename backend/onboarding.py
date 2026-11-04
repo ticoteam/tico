@@ -30,6 +30,7 @@ from . import access as Access
 from . import groups as Groups
 from . import message_bots as MessageBots
 from .store import H, Problem, encode, readiness_document
+from . import bot_settings as BS
 
 KEY = "onboarding"
 BOTOPS = "botops"
@@ -501,7 +502,7 @@ class Onboarding:
     def _bots(self, c):
         rows = []
         labels = {r["id"]: r["slug"] for r in c.execute("SELECT id,slug FROM bots")}   # one read: a manager's label
-        for row in c.execute("SELECT bot,config,onboarding_state,reports_to FROM bot_config ORDER BY bot").fetchall():
+        for row in c.execute(f"SELECT bot,{BS.CONFIG} AS config,onboarding_state,reports_to FROM bot_config bc {BS.JOIN} ORDER BY bot").fetchall():
             declared = _json(row["config"], {}) or {}
             bot = H.bot(c, row["bot"]) or {}
             if bot.get("state") == "archived":          # the assistant a company chose not to have
@@ -522,7 +523,7 @@ class Onboarding:
         """The machine this bot runs on, and what it last said about the repository. A null
         repository report means no machine has looked yet, not that the repository is missing."""
         row = c.execute("SELECT r.id,r.label,r.readiness FROM assignments a "
-                        "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?", (slug,)).fetchone()
+                        "JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?", (slug,)).fetchone()
         if not row:
             return None, None
         reported = readiness_document(row["readiness"]).get("bots", {}).get(slug)
@@ -534,7 +535,7 @@ class Onboarding:
         recent = H.shift(H.now(), seconds=-60)
         runners = [{"id": row["id"], "label": row["label"],
                     "online": bool(row["last_seen_at"] and row["last_seen_at"] > recent)}
-                   for row in c.execute("SELECT id,label,last_seen_at FROM runners "
+                   for row in c.execute("SELECT id,label,last_seen_at FROM runners_with_state "
                                         "WHERE revoked_at IS NULL ORDER BY created_at")]
         return {"runners": runners, "enrolled": bool(runners)}
 
@@ -838,7 +839,7 @@ class Onboarding:
         placed = []
         computer = c.execute("SELECT owner_id,accepts_member_bots FROM runners WHERE id=? AND revoked_at IS NULL",
                              (runner_id,)).fetchone()
-        for row in c.execute("SELECT bc.bot,bc.config,bc.owner_id FROM bot_config bc "
+        for row in c.execute(f"SELECT bc.bot,{BS.CONFIG} AS config,bc.owner_id FROM bot_config bc {BS.JOIN} "
                              "LEFT JOIN bots b ON b.id=bc.bot WHERE COALESCE(b.state,'active')<>'archived' "
                              "ORDER BY bc.bot").fetchall():
             if not (_json(row["config"], {}) or {}).get("template"):
@@ -880,12 +881,12 @@ class Onboarding:
         if not row or not company or (row["display_name"] or "").strip().lower() != company:
             return False
         c.execute("UPDATE bots SET display_name='Assistant' WHERE id=?", (slug,))
-        config = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        config = c.execute(BS.ONE_SQL, (slug,)).fetchone()
         if config and config["config"]:
             try:
                 declared = json.loads(config["config"])
                 declared["display_name"] = "Assistant"
-                c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), slug))
+                BS.write(c, slug, declared)
             except ValueError:
                 pass
         return True
@@ -966,10 +967,12 @@ class Onboarding:
         choice = {"template": card["template"], "display_name": card["name"], "instructions": card["instructions"]}
         restored = bool(row and row["state"] == "archived")
         if restored:
-            # The restore keeps the bot's own model and settings; only the name and description are renewed.
+            # The restore keeps the bot's own model and settings; only the name and description are renewed. The model
+            # is in the bot's declaration (bot_settings): bots has no model column since migration 0043.
+            kept_model = BS.read(c, slug).get("model")
             self.admin.create_bot(c, who, M.BotDefinitionCreate(
                 slug=slug, display_name=choice["display_name"], description=str(card.get("summary") or ""),
-                status="planned", repo=self._recorded_repo(c, slug), thread_mode="personal", model=row.get("model") or "restore",
+                status="planned", repo=self._recorded_repo(c, slug), thread_mode="personal", model=kept_model or "restore",
                 effort=row.get("effort") or "high", owners=[H.actor_id(who.actor)]))
         elif not row:
             self._define(c, who, slug, choice, card)
@@ -1022,17 +1025,62 @@ class Onboarding:
 
     def _seed_routines(self, c, who, slug, template):
         """The template's `routines:` (older: `schedules:`) become the bot's first routines, once. A routine a person
-        changed or deleted is never put back: only a key the bot has never had is created. (A bot
-        BotOps builds gets these from `hub bot create`; a built-in one is made here.)"""
-        made = []
+        changed or deleted is never put back: only a key the bot has never had is created. The bot's config names every
+        key it has had (`routines_seeded`), so a key stays seeded even if its schedule row is gone; a key whose row
+        exists (deleted, moved to an automation or changed) counts as seeded too. (A bot BotOps builds gets these from
+        `hub bot create`; a built-in one is made here.) Returns the keys it created."""
+        row = c.execute("SELECT 1 FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        declared = BS.read(c, slug)
+        had = list(declared.get("routines_seeded") or [])
+        seeded, made = list(had), []
         for entry in self._template_routines(c, template):
-            if c.execute("SELECT 1 FROM schedules WHERE bot=? AND routine_key=?", (slug, entry["id"])).fetchone():
+            key = entry["id"]
+            if key in seeded:
+                continue
+            if c.execute("SELECT 1 FROM schedules WHERE bot=? AND routine_key=?", (slug, key)).fetchone():
+                seeded.append(key)
                 continue
             routines.create(c, who.actor, slug, {"title": entry["title"], "text": entry["instructions"],
                                                  "cron": entry["cron"], "on": entry["on"],
                                                  "timezone": entry["timezone"],
-                                                 "enabled": entry["enabled"]}, key=entry["id"])
-            made.append(entry["id"])
+                                                 "enabled": entry["enabled"]}, key=key)
+            seeded.append(key)
+            made.append(key)
+        if row and seeded != had:
+            declared["routines_seeded"] = seeded
+            self._write_config(c, slug, declared)
+        return made
+
+    def ensure_builtin_routines(self, c):
+        """At startup (an update): the active Assistant gets its template's routines it has never had, its daily sweep,
+        which a company from before it existed never had. Only keys the bot has never had are created (`_seed_routines`),
+        so a routine a person deleted or changed stays so. No other built-in bot is backfilled: its routines are set up
+        with the bot (`_turn_on`), and a backfill would switch on what nobody asked for (a bookkeeper's monthly report).
+        A planned bot gets them when it is set up; a paused or archived bot is a person's stop and is left alone. Returns
+        the (bot, key) pairs it created."""
+        # Only the Assistant (a bootstrap card): its daily sweep is the one routine an install from before it never had.
+        boot = {card["template"] for card in read_cards(self.settings) if card.get("bootstrap")} & {"assistant"}
+        if not boot:
+            return []
+        try:
+            who = self.auth.owner_identity(c)
+        except Problem:
+            return []
+        made = []
+        for bot in c.execute(f"SELECT bc.bot, {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
+                             "WHERE b.state='active'").fetchall():
+            declared = _json(bot["config"], {}) or {}
+            if declared.get("template") not in boot:
+                continue
+            # Best effort per bot: one bot's failure does not stop the others (the same savepoint pattern as _ensure_builtin).
+            c.execute("SAVEPOINT builtin_routines")
+            try:
+                keys = self._seed_routines(c, who, bot["bot"], declared["template"])
+                c.execute("RELEASE builtin_routines")
+                made += [(bot["bot"], key) for key in keys]
+            except (Problem, ValueError):
+                c.execute("ROLLBACK TO builtin_routines")
+                c.execute("RELEASE builtin_routines")
         return made
 
     def start_setup(self, c, who, slug):
@@ -1101,7 +1149,7 @@ class Onboarding:
             if not row:
                 # The owner changed after the machine enrolled; a lone online machine is still
                 # the one this company's bots belong on.
-                online = c.execute("SELECT id,label FROM runners WHERE revoked_at IS NULL AND last_seen_at>?",
+                online = c.execute("SELECT id,label FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
                                    (H.shift(H.now(), seconds=-60),)).fetchall()
                 row = online[0] if len(online) == 1 else None
                 if row:
@@ -1145,7 +1193,7 @@ class Onboarding:
         planned, so leaving these to a separate click strands the whole setup."""
         cards = {card["template"]: card for card in read_cards(self.settings)}
         who = self.auth.owner_identity(c)
-        for row in c.execute("SELECT bc.bot,bc.revision,bc.config FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+        for row in c.execute(f"SELECT bc.bot,bc.revision,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
                              "WHERE b.state='planned' AND (EXISTS(SELECT 1 FROM assignments a WHERE a.bot=bc.bot) OR "
                              "EXISTS(SELECT 1 FROM cloud_machines m WHERE m.bot=bc.bot AND m.mode='cloud')) "
                              "ORDER BY bc.bot").fetchall():
@@ -1187,14 +1235,14 @@ class Onboarding:
 
     @staticmethod
     def _declared(c, slug):
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
         if not row:
             raise Problem("not_found", "Bot not found: " + str(slug), 404)
         return _json(row["config"], {}) or {}
 
     @staticmethod
     def _write_config(c, slug, declared):
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), slug))
+        BS.write(c, slug, declared)
 
     def _runtime(self, c, card):
         """The model a bot built from this card runs on: the card's own pick when it names a
@@ -1238,7 +1286,7 @@ class Onboarding:
                 model=model, effort=effort, owners=[H.actor_id(who.actor)]))
             bot_id = H.resolve_bot(c, slug)["id"]          # the id create_bot gave it
             if card.get("session") == "task":
-                c.execute("UPDATE bot_config SET config=json_set(config,'$.session','task') WHERE bot=?", (bot_id,))
+                BS.update(c, bot_id, {"session": "task"})
             if not picked:
                 self._follow_default(c, bot_id)
         else:
@@ -1260,7 +1308,7 @@ class Onboarding:
         for key in ("runtime", "model", "harness", "reasoning_effort"):
             declared.pop(key, None)
         self._write_config(c, slug, declared)
-        c.execute("UPDATE bots SET runtime='',model='',effort='' WHERE id=?", (slug,))
+        c.execute("UPDATE bots SET effort='' WHERE id=?", (slug,))
 
     def _setup_task(self, c, who, slug, choice, card, answers):
         """BotOps builds every bot people picked. A bootstrap template (the assistant, BotOps

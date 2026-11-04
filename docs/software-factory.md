@@ -9,7 +9,7 @@ the roles, drop the ones you don't need, and change the steps in Settings → Ta
 
 | # | Role | Starter template | What it does |
 |---|---|---|---|
-| 1 | Builder | `pr-reviewer` (Senior Software Engineer), set to build | Builds the change, does every fix step, merges under the Head of Engineering's rules |
+| 1 | Builder | `builder` (Builder), set to build | Builds the change, does every fix step, merges under the Head of Engineering's rules |
 | 2 | Reviewer 1 | `pr-reviewer`, preferably on a different model company from the Builder | Technical review: bugs and correctness, as comments on the ticket |
 | 3 | Reviewer 2 | `pr-reviewer`, on a third model if you have one | A second review of the updated change, only for larger or risky changes |
 | 4 | QA | `issue-triage` (QA Engineer) | Runs the acceptance tests before release, and again live after release |
@@ -106,12 +106,7 @@ ticket stays at its step with a Waiting tag.
   **What wakes** automation on the Automations page.
 - **A ticket at a working step (In Progress or a Fixes step) shows its age at that step** on its card (`step_since`
   on the task), amber past 4 hours. Waiting time is not counted: the clock restarts when the ticket comes back to
-  work. After 2 hours with no activity (no update, checkpoint or message), its bot owner is woken once for a status,
-  even when the ticket stands as at its last checkpoint and the plain status check would be held, and unless it waits on
-  something recorded (a question, a snooze, a due date, a blocker, a subtask) or a run of it is going. After 4 hours at
-  the step, the type's manager (Head of Engineering), or else the owner's manager, is woken once to unblock or reroute
-  it. Each happens once per stay at the step. A step's flow sets its own hours (`status_hours`, `late_hours`), on any
-  board; a Dev step without them uses 2 and 4.
+  work. After 4 hours at the step, the type's manager (Head of Engineering), or else the owner's manager, is woken once to unblock or reroute it. Owners are not woken for a status: a quiet ticket is listed on its owner's task roundup, once per run (three times a day by default). It happens once per stay at the step. A step's flow sets its own late hours (`late_hours`), on any board; a Dev step without one uses 4. `status_hours` no longer wakes anyone.
 - **A turn that ends and leaves its ticket in progress with nothing queued wakes its owner once.** Ten minutes after
   the owner's last run on a working ticket, or on an open check below it, finished with nothing live, queued or held
   after it and nothing recorded to wait on, the owner is woken once per stay at the step, a reviewer included.

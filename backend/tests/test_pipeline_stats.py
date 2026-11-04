@@ -8,6 +8,7 @@ from backend import hubdb as H
 from backend import pipeline_stats
 from backend.pipeline_stats import cause_of
 from backend.tests.test_api import api, assign, claim, get, post, ready, restrict, runner  # noqa: F401  (api is a fixture)
+from backend.tests.hold_rows import set_holds
 
 
 def board(api):
@@ -42,8 +43,8 @@ def test_counts_follow_the_board_snoozed_in_closed_out_private_only_for_its_read
     child = post(api, "tasks", {"owner": "cpo", "title": "Review it", "body": "Review it.",
                                 "relations": [{"task": reviewed["id"], "kind": "parent"}]})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_events SET created_at=? WHERE task_id=? AND field='step'", (H.shift(H.now(), hours=-30), old["id"]))
-        c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), days=3), snoozed["id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=? AND kind='step'", (H.shift(H.now(), hours=-30), old["id"]))
+        set_holds(c, snoozed["id"], snoozed_until=H.shift(H.now(), days=3))
         c.execute("UPDATE tasks SET status='closed', step_id=? WHERE id=?", (steps["Done"], done["id"]))
         c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,created_at) VALUES(?,?,?,?,?,?,?)",
                   (str(uuid.uuid4()), reviewed["id"], "pr", "https://github.com/acme/app/pull/7", "PR #7", "open",

@@ -17,10 +17,16 @@ from .blobs import Blobs
 from .config import ROOT, Settings
 from .execution import Execution
 from .store import H, P, Problem, Store, encode, repo_url
+from . import bot_settings as BS
 
 
 CORE_HISTORY = ("conversations", "messages", "tasks", "task_events", "turns", "meetings",
                 "meeting_versions", "meeting_deliveries")
+# A legacy source's task_events rows are the new database's task rows in history_events
+# (backend/migrations/0064_history_events.py); the report keeps the source's name for them. A legacy turn is an attempts
+# row with a run record (migration 0072), so a turns count reads those.
+HISTORY_COUNTS = {"task_events": "SELECT count(*) FROM history_events WHERE subject_type='task'",
+                  "turns": "SELECT count(*) FROM attempts WHERE job_id IS NULL OR trigger IS NOT NULL"}
 
 
 def registry_dir():
@@ -72,9 +78,8 @@ def migrate_legacy(source, destination, runtime, projects, *, queue_backlog=Fals
     if not seeded:
         store.seed(entries=entries)
     with store.transaction() as c:
-        # Legacy bot tokens, machine paths, runtime hosts and provider sessions
-        # are local capabilities/history, never cloud execution credentials.
-        c.execute("UPDATE bots SET token_hash=NULL,thread_id=NULL,cwd='',host='remote'")
+        # Legacy provider sessions are local history, never cloud execution credentials. The bot's machine path,
+        # its host and any token are no longer stored on bots at all (migration 0043).
         c.execute("DELETE FROM rate_limits")
         H.event(c, H.KEEPER, "legacy.execution_fenced", "database",
                 {"source_sha256": source_report["sha256"]})
@@ -86,7 +91,7 @@ def migrate_legacy(source, destination, runtime, projects, *, queue_backlog=Fals
         store.enqueue_existing()
     archives = import_text_archives(store, runtime)
     with store.transaction() as c:
-        counts = {table: c.execute('SELECT count(*) FROM "' + table + '"').fetchone()[0]
+        counts = {table: c.execute(HISTORY_COUNTS.get(table) or 'SELECT count(*) FROM "' + table + '"').fetchone()[0]
                   for table in CORE_HISTORY}
         expected = {table: source_report["tables"].get(table, 0) for table in CORE_HISTORY}
         if counts != expected:
@@ -96,10 +101,8 @@ def migrate_legacy(source, destination, runtime, projects, *, queue_backlog=Fals
                  "queued_jobs": c.execute("SELECT count(*) FROM jobs WHERE state='queued'").fetchone()[0],
                  "assignments": c.execute("SELECT count(*) FROM assignments").fetchone()[0],
                  "runners": c.execute("SELECT count(*) FROM runners").fetchone()[0],
-                 "legacy_tokens": c.execute("SELECT count(*) FROM bots WHERE token_hash IS NOT NULL").fetchone()[0],
-                 "legacy_paths": c.execute("SELECT count(*) FROM bots WHERE cwd<>'' OR host<>'remote'").fetchone()[0],
                  "bots_by_operator": bots_by_operator(c)}
-        if state["assignments"] or state["runners"] or state["legacy_tokens"] or state["legacy_paths"]:
+        if state["assignments"] or state["runners"]:
             raise RuntimeError("Legacy execution authority was not fully fenced")
         manifest = {"format": "tico-legacy-import-v1", "source": str(source),
                     "source_sha256": source_report["sha256"], "history": counts,
@@ -249,12 +252,12 @@ def main(argv=None):
         repo = repo_reference(args.repo)
         with store.transaction() as c:
             bot = (H.resolve_bot(c, args.bot) or {}).get("id", args.bot)
-            row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+            row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
             if not row:
                 raise SystemExit("Unknown bot: " + args.bot)
             config = {**json.loads(row["config"] or "{}"), "repo": repo}
-            c.execute("UPDATE bot_config SET repo=?,config=?,revision=revision+1 WHERE bot=?",
-                      (repo, encode(config), bot))
+            BS.write(c, bot, config)
+            c.execute("UPDATE bot_config SET repo=?,revision=revision+1 WHERE bot=?", (repo, bot))
             H.event(c, H.KEEPER, "bot.repo_set", bot, {"repo": repo})
         report = {"bot": bot, "repo": repo,
                   "repo_url": repo_url(repo, store.settings.github_owner)}

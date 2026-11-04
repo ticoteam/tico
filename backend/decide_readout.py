@@ -33,9 +33,7 @@ RUN = {"learnings-route": "run"}     # backend/learnings.py audits a night's run
 def _inline_sets():
     """The sets the code asks without a questions/ file: {set id: {question id: fixed options or None}}."""
     from clients.hubtools import CLASSIFY_OPTIONS
-    from .assistant import INTENT_CHOICES
-    return {"support-text": {"verdict": tuple(CLASSIFY_OPTIONS)}, "assistant-intent": {"intent": tuple(INTENT_CHOICES)},
-            "live-meeting-route": {}}
+    return {"support-text": {"verdict": tuple(CLASSIFY_OPTIONS)}, "live-meeting-route": {}}
 
 
 def known_sets(registry_dir=None):
@@ -185,7 +183,7 @@ def readout(c, settings, days=7, at=None):
     from .ask_ingest import QUESTION_SET, outcome_counts, reconcile
     gate = outcome_counts(c, stamp(start), stamp(end))
     recon = reconcile(c, stamp(start), stamp(end))
-    if gate["outcomes"] or gate["rehearsal"] or recon["calls"] or recon["no_call"]:
+    if gate["outcomes"] or recon["calls"] or recon["no_call"]:
         row = next((r for r in out if r["set"] == QUESTION_SET), None)
         if row is None:
             row = {"set": QUESTION_SET, "versions": [], "calls": 0, "jev": 0, "fallback": 0, "failed": {},
@@ -242,8 +240,6 @@ def text(data):
             if gate.get("failed_open_reasons"):
                 lines.append("  failed open, by reason: " + ", ".join(
                     f"{k} {n}" for k, n in gate["failed_open_reasons"].items()))
-            if gate["rehearsal"]:
-                lines.append("  rehearsal, would have: " + ", ".join(f"{k} {n}" for k, n in gate["rehearsal"].items()))
         if row.get("reconcile"):
             rec = row["reconcile"]
             named = "".join(f", {k} {n}" for k, n in rec["reasons"].items())

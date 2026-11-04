@@ -61,6 +61,12 @@ EVENTS_DESCRIPTION = (
     "- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or "
     "`state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n"
     "- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n"
+    "- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md §9); an `activity` one also carries "
+    "`counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` "
+    "(how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row "
+    "without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the "
+    "root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as "
+    "`GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n"
     "- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. "
     "With `needs=changes`: `count`, `version`, each bot's count (`bots`), and the ids `changed` and `removed` "
     "since `base` (null when more than 100 moved: read the list whole); read the changed items with "
@@ -87,6 +93,8 @@ STABLE = [
      "Whether the bot's manager bot may change its direct reports: true is on (the default), false is off; the owner's team rule overrides it", None),
     ("/api/v2/computers/{rid}/turns-at-once", "post", "Computers", "setComputerTurnsAtOnce",
      "Set the most turns a computer runs at once: null is automatic (its own capacity)", None),
+    ("/api/v2/computers/{rid}/label", "post", "Computers", "renameComputer",
+     "Rename a computer: 1 to 100 characters, trimmed; owners and admins", None),
     ("/api/v2/computers/{rid}/browser-exit", "get", "Computers", "getComputerBrowserExit",
      "Whether this computer shares its internet with bots, which bots, and its daily cap in bytes", "BrowserExit"),
     ("/api/v2/computers/{rid}/browser-exit", "post", "Computers", "setComputerBrowserExit",
@@ -286,6 +294,9 @@ STABLE = [
      "keeps it and changes only what is named, and a null `model` clears it so the bot's task model runs the task "
      "again. Whoever may change the bot's model may change this; a bot never does. Its `readiness` says whether the bot's "
      "computer can run it now", "TaskRunModelResult"),
+    ("/api/v2/tasks/{tid}/check-back", "post", "Tasks", "setTaskCheckBack",
+     "Set a future follow-up appointment on bot work. Accepts an offset timestamp or duration such as 45m; "
+     "human snoozes take precedence and human-only work is excluded", "TaskResult"),
     ("/api/v2/tasks/{tid}/snooze", "post", "Tasks", "snoozeTask",
      "Set a task aside until `until` (an ISO-8601 date or date-time): off lists and Needs you, and quiet, until "
      "then, when its owner bot is woken once. Its requester, owner, anyone on it by role, or a mover", "TaskResult"),
@@ -332,6 +343,7 @@ STABLE = [
     ("/api/v2/stale-review/{suggestion_id}", "post", "Needs you", "decideStaleSuggestion",
      "Accept or skip one suggestion on your Stale tickets card; accept sends the task version it showed "
      "(409 version_conflict otherwise)", None),
+    ("/api/v2/approvals", "get", "Needs you", "listApprovals", "The approvals addressed to you: pending (what Needs you counts), approved or declined", None),
     ("/api/v2/approvals/{aid}", "get", "Needs you", "getApproval", "One approval request", None),
     ("/api/v2/approvals/{aid}", "post", "Needs you", "decideApproval", "Approve or reject", None),
     ("/api/v2/approvals/{aid}/undo", "post", "Needs you", "undoApproval",
@@ -430,9 +442,8 @@ STABLE = [
      "and what waits for their OK",
      "Assistant"),
     ("/api/v2/assistant/messages", "post", "Assistant", "sendAssistantMessage",
-     "Say something to the Assistant. A lookup is answered at once (fast: true, with the reply); anything else "
-     "is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. `place: updates` (the Updates "
-     "chat) always takes a turn, handed the recent updates the caller may read", "AssistantSent"),
+     "Say something to the Assistant. It is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. "
+     "`place: updates` (the Updates chat) is handed the recent updates the caller may read", "AssistantSent"),
     ("/api/v2/assistant/turn-on", "post", "Assistant", "turnOnAssistant",
      "Owner only: restore the archived assistant, or add it from the catalog, and activate it", None),
     ("/api/v2/assistant/actions", "post", "Assistant", "proposeAssistantAction",
@@ -444,6 +455,11 @@ STABLE = [
      "AssistantActionResult"),
     ("/api/v2/assistant/actions/{aid}/cancel", "post", "Assistant", "cancelAssistantAction",
      "Drop a proposal; it never runs", "AssistantActionResult"),
+    ("/api/v2/assistant/actions/{aid}/withdraw", "post", "Assistant", "withdrawAssistantAction",
+     "Any teammate (a person or a bot) withdraws a waiting card: it never runs, and the owner's chat says who withdrew it. "
+     "Only the owner confirms it; the owner cancels it instead", "AssistantActionResult"),
+    ("/api/v2/assistant/proposals", "get", "Assistant", "listAssistantProposals",
+     "The Confirm cards still waiting for their owner, to find one to withdraw: filter by proposer and/or owner", None),
     ("/api/v2/assistant/settings", "get", "Assistant", "getAssistantSettings",
      "Your Assistant settings: whether it decides approvals for you, and whether the team allows it", None),
     ("/api/v2/assistant/settings", "post", "Assistant", "setAssistantSettings",
@@ -451,8 +467,8 @@ STABLE = [
     ("/api/v2/assistant/decisions", "get", "Assistant", "listAssistantDecisions",
      "The approvals your Assistant decided for you, with your words and whether each can still be undone", None),
     ("/api/v2/assistant/read-back", "post", "Assistant", "readBackAssistantApprovals",
-     "The Assistant only: post the list of approvals it is about to approve for you in your chat; only those may then "
-     "be approved on your yes", None),
+     "The Assistant only: post the list of approvals it is about to approve for you in your chat, with an optional note "
+     "of its own words above it; only the listed ones may then be approved on your yes", None),
     # Goals and KPIs (docs/goals-and-kpis.md)
     ("/api/v2/strategy-bot", "get", "Goals", "getStrategyBot",
      "The Strategy Bot's name, whether its regular checks run, how much it does (its level, "
@@ -587,8 +603,8 @@ STABLE = [
     ("/api/v2/bots/{bot}/kpis", "get", "KPIs", "listBotKpis",
      "A bot's five automatic KPIs, computed from Tico's own data (Read on the bot)", "BotKpis"),
     ("/api/v2/usage", "get", "Usage", "getUsage",
-     "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, harness, model, effort or subscription, "
-     "filterable by those run dimensions and department (__unknown__ selects missing values). The owner and bot administrators see every bot; anyone else sees the bots they run "
+     "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, task (the top 25), harness, model, effort or subscription, "
+     "filterable by those run dimensions, department (__unknown__ selects missing values) and bots (slugs, comma separated). The owner and bot administrators see every bot; anyone else sees the bots they run "
      "or own. ?bot=<bot id or slug> is that bot's daily series and top routines instead", "Usage"),
     ("/api/v2/usage/limits", "get", "Usage", "getUsageLimits",
      "The team default limit and each bot's hourly, daily, weekly and monthly limits with this period's spend, for the bots "
@@ -742,7 +758,7 @@ SCHEMAS = {
                      parts=items(obj({"kind": {"enum": ["progress", "reply", "tool"]}, "text": "s", "at": "s"})) | {
                          "description": "The run's pieces so far, in order, while it is leased or running (empty otherwise). "
                                         "`reply` and `progress` are what the bot wrote (`progress` when a tool call follows it); "
-                                        "`tool` is a short label such as \"Ran hub task create\", never its arguments or output"}),
+                                        "`tool` is a short label such as \"Filing a task\" or \"Ran npm\", never its arguments or output"}),
     "Conversation": obj({"id": "s", "kind": "s", "subject": "s", "participants": items({"type": "string"}),
                          "created_at": "s", "last_message_at": "s", "closed_at": "n"}),
     "TaskStep": obj({"id": "s", "type_id": "s", "name": "s", "public_name": "s", "position": "i", "status": "s",
@@ -758,7 +774,13 @@ SCHEMAS = {
     "TaskTypeList": obj({"types": items(ref("TaskType"))}),
     "TaskTypeResult": obj({"type": ref("TaskType")}),
     "Task": obj({"private": "b", "id": "s", "title": "s", "body": "s", "requester_id": "s", "owner_id": "s", "status": "s", "created_at": "s",
-                 "updated_at": "s", "due_at": "n", "version": "i", "lane": "s", "labels": items({"type": "string"}),
+                 "updated_at": "s", "due_at": "n", "check_back_at": {"type": ["string", "null"]},
+                 "check_back_note": {"type": ["string", "null"]}, "check_back": {"oneOf": [
+                     obj({"at": "s", "note": "s", "by": {"type": ["string", "null"]}, "due": "b"},
+                         enabled={"type": "boolean", "description": "Whether follow-up delivery is enabled for this install"},
+                         delivery={"type": "string", "description": "Due delivery state from the existing queue, or pending, disabled, bot_unavailable"}),
+                     {"type": "null"}]},
+                 "version": "i", "lane": "s", "labels": items({"type": "string"}),
                  "acceptance_criteria": items({"type": "string"}),
                  "occurrence": {"type": ["string", "null"], "description": "A due-date routine's occurrence, \"<automation_id>:<due_on>\", on the task it opened: the due is its deadline, not a wake date."}},
                 required=["id", "title", "requester_id", "owner_id", "status", "created_at", "updated_at", "due_at", "version", "lane", "labels", "holds"],
@@ -811,7 +833,8 @@ SCHEMAS = {
     "SeatDetail": obj({"id": "s", "kind": {"enum": ["seat"]}, "stage": {"enum": ["recruiting"]}, "title": "s",
                        "description": "s", "reports_to": "s", "team": "s", "created_at": "s",
                        "description_by": {"enum": ["chart", "person"]},
-                       "can_edit": "b"},
+                       "can_edit": "b",
+                       "reports_now": obj({"name": "s", "until": "s"}, required=["name", "until"])},
                       required=["id", "kind", "stage", "title", "description", "reports_to", "can_edit"]),
     "SeatDrafted": obj({"description": "s", "source": {"enum": ["catalog", "model", "none"]}},
                        required=["description", "source"]),
@@ -1152,8 +1175,7 @@ SCHEMAS = {
     "LibrarianSetup": obj({"available": "b",
                            "docs": obj({"show": "b", "empty": "b", "skipped": "b", "task": {"type": ["object", "null"]}}),
                            "market": ref("LibrarianMarketSetup")}),
-    "AssistantSent": obj({"message": ref("Message"), "reply": {"type": ["object", "null"]}, "fast": "b", "intent": "n"},
-                         required=["message", "fast"]),
+    "AssistantSent": obj({"message": ref("Message")}, required=["message"]),
     "AssistantActionResult": obj({"action": {"type": "object", "description": "id, summary, method, path, body, status "
                                             "(pending, running, done, failed, canceled, expired), result"}, "message_id": "s",
                                   "shown_once": {"type": "object", "description": "Confirm only, on a card that makes a "
@@ -1313,9 +1335,10 @@ SCHEMAS = {
                          "low_estimate_runs": {"type": "integer", "description": "Priced runs whose estimate may be low: the model "
                                                "charges more for long prompts and the runner did not report every request's tokens"}}),
     "Usage": obj({"from": "s", "to": "s", "prices_as_of": {"type": "string", "description": "The date the price table was read"},
-                  "group": {"enum": ["bot", "day", "routine", "harness", "model", "effort", "subscription"]}, "department": "n", "totals": ref("UsageFigures"),
+                  "group": {"enum": ["bot", "day", "routine", "task", "harness", "model", "effort", "subscription"]}, "department": "n", "totals": ref("UsageFigures"),
                   "rows": items({"type": "object", "description": "By bot: bot, name, department; by day: day; by routine: "
-                                                 "routine (null for runs that came from none), title, bot, name. Every row has the "
+                                                 "routine (null for runs that came from none), title, bot, name; by task: value and name (its title, "
+                                                 "'A private task', or null and 'Chats and other runs' for runs with none). Every row has the "
                                                  "usage figures and `share`, its part of the total (estimate plus API-equivalent)",
                                                  "additionalProperties": True}),
                   "dimensions": {"type": "object", "description": "Available dimension filters, scoped to visible runs"},
@@ -1886,6 +1909,11 @@ STABLE.extend([
      "AutomationStats"),
     ("/api/v2/automations/question-sets", "get", "Automations", "listQuestionSets",
      "The saved question sets a Decide step may name (`set`), each with its questions", "QuestionSets"),
+    ("/api/v2/automations/templates", "get", "Automations", "listAutomationTemplates",
+     "The inbox templates a new inbox starts from: each with its id, name and destination names", "AutomationTemplates"),
+    ("/api/v2/automations/templates/{tid}", "get", "Automations", "getAutomationTemplate",
+     "One template filled in for `owner` and `inbox`, as the flow the hub would save: enabled off, nothing saved",
+     "AutomationTemplate"),
     ("/api/v2/automations/{aid}", "get", "Automations", "getAutomation",
      "One automation with set questions filled in, today's counts and, for a schedule or a due date, next_run (for a due date, next_due too)", "Automation"),
     ("/api/v2/automations/{aid}", "patch", "Automations", "updateAutomation",
@@ -1925,6 +1953,8 @@ _RUN = obj({"id": "s", "automation_id": "s", "version": "i", "trigger_ref": "s",
 SCHEMAS.update({
     "Automation": obj({"id": "s", "name": "s", "owner_id": "s", "enabled": "b", "trigger": {"type": "object"},
                        "steps": items({"type": "object"}), "version": "i", "can_edit": "b", "can_pause": "b",
+                       "destinations": {"type": ["array", "null"], "items": {"type": "object"},
+                                        "description": "Named chains a filter rule's `to` runs (see the automation guide)"},
                        "spend_cap": {"type": ["object", "null"]}, "batch": {"type": ["object", "null"]},
                        "last_run": {"type": ["object", "null"]},
                        "counts": obj({"today": obj({"runs": "i", "dropped": "i"})}),
@@ -1971,6 +2001,10 @@ SCHEMAS.update({
                                "next": {"type": ["integer", "null"]}}),
     "AutomationGuide": obj({"text": "s"}),
     "QuestionSets": obj({"sets": items(obj({"id": "s", "summary": "s", "questions": {"type": "object", "description": "Keyed by question id, in judge.py's format"}}))}),
+    "AutomationTemplates": obj({"templates": items(obj({"id": "s", "name": "s",
+                                                        "destinations": items({"type": "string"})}))}),
+    "AutomationTemplate": obj({"name": "s", "owner": "s", "enabled": "b", "trigger": "o",
+                               "steps": items({"type": "object"}), "destinations": items({"type": "object"})}),
     "InboxSwitch": obj({"inbox": "s", "send": "b"}),
     "PersonAssistant": obj({"bot": {"type": ["string", "null"]}}),
 })
@@ -2329,9 +2363,9 @@ PROBLEM = {"type": "object", "required": ["error"], "properties": {"error": {
 TAGS['Cards and pins'] = ("Tico's built-in cards and where pages and cards are pinned: the Dashboard, team pages, bot "
                           "sidebars and tasks (docs/overview.md). A card shows each reader only what they may see.")
 STABLE.extend([
-    ('/api/v2/places/{place}', 'get', 'Cards and pins', 'getPlace', 'A place\'s pins in order (dashboard, team:<group>, '
-     'bot:<id>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable pages are '
-     'left out', 'Place'),
+    ('/api/v2/places/{place}', 'get', 'Cards and pins', 'getPlace', 'A place\'s pins in order (dashboard, growth, '
+     'team:<group>, bot:<id>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable '
+     'pages are left out. growth takes `month` (YYYY-MM) and answers `month` and `months`, the picker\'s choices', 'Place'),
     ('/api/v2/places/{place}', 'put', 'Cards and pins', 'savePlace', 'Save a Dashboard, team page or My dashboard (its '
      'default cards become pins); a team page\'s audience sets its group\'s Read', 'Place'),
     ('/api/v2/places/{place}/order', 'post', 'Cards and pins', 'orderPlace', 'Put every pin at a place in this order', 'Place'),
@@ -2343,7 +2377,7 @@ STABLE.extend([
      '`ids` reads up to 50', 'CardList'),
     ('/api/v2/cards', 'post', 'Cards and pins', 'addCard', 'A built-in card, pinned at `place` in the same write', None),
     ('/api/v2/cards/choices', 'get', 'Cards and pins', 'getCardChoices', 'Card templates and their settings, the teams, '
-     'and the KPIs and pages the caller may pick', None),
+     'the KPIs and pages the caller may pick, the Growth page\'s metrics and channels; `place=growth` adds its templates', None),
     ('/api/v2/cards/{cid}', 'patch', 'Cards and pins', 'updateCard', 'Change a card\'s heading or settings', None),
     ('/api/v2/cards/{cid}', 'delete', 'Cards and pins', 'removeCard', 'Remove a card and every pin of it', None),
 ])
@@ -2386,12 +2420,17 @@ SCHEMAS['RulesByTeammate'] = obj({
 })
 SCHEMAS['Card'] = obj({'id': 'n', 'template': {'enum': ['tasks_by_status', 'done_per_week', 'needs_you', 'spend', 'kpi',
                                                         'automation_runs', 'latest_pages', 'needs_attention',
-                                                        'unread_threads', 'my_tasks', 'updates']},
+                                                        'unread_threads', 'my_tasks', 'updates', 'growth_number',
+                                                        'growth_funnel', 'growth_channels', 'growth_retention',
+                                                        'growth_board']},
                        'title': 's', 'heading': 's', 'name': 's', 'team_name': 's', 'settings': 'o', 'hidden': 'b',
                        'data': {'type': ['object', 'null'], 'description': 'What the card shows the caller; null when hidden'}},
                       required=['id', 'template', 'heading', 'settings', 'hidden', 'data'])
 SCHEMAS['CardList'] = obj({'cards': items(ref('Card')), 'next': 'n'})
-SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'team', 'bot', 'task', 'person']}, 'saved': 'b', 'can_edit': 'b',
+SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'growth', 'team', 'bot', 'task', 'person']}, 'saved': 'b',
+                        'can_edit': 'b', 'month': {'type': 'string', 'description': 'growth: the month its cards read (YYYY-MM)'},
+                        'months': {'type': 'array', 'items': {'type': 'string'},
+                                   'description': 'growth: the newest 24 months with cohort rows, oldest first'},
                         'pins': items(obj({'id': 'n', 'item': 'n', 'position': 'i', 'size': {'enum': ['small', 'medium', 'large']},
                                            'card': ref('Card'),
                                            'page': obj({'file_id': 's', 'title': 's', 'bot': 's', 'updated_at': 's', 'archived': 'b'})},
@@ -2404,8 +2443,8 @@ TAGS['Model subscriptions'] = ("The company's saved model logins and keys, given
                                "sent only to add or reconnect one; no answer carries it.")
 STABLE.extend([
     ('/api/v2/model-subscriptions', 'get', 'Model subscriptions', 'listModelSubscriptions', 'Saved subscriptions and the kinds that can be added', 'ModelSubscriptionList'),
-    ('/api/v2/model-subscriptions', 'post', 'Model subscriptions', 'addModelSubscription', 'Add a subscription: a kind, a name and the pasted value (owners and admins)', 'ModelSubscription'),
-    ('/api/v2/model-subscriptions/{sid}', 'post', 'Model subscriptions', 'changeModelSubscription', 'Rename a subscription and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true', 'ModelSubscription'),
+    ('/api/v2/model-subscriptions', 'post', 'Model subscriptions', 'addModelSubscription', 'Add a subscription: a kind, a name, the pasted value and, for a plan, optionally its owner, a person (default: you; an API key has none; owners and admins)', 'ModelSubscription'),
+    ('/api/v2/model-subscriptions/{sid}', 'post', 'Model subscriptions', 'changeModelSubscription', 'Rename a subscription, change a plan owner and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true', 'ModelSubscription'),
     ('/api/v2/model-subscriptions/{sid}', 'delete', 'Model subscriptions', 'removeModelSubscription', 'Remove a subscription and take it off every computer; 409 `confirm_restart` while runs would stop unless `confirm=1`', 'ModelSubscriptionDeleted'),
     ('/api/v2/computer-subscriptions', 'get', 'Model subscriptions', 'listComputerSubscriptions', 'Which subscription each computer uses per runtime, and the computers that can take one', 'ComputerSubscriptionList'),
     ('/api/v2/computer-subscriptions', 'put', 'Model subscriptions', 'setComputerSubscription', 'Give a computer a subscription for one runtime, switch it, or clear it (null); 409 `confirm_restart` while live runs would stop unless `confirm` is true', 'ComputerSubscriptionResult'),
@@ -2416,14 +2455,15 @@ SCHEMAS['ModelSubscription'] = obj({
     'status': {'enum': ['new', 'working', 'needs_reconnect']}, 'status_detail': 's', 'status_at': 'n', 'preview': 's',
     'revision': 'i', 'computers': items({'type': 'string'}),
     'usage': {'anyOf': [obj({'window': {'type': ['string', 'null'], 'enum': ['5h', 'week', None]}, 'used_pct': NUM_N,
-                             'cost_usd_month': NUM_N, 'resets_at': 'n'}, required=['window', 'used_pct', 'cost_usd_month']),
+                             'cost_usd_month': NUM_N, 'resets_at': 'n',
+                             'reason': {'type': ['string', 'null']}}, required=['window', 'used_pct', 'cost_usd_month']),
                         {'type': 'null'}]},
-    'added_by': 's', 'added_by_name': 's', 'created_at': 's', 'updated_at': 's'},
+    'added_by': 's', 'added_by_name': 's', 'owner_id': 's', 'owner_name': 's', 'created_at': 's', 'updated_at': 's'},
     required=['id', 'name', 'kind', 'runtime', 'label', 'status', 'status_detail', 'status_at', 'preview', 'revision',
-              'computers', 'usage', 'added_by', 'added_by_name', 'created_at', 'updated_at'])
+              'computers', 'usage', 'added_by', 'added_by_name', 'owner_id', 'owner_name', 'created_at', 'updated_at'])
 SCHEMAS['ModelSubscriptionList'] = obj({
     'subscriptions': items(ref('ModelSubscription')),
-    'kinds': items(obj({'kind': _SUB_KIND, 'label': 's', 'runtime': {'enum': ['claude', 'codex']}, 'secret_label': 's', 'help': 's'}))})
+    'kinds': items(obj({'kind': _SUB_KIND, 'label': 's', 'runtime': {'enum': ['claude', 'codex']}, 'secret_label': 's', 'help': 's', 'connect': 'b', 'owned': 'b'}))})
 SCHEMAS['ModelSubscriptionDeleted'] = obj({'deleted': 'b', 'id': 's', 'computers': 'i', 'stopped': 'i', 'sessions_reset': 'i'})
 SCHEMAS['ComputerSubscriptionList'] = obj({
     'assignments': items(obj({'runner_id': 's', 'runtime': {'enum': ['claude', 'codex']}, 'subscription_id': 's'})),
@@ -2471,6 +2511,24 @@ SCHEMAS['MemoryTidyCard'] = obj({
 SCHEMAS['MemoryTidyCards'] = obj({'cards': items(ref('MemoryTidyCard'))})
 SCHEMAS['MemoryTidyCardResult'] = obj({'card': ref('MemoryTidyCard')})
 
+# A bot's Dream (backend/dream.py): a cleanup task over its own memory, with up to three questions to its requester.
+STABLE.extend([
+    ('/api/v2/bots/{bot}/dream', 'get', 'Bots', 'getBotDream',
+     "The bot's open dream, or else its newest one finished in the last day; dream is null otherwise", 'BotDreamView'),
+    ('/api/v2/bots/{bot}/dream', 'post', 'Bots', 'startBotDream',
+     'Start a dream: a `dream` task for the bot, with the rights `POST /api/v2/tasks` needs. Its open dream is returned '
+     'instead of a second; 409 stateless for a bot that keeps no memory', 'BotDreamView'),
+])
+SCHEMAS['BotDreamView'] = obj({'dream': {'oneOf': [obj({
+    'task': 's', 'status': 's', 'state': {'enum': ['starting', 'dreaming', 'asking', 'done', 'stopped']},
+    'questions': {'oneOf': [obj({'message_id': 's', 'text': 's', 'mine': {
+        'type': 'boolean', 'description': 'The question is put to the caller, who answers it at POST /api/v2/messages/{mid}/answer'}}),
+        {'type': 'null'}]},
+    'summary': 'n', 'doing': {'type': ['string', 'null'], 'description': "While dreaming: the bot's one line on what it is doing now (the task note)"},
+    'closed_at': 'n', 'started_at': 's',
+    'auto': {'type': 'boolean', 'description': 'Started by the nightly run (Auto dream), not by a person'},
+    'reason': {'type': ['string', 'null'], 'description': "An auto dream's reason: the first line of its body"}}), {'type': 'null'}]}})
+
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "
     "never removed or renamed, and a breaking change is a new /api/v3. Routes not listed are internal. "
@@ -2493,21 +2551,6 @@ def _refs(node, found):
             _refs(value, found)
 
 
-TAGS['Federation'] = ("Shared threads between Tico installs through Tico HQ: this install's key, peerings (both installs "
-                      "approve, and a pause stops one) and the threads it shares (docs/federation.md).")
-STABLE.extend([
-    ('/api/v2/federation', 'get', 'Federation', 'getFederation', "This install's key id, Gateway, one page of peerings and shared threads with cursors (no key material)", None),
-    ('/api/v2/federation/keys', 'post', 'Federation', 'createFederationKey', "Make this install's federation key and register it with Tico HQ", None),
-    ('/api/v2/federation/keys/rotate', 'post', 'Federation', 'rotateFederationKey', 'A new key; the old one is retired and every peering needs approving again', None),
-    ('/api/v2/federation/peerings', 'post', 'Federation', 'requestFederationPeering', 'Ask another install to peer; an Idempotency-Key is required', None),
-    ('/api/v2/federation/peerings/{peering_id}/approve', 'post', 'Federation', 'approveFederationPeering', "Approve a peering after checking the other install's key; active once both approve", None),
-    ('/api/v2/federation/peerings/{peering_id}/pause', 'post', 'Federation', 'setFederationPeeringPause', 'The kill switch: while paused nothing crosses the peering in either direction', None),
-    ('/api/v2/federation/peerings/{peering_id}/revoke', 'post', 'Federation', 'revokeFederationPeering', 'End a peering; a new request starts over', None),
-    ('/api/v2/federation/threads/{thread_id}/installs', 'post', 'Federation', 'shareFederationThread', 'Share a thread this install owns with an active peer; it gets the thread from now on', None),
-    ('/api/v2/federation/threads/{thread_id}/installs/{install_id}', 'delete', 'Federation', 'unshareFederationThread', 'Remove an install from a thread this install owns; it gets the removal and nothing after', None),
-    ('/api/v2/federation/threads/{thread_id}/installs/{install_id}/retry', 'post', 'Federation', 'retryFederationThreadInstall', 'Send again now what another install has not taken from this thread; for whoever manages the thread', None),
-    ('/api/v2/federation/threads/{thread_id}/readers', 'post', 'Federation', 'addFederationThreadReader', 'Let a local person read a shared thread copy on this install; an admin who reads it adds readers', None),
-])
 # Threads (docs/dev/threads-contract.md §10): a thread is a conversation read through threads.view, and its messages
 # carry thread_id, root_id-free fields as _message_out writes them.
 TAGS["Threads"] = ("Threads: the sidebar, a thread and its timeline, read marks, search, members, follow, and the messages "
@@ -2522,15 +2565,35 @@ SCHEMAS.update({
                        "last_seq": "i", "last_unread_seq": "i", "me": "o", "members": "o",
                        "retention_days": {"type": ["integer", "null"],
                                           "description": "Days a root keeps its messages; null keeps them for good"},
-                       "home": {"type": ["object", "null"], "description": "Only for audience home: {actor}"}},
-                      required=["id", "title", "audience", "root_id", "last_seq", "last_unread_seq"]),
+                       "home": {"type": ["object", "null"], "description": "Only for audience home: {actor}"},
+                       "pinned_for_everyone": {"type": "boolean", "description": "Its root is pinned for everyone "
+                                               "who reads it; `me.pinned` is whether it is pinned for the viewer"}},
+                      required=["id", "title", "audience", "root_id", "last_seq", "last_unread_seq",
+                                "pinned_for_everyone"]),
     "ThreadReactions": items(obj({"emoji": "s", "count": "i", "actors": "a"}, required=["emoji", "count", "actors"])),
     "ThreadEarlier": obj({"home": "s", "messages": "i"}, required=["home", "messages"]),
     "ThreadUploaded": obj({"thread": ref("ThreadView"), "message": ref("ThreadMessage")},
                           required=["thread", "message"]),
     "ThreadSidebar": obj({"attention": items({"type": "object"}), "threads": items(ref("ThreadView")),
-                          "dms": items({"type": "object"}), "next_cursor": "n"},
+                          "dms": items({"type": "object"}), "next_cursor": "n",
+                          "bot_dms": ref("ThreadDmCounts"), "person_dms": ref("ThreadDmCounts")},
                          required=["attention", "threads", "dms"]),
+    "ThreadDmCounts": {"type": "object", "additionalProperties": {"type": "integer"},
+                       "description": "Unread in each open DM with one teammate, by that teammate's actor "
+                                      "(first page only; {} after)"},
+    "ThreadRail": obj({"pinned": items(ref("ThreadView")), "threads": items(ref("ThreadView")),
+                       "catch_up": {"type": ["integer", "null"], "description": "Catch up's count, at most 99 (first "
+                                    "page only; null after)"},
+                       "catch_up_ids": {"type": "array", "items": {"type": "string"},
+                                        "description": "The root ids `catch_up` counts, at most 99 (first page only; "
+                                                       "[] after): a client keeps the set from the live stream"},
+                       "dms": ref("ThreadDmCounts"), "next_cursor": "n"}),
+    "ThreadBrowse": obj({"threads": items({"allOf": [ref("ThreadView"), obj({"member_count": "i"})]}),
+                         "next_cursor": "n"}),
+    "ThreadCatchUp": obj({"items": items(obj({"thread": ref("ThreadView"), "new_count": "i", "mention": "b",
+                                              "messages": items(ref("ThreadMessage")), "more": "i"})),
+                          "count": {"type": "integer", "description": "Every item across pages, at most 99"},
+                          "next_cursor": "n"}),
     "ThreadSearch": obj({"hits": items(obj({"message_id": "s", "thread_id": "s", "title": "s", "sender_id": "s",
                                             "created_at": "s", "excerpt": "s"},
                                            required=["message_id", "thread_id", "excerpt"])),
@@ -2538,13 +2601,39 @@ SCHEMAS.update({
     "ThreadMessage": obj({"id": "s", "conversation_id": "s", "thread_id": "s", "seq": "i", "sender_id": "s",
                           "recipient_id": "n", "kind": "s", "body": "n", "created_at": "s", "edited_at": "n",
                           "revision": "i", "refs": "o", "deleted": "b", "root_id": "n", "origin_id": "n",
-                          "parent_message_id": "n", "depth": "i", "hidden": "b",
+                          "parent_message_id": "n", "depth": "i", "hidden": "b", "clipped": "b",
                           "sub_thread": {"type": ["object", "null"], "description": "The sub-thread branching from this "
-                                         "message: {id, count, last_seq, unread, more}"}},
+                                         "message: {id, count, last_seq, unread, more}"},
+                          "in_reply_to": "n",
+                          "reply_to": {"oneOf": [ref("ThreadReplyQuote"), {"type": "null"}],
+                                       "description": "The message this one answers (or a sub-thread message's "
+                                                      "parent): a quote, `{id, hidden: true}` when the viewer does not "
+                                                      "read it, or null"},
+                          "routed": {"oneOf": [ref("ThreadRouted"), {"type": "null"}],
+                                     "description": "Who routing asked to answer this message (`to` empty: nobody); "
+                                                    "null when routing never looked at it"}},
                          required=["id", "seq", "thread_id"]),
+    "ThreadReplyQuote": obj({"id": "s", "author": "s", "author_name": "s",
+                             "excerpt": {"type": "string", "description": "Plain text, at most 120 characters"},
+                             "hidden": "b"}, required=["id"]),
+    "ThreadRouted": obj({"to": items(obj({"actor": "s", "name": "s"}, required=["actor", "name"]))}, required=["to"]),
+    "ThreadBotStatusRow": obj({"actor": "s", "name": "s",
+                               "state": {"type": "string", "enum": ["working", "up_next", "cant_reply"]},
+                               "detail": "s", "since": "s", "run_id": "n",
+                               "fix": {"oneOf": [obj({"label": "s", "href": "s"}, required=["label", "href"]),
+                                                 {"type": "null"}],
+                                       "description": "Where to fix what stops it (cant_reply only)"}},
+                              required=["actor", "name", "state", "detail", "since", "run_id", "fix"]),
+    "ThreadBotStatus": obj({"bots": items(ref("ThreadBotStatusRow"))}, required=["bots"]),
     "ThreadCrumb": obj({"id": "s", "title": "s"}),
     "ThreadTimeline": obj({"thread": ref("ThreadView"), "breadcrumb": items(ref("ThreadCrumb")),
-                           "messages": items({"type": "object"}), "next_cursor": "n"},
+                           "messages": items({"type": "object"}), "next_cursor": "n",
+                           "bot_status": {"type": "array", "items": ref("ThreadBotStatusRow"),
+                                          "description": "First page only: the bots the root waits on, as "
+                                                         "`GET .../bot-status` gives them"},
+                           "read_marks": {"type": "object", "additionalProperties": {"type": "integer"},
+                                          "description": "`flat` only: the viewer's last_read_seq in the root and in "
+                                                         "each thread a message on the page is in (0: read nothing)"}},
                           required=["thread", "messages"]),
     "ThreadMembers": obj({"members": items(obj({"actor": "s", "role": "s", "added_by": "n", "created_at": "s"},
                                                required=["actor", "role"])),
@@ -2563,7 +2652,24 @@ STABLE.extend([
      "`with=<actor>`, only the threads that teammate is a member of", "ThreadSidebar"),
     ("/api/v2/threads", "post", "Threads", "createThread",
      "Start a thread (audience members unless asked otherwise); with `parent_message_id` it is a sub-thread; with `body` "
-     "its first message is posted too", "ThreadView"),
+     "its first message is posted too; `pin_for_members` pins it for its starter and every person added. Only a DM with "
+     "one teammate may have no title (422 `name_required` otherwise)", "ThreadView"),
+    ("/api/v2/threads/rail", "get", "Threads", "listThreadRail",
+     "The threads the viewer is in, by title: `pinned` (at most 200 a page) and `threads`, each going on through "
+     "`next_cursor` until both are done; `catch_up`, `catch_up_ids` and `dms` on the first page. "
+     "Company, team and members threads and group DMs; never a 1:1 DM, a Home, a task's thread or a meeting", "ThreadRail"),
+    ("/api/v2/threads/browse", "get", "Threads", "browseThreads",
+     "Company and team threads the viewer may read and is not in, newest activity first; `q` matches the title. "
+     "Following one puts it in the rail", "ThreadBrowse"),
+    ("/api/v2/threads/catch-up", "get", "Threads", "listThreadCatchUp",
+     "Each thread with something new for the viewer and each open Needs attention item, mentions and asks first, then "
+     "newest activity, with its new messages in tree order (20 at most, within the page's byte budget, each text cut "
+     "at 4,000 characters with `clipped`; `more` counts the rest); `count` is the badge",
+     "ThreadCatchUp"),
+    ("/api/v2/threads/{thread_id}/pin", "put", "Threads", "pinThread",
+     "Pin a root thread for me; reading it is enough (404 otherwise, 422 for a sub-thread)", "ThreadView"),
+    ("/api/v2/threads/{thread_id}/pin", "delete", "Threads", "unpinThread",
+     "Unpin a root thread for me, a pin for everyone included (for me alone)", "ThreadView"),
     ("/api/v2/threads/search", "get", "Threads", "searchThreads",
      "Messages whose text matches every word of `q`, newest first, only in threads and messages the viewer may read", "ThreadSearch"),
     ("/api/v2/threads/home/{actor}", "get", "Threads", "getThreadHome",
@@ -2574,14 +2680,20 @@ STABLE.extend([
      "applies). `create=false` makes nothing and answers 404 `no_dm` when there is none yet", "ThreadView"),
     ("/api/v2/threads/dm", "post", "Threads", "createThreadDm",
      "A DM with these teammates (`members`), the open one or a new one, with an optional first message (`body`); needs "
-     "Write on each of them, and a bot's or person's first message passes the org rules", "ThreadView"),
+     "Write on each of them, and a bot's or person's first message passes the org rules. A new one with two or more "
+     "others needs a `title` (422 `name_required`)", "ThreadView"),
     ("/api/v2/threads/{thread_id}", "get", "Threads", "getThread",
      "A thread as the viewer sees it: its unread count, read mark, what they may do and its first page of members",
      "ThreadView"),
     ("/api/v2/threads/{thread_id}", "patch", "Threads", "updateThread",
-     "Rename, archive or unarchive a thread, change who it is for, or set how many days a root keeps its messages (`retention_days`, null for good); its managers only", "ThreadView"),
+     "Rename, archive or unarchive a thread, change who it is for, set how many days a root keeps its messages (`retention_days`, null for good), or pin a root for everyone (`pinned_for_everyone`; never a 1:1 DM, a Home, a task's or a meeting's thread); its managers only", "ThreadView"),
     ("/api/v2/threads/{thread_id}/timeline", "get", "Threads", "getThreadTimeline",
-     "The thread in tree order, a page of its own messages at a time (`cursor` is the seq from next_cursor), each followed by its sub-thread's messages; a long branch has a `collapsed` row with the cursor that reads the rest", "ThreadTimeline"),
+     "The thread in tree order, a page of its own messages at a time (`cursor` is the seq from next_cursor), each followed by its sub-thread's messages; a long branch has a `collapsed` row with the cursor that reads the rest. "
+     "With `flat=1`: the thread and every open sub-thread under it the viewer reads, in time order, all at depth 0, "
+     "paged the same way, with `read_marks`. Each message has `reply_to` and `routed`; the first page has `bot_status`", "ThreadTimeline"),
+    ("/api/v2/threads/{thread_id}/bot-status", "get", "Threads", "getThreadBotStatus",
+     "The bots the thread's root waits on, at most 5, oldest wait first: `working` (its current step), `up_next` "
+     "(finishing other work first) or `cant_reply` (what stops it, and `fix`)", "ThreadBotStatus"),
     ("/api/v2/threads/{thread_id}/members", "get", "Threads", "listThreadMembers",
      "Who a thread is for, a page at a time", "ThreadMembers"),
     ("/api/v2/threads/{thread_id}/members", "post", "Threads", "addThreadMember",
@@ -2589,7 +2701,9 @@ STABLE.extend([
     ("/api/v2/threads/{thread_id}/members/{actor}", "delete", "Threads", "removeThreadMember",
      "Remove a member from a thread (its managers)", "ThreadMemberChange"),
     ("/api/v2/threads/{thread_id}/messages", "post", "Threads", "postThreadMessage",
-     "Post a message in a thread, or in a sub-thread with `parent_message_id`; it passes the org rules first", "ThreadMessage"),
+     "Post a message in a thread, or in a sub-thread with `parent_message_id`; it passes the org rules first. "
+     "`in_reply_to` answers a message of the same root's open subtree the poster reads (422 `reply_target_invalid` "
+     "otherwise): the post stays in this thread, quoting it, and a bot replied to is woken", "ThreadMessage"),
     ("/api/v2/threads/{thread_id}/read", "post", "Threads", "markThreadRead",
      "Read up to `seq` in the thread; the highest mark wins, so a device that is ahead keeps its place", "ThreadRead"),
     ("/api/v2/threads/{thread_id}/read-all", "post", "Threads", "markThreadAndSubthreadsRead",
@@ -2610,8 +2724,8 @@ STABLE.extend([
      "A manager of a bot opens its Home's earlier shared-room messages to the Home's readers; a bot's Home only (422 "
      "otherwise), managers only (403)", "ThreadEarlier"),
     ("/api/v2/uploads/threads/{thread_id}/messages", "post", "Threads", "uploadThreadMessage",
-     "A person's message with files in a thread (multipart: text, titles and the files); each file is linked to the "
-     "message, under the chat upload limit", "ThreadUploaded"),
+     "A person's message with files in a thread (multipart: text, titles and the files, and `in_reply_to` as a post "
+     "takes it); each file is linked to the message, under the chat upload limit", "ThreadUploaded"),
     ("/api/v2/threads/messages/{message_id}/task", "post", "Threads", "makeTaskFromMessage",
      "A task from a message I read: the server copies its text and a link back, and the task is private unless the "
      "thread is company-wide", "TaskResult"),
@@ -2649,6 +2763,48 @@ SCHEMAS.update({
     "CallList": obj({"calls": items(ref("CallSummary")), "next_before": "n", "available": "b"}),
     "CallJoin": obj({"call": ref("Call"), "url": "s", "expires_in": "i", "token": "s"}),
     "CallToken": obj({"url": "s", "expires_in": "i", "token": "s"}),
+})
+
+
+# Feedback on bot work (backend/feedback.py): 👍/👎 with a reason on a message, task or approval a bot made.
+TAGS["Feedback"] = ("A person's 👍 or 👎 on a message, task or approval a bot made, with an optional reason: a 👎 can tell "
+                    "the bot (a note for its next run in that conversation) or become an org rule. Every answer leaves "
+                    "out feedback on what the caller cannot read.")
+STABLE.extend([
+    ("/api/v2/feedback", "post", "Feedback", "giveFeedback",
+     "Rate a message, task or approval a bot made; rating again replaces it. tell_bot (a 👎 only) leaves the bot a note",
+     "Feedback"),
+    ("/api/v2/feedback", "get", "Feedback", "listFeedbackMarkers",
+     "On these subjects the caller reads (subject_ids, comma-separated, at most 200): the caller's own feedback and "
+     "everyone's up/down counts",
+     "FeedbackMarkers"),
+    ("/api/v2/feedback/list", "get", "Feedback", "listFeedback",
+     "Feedback newest first, paged and byte-capped, by bot, rating and since, on subjects the caller reads", "FeedbackPage"),
+    ("/api/v2/feedback/recent-reasons", "get", "Feedback", "listRecentFeedbackReasons",
+     "The caller's five latest distinct reasons, each with how often they used it", "FeedbackReasons"),
+    ("/api/v2/feedback/{feedback_id}", "delete", "Feedback", "removeFeedback",
+     "Remove my feedback; a note it left that no run carried yet is taken back", "FeedbackRemoved"),
+    ("/api/v2/feedback/{feedback_id}/rule-draft", "post", "Feedback", "draftFeedbackRule",
+     "A one-sentence rule drafted from my 👎; stores nothing. With no model the reason comes back, drafted false",
+     "FeedbackRuleDraft"),
+    ("/api/v2/feedback/{feedback_id}/rule", "post", "Feedback", "makeFeedbackRule",
+     "Make my 👎 an internal org rule for the bot or all bots: active when I manage its Who, else suggested",
+     "FeedbackRuleMade"),
+])
+SCHEMAS.update({
+    "Feedback": obj({"id": "s", "person_id": "s", "subject_type": {"enum": ["message", "task", "approval"]},
+                     "subject_id": "s", "bot_id": "s", "rating": {"enum": ["up", "down"]}, "reason": "s",
+                     "outcome": {"enum": ["none", "told_bot", "rule"]}, "note_id": "n",
+                     "note_status": {"enum": ["waiting", "carried", "settled", "canceled", None]}, "org_rule_id": "n",
+                     "rule_status": {"enum": ["suggested", "active", "retired", None]}, "created_at": "s",
+                     "updated_at": "s"}),
+    "FeedbackMarkers": obj({"items": items(ref("Feedback")),
+                            "counts": items(obj({"subject_id": "s", "up": "i", "down": "i"}))}),
+    "FeedbackPage": obj({"items": items(ref("Feedback")), "next_cursor": "n"}),
+    "FeedbackReasons": obj({"reasons": items(obj({"text": "s", "count": "i"}))}),
+    "FeedbackRemoved": obj({"ok": "b", "id": "s"}),
+    "FeedbackRuleDraft": obj({"text": "s", "drafted": "b"}),
+    "FeedbackRuleMade": obj({"feedback": ref("Feedback"), "rule": "o"}),
 })
 
 
@@ -2924,6 +3080,30 @@ STABLE.extend([
     ("/api/v2/reader-messages", "get", "Company page", "listReaderMessages",
      "What readers sent the page (replies and requests), newest first; they never wake a bot", None),
 ])
+
+
+# What the Assistant did for you, the Needs you summary and why an item is here (docs/assistant.md).
+STABLE.extend([
+    ("/api/v2/needs-you/summary", "get", "Needs you", "getNeedsYouSummary",
+     "The Needs you count split by kind and by the bot that put each item there, with this week's and older counts; "
+     "the same query as the board, so the numbers match it (`limit` caps the list of bots)", "NeedsSummary"),
+    ("/api/v2/origins/{ref}", "get", "Needs you", "getOrigin",
+     "Why a task, bot question or approval is on your list: who made it, its cause (automation, rule, parent task or bot), "
+     "its siblings in the last seven days and up to three commands that would stop the source; 404 when you cannot read it", "Origin"),
+    ("/api/v2/assistant/changes", "get", "Assistant", "listAssistantChanges",
+     "What your Assistant changed for you in the last `days` (default 30), newest first, each with the words it acted on "
+     "and whether it can still be undone; paged with `limit` and `before`", "AssistantChangeList"),
+    ("/api/v2/assistant/changes/{cid}/restore", "post", "Assistant", "restoreAssistantChange",
+     "Undo one change your Assistant made for you where the record allows it; repeating it answers `already: true`", "AssistantChangeResult"),
+])
+SCHEMAS.update({
+    "NeedsSummary": obj({"actor": "s", "total": "i", "this_week": "i", "by_kind": "o", "by_bot": items({"type": "object"}),
+                         "bots_left": "i"}),
+    "Origin": obj({"ref": "s", "kind": "s", "id": "s", "title": "s", "created_at": "s", "made_by": "o",
+                   "task": {"type": ["string", "null"]}, "cause": "o", "siblings": "o", "stop": items({"type": "object"})}),
+    "AssistantChangeList": obj({"changes": items({"type": "object"}), "next": {"type": ["string", "null"]}}),
+    "AssistantChangeResult": obj({"id": "s", "restored": "b", "already": "b", "object": "s"}),
+})
 
 
 def generate():

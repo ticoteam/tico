@@ -15,10 +15,13 @@ import pytest
 
 from backend import diagnostics, health_monitor, providers, routines, support
 from backend.auth import Identity
-from backend.store import H
+from backend.store import H, encode
+from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.test_goal_manager import BASE
 from backend.tests.test_onboarding import as_person, draft, environment, machine, signed_in  # noqa: F401
 from backend.tests.test_support import FakeHQ
+from backend.enqueue import enqueue_stored
+from backend import bot_settings as BS
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "health-monitor"
 SECRET_TASK = "Acme payroll for March"
@@ -88,7 +91,7 @@ def finding(api, key):
 
 def runner_errors(api, runner, lines):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness=? WHERE id=?",
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?",
                   (json.dumps({"schema_version": 1, "bots": {}, "recent_errors": lines}), runner["runner_id"]))
 
 
@@ -275,7 +278,7 @@ def test_a_computer_on_a_release_the_server_cannot_work_with_is_bad(environment,
     monkeypatch.setenv("TICO_VERSION", "0.4.45")
     api, runner = built(environment)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.now(), runner["runner_id"]))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), runner["runner_id"]))
         c.execute("INSERT INTO runner_versions(runner_id,release,reported_at) VALUES(?,?,?) ON CONFLICT(runner_id) "
                   "DO UPDATE SET release=excluded.release,update_state='',update_error=''",
                   (runner["runner_id"], release, H.now()))
@@ -391,7 +394,8 @@ def test_a_setup_finding_naming_a_bot_is_never_reported_to_hq(environment, hq):
                   (SECRET_BOT, runner["runner_id"], H.now()))
         c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m-silent','human:ana',?,'chat','hi',?)",
                   ("bot:" + SECRET_BOT, H.now()))
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.shift(H.now(), minutes=-15), runner["runner_id"]))
+        enqueue_stored(c, 'm-silent')
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.shift(H.now(), minutes=-15), runner["runner_id"]))
     found = scan(api)
     silent = "computer_silent:" + runner["runner_id"]
     assert "limited_no_fallback:" + SECRET_BOT in found and "push_stuck:" + runner["runner_id"] in found and silent in found
@@ -467,8 +471,8 @@ def limited(api, bot=SECRET_BOT, config=None):
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, {bot: {"name": bot, "status": "active"}}, None)
         if config is not None:
-            c.execute("INSERT OR REPLACE INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')",
-                      (bot, json.dumps(config)))
+            c.execute("INSERT OR REPLACE INTO bot_config(bot,owner_id) VALUES(?,'ana')", (bot,))
+            BS.write(c, bot, config)
         H.event(c, H.KEEPER, "attempt.limited", "a-" + bot, {"bot": bot})
 
 
@@ -592,8 +596,8 @@ def test_a_bots_own_key_is_not_the_computers_login(environment):
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, {b: {"name": b, "status": "active"} for b in ("gem-a", "gem-b", "pi-a")}, None)
         for bot, harness in (("gem-a", "gemini-cli"), ("gem-b", "gemini-cli"), ("pi-a", "pi")):
-            c.execute("INSERT OR REPLACE INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')",
-                      (bot, json.dumps({"harness": harness})))
+            c.execute("INSERT OR REPLACE INTO bot_config(bot,owner_id) VALUES(?,'ana')", (bot,))
+            BS.write(c, bot, {'harness': harness})
     # The Gemini CLI and pi sign in with each bot's own key (`api_keys = "bot"`): gem-a out of quota on its key, as a
     # turn of its own, a check and a fallback, says nothing about the computer, and gem-b working there clears nothing.
     turn(api, rid, {**QUOTA}, 50, bot="gem-a")
@@ -617,7 +621,7 @@ def gateway_choice(api, monkeypatch, runner_id, isolated, enabled=("anthropic",)
         providers.save(c, "human:test", {"expected_revision": providers.load(c)["revision"], "enabled": list(enabled),
                                          "runtime": "claude", "auto_fallback": True, "preset": "subscriptions-gateway"},
                        H.now())
-        c.execute("UPDATE runners SET readiness=? WHERE id=?",
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?",
                   (json.dumps({"schema_version": 1, "isolated": isolated, "runtimes": {}, "bots": {}}), runner_id))
 
 
@@ -680,3 +684,54 @@ def test_the_scan_reads_its_findings_outside_the_write_lock(environment, monkeyp
     assert health_monitor.check(store, api.app.state.auth, store.settings) == [key]
     assert holders == [0]
     assert health_monitor.check(store, api.app.state.auth, store.settings) == []
+
+
+def test_the_monitor_files_for_botops_and_a_task_for_a_person_is_refused(api):
+    # The Health Monitor gives its fixes to BotOps only (docs/health-monitor.md): a task for a person, and a hand-off to
+    # one, are refused with where to file it and nothing is written; the same task for BotOps is accepted.
+    with api.app.state.store.transaction() as c:
+        for slug in ("health-monitor", "botops"):
+            c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES(?,?,?,'active')", (slug, slug, slug))
+            c.execute("UPDATE bots SET state='active' WHERE id=?", (slug,))
+            if c.execute("INSERT OR IGNORE INTO bot_config(bot,owner_id) VALUES(?,'ana')", (slug,)).rowcount:
+                BS.write(c, slug, {"name": slug, "runtime": "fake", "status": "active"})
+        title, body = "Wake Support Agent (cloud) and check it reports in", "Its last check-in was 40 minutes ago."
+        with pytest.raises(H.Refused) as refused:
+            H.task_create(c, "bot:" + health_monitor.SLUG, title, body, "human:ana", lint=False)
+        assert refused.value.rule == "botops-only" and "--owner botops" in str(refused.value)
+        assert c.execute("SELECT count(*) FROM tasks WHERE title=?", (title,)).fetchone()[0] == 0
+        fix = H.task_create(c, "bot:" + health_monitor.SLUG, title, body, "botops", lint=False)
+        assert H.task(c, fix["id"])["owner_id"] == "bot:botops"
+        with pytest.raises(H.Refused) as handed:
+            H.task_update(c, "bot:" + health_monitor.SLUG, fix["id"], owner="human:ana")
+        assert handed.value.rule == "botops-only"
+        assert H.task(c, fix["id"])["owner_id"] == "bot:botops"
+
+
+def test_a_report_the_owner_asked_for_and_approved_stays_the_monitors_under_its_approval_key(environment, hq):
+    """Whoever asked, the Health Monitor's report is the monitor's ticket: its key is `approval:`, which its "Seen again"
+    note finds, and the owner's own chat does not list it (support.OWN)."""
+    api, runner = built(environment)
+    api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
+    api.put("/api/v2/access/rules", json={"health_monitor_reports": False}, headers=signed_in())
+    runner_errors(api, runner, STREAM)
+    scan(api)
+    url = f"/api/v2/health-monitor/findings/event_stream:{runner['runner_id']}/report"
+    approval = api.post(url, json={}, headers=signed_in()).json()["approval"]
+    with api.app.state.store.transaction() as c:
+        owner = api.app.state.auth.owner_identity(c)
+        c.execute("UPDATE approvals SET decision='approved', decided_by_id=? WHERE id=?", (owner.actor, approval))
+    api.app.state.support.file_approved(owner, approval)
+    assert json.loads(hq.seen[-1].content)["source"] == "health_monitor"
+    with api.app.state.store.read() as c:
+        (key, source) = c.execute("SELECT request_key, json_extract(sent,'$.source') FROM support_tickets").fetchone()
+    assert key == "approval:" + approval and source == "health_monitor"
+    assert api.get("/api/v2/support/tickets", headers=signed_in()).json()["tickets"] == []
+    runner_errors(api, runner, [])
+    scan(api)
+    runner_errors(api, runner, STREAM)
+    scan(api)
+    repeat = api.post(url, json={}, headers=signed_in())
+    assert repeat.status_code == 200 and repeat.json()["comment"], repeat.text
+    (ticket,) = hq.tickets.values()
+    assert [m["body"][:37] for m in ticket["messages"]] == ["[Health Monitor] Seen again (2 times)"]

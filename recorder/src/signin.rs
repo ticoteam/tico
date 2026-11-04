@@ -266,8 +266,11 @@ pub fn save(id: &str, access: &str, grant: &Grant) -> Result<()> {
 }
 
 /// The access token for a connection, renewed first when a signed-in one is about to expire.
+static RENEWING: Mutex<()> = Mutex::new(());
 pub fn token(id: &str) -> Result<String> {
-    static RENEWING: Mutex<()> = Mutex::new(());
+    token_after_rejection(id, None)
+}
+pub fn token_after_rejection(id: &str, rejected: Option<&str>) -> Result<String> {
     let stored = settings::secret(&format!("tico-grant:{id}"))?;
     if stored.is_empty() {
         return settings::secret(&format!("tico:{id}"));
@@ -275,7 +278,10 @@ pub fn token(id: &str) -> Result<String> {
     // One renewal at a time: Tico rotates the refresh token, so a second concurrent use would be refused.
     let _guard = RENEWING.lock().unwrap_or_else(|error| error.into_inner());
     let grant: Grant = serde_json::from_str(&settings::secret(&format!("tico-grant:{id}"))?)?;
-    if grant.expires_at > chrono::Utc::now().timestamp() + 300 {
+    let current = settings::secret(&format!("tico:{id}"))?;
+    if rejected.is_none_or(|old| old != current)
+        && grant.expires_at > chrono::Utc::now().timestamp() + 300
+    {
         return settings::secret(&format!("tico:{id}"));
     }
     let (access, renewed) = renew(&grant)?;

@@ -1,7 +1,7 @@
-// A chat's goal on the Assistant page, offline (the one old chat left; a bot's page is Home and DM now). The goal
-// target, the "/" menu, the ways to send and the pinned-goal bar live in a bot's own composer, which is gone, so only
-// what the thread itself draws is here: the server's notice for a met goal (refs.chat_goal, refs.goal_status) is the
-// compact goal line, not a "Task" line, and the /goal messages the goal controls sent are not bubbles.
+// A chat's goal on the Assistant page, offline (the one old chat left; a bot's page is Home and DM now, and its goal
+// target and pinned-goal bar are in thread-composer.cjs). Only what the thread itself draws is here: the server's
+// notice for a met goal (refs.chat_goal, refs.goal_status) is the compact goal line, not a "Task" line, and the /goal
+// messages the goal controls sent are not bubbles.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

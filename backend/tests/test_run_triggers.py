@@ -31,7 +31,7 @@ def quiet(c, bot="ops"):
 
 def turn(api, attempt):
     with api.app.state.store.read() as c:
-        return dict(c.execute("SELECT * FROM turns WHERE id=?", (attempt["id"],)).fetchone())
+        return H.turn(c, attempt["id"])
 
 
 def machine(api, bot="ops"):
@@ -135,7 +135,7 @@ def test_the_claim_puts_the_wake_on_the_run(api):
         H.task_create(c, H.human_actor("ana"), "Close the books", "By Friday.", "bot:ops")
     assert turn(api, claim(api, r))["trigger_kind"] == "status_or_relation"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM turns WHERE trigger_kind IS NULL").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM attempts WHERE trigger_kind IS NULL").fetchone()[0] == 0
 
 
 def test_a_run_gets_the_callers_purpose_else_the_mapped_default(api):
@@ -160,12 +160,12 @@ def test_backfill_fills_old_runs_from_the_map_and_leaves_unmapped_unknown(api):
     with api.app.state.store.transaction() as c:
         for i, (bot, kind) in enumerate([("ops", "comment"), ("pr-reviewer", "pr_checks"), ("ops", None),
                                          ("ops", "other")]):
-            c.execute("INSERT INTO turns(id,bot,started_at,trigger,trigger_kind) VALUES(?,?,?,'task',?)",
+            c.execute("INSERT INTO attempts(id,bot_id,created_at,trigger,trigger_kind) VALUES(?,?,?,'task',?)",
                       (f"old{i}", bot, H.now(), kind))
-        c.execute("INSERT INTO turns(id,bot,started_at,trigger,trigger_kind,purpose) VALUES('named','ops',?,'task',"
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,trigger,trigger_kind,purpose) VALUES('named','ops',?,'task',"
                   "'comment','mine')", (H.now(),))
         RT.backfill(c)
-        got = dict(c.execute("SELECT id, purpose FROM turns WHERE id LIKE 'old%' OR id='named'").fetchall())
+        got = dict(c.execute("SELECT id, purpose FROM attempts WHERE id LIKE 'old%' OR id='named'").fetchall())
     assert got == {"old0": "answer comment", "old1": "handle PR checks", "old2": "unknown", "old3": "unknown",
                    "named": "mine"}
     rows = {row["purpose"] for row in weekly(api, where="bot='ops'")}
@@ -304,7 +304,7 @@ def test_a_run_says_whether_it_resumed_its_session_and_a_new_one_is_in_the_tasks
     assert (row["session_kind"], row["session_why"]) == (session["kind"], session.get("why"))
     assert row["rotated"] is None
     with api.app.state.store.read() as c:
-        notes = [e["note"] for e in c.execute("SELECT note FROM task_events WHERE task_id=? AND field='session'",
+        notes = [e["note"] for e in c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='session'",
                                               (task["id"],))]
     assert notes == ([said] if said else [])
 
@@ -331,7 +331,7 @@ def test_a_persons_clear_and_a_topic_change_in_a_task_room_are_in_the_tasks_hist
         room = c.execute("SELECT id FROM conversations WHERE task_id=?", (task["id"],)).fetchone()[0]
         views.clear_chat_session(c, api.app.state.store.settings, "human:ana", "ops", room)
         views.clear_chat_session(c, api.app.state.store.settings, "human:ana", "ops", room, {"reason": "topic_change"})
-        notes = [e["note"] for e in c.execute("SELECT note FROM task_events WHERE task_id=? AND field='session' "
+        notes = [e["note"] for e in c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='session' "
                                               "ORDER BY rowid", (task["id"],))]
     assert notes == ["Started a new session: a person cleared it",
                      "Started a new session: the conversation moved to a new topic"]
@@ -339,7 +339,7 @@ def test_a_persons_clear_and_a_topic_change_in_a_task_room_are_in_the_tasks_hist
 
 def lost(c, bot, why, n, kind="new", hours=1):
     for i in range(n):
-        c.execute("INSERT INTO turns(id,bot,started_at,session_kind,session_why) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,session_kind,session_why) VALUES(?,?,?,?,?)",
                   (f"{bot}-{why}-{hours}-{i}", bot, H.shift(H.now(), hours=-hours), kind, why))
 
 
@@ -379,7 +379,7 @@ def test_a_restore_ends_open_runs_with_an_outcome(api):
     post(api, "tasks", {"owner": "ops", "title": "Check the bank feed", "body": "Daily."})
     attempt = claim(api, r)
     with api.app.state.store.transaction() as c:
-        c.execute(f"UPDATE turns SET finished_at=?,exit='interrupted',{RT.SETTLE_SQL} WHERE id=?",
+        c.execute(f"UPDATE attempts SET settled_at=?,exit='interrupted',{RT.SETTLE_SQL} WHERE id=?",
                   (H.now(), attempt["id"]))
     assert (turn(api, attempt)["outcome"], turn(api, attempt)["did_nothing"]) == ("no_change", 1)
 
@@ -401,16 +401,16 @@ def test_the_weekly_table_counts_every_run_and_old_ones_read_unknown(api):
         {"input_tokens": 150, "cached_tokens": 750, "output_tokens": 20, "model": "fake-fallback"}]})
     with api.app.state.store.transaction() as c:
         # A run from before triggers were recorded, and one still going.
-        c.execute("INSERT INTO turns(id,bot,started_at,finished_at,trigger,exit,input_tokens,output_tokens) "
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,trigger,exit,input_tokens,output_tokens) "
                   "VALUES('old-run','ops',?,?,'task','completed',500,5)", (H.now(), H.now()))
-        c.execute("INSERT INTO turns(id,bot,started_at,trigger,trigger_kind) VALUES('live-run','ops',?,'say','comment')",
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,trigger,trigger_kind) VALUES('live-run','ops',?,'say','comment')",
                   (H.now(),))
-    # An attempt that failed with no turn row at all (as before turns were written at the claim).
+    # An attempt that failed with no run record at all (as before records were written at the claim).
     post(api, "chat/ops", {"text": "And the bank feed?"})
     lost = claim(api, r)
     with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM turns WHERE id=?", (lost["id"],))
-        c.execute("UPDATE attempts SET state='failed' WHERE id=?", (lost["id"],))
+        c.execute("UPDATE attempts SET trigger=NULL,trigger_kind=NULL,trigger_source=NULL,purpose=NULL,state='failed' "
+                  "WHERE id=?", (lost["id"],))
     rows = {row["trigger"]: row for row in weekly(api, where="bot='ops'")}
     week = H.now()[:10]
     assert set(rows) == {"person_message", "unknown", "comment"}
@@ -421,15 +421,14 @@ def test_the_weekly_table_counts_every_run_and_old_ones_read_unknown(api):
     assert rows["unknown"] == {**rows["unknown"], "runs": 2, "input_tokens": 500, "output_tokens": 5,
                                "unknown": 2, "unknown_pct": 100.0, "acted": 0, "did_nothing": 0}
     assert rows["comment"]["unknown"] == 1        # still running: no outcome yet, still counted
-    every = query(api, "SELECT (SELECT count(*) FROM turns) + (SELECT count(*) FROM attempts a "
-                       "WHERE NOT EXISTS (SELECT 1 FROM turns t WHERE t.id = a.id))")["rows"][0][0]
+    every = query(api, "SELECT count(*) FROM attempts")["rows"][0][0]
     assert sum(row["runs"] for row in weekly(api)) == every == 4
 
 
 def test_the_weekly_table_is_read_only_and_follows_who_may_read_the_bot(api):
     with api.app.state.store.transaction() as c:
         for bot in ("ops", "inbox"):
-            c.execute("INSERT INTO turns(id,bot,started_at,trigger,trigger_kind,outcome) "
+            c.execute("INSERT INTO attempts(id,bot_id,created_at,trigger,trigger_kind,outcome) "
                       "VALUES(?,?,?,'task','schedule','no_change')", (bot + "-run", bot, H.now()))
     assert {row["bot"] for row in weekly(api)} == {"ops", "inbox"}
     as_member(api, "ben@acme.example")
@@ -438,7 +437,7 @@ def test_the_weekly_table_is_read_only_and_follows_who_may_read_the_bot(api):
                 "UPDATE run_weekly SET runs=0", "DROP VIEW run_weekly"):
         assert query(api, sql, expected=422)["error"]["code"]
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM turns WHERE id IN ('ops-run','inbox-run')").fetchone()[0] == 2
+        assert c.execute("SELECT count(*) FROM attempts WHERE id IN ('ops-run','inbox-run')").fetchone()[0] == 2
 
 
 def test_open_task_states_match_the_board():
@@ -468,17 +467,16 @@ def test_the_weekly_table_adds_up_only_runs_the_reader_may_read(api):
     with store.transaction() as c:
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (secret["id"],))
     ran(lambda: None)                                                             # a run on Ana's private task
-    # A run Ben may read the attempt of, but not its turn (the turn names Ana's private task): not a turnless
-    # attempt, so not counted at all.
+    # A run whose record names Ana's private task (its job was for another task): not Ben's to read or count.
     post(api, "tasks", {"owner": "ops", "title": "Check the card feed", "body": "Daily."})
     hidden_turn = ran(lambda: None)
     with store.transaction() as c:
-        c.execute("UPDATE turns SET task_id=? WHERE id=?", (secret["id"], hidden_turn["id"]))
-    post(api, "chat/ops", {"text": "And the rest?"})                              # Ana's room, failed with no turn
+        c.execute("UPDATE attempts SET task_id=? WHERE id=?", (secret["id"], hidden_turn["id"]))
+    post(api, "chat/ops", {"text": "And the rest?"})                              # Ana's room, failed with no record
     lost = claim(api, r)
     with store.transaction() as c:
-        c.execute("DELETE FROM turns WHERE id=?", (lost["id"],))
-        c.execute("UPDATE attempts SET state='failed' WHERE id=?", (lost["id"],))
+        c.execute("UPDATE attempts SET trigger=NULL,trigger_kind=NULL,trigger_source=NULL,purpose=NULL,state='failed' "
+                  "WHERE id=?", (lost["id"],))
 
     def runs(token):
         return {row["trigger"]: row["runs"] for row in weekly(api, token)}
@@ -487,12 +485,11 @@ def test_the_weekly_table_adds_up_only_runs_the_reader_may_read(api):
         return query(api, f"SELECT count(*) FROM {table}", token)["rows"][0][0]
 
     assert runs("ana-test") == {"person_message": 1, "status_or_relation": 3, "unknown": 1}
-    assert runs("ben-test") == {"status_or_relation": 1} and readable("ben-test", "turns") == 1
-    assert readable("ben-test", "attempts") == 2                  # the control's attempt is his to read
+    assert runs("ben-test") == {"status_or_relation": 1} and readable("ben-test", "attempts") == 1
     # Ben's access to the shared task ends after its run: its totals leave his table with it.
     with store.transaction() as c:
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (shared["id"],))
-    assert runs("ben-test") == {} and readable("ben-test", "turns") == 0
+    assert runs("ben-test") == {} and readable("ben-test", "attempts") == 0
     assert sum(runs("ana-test").values()) == 5
 
 
@@ -512,8 +509,8 @@ def test_a_run_whose_inputs_came_from_a_private_task_leaves_the_weekly_table(api
     post(api, "tasks", {"owner": "ops", "title": "Check the card feed", "body": "Daily."})
     lost = claim(api, r)
     with store.transaction() as c:
-        c.execute("DELETE FROM turns WHERE id=?", (lost["id"],))
-        c.execute("UPDATE attempts SET state='failed' WHERE id=?", (lost["id"],))
+        c.execute("UPDATE attempts SET trigger=NULL,trigger_kind=NULL,trigger_source=NULL,purpose=NULL,state='failed' "
+                  "WHERE id=?", (lost["id"],))
 
     def runs(token):
         return {row["trigger"]: row["runs"] for row in weekly(api, token)}
@@ -536,7 +533,7 @@ def test_a_bots_result_accepted_edited_or_overridden_gives_its_run_one_outcome(a
     ana = H.human_actor("ana")
     with api.app.state.store.transaction() as c:
         old = H.turn_start(c, "bot:ops", "ops")              # a run with no result, as runs before this were
-        before = dict(c.execute("SELECT * FROM turns WHERE id=?", (old["id"],)).fetchone())
+        before = H.turn(c, old["id"])
         runs = {}
         for name in ("accepted", "edited", "overridden", "own"):
             task = H.task_create(c, ana, f"Recheck the {name} cash warning", "Before the deadline.", "bot:ops")
@@ -553,4 +550,4 @@ def test_a_bots_result_accepted_edited_or_overridden_gives_its_run_one_outcome(a
         for name, to in (("accepted", "closed"), ("edited", "done"), ("overridden", "open")):
             task_id, turn_id = runs[name]
             assert got[turn_id] == (ana, {"task_id": task_id, "outcome": name, "from": "done", "to": to})
-        assert dict(c.execute("SELECT * FROM turns WHERE id=?", (old["id"],)).fetchone()) == before
+        assert H.turn(c, old["id"]) == before

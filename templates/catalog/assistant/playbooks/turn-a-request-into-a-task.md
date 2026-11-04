@@ -37,6 +37,8 @@ and add the answer to `knowledge/routing.md` in the same run so you never ask ag
 
     hub task create --owner <owner> --title "..." --body "..."
 
+No `--due` unless they gave a calendar date. Keep "by Friday" in the body as they said it.
+
 The title is the ask in one line. The body has, in this order:
 
 1. **What is wanted**, in the requester's own words. Quote them. Your paraphrase loses the thing

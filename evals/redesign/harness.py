@@ -362,7 +362,7 @@ def publish_mail(org, mailbox, messages, deleted=()):
 
 def mail_computer(org, mailbox):
     """The mail computer's pass (CONTRACT §1 Mail actions): it claims every queued action for `mailbox` and reports
-    each done, as runner/connectors.py `mail_action_tick` does after Gmail took it. Returns the actions it claimed."""
+    each done, as runner_support/connectors.py `mail_action_tick` does after Gmail took it. Returns the actions it claimed."""
     claimed = org.api("post", "/api/v2/automations/mail-actions/claim", {"mailbox": mailbox},
                       who=org.runner["token"], wave=W3)
     actions = ((claimed.body or {}).get("actions") or []) if claimed.status == 200 else []

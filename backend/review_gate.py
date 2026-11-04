@@ -80,7 +80,7 @@ def refuse_second(c, actor, parent, title, snapshots=None):
         other_step = check_of(c, parent, other.get("title"))
         if not other_step or other_step["id"] != step["id"] or other["status"] not in H.ACTIVE_STATUSES:
             continue
-        seen = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
+        seen = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
                          "ORDER BY created_at DESC, rowid DESC LIMIT 1", (child_id,)).fetchone()
         judged = set(filter(None, (seen[0] if seen else "").split(",")))
         if wanted and judged and not wanted & judged:
@@ -408,13 +408,14 @@ def notify(c, actor, notice):
     if row and not source_wait:
         from .task_blocked import hold
         hold(c, row["id"], notice["text"], "gate")
-        c.execute("UPDATE tasks SET blocked_gate=? WHERE id=?", (
-            json.dumps({**{k: notice[k] for k in ("head", "kind", "pr")}, "at": H.now()}), row["id"]))
+        from . import task_holds
+        task_holds.change(c, row["id"], "blocked", gate=json.dumps(
+            {**{k: notice[k] for k in ("head", "kind", "pr")}, "at": H.now()}))
     if not row or actor == row["owner_id"]:
         return
     conv = H.conversation(c, row["conversation_id"])
     key = {k: notice[k] for k in ("kind", "head")}
-    if c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND json_extract(refs,'$.task')=? "
+    if c.execute("SELECT 1 FROM message_refs WHERE conversation_id=? AND ref_task_id=? "
                  "AND json_extract(refs,'$.review_gate')=? LIMIT 1",
                  (conv["id"], row["id"], json.dumps(key, sort_keys=True))).fetchone():
         return

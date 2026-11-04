@@ -1,6 +1,6 @@
 """Wake rules: one engine decides what a message to a bot does, and names the rule that decided it.
 
-A message to a bot starts a run (store.QUEUE_TRIGGER queues a job) unless it is quiet. `judge` is asked once for every
+A message to a bot starts a run (backend/enqueue.py queues a job) unless it is quiet. `judge` is asked once for every
 message H._write_message is about to write to a bot, and answers with an outcome and the id of the rule behind it:
 
 - `wake`: queue a run now.
@@ -14,7 +14,7 @@ message H._write_message is about to write to a bot, and answers with an outcome
   the keeper, with the rule id in the event payload, and write the message quietly with its note. An action that fails opens the message: it wakes the
   bot under `fail_open`, so work is never lost to a rule.
 
-The message is stamped `refs.rule` with the rule id, whatever the outcome, and a run copies it to `turns.rule_id`
+The message is stamped `refs.rule` with the rule id, whatever the outcome, and a run copies it to `attempts.rule_id`
 at claim, so every run joins to the rule that woke it (`rule_weekly` in hub sql).
 
 Built-in rules are defined here, in code, with stable ids. They reproduce what the wake filters did before there
@@ -82,6 +82,7 @@ HOLD_ROW, HOLD_IGNORED = "rule", "ignored"
 
 # What a message is, as a rule names it. The always-wake events cannot be lowered by a row.
 FLOOR_EVENTS = {
+    "check_back": "a task follow-up appointment is due",
     "person_message": "a person's message or comment, or a notice of a person's own act",
     "ask": "an ask or a steer: a question to the bot",
     "answer": "the answer to an ask the bot made",
@@ -99,7 +100,7 @@ FLOOR_EVENTS = {
 # Structured task news that wakes at once when no row already wakes it or keeps it quiet.
 URGENT_EVENTS = ("incident_news", "task_action", "task_blocker", "direct_review_request")
 # wake_rules.always_wakes key -> (event, rule id)
-_FLOOR = {"person": "person_message", "approval": "approval", "needs_action": "needs_action", "reply": "reply",
+_FLOOR = {"check_back": "check_back", "person": "person_message", "approval": "approval", "needs_action": "needs_action", "reply": "reply",
           "gate": "verdict", "handoff": "builder_handoff"}
 # wake_rules.AWAITED key -> event
 AWAITED_EVENTS = {
@@ -121,6 +122,7 @@ WAKE_EVENTS = {
     "stall": "a task has gone quiet and nothing is set to move it",
     "status_check": "a quiet task's status check",
     "stall_check": "a stall or status check",
+    "task_roundup": "the task roundup lists a bot's tasks with a missed update, gone quiet, or a follow-up time come",
     "routine": "a routine ran",
     "schedule": "a scheduled run",
     "due": "a task's due date came",
@@ -247,10 +249,10 @@ PROFILE_RULE_IDS = frozenset(r["id"] for found in PROFILE_RULES.values() for r i
 
 
 def profile_of(conn, bot):
-    """The profile a bot runs under: its `bot_config.profile`, or `doer` for a bot with none (a database from before
+    """The profile a bot runs under: its `bot_settings.profile`, or `doer` for a bot with none (a database from before
     profiles, a bot seeded since the last start)."""
     try:
-        row = conn.execute("SELECT json_extract(config,'$.profile') FROM bot_config WHERE bot=?",
+        row = conn.execute("SELECT profile FROM bot_settings WHERE bot_id=?",
                            (H.actor_id(bot),)).fetchone()
     except sqlite3.OperationalError:
         return "doer"
@@ -736,9 +738,10 @@ THREAD_WAKE = "thread_wake"
 
 def thread_wake(conn, message, bot, thread, mode="queue"):
     """The thread wake rule (docs/dev/threads-contract.md §4.3) for a bot that a thread message reaches but is not
-    addressed to (a mention, its DM or Home, a sub-thread it posted in): (mode, rule id), or (None, None) for no
-    delivery. backend/threads.py chose the reason by precedence; the engine judges it as it judges a message to the
-    bot, so a table row or a built-in hold still decides: `wake` keeps `mode`, `note` (or a hold) defers it to the
+    addressed to (a mention, its DM or Home, a sub-thread it posted in, a reply to its message): (mode, rule id), or
+    (None, None) for no delivery. A person's reply to the bot's message is judged as a mention of it, a bot's reply as
+    a bot's mention (bot_to_bot may make it wait). backend/threads.py chose the reason by precedence; the engine judges
+    it as it judges a message to the bot, so a table row or a built-in hold still decides: `wake` keeps `mode`, `note` (or a hold) defers it to the
     bot's next run, `batch` digests it, `ignore` drops it. Fail open: an error wakes."""
     try:
         refs = dict(message.get("refs") or {})

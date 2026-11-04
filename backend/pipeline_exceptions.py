@@ -81,8 +81,8 @@ def _entered(c, ids):
     out = {}
     for part in H.chunks(sorted(ids)):
         out.update(dict(c.execute(
-            f"SELECT task_id, max(created_at) FROM task_events WHERE task_id IN ({','.join('?' * len(part))}) "
-            "AND field IN ('step','status') GROUP BY task_id", part).fetchall()))
+            f"SELECT subject_id, max(created_at) FROM history_events WHERE subject_type='task' "
+            f"AND subject_id IN ({','.join('?' * len(part))}) AND kind IN ('step','status') GROUP BY subject_id", part).fetchall()))
     return out
 
 
@@ -99,8 +99,8 @@ def _runs(c, row):
         "ORDER BY coalesce(a.finished_at,a.created_at) DESC, a.id DESC LIMIT 20", (slug, *lanes)))
     live = any(a["state"] in ("leased", "running") for a in attempts)
     jobs = [r[0] for r in c.execute(
-        "SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
-        "AND j.state IN ('queued','held','uncertain') AND (m.conversation_id=? OR json_extract(m.refs,'$.task')=?)",
+        "SELECT j.state FROM jobs j JOIN message_refs m ON m.id=j.message_id WHERE j.bot_id=? "
+        "AND j.state IN ('queued','held','uncertain') AND (m.conversation_id=? OR m.ref_task_id=?)",
         (slug, row.get("conversation_id") or "", row["id"]))]
     return live, [a for a in attempts if a["state"] not in ("leased", "running")], jobs
 
@@ -287,7 +287,7 @@ def _outages(c, out, typ, rows, at):
             out.add("bot:" + slug, "outage", f"{row['slug']} is {row['status']}", row["updated_at"] or at,
                     bot=row["slug"])
         elif not check_pools.online(c, slug):
-            seen = c.execute("SELECT max(r.last_seen_at) FROM assignments a JOIN runners r ON r.id=a.runner_id "
+            seen = c.execute("SELECT max(r.last_seen_at) FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                              "WHERE a.bot=? AND r.revoked_at IS NULL", (slug,)).fetchone()[0]
             out.add("bot:" + slug, "outage", f"{row['slug']}'s computer is offline", seen or at, bot=row["slug"])
 
@@ -349,7 +349,7 @@ def build(c, typ, rows=None, at=None, reader=None):
         return []
     if rows is None:
         rows = [r for r in H._rows(c.execute(
-            f"SELECT * FROM tasks WHERE type_id=? AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
+            f"SELECT * FROM {H.TASKS} tasks WHERE type_id=? AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
             "ORDER BY created_at", (typ["id"], *H.ACTIVE_STATUSES))) if H.bot_reads_task(c, reader, r)][:5000]
     rows = [dict(r) for r in rows if r["status"] in H.ACTIVE_STATUSES]
     out = _List()

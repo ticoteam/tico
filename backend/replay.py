@@ -1,8 +1,8 @@
 """History replay: what happened between two moments, in time order, for a person to play back (`GET /api/v2/replay`).
 
 Nothing new is recorded. The items are read from the history Tico already keeps: task creation and the
-status and owner rows of `task_events`, messages (chats and task comments), runs (`turns`), each bot's
-status rows (`bot_status_history`) and goal status changes (`goal_events`). Each source is read by its
+status and owner rows of a task's history (`history_events`), messages (chats and task comments), runs (`turns`), each bot's
+status rows (`bot_status_history`) and goal status changes (`history_events` of goals). Each source is read by its
 time-bounded index and capped, so a long history costs what the window holds, not what the tables hold.
 Each source also stops after SCAN_MAX rows read, shown or not (rows the viewer may not read, or outside the
 scope, count too), and the answer is then cut short there like any other cap: `truncated`, with `next`.
@@ -128,8 +128,8 @@ def install(app, store, auth):
                 break
         changes, seen = [], 0
         marks = ",".join("?" * len(TASK_FIELDS))
-        cursor = c.execute(f"SELECT task_id,created_at,actor,field,old,new,note FROM task_events WHERE field IN ({marks}) "
-                           "AND created_at>=? AND created_at<? ORDER BY created_at", (*TASK_FIELDS, first, last))
+        cursor = c.execute("SELECT subject_id AS task_id,created_at,actor_id AS actor,kind AS field,old,new,note FROM history_events "
+                           f"WHERE subject_type='task' AND kind IN ({marks}) AND created_at>=? AND created_at<? ORDER BY created_at", (*TASK_FIELDS, first, last))
         cut = False
         while len(changes) <= LIMIT and not cut:
             batch = cursor.fetchmany(500)
@@ -209,8 +209,10 @@ def install(app, store, auth):
 
         # Runs, with the bot turns page's checks: Read on the bot, then its message, its room and its tasks.
         items = []
-        for scanned, turn in enumerate(c.execute("SELECT id,bot,started_at,finished_at,exit,summary,message_id,task_id FROM turns "
-                                                 "WHERE started_at>=? AND started_at<? ORDER BY started_at", (first, last)), 1):
+        for scanned, turn in enumerate(c.execute(
+                "SELECT id,bot_id AS bot,created_at AS started_at,settled_at AS finished_at,exit,summary,message_id,"
+                "task_id FROM attempts WHERE (job_id IS NULL OR trigger IS NOT NULL) AND created_at>=? AND created_at<? ORDER BY created_at",
+                (first, last)), 1):
             if scanned > SCAN_MAX:
                 caps.append(turn["started_at"])
                 break
@@ -270,7 +272,8 @@ def install(app, store, auth):
         for goal in H._rows(c.execute("SELECT id,title,owner_id FROM goals")):
             if goal["owner_id"] in hidden:
                 continue
-            for event in c.execute("SELECT created_at,actor,field,old,new FROM goal_events WHERE goal_id=? AND field='status' "
+            for event in c.execute("SELECT created_at,actor_id AS actor,old,new FROM history_events WHERE subject_type='goal' "
+                                   "AND subject_id=? AND kind='status' "
                                    "AND created_at>=? AND created_at<? ORDER BY created_at", (goal["id"], first, last)):
                 if within(goal["owner_id"], event["actor"]):
                     items.append({"at": event["created_at"], "kind": "goal.status", "who": event["actor"],
@@ -300,7 +303,8 @@ def install(app, store, auth):
         for task in candidates.values():
             if not within(task["owner_id"], task["requester_id"]):
                 continue
-            later = c.execute("SELECT old FROM task_events WHERE task_id=? AND field='status' AND created_at>=? ORDER BY created_at LIMIT 1",
+            later = c.execute("SELECT old FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' "
+                              "AND created_at>=? ORDER BY created_at LIMIT 1",
                               (task["id"], first)).fetchone()
             status = (later["old"] if later and later["old"] else task["status"]) or "open"
             if status in H.ACTIVE_STATUSES:

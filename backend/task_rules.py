@@ -148,7 +148,7 @@ def listing(c, settings, who=None, auth=None, now=None):
     return [row(c, settings, dict(r), who, auth, now) for r in c.execute("SELECT * FROM task_rules ORDER BY created_at,id")]
 
 
-HISTORY_ACTIVITY_SQL = "NOT (actor='keeper' AND field='github')"
+HISTORY_ACTIVITY_SQL = "NOT (actor_id='keeper' AND (kind='github' OR kind GLOB 'check_back_*'))"
 MESSAGE_ACTIVITY_SQL = "m.sender_id<>'keeper'"
 
 
@@ -157,7 +157,8 @@ def untouched(c, task, hours, now):
     # scoped messages in shared conversations; unrelated chat must not restart a task's wait.
     times = [task.get(k) for k in ("created_at", "updated_at", "done_at", "checkpoint_at")]
     # Observed GitHub facts have history, but viewing them and keeper notices are not work on the task.
-    times += [r[0] for r in c.execute(f"SELECT max(created_at) FROM task_events WHERE task_id=? AND {HISTORY_ACTIVITY_SQL}", (task["id"],))]
+    times += [r[0] for r in c.execute(f"SELECT max(created_at) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                                        f"AND {HISTORY_ACTIVITY_SQL}", (task["id"],))]
     message = c.execute("SELECT max(max(m.created_at,coalesce(m.edited_at,m.created_at),coalesce(m.deleted_at,m.created_at))) "
                         "FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
                         f"WHERE m.conversation_id=? AND {H.MESSAGE_TASK_SQL}=? AND {MESSAGE_ACTIVITY_SQL}",
@@ -168,6 +169,8 @@ def untouched(c, task, hours, now):
 
 
 def safe(c, task):
+    from . import task_holds
+    task = task_holds.with_holds(c, task)
     if task.get("waiting_on") or task.get("snoozed_until") or task.get("pinned"):
         return False
     # Pin tags are a durable task-level pin; the rail's pinned filtered views are only bookmarks.
@@ -184,8 +187,9 @@ def close(c, task, rule):
     # Only the status event carries the history note. task_close also records step consistency.
     H.task_close(c, H.KEEPER, task["id"], quiet=True)
     note = f"Closed by rule '{rule['name']}'"
-    c.execute("UPDATE task_events SET note=? WHERE task_id=? AND field='status' AND new='closed' "
-              "AND rowid=(SELECT max(rowid) FROM task_events WHERE task_id=? AND field='status')", (note, task["id"], task["id"]))
+    c.execute("UPDATE history_events SET note=? WHERE subject_type='task' AND subject_id=? AND kind='status' "
+              "AND new='closed' AND rowid=(SELECT max(rowid) FROM history_events WHERE subject_type='task' "
+              "AND subject_id=? AND kind='status')", (note, task["id"], task["id"]))
     H.event(c, H.KEEPER, "task_rule.closed", task["id"], {"rule": rule["id"], "name": rule["name"]})
 
 
@@ -198,12 +202,13 @@ ACTIONS = {"close": ("close it", close)}
 DUE_SQL = (
     "SELECT t.* FROM tasks t WHERE t.status='done' AND t.closed_at IS NULL "
     "AND t.updated_at<=? AND coalesce(t.done_at,t.updated_at)<=? AND coalesce(t.checkpoint_at,t.updated_at)<=? "
-    "AND t.waiting_on IS NULL AND t.snoozed_until IS NULL "
+    "AND t.waiting_on IS NULL AND NOT " + H.SNOOZED % "t" + " "
     "AND NOT EXISTS (SELECT 1 FROM task_tags tt JOIN tags g ON g.id=tt.tag_id "
     "WHERE tt.task_id=t.id AND lower(g.key) IN ('pin','pinned')) "
     "AND NOT EXISTS (SELECT 1 FROM json_each(t.labels) WHERE lower(value) IN ('pin','pinned')) "
     "AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.task_id=t.id AND a.decision IS NULL) "
-    f"AND NOT EXISTS (SELECT 1 FROM task_events WHERE task_id=t.id AND {HISTORY_ACTIVITY_SQL} AND created_at>?) "
+    "AND NOT EXISTS (SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=t.id "
+    f"AND {HISTORY_ACTIVITY_SQL} AND created_at>?) "
     "AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
     f"WHERE m.conversation_id=t.conversation_id AND {H.MESSAGE_TASK_SQL}=t.id "
     f"AND ((m.kind='ask' AND {H.OPEN_ASK_SQL}) OR ({MESSAGE_ACTIVITY_SQL} AND "

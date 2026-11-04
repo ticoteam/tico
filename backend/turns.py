@@ -15,6 +15,7 @@ from fastapi import Request
 
 from .store import H, Problem
 from . import task_privacy as privacy
+from . import bot_settings as BS
 
 SAID_CHARS, THINKING_CHARS, STEP_LIMIT = 280, 2000, 300
 # A tool event that opens a call; the next event for the same call closes it.
@@ -78,7 +79,7 @@ def build_steps(rows):
             if agent:
                 step = {"kind": "subagent", "tool": "subagent", "text": f"{agent} · {text}" if text else agent, "at": at}
             else:
-                step = {"kind": "tool", "tool": name, "text": text, "at": at}
+                step = {"kind": "tool", "tool": name, "label": tool_label(p), "text": text, "at": at}
             if p.get("parent_id"):
                 step["nested"] = True
             if p.get("background"):
@@ -98,13 +99,130 @@ def build_steps(rows):
     return steps[:STEP_LIMIT]
 
 
-def tool_label(payload):
-    """"Ran hub task create" from a tool event: the tool's own name and nothing else. An event can
-    carry a call's arguments or output; neither is read, so neither can reach a frontend."""
-    words = " ".join(re.sub(r"[^A-Za-z0-9]+", " ", str(payload.get("tool") or payload.get("name") or "")).split())
+# A shell call's events name the program it runs (the runner's summary: `npm`, or `hub task close`), never its
+# arguments. These tool names are shells.
+SHELL_TOOLS = {"bash", "shell"}
+# The programs a shell call may be labelled with on its own. The runner sends a shell line's first program (or `hub` and
+# its command path); a summary of any other shape, from a current or an older runner, is never shown.
+SHELL_PROGRAMS = {"awk", "cargo", "cat", "cd", "curl", "docker", "find", "gh", "git", "go", "grep", "jq", "ls", "make",
+                  "node", "npm", "npx", "pnpm", "pytest", "python", "python3", "rg", "sed", "sqlite3", "wc", "yarn"}
+# A hub command's plain phrase, by its CLI words, every one a real command of clients/hubcli.py (or one of its top-level
+# aliases, the RENAMED table). A word break is a space, so `read-back` is the two words `read back`. A phrase for a
+# command's first word alone covers the rest of its group; the longest key that starts the command wins.
+HUB_PHRASES = {
+    "task create": "Filing a task",
+    "task close": "Closing a task",
+    "task bulk": "Changing tasks",
+    "task list": "Listing tasks",
+    "task show": "Reading a task",
+    "task update": "Updating a task",
+    "task comment": "Commenting on a task",
+    "task ask": "Asking a teammate",
+    "needs you": "Reading the Needs you list",
+    "approval list": "Reading approvals",
+    "approval show": "Reading approvals",
+    "approval read back": "Preparing approvals for your yes",
+    "approval approve": "Approving",
+    "approval decline": "Declining approvals",
+    "message list": "Reading messages",
+    "message send": "Sending a message",
+    "conversation show": "Reading the chat",
+    "history": "Reading the chat",
+    "ask": "Asking a teammate",
+    "question ask": "Asking a teammate",
+    "human list": "Reading people",
+    "people": "Reading people",
+    "bot show": "Checking bots",
+    "bot status": "Checking bot status",
+    "bot pause": "Pausing a bot",
+    "bot resume": "Resuming a bot",
+    "bot model": "Changing a bot's model",
+    "bot owners": "Changing bot owners",
+    "group": "Working on groups",
+    "org": "Working on the org chart",
+    "automation list": "Reading automations",
+    "automation show": "Reading an automation",
+    "automation create": "Creating an automation",
+    "automation update": "Changing an automation",
+    "rules": "Working on rules",
+    "rule": "Working on rules",
+    "goal show": "Reading a goal",
+    "goal create": "Creating a goal",
+    "kpi update": "Updating a KPI",
+    "settings show": "Reading settings",
+    "settings set": "Changing a setting",
+    "finance": "Working in Finance",
+    "meeting": "Reading meetings",
+    "meetings": "Reading meetings",
+    "doc history": "Reading history",
+    "doc search": "Searching",
+    "context search": "Searching",
+    "file search": "Searching",
+    "finance search": "Searching",
+    "gateway search": "Searching",
+    "meeting search": "Searching",
+    "thread search": "Searching",
+    "market find": "Searching",
+    "settings find": "Searching",
+    "tool query search": "Searching",
+}
+
+
+def hub_words(text):
+    """A hub call's CLI words, lowercased and split on anything but letters and digits, from a shell summary
+    (`hub approval read-back`) or an MCP tool name (`mcp__hub__hub_approval_read_back`). None for any other tool."""
+    words = re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split()
+    if words[:1] == ["mcp"]:
+        words = words[1:]
+    if words[:1] != ["hub"]:
+        return None
+    words = words[1:]
+    if words[:1] == ["hub"]:  # an MCP tool named hub_<command>
+        words = words[1:]
+    return words
+
+
+def hub_phrase(words):
+    """The phrase for a hub command's words: the longest of its first three words that is a key, else None."""
+    for n in (3, 2, 1):
+        phrase = HUB_PHRASES.get(" ".join(words[:n]))
+        if phrase:
+            return phrase
+    return None
+
+
+def tool_words(name):
+    """A tool's own name in plain words, `mcp__peec-ai__list_brands` as `peec ai list brands`, or "a tool"."""
+    words = " ".join(re.sub(r"[^A-Za-z0-9]+", " ", name).split())
     if words.lower().startswith("mcp "):
         words = words[4:]
-    return "Ran " + (words[:TOOL_LABEL_CHARS].strip() or "a tool")
+    return words[:TOOL_LABEL_CHARS].strip() or "a tool"
+
+
+def shell_label(summary):
+    """A shell call's label from its summary, or None when the summary is neither a hub command nor one program from
+    SHELL_PROGRAMS. A hub command's summary is `hub` and its command path (the runner checks the path against the CLI's
+    command list): its phrase when it has one, else just `Ran hub`, since an old stored summary can hold argument words."""
+    words = summary.split()
+    if words[:1] == ["hub"]:
+        phrase = hub_phrase(hub_words(summary) or [])
+        if phrase:
+            return phrase
+        return "Ran hub"
+    if len(words) == 1 and words[0] in SHELL_PROGRAMS:
+        return "Ran " + words[0]
+    return None
+
+
+def tool_label(payload):
+    """What a tool call does, in a few plain words: a hub command's phrase, else "Ran" and the program or the tool's own
+    name. A shell call names only a hub command or a known program; its summary's arguments, paths and output are never
+    shown."""
+    name = str(payload.get("tool") or payload.get("name") or "")
+    if re.sub(r"[^A-Za-z0-9]+", " ", name).strip().lower() in SHELL_TOOLS:
+        summary = " ".join(str(payload.get("summary") or "").split())
+        return shell_label(summary) or "Ran " + tool_words(name)
+    return hub_phrase(hub_words(name) or []) or "Ran " + tool_words(name)
 
 
 def reply_parts(rows):
@@ -227,7 +345,7 @@ def mark_delivery(c, messages):
             if not row["live"]:
                 continue
             if row["bot_id"] not in configs:
-                config = c.execute("SELECT config FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
+                config = c.execute(BS.ONE_SQL, (row["bot_id"],)).fetchone()
                 configs[row["bot_id"]] = json.loads(config[0]) if config else {}
             config = configs[row["bot_id"]]
             mode = ("redirect" if row["redirect"] else "steer" if row["way"] != "queue"
@@ -255,7 +373,7 @@ def mark_prompts(c, messages):
     runs = c.execute(
         f"SELECT a.bot_id,a.state,coalesce(a.started_at,a.created_at) AS began,a.finished_at,t.sender_id,"
         " EXISTS(SELECT 1 FROM attempt_inputs i JOIN messages im ON im.id=i.message_id"
-        "  WHERE i.attempt_id=a.id AND im.sender_id LIKE 'human:%') AS person"
+        f"  WHERE i.attempt_id=a.id AND {H.person_sent_sql('im')}) AS person"
         " FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages t ON t.id=j.message_id"
         f" WHERE a.bot_id IN ({','.join('?' * len(bots))}) AND coalesce(a.started_at,a.created_at)<=?"
         " AND ((a.finished_at IS NULL AND a.state IN ('leased','running')) OR a.finished_at>=?)",
@@ -315,7 +433,7 @@ def annotate(c, auth, who, messages):
         return next((aid for aid, t in turns.items() if "bot:" + t["bot_id"] == actor and t["from"] <= at <= t["to"]), None)
 
     did = {aid: [] for aid in turns}
-    for row in c.execute(f"SELECT * FROM tasks WHERE requester_id IN ({who_marks}) AND created_at BETWEEN ? AND ?",
+    for row in c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE requester_id IN ({who_marks}) AND created_at BETWEEN ? AND ?",
                          (*actors, lo, hi)):
         aid = owner_of(row["requester_id"], row["created_at"])
         if aid and readable(lambda: auth.task_row(c, who, dict(row))):
@@ -342,8 +460,12 @@ def annotate(c, auth, who, messages):
             detail = (json.loads(row["detail"] or "{}") or {}).get("detail") or ""
             did[aid].append({"kind": "refused", "rule": row["rule"], "text": clip(detail, 200), "at": row["created_at"]})
     events = {aid: [] for aid in turns}
-    for row in c.execute(f"SELECT attempt_id,kind,payload,created_at FROM attempt_events WHERE attempt_id IN "
-                         f"({','.join('?' * len(turns))}) AND {STEP_EVENTS} ORDER BY attempt_id,seq", tuple(turns)):
+    step_rows = c.execute(f"SELECT attempt_id,kind,payload,created_at FROM attempt_events WHERE attempt_id IN "
+                          f"({','.join('?' * len(turns))}) AND {STEP_EVENTS} ORDER BY attempt_id,seq", tuple(turns)).fetchall()
+    # Each step names its tool calls by id, a new string per step, and its run by id: look up the tasks they could name
+    # in one pass, not one query per step (or per run).
+    privacy.prime_references(c, [dict(row) for row in step_rows])
+    for row in step_rows:
         if not privacy.content_readable(c, privacy.actor(who), dict(row)):
             continue
         events[row["attempt_id"]].append((row["kind"], json.loads(row["payload"]), row["created_at"]))

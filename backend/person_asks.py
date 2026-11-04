@@ -15,7 +15,7 @@ def waiting_on_people(conn):
     """Bot tasks waiting on a person with a plain ask and no open question to them."""
     out = []
     for row in H._rows(conn.execute(
-            "SELECT * FROM tasks WHERE status='waiting' AND waiting_on LIKE 'human:%' AND owner_id LIKE 'bot:%' "
+            f"SELECT * FROM {H.TASKS} tasks WHERE status='waiting' AND waiting_on LIKE 'human:%' AND owner_id LIKE 'bot:%' "
             "ORDER BY created_at")):
         if H.lint_person_ask(row.get("note")):
             continue

@@ -63,7 +63,7 @@ resumes the saved session. If the host refuses, Tico asks once more after a shor
 A new session starts only when the saved one is not on this computer (another computer ran the bot, or its
 files were cleared) or the host refuses it twice. The new session starts from the task's checkpoint and what was said
 since that turn, the bot's own replies included, and it is told so. A session does not move between computers. Every
-run records how its session began (`turns.session_kind`, `turns.session_why`, [hub sql](hub-sql.md)): resumed or new,
+run records how its session began (`attempts.session_kind`, `attempts.session_why`, [hub sql](hub-sql.md)): resumed or new,
 with the reason (`none_saved`, `not_found`, `resume_failed`, `compact_failed`, `interrupted`, `fallback_side`). A new
 session other than the first also leaves a line in the run's diagnostics and in the task's history ("Started a new
 session: the old one wasn't on this computer"), and Health names a bot that lost its session more than twice in a day.
@@ -114,15 +114,9 @@ Nothing closes on its own. A task with no activity for 7 days gets one **Still w
 
 ## Spot checks
 
-Tico watches running tasks. A task with no progress for 30 minutes gets a status check in its session: checkpoint,
-or mark it blocked or done. With still no progress, Tico retries the bot once. Thirty minutes later, still nothing, the
-Home gets a **stuck** line and BotOps gets a task to find out why ([Work that is waiting](tasks.md#work-that-is-waiting)).
-Tico asks no person about a stuck bot. These count toward the stalled-task limit of three a day.
+Tico does not check running work one task at a time. A task with no progress shows in its bot's task roundup, once per run (three times a day by default). A Dev ticket long at a working step is reported once to its manager.
 
-An idle task unchanged since its owner's last settled checkpoint skips a plain automatic stall or status check.
-Changed state or a missing checkpoint leaves the check eligible under the usual wake rules. Human messages still
-wake the bot as before, and leased or running sessions keep their recovery checks
-([details](hub-sql.md#what-woke-each-run-and-what-it-did)).
+Human messages still wake the bot as before ([details](hub-sql.md#what-woke-each-run-and-what-it-did)).
 
 ## Task goals
 

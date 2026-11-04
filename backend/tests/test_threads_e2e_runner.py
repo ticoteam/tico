@@ -64,5 +64,5 @@ def test_a_real_runner_enrolls_with_a_one_time_code_and_the_server_holds_its_reg
     assert retried.returncode == 0, retried.stderr[-400:]
     assert json.loads(retry_config.read_text())["runner_id"] == registration["runner_id"]
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT count(*) FROM runners WHERE label=?", (LABEL,)).fetchone()[0]
+        rows = c.execute("SELECT count(*) FROM runners_with_state WHERE label=?", (LABEL,)).fetchone()[0]
     assert rows == 1

@@ -11,7 +11,7 @@
    the Updates chat and bot pages run their rails to the top edge and place their headers themselves (18px down). */
 @media (min-width:761px){
   body:not(:has(#app-nudge:not([hidden]))) #topbar{display:none}
-  body:not(:has(#app-nudge:not([hidden]))) #main:not(.upd-chat-layout):not(.bot-split-layout){border-top:10px solid transparent}
+  body:not(:has(#app-nudge:not([hidden]))) #main:not(.upd-chat-layout):not(.bot-split-layout):not(.threads-layout){border-top:10px solid transparent}
 }
 #app-nudge{flex:1;display:flex;align-items:center;gap:12px;padding:8px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface);font-size:var(--t-base)}
 #app-nudge .app-nudge-text{flex:1;min-width:0}
@@ -40,7 +40,7 @@ body.native #app-nudge{display:none}
   .tree .cnt{font-size:var(--t-sm);padding:1px 8px}
   .chev{width:44px;height:44px;font-size:24px;margin-right:-8px}
   .tree{--tree-lead:8px}
-  .section-toggle{min-height:44px;font-size:var(--t-base)}
+  .section-toggle,.section-head{min-height:44px;font-size:var(--t-base)}
   /* iOS Safari zooms into any field whose text is under 16px and leaves the page zoomed, so on a
      phone every text field is 16px. Zoom itself stays allowed. */
   input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]),textarea,select{font-size:16px!important}

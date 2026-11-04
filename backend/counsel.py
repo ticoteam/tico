@@ -511,7 +511,7 @@ def read_refused(store, auth, who, method, path, query):
         return READ_SCOPE
     parts = path.split("/")[3:]
     kind, ident, rest = parts[0], (parts[1] if len(parts) > 1 else ""), parts[2:]
-    if kind in ("attempts", "turns"):
+    if kind in ("attempts", "turns"):  # `turns` is an older client's path for a run
         return READ_SCOPE if ident != who.attempt_id else None
     if kind not in ("tasks", "files"):
         return None

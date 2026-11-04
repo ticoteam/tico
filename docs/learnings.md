@@ -75,6 +75,52 @@ server is upgraded; the runner retains those reports for retry.
   `updated_at` (the saved copy's date, empty if none). Add `include_documents=false` to omit file contents
   while keeping their status. The button and history pagination use this; opening the panel fetches current files.
 - `POST /api/v2/bots/{bot}/memory/seen`: you opened the history.
+- `GET /api/v2/bots/{bot}/dream`, `POST /api/v2/bots/{bot}/dream`: see Dream below.
+
+## Dream
+
+**Dream**, at the top of the Learnings panel, asks the bot to tidy its own instructions and memory, as Claude Code's
+`/dream` does: orient, gather what happened in its chats and tasks since its last dream (two weeks back the first
+time), consolidate, then prune and index, keeping the working rules short. It may change any of those files, AGENT.md
+included, without asking. Midway it may ask the person who started it up to three questions in one message, about the
+business only (what to do, for whom, by which rule or priority), never for permission or about the dream itself, and
+waits for the answer. A stateless bot keeps no memory and has nothing
+to dream about (409).
+
+A dream is an ordinary task (`backend/dream.py`): the bot owns it, the person who clicked asked for it, it carries the
+label `dream`, and its body is the instructions. Starting one takes the rights to give the bot a task and goes through
+the same checks as any task create; while one is open, starting again returns it (or 409 `busy`, without its
+questions, to someone who may not read the bot). Starting one also records a `dream.start` event on the task; that
+event, not the label, is what makes a task a dream, since anyone can label a task `dream`. It runs as a task turn with the
+bot's own model, and its session resumes after the question. The question is the task's one `hub_task_ask`; ask
+ingest never judges it, since the person started the dream to be asked. They answer it in the panel, on the bot's
+page, where it shows until answered, or in Needs you; the answer wakes the bot as any answer does. While it works, the bot keeps
+the task note at one short line on what it is doing now, and the panel shows that line and how long the dream has run
+under "Dreaming…". The bot ends with
+one commit of everything it changed, `Dream: ...`, and marks the task done with a short summary. The panel then shows that summary and
+the commits whose source is the dream's task, and **Wake up** returns to the history. **Stop** closes the task.
+
+`GET` answers `{dream: {task, status, state, questions, summary, doing, closed_at, started_at, auto, reason}}` for the bot's open dream
+(on a shared bot, the caller's own branch, where POST files it), or else the newest one finished in the last day, or `{dream: null}`. `state` is `starting`, `dreaming`, `asking`
+(an open question to the requester: `questions` is `{message_id, text, mine}`), `done` or `stopped`.
+
+**Auto dream** is the same dream started by the night, without a click. At 02:00 company time (Settings > Routines,
+"Auto dream", on by default) it starts one for each bot whose memory changed a lot since its last dream, and only then.
+A bot is due when it is active, keeps memory, has no open dream, its last dream of either kind started at least 48
+hours ago (a bot that never dreamed must be 48 hours old), and its memory since that dream's start, or 14 days back if
+that is later, changed at least 200 lines over at least 10 memory turns. Counted: `memory/` except `memory/state.md`,
+and AGENT.md, AGENTS.md and CLAUDE.md (the runner reports only `memory/` and `knowledge/` today, so instruction-file
+changes do not count yet). A dream's own commits and memory tidy passes' commits do not count. At most three start a
+night, most changed lines first; the scheduled run claims its night once, so a restart does not start them twice.
+`backend/dream_auto.py` holds the rule.
+
+The requester is the bot's nearest human manager (the first person above it in its reporting chain, if still on the
+roster), else the company owner. The task is filed as a dream, with a `dream.auto` event under the system actor and
+its reason ("Auto dream: 412 memory lines changed in 23 turns since 2026-10-28") as the first line of its body. Its
+instructions say nobody is waiting: the bot applies and commits what it can settle, and only if it needs the requester
+it asks at most three business questions in one message, then makes a second commit when they are answered. The
+requester did not start the dream, so the question is what they answer, and it goes through the same exemption from
+ask ingest. Settings > Routines switches it off; Run now starts the same selection at once and ignores only the clock.
 
 ## Nightly learning run
 

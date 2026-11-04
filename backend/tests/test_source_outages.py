@@ -7,7 +7,15 @@ from backend import login_holds, source_outages
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, expire, get, post, ready, runner  # noqa: F401
 from backend.tests.test_login_holds import at, events, limit, done, signed_in
+from backend import bot_settings as BS
 
+
+
+def fallback_off(c, bot):
+    """Turn off the bot's declared fallback, if it has one (as json_set on `$.fallback.off` did)."""
+    fallback = BS.read(c, bot).get("fallback")
+    if isinstance(fallback, dict):
+        BS.update(c, bot, {"fallback": {**fallback, "off": True}})
 
 def notices(c):
     return [dict(r) for r in c.execute("SELECT * FROM messages WHERE json_extract(refs,'$.source_outage') IS NOT NULL")]
@@ -15,7 +23,9 @@ def notices(c):
 
 def managers(c):
     from backend.health_monitor import SLUG
-    c.execute("INSERT INTO bots(id,slug,display_name,runtime,state) VALUES(?,?,?,?,'active')", (SLUG, SLUG, 'Health', 'fake'))
+    c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES(?,?,?,'active')", (SLUG, SLUG, 'Health'))
+    c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (SLUG,))
+    BS.write(c, SLUG, {"runtime": "fake"})
     c.execute("UPDATE task_types SET manager='coo',role='engineering' WHERE id='general'")
 
 
@@ -52,8 +62,9 @@ def test_a_six_hour_hold_does_not_lease_again_or_hold_another_subscription(api, 
         assign(api, machine, bot)
     signed_in(api, machine, ['ops', 'finance'], ('codex',))
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.fallback.off',json('true'))")
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.runtime','codex') WHERE bot='finance'")
+        for bot in BS.read_many(c):
+            fallback_off(c, bot)
+        BS.update(c, 'finance', {'runtime': 'codex'})
     task = post(api, 'tasks', {'owner': 'ops', 'title': 'Prepare the deployment plan', 'body': 'Review existing code.'})
     first = claim(api, machine)
     limit(api, machine, first, errors=('Usage limit; usage window resets at 2026-10-27T07:00:00Z',))
@@ -73,7 +84,7 @@ def test_a_six_hour_hold_does_not_lease_again_or_hold_another_subscription(api, 
             assert c.execute('SELECT count(*) FROM attempts WHERE job_id=?', (first['job_id'],)).fetchone()[0] == 1
             assert not c.execute("SELECT 1 FROM jobs WHERE state='uncertain'").fetchone()
             assert not c.execute("SELECT 1 FROM bots WHERE state='quarantined'").fetchone()
-            assert not c.execute("SELECT 1 FROM tasks WHERE blocked_since IS NOT NULL").fetchone()
+            assert not c.execute("SELECT 1 FROM task_holds WHERE kind='blocked' AND released_at IS NULL").fetchone()
     at(monkeypatch, '2026-10-27T07:01:00.000000Z', api)
     ready(api, machine, ['ops', 'finance'])
     resumed = claim(api, machine)
@@ -400,7 +411,7 @@ def test_negotiated_fallback_continuation_keeps_its_provider_and_refuses_an_old_
     assert claim(api, machine) is None
     # A later setting stops new fallback turns, not continuation of work already saved there.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.fallback.off',json('true')) WHERE bot='ops'")
+        fallback_off(c, "ops")
         login_holds.record(c, machine['runner_id'], '', 'fake', H.now(), reset='2026-10-19T09:00:00.000000Z')
     at(monkeypatch, '2026-10-19T07:01:00.000000Z', api)
     post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},

@@ -43,9 +43,11 @@ from clients.gateway import user_agent
 
 from . import hubdb as H
 from . import outbound_tls
+from . import outbox as O
 from .auth import validate_identity
 from .models import Contract
 from .store import Problem
+from . import bot_settings as BS
 
 LOG = logging.getLogger("tico.postal_mail")
 TRANSPORT = None                 # tests' fake HQ, never the live one
@@ -57,6 +59,7 @@ QUESTION_SET = "physical-mail"
 EVERY = 60                       # seconds between drains when nothing new came
 MAX_ATTEMPTS = 5                 # then the letter stays failed until a person retries it
 BACKOFF = (60, 300, 1800, 7200)  # seconds before attempt 2, 3, 4, 5
+SCHEDULE = O.Waits(BACKOFF, repeat_last=True)
 BATCH = 10                       # letters per drain
 READS_PER_DAY = 100              # letters read (one Gateway call each) in any 24 hours; more wait for the next hour
 SENDERS = 20                     # addresses or @domains the email-in address takes scans from
@@ -118,8 +121,8 @@ def owner_actor(c, auth):
 def finance_bot(c):
     """The active Finance bot (the first of FINANCE_TEMPLATES that exists), or None."""
     marks = ",".join("?" * len(FINANCE_TEMPLATES))
-    rows = c.execute("SELECT bc.bot, json_extract(bc.config,'$.template') AS template FROM bot_config bc "
-                     f"JOIN bots b ON b.id=bc.bot WHERE json_extract(bc.config,'$.template') IN ({marks}) "
+    rows = c.execute(f"SELECT bc.bot, s.template AS template FROM bot_config bc {BS.JOIN} "
+                     f"JOIN bots b ON b.id=bc.bot WHERE s.template IN ({marks}) "
                      "AND b.state='active' ORDER BY bc.bot", FINANCE_TEMPLATES).fetchall()
     rows = sorted(rows, key=lambda r: FINANCE_TEMPLATES.index(r["template"]))
     return rows[0]["bot"] if rows else None
@@ -541,7 +544,7 @@ class PostalMail:
 
     def fail(self, row, code):
         attempts = row["attempts"] + 1
-        wait = BACKOFF[min(attempts - 1, len(BACKOFF) - 1)]
+        wait = SCHEDULE.wait_for(attempts)
         with self.store.transaction() as c:
             c.execute("UPDATE mail_items SET status='failed',attempts=?,next_try_at=?,error=?,updated_at=? "
                       "WHERE id=? AND status IN ('new','failed')",

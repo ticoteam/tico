@@ -144,9 +144,11 @@ The database itself is readable with plain SQL (`hub sql`, the SQL page, `POST /
 one `SELECT` at a time, each caller seeing only what the JSON API would show it, credentials never
 ([Querying Tico with SQL](hub-sql.md)).
 
-**Your Mac's runner** — the Rust runner `tico-runner` (`runner-rs/`), with Python helpers in `runner/` for the side
+**Your Mac's runner** — the Rust runner `tico-runner` (`runner-rs/`), with Python helpers in `runner_support/` for the side
 jobs, registered once with **Add computer** in **Settings → Computers** (`scripts/setup-runner.sh`, credential in
-`~/.config/tico/runner.json`). Four launchd jobs, installed and managed with `scripts/tico`:
+`~/.config/tico/runner.json`). Four launchd jobs, installed and managed with `scripts/tico`. Their plists name
+`runner`, which forwards to `runner_support/` (runner/__init__.py), so a computer moved back to an older release still
+starts them:
 
 | Job | Command | What it does |
 |---|---|---|
@@ -250,7 +252,7 @@ the bot's Home gets one-line reports ([Sessions](sessions.md)).
 an ask, an approval and a gate verdict always wake the bot (`person_message`, `ask`, `approval`, `verdict`), except that a
 Manager hears of a verdict as a note (`profile_manager_note`); a bot's own
 write (`own_write`), news about a task that waits on something (`parked`), a stall check on a task that has not moved
-(`same_state`; Stalled task check can let one wake through, see [Tasks](tasks.md)) and a plain bot-to-bot message (`bot_to_bot`) wait for the bot's next run; a deferred item waits too, until its deadline (`deferred`, [Steer, queue or defer](using-tico.md#steer-queue-or-defer)); a finished request and a
+(`same_state`; the [task roundup](tasks.md) lists such tasks instead, three times a day by default) and a plain bot-to-bot message (`bot_to_bot`) wait for the bot's next run; a deferred item waits too, until its deadline (`deferred`, [Steer, queue or defer](using-tico.md#steer-queue-or-defer)); a finished request and a
 person's review comments are batched (`batch_*`); one check finishing is ignored (`pr_check`) and a head whose checks
 all finished wakes the ticket's owner at a working step (`pr_checks_done`) or is a note (`pr_checks_note`); work wakes
 (an assignment, a review request, a blocker, a routine, a due date, a finished subtask, a published release) and anything
@@ -327,12 +329,7 @@ BotOps resumes or dismisses it after checking what already happened. Nothing is 
 While such a review is owed the bot's tasks and routines wait, but a human's own
 messages still run: nothing about them is uncertain.
 
-**Needs you.** Every issue Tico derives says whether a human has to act. Those that do (a
-review owed, a computer gone for more than ten minutes, a missing agent credential, a stale backup,
-a usage limit hit three times) open in a dialog in front of the human the first time they appear,
-wherever they are in the app. Each item is a title, at most one short line and at most two buttons: the title opens
-the details (the stopped runs, with *Open bot*, or the bot, the computer or Health). Closing it is remembered per issue and *Snooze* quiets it for an hour;
-the alert under the sidebar reopens it any time. Issues Tico resolves itself (a computer that
+**Needs you.** Every issue Tico derives says whether a human has to act. Those that do light the status dot left of your name: red when something is broken, amber for a warning. Its lines sit in the account menu and on a hover over the dot, one per problem, each with its fix (a computer with a Tico update waiting gets *Restart* on its line). The same issues are listed in **Settings → System checks**. Stopped runs and quarantined bots are BotOps's to review, so they stay off the dot; **Settings → Health** lists them as notes, with *Review stopped runs* for a bot's stopped runs. Issues Tico resolves itself (a computer that
 just dropped off, a usage limit that is retrying) stay out of the way as *resolves on its own* in
 **Settings → Health**, one row per computer rather than one per bot. A cloud deploy is different: hub.acme.example is
 unreachable for a few minutes, the runner keeps the run going and the server extends every
@@ -594,7 +591,7 @@ window and a gap between sweeps, and it grants no right.
 | **Custom** | what its rules say | its rules | what its settings say |
 
 A bot's own clock still wakes it: a routine or schedule wakes a Reviewer, Lead, Manager and Monitor, and a due date or a
-snooze ending wakes a Lead, Manager and Monitor; a Responder has no routines. Stall and status checks run only for a Doer (and for a
+snooze ending wakes a Lead, Manager and Monitor; a Responder has no routines. Late-ticket checks run only for a Doer (and for a
 Custom bot that keeps them on). Doers pull open tasks themselves; the others start a task only when it is handed to them.
 **Custom** copies the profile's rows into the Rules table, marked as the profile's, to edit there; choosing a named profile
 again deletes them after a confirm. Set a profile in **Settings → Bots → Edit**, with `hub bot profile <bot> [name]`, MCP
@@ -640,7 +637,7 @@ made or revoked is an `events` row (`token.create`, `token.revoke`).
 |---|---|
 | `backend/` | the cloud API, authorization, write layer, scheduler, backups (FastAPI, SQLite) |
 | `runner-rs/` | the local runner (`tico-runner`): enrolment, readiness, leases, runs, harnesses, updates |
-| `runner/` | the runner's Python helpers: the `python -m runner run` shim, connectors, Close call and meeting import, catalog set-up, the update process |
+| `runner_support/` | the runner's Python helpers: the `python -m runner_support run` shim, connectors, Close call and meeting import, catalog set-up, the update process |
 | `clients/` | what bots and the runner call: the `hub` CLI, the HTTP client, attachment download, routine validation, preflight, the docs read and write commands |
 | `connectors/` | shared Slack, mail/calendar and browser adapters bots use instead of vendor APIs |
 | `integrations/` | one page per outside system (what it is, how a bot uses it, rules, recipes) and the query lists; served as **Tools** and `hub tool show <service>`, with the learnings bots add |

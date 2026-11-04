@@ -37,7 +37,7 @@ SCHEMA = '''
 CREATE TABLE IF NOT EXISTS inbound_inboxes(
  inbox_id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, address TEXT NOT NULL,
  state TEXT NOT NULL, created_by TEXT NOT NULL, period_end REAL, cancel_pending INTEGER NOT NULL DEFAULT 0,
- used_for TEXT NOT NULL DEFAULT '');
+ used_for TEXT NOT NULL DEFAULT '', audience TEXT NOT NULL DEFAULT 'company', group_id TEXT);
 CREATE TABLE IF NOT EXISTS inbound_messages(
  seq INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT NOT NULL UNIQUE, inbox_id TEXT NOT NULL,
  kind TEXT NOT NULL, received_at REAL NOT NULL, sender TEXT NOT NULL, subject TEXT NOT NULL,
@@ -53,12 +53,6 @@ INSERT OR IGNORE INTO inbound_sync(singleton) VALUES(1);
 
 
 AUDIENCES = ('company','team')
-
-
-def ensure(c):
-    """Columns added after the first release (idempotent)."""
-    H.add_column(c,'inbound_inboxes','audience',"TEXT NOT NULL DEFAULT 'company'")
-    H.add_column(c,'inbound_inboxes','group_id','TEXT')
 
 
 class InboxAudience(Contract):
@@ -222,17 +216,22 @@ class Inbound:
             rows = [dict(r) for r in c.execute('SELECT * FROM inbound_inboxes WHERE inbox_id>? AND '+clause+
                                                ' ORDER BY inbox_id LIMIT ?',(after,*values,limit+1))]
             sync = dict(c.execute('SELECT * FROM inbound_sync WHERE singleton=1').fetchone())
+            # The demo has no HQ, so it is never off in the page's eyes once its seeded inboxes exist. Every write
+            # still refuses in `remote`, so nothing can be created or rented there.
+            demo_inboxes = bool(self.settings.demo and c.execute('SELECT 1 FROM inbound_inboxes LIMIT 1').fetchone())
         # A gap names its inbox: only the inboxes this reader may read.
         gaps = [g for g in json.loads(sync['gaps']) if g.get('inbox_id') not in hidden]
-        return {'inboxes':rows[:limit],'next':rows[limit-1]['inbox_id'] if len(rows)>limit else None,'configured':not self.off,'last_synced_at':sync['last_synced_at'],'error':sync['error'],
+        return {'inboxes':rows[:limit],'next':rows[limit-1]['inbox_id'] if len(rows)>limit else None,'configured':not self.off or demo_inboxes,'last_synced_at':sync['last_synced_at'],'error':sync['error'],
                 'gaps':gaps}
 
-    def connection_actor(self, who, what='Inbox', code='inbox_connection'):
+    def connection_actor(self, who, what='Inbox', code='inbox_connection', tap=False):
         # Delegated human identities may manage other Inbox operations, never company linking. Also the rule for
         # linking this server to its company (backend/company_server.py), with its own `what` and error `code`.
+        # `tap`: the person's own tap on a Confirm card counts (a disconnect, which holds no code).
         forbidden = Problem(code+'_forbidden',f'A signed-in owner or admin must connect {what} directly.',403)
         if (who.role not in ('owner','human') or not who.actor.startswith('human:')
-                or any((who.support,who.via,who.via_token,who.runner_id,who.attempt_id,who.agent,who.task_actor))):
+                or (who.via and not (tap and who.confirmed))
+                or any((who.support,who.via_token,who.runner_id,who.attempt_id,who.agent,who.task_actor))):
             raise forbidden
         from . import access, census
         with self.store.read_transaction() as c:
@@ -343,6 +342,9 @@ class Inbound:
     def phone_requests(self, who, after='', limit=100):
         with self.store.read_transaction() as c:
             permit(c,who,admin=True,auth=self.auth)
+        # The demo has no HQ to ask, and it has no requests: an empty list, not an error. Writes still refuse in `remote`.
+        if self.settings.demo:
+            return {'phone_requests':[],'next':None}
         return self.remote('GET','phone-requests?'+urlencode({'after':after,'limit':limit}))
 
     def phone_request(self, who, *, name=None, operation=None, ident=None, action=None, price=None):

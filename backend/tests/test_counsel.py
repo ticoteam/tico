@@ -19,6 +19,7 @@ from backend.blobs import register
 from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
 from backend.tests.test_org_rules import as_bot, org
+from backend import bot_settings as BS
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 CONTRACT = ("Acme Vendor Terms\n\n4. Messaging\n\nCustomer messages must include an opt-out line in every send. "
@@ -29,7 +30,8 @@ def counsel_on(api):
     """Counsel is built in and active, as onboarding makes it: a bot row, a config, and its own token."""
     with api.app.state.store.transaction() as c:
         c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('tico-counsel', 'tico-counsel', 'Counsel', 'active')")
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,owner_id) VALUES('tico-counsel','{}','','ana')")
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,team,owner_id) VALUES('tico-counsel','','ana')")
+        BS.write(c, 'tico-counsel', {})
     as_bot(api, "tico-counsel", "counsel-test")
 
 
@@ -570,7 +572,8 @@ def test_another_bot_cannot_cite_a_file_it_cannot_read(api):
     read_document(api, file_id)
     with api.app.state.store.transaction() as c:
         c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('scout', 'scout', 'Scout', 'active')")
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,owner_id) VALUES('scout','{}','','ana')")
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,team,owner_id) VALUES('scout','','ana')")
+        BS.write(c, 'scout', {})
     as_bot(api, "scout", "scout-test")
     r = api.post("/api/v2/rules", headers=headers("scout-test"), json={
         "kind": "external", "text": "Keep a consent record.", "who": {"bots": ["ops"]}, "source_id": source(api),
@@ -851,9 +854,11 @@ def test_the_assistant_is_offered_the_document_read_the_question_and_the_single_
     tools = {t["name"]: t for t in hubtools.TOOLS}
     assert tools["hub_rules_get"]["writes"] is False
     assert tools["hub_rules_read"]["writes"] is True and "on_behalf_of" in tools["hub_rules_read"]["inputSchema"]["properties"]
-    assert A.instructed_org("POST", "/api/v2/rules/read", b"{}")
-    assert A.instructed_org("POST", "/api/v2/rules/ask", b"{}")
-    assert not A.instructed_org("GET", "/api/v2/rules/read", b"{}")
+    # The rule reads are writes the Assistant's turn may make on the person's cited words (`admits_on_turn`); a read
+    # (GET) is never a write, so it is not held.
+    assert A.admits_on_turn("POST", "/api/v2/rules/read", b"{}")
+    assert A.admits_on_turn("POST", "/api/v2/rules/ask", b"{}")
+    assert not A.admits_on_turn("GET", "/api/v2/rules/read", b"{}")
 
 
 def test_a_replay_returns_the_saved_answer_and_fetches_nothing(api, monkeypatch):
@@ -1019,7 +1024,7 @@ def test_a_link_read_is_private_to_its_requester_and_counsel(api, monkeypatch):
 def test_counsel_tasks_are_private_by_default(api):
     counsel_on(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=? WHERE bot='tico-counsel'", (json.dumps({"template": "tico-counsel"}),))
+        BS.write(c, 'tico-counsel', {'template': 'tico-counsel'})
     with api.app.state.store.read() as c:
         assert H.private_tasks_default(c, "bot:tico-counsel") is True
 
@@ -1197,7 +1202,7 @@ def test_a_completed_counsel_turn_finishes_its_read_task_and_a_failed_one_does_n
                  "exposure, ask a lawyer.*"}, token=r["token"])
     assert task_state(api, first["task_id"])["status"] == "done"
     with api.app.state.store.read() as c:
-        notes = [x[0] for x in c.execute("SELECT note FROM task_events WHERE task_id=? AND field='status' AND new='done'",
+        notes = [x[0] for x in c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' AND new='done'",
                                          (first["task_id"],))]
     assert notes == ["Wrote 3 suggestions, 0 quotes dropped; read, nothing else for us."]
     # A failed run leaves its read task to the normal retry.
@@ -1274,7 +1279,7 @@ def test_a_run_carrying_a_second_private_task_neither_publishes_nor_finishes_the
     finish(api, r, attempt, text="Read it. Globex price list is secret.")
     assert task_state(api, read["task_id"])["status"] != "done"
     with api.app.state.store.read() as c:
-        notes = [x[0] or "" for x in c.execute("SELECT note FROM task_events WHERE task_id=?", (read["task_id"],))]
+        notes = [x[0] or "" for x in c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=?", (read["task_id"],))]
     assert not any("Globex" in note for note in notes)
 
 
@@ -1301,8 +1306,8 @@ def test_a_stateless_bots_task_keeps_its_own_session_lane_and_checkpoint_even_on
     from backend.tests.test_api import assign, claim, runner
     with api.app.state.store.transaction() as c:
         c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('tico-counsel', 'tico-counsel', 'Counsel', 'active')")
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,owner_id) VALUES('tico-counsel', ?, '', 'ana')",
-                  (json.dumps({"template": "tico-counsel", "session": "bot"}),))
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,team,owner_id) VALUES('tico-counsel','','ana')")
+        BS.write(c, 'tico-counsel', {'template': 'tico-counsel', 'session': 'bot'})
         task = H.task_create(c, "human:ana", "Read the synthetic contract", "Use only fixture text.",
                              "bot:tico-counsel", lint=False)["id"]
     r = runner(api)

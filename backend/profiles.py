@@ -1,6 +1,6 @@
 """Bot profiles: how a bot is woken and what work it takes (quiet task flow, section 5).
 
-`bot_config.profile` is `doer`, `reviewer`, `lead`, `manager`, `responder`, `monitor` or `custom`. A profile is a fixed set of
+`bot_settings.profile` is `doer`, `reviewer`, `lead`, `manager`, `responder`, `monitor` or `custom`. A profile is a fixed set of
 bot-scope built-in wake rows (rules.PROFILE_RULES) and a few numbers and flags:
 
     profile    wakes now                               everything else      pulls open tasks  sweeps  takes
@@ -38,6 +38,7 @@ from pydantic import Field
 
 from . import hubdb as H
 from .models import Contract
+from . import bot_settings as BS
 
 DOER, REVIEWER, LEAD, MANAGER, RESPONDER, MONITOR, CUSTOM = (
     "doer", "reviewer", "lead", "manager", "responder", "monitor", "custom")
@@ -50,6 +51,18 @@ MATERIALISED = "profile"                # `created_by` of the rows a custom prof
 RELEASE_QA_TITLE = re.compile(
     r"^(?:(?:Post[- ](?:Release|Launch)|Release)\s+QA(?:\s+(?:pass|sweep))?|Post[- ]Release\s+checks?)\s*(?::|$)", re.I)
 ACCEPTANCE_TITLE = re.compile(r"\blive acceptance\b", re.I)
+# A top-level production acceptance run is acceptance QA work (Dev 750, engineering ruling on 34f2faaf). Only a title
+# that reads as a run counts: it opens with a run verb, or with the phrase itself. Anything else, including any
+# request that builds or changes the acceptance tests, is ordinary work.
+PRODUCTION_ACCEPTANCE_TITLE = re.compile(r"\bproduction acceptance\b", re.I)
+#   A run verb names the acceptance itself (optionally one word such as the feature), and what follows is a run's
+#   object or a preposition, not a checklist, plan or note about it.
+_ACCEPTANCE_RUN_AFTER = (
+    r"(?=\s*$|\s*[:,(]|\s+(?:for|after|on|against|in|at|with|from|to|before|during|of|and|through|across"
+    r"|tests?|suite|run|pass|sweep|checks?|again|now|today|as|once)\b)")
+PRODUCTION_ACCEPTANCE_RUN_TITLE = re.compile(
+    r"^(?:(?:run|rerun|re-run|execute|perform|carry out|complete|finish|check|verify|do)\b(?:\s+[\w-]+){0,2}?"
+    r"\s+production acceptance\b" + _ACCEPTANCE_RUN_AFTER + r"|production acceptance run\b)", re.I)
 # The numbers a former Token saver bot keeps.
 TOKEN_SAVER_OPTIONS = {"batch_seconds": TOKEN_SAVER_SECONDS, "batch_scope": "bot", "sweep_seconds": 2 * 3600}
 
@@ -179,12 +192,12 @@ def choices():
 
 def of_bot(c, bot):
     """The bot's profile name as the engine reads it (doer when it has none)."""
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     return name_of(H._json(row[0], {}) if row else {}) or DOER
 
 
 def config_of(c, bot):
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     return H._json(row[0], {}) or {} if row else {}
 
 
@@ -198,8 +211,8 @@ def sweeps_on(c, bot):
 def is_review_task(c, row, *, parent_id=None):
     """One classification for creation, assignment, pull, wakes and Health.
 
-    Explicit release QA may be top-level. Gate and acceptance requests need a parent;
-    an untitled delegated child also qualifies while its parent is in a review/QA step.
+    Explicit release QA and a top-level production acceptance run may be top-level. Gate and live acceptance requests
+    need a parent; an untitled delegated child also qualifies while its parent is in a review/QA step.
     `parent_id` lets creation check the same rule before the child row exists.
     """
     from . import auto_tasks
@@ -208,7 +221,7 @@ def is_review_task(c, row, *, parent_id=None):
         return True
     parent_id = parent_id or (H.TR.parent_of(c, row["id"]) if row.get("id") else None)
     if not parent_id:
-        return False
+        return bool(PRODUCTION_ACCEPTANCE_TITLE.search(title) and PRODUCTION_ACCEPTANCE_RUN_TITLE.match(title))
     return bool(_check_title(c, H.task(c, parent_id), title) or ACCEPTANCE_TITLE.search(title)
                 or auto_tasks.review(c, row, parent_id=parent_id))
 
@@ -396,7 +409,8 @@ def set_profile(admin, c, who, bot, body, undo_change_id=None):
         options = given
     apply(declared, name, {k: v for k, v in options.items() if _valid(k, v)})
     after = snapshot(declared)
-    c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+    BS.write(c, bot, declared)
+    c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
     from . import wake_presets
     wake_presets.replan(c, bot)
     admin.record(c, who.actor, bot, "profile", before, after)
@@ -443,7 +457,7 @@ def default_for(c, slug, declared):
     if any(fnmatchcase(slug, p) for p in MONITOR_SLUGS):
         return MONITOR, {}, None
     if any(fnmatchcase(slug, p) for p in REVIEWER_SLUGS):
-        # The Builder is called pr-reviewer in the starter factory and owns the Dev tickets: it stays a doer.
+        # The starter's pr-reviewer was the Builder before the builder template: an install that kept it owns the Dev tickets.
         if slug == "pr-reviewer" and _owns_dev_tickets(c, slug):
             return DOER, preset, None
         return REVIEWER, {}, None
@@ -462,14 +476,15 @@ def _owns_dev_tickets(c, slug):
     return False
 
 
-def migrate(c):
+def migrate(c, tell=True):
     """Give every bot with no profile one, by its name (`default_for`), and tell each owner once, in one notice that
     names every bot of theirs and its profile. Runs at each start and touches only bots with no profile, so a bot is
-    migrated once, whatever its owner changes afterwards."""
+    migrated once, whatever its owner changes afterwards. `tell=False` skips the notice, for an install that is made
+    with its bots (the demo), where there is no earlier state to explain."""
     from . import rules
     from .store import encode
     told = {}
-    for row in c.execute("SELECT bc.bot,bc.config,bc.owner_id,bc.bot_owners,b.state,b.slug,b.display_name FROM bot_config bc "
+    for row in c.execute(f"SELECT bc.bot,{BS.CONFIG} AS config,bc.owner_id,bc.bot_owners,b.state,b.slug,b.display_name FROM bot_config bc {BS.JOIN} "
                          "JOIN bots b ON b.id=bc.bot ORDER BY bc.bot").fetchall():
         declared = H._json(row["config"], {}) or {}
         if not isinstance(declared, dict) or name_of(declared):
@@ -480,7 +495,8 @@ def migrate(c):
         except Exception:  # noqa: BLE001 - a start never fails on a guess about one bot: it is a Doer
             name, options, source = DOER, {}, None
         apply(declared, name, options)
-        c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), row["bot"]))
+        BS.write(c, row["bot"], declared)
+        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (row["bot"],))
         if name == CUSTOM and source and rules.PROFILE_RULES.get(source):
             materialise(c, row["bot"], source)
         H.event(c, H.KEEPER, "bot.profile_migrated", row["bot"], {"profile": name, "options": options})
@@ -489,7 +505,7 @@ def migrate(c):
         owner = row["owner_id"] or next(iter(_owner_ids(row["bot_owners"])), "") or H.default_human(c)
         if owner and H.human(c, owner):
             told.setdefault(owner, []).append((row["display_name"] or slug, slug, name))
-    for owner, bots in told.items():
+    for owner, bots in (told.items() if tell else ()):
         lines = [f"- {label} ({slug}): {SPEC[name]['label']}" for label, slug, name in bots[:40]]
         more = f"\n...and {len(bots) - 40} more." if len(bots) > 40 else ""
         H.notice(c, H.KEEPER, H.human_actor(owner),
@@ -514,12 +530,12 @@ def mismatches(c):
     with tasks queued, a doer whose runs for a week all did nothing. [(kind, bot, count)]."""
     out = []
     since = H.shift(H.now(), days=-IDLE_DAYS)
-    for row in c.execute("SELECT bc.bot,bc.config FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+    for row in c.execute(f"SELECT bc.bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
                          "WHERE b.state='active' ORDER BY bc.bot").fetchall():
         declared = H._json(row["config"], {}) or {}
         name, bot = name_of(declared), row["bot"]
         if name == REVIEWER:
-            tasks = H._rows(c.execute(f"SELECT * FROM tasks WHERE owner_id=? AND status IN {OPEN} LIMIT 200",
+            tasks = H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE owner_id=? AND status IN {OPEN} LIMIT 200",
                                       ("bot:" + bot,)))
             other = sum(1 for t in tasks if not is_review_task(c, t))
             if other:
@@ -530,8 +546,8 @@ def mismatches(c):
             if n:
                 out.append(("responder_has_tasks", bot, n))
         elif name == DOER:
-            seen = c.execute("SELECT count(*) AS n, sum(coalesce(did_nothing,0)=1) AS idle FROM turns WHERE bot=? "
-                             "AND started_at>? AND finished_at IS NOT NULL", (bot, since)).fetchone()
+            seen = c.execute("SELECT count(*) AS n, sum(coalesce(did_nothing,0)=1) AS idle FROM attempts WHERE bot_id=? "
+                             "AND created_at>? AND settled_at IS NOT NULL", (bot, since)).fetchone()
             created = c.execute("SELECT created_at FROM bots WHERE id=?", (bot,)).fetchone()
             if (seen["n"] >= IDLE_MIN_RUNS and seen["idle"] == seen["n"]
                     and not (created and created[0] and created[0] > since)):

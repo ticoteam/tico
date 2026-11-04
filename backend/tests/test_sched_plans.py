@@ -60,12 +60,12 @@ def test_dead_turn_sweep_walks_live_runs(api):
     assert "attempts_created" not in text, text
 
 
-def test_health_held_totals_walk_live_runs(api):
+def test_health_live_totals_walk_live_runs(api):
     # Unhinted, the GROUP BY picked attempts_runner_finished and walked every attempt ever run (48 ms on Tico Team).
     from backend import start_places
     tidy_stats(api)
-    assert "INDEXED BY attempts_live_lease" in start_places.HELD_TOTALS_SQL
-    text = plan(api, start_places.HELD_TOTALS_SQL, (NOW, NOW))
+    assert "INDEXED BY attempts_live_lease" in start_places.LIVE_TOTALS_SQL
+    text = plan(api, start_places.LIVE_TOTALS_SQL, (NOW,))
     assert "USING INDEX attempts_live_lease" in text, text
     assert "attempts_runner_finished" not in text, text
 

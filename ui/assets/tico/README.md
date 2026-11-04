@@ -1,10 +1,10 @@
 # Tico brand
 
-The icon and wordmark are the ones on tico.team. Three SVGs are the source; everything else is
-generated from them.
+Three SVGs are the source; everything else is generated from them.
 
-- `tico-mark.svg`: the square icon, a dark rounded tile (#172221) with an off-white "ti" and a green dot.
-  The tab favicon uses it directly.
+- `tico-mark.svg`: the square icon, the flat Liquid Dot (jade `#56a578`, a little less than round, the same blob
+  radius as `ui/styles/liquid-dot.css`) with a soft shadow on a dark rounded tile (#172221). The app icon and
+  the tab favicon use it.
 - `tico-wordmark.svg` / `tico-wordmark-reversed.svg`: the full-width "tico" logo, dark ink for light
   backgrounds and off-white for dark ones. The first-run setup and the sign-in pages show it while the
   app is still called Tico (the UI swaps in the reversed one in dark mode); a company that names its app

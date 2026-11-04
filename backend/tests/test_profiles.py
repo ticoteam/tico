@@ -13,22 +13,23 @@ from backend import wake_presets as W
 from backend.store import encode
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401  (api is a fixture)
 from backend.tests.test_wake_rules import jobs, news
+from backend import bot_settings as BS
 
 
 def add_bot(c, slug, **config):
     H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", "status": "active"}}, {"people": []})
-    c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
-              (slug, encode({"name": slug, "runtime": "fake", "status": "active", **config}), None, "ana"))
+    c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, None, 'ana'))
+    BS.write(c, slug, {'name': slug, 'runtime': 'fake', 'status': 'active', **config})
 
 
 def profile_of(c, slug):
-    return json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+    return BS.read(c, slug)
 
 
 def put(c, slug, name, **options):
     """Give an existing bot a profile the way the API does (without the Strategy Bot gate or audit)."""
     declared = profile_of(c, slug)
-    c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(P.apply(declared, name, options)), slug))
+    BS.write(c, slug, P.apply(declared, name, options))
 
 
 def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api):
@@ -40,19 +41,21 @@ def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api
             add_bot(c, slug)
         add_bot(c, "saver", wake_preset="token_saver")
         add_bot(c, "grok-designer", harness="grokbot")
-        # The starter factory's Builder is called pr-reviewer and owns the Dev tickets: it stays a doer.
+        # The starter's pr-reviewer was the Builder before the builder template: an install that kept it stays a doer.
         add_bot(c, "pr-reviewer")
         add_bot(c, "pr-reviewer-2")
+        add_bot(c, "builder")
         kind = c.execute("SELECT id FROM task_types WHERE name='Dev tickets'").fetchone()
         if kind is None:
             c.execute("INSERT INTO task_types(id,name,created_at,updated_at) VALUES('dev','Dev tickets',?,?)", (H.now(), H.now()))
         H.task_create(c, "human:ana", "Fix login", "x", "bot:pr-reviewer", type="Dev tickets")
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.profile','doer') WHERE bot='cpo'")
+        BS.update(c, 'cpo', {'profile': 'doer'})
         told = P.migrate(c)
         got = {slug: profile_of(c, slug) for slug in (*slugs, "saver", "grok-designer", "pr-reviewer", "cpo")}
         assert {slug: got[slug]["profile"] for slug in slugs} == slugs
         assert got["grok-designer"]["profile"] == P.RESPONDER and got["cpo"]["profile"] == "doer"
         assert got["pr-reviewer"]["profile"] == P.DOER and profile_of(c, "pr-reviewer-2")["profile"] == P.REVIEWER
+        assert profile_of(c, "builder")["profile"] == P.DOER
         # A former Token saver bot keeps its 30-minute window as a value of its own; Performance is the Doer's.
         assert got["saver"]["profile"] == P.DOER and got["saver"]["wake_preset"] == "token_saver"
         assert got["saver"]["profile_options"]["batch_seconds"] == 1800 and got["writer"]["wake_preset"] == "performance"
@@ -189,6 +192,23 @@ def test_release_qa_uses_one_classification_for_creation_pull_wake_and_health(ap
     pytest.param("Release QA checklist planning", False, id="qa-planning"),
     pytest.param("Post Release QA dashboard redesign", False, id="post-qa-dashboard"),
     pytest.param("Add acceptance tests for CSV export", True, id="acceptance-implementation"),
+    pytest.param("Implement production acceptance tests", True, id="production-acceptance-implementation"),
+    pytest.param("Implement production acceptance tests", False, id="production-acceptance-top-level-implement"),
+    pytest.param("Develop production acceptance tests for the waitlist", False,
+                 id="production-acceptance-top-level-develop"),
+    pytest.param("Add production acceptance tests for CSV export", False, id="production-acceptance-top-level-add"),
+    pytest.param("Write production acceptance tests for the waitlist", False,
+                 id="production-acceptance-top-level-write"),
+    pytest.param("Build the production acceptance suite", False, id="production-acceptance-top-level-build"),
+    pytest.param("Update the production acceptance checklist", False, id="production-acceptance-top-level-update"),
+    pytest.param("Waitlist production acceptance tests", False, id="production-acceptance-top-level-no-run-verb"),
+    pytest.param("Production acceptance checklist update", False, id="production-acceptance-top-level-prefix-update"),
+    pytest.param("Production acceptance tests for the waitlist", False,
+                 id="production-acceptance-top-level-prefix-tests"),
+    pytest.param("Check the production acceptance checklist", False, id="production-acceptance-top-level-check-list"),
+    pytest.param("Verify production acceptance checklist", False, id="production-acceptance-top-level-verify-list"),
+    pytest.param("Complete the production acceptance plan", False, id="production-acceptance-top-level-complete-plan"),
+    pytest.param("Run production acceptance dashboard", False, id="production-acceptance-top-level-run-dashboard"),
 ])
 def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
     with api.app.state.store.transaction() as c:
@@ -203,6 +223,43 @@ def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
         with pytest.raises(H.Refused) as raised:
             H.task_update(c, "bot:ops", ordinary["id"], owner="bot:checker")
         assert raised.value.rule == "profile"
+
+
+@pytest.mark.parametrize("title", [
+    "Run waitlist production acceptance after existing release and admin gates clear",
+    "Execute production acceptance for the waitlist",
+    "Re-run production acceptance on the release candidate",
+    "Production acceptance run for the waitlist",
+    "Production acceptance run: waitlist release",
+    "Run production acceptance tests for the waitlist",
+    "Run the production acceptance suite",
+])
+def test_a_top_level_production_acceptance_run_reads_as_review_work(api, title):
+    with api.app.state.store.transaction() as c:
+        add_bot(c, "checker")
+        put(c, "checker", P.REVIEWER)
+        made = H.task_create(c, "bot:ops", title, "x", "bot:checker")
+        assert P.is_review_task(c, H.task(c, made["id"]))
+
+
+def test_a_top_level_production_acceptance_run_is_review_work_for_a_reviewer_and_health_stops_counting_it(api):
+    """Task 17112188 (QA (GPT), Reviewer profile) was counted by Health as non-review work (Dev 750, finding 34f2faaf).
+    A top-level production acceptance run is acceptance QA: the reviewer takes it, and the same classification clears
+    the finding for Health."""
+    with api.app.state.store.transaction() as c:
+        add_bot(c, "checker")
+        put(c, "checker", P.REVIEWER)
+        config = profile_of(c, "checker")
+        c.execute("DELETE FROM jobs")
+        made = H.task_create(c, "bot:ops",
+                             "Run waitlist production acceptance after existing release and admin gates clear",
+                             "x", "bot:checker")
+        row = H.task(c, made["id"])
+        assert made["type_id"] == H.GENERAL_TYPE and P.is_review_task(c, row)
+        assert P.pull_refusal(c, row, config) is None
+        assert last_to(c, "checker")["rule"] == "profile_reviewer_request"
+        assert jobs(c, "checker") == 1
+        assert P.mismatches(c) == []
 
 
 def test_health_counts_a_keepers_ordinary_task_for_a_reviewer_but_not_its_pool_review(api):

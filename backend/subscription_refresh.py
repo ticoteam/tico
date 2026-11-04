@@ -58,7 +58,7 @@ def invalidate_signin(c, runner, profile, runtime, at):
 
 def request_refresh(c, auth, who, body):
     auth.domain(who)
-    runner = c.execute('SELECT * FROM runners WHERE id=? AND revoked_at IS NULL', (body.runner_id,)).fetchone()
+    runner = c.execute('SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL', (body.runner_id,)).fetchone()
     if not runner or who.role not in ('human', 'owner') or not (
             auth.bot_admin(who) or runner['owner_id'] == H.actor_id(who.actor)):
         raise Problem('forbidden', 'Only a computer operator or administrator can refresh weekly usage', 403)
@@ -118,6 +118,9 @@ def report(c, runner, rid, body):
                     (runner, body.profile)).fetchone()
     state = json.loads(row[0] or '{}').get(body.runtime) if row else None
     weekly = weekly_snapshot(body.weekly.model_dump()) if body.weekly else None
+    if weekly:
+        # A named login's refresh is never a plan's reading, whatever the computer sent: no provenance is kept.
+        weekly['origin'] = weekly['subscription_id'] = None
     if body.state == 'succeeded' and (not weekly or H.parse_ts(weekly['reported_at']) < H.parse_ts(value['requested_at'])
                                     or state is None or state.get('signed_in') is False):
         raise Problem('invalid', 'Weekly refresh has no current valid reading', 422)

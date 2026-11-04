@@ -9,6 +9,7 @@ from backend import hubdb as H
 from backend import worktrees as W
 from backend.tests.test_github_app import api, gh, auth, connect, runner_token  # noqa: F401
 from backend.tests.test_repositories import catalog, put
+from backend.enqueue import enqueue_stored
 
 
 @pytest.fixture
@@ -26,13 +27,14 @@ def prepared(api, gh):
         for name, kind in columns.items():
             if name not in have:
                 c.execute(f'ALTER TABLE task_links ADD COLUMN {name} {kind}')
-        c.execute("UPDATE runners SET readiness=? WHERE id='r1'", (json.dumps({'schema_version': 1, 'bots': {}, 'worktrees': True}),))
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'", (json.dumps({'schema_version': 1, 'bots': {}, 'worktrees': True}),))
         task = H.task_create(c, 'human:ana', 'Build product', 'Implement product', 'bot:cmo')
         c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
         other = H.task_create(c, 'human:ana', 'Other work', 'Implement docs', 'bot:cpo')
         c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
         until = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
         c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m1','human:ana','bot:cmo','say','Work',?)", (H.now(),))
+        enqueue_stored(c, 'm1')
         job = c.execute("SELECT id FROM jobs WHERE message_id='m1'").fetchone()[0]
         c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) VALUES('a1',?,'cmo','r1',1,'synthetic','running',?,?)", (job, until, H.now()))
     return api, task['id'], other['id']
@@ -50,11 +52,11 @@ def test_create_permissions_limit_old_computer_and_attach(prepared):
     assert post(api, path, {'repo': 'Acme/product'}).status_code == 403
     put(api, 'bots/cmo/repositories', {'mode': 'all', 'all_access': 'write'})
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness='{}' WHERE id='r1'")
+        c.execute("UPDATE runner_states SET readiness='{}' WHERE runner_id='r1'")
     response = post(api, path, {'repo': 'Acme/product'})
     assert response.status_code == 409 and 'Update this computer' in response.text
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness=? WHERE id='r1'", (json.dumps({'schema_version': 1, 'bots': {}, 'worktrees': True}),))
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'", (json.dumps({'schema_version': 1, 'bots': {}, 'worktrees': True}),))
     response = post(api, path, {'repo': 'Acme/product'}, 'bot-test')
     assert response.status_code == 200, response.text
     link = response.json()
@@ -815,6 +817,10 @@ def test_a_computer_reads_the_status_only_of_tasks_it_ran_that_bots_session_for(
         fresh = {'id': 'r2', 'token_hash': 'synthetic-r2'}
         c.execute(f"INSERT INTO runners({','.join(cols)}) SELECT {','.join('?' if col in fresh else col for col in cols)} "
                   "FROM runners WHERE id='r1'", [fresh[col] for col in cols if col in fresh])
+        # r2 reports what r1 reports: the state columns are runner_states (migration 0062), and the insert made r2's row.
+        state = [r[1] for r in c.execute('PRAGMA table_info(runner_states)') if r[1] != 'runner_id']
+        c.execute("UPDATE runner_states SET " + ','.join(f"{n}=(SELECT {n} FROM runner_states WHERE runner_id='r1')" for n in state)
+                  + " WHERE runner_id='r2'")
         job = c.execute("SELECT job_id FROM attempts WHERE id='a1'").fetchone()[0]
         for aid, runner, lane in (('a2', 'r1', 'task:' + tid), ('a3', 'r2', 'task:' + other)):
             c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,lane) "
@@ -1124,7 +1130,7 @@ def test_a_retry_after_the_deadline_keeps_the_setup_phase_and_names_the_register
     again = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
     assert again['link_id'] == link['link_id'] and again['checkout_state'] == 'setup_running'
     assert {k: again[k] for k in proof} == proof
-    # The registered setup command's own reports (runner/worktrees.py _run_registered_setup) finish it.
+    # The registered setup command's own reports (runner_support/worktrees.py _run_registered_setup) finish it.
     assert patch(state='pending', checkout_state='setup_running', setup_pending=True, **proof).status_code == 200
     assert patch(state='present', checkout_state='ready', setup_pending=False, **proof).status_code == 200
     with api.app_state.store.read() as c:
@@ -1364,6 +1370,7 @@ def test_owner_managers_provision_reports_worktrees_without_granting_repo_access
         with api.app_state.store.transaction() as c:
             c.execute("INSERT OR REPLACE INTO assignments VALUES('cpo','r2',1,?,'ana')", (H.now(),))
             c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('manager-message','human:ana','bot:cpo','say','Manage work',?)", (H.now(),))
+            enqueue_stored(c, 'manager-message')
             job = c.execute("SELECT id FROM jobs WHERE message_id='manager-message'").fetchone()[0]
             c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) VALUES('manager-attempt',?,'cpo','r2',1,'synthetic-manager','running',?,?)",
                       (job, H.shift(H.now(), hours=1), H.now()))

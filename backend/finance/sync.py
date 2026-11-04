@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
+from .. import outbox as O
 from . import banking, cards, payments, stripe_sync, transfers
 from .context import is_set_up, load
 from .core import feeds as F
@@ -33,6 +34,7 @@ EVENTS_PAGES = 4
 INBOX_MOST, OUTBOX_MOST, PAY_MOST = 200, 50, 50
 STATEMENT_HOURS = 24
 RETRY = (60, 300, 1800, 3600)
+WRITE_SCHEDULE = O.Waits(RETRY, repeat_last=True)     # a failed write waits this long; the last wait repeats
 # Never sent again on their own once a call may have landed. Mercury documents no idempotency for recipients and cards;
 # a transfer is listed by choice: its key is sent, but an unknown result goes to a person, never to a resend.
 NO_KEY_OPS = ("card_create", "recipient_create", "transfer_create")
@@ -230,7 +232,9 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
     if due:
         problems += statements(store, provider, cid, now)
         with store.transaction() as c:      # the balance this pass read and every row it took in (inbox too) agree now
-            banking.refresh_connection_openings(load(c, now), cid)
+            ctx = load(c, now)
+            banking.pair_card_payments(ctx, cid)
+            banking.refresh_connection_openings(ctx, cid)
     with store.transaction() as c:
         fields: dict[str, object] = {"last_sync_at": now, "updated_at": now}
         # A first backfill still under way goes on at once (rung below), not a poll later: until it ends the books
@@ -319,6 +323,7 @@ def balances(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
             if a is not None:
                 banking.set_balance(ctx, str(m["id"]), _cents(a.get("currentBalance")),
                                     _cents(a.get("availableBalance")), now)
+            banking.tidy_name(ctx, str(m["id"]))
     return []
 
 
@@ -382,14 +387,17 @@ def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
         done = not raws or cursor == before or not next_page(page) and len(raws) < 500 or seen and repeat
         repeat = seen
         with store.transaction() as c:
+            fresh = _settings(SK.get(c, "fin_connections", cid))
             SK.update(c, "fin_connections", cid, {"cursor": cursor, "settings": SK.dump(
-                {**conf, "backfilled": True}) if done else row["settings"]})
+                {**fresh, "backfilled": True, "opened": []}) if done else SK.dump(fresh)})
             if done:
-                # The balances read at the start of this pass and the whole feed: each account's opening balance.
+                # The balances read at the start of this pass and the whole feed: each account's opening balance. One
+                # with no balance read yet gets its opening on a later pass (banking.refresh_opening).
                 ctx = load(c, now)
-                for m in SK.money_accounts(c, ctx.book.id):
-                    if str(m["connection_id"] or "") == cid:
-                        banking.opening_balance(ctx, str(m["id"]))
+                mine = [m for m in SK.money_accounts(c, ctx.book.id) if str(m["connection_id"] or "") == cid]
+                for m in mine:
+                    banking.opening_balance(ctx, str(m["id"]))
+                banking.mark_opened(ctx, cid, [str(m["id"]) for m in mine if m["balance"] is not None and m["account_id"]])
         if done:
             break
     return []
@@ -668,7 +676,7 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
         final, why = True, f"{why}; it may have gone through: check Mercury before trying again"
     SK.update(c, "fin_outbox", str(o["id"]), {
         "status": "failed" if final else "pending", "attempts": attempts, "last_error": why, "claimed_at": None,
-        "next_try_at": None if final else _after(now, RETRY[min(attempts - 1, len(RETRY) - 1)]), "updated_at": now})
+        "next_try_at": None if final else _after(now, WRITE_SCHEDULE.wait_for(attempts)), "updated_at": now})
     if op == "transfer_create" and final:
         transfers.not_sent(load(c, now), body, why, unknown=answer.status is None or answer.status >= 500,
                            started=now)

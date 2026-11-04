@@ -585,16 +585,16 @@ def draft_facts(c, author, kind, day):
     goals = c.execute("SELECT title FROM goals WHERE owner_id=? AND (status IS NULL OR status NOT IN "
                       "('done','dropped')) ORDER BY rank LIMIT 5", (author,)).fetchall()
     # Their decisions in Needs you: what they moved a shared task to (approved, declined, done, closed)...
-    decided = c.execute(f"SELECT t.title, e.new FROM task_events e JOIN tasks t ON t.id=e.task_id WHERE e.actor=? "
-                        f"AND e.field='status' AND e.old IS NOT NULL AND e.created_at>=? AND {shared_tasks_sql(hidden, 't.')} "
+    decided = c.execute(f"SELECT t.title, e.new FROM history_events e JOIN tasks t ON e.subject_type='task' AND t.id=e.subject_id "
+                        f"WHERE e.actor_id=? AND e.kind='status' AND e.old IS NOT NULL AND e.created_at>=? AND {shared_tasks_sql(hidden, 't.')} "
                         "ORDER BY e.created_at DESC LIMIT ?", (author, since, DRAFT_LIST_MAX)).fetchall()
     # ...and their answers to asks, then their comments; a message counts only when every task it names is shared.
     said = lambda where: [(title, m["body"]) for m in c.execute(
-        "SELECT * FROM messages WHERE sender_id=? AND deleted_at IS NULL AND created_at>=? AND " + where
+        "SELECT * FROM message_refs WHERE sender_id=? AND deleted_at IS NULL AND created_at>=? AND " + where
         + " ORDER BY created_at DESC LIMIT ?", (author, since, DRAFT_SCAN_MAX)).fetchall()
         if (title := _shared_message(c, m, shared))][:DRAFT_LIST_MAX]
     answers = said("kind='answer'")
-    comments = said("kind IN ('say','ask') AND json_extract(refs,'$.task') IS NOT NULL "
+    comments = said("kind IN ('say','ask') AND ref_task_id IS NOT NULL "
                     "AND json_extract(refs,'$.comment')")
     # The shared meetings they owned or were in (media.shared_meeting; sql.py has the same rule): live,
     # not private, not deleted, with a summary.

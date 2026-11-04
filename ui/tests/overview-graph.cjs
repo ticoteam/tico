@@ -1,7 +1,7 @@
 // Overview › Graph (ui/app/overview-graph.js): the team chart top down with each teammate's rules or goals.
 //  - the Graph tab beside Campus at #/overview/graph; built-in bots stay off; groups are labelled boxes;
 //  - Rules | Goals in the address (?view=goals), kept on reload;
-//  - Rules: counts on bots and people, Block / Escalate marked; a tap opens the panel (Follows, With, Team), a rule
+//  - Rules: counts on bots and people, Stop / Ask first marked; a tap opens the panel (Follows, With, Team), a rule
 //    picked there lights up its Who and With teammates and the link between them; Edit only where the rule allows;
 //    Add rule opens the Rules dialog with Who set to the teammate, and the graph reads its rules again after;
 //  - Goals: chips coloured by status, the panel with KPI and target, a link where a goal supports another owner's;
@@ -124,7 +124,7 @@ async function tabAndToggle(browser) {
   await page.locator('.dash-tabs a', {hasText: 'Graph'}).click();
   await page.waitForFunction(() => location.hash === '#/overview/graph');
   await ready(page, 'rules');
-  assert.deepEqual(await page.locator('.dash-tabs a').allInnerTexts(), ['Mine', 'Company', 'Campus', 'Graph', 'Company page']);
+  assert.deepEqual(await page.locator('.dash-tabs a').allInnerTexts(), ['Mine', 'Company', 'Campus', 'Graph', 'Share']);
   assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Graph');
   // The chart: people at the top, the group as a box, bots under their managers; built-ins stay off.
   for (const k of ['p:ana', 'p:sam', 'g:growth', 'b:lead', 'b:writer', 'b:seo', 'b:builder']) assert.equal(await node(page, k).count(), 1, k);

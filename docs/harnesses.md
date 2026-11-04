@@ -11,7 +11,7 @@ and holds no harness.
 
 | Harness | Manifest | Providers | Installed with | Signs in with |
 |---|---|---|---|---|
-| Codex | `runner/harnesses/codex.toml` | OpenAI | npm `@openai/codex` | ChatGPT subscription (device code, from Settings) or `OPENAI_API_KEY` |
+| Codex | `runner-rs/harnesses/codex.toml` | OpenAI | npm `@openai/codex` | ChatGPT subscription (device code, from Settings) or `OPENAI_API_KEY` |
 | Claude Code | `claude-code.toml` | Anthropic | npm `@anthropic-ai/claude-code` | Claude subscription (link and pasted code, from Settings), `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` |
 | Gemini CLI | `gemini-cli.toml` | Google | npm `@google/gemini-cli` | `GEMINI_API_KEY` |
 | Antigravity (Gemini variant) | `gemini-cli.toml` `[variants.antigravity]` | Google | Operator installs `agy`; the runner never installs or updates it | Google account, signed in by the operator in `agy`; readiness checks only that `agy` is on PATH, a real run checks the sign-in; no MCP servers |
@@ -222,13 +222,15 @@ The current OpenAI and Claude choices, reviewed 2026-10-03, are:
 | Claude Code (Anthropic) | Fable 5.1 | `claude-fable-5-1` | 2026-09-01 |
 | Claude Code (Anthropic) | Haiku 5.5 | `claude-haiku-5-5` | 2026-10-07 |
 | Codex (OpenAI) | Sol 6.1 | `gpt-6.1-sol` | 2026-09-29 |
+| Codex (OpenAI) | Terra 6.1 | `gpt-6.1-terra` | 2026-10-26 |
 | Codex (OpenAI) | Luna 6 | `gpt-6-luna` | 2026-09-22 |
 
 Release dates: [Claude release notes](https://platform.claude.com/docs/en/release-notes/overview)
 and [OpenAI changelog](https://developers.openai.com/api/docs/changelog).
 The offered effort levels are low, medium, high, xhigh and max, supported by the existing runner
 adapters and documented for [Claude](https://platform.claude.com/docs/en/build-with-claude/effort),
-[Sol 6.1](https://developers.openai.com/api/docs/models/gpt-6.1-sol) and
+[Sol 6.1](https://developers.openai.com/api/docs/models/gpt-6.1-sol),
+[Terra 6.1](https://developers.openai.com/api/docs/models/gpt-6.1-terra) and
 [Luna 6](https://developers.openai.com/api/docs/models/gpt-6-luna).
 Astra, Sol 6 and Opus 5 remain readable for existing configurations but cannot be newly selected.
 No existing bot is migrated automatically.
@@ -372,7 +374,7 @@ A harness is a manifest plus a host adapter.
 1. **Host adapter**: `runner-rs/src/hosts/<host>.rs` (`start_thread`, `start_turn`, `interrupt`, and events on the
    host's channel). Add it to the `Host` enum in `runner-rs/src/hosts/mod.rs` and to `make_host` in
    `runner-rs/src/execute.rs`.
-2. **Manifest**: `runner/harnesses/<id>.toml`. The file name is the id.
+2. **Manifest**: `runner-rs/harnesses/<id>.toml`. The file name is the id.
 
    ```toml
    id = "acme-agent"            # lowercase letters, digits, hyphens

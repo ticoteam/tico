@@ -8,6 +8,8 @@ from backend.auth import Identity
 from backend.store import H, encode
 from backend.tests.test_api import api, get  # noqa: F401
 from backend.tests.test_dev_ticket_rules import dev_type
+from backend import bot_settings as BS
+from backend.tests.hold_rows import set_holds
 
 HEAD = "a" * 40
 
@@ -16,16 +18,15 @@ def board(c, profile="manager"):
     found = c.execute("SELECT id FROM task_types WHERE name='Dev tickets'").fetchone()
     typ = H.type_get(c, found[0]) if found else dev_type(c)
     c.execute("UPDATE task_types SET manager='coo' WHERE id=?", (typ["id"],))
-    c.execute("UPDATE bot_config SET config=? WHERE bot='coo'",
-              (encode({"name": "coo", "runtime": "fake", "status": "active", "profile": profile}),))
+    BS.write(c, 'coo', {'name': 'coo', 'runtime': 'fake', 'status': 'active', 'profile': profile})
     if not c.execute("SELECT 1 FROM runners WHERE id='r1'").fetchone():
-        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,last_seen_at) VALUES('r1','box','ana','h',?,?)",
-                  (H.now(), H.now()))
+        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','box','ana','h',?)", (H.now(),))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r1'", (H.now(),))
     return H.type_get(c, typ["id"])
 
 
 def profile(c, slug, name):
-    c.execute("UPDATE bot_config SET config=json_set(config,'$.profile',?) WHERE bot=?", (name, slug))
+    BS.update(c, slug, {'profile': name})
 
 
 def settled(c):
@@ -46,7 +47,7 @@ def ticket(c, typ, title="Fix the connection", step="In Progress", minutes=0):
     if minutes:
         then = H.shift(H.now(), minutes=-minutes)
         c.execute("UPDATE tasks SET created_at=?, updated_at=? WHERE id=?", (then, then, row["id"]))
-        c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (then, row["id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (then, row["id"]))
     return H.task(c, row["id"])
 
 
@@ -91,7 +92,7 @@ def test_a_ticket_with_no_run_for_45_minutes_is_listed_once_with_its_owner_and_s
         typ = board(c)
         quiet, fresh, snoozed = ticket(c, typ, "Fix Cursor", minutes=50), ticket(c, typ, "Fix Muse", minutes=20), \
             ticket(c, typ, "Fix Grok", minutes=50)
-        c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), hours=5), snoozed["id"]))
+        set_holds(c, snoozed["id"], snoozed_until=H.shift(H.now(), hours=5))
         [entry] = listed(c, typ, "stuck")
         assert entry["ticket"]["id"] == quiet["id"] and entry["ticket"]["owner_id"] == "cpo"
         assert "owner cpo" in entry["cause"]
@@ -111,7 +112,7 @@ def test_a_check_left_doing_with_no_run_is_listed_under_its_ticket_and_the_ticke
         check = check_of(c, row)
         check = doing(c, check)
         run(c, check, "completed", 360)
-        c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (H.shift(H.now(), hours=-6), check["id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (H.shift(H.now(), hours=-6), check["id"]))
         [entry] = listed(c, typ, "stuck")
         assert entry["ticket"]["id"] == row["id"] and entry["check"]["id"] == check["id"]
         assert entry["check"]["owner_id"] == "ops" and "owner ops" in entry["cause"]
@@ -211,7 +212,7 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
         H.task_update(c, "bot:cpo", row["id"], status="doing", note="Back on it")
         # Its own words: the same notice again is dropped as a repeat, which would hide a wake.
         H._wake(c, H.task(c, row["id"]), "bot:coo", f"A setup blocker on {title} needs you.", {"wake": "blocker"})
-        c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (H.shift(H.now(), hours=-5), late["id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (H.shift(H.now(), hours=-5), late["id"]))
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), hours=-5), late["id"]))
         step_age.sweep(c, H.shift(H.now(), minutes=1))
         H.task_update(c, "bot:cpo", row["id"], status="done", note="Shipped")
@@ -242,19 +243,17 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
         assert list(H.TR.child_ids(c, fresh["id"])) == []
 
 
-def test_a_turn_that_ends_doing_with_nothing_queued_wakes_its_owner_once_and_the_sweep_lists_it(api):
+def test_a_turn_that_ends_doing_with_nothing_queued_wakes_no_owner_and_is_listed_for_its_manager(api):
     with api.app.state.store.transaction() as c:
         typ = board(c)
         row = ticket(c, typ, minutes=120)
         check = check_of(c, row)
         check = doing(c, check)
-        c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (H.shift(H.now(), minutes=-120), check["id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (H.shift(H.now(), minutes=-120), check["id"]))
         run(c, check, "completed", 60)
         before = unheld_jobs(c, "ops")
-        assert step_age.turn_ended(c) == [check["id"]]
-        assert unheld_jobs(c, "ops") == before + 1, "a reviewer's profile would hold a status check; this one wakes"
-        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")
-        assert step_age.turn_ended(c) == [], "once per stay at the step"
+        assert not hasattr(step_age, "turn_ended"), "no owner wake after an idle turn: the manager's list carries it"
+        assert unheld_jobs(c, "ops") == before
         [entry] = listed(c, typ, "stuck")
         assert entry["check"]["id"] == check["id"]
         assert rules.EVENTS["exceptions"]
@@ -300,14 +299,14 @@ def test_a_verdict_a_handoff_and_a_child_or_blocker_result_are_a_note_for_a_mana
         assert results("manager") == 0
 
 
-def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_and_unwoken_until_it_is_really_idle(api):
+def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_until_it_is_really_idle(api):
     """A reviewer's profile has no stall sweeps; what its check waits on is read all the same."""
     with api.app.state.store.transaction() as c:
         typ = board(c)
         row = ticket(c, typ, minutes=200)
         check = doing(c, check_of(c, row))
         profile(c, "ops", "reviewer")
-        c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (H.shift(H.now(), minutes=-120), check["id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (H.shift(H.now(), minutes=-120), check["id"]))
         run(c, check, "completed", 60)
         upstream = H.task_create(c, "bot:cpo", "Ship the base fix", "Ship.", "bot:cpo", lint=False)
         settled(c)
@@ -320,8 +319,8 @@ def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_and_unwoken_unti
                             c.execute("DELETE FROM messages WHERE id=?", (m["id"],)))
 
         def snooze():
-            c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), hours=3), check["id"]))
-            return lambda: c.execute("UPDATE tasks SET snoozed_until=NULL WHERE id=?", (check["id"],))
+            set_holds(c, check["id"], snoozed_until=H.shift(H.now(), hours=3))
+            return lambda: set_holds(c, check["id"], snoozed_until=None)
 
         def approval():
             aid = H.new_id()
@@ -338,13 +337,9 @@ def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_and_unwoken_unti
             undo = wait()
             settled(c)
             assert listed(c, typ, "stuck") == [], wait.__name__
-            assert step_age.turn_ended(c) == [], wait.__name__
             undo()
         [entry] = listed(c, typ, "stuck")
         assert entry["check"]["id"] == check["id"], "nothing recorded: the idle reviewer's check is listed"
-        before = unheld_jobs(c, "ops")
-        assert step_age.turn_ended(c) == [check["id"]], "and its reviewer is woken"
-        assert unheld_jobs(c, "ops") == before + 1
 
 
 def test_a_finished_check_is_filed_so_an_idle_ticket_is_listed_as_not_moving_on_not_as_missing_its_check(api):
@@ -465,7 +460,7 @@ def test_the_github_outage_folds_in_only_the_tickets_the_manager_reads_in_pipeli
         early, late = H.shift(H.now(), minutes=-30), H.shift(H.now(), minutes=-10)
 
         def held(row, since):
-            c.execute("INSERT INTO task_events(id,task_id,created_at,actor,field,old,new,note) VALUES(?,?,?,?,?,?,?,'')",
+            c.execute("INSERT INTO history_events(subject_type,id,subject_id,created_at,actor_id,kind,old,new,note) VALUES('task',?,?,?,?,?,?,?,'')",
                       (H.new_id(), row["id"], H.shift(H.now(), seconds=1), H.KEEPER, move_retry.FIELD,
                        row["step_id"], json.dumps({"state": "waiting", "outage": True, "since": since,
                                                    "step": "Review 1", "kind": "github"})))

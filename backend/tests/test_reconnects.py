@@ -9,6 +9,7 @@ import json
 from backend import hubdb as H
 from backend import reconnects as R
 from backend.tests.test_api import api, assign, claim, get, headers, post, runner  # noqa: F401
+from backend import bot_settings as BS
 
 
 def heartbeat(api, machine, signed_in):
@@ -283,8 +284,8 @@ def botops_turn(api, title="Connect the Acme CRM for ops"):
     from backend.tests.test_api import ready
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('botops',?, 'ana')",
-                  (encode({"name": "botops", "runtime": "fake", "status": "active"}),))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('botops','ana')")
+        BS.write(c, 'botops', {'name': 'botops', 'runtime': 'fake', 'status': 'active'})
     machine = runner(api)
     assign(api, machine, "botops")
     ready(api, machine, ["botops"])

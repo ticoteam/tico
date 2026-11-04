@@ -69,6 +69,7 @@ window.pageCard = function pageCard(page, {size = 'medium'} = {}) {
     open.innerHTML = `<span class="nav-icon" aria-hidden="true">article</span><div class="pg-open-text"><span class="pg-open-title">${esc(page.title || 'Page')}</span>${full ? '' : pageStatusHTML(page, {link: false})}</div>${full ? '' : '<span class="pg-open-btn">Open</span>'}`;
     if (full) el.innerHTML = pageStatusHTML(page);
     el.append(open);
+    el.pageData = page; el.pageSize = size;     // drawn as its frame once the desktop app trusts it (nativeVisualRepaint)
     return el;
   }
   el.classList.add('pg-framed');
@@ -133,7 +134,7 @@ function pageFullDraw(state) {
 // A pin's place (backend/cards.py) as the app's address.
 function pagePlaceHref(place) {
   const [kind, ...rest] = String(place).split(':'), id = encodeURIComponent(rest.join(':'));
-  return kind === 'dashboard' ? OVERVIEW : kind === 'person' ? HOME : kind === 'team' ? '#/team/' + id : kind === 'bot' ? '#/bot/' + id : '#/task/' + id;
+  return kind === 'dashboard' ? OVERVIEW : kind === 'growth' ? '#/growth' : kind === 'person' ? HOME : kind === 'team' ? '#/team/' + id : kind === 'bot' ? '#/bot/' + id : '#/task/' + id;
 }
 function pageFullHead(state) {
   const p = state.page, head = $('#pg-view .pg-head');
@@ -160,6 +161,7 @@ async function pageFullBody(state) {
   const card = window.pageCard(p, {size: 'full'});
   if (current && card.querySelector('iframe')) { body.replaceChildren(card); return; }
   card.querySelector('.pg-open')?.remove();
+  delete card.pageData;                         // this view draws its own frame again (nativeVisualRepaint)
   if (!current) card.querySelector('.pg-status').textContent = `v${state.shown} · an older version`;
   const box = document.createElement('div');
   box.className = 'pg-box pg-preview';

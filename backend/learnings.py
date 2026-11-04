@@ -33,6 +33,7 @@ from .statuses import PARKED_SQL
 from .store import H, Problem
 from .updates import ZONE
 from .views import human_only
+from . import bot_settings as BS
 
 LOG = logging.getLogger("tico.learnings")
 
@@ -131,9 +132,9 @@ def roster(c, settings, now=None):
     ran = {r[0] for r in c.execute("SELECT DISTINCT bot_id FROM attempts WHERE started_at>=?", (since,))}
     out = {}
     for row in c.execute("SELECT b.id,b.slug,b.display_name,coalesce(bc.description,'') AS description,"
-                         "coalesce(bc.config,'{}') AS config FROM bots b "
-                         "LEFT JOIN bot_config bc ON bc.bot=b.id WHERE b.state='active' "
-                         "AND coalesce(json_extract(bc.config,'$.shared_from'),'')='' "
+                         f"{BS.CONFIG} AS config FROM bots b "
+                         f"LEFT JOIN bot_config bc ON bc.bot=b.id {BS.JOIN} WHERE b.state='active' "
+                         f"AND coalesce(s.shared_from,'')='' "
                          "AND coalesce(bc.onboarding_state,'') NOT IN " + PARKED_SQL + " ORDER BY b.slug"):
         config = H._json(row["config"], {}) or {}
         if row["id"] in skip or row["id"] not in ran or is_external(config) or H.stateless(config):
@@ -683,8 +684,9 @@ def market_subjects(c, delivery, saw_text):
     from . import market
     begin, end = window(c, delivery)
     out = {}
-    for e in c.execute("SELECT * FROM market_events WHERE actor=? AND created_at>=? AND created_at<=? "
-                       "AND subject_kind IN ('entity','edge') ORDER BY created_at", ("bot:" + LIBRARIAN, begin, end)).fetchall():
+    for e in c.execute(f"SELECT {market.EVENT_COLUMNS} FROM history_events WHERE actor_id=? AND created_at>=? "
+                       "AND created_at<=? AND subject_type IN ('market_entity','market_edge') ORDER BY created_at",
+                       ("bot:" + LIBRARIAN, begin, end)).fetchall():
         entity_id = e["subject_id"] if e["subject_kind"] == "entity" else (market.edge(c, e["subject_id"]) or {}).get("src")
         entity = market.entity(c, entity_id) if entity_id else None
         if not entity:

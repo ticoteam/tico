@@ -7,6 +7,7 @@ import pytest
 from backend import check_models
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
+from backend import bot_settings as BS
 
 GROK = {"model": "grok-4.6", "runtime": "grok", "harness": "grok", "billing": "api"}
 
@@ -31,10 +32,10 @@ def parent_turn(api):
     """ops on Claude, working a person's task: its claimed turn."""
     company(api, "anthropic", "xai")
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config.update(runtime="claude", harness="claude", model="claude-sonnet-5-5",
                       fallback={"harness": "codex", "model": "gpt-6.1-sol"})
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     machine = runner(api)
     assign(api, machine, "ops")
     heartbeat(api, machine)
@@ -165,7 +166,7 @@ def test_a_limit_on_the_check_model_holds_the_check_alone_and_the_bot_keeps_work
     assert claim(api, machine) is None, "the check waits for Grok's reset"
     monkeypatch.setattr(H, "now", lambda: H.shift(reset, seconds=2))
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen_at=NULL,awake_since=NULL")   # the computer stayed in touch meanwhile
+        c.execute("UPDATE runner_states SET last_seen_at=NULL,awake_since=NULL")   # the computer stayed in touch meanwhile
     heartbeat(api, machine)
     again = claim(api, machine)
     assert again["task"]["id"] == sub["id"] and again["config"]["runtime"] == "grok"
@@ -239,7 +240,7 @@ def out_of_quota(api, machine, turn, resets_at=None):
 def later(api, monkeypatch, machine, at):
     monkeypatch.setattr(H, "now", lambda: at)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen_at=NULL,awake_since=NULL")   # the computer stayed in touch meanwhile
+        c.execute("UPDATE runner_states SET last_seen_at=NULL,awake_since=NULL")   # the computer stayed in touch meanwhile
     all_ready(api, machine)
 
 
@@ -262,7 +263,7 @@ def test_a_check_moves_to_its_next_model_once_its_default_login_is_out_of_quota(
     with api.app.state.store.read() as c:
         assert "the check moved to grok" in H.status(c, "ops")["focus"]
         assert c.execute("SELECT count(*) FROM events WHERE action='attempt.check_moved'").fetchone()[0] == 1
-        event = c.execute("SELECT old,new,note FROM task_events WHERE task_id=? AND field='check_model' "
+        event = c.execute("SELECT old,new,note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model' "
                           "AND old IS NOT NULL", (sub["id"],)).fetchone()
         assert (event["old"], event["new"]) == ("codex:gpt-6-luna", "grok:grok-4.6"), dict(event)
     shown = get(api, "tasks/" + sub["id"])

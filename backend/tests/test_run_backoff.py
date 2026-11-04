@@ -14,7 +14,7 @@ def at(monkeypatch, api, when):
     """The clock reads `when`, and the test computer has been reporting in all along."""
     monkeypatch.setattr(H, "now", lambda: when)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen_at=?,awake_since=NULL", (when,))
+        c.execute("UPDATE runner_states SET last_seen_at=?,awake_since=NULL", (when,))
 
 
 def fail(api, machine, attempt, error, summary="", **extra):
@@ -77,7 +77,7 @@ def test_a_prompt_too_large_to_send_compacts_first_then_starts_a_fresh_session_a
                 # The run that compacted first failed the same way: now the next run starts a new provider session,
                 # as a Clear does, and the failed run says why.
                 assert epoch["epoch"] == 1 and c.execute("SELECT count(*) FROM compact_first").fetchone()[0] == 0
-                assert tuple(c.execute("SELECT session_kind,session_why FROM turns WHERE id=?",
+                assert tuple(c.execute("SELECT session_kind,session_why FROM attempts WHERE id=?",
                                        (attempt["id"],)).fetchone()) == ("new", "prompt_too_long_after_compact")
             state = run_backoff.get(c, "ops")
         assert state["fails"] == fails and state["error_class"] == run_backoff.PROMPT_TOO_LONG
@@ -150,10 +150,10 @@ def test_a_new_session_after_a_prompt_too_large_to_send_is_in_the_tasks_history(
     second = claim(api, machine)
     assert second["task"]["id"] == task and second["config"]["compact_first"] is True
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='session'", (task,)).fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='session'", (task,)).fetchone()[0] == 0
     fail(api, machine, second, TOO_BIG)
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT field,new,note FROM task_events WHERE task_id=? AND field='session'", (task,)).fetchone()
+        row = c.execute("SELECT kind AS field,new,note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='session'", (task,)).fetchone()
         assert tuple(row) == ("session", "new", "Started a new session: the old one was still too large to send after compacting")
 
 

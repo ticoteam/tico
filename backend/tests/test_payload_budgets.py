@@ -10,6 +10,7 @@ from backend import hubdb as H
 from backend import threads as CORE
 from backend.store import encode
 from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.hold_rows import set_holds
 
 KB = 1024
 MARKER = "TOOL-OUTPUT-MARKER-7f3a"
@@ -41,6 +42,8 @@ def test_payloads_stay_under_their_budgets(api):
         # 2,000 tasks: 500 on ana (her Needs you), the rest on bots.
         clone(c, "tasks", row, 499, title=lambda i: f"Review plan {i}")
         clone(c, "tasks", row, 1500, owner_id=lambda i: "bot:ops", title=lambda i: f"Bot work {i}")
+        c.execute("UPDATE tasks SET check_back_at=?,check_back_note=? WHERE owner_id LIKE 'bot:%'",
+                  (H.shift(H.now(), hours=1), "Inspect the next result. " * 20))
         first = dict(c.execute("SELECT * FROM messages WHERE conversation_id=? ORDER BY rowid LIMIT 1", (cid,)).fetchone())
         # 1,000 long replies before it; a person's message would queue a run of its own.
         clone(c, "messages", {**first, "body": BODY, "sender_id": "bot:ops", "recipient_id": "human:ana"}, 1000,
@@ -295,8 +298,8 @@ def test_snoozed_notes_stay_out_of_the_board_and_the_task_keeps_its_note(api):
     with store.transaction() as c:
         row = dict(c.execute("SELECT * FROM tasks WHERE id=?", (task["id"],)).fetchone())
         clone(c, "tasks", row, 499, title=lambda i: f"Snoozed {i}")
-        c.execute("UPDATE tasks SET snoozed_until=?, snoozed_note=? WHERE title LIKE 'Snoozed %'",
-                  (H.shift(H.now(), days=5), note))
+        for (snoozed,) in c.execute("SELECT id FROM tasks WHERE title LIKE 'Snoozed %'").fetchall():
+            set_holds(c, snoozed, snoozed_until=H.shift(H.now(), days=5), snoozed_note=note)
     board = api.get("/api/v2/tasks?brief=1&limit=500&snoozed=only", headers=headers())
     rows = board.json()["tasks"]
     assert len(rows) == 500
@@ -304,31 +307,3 @@ def test_snoozed_notes_stay_out_of_the_board_and_the_task_keeps_its_note(api):
     whole = get(api, "tasks/" + task["id"])["task"]
     assert whole["holds"][0]["reason"] == note, "the task's own view keeps the note whole"
 
-
-def test_the_federation_status_pages_its_peerings_and_shared_threads(api):
-    """GET /api/v2/federation: one page of peerings and one of shared threads at a time, each with its cursor."""
-    other = "gi_" + "b" * 24
-    with api.app.state.store.transaction() as c:
-        for i in range(130):
-            thread = CORE.create(c, H.KEEPER, title=f"Shared {i}", audience="members", members=["human:ana"])["id"]
-            install = f"gi_{i:024x}"
-            c.execute("INSERT INTO federation_peerings(id,hq_peering_id,peer_install,direction,status,peer_company,created_at,"
-                      "updated_at) VALUES(?,?,?,?,?,?,?,?)",
-                      (f"fp_{i:04d}", f"hq_{i:04d}", install, "outgoing", "active", f"Acme {i} " + "x" * 100, H.now(), H.now()))
-            c.execute("INSERT INTO federation_threads(id,thread_id,home_install,origin_id,applied_through,high_seq,"
-                      "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-                      (uuid.uuid4().hex, thread, other, f"origin-{i:04d}", 1, 1, H.now(), H.now()))
-    first = get(api, "federation?limit=100")
-    assert len(first["peerings"]) == 100 and first["next_cursor"] and len(first["threads"]) == 100
-    assert first["threads_next_cursor"]
-    assert size(first) < 64 * KB
-    rest = get(api, f"federation?limit=100&cursor={first['next_cursor']}&threads_cursor={first['threads_next_cursor']}")
-    assert len(rest["peerings"]) == 30 and rest["next_cursor"] is None
-    assert len(rest["threads"]) == 30 and rest["threads_next_cursor"] is None
-    seen = [p["id"] for p in first["peerings"] + rest["peerings"]]
-    assert len(set(seen)) == 130
-    threads = [t["thread_id"] for t in first["threads"] + rest["threads"]]
-    assert len(set(threads)) == 130
-    assert first["peerings"][0]["company"].startswith("Acme 129 ")         # newest first
-    assert api.get("/api/v2/federation?limit=101", headers=headers()).status_code == 422
-    assert api.get("/api/v2/federation?cursor=nope", headers=headers()).status_code == 422

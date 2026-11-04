@@ -30,7 +30,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Store a Credential and grant it | Tools → Credentials → Add credential; then Access → Grant access |
 | Connect or review a Tool | Tools; Slack channels are under Tools → Slack channels |
 | Add or manage people and member rules | Settings → People |
-| Connect your Google account | Settings → My Google account |
+| Connect your Google account | Settings → Google |
 | Manage shared email and phone numbers | Settings → More → Email & Phone |
 | Choose AI providers | Settings → Models |
 | Connect the Tico AI Gateway | Settings → Models → Tico Gateway → Advanced ([Tico AI Gateway](ai-gateway.md)) |
@@ -47,9 +47,9 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | See the market map, or ask the Librarian about the market | Strategy → Market (`#/strategy/market`; `#/market` redirects there) |
 | See growth numbers and their sources, or marketing tasks | Growth (`#/growth`; Sources is a link on the page) ([Growth](growth.md)). Marketing tasks are on the Tasks page, type Marketing |
 | Review goals and KPIs | Goals; a goal's **Bet** picker links it to a strategy bet |
-| See the Company page, or share it | Overview → Company page (`#/overview/company-page`); the share icon has transparency, the address and readers. Owners and admins only ([Company page](company-page.md)) |
-| Change the Company page: editions, disclosure, stats, audiences, accent, logo | Overview → Company page → Manage (`#/company-page`) |
-| Contact support or continue a support thread | Ask → **Loop in Support** (phone: the Ask tab), or any `#/support` link |
+| See the Company page, or share it | Overview → Share (`#/overview/company-page`); the share icon has transparency, the address and readers. Owners and admins only ([Company page](company-page.md)) |
+| Change the Company page: editions, disclosure, stats, audiences, accent, logo | Overview → Share → Manage (`#/company-page`) |
+| Message the Tico team | **?** beside Search (phone: More drawer, beside Search), or any `#/support` link |
 
 All four system bots appear as **Built-in** in Settings > Bots. Neither Assistant nor BotOps has a rail entry: **Ask**
 (the sidebar's bottom row, ⌘J; the phone's middle tab) opens your Assistant over any page as **Tico Assistant**, `#/assistant`

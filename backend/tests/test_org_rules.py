@@ -11,6 +11,7 @@ from backend import rule_due as D
 from backend.auth import Identity
 from backend.store import H, encode
 from backend.tests.test_api import api, get, headers, post, put  # noqa: F401  (the api fixture)
+from backend import bot_settings as BS
 
 
 def set_roster(api, doc):
@@ -36,8 +37,10 @@ def org(api):
                        "support-tier-2": {"name": "Support Tier 2", "parent": "support"}},
     })
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET team='support-tier-2', config=json_set(config, '$.team', 'support-tier-2') WHERE bot='finance'")
-        c.execute("UPDATE bot_config SET team='product', config=json_set(config, '$.team', 'product') WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET team='support-tier-2' WHERE bot='finance'")
+        BS.update(c, 'finance', {'team': 'support-tier-2'})
+        c.execute("UPDATE bot_config SET team='product' WHERE bot='ops'")
+        BS.update(c, 'ops', {'team': 'product'})
     as_bot(api, "ops", "ops-test")
     as_bot(api, "finance", "finance-test")
 
@@ -76,7 +79,8 @@ def test_who_matches_a_group_a_nested_group_a_person_all_bots_and_a_later_bot(ap
     # A bot made after the rule is covered by all_bots, with no edit to the rule.
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('late-bot', 'late-bot', 'Late', 'active')")
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('late-bot','{}','', 'ana')")
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('late-bot','','ana')")
+        BS.write(c, 'late-bot', {})
     as_bot(api, "late-bot", "late-test")
     assert everyone_bots in matched(api, "bot:late-bot")
     assert support not in matched(api, "bot:late-bot")
@@ -90,7 +94,8 @@ def test_a_bot_changing_its_group_changes_which_group_rules_reach_it(api):
     support = rule(api, {"kind": "internal", "text": "Log every refund.", "who": {"groups": ["support"]}})["id"]
     assert support not in matched(api, "bot:ops")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET team='support-tier-2', config=json_set(config, '$.team', 'support-tier-2') WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET team='support-tier-2' WHERE bot='ops'")
+        BS.update(c, 'ops', {'team': 'support-tier-2'})
     assert support in matched(api, "bot:ops")
 
 
@@ -101,6 +106,22 @@ def test_with_matches_any_of_several_recipients(api):
     assert r in matched(api, "human:cara", ["bot:ops"])
     assert r in matched(api, "human:cara", ["bot:doc-updater", "bot:finance"])
     assert r not in matched(api, "human:cara", ["bot:doc-updater"])
+
+
+def test_a_peer_rule_from_add_rule_keeps_its_mention_with_and_ask_first_reviewer(api):
+    """Add rule sends Who, With, If broken and (under Ask first) a reviewer in one write; the text keeps its @mention as
+    written, for the Rules page to show as a chip. With a person, it reaches a bot only when that person is a recipient."""
+    org(api)
+    made = rule(api, {"kind": "internal", "text": "Ask @cara before you assign her a task.", "who": {"all_bots": True},
+                      "with": {"people": ["cara"]}, "if_broken": "escalate", "reviewer": "ben"})
+    assert made["text"] == "Ask @cara before you assign her a task."
+    assert made["if_broken"] == "escalate" and made["reviewer"]["id"] == "ben"
+    assert made["who"]["all_bots"] and [p["id"] for p in made["with"]["people"]] == ["cara"]
+    assert made["id"] in matched(api, "bot:ops", ["human:cara"])
+    assert made["id"] not in matched(api, "bot:ops", ["human:ben"])
+    # Stop is the default when If broken is left as the dialog opens it.
+    plain = rule(api, {"kind": "internal", "text": "Cite a source.", "who": {"all_bots": True}, "if_broken": "block"})
+    assert plain["if_broken"] == "block" and plain["reviewer"] is None
 
 
 def test_everyone_by_a_plain_member_is_refused(api):
@@ -235,7 +256,7 @@ def test_the_rules_list_is_paged(api):
 def test_a_turn_limit_set_on_the_bot_reads_back_as_its_sentence(api):
     org(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config, '$.turns_per_hour', 7) WHERE bot='ops'")
+        BS.update(c, 'ops', {'turns_per_hour': 7})
     texts = [s["text"] for s in get(api, "bots/ops/rules")["settings"]]
     assert "Up to 7 turns per hour" in texts
     assert "Team default: 2500 turns per day" in texts
@@ -247,7 +268,8 @@ def test_a_bot_with_no_team_of_its_own_is_in_its_managers_group(api):
     support = rule(api, {"kind": "internal", "text": "Log every refund.", "who": {"groups": ["support"]}})["id"]
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('intern', 'intern', 'Intern', 'active')")
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id,reports_to) VALUES('intern','{}','','ana','finance')")
+        c.execute("INSERT INTO bot_config(bot,team,owner_id,reports_to) VALUES('intern','','ana','finance')")
+        BS.write(c, 'intern', {})
     assert support in matched(api, "bot:intern")
 
 

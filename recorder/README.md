@@ -15,6 +15,30 @@ bash recorder/package-macos.sh
 
 The bundle is described by `tauri.conf.json` (product name "Tico Recorder", identifier `team.tico.recorder.native`, icons, macOS 14.2 minimum, hardened runtime), `Info.plist` (the microphone and meeting-audio usage text and the `tico-recorder://` link scheme) and `entitlements.plist` (audio input and network client; the app is not sandboxed). The identifier and the data folder `~/Library/Application Support/Tico Recorder Native` stay as they are, so microphone permission, keychain entries and recordings carry over from the earlier build. The folder name is read in `src/settings.rs`.
 
+## Screen sharing and meeting links
+
+
+People and More offer **Copy meeting link**. Copying a local recording first asks which Tico
+will receive its transcript and confirms a private live meeting; it never makes the meeting
+public. Add people in People so a private link works for them. Existing and ended meetings
+open directly after sign-in. A filed recording links to its filed meeting. Links use Tico's
+browser address, including when the recorder signs in through a runner hostname.
+
+**Share screen** opens a confirmation naming the audience, then the macOS system picker.
+A selected window or display is sent as a bounded live image feed (up to 5 fps, 1920 px),
+for documents and slides. It is not a full-motion video transport. Screen images are never
+saved or sent to bots. Recorder's own windows are excluded from display captures; if that
+cannot be done on the OS version, or Screen Recording permission is absent, the picker offers windows only. Capture does not begin at launch,
+on Record, on copying a link, or on reconnect. Other platforms currently report unsupported.
+
+A red **Sharing · Stop** control stays available in other recordings and the library. Stop, Pause or Discard,
+sending/finishing/deleting that meeting, sign-out, macOS stop and connection loss end the share.
+Stop revokes the server share independently of uploads; sign-out and quit attempt this before releasing credentials. Slow uploads have a size-based deadline and an independent heartbeat; oversized frames are compressed further or skipped. A restart never resumes it. Making a meeting public while sharing asks to stop first; the
+server also clears frames on visibility changes. An abandoned stream expires after ten seconds.
+The viewer requires sign-in and current meeting access and clears images when access is lost. A separate status check clears stopped shares even while an image is downloading.
+
+Older servers refuse the feature before the picker opens. Physical source selection, macOS permission prompts and the system clipboard require manual validation on a Mac.
+
 ## Releases and updates
 
 - `.github/workflows/recorder.yml` builds a universal (Apple silicon and Intel) `Tico-Recorder_<version>_universal.dmg`, the updater archive `Tico-Recorder.app.tar.gz` with its `.sig`, and `Tico-Recorder.dmg`, a copy under a stable name for the download link. GitHub turns spaces in asset names into dots, so the release names have no spaces; the product name keeps its space. It uses the desktop app's signing and updater secrets (see `app.yml`). Notarization runs when the Apple ID secrets are set.

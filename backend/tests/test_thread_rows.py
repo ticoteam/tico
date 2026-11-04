@@ -125,7 +125,7 @@ def test_a_long_dm_list_pages_on_its_own_and_a_page_reads_each_list_once(acme):
             threads.sidebar(c, v, limit=2)
         finally:
             c.set_trace_callback(None)
-    assert len([s for s in statements if "ORDER BY place, activity DESC" in s]) == 2
+    assert len([s for s in statements if "ORDER BY rank, activity DESC" in s]) == 2
 
 
 def test_a_cursor_from_one_merged_page_still_reads_and_a_bad_one_is_refused(api):
@@ -144,7 +144,7 @@ def dm_rows(api, token):
 def test_a_dm_row_names_the_others_without_a_members_read(acme):
     api, _ = acme
     one = ok(call(api, "POST", "threads/dm", "cara-test", {"members": ["human:eve"]}))
-    many = ok(call(api, "POST", "threads/dm", "cara-test", {"members": ["human:eve", "human:fay", "human:ben", "human:ana"]}))
+    many = ok(call(api, "POST", "threads/dm", "cara-test", {"members": ["human:eve", "human:fay", "human:ben", "human:ana"], "title": "Plans"}))
     rows = dm_rows(api, "cara-test")
     assert [p["actor"] for p in rows[one["id"]]["dm_with"]] == ["human:eve"] and rows[one["id"]]["dm_with_count"] == 1
     assert "human:cara" not in {p["actor"] for p in rows[many["id"]]["dm_with"]}

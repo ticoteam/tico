@@ -4,6 +4,7 @@ Every test runs against a fresh database in a temp directory with a small fake r
 nothing here reads `registry/` or the real `runtime/hub.db`.
 """
 import hashlib
+import importlib
 import json
 import re
 import sqlite3
@@ -19,6 +20,10 @@ from backend import marketing_tasks as MT
 from backend import strategy as S
 from backend import task_relations as TR
 from backend import wake_presets as WP
+from backend import bot_settings as BS
+
+# The table's DDL: migration 0070 owns it (bot_settings.py has none).
+_BOT_SETTINGS_TABLE = importlib.import_module("backend.migrations.0070_bot_settings").TABLE
 
 EMPLOYEES = {
     "coo": {"display_name": "COO", "status": "active", "host": "keeper", "runtime": "codex",
@@ -41,6 +46,22 @@ CMO = H.bot_actor("cmo")
 SEO = H.bot_actor("seo")
 COO = H.bot_actor("coo")
 ANALYTICS = H.bot_actor("analytics")
+
+# The run table as an install from before migration 0072 had it: a run's record in `turns` (the attempts table keeps
+# the lease). Its usage went to usage_facts in migration 0053, which also dropped turn_usage_segments.
+LEGACY_TURNS = ("CREATE TABLE turns (id TEXT PRIMARY KEY, bot TEXT, thread_id TEXT, started_at TEXT, finished_at TEXT, "
+                "trigger TEXT, message_id TEXT, task_id TEXT, exit TEXT, summary TEXT, input_tokens INTEGER, "
+                "cached_tokens INTEGER, output_tokens INTEGER, model TEXT, provider TEXT, est_cost_usd REAL, "
+                "billing TEXT, trigger_kind TEXT, trigger_source TEXT, writes INTEGER, outcome TEXT, "
+                "did_nothing INTEGER, purpose TEXT)")
+
+
+def with_legacy_run_tables(conn):
+    """Put back `turns` (empty) on a file `H.connect` made, and forget migration 0072, so
+    the numbered steps and the migrations run on them again as on an install from before it."""
+    conn.execute("DELETE FROM schema_migrations WHERE version>='0072' AND version NOT LIKE 'legacy%'")
+    conn.execute(LEGACY_TURNS)
+    conn.commit()
 
 
 class HubCase(unittest.TestCase):
@@ -70,16 +91,17 @@ class Schema(HubCase):
         task = H.task_create(self.conn, ANA, "Prepare packet", "Keep this task through upgrade.", CMO, lint=False)
         # Main has already applied the purpose migration; rotation must be appended after it.
         published_version = H.MIGRATIONS.index(H.RUN_PURPOSE_SCHEMA) + 1
+        with_legacy_run_tables(self.conn)
         self.conn.execute("INSERT INTO turns(id,bot,started_at,purpose) VALUES('before-rotation','cmo',?,'review PR')",
                           (H.now(),))
-        self.conn.execute("ALTER TABLE turns DROP COLUMN rotated")
         self.conn.execute(f"PRAGMA user_version={published_version}")
         self.conn.commit()
         H.migrate(self.conn)
-        self.assertIn("rotated", {r[1] for r in self.conn.execute("PRAGMA table_info(turns)")})
+        self.assertNotIn("turns", {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")})
+        self.assertIn("rotated", {r[1] for r in self.conn.execute("PRAGMA table_info(attempts)")})
         self.assertEqual(self.conn.execute("SELECT title FROM tasks WHERE id=?", (task["id"],)).fetchone()[0],
                          "Prepare packet")
-        self.assertEqual(self.conn.execute("SELECT purpose FROM turns WHERE id='before-rotation'").fetchone()[0],
+        self.assertEqual(self.conn.execute("SELECT purpose FROM attempts WHERE id='before-rotation'").fetchone()[0],
                          "review PR")
         self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
 
@@ -108,8 +130,8 @@ class Schema(HubCase):
         names = {r["name"] for r in self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertLessEqual({"bots", "humans", "conversations", "messages", "tasks",
-                              "task_events", "approvals", "bot_status", "bot_status_history",
-                              "schedules", "turns", "deltas", "rate_limits", "refusals",
+                              "history_events", "approvals", "bot_status", "bot_status_history",
+                              "schedules", "attempts", "deltas", "rate_limits", "refusals",
                               "events"}, names)
         indexes = {r["name"] for r in self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='index'")}
@@ -162,16 +184,47 @@ class GrowthRethink(unittest.TestCase):
         self.addCleanup(self.dir.cleanup)
         self.path = Path(self.dir.name) / "hub.db"
 
+    # The retired tables and columns as the release before the rethink created them. Growth's startup schema no
+    # longer makes them, so a file from that release is rebuilt with them here.
+    BEFORE = """
+CREATE TABLE gtm_drafts (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL DEFAULT '{}',
+  revision INTEGER NOT NULL DEFAULT 0, updated_by TEXT, updated_at TEXT);
+CREATE TABLE gtm_versions (id TEXT PRIMARY KEY, n INTEGER NOT NULL UNIQUE, body TEXT NOT NULL DEFAULT '{}',
+  note TEXT NOT NULL DEFAULT '', published_by TEXT, published_at TEXT NOT NULL);
+CREATE TABLE growth_ideas (
+  task_id TEXT PRIMARY KEY REFERENCES tasks(id), hypothesis TEXT NOT NULL DEFAULT '', prediction TEXT NOT NULL DEFAULT '',
+  bet_id TEXT, kpi_id TEXT, judged_kpi_id TEXT, ice_i INTEGER, ice_c INTEGER, ice_e INTEGER,
+  status TEXT NOT NULL DEFAULT 'idea', source_kind TEXT, source_ref TEXT, test_from TEXT, test_to TEXT, change TEXT,
+  stop_if TEXT, min_events INTEGER, audience TEXT, external_ref TEXT, result TEXT, learning TEXT, bet_effect TEXT,
+  confidence TEXT, verdict_at TEXT, verdict_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE growth_idea_channels (
+  task_id TEXT NOT NULL REFERENCES tasks(id), channel_id TEXT NOT NULL, PRIMARY KEY(task_id, channel_id));
+ALTER TABLE growth_settings ADD COLUMN framework TEXT NOT NULL DEFAULT '';
+ALTER TABLE growth_settings ADD COLUMN verdict_win_pct REAL NOT NULL DEFAULT 60;
+"""
+
     def before_rethink(self):
         """The file as the release before the rethink left it: every migration before it (not the ones after, which
-        would then sort after an applied one), and the strategy tables store.py makes at startup."""
+        would then sort after an applied one), the threads schema that release's modules made after the migrations
+        (0047 makes it now, unrecorded here so the full migrate still runs it), and the strategy tables store.py makes
+        at startup."""
         conn = sqlite3.connect(self.path, isolation_level=None)
         conn.row_factory = sqlite3.Row
         self.addCleanup(conn.close)
         every = migrations.files()
+        apply = migrations.apply
+        threads = importlib.import_module("backend.migrations.0047_native_threads_schema")
+
+        def apply_then_threads(conn, directory=None):
+            apply(conn, directory)
+            threads.up(conn)
+
         with unittest.mock.patch.object(migrations, "files",
-                                        lambda directory=None: [m for m in every if m.version < "0035_growth_rethink"]):
+                                        lambda directory=None: [m for m in every if m.version < "0035_growth_rethink"]), \
+                unittest.mock.patch.object(migrations, "apply", apply_then_threads):
             H.migrate(conn)
+        for statement in migrations.statements(self.BEFORE):
+            conn.execute(statement)
         for statement in S.SCHEMA:
             conn.execute(statement)
         return conn
@@ -287,25 +340,13 @@ class GrowthRethink(unittest.TestCase):
 
 
 class RegistrySync(HubCase):
-    def test_sync_is_idempotent_and_keeps_tokens_threads_and_quarantine(self):
-        token = H.issue_token(self.conn, "cmo")
-        self.conn.execute("UPDATE bots SET thread_id='t-1' WHERE slug='cmo'")
+    def test_sync_is_idempotent_and_keeps_quarantine(self):
         H.quarantine(self.conn, "seo", "test")
         H.sync_registry(self.conn, EMPLOYEES, PEOPLE)
         H.sync_registry(self.conn, EMPLOYEES, PEOPLE)
         self.assertEqual(len(H.bots(self.conn)), len(EMPLOYEES))
         self.assertEqual(len(H.humans(self.conn)), len(PEOPLE["people"]))
-        self.assertEqual(H.bot(self.conn, "cmo")["thread_id"], "t-1")
-        self.assertEqual(H.verify_bot(self.conn, "cmo", token)["slug"], "cmo")
         self.assertEqual(H.bot(self.conn, "seo")["state"], "quarantined")
-
-class Tokens(HubCase):
-    def test_a_wrong_or_rotated_token_is_refused(self):
-        first = H.issue_token(self.conn, "cmo")
-        self.refused("identity", H.verify_bot, self.conn, "cmo", "nope")
-        H.issue_token(self.conn, "cmo")                     # the keeper rotates on resume
-        self.refused("identity", H.verify_bot, self.conn, "cmo", first)
-        self.refused("identity", H.verify_bot, self.conn, "seo", first)   # never issued one
 
 
 # ----------------------------------------------------------------------------- rule 1
@@ -370,7 +411,7 @@ class Rule5Tasks(HubCase):
         self.assertEqual(opened["status"], "open")
         for column, field in (("done_at", "done_at"), ("closed_at", "closed_at"), ("closed_by_id", "closed_by")):
             self.assertIsNone(opened[column])
-            event = self.conn.execute("SELECT old,new FROM task_events WHERE task_id=? AND field=? ORDER BY id DESC LIMIT 1",
+            event = self.conn.execute("SELECT old,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? ORDER BY id DESC LIMIT 1",
                                       (row["id"], field)).fetchone()
             self.assertEqual(event["old"], closed[column])
             self.assertIsNone(event["new"])
@@ -432,10 +473,11 @@ class Rule5Tasks(HubCase):
         # Superseding its ask card exercises the server's versioned unblock path.
         self.conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
         self.conn.execute(re.search(r"CREATE TABLE IF NOT EXISTS bot_config\(.*?\);", SCHEMA, re.S).group(0))
+        self.conn.execute(_BOT_SETTINGS_TABLE)
         self.conn.execute("ALTER TABLE bot_config ADD COLUMN access TEXT")
         self.conn.execute("ALTER TABLE bot_config ADD COLUMN onboarding_state TEXT")
-        self.conn.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('cmo',?, 'ana')",
-                          (json.dumps({"bot_contact": "tasks"}),))
+        self.conn.execute("INSERT INTO bot_config(bot,owner_id) VALUES('cmo','ana')")
+        BS.write(self.conn, 'cmo', {'bot_contact': 'tasks'})
         parent = H.task_create(self.conn, CMO, "Plan the launch week", "All of it.", ANALYTICS)
         row = H.task_create(self.conn, CMO, "Pick the hero image", "Two drafts.", SEO, parent_id=parent["id"])
         H.task_update(self.conn, SEO, row["id"], status="waiting", waiting_on="ana", note="Pick one image.")
@@ -936,7 +978,7 @@ class WaitingWithDependency(HubCase):
         self.assertEqual(done['status'], 'done')
         self.assertEqual(H.task(self.conn, child['id'])['status'], 'open', 'the subtask stays open')
         said = [e['new'] for e in H._rows(self.conn.execute(
-            "SELECT new FROM task_events WHERE task_id=? AND field='children'", (parent['id'],)))]
+            "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='children'", (parent['id'],)))]
         self.assertEqual(said, ['Still open: Approve the final copy'])
 
     def test_invalid_dependency_is_refused(self):
@@ -1539,6 +1581,7 @@ class TurnLegacyUsageDropped(HubCase):
 
     def install_as_before_measured_usage(self):
         self.before("0009")
+        with_legacy_run_tables(self.conn)
         for column, kind in (("tokens_in", "INTEGER"), ("tokens_out", "INTEGER"), ("cost", "REAL")):
             self.conn.execute(f"ALTER TABLE turns ADD COLUMN {column} {kind}")
         now = H.now()
@@ -1554,14 +1597,14 @@ class TurnLegacyUsageDropped(HubCase):
     def test_the_upgrade_moves_the_legacy_tokens_and_cost_and_drops_the_columns(self):
         self.install_as_before_measured_usage()
         migrations.apply(self.conn)
-        columns = {r[1] for r in self.conn.execute("PRAGMA table_info(turns)")}
+        columns = {r[1] for r in self.conn.execute("PRAGMA table_info(attempts)")}
         self.assertFalse({"tokens_in", "tokens_out", "cost"} & columns)
         self.assertEqual([tuple(r) for r in self.conn.execute(
-            "SELECT id, input_tokens, cached_tokens, output_tokens, est_cost_usd FROM turns ORDER BY id")],
+            "SELECT id, input_tokens, cached_tokens, output_tokens, est_cost_usd FROM attempts ORDER BY id")],
             [("cost-only", None, None, None, 9.0), ("measured", 100, 50, 10, 0.2), ("old-run", 500, None, 5, 0.75)])
 
     def test_the_run_totals_read_the_moved_numbers(self):
         self.install_as_before_measured_usage()
         migrations.apply(self.conn)
-        totals = {r[0]: r[1] for r in self.conn.execute(f"SELECT t.id, {WP.RUN_TOKENS} FROM turns t")}
+        totals = {r[0]: r[1] for r in self.conn.execute(f"SELECT a.id, {WP.RUN_TOKENS} FROM attempts a")}
         self.assertEqual(totals, {"cost-only": 0, "measured": 160, "old-run": 505})

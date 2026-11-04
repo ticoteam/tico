@@ -60,10 +60,14 @@ For example, **3 running · 2 starting · 7 waiting for quota (oldest 2 h) · 5 
 The counts describe the computer's total load, including work belonging to other people. Wait reasons never name
 bots, tasks, people or accounts. The bot list still follows each viewer's access.
 
-On an upgraded runner, only running and starting turns occupy a place. A login, quota or other pre-start wait holds
-none, so unrelated work can start. Waiting for a lane or login releases the place; continuing requires a fresh atomic
-reservation. Two turns cannot take the last place together. Codex's shared ChatGPT login does not normally queue
-turns ([sharing a sign-in](#bots-sharing-one-chatgpt-sign-in-run-side-by-side)).
+On an upgraded runner, a turn holds its place from its claim until it ends. A computer runs up to its turn limit, and
+holds at most twice that in claimed work, waiting turns included; the rest stays queued on the server, unleased, until
+a claim ends. A turn claimed past the limit holds no place: its start is refused as "computer busy" until one frees. A
+login, quota or other pre-start wait is parked: the turn keeps its claim but takes no start place, so
+other work can start beside it. Waiting for
+a lane or login releases only the start reservation; continuing requires a fresh atomic reservation. Two turns cannot
+take the last start reservation together. Codex's shared ChatGPT login does not normally queue turns
+([sharing a sign-in](#bots-sharing-one-chatgpt-sign-in-run-side-by-side)).
 
 A starting turn reserves a place for up to **3 minutes (180 seconds)**, including active Git and runtime preparation.
 Keeping that preparation active does not extend the deadline. If the turn has not started, its place is released and
@@ -213,7 +217,12 @@ installed, the person's own first, and runs the sign-in there: `claude setup-tok
 own. That computer's own login stays as it was. The page shows the link and any code, never the result, which the
 computer sends straight to Tico and keeps no copy of. If it has to run on someone else's computer, the page says so before
 the sign-in, since the result passes through that computer; cancel and paste to avoid that. With no such computer,
-**Connect** is off and pasting still works. A sign-in the command reports as failed saves nothing.
+**Connect** is off and pasting still works. A sign-in the command reports as failed saves nothing. If the sign-in cannot
+accept the code and asks to retry, Tico ends that attempt and offers **Try again**. Open the new link and use the code
+from that page; a code from the previous attempt does not carry over.
+The computer's runner log records the sign-in ID, stages, elapsed time, command exit code and a safe failure category
+(code rejected, OAuth network error, or another OAuth error). It never records the authorization link, code, token or
+raw command output. A generic code rejection cannot say whether that code expired, was reused or was incomplete.
 Connecting a saved subscription is **Reconnect**, and asks first as a pasted value does. It belongs to the company; the list says
 who added it. Owners and admins add, rename, reconnect and remove them in **Settings > Models**; anyone who sees that
 page sees the list (name, kind, status, computers, usage), never a value.
@@ -273,7 +282,8 @@ registered: choose **Add computer**.
 
 ## A computer's pop-up
 
-Click a row to open its pop-up. Its sections, top to bottom:
+Click a row to open its pop-up. Owners and admins rename the computer with the pencil next to its name (1 to 100
+characters; a cloud machine made again keeps the name). Its sections, top to bottom:
 
 1. **Connections**: one line per AI tool, the computer's login for it: the tool, "Computer's login" (or "Shared key"),
    the signed-in account and plan, sign-in state, usage (weekly and, where the tool reports one, the 5-hour window) and

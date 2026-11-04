@@ -1,7 +1,11 @@
 # A pushed version tag becomes a GitHub release: the one-line installers (install.sh and the Windows install-wsl.ps1 with this tag baked in, the compose bundle, SHA256SUMS), and the Rust runner for Mac and Linux checkouts (tico-runner-<os>-<arch>.gz, tico-runner-SHA256SUMS).
-# Nothing is built here: the runner binaries and the three images are the ones the tag's Release validation run built
-# and tested (ci.yml). This workflow publishes those binaries and points the version tags at those image digests, after
-# checking each image says it is this version. The server release never waits for desktop builds.
+# The Linux binaries and the three images are the ones the tag's Release validation run built and tested (ci.yml). This
+# workflow publishes those binaries and points the version tags at those image digests, after checking each image says
+# it is this version. The server release never waits for Mac or desktop builds.
+# The Mac runner and relay (no gate part runs on a Mac) are carried forward from the previous release when their sources
+# did not change, and published with it. When they did change they are built here, beside the publication, and added to
+# the published release with the checksum files rewritten after them; until then a Mac checkout's update waits
+# (runner_support/release_update.py) instead of failing.
 # The desktop app follows: built only when the shell changed since the previous release, otherwise the previous release's
 # desktop files and updater manifest are carried forward. Either way they are added to the published release afterwards,
 # and a desktop failure leaves the server release in place. Tico Recorder (recorder.yml) follows the same way, with
@@ -90,8 +94,66 @@ jobs:
           echo "run=$run" >> "$GITHUB_OUTPUT"
           echo "Release validation run $run passed for $GITHUB_SHA as $GITHUB_REF_NAME."
 
-  release:
+  # Do the Mac binaries need building? Only when what the runner or relay is built from changed since the previous
+  # release, or that release lacks them; otherwise release carries them forward. A manual rebuild of a published
+  # release builds them only if it lacks them. Always runs (a dry run too): release needs it.
+  runner-changes:
     needs: validated
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.diff.outputs.build }}
+      previous: ${{ steps.diff.outputs.previous }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.validated.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.validated.outputs.sha }}
+          VERSION: ${{ needs.validated.outputs.version }}
+          PUBLISHED: ${{ needs.validated.outputs.published }}
+        run: |
+          # The four Mac binaries are on the release and its checksum files list them: macos-assets uploads the
+          # checksum files last, so one it did not finish counts as missing (a Mac checkout downloads only what they list).
+          has_mac() {
+            local names name platform sums
+            names="$(gh release view "$1" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null)" || return 1
+            sums="$(mktemp -d)"
+            gh release download "$1" -R "$GITHUB_REPOSITORY" -D "$sums" -p tico-runner-SHA256SUMS -p tico-screen-relay-SHA256SUMS 2>/dev/null || return 1
+            for platform in macos-arm64 macos-x86_64; do
+              for name in tico-runner tico-screen-relay; do
+                grep -qx "$name-$platform.gz" <<<"$names" || return 1
+                grep -Eq "^[0-9a-f]{64} [ *]$name-$platform\.gz$" "$sums/$name-SHA256SUMS" || return 1
+              done
+            done
+          }
+          if [ "$PUBLISHED" = true ]; then
+            build=true
+            if has_mac "$VERSION"; then build=false; fi
+            echo "build=$build" >> "$GITHUB_OUTPUT"
+            echo "Mac binaries for the published $VERSION: build=$build"
+            exit 0
+          fi
+          previous="$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -vx "$VERSION" \
+            | while read -r tag; do git merge-base --is-ancestor "$tag" "$SHA" && { echo "$tag"; break; }; done)"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          build=true
+          # runner-rs/harnesses is part of the runner's source fingerprint (runner-rs/build.rs). A change to the macos job
+          # alone (say, its Rust toolchain) does not rebuild: it takes effect with the next runner or relay change.
+          if [ -n "$previous" ] && git diff --quiet "$previous" "$SHA" -- runner-rs relay-rs \
+             && has_mac "$previous"; then
+            build=false
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "Mac binaries: build=$build (previous release $previous)"
+
+  release:
+    needs: [validated, runner-changes]
     if: needs.validated.outputs.published != 'true'
     runs-on: ubuntu-24.04
     permissions:
@@ -110,15 +172,30 @@ jobs:
           persist-credentials: false
       - name: Download the validated runner binaries and image digests
         run: |
-          gh run download "$RUN" -R "$GITHUB_REPOSITORY" -p 'runner-*' -D "$RUNNER_TEMP/runner"
+          gh run download "$RUN" -R "$GITHUB_REPOSITORY" -p 'runner-linux-*' -D "$RUNNER_TEMP/runner"
           gh run download "$RUN" -R "$GITHUB_REPOSITORY" -p 'image-*' -D "$RUNNER_TEMP/images"
           mkdir -p dist/runner
           find "$RUNNER_TEMP/runner" -name '*.gz' -exec mv {} dist/runner/ \;
-          for platform in macos-arm64 macos-x86_64 linux-x86_64 linux-arm64; do
+          for platform in linux-x86_64 linux-arm64; do
             for name in tico-runner tico-screen-relay; do
               test -s "dist/runner/$name-$platform.gz" || { echo "::error::Run $RUN has no $name-$platform.gz"; exit 1; }
             done
           done
+      # Same runner and relay sources as the previous release: its Mac binaries are this release's (a Mac checkout
+      # checks a binary's --build-id, the source fingerprint, not the release it was first built for).
+      - name: Carry the previous release's Mac binaries forward
+        if: needs.runner-changes.outputs.build != 'true'
+        env:
+          PREVIOUS: ${{ needs.runner-changes.outputs.previous }}
+        run: |
+          gh release download "$PREVIOUS" -R "$GITHUB_REPOSITORY" -D dist/runner \
+            -p 'tico-runner-macos-*.gz' -p 'tico-screen-relay-macos-*.gz'
+          for platform in macos-arm64 macos-x86_64; do
+            for name in tico-runner tico-screen-relay; do
+              test -s "dist/runner/$name-$platform.gz" || { echo "::error::$PREVIOUS has no $name-$platform.gz"; exit 1; }
+            done
+          done
+          echo "Mac binaries carried forward from $PREVIOUS"
       - name: Checksum the runner binaries
         run: |
           (cd dist/runner && sha256sum tico-runner-*.gz > tico-runner-SHA256SUMS)
@@ -181,6 +258,85 @@ jobs:
           flags=()
           case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
           gh release create "$VERSION" "${files[@]}" --title "$VERSION" --notes "" --verify-tag "${flags[@]}"
+
+  # The Mac runner and relay, built from the tag when runner-changes says so, beside the publication. A GitHub-hosted
+  # macOS runner can take 5-15 minutes to start; nothing waits for it but macos-assets.
+  macos:
+    needs: [validated, runner-changes]
+    if: needs.validated.outputs.dry_run != 'true' && needs.runner-changes.outputs.build == 'true'
+    strategy:
+      matrix:
+        include:
+          - {name: macos-arm64, target: aarch64-apple-darwin}
+          - {name: macos-x86_64, target: x86_64-apple-darwin}
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.validated.outputs.sha }}
+          persist-credentials: false
+      - name: Install Rust
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup toolchain install 1.92 --profile minimal --target "$TARGET" && rustup default 1.92
+      - name: Build tico-runner and tico-screen-relay
+        env:
+          TARGET: ${{ matrix.target }}
+          NAME: ${{ matrix.name }}
+          TICO_VERSION: ${{ needs.validated.outputs.version }}
+        run: |
+          # Two crates with their own target directories, built side by side; both must succeed.
+          (cd runner-rs && cargo build --release --locked --target "$TARGET") & runner=$!
+          (cd relay-rs && cargo build --release --locked --target "$TARGET") & relay=$!
+          status=0
+          wait "$runner" || { echo "::error::tico-runner did not build"; status=1; }
+          wait "$relay" || { echo "::error::tico-screen-relay did not build"; status=1; }
+          [ "$status" = 0 ] || exit 1
+          mkdir -p dist
+          gzip -9 -c "runner-rs/target/$TARGET/release/tico-runner" > "dist/tico-runner-$NAME.gz"
+          gzip -9 -c "relay-rs/target/$TARGET/release/tico-screen-relay" > "dist/tico-screen-relay-$NAME.gz"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-runner-${{ matrix.name }}
+          path: dist/*.gz
+          retention-days: 30
+          if-no-files-found: error
+
+  # Adds the new Mac binaries to the published release, then rewrites both checksum files with their lines: a Mac
+  # checkout downloads only a binary its release's checksum file lists, so it never fetches one that is not there yet.
+  macos-assets:
+    needs: [validated, release, macos]
+    if: >-
+      ${{ !cancelled() && needs.macos.result == 'success'
+      && (needs.release.result == 'success' || needs.release.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # uploads the Mac binaries to the published release
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.validated.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: macos-runner-*
+          path: dist/mac
+          merge-multiple: true
+      - name: Add the Mac binaries and their checksums to the release
+        run: |
+          mkdir -p dist/sums
+          gh release download "$VERSION" -R "$GITHUB_REPOSITORY" -D dist/sums -p tico-runner-SHA256SUMS -p tico-screen-relay-SHA256SUMS
+          for name in tico-runner tico-screen-relay; do
+            for platform in macos-arm64 macos-x86_64; do
+              test -s "dist/mac/$name-$platform.gz" || { echo "::error::no $name-$platform.gz was built"; exit 1; }
+            done
+            { grep -v -- '-macos-' "dist/sums/$name-SHA256SUMS" || true; (cd dist/mac && sha256sum "$name"-macos-*.gz); } > "dist/$name-SHA256SUMS"
+          done
+          cat dist/*-SHA256SUMS
+          gh release upload "$VERSION" -R "$GITHUB_REPOSITORY" dist/mac/*.gz --clobber
+          gh release upload "$VERSION" -R "$GITHUB_REPOSITORY" dist/tico-runner-SHA256SUMS dist/tico-screen-relay-SHA256SUMS --clobber
 
   # Does this tag need new desktop apps? Only when what the shell is built from changed since the previous release.
   desktop-changes:

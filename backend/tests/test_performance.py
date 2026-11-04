@@ -129,9 +129,8 @@ def test_a_bot_the_reader_may_not_see_is_unnamed_in_turns_overloads_and_the_summ
     start = (int(time.time()) // 60 - 12) * 60
     with api.app.state.store.transaction() as c:               # the Legal bot's turn ran on this computer
         counsel = H.resolve_bot(c, "counsel")["id"]
-        c.execute("UPDATE attempts SET bot_id=?,created_at=? WHERE id=?", (counsel, P._iso(start - 60), attempt["id"]))
-        c.execute("INSERT OR REPLACE INTO turns(id,bot,model) VALUES(?,?,'legal-model-x')",
-                  (attempt["id"], "bot:" + counsel))
+        c.execute("UPDATE attempts SET bot_id=?,created_at=?,usage_model='legal-model-x' WHERE id=?",
+                  (counsel, P._iso(start - 60), attempt["id"]))
     post(api, "runners/performance", {"samples": [sample(start + 60 * i, cpu=97.0) for i in range(10)]}, token=r["token"])
     cara = get(api, f"computers/{rid}/performance?hours=1", token="cara-test")
     assert cara["runs"][0]["bot"] == "counsel" and cara["runs"][0]["id"] == attempt["id"]
@@ -296,11 +295,11 @@ def test_steering_polls_and_output_batches_store_no_retry_receipts_and_replay_th
 
 def test_one_tasks_history_of_one_field_reads_by_task(api):
     with api.app.state.store.read() as c:
-        for sql in ("SELECT coalesce(max(rowid),0) FROM task_events WHERE task_id=? AND field='status' "
+        for sql in ("SELECT coalesce(max(rowid),0) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' "
                     "AND old IN ('done','closed','declined') AND new NOT IN ('done','closed','declined')",
-                    "SELECT * FROM task_events WHERE task_id=? AND field='owner' ORDER BY created_at DESC, rowid DESC LIMIT 1"):
+                    "SELECT id, subject_id AS task_id, created_at, actor_id AS actor, kind AS field, old, new, note, action_id, via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='owner' ORDER BY created_at DESC, rowid DESC LIMIT 1"):
             plan = " ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql, ("t",)))
-            assert "task_events_task_field" in plan, plan
+            assert "history_events_subject_kind" in plan, plan
 
 
 def test_a_steering_poll_with_nothing_queued_answers_without_the_writer(api, monkeypatch):

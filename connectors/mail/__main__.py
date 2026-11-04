@@ -254,7 +254,7 @@ def cmd_e2e(args):
 
 def cmd_mint_token(args):
     """A short-lived access token for one mailbox, for the runner's supervisor to hand a turn
-    (runner/credential_socket.py). Prints the token and its expiry; the key itself never leaves."""
+    (runner_support/credential_socket.py). Prints the token and its expiry; the key itself never leaves."""
     try:
         token, expiry, granted = auth.mint_token(args.mailbox, args.service)
     except oauth.SignInFailed as e:
@@ -2632,6 +2632,7 @@ def cmd_sync_export(args):
         rows = db.unpushed(conn, mailbox=mailbox if mailbox else None,
                            mailboxes=None if mailbox or boxes is None else boxes,
                            limit=getattr(args, "limit", None) or SYNC_LIMIT)
+        db.annotate_known_senders(conn, rows)
     finally:
         conn.close()
     payload = {"ok": True, "count": len(rows), "messages": rows}

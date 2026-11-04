@@ -27,8 +27,7 @@ LIMIT_MAX = 100
 BYTES_MAX = 96 * 1024
 BOTS_MAX = 20            # bots named on one row; `more_bots` counts the rest
 SCAN_MAX = 500           # bots read for one row (GitHub repository access)
-KINDS = ("slack", "github", "mailbox", "inbox", "meetings", "trigger", "webhook", "postal", "listening", "slack_link",
-         "peer")
+KINDS = ("slack", "github", "mailbox", "inbox", "meetings", "trigger", "webhook", "postal", "listening", "slack_link")
 
 
 def table(c, name):
@@ -306,39 +305,7 @@ def thread_link_rows(v):
     return out
 
 
-def peers(v, after, n):
-    return keyed(peer_rows(v), after, n)
-
-
-def peer_rows(v):
-    """Other companies' Tico installs this one peers with. The owner sees every peering; anyone else sees the peers
-    that carry a thread they can read, and no Configure."""
-    from . import threads as TH
-    if not table(v.c, "federation_peerings"):
-        return []
-    found = {r["peer_install"]: dict(r) for r in v.c.execute(
-        "SELECT * FROM federation_peerings WHERE status<>'revoked' ORDER BY peer_install LIMIT ?", (SCAN_MAX,))}
-    if v.who.role != "owner":
-        reader = TH.viewer(v.auth, v.who)
-        carried = set()
-        for t in v.c.execute("SELECT thread_id, home_install FROM federation_threads ORDER BY thread_id LIMIT ?",
-                             (SCAN_MAX,)):
-            if not TH.readable(v.c, reader, t["thread_id"]):
-                continue
-            carried.add(t["home_install"])
-            carried.update(m["install"] for m in v.c.execute(
-                "SELECT install FROM federation_members WHERE thread_id=? AND status='active'", (t["thread_id"],)))
-        found = {install: p for install, p in found.items() if install in carried}
-    out = []
-    for install, p in sorted(found.items()):
-        status = ("waiting" if p["status"] == "pending" else "paused" if p["paused_at"] else
-                  "on" if p["status"] == "active" else "error")
-        out.append(row("peer", install, p["peer_company"] or install, status, "company", "Shared threads",
-                       "#/library/connections", detail=install, can=v.who.role == "owner"))
-    return out
-
-
-SOURCES = (slack, github, mailboxes, inboxes, meetings, triggers, webhooks, postal, listening, thread_links, peers)
+SOURCES = (slack, github, mailboxes, inboxes, meetings, triggers, webhooks, postal, listening, thread_links)
 
 
 def view(c, auth, who, settings):

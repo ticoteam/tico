@@ -169,7 +169,7 @@ def test_old_undated_questions_go_back_only_in_the_weekday_batch_of_the_hourly_s
         asks = [pick(c, t["id"], f"Which {t['title'][7:]}?") for t in tasks]
         old = "2026-09-24T17:00:00.000000Z"                                # weeks before, past the old 14-day expiry
         c.executemany("UPDATE messages SET created_at=? WHERE id=?", [(old, a["id"]) for a in asks])
-        c.execute("UPDATE task_events SET created_at=?", (old,))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task'", (old,))
 
     def tick(at):
         Scheduler(store, execution).tick(datetime.fromisoformat(at).replace(tzinfo=timezone.utc))

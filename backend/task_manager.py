@@ -185,7 +185,7 @@ def _reviews(c):
     one for the same parent and step."""
     from . import step_flow
     rows = H._rows(c.execute(
-        "SELECT t.* FROM tasks t JOIN task_relations r ON r.from_task=t.id AND r.kind='parent' "
+        f"SELECT t.* FROM {H.TASKS} t JOIN task_relations r ON r.from_task=t.id AND r.kind='parent' "
         "JOIN tasks p ON p.id=r.to_task "
         "WHERE coalesce(t.private,1)=0 AND t.status IN ('open','doing','waiting','review','ready') "
         "AND (EXISTS(SELECT 1 FROM task_steps s WHERE s.type_id=p.type_id AND s.flow LIKE '%\"check\":%') "
@@ -221,7 +221,7 @@ def _merged(c, at):
     """A ticket whose pull requests have all merged (or whose release shipped) and that is still in a working step."""
     rows = H._rows(c.execute(
         "SELECT t.*, max(l.state='shipped') AS shipped, max(l.pr_merged_at) AS merged_at, min(l.title) AS pr "
-        "FROM tasks t JOIN task_links l ON l.task_id=t.id AND l.kind='pr' "
+        f"FROM {H.TASKS} t JOIN task_links l ON l.task_id=t.id AND l.kind='pr' "
         "WHERE coalesce(t.private,1)=0 AND t.status IN ('open','doing','waiting','review','ready') "
         "AND l.state IN ('merged','shipped') AND NOT EXISTS(SELECT 1 FROM task_links o WHERE o.task_id=t.id AND o.kind='pr' "
         "AND coalesce(o.state,'open') NOT IN ('merged','closed','shipped')) GROUP BY t.id"))
@@ -288,7 +288,7 @@ def _owner_review(c, at):
 def _duplicates(c):
     # Titles match by H.title_key, the create refusal's rule, so only pairs of the same requester and owner are read.
     rows = H._rows(c.execute(
-        "SELECT * FROM tasks WHERE coalesce(private,1)=0 AND status IN ('open','doing','waiting','review','ready') AND id IN ("
+        f"SELECT * FROM {H.TASKS} tasks WHERE coalesce(private,1)=0 AND status IN ('open','doing','waiting','review','ready') AND id IN ("
         "SELECT id FROM tasks t WHERE coalesce(t.private,1)=0 AND t.status IN ('open','doing','waiting','review','ready') "
         "AND EXISTS(SELECT 1 FROM tasks o WHERE o.id<>t.id AND o.requester_id=t.requester_id AND o.owner_id=t.owner_id "
         "AND coalesce(o.private,1)=0 AND o.status IN ('open','doing','waiting','review','ready'))) ORDER BY created_at, id"))
@@ -343,7 +343,7 @@ def render(c, name, items, more):
 
 def _open_report(c, name):
     like = "Task check: " + name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + " (%"
-    return H._one(c, "SELECT * FROM tasks WHERE owner_id=? AND requester_id=? AND title LIKE ? ESCAPE '\\' "
+    return H._one(c, f"SELECT * FROM {H.TASKS} tasks WHERE owner_id=? AND requester_id=? AND title LIKE ? ESCAPE '\\' "
                      "AND status IN ('open','doing','waiting','review','ready') ORDER BY created_at DESC LIMIT 1",
                   (ACTOR, H.KEEPER, like))
 

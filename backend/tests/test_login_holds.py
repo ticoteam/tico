@@ -7,6 +7,7 @@ from pathlib import Path
 from backend import health_monitor, login_holds
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, expire, get, headers, post, ready, runner
+from backend import bot_settings as BS
 
 CLAUDE = "You've hit your session limit · resets 2:40am (UTC)"
 
@@ -44,7 +45,7 @@ def at(monkeypatch, when, api=None):
     monkeypatch.setattr(H, "now", lambda: when)
     if api is not None:
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE runners SET last_seen_at=?,awake_since=NULL", (when,))
+            c.execute("UPDATE runner_states SET last_seen_at=?,awake_since=NULL", (when,))
 
 
 def test_thirteen_queued_jobs_after_a_limit_start_one_probe_at_the_reset_not_thirteen_turns(api, monkeypatch):
@@ -55,7 +56,7 @@ def test_thirteen_queued_jobs_after_a_limit_start_one_probe_at_the_reset_not_thi
     assign(api, machine, "ops")
     assign(api, machine, "finance")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
     ready(api, machine, ["ops", "finance"])
     for n in range(12):
         post(api, "tasks", {"owner": "ops", "title": f"Review change {n}", "body": "Please review it."})
@@ -86,7 +87,7 @@ def test_a_hold_survives_a_runner_restart_and_a_lost_probe_is_retried_as_the_sam
     machine = runner(api)
     assign(api, machine, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=8 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=8 WHERE runner_id=?", (machine["runner_id"],))
     ready(api, machine, ["ops"])
     for n in range(3):
         post(api, "tasks", {"owner": "ops", "title": f"Task {n}", "body": "Please do it."})
@@ -147,7 +148,7 @@ def test_try_now_on_a_shared_login_starts_one_probe_across_bots_and_a_second_lim
     assign(api, machine, "ops")
     assign(api, machine, "finance")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
     ready(api, machine, ["ops", "finance"])
     for n in range(3):
         post(api, "tasks", {"owner": "ops", "title": f"Ops {n}", "body": "Please do it."})
@@ -199,7 +200,7 @@ def test_a_held_login_sends_the_turn_to_a_ready_fallback_and_waits_only_when_non
     machine = runner(api)
     assign(api, machine, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=8 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=8 WHERE runner_id=?", (machine["runner_id"],))
     signed_in(api, machine, ["ops"], ["codex"])
     for n in range(3):
         post(api, "tasks", {"owner": "ops", "title": f"Task {n}", "body": "Please do it."})
@@ -251,7 +252,7 @@ def test_a_same_login_named_fallback_uses_the_next_company_row_or_waits_without_
     config = {"runtime": "codex", "harness": "codex", "model": "gpt-6-luna",
               "fallback": {"harness": "codex", "model": "gpt-6-luna"}}
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_patch(config,?) WHERE bot='ops'", (json.dumps(config),))
+        BS.update(c, "ops", config)
     signed_in(api, machine, ["ops"], ["codex", "claude"])
     for n in range(2):
         post(api, "tasks", {"owner": "ops", "title": f"Same login work {n}", "body": "Please do it."})
@@ -275,7 +276,7 @@ def test_a_bot_whose_fallback_is_off_or_not_signed_in_waits_out_the_hold(api, mo
     machine = runner(api)
     assign(api, machine, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=8 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=8 WHERE runner_id=?", (machine["runner_id"],))
     signed_in(api, machine, ["ops"], [])
     for n in range(2):
         post(api, "tasks", {"owner": "ops", "title": f"Task {n}", "body": "Please do it."})
@@ -284,8 +285,7 @@ def test_a_bot_whose_fallback_is_off_or_not_signed_in_waits_out_the_hold(api, mo
     signed_in(api, machine, ["ops"], [])
     assert claim(api, machine) is None                      # no other provider is signed in here
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.fallback',json('{\"off\":true}')) "
-                  "WHERE bot='ops'")
+        BS.update(c, 'ops', {'fallback': {'off': True}})
     signed_in(api, machine, ["ops"], ["codex"])
     assert claim(api, machine) is None                      # the bot turned its fallback off
 
@@ -304,7 +304,7 @@ def two_bots(api, monkeypatch, runtimes=("codex",)):
     for bot in ("ops", "finance"):
         assign(api, machine, bot)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
     signed_in(api, machine, ["ops", "finance"], runtimes)
     return machine
 
@@ -439,7 +439,7 @@ def test_a_lane_leased_before_the_limit_cannot_clear_the_login_hold(api, monkeyp
     for bot in ("ops", "finance"):
         assign(api, machine, bot)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
     ready(api, machine, ["ops", "finance"])
     post(api, "tasks", {"owner": "ops", "title": "Long work", "body": "Please do it."})
     post(api, "tasks", {"owner": "finance", "title": "Close the month", "body": "Please do it."})
@@ -548,8 +548,7 @@ def test_a_named_fallback_that_is_not_ready_here_leaves_the_job_waiting_not_leas
 
     def names(fallback):
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE bot_config SET config=json_set(config,'$.fallback',json(?)) WHERE bot='ops'",
-                      (json.dumps(fallback),))
+            BS.update(c, 'ops', {'fallback': fallback})
     names({"harness": "codex", "model": "gpt-5.5"})
     for minute in ("01:50", "01:55", "02:00"):                      # Codex is not signed in here: no lease, ever
         at(monkeypatch, f"2026-10-19T{minute}:00.000000Z", api)
@@ -778,8 +777,7 @@ def test_a_limit_keeps_the_provider_and_login_it_came_from_after_settings_and_ho
     with api.app.state.store.transaction() as c:
         assert H.status(c, "ops")["focus"].startswith(said + " at 01:46")
         # The bot moves to Codex and another turn replaces the login's hold: the run still names what refused it.
-        assert c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
-                         (json.dumps({"runtime": "codex"}),)).rowcount == 1
+        BS.write(c, "ops", {"runtime": "codex"})
         assert login_holds.get(c, machine["runner_id"], "work", "fake"), "an in-flight turn keeps its reported home"
         login_holds.record(c, machine["runner_id"], "work", "fake", "2026-10-19T01:47:00.000000Z", attempt_id="other",
                            bot="finance", error=CLAUDE)
@@ -796,7 +794,7 @@ def test_a_late_limit_from_a_turn_started_before_the_hold_keeps_the_live_try_now
     for bot in ('ops', 'finance'):
         assign(api, machine, bot)
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET capacity=16 WHERE id=?', (machine['runner_id'],))
+        c.execute('UPDATE runner_states SET capacity=16 WHERE runner_id=?', (machine['runner_id'],))
     ready(api, machine, ['ops', 'finance'])
     for n in range(3):
         for bot in ('ops', 'finance'):
@@ -883,6 +881,6 @@ def test_canonical_parses_the_readiness_once_per_transaction(api, monkeypatch):
         assert len(parsed) == 2                 # one parse per login asked for: team-a and solo
         assert [login_holds.canonical(c, rid, "team-a", "fake") for _ in range(3)] == [""] * 3 and len(parsed) == 2
         # A write in the same transaction is seen: the runner now shares its login, and its answer changes.
-        c.execute("UPDATE runners SET readiness=? WHERE id=?", (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?", (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {
             "fake": {**row, "profiles": {"solo": {**row, "shared_login": True}}}}}), rid))
         assert login_holds.canonical(c, rid, "solo", "fake") == ""

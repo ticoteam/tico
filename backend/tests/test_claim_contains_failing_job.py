@@ -157,7 +157,7 @@ def test_the_writes_a_failing_job_made_before_its_error_are_rolled_back(api, mon
     assert turn["bot"] == "cpo"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 0
-        assert c.execute("SELECT count(*) FROM turns WHERE bot='ops'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 0
     [bad] = jobs_of(api, "ops")
     assert (bad["state"], bad["attempt_id"], bad["held"]) == ("queued", None, 1)
     [good] = jobs_of(api, "cpo")
@@ -557,10 +557,10 @@ def test_a_login_check_that_raises_for_one_job_holds_that_job_and_the_bots_other
     bad, other = [job["id"] for job in jobs_of(api, "ops")]
     real = execution.login_refusal
 
-    def raising(c, settings, runner_id, bot, config, job_id=None, ctx=None):
+    def raising(c, settings, runner_id, bot, config, job_id=None, ctx=None, loads=None):
         if job_id == bad:
             raise RuntimeError("the job's continuation cannot be read")
-        return real(c, settings, runner_id, bot, config, job_id, ctx)
+        return real(c, settings, runner_id, bot, config, job_id, ctx, loads=loads)
     monkeypatch.setattr(execution, "login_refusal", raising)
 
     turn = claim(api, machine)

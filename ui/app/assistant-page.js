@@ -92,12 +92,12 @@ async function assistantSend(P, text, queued = null) {
     if (!r?.message) throw new Error('Not sent. Try again.');
     sessionAcknowledge(pq(P, '.p-text'), out.scope);
     if (state && V2C === state) {
-      // Your words show at once; a lookup's answer comes with them, a bot turn streams in like any reply.
-      for (const m of [r.message, r.reply].filter(Boolean)) { state.messages.push(m); state.mine.push(m); }
+      // Your words show at once; the bot's turn streams in like any reply.
+      state.messages.push(r.message); state.mine.push(r.message);
       state.stick?.toBottom();
-      if (!r.fast) { state.live = {text: ''}; state.execution = null; state.sentAt = Date.now(); }
+      state.live = {text: ''}; state.execution = null; state.sentAt = Date.now();
       v2ChatRender(state);
-      if (!r.fast) v2ChatStream(state);
+      v2ChatStream(state);
     }
   } catch (e) {
     failed = true;

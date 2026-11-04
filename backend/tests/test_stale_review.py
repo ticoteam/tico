@@ -82,7 +82,7 @@ def shown(card):
 
 
 def start_turn(c, task_id):
-    """A bot's turn on the task begins, as a runner's claim writes it: a running attempt and its turn, while the task
+    """A bot's turn on the task begins, as a runner's claim writes it: a running attempt on the task, while the task
     row itself stays as it was."""
     other = H.task_create(c, "human:ana", "Elsewhere " + H.new_id(), "x", "bot:ops")
     H.task_comment(c, "human:ana", other["id"], "Please look at this")
@@ -91,7 +91,7 @@ def start_turn(c, task_id):
     aid = H.new_id()
     c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
               "VALUES(?,?,'ops','r1',1,?,'running',?,?)", (aid, job, aid, H.shift(H.now(), seconds=600), H.now()))
-    c.execute("INSERT INTO turns(id,bot,started_at,task_id) VALUES(?,'ops',?,?)", (aid, H.now(), task_id))
+    c.execute("UPDATE attempts SET trigger='task',task_id=? WHERE id=?", (task_id, aid))
 
 
 def an_hour_on(store):
@@ -501,7 +501,7 @@ def test_other_reasons_parent_blockers_snooze_and_twin_titles(stale):
         c.execute("INSERT INTO task_relations VALUES(?,?,'blocks','bot:ops',?)", (blocker, blocked, H.now()))
         c.execute("UPDATE tasks SET status='done' WHERE id IN (?,?)", (parent, blocker))
         ended = H.shift(H.now(), hours=-30)
-        c.execute("INSERT INTO task_events(id,task_id,created_at,actor,field,old,new,note) VALUES(?,?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO history_events(subject_type,id,subject_id,created_at,actor_id,kind,old,new,note) VALUES('task',?,?,?,?,?,?,?,?)",
                   (H.new_id(), snoozed, ended, H.KEEPER, "snoozed_until", ended, None, "snooze over"))
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (ended, snoozed))
         found = {row["id"]: why for row, why in SR.candidates(c, H.now())}
