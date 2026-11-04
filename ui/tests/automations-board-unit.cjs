@@ -54,8 +54,38 @@ const sorted = flow(back);
 assert.deepEqual(plain(sorted.steps.slice(-1)[0].rules.map(r => [r.when.length ? r.when[0].value : '', r.to])), [['me', 'me'], ['eng', 'eng'], ['', 'eng']]);
 assert.ok(shape({...fx.inbox, ...plain(sorted)}));
 
+// Minimums as stored: a question or a Sort with none keeps none (the engine's own default), and saves without one.
+const nomin = clone(fx.inbox);
+delete nomin.steps[2].rules[0].when[0].min;
+for (const r of nomin.steps[4].rules) if (r.when.length) delete r.when[0].min;
+const nb = shape(nomin);
+assert.ok(nb, 'no minimum is still a board');
+assert.equal('min' in nb.questions[0], false);
+assert.equal(nb.questions[1].min, 0.8);
+assert.equal('min' in nb.llm, false);
+assert.deepEqual(plain(flow(nb)), {steps: nomin.steps, destinations: nomin.destinations});
+
+// Sort with one destination: a last filter with one rule and no conditions, no decide (a one-option choice is refused).
+const one = shape(fx.inbox);
+Object.assign(one.llm, {to: ['me'], default: 'me'});
+const oneOut = flow(one);
+assert.deepEqual(plain(oneOut.steps.map(s => s.type)), ['filter', 'decide', 'filter', 'filter']);
+assert.deepEqual(plain(oneOut.steps[3]), {...fx.inbox.steps[4], rules: [{when: [], match: 'all', then: [], to: 'me', next: 'end', stop: true}]});
+const oneBack = shape({...fx.inbox, ...plain(oneOut)});
+assert.deepEqual(plain(oneBack.llm), {mode: 'sort', prompt: '', to: ['me'], default: 'me', as: ''});
+assert.deepEqual(plain(flow(oneBack)), plain(oneOut));
+const lone = {...clone(fx.webhook), steps: [{id: 's1', type: 'filter', enabled: true, rules: [{when: [], match: 'all', then: [], to: 'ops', next: 'end', stop: true}]}]};
+assert.deepEqual(plain(shape(lone).rules), [], 'a lone routing filter is Sort, not a rule');
+assert.equal(shape(lone).llm.default, 'ops');
+// Back to two: a new decide and the same filter, at the board's minimum.
+Object.assign(oneBack.llm, {to: ['me', 'eng'], prompt: 'Pick one.'});
+const two = flow(oneBack);
+assert.deepEqual(plain(two.steps.slice(-1)[0].rules.map(r => [r.when[0]?.min ?? null, r.to])), [[0.5, 'me'], [0.5, 'eng'], [null, 'me']]);
+assert.equal(two.steps.slice(-1)[0].id, 'sf');
+assert.ok(shape({...fx.inbox, ...plain(two)}));
+
 // No board: no destinations, a rule going on to the next step, a saved question set, an extra step, a missing
-// destination, or no LLM at the end.
+// destination, no LLM at the end, Sort minimums that differ, or a step switched off.
 const without = mut => { const f = clone(fx.inbox); mut(f); return shape(f); };
 assert.equal(without(f => { delete f.destinations; }), null);
 assert.equal(without(f => { f.destinations = []; }), null);
@@ -66,6 +96,11 @@ assert.equal(without(f => { f.steps.push({id: 'a1', type: 'action', do: 'archive
 assert.equal(without(f => { f.steps[2].rules[0].to = 'nowhere'; }), null);
 assert.equal(without(f => { f.steps.splice(3, 2); }), null);
 assert.equal(without(f => { f.steps[4].rules.pop(); }), null);
+// Sort routes with different minimums (the board shows one), or any step switched off (the board can't show it).
+assert.equal(without(f => { f.steps[4].rules[1].when[0].min = 0.7; }), null);
+assert.equal(without(f => { delete f.steps[4].rules[2].when[0].min; }), null);
+assert.equal(without(f => { f.steps[3].enabled = false; f.steps[4].enabled = false; }), null);
+assert.equal(without(f => { f.steps[0].enabled = false; }), null);
 assert.equal(shape({trigger: {type: 'message'}, steps: [{id: 'f1', type: 'filter', rules: []}]}), null, 'a plain flow keeps its steps');
 const legacy = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/redesign-automations.json'), 'utf8')).automations;
 for (const a of legacy) assert.equal(shape(a), null, `${a.id} keeps its step list`);

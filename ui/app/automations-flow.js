@@ -234,7 +234,8 @@ const AU_BOARD_ACTS = {archive: 'Archive', label: 'Label', star: 'Star', leave_f
   draft_reply: 'Draft reply', send_reply: 'Reply', unsubscribe: 'Unsubscribe', create_task: 'Create a task', wake_bot: 'Message a bot',
   assign: 'Assign', note: 'Note', post_update: 'Post update', call_webhook: 'Call webhook'};
 const AU_BOARD_OPS = {is: 'is', is_not: 'is not', contains: 'contains', matches: 'matches', '>=': '≥', '<=': '≤'};
-const AU_Q_MIN = 0.75, AU_SORT_MIN = 0.5;
+// A new question's minimum and a new Sort's; a yes/no condition with no min holds at half (the engine's own default).
+const AU_Q_MIN = 0.75, AU_SORT_MIN = 0.5, AU_NOUL_MIN = 0.5;
 // Star is a label (STARRED); the board shows it as its own action.
 function auActKey(x) {
   const d = auThenDo(x), a = (x && typeof x === 'object' && x.args) || {};
@@ -245,6 +246,8 @@ const auRuleNext = r => r?.to ? 'end' : r?.next || (r?.stop === true ? 'end' : '
 const auDestColor = (d, i = 0) => `var(--au-${AU_DEST_COLORS.includes(d?.color) ? d.color : AU_DEST_COLORS[i % AU_DEST_COLORS.length]})`;
 const auDestIcon = d => (d?.then || []).length ? AU_ACTION_ICONS[auActKey(d.then[0])] || 'bolt' : 'block';
 function auDestName(id, dests = AU?.cur?.destinations) { return (dests || []).find(d => d.id === id)?.name || id; }
+// Name and id, so a diff shows a move between two destinations that share a name.
+function auDestLabel(id, dests) { const n = auDestName(id, dests); return n && n !== id ? `${n} (${id})` : String(id ?? ''); }
 
 function auBoardShape(flow) {
   const dests = flow?.destinations;
@@ -258,9 +261,14 @@ function auBoardShape(flow) {
     const c = (r.when || [])[0];
     return (r.when || []).length === 1 && c.field === field && (c.op || 'is') === 'is' && (c.value === value || (value === 'yes' && c.value === true));
   };
+  // A switched-off step stays in the step list: the board has no off switch to show it, and a save would turn it on.
+  if (steps.some(s => !s || s.enabled === false)) return null;
+  // Sort with one destination: a last filter whose one rule, with no conditions or actions, goes there (no LLM call).
+  const sortOne = s => s?.type === 'filter' && (s.rules || []).length === 1 && !(s.rules[0]?.when || []).length
+    && !(s.rules[0]?.then || []).length && ids.has(s.rules[0]?.to);
   const b = {rules: [], questions: [], llm: null, dests: copy(dests), src: {}};
   let i = 0;
-  if (steps[i]?.type === 'filter') {
+  if (steps[i]?.type === 'filter' && !(steps.length === 1 && sortOne(steps[0]))) {
     const rules = steps[i].rules || [];
     if (!rules.every(r => r && typeof r === 'object' && toOk(r) && ['end', 'rule'].includes(auRuleNext(r)))) return null;
     b.src.rules = steps[i];
@@ -275,8 +283,8 @@ function auBoardShape(flow) {
     for (let k = 0; k < qids.length; k++) {
       const r = rules[k], q = qd.questions[qids[k]];
       if (!r || !one(r, `${qd.out}.${qids[k]}`, 'yes') || !toOk(r) || auRuleNext(r) !== 'end' || typeof q.instructions !== 'string') return null;
-      const min = r.when[0].min;
-      b.questions.push({id: qids[k], text: q.instructions, min: min == null || min === '' ? AU_Q_MIN : Number(min), then: copy(r.then || []), to: r.to || ''});
+      const min = r.when[0].min;   // kept as stored: no min stays none
+      b.questions.push({id: qids[k], text: q.instructions, ...(min == null || min === '' ? {} : {min}), then: copy(r.then || []), to: r.to || ''});
     }
     Object.assign(b.src, {qd, qf});
     i += 2;
@@ -292,10 +300,16 @@ function auBoardShape(flow) {
       if (!r || !one(r, field, opts[k]) || r.to !== opts[k] || (r.then || []).length || auRuleNext(r) !== 'end') return null;
     }
     if ((last.when || []).length || !ids.has(last.to) || (last.then || []).length) return null;
-    const min = rules[0].when[0].min;
-    b.llm = {mode: 'sort', prompt: q.instructions, to: opts, default: last.to, min: min == null || min === '' ? AU_SORT_MIN : Number(min), as: ''};
+    // The board shows one minimum for Sort, so routes with different ones keep the step list.
+    const mins = rules.slice(0, -1).map(r => r.when[0].min ?? '');
+    if (mins.some(m => m !== mins[0])) return null;
+    b.llm = {mode: 'sort', prompt: q.instructions, to: opts, default: last.to, ...(mins[0] === '' ? {} : {min: mins[0]}), as: ''};
     Object.assign(b.src, {sd, sf, sq: sq[0]});
     i += 2;
+  } else if (i === steps.length - 1 && sortOne(sd)) {
+    b.llm = {mode: 'sort', prompt: '', to: [sd.rules[0].to], default: sd.rules[0].to, as: ''};
+    b.src.sf = sd;
+    i += 1;
   } else if (sd?.type === 'llm' && sd.choose && typeof sd.choose === 'object') {
     const c = sd.choose;
     // A draft or a reply runs mail actions: only a message flow has one to answer.
@@ -330,20 +344,23 @@ function auBoardFlow(b) {
     used.delete(d.out); delete d.set;
     d.out = outName(d, 'd'); d.level ||= 'medium';
     d.questions = Object.fromEntries(b.questions.map(q => [q.id, {...copy(old[q.id] || {}), type: 'noul', instructions: q.text}]));
-    f.rules = b.questions.map(q => rule({when: [{field: `${d.out}.${q.id}`, op: 'is', value: 'yes', min: q.min ?? AU_Q_MIN}],
+    f.rules = b.questions.map(q => rule({when: [{field: `${d.out}.${q.id}`, op: 'is', value: 'yes', ...(q.min == null ? {} : {min: q.min})}],
       match: 'all', then: q.then, to: q.to, next: 'end'}));
     steps.push(d, f);
   }
   const L = b.llm;
-  if (L.mode === 'sort') {
+  // One destination needs no choice: a single rule sends everything there (a one-option choice is refused).
+  if (L.mode === 'sort' && L.to.length === 1) steps.push({...keep(b.src.sf, 'filter'), rules: [rule({when: [], match: 'all', then: [], to: L.to[0]})]});
+  else if (L.mode === 'sort') {
     const d = keep(b.src.sd, 'decide'), f = keep(b.src.sf, 'filter'), qid = b.src.sq || 'to';
     const old = b.src.sd?.questions?.[qid] || {}, was = old.criteria && !Array.isArray(old.criteria) ? old.criteria : {};
     used.delete(d.out); delete d.set;
     d.out = outName(d, 'd'); d.level ||= 'high';
     d.questions = {[qid]: {...copy(old), type: 'choice', instructions: L.prompt,
       criteria: Object.fromEntries(L.to.map(id => [id, was[id] ?? auDestName(id, b.dests)]))}};
-    const field = `${d.out}.${qid}`;
-    f.rules = [...L.to.map(id => rule({when: [{field, op: 'is', value: id, min: L.min ?? AU_SORT_MIN}], match: 'all', then: [], to: id})),
+    // Each route keeps the Sort's minimum as stored (none stays none); a new Sort gets the board's.
+    const field = `${d.out}.${qid}`, min = b.src.sd ? L.min : L.min ?? AU_SORT_MIN;
+    f.rules = [...L.to.map(id => rule({when: [{field, op: 'is', value: id, ...(min == null ? {} : {min})}], match: 'all', then: [], to: id})),
       rule({when: [], match: 'all', then: [], to: L.default})];
     steps.push(d, f);
   } else {
@@ -433,7 +450,7 @@ function auBoardHTML(a, b) {
     <section class="au-bllm${AU.ed?.kind === 'board' && AU.ed.part === 'llm' ? ' sel' : ''}" aria-label="LLM">
       <div class="au-bh"><span class="au-tag acc">3 · LLM</span><b>Read what’s left, pick one below</b>${seg}</div>
       <div class="au-bllm-b" role="button" tabindex="0" data-board="llm"><div class="au-bpr">${L.prompt ? esc(L.prompt) : '<span class="muted">No instructions</span>'}</div>
-        <span class="au-bun">unsure → ${esc(auDestName(L.default, dests))}</span></div>
+        ${L.to.length < 2 ? '' : `<span class="au-bun">unsure → ${esc(auDestName(L.default, dests))}</span>`}</div>
     </section>
     <svg class="au-branch" height="48" aria-hidden="true" fill="none" stroke-width="1.5"></svg>
     <div class="au-dests">${dests.map((d, i) => `<div class="au-dest${dsel(i)}" role="button" tabindex="0" data-board="dest:${i}"${L.to.includes(d.id) ? ` data-to="${esc(d.id)}"` : ''} style="--c:${auDestColor(d, i)}">
