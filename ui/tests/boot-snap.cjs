@@ -171,7 +171,9 @@ const {t} = require('./support/load.cjs');
       await other.reload({waitUntil: 'domcontentloaded'});
       await other.getByRole('heading', {name: 'Tasks', exact: true}).waitFor();
       await other.waitForFunction(() => performance.getEntriesByName('tico:paint-fresh').length === 1);
-      await other.evaluate(() => { snapChannel.onmessage = null; });
+      // Its own save after settling (bootPaintWatch's, 1.5 s on) would meet the next sign-out's epoch by itself and ban
+      // it before the test's save: stopped here, so the test's save is the one the epoch check refuses.
+      await other.evaluate(() => { snapChannel.onmessage = null; clearTimeout(SNAP.timer); });
     };
     const epochNow = () => page.evaluate(async () => {
       if (!(await indexedDB.databases()).some(d => d.name === 'tico-boot')) return null;
@@ -214,6 +216,9 @@ const {t} = require('./support/load.cjs');
     await otherKeepsNothing('nothing is kept after the database went');
 
     await fresh();
+    // The other tab, before the sign-out: someone's screen to keep, and banned by nothing.
+    assert.equal(await other.evaluate(() => SNAP.who !== '' && !SNAP.banned && SNAP.epoch !== null), true,
+      'the other tab would keep its screen');
     // Signing out while the copy is up takes it down at once, and leaves no screen behind (the navigation itself is
     // not followed).
     held = [];
@@ -237,9 +242,9 @@ const {t} = require('./support/load.cjs');
     await page.evaluate(() => { bootSnapSave(); window.dispatchEvent(new Event('pagehide')); });
     await page.waitForTimeout(300);
     assert.equal(await kept(), null, 'nothing is kept again after a sign-out in this page');
-    // Nor by the other tab, which never heard a 401 nor the channel: the epoch it read at boot is old, so its save
-    // and its leaving write nothing, and it drops whose screen it was.
-    assert.equal(await other.evaluate(() => SNAP.who !== '' && !SNAP.banned), true, 'the other tab was not told');
+    // Nor by the other tab, which never heard a 401 nor the channel (its listener is off and nothing deletes the
+    // database, so only a save's epoch check can ban it): the epoch it read at boot is old, so its save and its
+    // leaving write nothing, and it drops whose screen it was.
     await other.evaluate(() => { bootSnapSave(); window.dispatchEvent(new Event('pagehide')); });
     await other.waitForTimeout(300);
     assert.equal(await kept(), null, 'an old epoch keeps nothing');
