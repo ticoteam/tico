@@ -8,6 +8,7 @@ import time_machine
 
 from backend import automations
 from backend import hubdb as H
+from backend.store import sweep_mail
 from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.test_automation_turns import finish
 from backend.tests.test_connectors import mail_message
@@ -382,6 +383,41 @@ def test_forty_five_mail_turns_run_ten_at_a_time_through_the_real_executor(api):
         assert counts() == (24, 20)                                 # ten more start; the old holds wait for the sweep
         with store.read() as c:
             assert c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=?", (aid,)).fetchone()[0] == 45
+
+
+def test_a_mail_message_runs_once_even_after_its_row_is_swept_and_exported_again(api):
+    """Retention sweeps the message's row and a label change exports it again: it is news only the first time, so the
+    run it started is still the only one (the run's trigger ref outlives the row)."""
+    aid = make(api, {"type": "message", "inbox": "ana@acme.example"}, [NOOP])
+    machine = runner(api)
+    with time_machine.travel(T0, tick=False):
+        sync(api, machine, [mail_message(msg_id="m1", epoch=int((T0 - timedelta(hours=1)).timestamp()))], T0)
+    assert ran(api, aid) == {"m1"}
+    later = T0 + timedelta(days=400)                                  # past any retention window
+    sweep_mail(api.app.state.store, now=later.isoformat())
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM mail_messages WHERE msg_id='m1'").fetchone()
+    with time_machine.travel(later, tick=False):
+        sync(api, machine, [mail_message(msg_id="m1", labels=("INBOX", "STARRED"),
+                                         epoch=int((T0 - timedelta(hours=1)).timestamp()))], later)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT 1 FROM mail_messages WHERE msg_id='m1'").fetchone()   # stored again: it is fresh
+    assert len(runs(api, aid)["runs"]) == 1
+
+
+def test_a_run_is_found_by_its_automation_and_trigger_ref_through_an_index(api):
+    with api.app.state.store.read() as c:
+        plan = " ".join(row[-1] for row in c.execute(
+            "EXPLAIN QUERY PLAN SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=?",
+            ("aut_x", "mail:ana@acme.example:m1")))
+    assert "automation_runs_trigger" in plan
+
+
+def test_a_sync_stamped_with_an_offset_sets_the_watch_at_the_same_instant_as_utc(api):
+    with api.app.state.store.read() as c:
+        utc = automations.mail_watch(c, "ana@acme.example", "2026-10-28T12:00:00+00:00")
+        local = automations.mail_watch(c, "ana@acme.example", "2026-10-29T02:00:00+14:00")
+    assert utc == local == "2026-10-27T12:00:00.000000Z"
 
 
 def test_an_automation_has_ten_runs_in_flight_and_the_rest_wait_queued(api):

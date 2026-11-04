@@ -1085,10 +1085,11 @@ def queue(c, row, payload, ref="", *, manual=False, chain=()):
             (row["id"], str(ref)[:200])).fetchone():
         # One due day, one run: a repeated or concurrent pass for the same day starts nothing new.
         return None
-    if str(ref).startswith("slack:") and c.execute(
+    if str(ref).startswith(("slack:", "mail:")) and c.execute(
             "SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=? LIMIT 1",
             (row["id"], str(ref)[:200])).fetchone():
-        # One Slack message, one run: a channel message offered once may come back as an `@Tico` event.
+        # One Slack or mail message, one run: a message offered again (its mail row swept, or a label change exported
+        # it again) starts nothing new. The run stays after its message's row goes (automation_runs_trigger).
         return None
     held = _hold_row(c, row["id"])
     if held and manual:
@@ -1283,7 +1284,10 @@ def mail_watch(c, mailbox, synced_at):
     row = c.execute("SELECT watching_since_at FROM mail_mailboxes WHERE address=?", (mailbox,)).fetchone()
     if row and row["watching_since_at"]:
         return row["watching_since_at"]
-    return H.shift(synced_at, hours=-MAIL_LOOKBACK_HOURS)
+    # In UTC: an offset in the sync's stamp is an instant, and H.shift would keep its local clock.
+    at = H.parse_ts(synced_at)
+    at = (at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at).astimezone(timezone.utc)
+    return (at - timedelta(hours=MAIL_LOOKBACK_HOURS)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def on_mail(c, mailbox, message, watch=None):
