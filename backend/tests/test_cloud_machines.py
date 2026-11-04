@@ -2141,6 +2141,7 @@ def test_a_cloud_machine_stopped_when_idle_is_not_offline_on_health(cloud):
 def test_a_cloud_machine_left_empty_is_resting_after_its_bot_moves_to_a_computer(cloud):
     computer = enrolled(cloud)
     other = runner(cloud.api, label="Office computer")
+    reported(cloud, other)                                # enrollment alone does not make a computer online
     idle(cloud)
     assign(cloud.api, other, "ops", 1)
     cloud.hq.calls.clear()
