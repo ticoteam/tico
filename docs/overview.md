@@ -25,7 +25,7 @@ in the sidebar tree; its arrow still folds it) is the same grid for one group. B
 | `growth` | Everyone (the [Growth page](growth.md), `#/growth`) | The owner, admins, and a bot acting as itself, which pins only its own cards there |
 | `team:<group>` | Whoever may Read the group: **Seen by** opens the group's Access (permissions.md, People and groups) | The owner, admins, and a person who leads the group or a group above it |
 | `bot:<slug>` | Whoever may Read the bot | The bot itself, or a person who manages it |
-| `task:<id>` | Whoever may read the task | The bot on it (owner or requester), its people, someone who can move it |
+| `task:<id>` | Whoever may read the task | Any person who may read it; the bot on it (owner or requester) |
 | `person:<id>` | That person only (My dashboard) | That person, or BotOps and the Assistant acting for them |
 
 A Dashboard nobody arranged shows Tasks by status, Done per week, Needs you and Latest pages for the company; a team page
@@ -66,6 +66,8 @@ a page's data from spreading on its own: a bot pins only its own pages and cards
 asked for. A person pins to the Dashboard or a team page, and a page they pin there may be read by that place's audience;
 a private task's file is never pinned there. Each pin and unpin of a page is in the file's activity (docs/files.md).
 A page published with `--task` pins itself to the top of that task; a page's full view says where it is pinned.
+Any person who can read a task may link a page they can read there. Task pins widen nothing. Unlinking is for whoever
+linked it, the task's owner or requester, or the org owner.
 A bot's sidebar pins are its sidebar widgets: `page:<file id>` and `card:<id>` beside Tasks, Updates and Files, any
 number, and the built-ins may be hidden so the sidebar is only pages. The Assistant's sidebar keeps its own widgets.
 

@@ -12,7 +12,8 @@ A pin puts a page (`page:<file id>`) or a card (`card:<id>`) at a place, in orde
   lead the group or a group above it arrange it.
 - `bot:<slug>`, the bot's sidebar: its rows follow the page and card widgets saved with the sidebar
   (backend/bot_task_tabs.py), which keeps their order.
-- `task:<id>`, the top of a task, for whoever may read the task.
+- `task:<id>`, the top of a task: people who may read it link pages they can read. Unpinning is for whoever pinned
+  it, the task's owner or requester, or the org owner. A task pin widens nothing.
 - `person:<id>`, a person's My dashboard (the landing page): theirs alone. Only they read and arrange it, BotOps and
   the Assistant only when acting for them; an admin has no way in, and a card pinned there is known to no one else.
   `person:me` is the caller's own. Its cards are cards they made.
@@ -879,8 +880,14 @@ def may_manage(ctx, kind, ident):
         return False
     if who.role == "bot":
         return not who.via and who.actor in (row["owner_id"], row["requester_id"])
-    return ctx.person and (who.role == "owner" or who.actor in (row["owner_id"], row["requester_id"])
-                           or H.can_move(ctx.c, who.actor))
+    return ctx.person
+
+
+def may_unpin(ctx, pin, kind, ident):
+    if kind != "task" or not ctx.person:
+        return may_manage(ctx, kind, ident)
+    row = ctx.auth.task(ctx.c, ctx.who, ident)
+    return ctx.who.role == "owner" or ctx.who.actor in (pin["made_by"], row["owner_id"], row["requester_id"])
 
 
 def require_view(ctx, place):
@@ -992,6 +999,10 @@ def place_view(ctx, place):
     prime_pins(ctx, pins)
     cache = ctx.memo("file_cache", dict)
     shown = [v for v in (pin_view(ctx, p, cache) for p in pins) if v]
+    if kind == "task":
+        by_id = {p["id"]: p for p in pins}
+        for pin in shown:
+            pin["can_unpin"] = may_unpin(ctx, by_id[pin["id"]], kind, ident)
     out = {"place": place, "kind": kind, "saved": saved, "can_edit": may_manage(ctx, kind, ident), "pins": shown}
     if kind == "growth":
         # The month picker: the month the cards read, and the newest months with cohort rows, oldest first.
@@ -1159,7 +1170,9 @@ def edit_pin(ctx, pid, size=None, position=None):
 
 def remove_pin(ctx, pid):
     pin, kind, ident = pin_or_404(ctx, pid)
-    require_manage(ctx, pin["place"])
+    if not may_unpin(ctx, pin, kind, ident):
+        raise Problem("forbidden", "Only whoever pinned it, the task's owner or requester, or the org owner unpins it"
+                      if kind == "task" else "You cannot unpin here", 403)
     if kind == "bot":
         from . import bot_task_tabs as T
         T.remove_widget(ctx, ident, pin["item"])

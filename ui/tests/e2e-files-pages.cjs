@@ -1,7 +1,7 @@
 // Journey: bot files and pages, as Dana. The Engineering Lead's pages and files (the pages seed) show in Library > Files
 // with their titles; a page opens and draws its title, its version and its status line. Runs on a phone and a desktop.
 const assert = require('node:assert/strict');
-const {journey, open, go, call, assertClean, drawn, shot, t, SEEDS} = require('./support/e2e.cjs');
+const {journey, open, go, call, must, assertClean, drawn, shot, t, SEEDS} = require('./support/e2e.cjs');
 
 journey('e2e-files-pages', async ({hub, browser, phone}) => {
   const where = phone ? 'phone' : 'desktop';
@@ -35,4 +35,30 @@ journey('e2e-files-pages', async ({hub, browser, phone}) => {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   assert.ok(overflow <= 1, `${where}: files page scrolls sideways by ${overflow}px`);
   assertClean(page, `${where}: back on files`);
+
+  const task = await must(hub, 'dana', 'POST', 'tasks', {owner: 'person:dana', title: 'Review the linked plan', body: 'Review.'});
+  const id = (task.task || task).id;
+  const reader = await open(browser, hub, 'priya', {phone, hash: '#/task/' + id});
+  go(page, '#/task/' + id);
+  const section = reader.locator('[data-task-pages]');
+  await section.getByRole('button', {name: 'Link page', exact: true}).click();
+  const search = reader.waitForResponse(r => new URL(r.url()).pathname === '/api/v2/files/search');
+  await section.getByRole('searchbox', {name: 'Search pages'}).fill('Engineering weekly');
+  assert.equal(new URL((await search).url()).searchParams.get('kind'), 'page', `${where}: the picker searches pages only`);
+  await section.getByRole('button', {name: 'Engineering weekly', exact: true}).click();
+  await section.locator('.pg-card', {hasText: 'Engineering weekly'}).waitFor({timeout: t(15000)});
+  await page.locator('[data-task-pages] .pg-card', {hasText: 'Engineering weekly'}).waitFor({timeout: t(15000)});
+  assert.equal(await section.locator('.tp-picker').isVisible(), false, `${where}: linking closes the picker`);
+  assertClean(reader, `${where}: a task reader links a page`);
+  const readerOverflow = await reader.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  assert.ok(readerOverflow <= 1, `${where}: the picker and page fit the task`);
+  await shot(reader, `e2e-task-pages-${where}`);
+
+  // The owner unlinks it in another tab; its files event refreshes the already loaded section in both tabs.
+  await page.locator('[data-task-pages]').getByRole('button', {name: 'Unlink Engineering weekly', exact: true}).click();
+  await section.locator('.pg-card').waitFor({state: 'detached', timeout: t(15000)});
+  await page.locator('[data-task-pages] .pg-card').waitFor({state: 'detached', timeout: t(15000)});
+  assertClean(page, `${where}: unlink reaches both task readers`);
+  assertClean(reader, `${where}: linked pages refresh without reopening the task`);
+  await reader.context().close();
 }, [...SEEDS, 'pages']);

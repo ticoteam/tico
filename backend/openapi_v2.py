@@ -2295,7 +2295,8 @@ STABLE.extend([
     ("/api/v2/pages", "post", "Pages", "publishPage",
      "A bot publishes an .html page (raw with fields in the query, or JSON); scripts and outside loads are removed", "PagePublished"),
     ("/api/v2/pages", "get", "Pages", "listPages",
-     "Pages the caller may read: `ids` (up to 50) in that order, leaving out the unreadable; else newest first by bot or task",
+     "Pages the caller may read: `ids` (up to 50) in that order, leaving out the unreadable; else newest first by bot "
+     "or task (filed on or pinned to it)",
      "PageList"),
     ("/api/v2/pages/{fid}", "get", "Pages", "getPage", "One page and its status line; 404 when the caller may not read it",
      "PageShown"),
@@ -2306,7 +2307,7 @@ STABLE.extend([
      "Library › Files: every file the caller may see, newest activity first, filtered by kind, bot, team, task, date, "
      "pinned or archived; paged and byte-capped, no totals", "FileLibrary"),
     ("/api/v2/files/search", "get", "Files", "searchFiles",
-     "Search the files the caller may read by title and text, best first, each with an excerpt", "FileSearch"),
+     "Search the files the caller may read by title and text, filtered by kind, best first with an excerpt", "FileSearch"),
     ("/api/v2/files/{fid}", "delete", "Files", "deleteFile",
      "The owner deletes a file for good: every version's bytes leave storage; activity keeps who and when", "FileDeleted"),
 ])
@@ -2368,9 +2369,11 @@ STABLE.extend([
      'default cards become pins); a team page\'s audience sets its group\'s Read', 'Place'),
     ('/api/v2/places/{place}/order', 'post', 'Cards and pins', 'orderPlace', 'Put every pin at a place in this order', 'Place'),
     ('/api/v2/pins', 'post', 'Cards and pins', 'addPin', 'Pin page:<file id> or card:<id> at a place: a bot its own, to '
-     'its sidebar or task; a person who arranges the Dashboard or a team page there', 'Place'),
+     'its sidebar or task; any person who may read a task there, without widening page access; a person who arranges '
+     'the Dashboard or a team page there', 'Place'),
     ('/api/v2/pins/{pid}', 'patch', 'Cards and pins', 'updatePin', 'Resize or move a pin', 'Place'),
-    ('/api/v2/pins/{pid}', 'delete', 'Cards and pins', 'removePin', 'Unpin; a card pinned nowhere else goes with it', None),
+    ('/api/v2/pins/{pid}', 'delete', 'Cards and pins', 'removePin', 'Unpin; on a task, whoever pinned it, its owner or '
+     'requester, or the org owner; a card pinned nowhere else goes with it', None),
     ('/api/v2/cards', 'get', 'Cards and pins', 'listCards', 'Cards the caller made or sees pinned, with their data; '
      '`ids` reads up to 50', 'CardList'),
     ('/api/v2/cards', 'post', 'Cards and pins', 'addCard', 'A built-in card, pinned at `place` in the same write', None),
@@ -2430,7 +2433,8 @@ SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'growth', '
                         'months': {'type': 'array', 'items': {'type': 'string'},
                                    'description': 'growth: the newest 24 months with cohort rows, oldest first'},
                         'pins': items(obj({'id': 'n', 'item': 'n', 'position': 'i', 'size': {'enum': ['small', 'medium', 'large']},
-                                           'card': ref('Card'),
+                                           'card': ref('Card'), 'can_unpin': {'type': 'boolean', 'description':
+                                               'Task pins: whether this reader may unlink it'},
                                            'page': obj({'file_id': 's', 'title': 's', 'bot': 's', 'updated_at': 's', 'archived': 'b'})},
                                           required=['id', 'item', 'position', 'size'])),
                         'audience': {'type': 'object', 'description': 'A team page: who sees it (docs/permissions.md)'},
