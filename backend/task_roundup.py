@@ -121,8 +121,9 @@ def send(c, plan):
     actor = H.bot_actor(slug)
     with isolated(c, WAKE, slug):
         try:
+            # no_mentions: a task's title may say "@ana", which is text in the list, not a mention, so no person is delivered it.
             message = H._write_message(c, H.KEEPER, actor, text, _room(c, slug), "notice",
-                                       RT.stamp({"wake": WAKE}, WAKE), None, None)
+                                       RT.stamp({"wake": WAKE, "no_mentions": True}, WAKE), None, None)
         except H.Refused:
             return 0                    # not told this run: a later run may try again
         if not _delivered(c, slug, message):
@@ -288,6 +289,11 @@ def _last_turn(c, row, slug, actor):
         (slug, row["id"], row["conversation_id"], actor, row["id"], actor)).fetchone()[0]
 
 
+def _readable(c, actor, rows):
+    """The related tasks (rows with their id, owner, requester and private flag) that the bot may read."""
+    return [row for row in rows if H.task_private_readable(c, actor, row)]
+
+
 def _news(c, row, actor, base):
     """(count, latest time, what the latest was) of what others did on the task since `base`, or None."""
     tid, conv = row["id"], row["conversation_id"]
@@ -298,19 +304,20 @@ def _news(c, row, actor, base):
                      (tid, horizon, base, actor, H.KEEPER)).fetchone()[0]
     gone = H._rows(c.execute(f"SELECT created_at, actor_id FROM history_events WHERE {_UNBLOCKED} "
                              "ORDER BY created_at DESC", (tid, base, actor)))
-    # A blocker that finished and whose relation is still there (a roadmap item keeps its finished Dev tickets).
-    retired = H._rows(c.execute(
-        "SELECT t.status, h.created_at AS at FROM task_relations r JOIN tasks t ON t.id=r.from_task "
-        "JOIN history_events h ON h.subject_type='task' AND h.subject_id=t.id AND h.kind='status' "
-        f"AND h.new NOT IN ({_marks()}) AND h.created_at>? AND h.actor_id<>? "
+    # A blocker that finished and whose relation is still there (a roadmap item keeps its finished Dev tickets). A related
+    # task the bot cannot read is neither counted nor described: its finish is not news on this list.
+    retired = _readable(c, actor, H._rows(c.execute(
+        "SELECT t.id, t.owner_id, t.requester_id, t.private, t.status, h.created_at AS at FROM task_relations r "
+        "JOIN tasks t ON t.id=r.from_task JOIN history_events h ON h.subject_type='task' AND h.subject_id=t.id "
+        f"AND h.kind='status' AND h.new NOT IN ({_marks()}) AND h.created_at>? AND h.actor_id<>? "
         f"WHERE r.to_task=? AND r.kind='blocks' AND t.status NOT IN ({_marks()}) ORDER BY h.created_at DESC",
-        (*H.ACTIVE_STATUSES, base, actor, tid, *H.ACTIVE_STATUSES)))
-    kids = H._rows(c.execute(
-        "SELECT t.status, h.created_at AS at FROM task_relations r JOIN tasks t ON t.id=r.from_task "
-        "JOIN history_events h ON h.subject_type='task' AND h.subject_id=t.id AND h.kind='status' "
-        f"AND h.new NOT IN ({_marks()}) AND h.created_at>? AND h.actor_id<>? "
+        (*H.ACTIVE_STATUSES, base, actor, tid, *H.ACTIVE_STATUSES))))
+    kids = _readable(c, actor, H._rows(c.execute(
+        "SELECT t.id, t.owner_id, t.requester_id, t.private, t.status, h.created_at AS at FROM task_relations r "
+        "JOIN tasks t ON t.id=r.from_task JOIN history_events h ON h.subject_type='task' AND h.subject_id=t.id "
+        f"AND h.kind='status' AND h.new NOT IN ({_marks()}) AND h.created_at>? AND h.actor_id<>? "
         f"WHERE r.to_task=? AND r.kind='parent' AND t.status NOT IN ({_marks()}) ORDER BY h.created_at DESC",
-        (*H.ACTIVE_STATUSES, base, actor, tid, *H.ACTIVE_STATUSES)))
+        (*H.ACTIVE_STATUSES, base, actor, tid, *H.ACTIVE_STATUSES))))
     count = (msgs or 0) + hist + len(gone) + len(retired) + len(kids)
     if not count:
         return None

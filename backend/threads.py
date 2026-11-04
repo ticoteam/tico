@@ -1050,7 +1050,9 @@ def record(c, message, conv):
     if thread is None:
         return {}
     author = message.get("sender_id") or ""
-    found = mentions(c, thread, message.get("body") or "", author=author) if "@" in str(message.get("body") or "") else []
+    # A generated notice (refs.no_mentions, a task roundup) names people in its text as data: it makes no mention.
+    named = "@" in str(message.get("body") or "") and not refs.get("no_mentions")
+    found = mentions(c, thread, message.get("body") or "", author=author) if named else []
     warnings, in_audience = [], []
     now = _now()
     for actor, kind in found:
@@ -3033,7 +3035,8 @@ def _remention(c, message, now):
                                    (message["id"],))}
     c.execute("DELETE FROM message_mentions WHERE message_id=?", (message["id"],))
     named, added, warnings = set(), [], []
-    for actor, kind in mentions(c, thread, message["body"], author=message.get("sender_id")):
+    generated = (message.get("refs") or {}).get("no_mentions")       # a generated notice's edit names no one, as its post did not
+    for actor, kind in ([] if generated else mentions(c, thread, message["body"], author=message.get("sender_id"))):
         inside = audience_has(c, thread, actor)
         named.add(actor)
         c.execute("INSERT OR IGNORE INTO message_mentions(id,message_id,actor,kind,in_audience,created_at) "
