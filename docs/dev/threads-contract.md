@@ -493,7 +493,10 @@ read nothing; one query, `threads.read_marks`): a client reads each message agai
 `GET /api/v2/threads/{id}/bot-status` → `{"bots": [...]}` for the thread's root, and the same list as `bot_status` on
 the first timeline page (no `cursor`). One row per bot the root waits on: a person's message gave it an open wake
 (`queue`/`steer` delivery, `pending`, `delivered` or `capped`, partial index `message_deliveries_open_bots`) and the bot
-has not posted in the root since; a delivery with no live job or running attempt is left out. At most 5, oldest wait
+has not posted in the root since; a delivery with no live job or running attempt is left out, except an outside
+agent's (it takes work with no job here). Each bot's newest 50 open wakes are read, so one bot's never crowd out
+another's; a running turn's inputs count only for that turn's bot. Someone who reads only a migrated Home's old
+history gets `[]` (REST, timeline and SSE). At most 5, oldest wait
 first:
 ```json
 {"actor": "bot:legal", "name": "Legal", "state": "working|up_next|cant_reply", "detail": "...",
@@ -511,7 +514,8 @@ first:
 
 SSE: a `threads` event `bot_status` `{"thread_id": <root>, "bots": [...]}`, rendered per viewer, to the root's readers
 whenever a wake, job, attempt, refusal, bot state or drain changes for it; a run's steps send at most one per root
-every 5 s (`changes_bot_status`).
+every 5 s (`changes_bot_status`), and a step held back is sent by the scheduler's next tick
+(`thread_bot_status.send_trailing`).
 
 ## 5. C4: order and read state
 - `messages.seq` is per install, strictly increasing, from `sequences('messages')`. Tree order:
