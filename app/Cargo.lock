@@ -4521,8 +4521,12 @@ name = "tico-app"
 version = "0.3.6"
 dependencies = [
  "base64 0.22.1",
+ "block2",
  "log",
  "minisign",
+ "objc2",
+ "objc2-foundation",
+ "objc2-web-kit",
  "reqwest 0.12.28",
  "reqwest 0.13.5",
  "serde",
