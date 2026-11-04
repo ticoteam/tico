@@ -802,7 +802,7 @@ impl Recorder {
                 "session_id":session})), &uuid::Uuid::new_v4().to_string())?;
             let mut cursor = after;
             if !initial {
-                for (seq, kind, value) in tico.events(&format!(
+                for (seq, kind, value) in tico.events_until_change(&format!(
                     "/api/v2/events?topics=meeting_items,presence&meeting={remote}&place=meeting:{remote}&after={after}"))? {
                     cursor = cursor.max(seq);
                     if kind == "ready" { cursor = cursor.max(value["seq"].as_u64().unwrap_or(0)); }

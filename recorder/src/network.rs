@@ -410,6 +410,13 @@ impl Tico {
     /// The events a Tico event stream (SSE) has now: `(id, type, payload)` until its first
     /// keep-alive, which follows what was already there. The stream is then closed.
     pub fn events(&self, path: &str) -> Result<Vec<(u64, String, Value)>> {
+        self.read_events(path, false)
+    }
+    /// A shared panel refetches as soon as an invalidation arrives, without waiting for a quiet stream.
+    pub fn events_until_change(&self, path: &str) -> Result<Vec<(u64, String, Value)>> {
+        self.read_events(path, true)
+    }
+    fn read_events(&self, path: &str, until_change: bool) -> Result<Vec<(u64, String, Value)>> {
         ensure!(
             path.starts_with('/') && !path.starts_with("//"),
             "Invalid Tico endpoint"
@@ -443,6 +450,13 @@ impl Tico {
                 if !kind.is_empty() {
                     let payload = serde_json::from_str(&data).unwrap_or(Value::Null);
                     out.push((id, std::mem::take(&mut kind), payload));
+                    if until_change
+                        && out.last().is_some_and(|(_, kind, _)| {
+                            !matches!(kind.as_str(), "ready" | "cursor")
+                        })
+                    {
+                        break;
+                    }
                 }
                 data.clear();
                 continue;

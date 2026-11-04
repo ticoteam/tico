@@ -1073,7 +1073,7 @@ function meetPendingMerge(a, b) {
 async function meetPendingSave(state, rid, iid) {
   const draft = meetPendingDraft(state, iid);
   clearTimeout(draft.timer);
-  if (draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight;
+  if (draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight?.catch(() => {});
   const patch = draft.patch;
   draft.patch = {}; draft.error = '';
   draft.flight = post(`/meetings/${encodeURIComponent(rid)}/items/${encodeURIComponent(iid)}`, patch);

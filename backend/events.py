@@ -161,7 +161,7 @@ def _item_task_refs(task, column="result_ref"):
 
 _MEETING_ACCESS = ("OLD.review_state IS NOT NEW.review_state OR OLD.owner IS NOT NEW.owner OR "
                    + " OR ".join(f"json_extract(OLD.metadata,'$.{key}') IS NOT json_extract(NEW.metadata,'$.{key}')"
-                                 for key in ('private', 'participants', 'calendar')))
+                                 for key in ('private', 'participants', 'calendar', 'audience', 'audience_emails')))
 
 
 # Who could read a task before this write: its parties and privacy, kept on the row when they

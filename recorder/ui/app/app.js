@@ -393,7 +393,7 @@
     return `<section class="section"><div class="section-head"><h2>Tasks</h2><span class="aside">${here.length ? esc(here.join(', ') + (here.length === 1 ? ' is here' : ' are here')) : ''}</span></div>` +
       Object.values(data.sections).flat().filter(i => i.status !== 'dismissed').map(it => {
         if (it.status === 'pushed') return `<div class="item sent">${esc(it.text)} · Sent</div>`;
-        const draft = sharedDraft(it.id), current = mergeShared(it, draft.patch), detail = current.detail || {};
+        const draft = sharedDraft(it.id), current = mergeShared(mergeShared(it, draft.inflightPatch || {}), draft.patch), detail = current.detail || {};
         const fields = it.section === 'task' ? ['owner', 'due', 'body'] : it.section === 'doc' ? ['document', 'change', 'why'] : ['side', 'app', 'area'];
         const owners = a.owners.filter(o => !data.audience || data.audience.includes(o.actor));
         return `<div class="shared-item" data-shared-item="${esc(it.id)}"><label>Title<textarea data-defer data-shared-field="text" aria-label="Title">${esc(current.text)}</textarea></label>` + fields.map(key => {
@@ -415,12 +415,13 @@
   async function sharedSave(id) {
     const draft = sharedDraft(id);
     clearTimeout(draft.timer);
-    if (draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight;
+    if (draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight?.catch(() => {});
     const patch = draft.patch; draft.patch = {}; draft.error = '';
+    draft.inflightPatch = patch;
     draft.flight = invoke('shared_item', {id, body:patch});
     try { await draft.flight; }
     catch (e) { draft.patch = mergeShared(patch, draft.patch); draft.error = String(e); }
-    finally { draft.flight = null; }
+    finally { draft.flight = null; draft.inflightPatch = null; }
     if (!draft.error && Object.keys(draft.patch).length && !draft.sending) return sharedSave(id);
     await poll();
     const node = [...document.querySelectorAll('[data-shared-item]')].find(n => n.dataset.sharedItem === id);
