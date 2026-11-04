@@ -64,6 +64,7 @@ def test_cards_are_titled_dated_grouped_and_one_per_blocker(api):
     assert card["actions"] == ["answer", "update"]
     assert vendor["id"] not in items and fix["id"] not in items
     assert {f["id"] for f in card["folded"]} == {vendor["id"], fix["id"]}
+    assert page["folded_task_ids"] == sorted([vendor["id"], fix["id"]])
     # The walk-through and brief say the folded waits with the card.
     assert {f["title"] for f in batch._row(card, "human:ana")["folded"]} == {"Switch the payroll vendor",
                                                                               "Give finance the payroll connector"}
@@ -240,15 +241,21 @@ def test_pages_cut_the_whole_list_and_a_cursor_from_an_older_version_starts_agai
                             "due": H.shift(H.now(), days=n + 1)}, token=finance["token"])
     approval_for_ana(api, token=finance["token"])
     post(api, "tasks", {"title": "Plan the offsite", "body": "x", "owner": "human:ana"})
+    with api.app.state.store.transaction() as c:
+        wait = H.task_create(c, "human:ana", "Prepare the offsite", "x", "bot:finance")
+        H.task_create(c, "bot:finance", "Pick the offsite venue", "x", "human:ana", parent_id=wait["id"])
+        c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana' WHERE id=?", (wait["id"],))
     whole = get(api, "needs-you")
     assert whole["next"] is None and whole["count"] == len(whole["items"]) >= 6 and "bots" not in whole
     kinds = dict(Counter(it["kind"] for it in whole["items"]))
     assert whole["by_kind"] == kinds and kinds["approval"] == 1
+    assert whole["folded_task_ids"] == [wait["id"]]
     seen, cursor, page = [], None, None
     while True:
         page = get(api, "needs-you?limit=2" + (f"&cursor={cursor}" if cursor else ""))
         assert page["version"] == whole["version"] and page["count"] == whole["count"] and len(page["items"]) <= 2
         assert page["by_kind"] == kinds          # approvals on unread pages count before their rows arrive
+        assert page["folded_task_ids"] == [wait["id"]]   # folding is independent of which cards this page holds
         seen += page["items"]
         cursor = page["next"]
         if not cursor:
@@ -264,13 +271,20 @@ def test_pages_cut_the_whole_list_and_a_cursor_from_an_older_version_starts_agai
     get(api, "needs-you?limit=2&cursor=nonsense", expected=422)
 
 
-def test_kind_counts_keep_inbox_attention_separate_and_follow_live_decisions(api):
+def test_whole_list_facts_scope_inbox_and_folding_and_follow_live_changes(api):
     from backend import events as E, threads
     store, auth, view = api.app.state.store, api.app.state.auth, api.app.state.task_view
     approval = approval_for_ana(api)
-    post(api, "tasks", {"title": "Review the plan", "body": "x", "owner": "human:ana"})
+    post(api, "tasks", {"title": "Review the plan", "body": "x", "owner": "human:ana",
+                        "due": H.shift(H.now(), days=1)})
     other = post(api, "tasks", {"title": "Review Ben's plan", "body": "x", "owner": "human:ben"})
     with store.transaction() as c:
+        wait = H.task_create(c, "human:ana", "Prepare the offsite", "x", "bot:ops")
+        card = H.task_create(c, "bot:ops", "Pick the offsite venue", "x", "human:ana", parent_id=wait["id"])
+        other_wait = H.task_create(c, "human:ben", "Prepare Ben's offsite", "x", "bot:ops")
+        H.task_create(c, "bot:ops", "Pick Ben's venue", "x", "human:ben", parent_id=other_wait["id"])
+        c.executemany("UPDATE tasks SET status='waiting', waiting_on=? WHERE id=?",
+                      [("human:ana", wait["id"]), ("human:ben", other_wait["id"])])
         room = threads.create(c, "human:cara", title="Launch", audience="members", members=["human:ana"])
         threads.post(c, "human:cara", room["id"], "Please check the launch plan.", to_actor="human:ana")
     page = get(api, "needs-you?limit=1")
@@ -278,6 +292,8 @@ def test_kind_counts_keep_inbox_attention_separate_and_follow_live_decisions(api
     assert page["by_kind"] == dict(Counter(it["kind"] for it in whole["items"]))
     assert page["by_kind"]["approval"] == 1 and page["by_kind"]["thread_mention"] == 1
     assert sum(page["by_kind"].values()) == page["count"] > len(page["items"])
+    assert page["folded_task_ids"] == whole["folded_task_ids"] == [wait["id"]]
+    assert card["id"] not in {it["id"] for it in page["items"]}   # its folded task is known before the card loads
     assert other["id"] not in {it["id"] for it in whole["items"]}
     who = auth.authenticate({"authorization": "Bearer ana-test"})
     with store.read() as c:
@@ -287,6 +303,15 @@ def test_kind_counts_keep_inbox_attention_separate_and_follow_live_decisions(api
         event = E.read(c, auth, who, after, topics=("needs",), task_view=view, needs_held=held)[0][-1][2]
     assert event["by_kind"] == get(api, "needs-you?limit=1")["by_kind"]
     assert "approval" not in event["by_kind"] and event["by_kind"]["thread_mention"] == 1
+    assert event["folded_task_ids"] == [wait["id"]]
+
+    for remove, folded in [(True, []), (False, [wait["id"]])]:
+        with store.read() as c:
+            after = E.latest(c)
+        post(api, f"tasks/{card['id']}/relations", {"kind": "parent", "task": wait["id"], "remove": remove})
+        with store.read() as c:
+            event = E.read(c, auth, who, after, topics=("needs",), task_view=view, needs_held=held)[0][-1][2]
+        assert event["folded_task_ids"] == get(api, "needs-you?limit=1")["folded_task_ids"] == folded
 
 
 def test_each_card_task_is_read_by_id_once_however_many_cards(api):

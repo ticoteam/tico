@@ -11,13 +11,14 @@ const NEED_RANK = Object.fromEntries(NEED_GROUPS.map(([k], i) => [k, i]));
 const needLabel = need => (NEED_GROUPS.find(([k]) => k === need) || NEED_GROUPS.at(-1))[1];
 let NEEDS_MEMO = null;
 function needsIndex() {
-  const list = S.v2?.needs || [];
-  if (NEEDS_MEMO?.list !== list) {
+  const list = S.v2?.needs || [], foldedIds = S.v2?.needsFoldedIds;
+  if (NEEDS_MEMO?.list !== list || NEEDS_MEMO?.foldedIds !== foldedIds) {
     const byId = new Map(list.map((it, i) => [String(it.id), {it, i}]));
     // A bot's task folded into the card that asks the person the same thing is not listed again, nor a task the
     // Strategy Bot merged into an item of its own (backend/strategy_merge.py): the server leaves both out of Needs you.
-    const folded = new Set(list.flatMap(it => [...(it.folded || []).map(f => String(f.id)), ...(it.merged || []).map(String)]));
-    NEEDS_MEMO = {list, byId, folded};
+    // The whole-list ids also cover unread cards; their titles and asks stay on their own pages.
+    const folded = new Set((foldedIds || list.flatMap(it => [...(it.folded || []).map(f => f.id), ...(it.merged || [])])).map(String));
+    NEEDS_MEMO = {list, byId, folded, foldedIds};
   }
   return NEEDS_MEMO;
 }

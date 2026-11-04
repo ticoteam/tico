@@ -90,7 +90,8 @@ async function v2Refresh() {
 }
 // Needs you as the page holds it: the first items of the list, a page at a time (GET /v2/needs-you?limit=), in the
 // server's order, with its version, its whole count, each bot's count over the whole list (`bots`) and where the next
-// page starts (`needsNext`, null once it is all here), plus counts by kind over the whole list (`by_kind`).
+// page starts (`needsNext`, null once it is all here), plus counts by kind (`by_kind`) and ids of tasks folded into
+// other cards (`folded_task_ids`) over the whole list.
 // A read names the version held; an unchanged list comes back
 // without its items. Each read is its own request: one already on its way may have been answered before the change
 // this read was asked for (an answer sent, a live event), and sharing it would keep the old list. An older read that
@@ -121,6 +122,7 @@ function needsTake(needs) {
   S.v2.needs = needs.items || []; S.v2.needsVersion = needs.version || null;
   S.v2.needsCount = needs.count ?? S.v2.needs.length; S.v2.needsNext = needs.next || null; S.v2.needsBots = needs.bots || null;
   S.v2.needsByKind = needs.by_kind || null;
+  S.v2.needsFoldedIds = needs.folded_task_ids || null;
   if (needsFirstDone) { const done = needsFirstDone; needsFirstDone = null; done(); }
 }
 let NEEDS_READ = 0, NEEDS_KEPT = 0;
@@ -149,6 +151,7 @@ function v2NeedsMore() {
       S.v2.needs = [...S.v2.needs, ...(r.items || [])];
       S.v2.needsCount = r.count ?? S.v2.needs.length; S.v2.needsNext = r.next || null; S.v2.needsBots = r.bots || null;
       S.v2.needsByKind = r.by_kind || null;
+      S.v2.needsFoldedIds = r.folded_task_ids || null;
       return true;
     } finally { NEEDS_MORE = null; }
   })();
@@ -185,6 +188,7 @@ async function v2NeedsMend(d) {
   S.v2.needsNext = all || items.length >= d.count ? null : needsCursor(d.version, items.length);
   if (d.bots) S.v2.needsBots = d.bots;
   S.v2.needsByKind = d.by_kind || null;
+  S.v2.needsFoldedIds = d.folded_task_ids || null;
   return true;
 }
 // One line above the composer when the bot cannot answer right now: its status says so, or

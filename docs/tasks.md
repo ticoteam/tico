@@ -24,7 +24,8 @@ deleted types fall back to General.
 
 **Needs you** counts the tasks waiting on you in the selected type and filters, plus approvals and
 questions outside any task. The count includes those on unread pages and stays the same on a phone
-and desktop. Thread mentions, unread DMs and held messages are counted in Inbox.
+and desktop. Tasks folded or merged into another card count only through that card, even before it loads.
+Thread mentions, unread DMs and held messages are counted in Inbox.
 
 Picking a step sets the task's status. Steps can move in any order. Bots, older runners and
 existing scripts can keep setting `status`:

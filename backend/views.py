@@ -1972,6 +1972,12 @@ def needs_kinds(items):
     return counts
 
 
+def needs_folded_ids(items):
+    """Task ids represented by another card, including cards on unread pages, so Tasks counts each blocker once."""
+    return sorted({str(f["id"]) for it in items for f in it.get("folded", [])}
+                  | {str(tid) for it in items for tid in it.get("merged", [])})
+
+
 def needs_actor(it, me):
     """The teammate one Needs-you item goes with (needs_bots), or None."""
     actor = None
@@ -3013,7 +3019,8 @@ def install_views(app, store, auth, mutate, task_view):
         `version=<the one held>` answers `unchanged` with no items when it still holds, and `ids=a,b` sends only those
         items, with each one's place in the whole list (`positions`), to mend a held copy after a live `needs` event.
         `limit` (at most NEEDS_PAGE_MAX) sends a page, with `next` to pass as `cursor` for the one after it and `bots`,
-        each bot's count over the whole list; `by_kind` counts each kind over the whole list, including unread pages.
+        each bot's count over the whole list; `by_kind` counts each kind and `folded_task_ids` names tasks represented
+        by other cards over the whole list, including unread pages.
         A cursor from an older version starts again from the top (`restart`).
         Without either, the whole list. Every page is cut from the list built whole, so its `version` and each
         item's place are the same as the full read's and the live event's."""
@@ -3035,7 +3042,8 @@ def install_views(app, store, auth, mutate, task_view):
                 positions = {str(x["id"]): n for n, x in enumerate(items) if str(x["id"]) in wanted}
                 return {"actor": who.actor, "count": len(items), "version": current, "positions": positions,
                         "items": needs_visuals(c, who, [x for x in items if str(x["id"]) in positions])}
-            out = {"actor": who.actor, "count": len(items), "by_kind": needs_kinds(items), "items": items, "older": older,
+            out = {"actor": who.actor, "count": len(items), "by_kind": needs_kinds(items),
+                   "folded_task_ids": needs_folded_ids(items), "items": items, "older": older,
                    "went_away": went_away(c, who.actor), "version": current, "next": None}
             if limit is not None or cursor:
                 out["items"], out["next"], restarted = needs_page(items, current, limit, cursor)
