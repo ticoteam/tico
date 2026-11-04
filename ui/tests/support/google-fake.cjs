@@ -3,6 +3,7 @@
 // `fake.state` is what GET /v2/google sends and a test sets it directly; `fake.personal` is the person's own state.
 // Every write is kept in `fake.writes` as {method, path, body}. `fake.checks` is a queue of answers for the next
 // POST /workspace/check: 'ok', 'unauthorized' (the default when the queue is empty) or 'other'.
+// Every key view and setup code carries a `generation` (row() gives 1 unless set). A new key or code takes the next one.
 const SCOPES = ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/gmail.modify'];
 const CLIENT_ID = '1234567890-acme.apps.googleusercontent.com';
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
@@ -13,12 +14,12 @@ const delegation = `https://admin.google.com/ac/owl/domainwidedelegation?clientI
 // A workspace row in the contract's shape: status 'pending' | 'connected' | 'failing'.
 const row = (status, over = {}) => ({status, domain: 'acme.example', project_id: 'tico-mail-a1b2c3', client_id: CLIENT_ID,
   scopes: SCOPES, delegation_url: delegation, connected_at: status === 'pending' ? null : ago(90), checked_at: null,
-  last_error: null, probe: null, ...over});
+  last_error: null, probe: null, generation: 1, ...over});
 
 exports.row = row;
 exports.googleFake = () => {
   const fake = {
-    writes: [], checks: [], codes: 0, personal: null,
+    writes: [], checks: [], codes: 0, gen: 0, personal: null,
     state: {
       can_admin: true, workspace: null, pending: null,
       me: {mailbox: 'ana@acme.example', covered_by_workspace: false},
@@ -27,6 +28,8 @@ exports.googleFake = () => {
     },
   };
   fake.personal = {configured: true, mailbox: 'ana@acme.example', status: 'connected', syncing: true, can: ['read']};
+  // The next key or setup code takes the generation after the newest one the fake holds, as the server does.
+  const newestGeneration = () => Math.max(fake.gen, fake.state.workspace?.generation ?? 0, fake.state.pending?.generation ?? 0);
 
   fake.answer = (p, url, method = 'GET', body = null) => {
     const s = fake.state;
@@ -35,10 +38,11 @@ exports.googleFake = () => {
     if (p === '/api/v2/google/workspace/setup-code' && method === 'POST') {
       fake.codes += 1;
       return {code: `code${fake.codes}`, command: `curl -fsSL https://tico-ui.test/api/v2/google/setup.sh | bash -s -- code${fake.codes}`,
-        expires_at: soon(10)};
+        expires_at: soon(10), generation: newestGeneration() + 1};
     }
     if (p === '/api/v2/google/workspace/key' && method === 'POST') {
-      const made = row('pending', {domain: body?.domain || 'acme.example'});
+      const made = row('pending', {domain: body?.domain || 'acme.example', generation: newestGeneration() + 1});
+      fake.gen = made.generation;
       if (s.workspace && s.workspace.status !== 'pending') s.pending = made;
       else s.workspace = made;
       return {client_id: CLIENT_ID, delegation_url: delegation, keep_key_ids: []};

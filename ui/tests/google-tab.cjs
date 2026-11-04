@@ -235,7 +235,7 @@ const scenarios = {
     await page.locator('[data-ws-replace]').click();
     await page.locator('[data-ws-step=create]').waitFor();
     // The script uploads the new key on the computer; the replacement keeps polling until it lands.
-    fake.state.pending = row('pending');
+    fake.state.pending = row('pending', {generation: 2});
     await page.locator('[data-ws-step=allow]').waitFor({timeout: 15000});
     await page.locator('[data-ws-check]').waitFor();
     assert.equal(await page.locator('[data-ws-step=create]').count(), 0, 'the replacement is over');
@@ -266,7 +266,7 @@ const scenarios = {
     await page.locator('[data-ws-replace]').click();
     await page.locator('[data-ws-command]').click();
     await page.locator('[data-ws-step=create] code', {hasText: 'bash -s -- code1'}).waitFor();
-    fake.state.pending = row('pending');
+    fake.state.pending = row('pending', {generation: 2});
     await page.locator('[data-ws-step=allow]').waitFor({timeout: 15000});
     await page.locator('[data-ws-replace]').click();
     await page.locator('[data-ws-step=create]').waitFor();
@@ -289,6 +289,45 @@ const scenarios = {
     assert.equal(await page.locator('[data-ws-step=allow]').count(), 0);
     assert.equal(writesTo(fake, '/api/v2/google/workspace', 'DELETE').length, 1);
     assert.equal(fake.state.workspace, null);
+    assert.deepEqual(seen.errors, []);
+  },
+
+  'a replacement made while a key is pending waits for a newer key, then its Allow step and Check show': async browser => {
+    const fake = googleFake();
+    fake.state.workspace = row('connected', {generation: 1});
+    fake.state.pending = row('pending', {generation: 2});
+    const {page, seen} = await open(browser, fake);
+    await page.locator('[data-ws-replace]').click();
+    await page.locator('[data-ws-step=create]').waitFor();
+    // The waiting key is no newer than the click, so the replacement goes on; the script's newer key ends it.
+    fake.state.pending = row('pending', {generation: 3});
+    await page.locator('[data-ws-step=allow]').waitFor({timeout: 15000});
+    await page.locator('[data-ws-check]').waitFor();
+    assert.equal(await page.locator('[data-ws-step=create]').count(), 0, 'the replacement is over');
+    assert.equal(await page.locator('[data-ws-disconnect]').count(), 1, 'the connected key stays until the new one is checked');
+    assert.deepEqual(seen.errors, []);
+  },
+
+  'a command made while a key is pending is used up by its key, even when that lands while the tab is hidden': async browser => {
+    const fake = googleFake();
+    fake.state.workspace = row('connected', {generation: 1});
+    fake.state.pending = row('pending', {generation: 2});
+    const {page, seen} = await open(browser, fake);
+    await page.locator('[data-ws-replace]').click();
+    await page.locator('[data-ws-command]').click();
+    await page.locator('[data-ws-step=create] code', {hasText: 'bash -s -- code1'}).waitFor();
+    // Settings is left: nothing reads the state while the tab is hidden. The script's key uploads and is checked meanwhile.
+    await page.evaluate(() => { document.querySelector('#set-google').hidden = true; });
+    fake.state.pending = row('pending', {generation: 3});
+    fake.state.workspace = row('connected', {generation: 3});
+    fake.state.pending = null;
+    // Settings comes back: its visit re-reads the state first, and that read uses up the command.
+    await page.evaluate(() => { document.querySelector('#set-google').hidden = false; });
+    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
+    await page.locator('[data-ws-replace]').click();
+    await page.locator('[data-ws-step=create]').waitFor();
+    assert.equal(await page.locator('[data-ws-step=create] code').count(), 0, 'the used command shows no code');
+    assert.doesNotMatch(await page.locator('[data-google-card=workspace]').innerText(), /code1/);
     assert.deepEqual(seen.errors, []);
   },
 

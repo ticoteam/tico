@@ -31,11 +31,14 @@
     const ws = g.workspace || null;
     return {active: ws && ws.status !== 'pending' ? ws : null, pend: g.pending || (ws && ws.status === 'pending' ? ws : null)};
   };
-  // A replacement ends when a new key is promoted (the active row's connected_at changes), or when a pending key arrives
-  // that was not there when Replace was clicked. It never sticks.
-  const replacingNow = (host, {active, pend}) => {
+  // Every key view carries the server's generation, which counts up with each key. A view without one counts as -1.
+  const generationOf = row => (Number.isInteger(row?.generation) ? row.generation : -1);
+  const newestGeneration = g => Math.max(generationOf(g.workspace), generationOf(g.pending));
+  // A replacement ends when a key (pending or active) arrives with a generation newer than the newest one seen at the
+  // Replace click. Until then it keeps polling. It never sticks.
+  const replacingNow = (host, g) => {
     const r = host._googleReplacing;
-    const match = !!r && r.since === (active?.connected_at ?? null) && !(pend && !r.hadPending);
+    const match = !!r && newestGeneration(g) <= r.since;
     if (!match) host._googleReplacing = null;
     return match;
   };
@@ -244,7 +247,7 @@
   function paint(host) {
     const {g, personal} = host._googleState;
     const {active, pend} = rowsOf(g);
-    const replacing = replacingNow(host, {active, pend});
+    const replacing = replacingNow(host, g);
     const kept = {};
     host.querySelectorAll('[data-keep]').forEach(el => { kept[el.dataset.keep] = el.value; });
     const flash = host._googleFlash || '';
@@ -285,8 +288,8 @@
     button.disabled = true;
     try {
       const made = await post('/v2/google/workspace/setup-code', {domain});
-      // pendingBefore: a key already waiting when the command was made is not the one it brings in.
-      command = {command: made.command, expires_at: made.expires_at, domain, pendingBefore: !!rowsOf(host._googleState?.g || {}).pend};
+      // The key this command brings in carries this generation, so any key at or past it uses the command up.
+      command = {command: made.command, expires_at: made.expires_at, domain, generation: made.generation};
       await window.mountGoogleConnect(host, {force: true});
     } catch (error) {
       button.disabled = false;
@@ -434,8 +437,7 @@
     if (el.hasAttribute('data-google-disconnect')) return disconnectPersonal(host, el);
     if (el.hasAttribute('data-ws-command')) return newCommand(host, el);
     if (el.hasAttribute('data-ws-replace')) {
-      const {active, pend} = rowsOf(host._googleState.g);
-      host._googleReplacing = {since: active?.connected_at ?? null, hadPending: !!pend};
+      host._googleReplacing = {since: newestGeneration(host._googleState.g)};
       // A mount, not a paint: it re-reads the key state and starts the poll that waits for the new key.
       return window.mountGoogleConnect(host, {force: true});
     }
@@ -489,10 +491,11 @@
     }
     if (turn !== host._googleTurn || !host.isConnected) return;
     host._googleState = {g, personal};
-    const {active, pend} = rowsOf(g);
-    // A setup command is single use: a pending key that arrives after it was made is the upload it was for.
-    if (command && pend && !command.pendingBefore) command = null;
-    const replacing = replacingNow(host, {active, pend});
+    const {active} = rowsOf(g);
+    // A setup command is used up by the first read that shows a key, pending or active, at its generation or newer.
+    // Every read checks this, so a key that arrived while the tab was hidden still counts on the next visit.
+    if (command && newestGeneration(g) >= command.generation) command = null;
+    const replacing = replacingNow(host, g);
     const isLive = live();
     const snapshot = JSON.stringify([g.can_admin, unchecked(g.workspace), unchecked(g.pending), g.oauth, g.me,
       g.setup?.reachable, personal, isLive]);
@@ -502,8 +505,8 @@
     }
     bind(host);
     const personalBusy = !!personal && !personal.error && ['ready', 'finishing', 'disconnecting', 'revoking'].includes(personal.status);
-    // Polls while a replacement waits for its key, and while a live command waits for a first key.
-    const waitingForKey = !!g.can_admin && !pend && (replacing || (isLive && !active));
+    // Polls for the whole replacement, and while a live command waits for a first key.
+    const waitingForKey = !!g.can_admin && (replacing || (isLive && !active));
     if ((personalBusy || waitingForKey) && watchable(host)) {
       host._googlePoll = setTimeout(() => { if (watchable(host)) void mountGoogleConnect(host); }, POLL_MS);
     }
