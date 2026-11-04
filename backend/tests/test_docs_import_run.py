@@ -1,5 +1,6 @@
 """Document import conversion in a worker: golden output, time, memory, busy, output cap, cancel and cleanup."""
 
+import importlib
 import io
 import subprocess
 import sys
@@ -60,6 +61,14 @@ def fake_worker(tmp_path, body):
     script = tmp_path / "fake_worker.py"
     script.write_text(body)
     return script
+
+
+def test_importing_the_worker_leaves_sys_path_alone(monkeypatch):
+    # The worker used to append its folder to sys.path on import, so `import connectors` found backend/connectors.py.
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    before = list(sys.path)
+    importlib.reload(docs_import_worker)
+    assert sys.path == before
 
 
 def test_normal_files_convert_in_the_worker_exactly_as_in_process(temp_root):

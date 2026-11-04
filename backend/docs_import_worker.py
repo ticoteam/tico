@@ -4,16 +4,14 @@ docs_import_run.py starts it as `python -I docs_import_worker.py <work dir>`, so
 directory or the environment. It sets its memory limit before it parses anything, and checks the output length
 before it writes a result, so a file that expands past the limit never reaches the server's own process. The parent
 kills it at the time limit and removes the work directory after it exits.
+
+Importing this module has no side effects. Run as a script, it puts its own folder on sys.path to find docs_import,
+which is standard library only; imported as backend.docs_import_worker, it imports docs_import from the package.
 """
 import json
 import resource
 import sys
 from pathlib import Path
-
-if not __package__:
-    # Run as a script (`python -I`): docs_import, standard library only, sits beside it. Imported as backend.docs_import_worker
-    # (tests), the path stays as it was: backend/ on it would shadow top-level packages such as `connectors`.
-    sys.path.append(str(Path(__file__).resolve().parent))
 
 
 def _limit_memory(limit_bytes):
@@ -26,9 +24,9 @@ def convert(work):
     root = Path(work)
     request = json.loads((root / "request.json").read_text())
     _limit_memory(request["memory_bytes"])
-    if __package__:
+    if __package__:  # imported as backend.docs_import_worker
         from . import docs_import
-    else:
+    else:  # run as a script: the __main__ block has put this folder on sys.path
         import docs_import
     try:
         text, guess = docs_import.to_markdown(request["filename"], (root / "input").read_bytes())
@@ -42,5 +40,6 @@ def convert(work):
 
 
 if __name__ == "__main__":
+    sys.path.append(str(Path(__file__).resolve().parent))  # -I leaves this folder off sys.path; docs_import is here
     work = Path(sys.argv[1])
     (work / "result.json").write_text(json.dumps(convert(work)))
