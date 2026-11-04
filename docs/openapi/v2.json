@@ -1237,7 +1237,7 @@
     },
     "/api/v2/assistant/read-back": {
       "post": {
-        "summary": "The Assistant only: post the list of approvals it is about to approve for you in your chat; only those may then be approved on your yes",
+        "summary": "The Assistant only: post the list of approvals it is about to approve for you in your chat, with an optional note of its own words above it; only the listed ones may then be approved on your yes",
         "operationId": "readBackAssistantApprovals",
         "requestBody": {
           "content": {
@@ -42577,6 +42577,12 @@
             "maxItems": 100,
             "minItems": 1,
             "title": "Approvals"
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Note",
+            "default": ""
           }
         },
         "additionalProperties": false,

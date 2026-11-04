@@ -102,6 +102,7 @@ export type AssistantPage = {
 
 export type AssistantReadBack = {
   approvals: Array<string>;
+  note?: string;
 };
 
 export type AssistantSent = {
