@@ -66,6 +66,7 @@ HQ_WAIT = 8
 SOURCES = ("person", "bot_report", "botops", "health_monitor")
 RULE = "bot_reports_direct"     # the team rule: a bot's report is sent without a card (report_now)
 REPORT_OPERATION = "support.report"  # the Idempotency-Key scope of a direct report (a drafted approval has its own)
+DRAFT_OPERATION = "/api/v2/approvals"  # the Idempotency-Key scope of a drafted report (app.py approval_request)
 # Who may act for a person on their confirmation (`Identity.confirmed`): BotOps and the Assistant, with their yes to a
 # read-back or their tap on a Confirm card (backend/app.py, backend/auth.py). Unconfirmed, they are refused here.
 CONFIRMED_VIA = ("botops", "assistant")
@@ -449,18 +450,19 @@ class Support:
 
     def report_now(self, who, body, key=None):
         """A bot's report, sent without a card when the team lets bots send without asking (team rule `bot_reports_direct`).
-        Returns None when the rule is off or the caller is not a bot: the caller then drafts it as a `support` approval, as
-        before. Otherwise it gets the checks a drafted report gets (backend/hubdb.py `lint_approval`, a quarantined bot
-        refused, a refusal recorded and counted the same way) and is filed as an approved one is: the same HQ call, the same
-        day limit, the same source. It is filed as the install's default person (`H.default_human`), the one whose yes a
-        drafted report would ask for. A bot has no person of its own to file as; the Health Monitor files as the owner the
-        same way (backend/health_monitor.py report). `body` is the approval request and `key` its Idempotency-Key, kept as
-        `mutate` keeps a write's: scoped to the bot's attempt, bound to the request's content (another body under the key
-        is a 409), and a retry gets the same ticket. Sends are serialized as `file_approved` serializes them, and the bot is
-        checked under the write lock before anything is sent (`validate_identity`, as `mutate` checks it)."""
-        with self.store.read() as c:
-            if who.role != "bot" or not team_rules.load(c)[RULE]:
-                return None
+        Returns None when the caller should draft it as a `support` approval, as before: the caller is not a bot, the rule is
+        off (checked again under the send's lock, so a report queued while the owner turned it off is drafted, not sent), or
+        the key already drafted a report (the route replays that draft). Otherwise it gets the checks a drafted report gets
+        (backend/hubdb.py `lint_approval`, a quarantined bot refused, a refusal recorded and counted the same way) and is
+        filed as an approved one is: the same HQ call, the same day limit, the same source. It is filed as the install's
+        default person (`H.default_human`), the one whose yes a drafted report would ask for. A bot has no person of its own
+        to file as; the Health Monitor files as the owner the same way (backend/health_monitor.py report). `body` is the
+        approval request and `key` its Idempotency-Key, kept as `mutate` keeps a write's: scoped to the bot's attempt, bound
+        to the request's content (another body under the key is a 409), and a retry gets the same ticket whatever the rule
+        says now. Sends are serialized as `file_approved` serializes them, and the bot is checked under the write lock before
+        anything is sent (`validate_identity`, as `mutate` checks it)."""
+        if who.role != "bot":
+            return None
         if not key or len(key) > 200:
             raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
         content = body.model_dump()
@@ -475,6 +477,8 @@ class Support:
         refusal = None
         with self.store.transaction() as c:
             validate_identity(c, who)              # the bot still holds its credential, lease and state, under the lock
+            # The receipts come first, whatever the rule says now: a key that already sent is replayed, and a key that
+            # already drafted is the draft's (the route replays it), so neither path sends the report a second time.
             kept = c.execute("SELECT request_hash, response FROM idempotency WHERE binding IS NULL AND actor=? "
                              "AND operation=? AND key=?", (principal, REPORT_OPERATION, key)).fetchone()
             if kept:
@@ -485,6 +489,10 @@ class Support:
                 if not done:
                     raise Problem("idempotency_conflict", "This key's report is no longer kept", 409)
                 return {"ticket": view(done), "sent": True, "filed_as": answer["filed_as"]}
+            drafted = c.execute("SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
+                                (principal, DRAFT_OPERATION, key)).fetchone()
+            if drafted or not team_rules.load(c)[RULE]:
+                return None                        # drafted, as the caller does; the rule is read under the lock
             c.execute("SAVEPOINT domain_write")
             try:
                 lifecycle.refuse_send(c, who, None, what="anything")

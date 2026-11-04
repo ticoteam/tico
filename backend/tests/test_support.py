@@ -913,3 +913,78 @@ def test_a_bots_report_is_refused_once_its_credential_or_its_bot_has_ended(envir
                                          ApprovalCreate(kind="support", payload=payload), "ended-1")
     assert ended.value.code == ("revoked" if ending == "credential" else "paused")
     assert hq.seen == []
+
+
+def test_a_retry_after_the_owner_turns_direct_reports_off_gets_the_same_ticket(environment, hq):  # noqa: F811  (the fixture)
+    import hashlib
+    api = environment()
+    bot = as_bot(api)
+    payload = {"message": REPORT, "content_sha256": hashlib.sha256(REPORT.encode()).hexdigest()}
+
+    def direct(key):
+        return api.post("/api/v2/approvals", json={"kind": "support", "payload": payload},
+                        headers={**bot, "Idempotency-Key": key})
+    first = direct("receipt-1")
+    assert first.status_code == 200 and first.json()["sent"] is True, first.text
+    drafts_only(api)                        # the owner turns direct reports off
+    again = direct("receipt-1")
+    assert again.status_code == 200, again.text
+    assert again.json()["sent"] is True and again.json()["ticket"]["id"] == first.json()["ticket"]["id"]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM approvals").fetchone()[0] == 0     # no draft in its place
+    assert len(hq.seen) == 1
+
+
+def test_a_key_that_drafted_while_direct_reports_were_off_is_replayed_not_sent(environment, hq):  # noqa: F811  (the fixture)
+    import hashlib
+    api = environment()
+    bot = as_bot(api)
+    drafts_only(api)
+    payload = {"message": REPORT, "content_sha256": hashlib.sha256(REPORT.encode()).hexdigest()}
+    headers = {**bot, "Idempotency-Key": "draft-1"}
+    drafted = api.post("/api/v2/approvals", json={"kind": "support", "payload": payload}, headers=headers)
+    assert drafted.status_code == 200 and drafted.json()["kind"] == "support" and "sent" not in drafted.json()
+    assert api.put("/api/v2/access/rules", json={"bot_reports_direct": True}, headers=signed_in()).status_code == 200
+    again = api.post("/api/v2/approvals", json={"kind": "support", "payload": payload}, headers=headers)
+    assert again.status_code == 200 and again.json()["id"] == drafted.json()["id"]
+    assert hq.seen == []                    # the draft is the one approval; the retry sends nothing of its own
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM approvals").fetchone()[0] == 1
+
+
+def test_a_report_queued_while_the_owner_turns_direct_reports_off_is_drafted_not_sent(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
+    import hashlib
+    import threading
+    import time
+    from backend.models import ApprovalCreate
+    api = environment()
+    as_bot(api)
+    who = Identity("bot:coo", "bot", agent="hermes")
+
+    def body_for(message):
+        return ApprovalCreate(kind="support", payload={"message": message,
+                                                       "content_sha256": hashlib.sha256(message.encode()).hexdigest()})
+    entered, release = threading.Event(), threading.Event()
+
+    def slow(request):                      # the first send is still out when the queued report arrives
+        entered.set()
+        release.wait(5)
+        return hq(request)
+    monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(slow))
+    answers = {}
+
+    def send(name, message, key):
+        answers[name] = api.app.state.support.report_now(who, body_for(message), key)
+    first = threading.Thread(target=send, args=("first", REPORT, "in-flight"))
+    first.start()
+    assert entered.wait(5)
+    queued = threading.Thread(target=send, args=("queued", "A report queued behind the first one", "queued"))
+    queued.start()
+    time.sleep(0.3)                         # the queued report is waiting for the send's lock
+    drafts_only(api)                        # the owner turns direct reports off while it waits
+    release.set()
+    first.join(10)
+    queued.join(10)
+    assert answers["first"]["sent"] is True
+    assert answers["queued"] is None        # the caller drafts it; nothing is sent for it
+    assert len(hq.seen) == 1

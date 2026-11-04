@@ -129,7 +129,7 @@ command prints the ticket. No approval card is made. The ticket is filed as the 
 drafted report would ask), counts toward their 10 a day, and its replies show on their Support page. The same checks as
 a drafted report run first (the message is checked as `lint_approval` checks it, a quarantined bot is refused, and a
 refusal is recorded), and the day limit, the HQ call and the source are the same. The bot sends an `Idempotency-Key`, as
-every write does: a retry with the same key is the same ticket and nothing more reaches HQ. The key is the bot's attempt's, and the same key with other content is refused (409) and sends nothing. The version and install ID go
+every write does: a retry with the same key is the same ticket and nothing more reaches HQ. The key is the bot's attempt's, and the same key with other content is refused (409) and sends nothing. A retry after the owner turns direct reports off is still the same ticket, and a key that drafted stays a draft. The version and install ID go
 with it unless `--no-ids`.
 
 **Off.** The report waits for a person's yes:
