@@ -292,13 +292,15 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
       }
       if (rest === 'versions') {
         const status = url.searchParams.get('status');
-        return json({versions: db.versions[a.id].filter(v => !status || v.status === status)});
+        // A version's flow comes back key-sorted as the hub stores it, including one a test put in the list directly.
+        return json({versions: db.versions[a.id].filter(v => !status || v.status === status).map(v => ({...v, flow: sortFlow(v.flow)}))});
       }
       if ((m = rest.match(/^versions\/(\d+)\/restore$/)) && method === 'POST') {
         const v = db.versions[a.id].find(x => x.n === +m[1]);
         if (!v) return refuse(404, 'not_found', 'No such version');
-        a.trigger = clone(v.flow.trigger); a.steps = clone(v.flow.steps);
-        if (v.flow.destinations) a.destinations = clone(v.flow.destinations); else delete a.destinations;
+        const f = sortFlow(v.flow);
+        a.trigger = f.trigger; a.steps = f.steps;
+        if (f.destinations) a.destinations = f.destinations; else delete a.destinations;
         // A pending version turned on becomes the current one; an older one comes back as a new version. A draft (off,
         // no version live yet) is turned on by its first pending version.
         if (v.status === 'pending') {
