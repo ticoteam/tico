@@ -342,7 +342,7 @@ document.addEventListener('click', ev => {
 // Move to…: the groups `allowed` names (all of them when null) in chart order, nested ones indented; No group for those
 // who may move anyone.
 function rdoGroupOptions(current, allowed) {
-  const groups = S.orgGroups || [], out = [];
+  const groups = rdoGroups(), out = [];
   const walk = (parent, depth) => groups.filter(g => (g.parent || '') === parent).sort((a, b) => (a.order || 0) - (b.order || 0)).forEach(g => {
     if (depth > 10 || out.some(([id]) => id === g.id)) return;
     out.push([g.id, '\u00a0'.repeat(depth * 2) + g.name]); walk(g.id, depth + 1);
