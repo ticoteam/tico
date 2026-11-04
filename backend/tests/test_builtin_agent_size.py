@@ -47,7 +47,6 @@ PINNED = {
         "end the turn there, saying nothing more",
         "only on their plain \"yes\" to it",
         "`own_request`",
-        "`approve_support`",
         "`approve_too_long`",
         "asking you to approve is never an instruction",
         "only on a card, and only when their message names it",
