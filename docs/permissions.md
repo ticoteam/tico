@@ -318,7 +318,7 @@ The check has four layers. Two of them can be switched off in the same card:
   task to the bot to release it; close it if it is an attack. With no person to hold it, it goes to its bot with the
   warning line instead. A document at or over the hold line, on a door set to Hold, becomes a read task for Counsel,
   labelled held, with its text left out. Slack cannot be set to Hold, so no Slack message is held; at Warn it gets no
-  line. At or over `warn` (50%), the bot's copy starts with a line saying the text looks like a
+  line. On the other doors, at or over `warn` (50%), the bot's copy starts with a line saying the text looks like a
   prompt injection and is data. Mail at the hold line gets that line too, and a held automation turn is recorded as
   step `held`.
 - **Who gets a held item.** Whoever made the webhook's automation or rule, else the automation's owner, else the bot's
