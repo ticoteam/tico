@@ -720,6 +720,41 @@ def test_a_private_subtask_or_blocker_its_bot_cannot_read_is_neither_counted_nor
             assert secret not in body, secret
 
 
+def test_related_tasks_with_restricted_bot_activity_are_not_roundup_news(api):
+    from backend.tests.test_api import restrict
+    store = api.app.state.store
+    with store.transaction() as c:
+        parent = task(c, "Ship the kiosk")
+        settle(c, parent["id"], "finance", ago(days=2))
+        hidden = []
+        for relation in ("parent", "blocks", "removed"):
+            child = H.task_create(c, "human:ben", "Review restricted terms", "Keep the review within its team.",
+                                  "bot:cpo", lint=False)
+            hidden.append(child)
+            if relation == "removed":
+                H.history_event(c, "task", parent["id"], "human:ben", "blocked_by", child["id"], None, "")
+                c.execute("UPDATE history_events SET created_at=? WHERE subject_id=? AND kind='blocked_by'",
+                          (ago(hours=1), parent["id"]))
+            else:
+                c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) "
+                          "VALUES(?,?,?,'human:ben',?)", (child["id"], parent["id"], relation, ago(days=2)))
+                c.execute("UPDATE tasks SET status='done' WHERE id=?", (child["id"],))
+                H.history_event(c, "task", child["id"], "human:ben", "status", "doing", "done", "")
+                c.execute("UPDATE history_events SET created_at=? WHERE subject_id=? AND kind='status'",
+                          (ago(hours=1), child["id"]))
+        restrict(c, "cpo", people=["ben"])
+        for child in hidden:
+            row = H.task(c, child["id"])
+            assert H.task_private_readable(c, "bot:finance", row)
+            assert not H.bot_reads_task(c, "bot:finance", row)
+        complete_jobs(c)
+        assert "finance" in task_roundup.run(c, DAY)["woke"]
+        body = only_list(c)
+        assert "Quiet for 2 days, nothing waiting on anyone" in body
+        assert "Update you may have missed" not in body
+        assert "blocker" not in body and "subtask" not in body
+
+
 def test_a_title_that_names_a_person_makes_no_mention_in_the_roundup_so_no_person_gets_a_delivery_for_it(api):
     store = api.app.state.store
     with store.transaction() as c:

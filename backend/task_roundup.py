@@ -533,7 +533,7 @@ def _last_turn(c, row, slug, actor):
 
 def _readable(c, actor, rows):
     """The related tasks (rows with their id, owner, requester and private flag) that the bot may read."""
-    return [row for row in rows if H.task_private_readable(c, actor, row)]
+    return [row for row in rows if H.bot_reads_task(c, actor, row)]
 
 
 def _news(c, row, actor, base):
