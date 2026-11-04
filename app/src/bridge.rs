@@ -112,15 +112,21 @@ fn set_visual_origin(state: &AppState, label: &str, document: Option<&url::Url>,
     let caller = org_of(label).unwrap_or_default();
     let open = list.active().map(|org| org.id.as_str());
     if open != Some(caller) {
-        // The prefetched page, hidden: its allowance waits apart from the open page's until it is shown.
-        let prefetched = state.prefetch.lock().unwrap().org.clone();
-        let hub = prefetched.filter(|id| id == caller).and_then(|id| list.get(&id).and_then(|org| org.hub()));
+        // A hidden page, the prefetched one or one kept since a switch away: its allowance waits apart from the open
+        // page's until it is shown.
+        let prefetched = state.prefetch.lock().unwrap().org.as_deref() == Some(caller);
+        let hub = list.get(caller).and_then(|org| org.hub());
         if hub.is_none() || !server_document(hub.as_ref(), caller, Some(caller), document) {
             return Err("Only the selected server's page may configure visuals.".into());
         }
-        let mut parked = state.parked_visual.lock().unwrap();
-        *parked = visual_from(hub.as_ref(), body);
-        return Ok(parked.is_some());
+        let visual = visual_from(hub.as_ref(), body);
+        let set = visual.is_some();
+        if prefetched {
+            *state.parked_visual.lock().unwrap() = visual;
+        } else if !state.kept.lock().unwrap().set_visual(caller, visual) {
+            return Err("Only the selected server's page may configure visuals.".into());
+        }
+        return Ok(set);
     }
     let connection = state.connection.lock().unwrap();
     let hub = connection.as_ref().map(|c| &c.hub);

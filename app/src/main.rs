@@ -44,7 +44,7 @@ const MIN_HEIGHT: u32 = 400;
 pub(crate) const LOG_LINES: usize = 200;
 
 /// The shell's state. When more than one lock is held, they are taken in this order: changing, orgs, prefetch,
-/// connection, visual_origin, parked_visual.
+/// connection, visual_origin, parked_visual, shown, kept.
 struct AppState {
     connection: Mutex<Option<Config>>,
     visual_origin: Mutex<Option<visual_origin::VisualOrigin>>,
@@ -59,8 +59,12 @@ struct AppState {
     // Held while the open org changes or an org goes, so a switch and a removal never interleave. Never taken on
     // the main thread: a switch waits on it for webview work.
     pub(crate) changing: Mutex<()>,
-    // The orgs whose pages are open, least recently shown first (windows::KEEP_ALIVE of them).
+    // The orgs whose pages are open, least recently shown first: the open org's last, and before it those kept
+    // hidden since a switch away (`kept`), windows::KEEP_ALIVE in all at most. A prefetched page is not among them.
     shown: Mutex<Vec<String>>,
+    // The pages kept hidden after a switch away, each closing windows::KEEP_FOR after it went hidden unless it is
+    // shown again first, with the visual allowance each had when open.
+    kept: Mutex<windows::Kept>,
     // The page built hidden for the org the pointer rests on in the rail, and the visual allowance it sent while
     // hidden, which becomes the open one when it is shown.
     prefetch: Mutex<windows::Prefetch>,
@@ -83,6 +87,7 @@ impl AppState {
             granted: Mutex::new(HashSet::new()),
             changing: Mutex::new(()),
             shown: Mutex::new(Vec::new()),
+            kept: Mutex::new(windows::Kept::default()),
             prefetch: Mutex::new(windows::Prefetch::default()),
             parked_visual: Mutex::new(None),
             traces: Mutex::new(Vec::new()),
@@ -439,6 +444,7 @@ async fn remove_org(app: &App, id: &str) {
                     select_connection(&state, None);
                     *state.status.lock().unwrap() = HubStatus::default();
                     state.shown.lock().unwrap().clear();
+                    *state.kept.lock().unwrap() = windows::Kept::default();
                     // The setup window first, so that the app keeps a window while the main one goes.
                     let _ = build_server_window(app);
                     if let Some(window) = main_window(app) {

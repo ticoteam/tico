@@ -396,9 +396,10 @@ pub(crate) fn first_grant(granted: &std::collections::HashSet<String>, identifie
     !granted.contains(identifier)
 }
 
-/// Whether org `id`'s page is the one on screen: the last shown, and not a prefetch waiting to be.
-pub(crate) fn on_screen(shown: &[String], prefetched: Option<&str>, id: &str) -> bool {
-    shown.last().is_some_and(|last| last == id) && prefetched != Some(id)
+/// Whether org `id`'s page is the one on screen: the last shown, and neither a prefetch waiting to be shown nor a page
+/// kept hidden after a switch away (the last shown once the open org was removed, until the switch that follows).
+pub(crate) fn on_screen(shown: &[String], prefetched: Option<&str>, kept: &Kept, id: &str) -> bool {
+    shown.last().is_some_and(|last| last == id) && prefetched != Some(id) && !kept.contains(id)
 }
 
 /// Whether org `id`'s page is the one on screen now.
@@ -406,12 +407,93 @@ pub(crate) fn page_on_screen(app: &App, id: &str) -> bool {
     let state = app.state::<AppState>();
     let prefetched = state.prefetch.lock().unwrap().org.clone();
     let shown = state.shown.lock().unwrap();
-    on_screen(&shown, prefetched.as_deref(), id)
+    let kept = state.kept.lock().unwrap();
+    on_screen(&shown, prefetched.as_deref(), &kept, id)
 }
 
-/// How many org pages stay open: the open one only, so a switch closes the previous page once the new one is on
-/// screen. A prefetched page (see `prefetch`) is apart from these.
-pub(crate) const KEEP_ALIVE: usize = 1;
+/// How many org pages stay open: the open one and up to two kept hidden after a switch away (`Kept`), so clicking
+/// across many orgs never piles pages up: past the cap, the least recently shown closes at once. A prefetched page
+/// (see `prefetch`) is apart from these.
+pub(crate) const KEEP_ALIVE: usize = 3;
+
+/// How long a page stays open, hidden, after a switch away from it: a switch back within this shows it as it was,
+/// with no reload. Each time it goes hidden it gets the full time again.
+pub(crate) const KEEP_FOR: Duration = Duration::from_secs(30);
+
+/// The pages kept open, hidden, after a switch away from them, until `KEEP_FOR` after they went hidden.
+#[derive(Default)]
+pub(crate) struct Kept {
+    pages: Vec<KeptPage>,
+    // Moves on at every hiding: a page's close timer goes ahead only if its ticket is still the page's.
+    serial: u64,
+}
+
+struct KeptPage {
+    org: String,
+    ticket: u64,
+    // The visual allowance the page had when it was open: it follows the page while hidden (its navigation, and
+    // `visualOrigin` from the page itself) and becomes the open one again when the page is shown.
+    visual: Option<VisualOrigin>,
+}
+
+impl Kept {
+    /// `id`'s page went hidden with its visual allowance: the ticket for its close.
+    pub(crate) fn hide(&mut self, id: &str, visual: Option<VisualOrigin>) -> u64 {
+        self.serial += 1;
+        self.pages.retain(|page| page.org != id);
+        self.pages.push(KeptPage { org: id.to_string(), ticket: self.serial, visual });
+        self.serial
+    }
+
+    /// `id`'s page is shown again: its close is off. Answers its allowance, `None` if the page was not kept.
+    pub(crate) fn show(&mut self, id: &str) -> Option<Option<VisualOrigin>> {
+        let index = self.pages.iter().position(|page| page.org == id)?;
+        Some(self.pages.remove(index).visual)
+    }
+
+    pub(crate) fn contains(&self, id: &str) -> bool {
+        self.pages.iter().any(|page| page.org == id)
+    }
+
+    /// `id`'s close with `ticket` is due: whether the page is still hidden since that hiding (it goes now), not shown
+    /// or hidden again meanwhile.
+    pub(crate) fn expire(&mut self, id: &str, ticket: u64) -> bool {
+        let before = self.pages.len();
+        self.pages.retain(|page| page.org != id || page.ticket != ticket);
+        self.pages.len() != before
+    }
+
+    /// `id`'s page closes some other way (past the cap, or its org going): its close is off.
+    pub(crate) fn forget(&mut self, id: &str) {
+        self.pages.retain(|page| page.org != id);
+    }
+
+    /// A kept page sent its own allowance (`visualOrigin`): whether `id` is a kept page, which takes it.
+    pub(crate) fn set_visual(&mut self, id: &str, visual: Option<VisualOrigin>) -> bool {
+        let Some(page) = self.pages.iter_mut().find(|page| page.org == id) else { return false };
+        page.visual = visual;
+        true
+    }
+
+    /// The allowance of the kept page on `hub`, if one is.
+    fn visual_for(&mut self, hub: Option<&url::Url>) -> Option<&mut Option<VisualOrigin>> {
+        self.pages.iter_mut().map(|page| &mut page.visual).find(|visual| visual.as_ref().is_some_and(|visual| visual.serves(hub)))
+    }
+}
+
+/// The bookkeeping of a switch to `id` from `previous` once `id`'s page is on screen (`Kept::show` already took `id`
+/// out of the kept pages): `previous`'s page goes hidden, kept with the allowance it had (`left`), and the least
+/// recently shown pages beyond `KEEP_ALIVE` go. Answers the pages to close now, and the ticket for the close of the
+/// page that went hidden.
+pub(crate) fn note_switch(shown: &mut Vec<String>, kept: &mut Kept, id: &str, previous: Option<&str>, left: Option<VisualOrigin>) -> (Vec<String>, Option<u64>) {
+    let gone: Vec<String> = note_shown(shown, id, KEEP_ALIVE).into_iter().filter(|other| other != id).collect();
+    for other in &gone {
+        kept.forget(other);
+    }
+    let hidden = previous.filter(|previous| *previous != id && shown.iter().any(|shown| shown == previous))
+        .map(|previous| kept.hide(previous, left));
+    (gone, hidden)
+}
 
 /// Records that `id`'s page is on screen, most recent last, and returns the orgs whose pages go: the least recently
 /// shown beyond `keep`.
@@ -423,9 +505,11 @@ pub(crate) fn note_shown(order: &mut Vec<String>, id: &str, keep: usize) -> Vec<
 }
 
 /// Makes another org the open one: its page replaces the old one in the main window. A page already built (a
-/// prefetch) is shown at once, as far as it has loaded; otherwise a new one opens. The old page closes once the new
-/// one is on screen. No restart and no new sign-in: the org's own store keeps its sign-in. The org becomes the open
-/// one only once its page exists: if the page cannot open, the old org and its page stay.
+/// prefetch, or a page kept hidden since a switch away from it) is shown at once, as it is: a kept page with no
+/// reload. Otherwise a new one opens. The old page goes hidden once the new one is on screen, and closes `KEEP_FOR`
+/// later unless it is shown again first (`Kept`), or at once past `KEEP_ALIVE`. No restart and no new sign-in: the
+/// org's own store keeps its sign-in. The org becomes the open one only once its page exists: if the page cannot
+/// open, the old org and its page stay.
 pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
     timing::begin(app, id);
     let state = app.state::<AppState>();
@@ -436,20 +520,25 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
     let (org, was_open, previous) = {
         let orgs = state.orgs.lock().unwrap();
         let Some(org) = orgs.get(id).cloned() else { return Ok(()) };
-        let previous = orgs.active().map(|org| org.id.clone());
-        (org, previous.as_deref() == Some(id), previous)
+        let previous = orgs.active().cloned();
+        (org, previous.as_ref().is_some_and(|previous| previous.id == id), previous)
     };
     let Some(home) = Home::of(&org) else {
         log::warn!("could not open an org: its address is not usable");
         return Ok(());
     };
     let live = org_page(app, &org.id);
+    let kept = live.is_some() && state.kept.lock().unwrap().contains(id);
     let showing = {
         let prefetched = state.prefetch.lock().unwrap().org.clone();
-        on_screen(&state.shown.lock().unwrap(), prefetched.as_deref(), id)
+        let shown = state.shown.lock().unwrap();
+        on_screen(&shown, prefetched.as_deref(), &state.kept.lock().unwrap(), id)
     };
-    // Open and on screen: nothing to show. Open but hidden (the prefetch became the open org when the open one was
-    // removed) goes on to be shown.
+    if kept {
+        timing::mark(app, id, "kept");
+    }
+    // Open and on screen: nothing to show. Open but hidden (the prefetch, or a kept page, became the open org when
+    // the open one was removed) goes on to be shown.
     if was_open && live.is_some() && showing {
         timing::finish(app, id, "already open");
         refresh_chrome(app);
@@ -461,7 +550,7 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
         if let Err(e) = build_window(app) {
             log::warn!("could not open the window for an org: {e}");
             if let Some(previous) = &previous {
-                state.orgs.lock().unwrap().set_active(previous);
+                state.orgs.lock().unwrap().set_active(&previous.id);
             }
             return Err(e);
         }
@@ -470,7 +559,8 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
         layout_page(app, page);
         let _ = page.show();
         let _ = page.set_focus();
-        // The flag is used up only by a page that went to the hub's sign-in with it: a prefetch built on it.
+        // The flag is used up only by a page that went to the hub's sign-in with it: a prefetch built on it. A kept
+        // page used it up when it was first shown (it is never the prefetch: see `prefetch`).
         if state.prefetch.lock().unwrap().started_on_sign_in(id) {
             state.orgs.lock().unwrap().take_sign_in(id);
         }
@@ -480,19 +570,66 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
     }
     state.orgs.lock().unwrap().set_active(id);
     state.prefetch.lock().unwrap().take(id);
+    // A kept page's close is off, and its allowance comes back with it.
+    let kept_visual = state.kept.lock().unwrap().show(id).flatten();
     // The connection follows the open org, and the status starts over.
-    select_org(&state, Config::new(home.hub.clone()), live.is_some());
+    let left = select_org(&state, Config::new(home.hub.clone()), live.is_some(), kept_visual);
     *state.status.lock().unwrap() = crate::hub::HubStatus::default();
     layout(app);
-    timing::shown(app, id);
-    let gone = note_shown(&mut state.shown.lock().unwrap(), id, KEEP_ALIVE);
-    for other in gone.iter().filter(|other| other.as_str() != id) {
+    if kept {
+        // Nothing left to time: the app on it has been up since it was first shown.
+        timing::finish(app, id, "shown");
+    } else {
+        timing::shown(app, id);
+    }
+    // The page left goes hidden with its own allowance (only ever its own: the open page's is for the open hub).
+    let previous = previous.filter(|previous| previous.id != id);
+    let left = left.filter(|visual| visual.serves(previous.as_ref().and_then(Org::hub).as_ref()));
+    let (gone, hidden) = {
+        let mut shown = state.shown.lock().unwrap();
+        note_switch(&mut shown, &mut state.kept.lock().unwrap(), id, previous.as_ref().map(|org| org.id.as_str()), left)
+    };
+    if let (Some(previous), Some(ticket)) = (previous, hidden) {
+        if let Some(page) = org_page(app, &previous.id) {
+            hide_page(&page);
+        }
+        close_later(app, previous.id, ticket);
+    }
+    for other in &gone {
         if let Some(page) = org_page(app, other) {
             let _ = page.close();
         }
     }
     refresh_chrome(app);
     Ok(())
+}
+
+/// Media a hidden page was playing stops: the page is no longer on screen to show it.
+const PAUSE_MEDIA: &str = "document.querySelectorAll('video, audio').forEach(m => { try { m.pause(); } catch (e) {} });";
+
+/// Hides a page kept after a switch away.
+fn hide_page(page: &Webview) {
+    let _ = page.eval(PAUSE_MEDIA);
+    let _ = page.hide();
+}
+
+/// Closes org `id`'s kept page `KEEP_FOR` after it went hidden (`ticket`), unless it was shown (or hidden again,
+/// which starts its own wait) meanwhile, or closed some other way.
+fn close_later(app: &App, id: String, ticket: u64) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(KEEP_FOR).await;
+        let state = app.state::<AppState>();
+        let _changing = state.changing.lock().unwrap();
+        if !state.kept.lock().unwrap().expire(&id, ticket) || active_org(&app).is_some_and(|open| open.id == id) {
+            return;
+        }
+        state.shown.lock().unwrap().retain(|shown| shown != &id);
+        if let Some(page) = org_page(&app, &id) {
+            let _ = page.close();
+            log::info!("org page {id} closed: hidden for {} s", KEEP_FOR.as_secs());
+        }
+    });
 }
 
 /// Numbers a rail click, in the order the clicks came.
@@ -529,16 +666,22 @@ fn layout_page(app: &App, page: &Webview) {
 }
 
 /// The open org's server becomes the connection. Its page's visual allowance comes along when the page was already
-/// built (a prefetch sent it while hidden); a new page sends its own.
-fn select_org(state: &AppState, config: Config, built: bool) {
+/// built: the one a kept page had (`kept`), or the one a prefetch sent while hidden; a new page sends its own.
+/// Answers the allowance of the page that was open, for it to keep while hidden.
+pub(crate) fn select_org(state: &AppState, config: Config, built: bool, kept: Option<VisualOrigin>) -> Option<VisualOrigin> {
     let mut connection = state.connection.lock().unwrap();
     let mut visual = state.visual_origin.lock().unwrap();
     let mut parked = state.parked_visual.lock().unwrap();
-    *visual = None;
-    if built && parked.as_ref().is_some_and(|parked| parked.serves(Some(&config.hub))) {
-        *visual = parked.take();
+    let left = visual.take();
+    if built {
+        if let Some(kept) = kept.filter(|kept| kept.serves(Some(&config.hub))) {
+            *visual = Some(kept);
+        } else if parked.as_ref().is_some_and(|parked| parked.serves(Some(&config.hub))) {
+            *visual = parked.take();
+        }
     }
     *connection = Some(config);
+    left
 }
 
 /// The page built ahead of a click: at most one, for the org the pointer last rested on in the rail.
@@ -620,9 +763,12 @@ pub(crate) fn prefetch(app: &App, id: &str) -> tauri::Result<()> {
         let list = state.orgs.lock().unwrap();
         list.get(id).filter(|_| list.active().map(|open| open.id.as_str()) != Some(id)).cloned()
     };
-    let Some(org) = org.filter(|_| main_window(app).is_some()) else {
-        // Nothing to build (a rest on the open org, say). The rest still called off the close of the page built for
-        // another org, so for that page it counts as a leave: its close is scheduled again.
+    // A page kept hidden since a switch away is shown as it is on a click: nothing to build, and it never becomes the
+    // prefetch, so it never gets a second page and a leave's close never reaches it (its own `close_later` does).
+    let kept = state.kept.lock().unwrap().contains(id);
+    let Some(org) = org.filter(|_| !kept && main_window(app).is_some()) else {
+        // Nothing to build (a rest on the open org or a kept one, say). The rest still called off the close of the
+        // page built for another org, so for that page it counts as a leave: its close is scheduled again.
         leave(app);
         return Ok(());
     };
@@ -678,7 +824,8 @@ pub(crate) fn leave(app: &App) {
     });
 }
 
-/// Closes a prefetched page that was never shown. Callers hold `changing`.
+/// Closes a prefetched page that was never shown. A page in `shown` (the open one, or one kept hidden since a switch
+/// away) is never the prefetch's to close: the switch away or its own `close_later` closes it. Callers hold `changing`.
 fn close_unused(app: &App, id: &str) {
     let state = app.state::<AppState>();
     let open = state.orgs.lock().unwrap().active().is_some_and(|org| org.id == id);
@@ -692,14 +839,21 @@ fn close_unused(app: &App, id: &str) {
     }
 }
 
-/// An org went: its page is no longer counted as shown or prefetched. Callers hold `changing` and close the page.
+/// An org went: its page is no longer counted as shown, kept or prefetched, and a kept page's pending close is off.
+/// Callers hold `changing` and close the page at once.
 pub(crate) fn forget_page(app: &App, id: &str) {
     let state = app.state::<AppState>();
-    state.shown.lock().unwrap().retain(|shown| shown != id);
     let mut prefetch = state.prefetch.lock().unwrap();
-    if prefetch.take(id) {
+    if forget_org(&mut state.shown.lock().unwrap(), &mut state.kept.lock().unwrap(), &mut prefetch, id) {
         *state.parked_visual.lock().unwrap() = None;
     }
+}
+
+/// `forget_page`'s bookkeeping: answers whether `id` was the prefetch, whose allowance then goes too.
+pub(crate) fn forget_org(shown: &mut Vec<String>, kept: &mut Kept, prefetch: &mut Prefetch, id: &str) -> bool {
+    shown.retain(|shown| shown != id);
+    kept.forget(id);
+    prefetch.take(id)
 }
 
 /// Loads org `id`'s open page again after Tico sign-in renewed its session: on the hub's sign-in when the server
@@ -763,23 +917,135 @@ mod page_tests {
         assert_eq!(shown, order(&["b", "a"]));
         assert_eq!(note_shown(&mut shown, "c", 2), order(&["b"]));
         assert_eq!(shown, order(&["a", "c"]));
-        // The cap in use: only the open page stays.
-        assert_eq!(note_shown(&mut shown, "d", KEEP_ALIVE), order(&["a", "c"]));
-        assert_eq!(shown, order(&["d"]));
-        assert!(note_shown(&mut shown, "d", KEEP_ALIVE).is_empty(), "the open page never closes itself");
-        assert_eq!(note_shown(&mut shown, "e", 0), order(&["d"]), "a cap below one still keeps the open page");
-        assert_eq!(shown, order(&["e"]));
+        // The cap in use: the open page and two kept ones.
+        assert!(note_shown(&mut shown, "d", KEEP_ALIVE).is_empty());
+        assert_eq!(note_shown(&mut shown, "e", KEEP_ALIVE), order(&["a"]));
+        assert_eq!(shown, order(&["c", "d", "e"]));
+        assert!(note_shown(&mut shown, "e", KEEP_ALIVE).is_empty(), "the open page never closes itself");
+        assert_eq!(note_shown(&mut shown, "f", 0), order(&["c", "d", "e"]), "a cap below one still keeps the open page");
+        assert_eq!(shown, order(&["f"]));
     }
 
     #[test]
-    fn an_open_org_is_on_screen_only_when_it_was_shown_last_and_is_not_a_prefetch() {
+    fn an_open_org_is_on_screen_only_when_it_was_shown_last_and_is_neither_a_prefetch_nor_kept() {
+        let none = Kept::default();
         let shown = order(&["a"]);
-        assert!(on_screen(&shown, None, "a"));
-        assert!(!on_screen(&shown, None, "b"));
-        assert!(!on_screen(&shown, Some("a"), "a"));
+        assert!(on_screen(&shown, None, &none, "a"));
+        assert!(!on_screen(&shown, None, &none, "b"));
+        assert!(!on_screen(&shown, Some("a"), &none, "a"));
         // Open A, prefetch B, remove A: B is the open org but was never shown, so it must still be shown.
-        assert!(!on_screen(&[], Some("b"), "b"));
-        assert!(!on_screen(&[], None, "b"));
+        assert!(!on_screen(&[], Some("b"), &none, "b"));
+        assert!(!on_screen(&[], None, &none, "b"));
+        // B kept, then A (open) removed: B is shown last but hidden, so the switch to it must still show it.
+        let mut kept = Kept::default();
+        kept.hide("b", None);
+        assert!(!on_screen(&order(&["b"]), None, &kept, "b"));
+        assert!(kept.show("b").is_some());
+        assert!(on_screen(&order(&["b"]), None, &kept, "b"));
+    }
+
+    /// A switch as `switch_to` keeps its books: `id` is shown (its close off), and the open org's page goes hidden.
+    fn switch(shown: &mut Vec<String>, kept: &mut Kept, id: &str) -> (Vec<String>, Option<u64>) {
+        let previous = shown.last().cloned();
+        kept.show(id);
+        note_switch(shown, kept, id, previous.as_deref(), None)
+    }
+
+    #[test]
+    fn a_switch_keeps_the_page_left_hidden_and_closes_only_past_the_cap() {
+        let (mut shown, mut kept) = (Vec::new(), Kept::default());
+        assert_eq!(switch(&mut shown, &mut kept, "a"), (vec![], None), "the first page hides nothing");
+        // A to B and back: A is kept, then shown again as it was, and B is kept.
+        let (gone, hidden) = switch(&mut shown, &mut kept, "b");
+        assert!(gone.is_empty() && hidden.is_some() && kept.contains("a"));
+        let (gone, hidden) = switch(&mut shown, &mut kept, "a");
+        assert!(gone.is_empty() && hidden.is_some());
+        assert!(!kept.contains("a") && kept.contains("b"));
+        assert_eq!(shown, order(&["b", "a"]));
+        // C, then D: two pages stay hidden besides the open one, and the least recently shown (B) goes first.
+        assert!(switch(&mut shown, &mut kept, "c").0.is_empty());
+        assert_eq!(shown, order(&["b", "a", "c"]));
+        let (gone, hidden) = switch(&mut shown, &mut kept, "d");
+        assert_eq!(gone, order(&["b"]));
+        assert!(hidden.is_some());
+        assert_eq!(shown, order(&["a", "c", "d"]));
+        assert!(!kept.contains("b") && kept.contains("a") && kept.contains("c") && !kept.contains("d"));
+        // Rapid clicks across many orgs never hold more than the cap.
+        for id in ["e", "f", "g", "h", "a", "b", "c"] {
+            switch(&mut shown, &mut kept, id);
+            assert!(shown.len() <= KEEP_ALIVE && kept.pages.len() < KEEP_ALIVE, "{shown:?}");
+            assert!(shown[..shown.len() - 1].iter().all(|other| kept.contains(other)), "every page but the open one is kept");
+        }
+        // A switch to the org already open hides nothing.
+        assert_eq!(switch(&mut shown, &mut kept, "c"), (vec![], None));
+        // No org was open (the last one went): nothing to hide.
+        assert_eq!(note_switch(&mut Vec::new(), &mut Kept::default(), "a", None, None), (vec![], None));
+    }
+
+    #[test]
+    fn a_close_that_comes_after_the_page_was_shown_again_closes_nothing() {
+        let mut kept = Kept::default();
+        let first = kept.hide("a", None);
+        // Shown again within the wait: the close that comes later does nothing.
+        kept.show("a");
+        assert!(!kept.expire("a", first));
+        // Hidden again: a fresh wait. The first hiding's close still does nothing; the second's closes it.
+        let second = kept.hide("a", None);
+        assert_ne!(first, second);
+        assert!(!kept.expire("a", first) && kept.contains("a"));
+        let other = kept.hide("b", None);
+        assert!(!kept.expire("b", second), "a ticket is one page's only");
+        assert!(kept.expire("a", second) && !kept.contains("a"));
+        assert!(!kept.expire("a", second), "it closes once");
+        assert!(kept.expire("b", other));
+    }
+
+    #[test]
+    fn removing_an_org_forgets_its_kept_page_and_calls_off_its_close() {
+        let (mut shown, mut kept, mut prefetch) = (Vec::new(), Kept::default(), Prefetch::default());
+        switch(&mut shown, &mut kept, "a");
+        let (_, ticket) = switch(&mut shown, &mut kept, "b");
+        let ticket = ticket.unwrap();
+        assert!(!forget_org(&mut shown, &mut kept, &mut prefetch, "a"), "A was kept, not the prefetch");
+        assert_eq!(shown, order(&["b"]));
+        assert!(!kept.contains("a") && !kept.expire("a", ticket), "its close is off; the caller closes the page at once");
+        // The prefetch goes the same way, and says so, so its parked allowance goes too.
+        prefetch.org = Some("c".into());
+        assert!(forget_org(&mut shown, &mut kept, &mut prefetch, "c"));
+    }
+
+    #[test]
+    fn a_kept_page_keeps_its_own_visual_allowance_and_gets_it_back_when_shown() {
+        let (acme, tidy) = (url::Url::parse("https://acme.example.com/").unwrap(), url::Url::parse("https://tidy.example.com/").unwrap());
+        let doc = crate::orgs::Document { version: 1, active: Some("o_aaaaaaaa".into()), orgs: vec![] };
+        let state = AppState::new(crate::orgs::Orgs::new(doc, None), Some(Config::new(acme.clone())));
+        let allowance = |hub: &url::Url| VisualOrigin::new(hub, "https://visuals.example.net").unwrap();
+        *state.visual_origin.lock().unwrap() = Some(allowance(&acme));
+        // A (open, with an allowance) to B (a new page): A's allowance is handed back for A to keep, B has none yet.
+        let left = select_org(&state, Config::new(tidy.clone()), false, None);
+        assert!(left.as_ref().unwrap().serves(Some(&acme)) && state.visual_origin.lock().unwrap().is_none());
+        state.kept.lock().unwrap().hide("o_aaaaaaaa", left);
+        *state.visual_origin.lock().unwrap() = Some(allowance(&tidy));
+        // While A is hidden, its navigation uses its own allowance, and its new top-level page clears only its own.
+        let signing_in = AtomicBool::new(false);
+        let frame = url::Url::parse("https://visuals.example.net/visuals/WyJodW1hbjphIiwiZjEiLDEsIiIsMjAwMDAwMDAwMF0.ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn-_0").unwrap();
+        assert!(follow_window(&state, &signing_in, true, Some(&acme), &frame), "A's frame follows A's own allowance");
+        assert!(state.kept.lock().unwrap().pages[0].visual.is_some());
+        top_level_window(&state, &signing_in, true, Some(&acme), &acme);
+        assert!(state.kept.lock().unwrap().pages[0].visual.is_none(), "a new top-level page sends its config again");
+        assert!(!follow_window(&state, &signing_in, true, Some(&acme), &frame), "and until then has none");
+        assert!(follow_window(&state, &signing_in, true, Some(&tidy), &frame), "the open page keeps its own");
+        assert!(state.visual_origin.lock().unwrap().is_some(), "the open page's allowance is untouched");
+        assert!(state.kept.lock().unwrap().set_visual("o_aaaaaaaa", Some(allowance(&acme))), "the kept page sends it again");
+        assert!(!state.kept.lock().unwrap().set_visual("o_cccccccc", Some(allowance(&acme))), "only a kept page keeps one");
+        // Back to A: its allowance comes back with it, and B's is handed back for B to keep.
+        let kept = state.kept.lock().unwrap().show("o_aaaaaaaa").flatten();
+        let left = select_org(&state, Config::new(acme.clone()), true, kept);
+        assert!(left.unwrap().serves(Some(&tidy)));
+        assert!(state.visual_origin.lock().unwrap().as_ref().unwrap().serves(Some(&acme)));
+        // A kept allowance for another hub is never taken.
+        let left = select_org(&state, Config::new(tidy.clone()), true, Some(allowance(&acme)));
+        assert!(left.is_some() && state.visual_origin.lock().unwrap().is_none());
     }
 
     #[test]
@@ -967,22 +1233,23 @@ fn stays_in_app(opener: &App, signing_in: &AtomicBool, page_org: Option<&str>, h
     stays
 }
 
-/// The visual allowance of the page on `hub`: the open page's, or the prefetched page's while it is hidden. Neither
-/// page ever reads or clears the other's.
-fn own_visual<'a>(open: &'a mut Option<VisualOrigin>, parked: &'a mut Option<VisualOrigin>, hub: Option<&url::Url>) -> Option<&'a mut Option<VisualOrigin>> {
+/// The visual allowance of the page on `hub`: the open page's, the prefetched page's while it is hidden, or a kept
+/// page's while it is hidden. No page ever reads or clears another's.
+fn own_visual<'a>(open: &'a mut Option<VisualOrigin>, parked: &'a mut Option<VisualOrigin>, kept: &'a mut Kept, hub: Option<&url::Url>) -> Option<&'a mut Option<VisualOrigin>> {
     if open.as_ref().is_some_and(|visual| visual.serves(hub)) {
         Some(open)
     } else if parked.as_ref().is_some_and(|visual| visual.serves(hub)) {
         Some(parked)
     } else {
-        None
+        kept.visual_for(hub)
     }
 }
 
 pub(crate) fn follow_window(state: &AppState, signing_in: &AtomicBool, visuals: bool, hub: Option<&url::Url>, url: &url::Url) -> bool {
     let mut visual = state.visual_origin.lock().unwrap();
     let mut parked = state.parked_visual.lock().unwrap();
-    let own = own_visual(&mut visual, &mut parked, hub);
+    let mut kept = state.kept.lock().unwrap();
+    let own = own_visual(&mut visual, &mut parked, &mut kept, hub);
     let allowed = if visuals { own.as_ref().and_then(|own| own.as_ref()) } else { None };
     let stays = follow(hub, allowed, signing_in, url);
     if visuals && (navigation(hub, false, url) == Navigation::Start || session_exit(hub, url)) {
@@ -997,9 +1264,10 @@ pub(crate) fn top_level_window(state: &AppState, signing_in: &AtomicBool, visual
     if visuals {
         let mut visual = state.visual_origin.lock().unwrap();
         let mut parked = state.parked_visual.lock().unwrap();
+        let mut kept = state.kept.lock().unwrap();
         // A new top-level Hub page must authenticate and send its config again. A permitted
         // visual commit changes neither its allowance nor sign-in state.
-        if let Some(own) = own_visual(&mut visual, &mut parked, hub) {
+        if let Some(own) = own_visual(&mut visual, &mut parked, &mut kept, hub) {
             if !own.as_ref().is_some_and(|visual| visual.permits(hub, url)) {
                 *own = None;
             }
