@@ -787,9 +787,7 @@ def report(c_factory, support, auth, settings, who, key):
                 asked = c.execute("SELECT decision FROM approvals WHERE id=?", (filed["approval_id"],)).fetchone()
                 if not asked or (asked["decision"] and asked["decision"] != "approved"):
                     cleared = filed["approval_id"]   # declined, withdrawn or gone: the signature can be reported again
-        since = H.shift(H.now(), hours=-24)
-        today = c.execute("SELECT count(*) FROM health_reports WHERE created_at>? AND ticket_id IS NOT NULL",
-                          (since,)).fetchone()[0]
+        today = _reports_today(c)
     if cleared:
         with store.transaction() as c:
             c.execute("DELETE FROM health_reports WHERE signature=? AND approval_id=? AND ticket_id IS NULL",
@@ -839,6 +837,12 @@ def report(c_factory, support, auth, settings, who, key):
     return {"signature": row["signature"], "ticket": ticket["id"]}
 
 
+def _reports_today(c):
+    """New tickets sent in the last day, including approvals requested on an earlier day. Repeat comments do not count."""
+    return c.execute("SELECT count(*) FROM health_reports h LEFT JOIN support_tickets t ON t.id=h.ticket_id "
+                     "WHERE h.ticket_id IS NOT NULL AND coalesce(t.created_at,h.created_at)>?",
+                     (H.shift(H.now(), hours=-24),)).fetchone()[0]
+
 
 
 def file_reports(store, auth, settings, support, signatures):
@@ -856,6 +860,8 @@ def file_reports(store, auth, settings, support, signatures):
         return {signature: {"signature": signature, "deferred": "support_off"} for signature in signatures}
     answers = _send_approved(store, support)
     for signature in signatures:
+        if signature in answers:
+            continue
         try:
             answers[signature] = report(store, support, auth, settings, SimpleNamespace(actor="bot:" + BOTOPS), signature)
         except Problem as exc:
@@ -864,27 +870,33 @@ def file_reports(store, auth, settings, support, signatures):
 
 
 def _send_approved(store, support):
-    """The reports BotOps asked a person to approve, which the person has approved since: each one is sent once, as that
-    approval's ticket (support.file_approved, as the asker, BotOps). Its ticket is kept on its health report. A send that
-    fails stays for the next run. Returns {signature: answer}."""
+    """Approved reports, sent once as their requester (BotOps, or the keeper for older requests). A failed or over-cap send
+    stays queued. Its ticket and current occurrence baseline are kept on its health report. Returns {signature: answer}."""
     with store.read() as c:
         waiting = [dict(r) for r in c.execute(
-            "SELECT h.signature, h.approval_id FROM health_reports h JOIN approvals a ON a.id=h.approval_id "
-            "WHERE h.ticket_id IS NULL AND a.requested_by_id=? AND a.decision='approved' ORDER BY h.created_at",
-            ("bot:" + BOTOPS,)).fetchall()]
+            "SELECT h.signature, h.approval_id, a.requested_by_id FROM health_reports h JOIN approvals a ON a.id=h.approval_id "
+            "WHERE h.ticket_id IS NULL AND a.requested_by_id IN (?,?) AND a.decision='approved' ORDER BY h.created_at",
+            ("bot:" + BOTOPS, H.KEEPER)).fetchall()]
+        today = _reports_today(c)
     sent = {}
     for row in waiting:
+        if today >= REPORTS_PER_DAY:
+            sent[row["signature"]] = {"signature": row["signature"], "deferred": "support_busy"}
+            continue
         try:
-            answer = support.file_approved(SimpleNamespace(actor="bot:" + BOTOPS), row["approval_id"])
+            answer = support.file_approved(SimpleNamespace(actor=row["requested_by_id"]), row["approval_id"])
         except Exception as exc:  # noqa: BLE001 - a report that cannot be sent waits for the next run
             log.warning("Health report %s could not be sent yet", row["signature"], exc_info=True)
             sent[row["signature"]] = {"signature": row["signature"], "deferred": type(exc).__name__}
             continue
         ticket = answer["ticket"]["id"]
         with store.transaction() as c:
-            c.execute("UPDATE health_reports SET ticket_id=?, reported_at=? WHERE signature=? AND approval_id=?",
-                      (ticket, H.now(), row["signature"], row["approval_id"]))
-            H.event(c, "bot:" + BOTOPS, "health_monitor.reported", row["signature"], {"ticket": ticket})
+            c.execute("UPDATE health_reports SET ticket_id=?, reported_at=?, reported_occurrences="
+                      "(SELECT coalesce(max(occurrences),0) FROM health_findings WHERE signature=?) "
+                      "WHERE signature=? AND approval_id=?",
+                      (ticket, H.now(), row["signature"], row["signature"], row["approval_id"]))
+            H.event(c, row["requested_by_id"], "health_monitor.reported", row["signature"], {"ticket": ticket})
+        today += 1
         sent[row["signature"]] = {"signature": row["signature"], "ticket": ticket, "approval": row["approval_id"]}
     return sent
 

@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 
 from .. import health, hosted_updates, invariants, mail_settings, proposals, replication
 from .. import maintenance_health as MH
+from .. import run_triggers as RT
 from ..store import H
 
 log = logging.getLogger("tico.maintenance.check_health")
@@ -490,13 +491,16 @@ def _task_create(c, title, body):
 
 
 def _comment(c, task_id, text, wake):
-    """A comment as the keeper. True when it was written; a failure is logged and False, so the caller keeps its marker as it
-    was and the next run tries again."""
+    """A comment as the keeper. True when written (and, for a wake, queued for BotOps); otherwise the caller keeps its
+    marker as it was and the next run tries again."""
     try:
         c.execute("SAVEPOINT check_health_comment")
-        H.task_comment(c, H.KEEPER, task_id, text, wake=wake)
+        refs = RT.stamp({"wake": "task_roundup", "no_mentions": True}, "task_roundup", "check_health") if wake else None
+        message = H.task_comment(c, H.KEEPER, task_id, text, wake=wake, extra_refs=refs)
+        queued = not wake or c.execute("SELECT 1 FROM jobs WHERE message_id=? AND bot_id=?",
+                                       (message["id"], BOTOPS)).fetchone() is not None
         c.execute("RELEASE check_health_comment")
-        return True
+        return queued
     except Exception:  # noqa: BLE001 - a comment that cannot be written waits for the next run
         c.execute("ROLLBACK TO check_health_comment")
         c.execute("RELEASE check_health_comment")
@@ -540,7 +544,9 @@ def _wake_waiting(c):
 
 
 def _wake_text(c, ids):
-    parts = [f"{H.task(c, task_id)['title']} (task {task_id})" for task_id in ids[:WAKE_LIST]]
+    # This list may land in a shared task's conversation: private tasks contribute neither their title nor their id.
+    parts = ["a private health task" if H.task_private(c, task) else f"{task['title']} (task {task['id']})"
+             for task in (H.task(c, task_id) for task_id in ids[:WAKE_LIST])]
     more = f" and {len(ids) - WAKE_LIST} more" if len(ids) > WAKE_LIST else ""
     return ("Health wake: these BotOps tasks changed since BotOps last looked: " + "; ".join(parts) + more
             + ". Each task says what changed; close the ones marked cleared.")

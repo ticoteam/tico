@@ -209,6 +209,7 @@ def test_an_urgent_finding_files_on_its_first_run(environment, readers, code_fin
     assert result["details"]["filed"] == [key] and result["woke"] == 1
     (task,) = botops_tasks(api)
     assert task["title"] == "Health: The event stream drops" and task["owner_id"] == "bot:botops"
+    assert [job["task"] for job in wake_jobs(api)] == [task["id"]]
     assert finding(api, key)["pending"] == 0
 
 
@@ -1196,6 +1197,13 @@ def wake_marker(api):
     return json.loads(row["value"]) if row else None
 
 
+def wake_jobs(api):
+    with api.app.state.store.read() as c:
+        return [dict(row) for row in c.execute(
+            "SELECT j.id, json_extract(m.refs,'$.task') task FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "WHERE j.bot_id='botops' AND m.body LIKE 'Health wake: %'")]
+
+
 def test_the_step_reads_the_apps_settings_not_the_step_row(environment, readers, monkeypatch):
     # The engine's ctx["settings"] is the step's own row (a dict). The readers and the report path need the app's settings.
     api, _ = built(environment)
@@ -1229,8 +1237,9 @@ def test_with_support_off_a_tico_bug_leaves_for_no_one_and_asks_nothing(environm
         assert c.execute("SELECT count(*) FROM health_reports").fetchone()[0] == 0
 
 
-def test_a_report_botops_asked_for_is_sent_once_a_person_approves_and_a_failed_send_waits(environment, readers, code_findings,
-                                                                                         hq, monkeypatch):
+@pytest.mark.parametrize("requester", ["bot:botops", H.KEEPER])
+def test_an_approved_report_is_sent_as_its_requester_and_a_failed_send_waits(environment, readers, code_findings,
+                                                                           hq, monkeypatch, requester):
     api, _ = built(environment)
     store, support, auth, settings = api.app.state.store, api.app.state.support, api.app.state.auth, api.app.state.store.settings
     set_rule(api, False)
@@ -1244,7 +1253,9 @@ def test_a_report_botops_asked_for_is_sent_once_a_person_approves_and_a_failed_s
     assert asked_by == "bot:botops"
     with store.transaction() as c:
         owner = auth.owner_identity(c)
-        c.execute("UPDATE approvals SET decision='approved', decided_by_id=? WHERE id=?", (owner.actor, approval["id"]))
+        # Older health reports used the keeper as their requester.
+        c.execute("UPDATE approvals SET requested_by_id=?, decision='approved', decided_by_id=? WHERE id=?",
+                  (requester, owner.actor, approval["id"]))
 
     def unreachable(who, approval_id):
         raise Problem("support_unreachable", "Tico support is out of reach", 503)
@@ -1262,6 +1273,69 @@ def test_a_report_botops_asked_for_is_sent_once_a_person_approves_and_a_failed_s
     with store.read() as c:
         assert c.execute("SELECT ticket_id FROM health_reports WHERE signature=?", (sig,)).fetchone()[0] == sent[sig]["ticket"]
     assert MH.file_reports(store, auth, settings, support, []) == {}      # sent once: nothing waits any more
+
+
+def test_approved_reports_share_the_daily_cap_and_wait_until_the_next_day(environment, readers, code_findings, hq, clock,
+                                                                          monkeypatch):
+    api, _ = built(environment)
+    store, auth, support = api.app.state.store, api.app.state.auth, api.app.state.support
+    set_rule(api, False)
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG),
+                        item("worktree_error", key="worktree_error:A", kind=MH.BUG)]
+    approvals = file_due(api, run(api))
+    clock.at += timedelta(hours=25)                              # requests from yesterday still count when sent today
+    with store.transaction() as c:
+        owner = auth.owner_identity(c)
+        for answer in approvals.values():
+            c.execute("UPDATE approvals SET decision='approved', decided_by_id=? WHERE id=?",
+                      (owner.actor, answer["approval"]))
+        for i in range(MH.REPORTS_PER_DAY - 1):
+            c.execute("INSERT INTO health_reports(signature,ticket_id,created_at,reported_occurrences) VALUES(?,?,?,1)",
+                      (f"hm-filed{i}", f"ticket-{i}", H.now()))
+    real = support.file_approved
+
+    def send(who, approval_id):
+        assert len(store.writer.queue) == 0                     # HQ is called outside the write transaction
+        return real(who, approval_id)
+
+    monkeypatch.setattr(support, "file_approved", send)
+    answers = file_due(api, run(api))
+    assert len([a for a in answers.values() if a.get("ticket")]) == 1 and len(hq.tickets) == 1
+    (waiting,) = [sig for sig, answer in answers.items() if answer.get("deferred") == "support_busy"]
+    with store.read() as c:
+        row = c.execute("SELECT h.ticket_id,a.consumed_at FROM health_reports h JOIN approvals a ON a.id=h.approval_id "
+                        "WHERE h.signature=?", (waiting,)).fetchone()
+        assert row["ticket_id"] is None and row["consumed_at"] is None
+    assert MH.file_reports(store, auth, store.settings, support, []) == {
+        waiting: {"signature": waiting, "deferred": "support_busy"}}
+    assert len(hq.tickets) == 1
+    clock.at += timedelta(hours=25)
+    sent = MH.file_reports(store, auth, store.settings, support, [])
+    assert sent[waiting]["ticket"] and len(hq.tickets) == 2
+
+
+def test_sending_an_approval_resets_the_repeat_count_and_daily_throttle(environment, readers, code_findings, hq, clock):
+    api, _ = built(environment)
+    store, sig = api.app.state.store, MH.signature("push_stuck")
+    set_rule(api, False)
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG)]
+    approval = file_due(api, run(api))[sig]["approval"]
+    clock.at += timedelta(hours=25)
+    result = run(api)                                           # seen again while the approval waited
+    assert result["details"]["reports_due"] == [sig]
+    with store.transaction() as c:
+        owner = api.app.state.auth.owner_identity(c)
+        c.execute("UPDATE approvals SET decision='approved', decided_by_id=? WHERE id=?", (owner.actor, approval))
+    assert file_due(api, result)[sig]["ticket"]
+    (ticket,) = hq.tickets.values()
+    assert ticket["messages"] == []
+    with store.read() as c:
+        row = c.execute("SELECT reported_occurrences,reported_at FROM health_reports WHERE signature=?", (sig,)).fetchone()
+        assert row["reported_occurrences"] == 2 and row["reported_at"] == H.now()
+    clock.at += timedelta(hours=1)
+    assert file_due(api, run(api)) == {} and ticket["messages"] == []
+    clock.at += timedelta(hours=24)
+    assert file_due(api, run(api))[sig]["comment"] is True and len(ticket["messages"]) == 1
 
 
 def test_a_repeat_of_a_tico_bug_is_commented_once_a_day_counted_from_the_last_report(environment, readers, code_findings, hq,
@@ -1296,6 +1370,43 @@ def test_three_new_problems_in_one_run_wake_botops_once(environment, readers, co
     assert wake is True and text.startswith("Health wake: ")
     assert task_id in [t["id"] for t in botops_tasks(api)]
     assert all(f"(task {t['id']})" in text for t in botops_tasks(api))
+    assert [job["task"] for job in wake_jobs(api)] == [task_id]
+
+
+def test_a_grouped_wake_held_by_a_rule_waits_until_a_job_is_queued(environment, readers, code_findings, monkeypatch):
+    from backend import rules
+    api, _ = built(environment)
+    three_new_problems(code_findings)
+    real = rules.judge
+
+    def held(conn, actor, target, kind, refs, body, conv, in_reply_to=None, decided=None):
+        if (refs or {}).get("wake") == "task_roundup":
+            return rules.Decision(rules.NOTE, rules.MANAGER_NOTE, rules.HOLD_ROW)
+        return real(conn, actor, target, kind, refs, body, conv, in_reply_to, decided)
+
+    monkeypatch.setattr(rules, "judge", held)
+    assert run(api)["woke"] == 0 and wake_jobs(api) == []
+    assert len(wake_marker(api)) == 3
+    monkeypatch.setattr(rules, "judge", real)
+    assert run(api)["woke"] == 1 and len(wake_jobs(api)) == 1
+    assert wake_marker(api) is None
+
+
+def test_a_grouped_wake_on_a_shared_task_hides_a_private_tasks_title_and_id(environment, readers, code_findings, monkeypatch):
+    api, _ = built(environment)
+    code_findings[:] = [item("push_stuck", key="push_stuck:A"), item("worktree_error", key="worktree_error:A")]
+    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: False)
+    run(api)
+    shared, private = wake_marker(api)
+    secret = "Confidential merger terms"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (shared,))
+        c.execute("UPDATE tasks SET private=1,title=? WHERE id=?", (secret, private))
+    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: True)
+    assert run(api)["woke"] == 1
+    (text,) = said(api, shared, "Health wake: ")
+    assert f"(task {shared})" in text and "a private health task" in text
+    assert secret not in text and private not in text
 
 
 def test_a_wake_the_gate_refuses_waits_in_the_marker_and_the_next_allowed_run_wakes_once(environment, readers, code_findings,
