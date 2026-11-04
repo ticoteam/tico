@@ -821,10 +821,16 @@ def run(args, who=None):
                     body["entity"]["tier"] = args.tier
                 if args.new_id:
                     body["entity"]["id"] = args.new_id
+                if args.last_verified_at:
+                    body["entity"]["last_verified_at"] = args.last_verified_at
             if args.entity_id:
                 body["entity_id"] = args.entity_id
                 if args.summary is not None:
                     body["summary"] = args.summary
+                if args.last_verified_at:
+                    body["last_verified_at"] = args.last_verified_at
+            if args.last_verified_at and "entity" not in body and "entity_id" not in body:
+                raise APIError("entity", "--last-verified-at needs --entity-id, or --entity-type and --entity-name for a new entity")
             if args.edge_src and args.edge_rel and args.edge_dst:
                 body["edge"] = {"src": args.edge_src, "rel": args.edge_rel, "dst": args.edge_dst}
             return post(f"market/insights/{args.id}/apply", body)

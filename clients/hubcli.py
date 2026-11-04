@@ -2565,6 +2565,8 @@ def parser():
     s.add_argument("--summary")
     s.add_argument("--tier", choices=["core", "lookalike", "phrase-stealer", "secondary"], help="for a new company")
     s.add_argument("--new-id", dest="new_id", help="the id for a new entity when the default type/name-slug is wrong, e.g. company/self")
+    s.add_argument("--last-verified-at", dest="last_verified_at", metavar="YYYY-MM-DD",
+                   help="the date the entity was last checked: set on --entity-id, or on a new entity; the server refuses anything but a date")
     s.add_argument("--edge-src", dest="edge_src")
     s.add_argument("--edge-rel", dest="edge_rel")
     s.add_argument("--edge-dst", dest="edge_dst")

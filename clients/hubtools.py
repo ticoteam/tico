@@ -2313,6 +2313,7 @@ def market_resolve(api, args):
        "entity_id": _s("Existing entity to update"), "summary": _s("New summary"),
        "tier": _s("core, lookalike, phrase-stealer or secondary, for a new company", default=""),
        "new_id": _s("Id for a new entity when type/name-slug is wrong, e.g. company/self", default=""),
+       "last_verified_at": _s("Date the entity was last checked, YYYY-MM-DD: set on entity_id, or on a new entity", default=""),
        "edge_src": _s("Edge source entity"), "edge_rel": _s("One of the sixteen relations"),
        "edge_dst": _s("Edge destination entity")},
       required=("id",), writes=True)
@@ -2325,10 +2326,16 @@ def market_apply(api, args):
             body["entity"]["tier"] = args["tier"]
         if args.get("new_id"):
             body["entity"]["id"] = args["new_id"]
+        if args.get("last_verified_at"):
+            body["entity"]["last_verified_at"] = args["last_verified_at"]
     if args.get("entity_id"):
         body["entity_id"] = args["entity_id"]
         if args.get("summary") is not None:
             body["summary"] = args["summary"]
+        if args.get("last_verified_at"):
+            body["last_verified_at"] = args["last_verified_at"]
+    if args.get("last_verified_at") and "entity" not in body and "entity_id" not in body:
+        raise ValueError("last_verified_at needs entity_id, or entity_type and entity_name for a new entity")
     if args.get("edge_src") and args.get("edge_rel") and args.get("edge_dst"):
         body["edge"] = {"src": args["edge_src"], "rel": args["edge_rel"], "dst": args["edge_dst"]}
     return api.post(f"market/insights/{args['id']}/apply", body, key=_key(args))
