@@ -403,8 +403,8 @@ def test_a_reviewer_owner_keeps_its_mail_draft_since_no_task_is_filed(api):
 
 def test_a_group_whose_bot_lead_cannot_file_a_draft_is_sorted_without_drafts(api):
     set_templates(api, STAFF)
-    set_config(api, "coo", "profile", "reviewer")
-    gid = post(api, "groups", {"name": "Legal Desk", "add": {"bots": ["coo"]}, "lead": "bot:coo"})["id"]
+    set_config(api, "finance", "profile", "reviewer")      # built-in bots (coo here) stay outside groups
+    gid = post(api, "groups", {"name": "Finance Desk", "add": {"bots": ["finance"]}, "lead": "bot:finance"})["id"]
     listed(api, "general")
     flow = fill(api, "founder", f"group:{gid}", "slack:#general")
     F.check(flow)
