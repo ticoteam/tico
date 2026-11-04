@@ -277,7 +277,7 @@ function auEdWire(box) {
     auPathSet(ed, b, v);
     // An action's text edited under its own name: the other names the hub reads first go, so the edit is what runs.
     const argAt = /^(.*)\.args\.([a-z_]+)$/.exec(b), act = argAt && auPathGet(ed, argAt[1]), names = AU_ARG_NAMES[act?.do];
-    if (names?.key === argAt?.[2] && act.args) for (const k of [...names.keys, ...(names.drop || [])]) if (k !== names.key) delete act.args[k];
+    if (names && names.key === argAt[2] && act.args) for (const k of [...names.keys, ...(names.drop || [])]) if (k !== names.key) delete act.args[k];
     // Stop here changes where a rule goes: a rule that names its next gets the new one (a rule that moved on, unstopped,
     // goes to the next step); a rule that doesn't goes by stop alone.
     const stopAt = /^step\.rules\.(\d+)\.stop$/.exec(b), sr = stopAt && ed.step?.rules?.[stopAt[1]];
