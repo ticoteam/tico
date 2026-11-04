@@ -153,7 +153,7 @@ function auFilterFields(s) {
     <div class="au-then"><span class="nav-icon" aria-hidden="true">arrow_forward</span>${(r.then || []).map((x, j) =>
       `<span class="au-ir">${auSel(`step.rules.${i}.then.${j}.do`, Object.entries(AU_ACTIONS), auThenDo(x), 'aria-label="Then"')}${(r.then || []).length > 1 ? auX(`step.rules.${i}.then`, j) : ''}</span>`).join('')}
       ${auPlus(`step.rules.${i}.then`, 'then', 'Action')}</div>
-    <label class="au-chk"><input type="checkbox" data-b="step.rules.${i}.stop"${r.stop !== false ? ' checked' : ''}${auDis()}>Stop here</label></div>`).join('')
+    <label class="au-chk"><input type="checkbox" data-b="step.rules.${i}.stop"${auRuleNext(r) === 'end' ? ' checked' : ''}${auDis()}>Stop here</label></div>`).join('')
     + auPlus('step.rules', 'rule', 'Rule'));
 }
 function auDecideFields(s, ed) {
@@ -275,6 +275,10 @@ function auEdWire(box) {
     if (b === 'set') { ed.custom = !v; if (v) { ed.step.set = v; delete ed.step.questions; auDecideQs(ed); } auDrawSide(); return; }
     if (b.startsWith('qs.')) ed.custom = true;
     auPathSet(ed, b, v);
+    // Stop here changes where a rule goes: a rule that names its next gets the new one (a rule that moved on, unstopped,
+    // goes to the next step); a rule that doesn't goes by stop alone.
+    const stopAt = /^step\.rules\.(\d+)\.stop$/.exec(b), sr = stopAt && ed.step?.rules?.[stopAt[1]];
+    if (sr && 'next' in sr) sr.next = v ? 'end' : sr.next === 'end' ? 'step' : sr.next;
     // Another model has its own harnesses and efforts: the ones kept for the last model do not carry over.
     if (b === 'step.model') { auPathSet(ed, 'step.harness', undefined); auPathSet(ed, 'step.effort', undefined); }
     if (t.hasAttribute('data-redraw') && e.type === 'change') { if (b === 'step.do') ed.step.args = {}; auDrawSide(); }
@@ -347,11 +351,9 @@ async function auEdSave(button) {
       }));
       delete step.set;
     }
-    // A rule that says where it goes next keeps that in step with Stop here (the hub refuses the two disagreeing).
-    if (step.type === 'filter') for (const r of step.rules || []) if ('next' in r) {
-      r.next = r.to || r.stop ? 'end' : r.next === 'end' ? 'step' : r.next;
-      r.stop = r.next === 'end';
-    }
+    // A rule's own next is what runs, so a stop it carries follows it (the hub refuses the two disagreeing); a stop it
+    // never had stays off the rule.
+    if (step.type === 'filter') for (const r of step.rules || []) if ('next' in r && 'stop' in r) r.stop = r.next === 'end';
     const steps = auClone(a.steps);
     if (ed.insert) auContainer(steps, ed.insert.key)?.arr.splice(ed.insert.index, 0, step);
     else { const hit = auFind(steps, ed.id); if (hit) hit.arr[hit.i] = step; }

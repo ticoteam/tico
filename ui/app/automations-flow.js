@@ -241,8 +241,11 @@ function auActKey(x) {
   const d = auThenDo(x), a = (x && typeof x === 'object' && x.args) || {};
   return d === 'label' && /^starred$/i.test(String(a.name ?? a.tag ?? '')) ? 'star' : d;
 }
-// Where a rule goes after its chain: end, rule (move on to the next rule) or step; a rule with a destination ends.
-const auRuleNext = r => r?.to ? 'end' : r?.next || (r?.stop === true ? 'end' : 'step');
+// Where a rule goes after its chain, as the engine reads it: its own next, else end when it has a destination or
+// stops, else the next step.
+const auRuleNext = r => r?.next || (r?.to || r?.stop === true ? 'end' : 'step');
+// What Sort asks when no one has written instructions yet (a decide or an llm step needs some).
+const auBoardAsk = mail => mail ? 'Pick where this message goes.' : 'Pick where this goes.';
 const auDestColor = (d, i = 0) => `var(--au-${AU_DEST_COLORS.includes(d?.color) ? d.color : AU_DEST_COLORS[i % AU_DEST_COLORS.length]})`;
 const auDestIcon = d => (d?.then || []).length ? AU_ACTION_ICONS[auActKey(d.then[0])] || 'bolt' : 'block';
 function auDestName(id, dests = AU?.cur?.destinations) { return (dests || []).find(d => d.id === id)?.name || id; }
@@ -266,11 +269,11 @@ function auBoardShape(flow) {
   // Sort with one destination: a last filter whose one rule, with no conditions or actions, goes there (no LLM call).
   const sortOne = s => s?.type === 'filter' && (s.rules || []).length === 1 && !(s.rules[0]?.when || []).length
     && !(s.rules[0]?.then || []).length && ids.has(s.rules[0]?.to);
-  const b = {rules: [], questions: [], llm: null, dests: copy(dests), src: {}};
+  const b = {rules: [], questions: [], llm: null, dests: copy(dests), src: {}, mail: flow.trigger?.type === 'message'};
   let i = 0;
   if (steps[i]?.type === 'filter' && !(steps.length === 1 && sortOne(steps[0]))) {
     const rules = steps[i].rules || [];
-    if (!rules.every(r => r && typeof r === 'object' && toOk(r) && ['end', 'rule'].includes(auRuleNext(r)))) return null;
+    if (!rules.every(r => r && typeof r === 'object' && toOk(r) && ['end', 'rule'].includes(auRuleNext(r)) && !(r.to && auRuleNext(r) !== 'end'))) return null;
     b.src.rules = steps[i];
     b.rules = rules.map(r => ({...copy(r), next: auRuleNext(r)}));
     i++;
@@ -342,7 +345,8 @@ function auBoardFlow(b) {
   if (b.questions.length) {
     const d = keep(b.src.qd, 'decide'), f = keep(b.src.qf, 'filter'), old = b.src.qd?.questions || {};
     used.delete(d.out); delete d.set;
-    d.out = outName(d, 'd'); d.level ||= 'medium';
+    // A new step starts at the board's level; a kept one keeps its own, none included (the engine runs none as low).
+    d.out = outName(d, 'd'); if (!b.src.qd) d.level = 'medium';
     d.questions = Object.fromEntries(b.questions.map(q => [q.id, {...copy(old[q.id] || {}), type: 'noul', instructions: q.text}]));
     f.rules = b.questions.map(q => rule({when: [{field: `${d.out}.${q.id}`, op: 'is', value: 'yes', ...(q.min == null ? {} : {min: q.min})}],
       match: 'all', then: q.then, to: q.to, next: 'end'}));
@@ -355,8 +359,8 @@ function auBoardFlow(b) {
     const d = keep(b.src.sd, 'decide'), f = keep(b.src.sf, 'filter'), qid = b.src.sq || 'to';
     const old = b.src.sd?.questions?.[qid] || {}, was = old.criteria && !Array.isArray(old.criteria) ? old.criteria : {};
     used.delete(d.out); delete d.set;
-    d.out = outName(d, 'd'); d.level ||= 'high';
-    d.questions = {[qid]: {...copy(old), type: 'choice', instructions: L.prompt,
+    d.out = outName(d, 'd'); if (!b.src.sd) d.level = 'high';
+    d.questions = {[qid]: {...copy(old), type: 'choice', instructions: L.prompt || auBoardAsk(b.mail),
       criteria: Object.fromEntries(L.to.map(id => [id, was[id] ?? auDestName(id, b.dests)]))}};
     // Each route keeps the Sort's minimum as stored (none stays none); a new Sort gets the board's.
     const field = `${d.out}.${qid}`, min = b.src.sd ? L.min : L.min ?? AU_SORT_MIN;
@@ -366,7 +370,7 @@ function auBoardFlow(b) {
   } else {
     const s = keep(b.src.ls, 'llm');
     used.delete(s.out);
-    Object.assign(s, {as: L.as || s.as, prompt: L.prompt, out: outName(s, 'l'), choose: {...(s.choose || {}), to: [...L.to], default: L.default, mode: L.mode}});
+    Object.assign(s, {as: L.as || s.as, prompt: L.prompt || auBoardAsk(b.mail), out: outName(s, 'l'), choose: {...(s.choose || {}), to: [...L.to], default: L.default, mode: L.mode}});
     steps.push(s);
   }
   return {steps, destinations: copy(b.dests)};
