@@ -1,6 +1,7 @@
 account_balance
 account_balance_wallet
 account_tree
+add
 ads_click
 alt_route
 analytics
@@ -18,6 +19,8 @@ balance
 bolt
 bug_report
 calendar_month
+call
+call_end
 campaign
 cast_for_education
 category
@@ -92,6 +95,8 @@ mark_email_read
 mark_email_unread
 menu
 menu_book
+mic
+mic_off
 monitor_heart
 monitoring
 more_horiz
@@ -122,6 +127,7 @@ rocket_launch
 route
 schedule
 school
+screen_share
 search
 security
 sell
@@ -132,14 +138,18 @@ shield_person
 shopping_cart
 smart_toy
 star
+stop_screen_share
 store
 strategy
 supervisor_account
 support_agent
+swap_horiz
 tag
 target
 task_alt
 text_fields
+thumb_down
+thumb_up
 today
 tour
 travel_explore

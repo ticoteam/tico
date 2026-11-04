@@ -36,7 +36,7 @@ def test_uncertain_changes_and_main_run_everything_and_ui_keeps_its_map(tmp_path
     # The audited UI map's scripts run, with any core script the dependency map finds using the file.
     assert {"chat", "imported-history"} <= set(ui["browser"]) and "--all" not in ui["browser"]
     assert checks.selection(["ui/app/core.js"])["browser"] == ["--all"]
-    assert checks.selection(["runner/harnesses/codex.toml"])["conformance"]
+    assert checks.selection(["runner-rs/harnesses/codex.toml"])["conformance"]
     assert checks.selection(["runner-rs/src/sessions.rs"])["conformance"]
     assert checks.selection(["backend/harness_actions.py"])["conformance"]
     # A removed mapped browser test makes the map uncertain, even if its sibling remains.
@@ -108,7 +108,7 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
 
 def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fails_the_job(tmp_path, monkeypatch, mapped):
     for changed, crates in ((["runner-rs/src/state.rs"], ["runner-rs"]), (["relay-rs/src/gateway.rs"], ["relay-rs"]),
-                            (["runner/redact.py"], ["runner-rs"]), (["runner-rs/Cargo.lock", "relay-rs/Cargo.lock"],
+                            (["runner_support/redact.py"], ["runner-rs"]), (["runner-rs/Cargo.lock", "relay-rs/Cargo.lock"],
                                                                     ["relay-rs", "runner-rs"]),
                             (["backend/tests/fixtures/gateway_enroll_contract.json"], ["runner-rs"])):
         for event in ("pull_request", "push"):
@@ -125,7 +125,7 @@ def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fai
     assert {"suite": "conformance", "files": [checks.CONFORMANCE], "crates": ["relay-rs", "runner-rs"]} in jobs
 
     monkeypatch.setattr(checks, "ROOT", tmp_path)
-    (tmp_path / "runner/tests").mkdir(parents=True)
+    (tmp_path / "runner_support/tests").mkdir(parents=True)
     (tmp_path / checks.CONFORMANCE).touch()
     (tmp_path / "ci-results").mkdir()
     (tmp_path / "ci-results/conformance.xml").write_text("<testsuite><testcase/></testsuite>")
@@ -316,8 +316,10 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     # On this checkout: a test-only change runs that test and the few that import, read or list it (or every file,
     # like test_local_imports), not the suite; the scheduler's guard follows
     # task_loops; the shared helper reaches the Caddy container test through caddy_assets.
+    # test_ddl_guard scans all of backend/ (it skips tests at run time, which the map cannot see), so it is the twentieth;
+    # test_schema_every_table reads every table the source makes in the same way, so it is the twenty-first.
     alone = checks.selection(["backend/tests/test_task_loops.py"])["python"]
-    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 20
+    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 25
     loops = checks.selection(["backend/task_loops.py"])
     assert "backend/tests/test_scheduler.py" in loops["python"] and not loops["caddy"]
     assert checks.selection(["backend/caddy_assets.py"])["caddy"]

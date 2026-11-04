@@ -94,7 +94,7 @@ def run_one(server, scenario, owner, member, quiet=45, timeout=900):
             seen.add(m["id"])
             last = time.monotonic()
             refs = m.get("refs") or {}
-            if m["from_actor"] == "bot:botops":
+            if m["sender_id"] == "bot:botops":
                 if refs.get("credential_request") and "credential_card" in rules and m["id"] not in answered:
                     answered.add(m["id"])
                     server.request("POST", f"credential-requests/{refs['credential_request']}/save", {"value": rules["credential_card"]["value"]}, owner)
@@ -105,7 +105,7 @@ def run_one(server, scenario, owner, member, quiet=45, timeout=900):
                     steps += 1
                 if not (refs.get("credential_request") or refs.get("action")):
                     transcript.append(("bot", m["body"]))
-            elif m["from_actor"].startswith("human:") and m["body"] != scenario["prompt"] and not refs.get("credential_saved"):
+            elif m["sender_id"].startswith("human:") and m["body"] != scenario["prompt"] and not refs.get("credential_saved"):
                 steps += 1
                 transcript.append(("person", m["body"]))
     return score.score(scenario, server, owner, transcript, before, steps) | {"transcript": transcript}

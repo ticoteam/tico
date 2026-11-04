@@ -10,9 +10,11 @@ timer of its own. Every route shows a person their own tickets and no one else's
 it is stored as plain text and the page escapes it.
 
 A bot (or the Assistant, or a person's token) reports a Tico bug the same way, with one step more: it drafts the report as
-a `support` approval (backend/hubdb.py `lint_support`: the message, its hash, whether the IDs go), a person reads it in
+a `support` approval (backend/hubdb.py `lint_approval`: the message, its hash, whether the IDs go), a person reads it in
 Needs you and says yes, and only then may the bot send it (`file_approved`). The ticket is the approving person's: it is
 filed as them, counts against their day, and its replies show on their Support page. No diagnostics bundle goes this way.
+Unless the team lets bots send without asking (team rule `bot_reports_direct`, on by default): then the same draft is
+decided as the install's default person under the team rule and sent at once (`send_by_rule`, through the same send).
 
 `TICO_SUPPORT=off` removes the feature (an air-gapped install); PRIVACY.md and docs/support.md describe it.
 """
@@ -29,23 +31,23 @@ import httpx
 
 from pydantic import Field
 
-from . import diagnostics, support_asks
+from . import diagnostics, support_asks, team_rules
 from .census import hq_url
-from .auth import Identity
+from .auth import Identity, validate_identity
 from .models import Contract
 from .replication import rehearsal_on
 from .credentials import SEALED
-from .store import H, Problem, encode
+from .store import H, Problem, encode, refused
 
 log = logging.getLogger("tico.support")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS support_tickets(
- id TEXT PRIMARY KEY, actor TEXT NOT NULL, created TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
- message TEXT NOT NULL, email TEXT NOT NULL DEFAULT '', sent_json TEXT NOT NULL DEFAULT '{}',
- hq_id TEXT NOT NULL, hq_secret TEXT NOT NULL, messages_json TEXT NOT NULL DEFAULT '[]',
- seen_id INTEGER NOT NULL DEFAULT 0, checked TEXT, request_key TEXT);
-CREATE INDEX IF NOT EXISTS support_tickets_actor ON support_tickets(actor, created);
+ id TEXT PRIMARY KEY, actor TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
+ message TEXT NOT NULL, email TEXT NOT NULL DEFAULT '', sent TEXT NOT NULL DEFAULT '{}',
+ hq_id TEXT NOT NULL, hq_secret TEXT NOT NULL, messages TEXT NOT NULL DEFAULT '[]',
+ seen_id INTEGER NOT NULL DEFAULT 0, checked_at TEXT, request_key TEXT);
+CREATE INDEX IF NOT EXISTS support_tickets_actor ON support_tickets(actor, created_at);
 """
 MAX_MESSAGE = 4000
 PER_DAY = 10                 # new tickets one person may file in a day; HQ limits the address as well
@@ -62,6 +64,12 @@ HQ_WAIT = 8
 # The sources this server names when it files (HQ's `source` field; HQ owns the full list and stores `unknown` for any
 # value it does not know): a person, a bot's report a person approved, BotOps, the Health Monitor.
 SOURCES = ("person", "bot_report", "botops", "health_monitor")
+RULE = "bot_reports_direct"     # the team rule: a bot's report is sent without a card (send_by_rule)
+RULE_VIA = "team rule"          # approvals.decided_via of a draft the rule decided: no person decided it
+RULE_NOTE = "team rule: bots send reports without asking"   # the decision's note, in its history
+# Who may act for a person on their confirmation (`Identity.confirmed`): BotOps and the Assistant, with their yes to a
+# read-back or their tap on a Confirm card (backend/app.py, backend/auth.py). Unconfirmed, they are refused here.
+CONFIRMED_VIA = ("botops", "assistant")
 TRANSPORT = None             # tests replace it with an httpx.MockTransport: nothing reaches the network
 CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
 EMAIL = re.compile(r"[^@\s<>\",;()\[\]\\]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\.[A-Za-z]{2,24}")
@@ -166,10 +174,12 @@ def require_on(settings):
 
 
 def require_person(who):
-    """A person at their own browser: not a token, not the Assistant acting for them, not a bot or a computer. BotOps
-    acting with a person's delegated rights (backend/app.py delegated_identity) files as that person; BotOps with its
-    own rights is a bot and is refused."""
-    if who.role not in ("owner", "human") or who.via_token or (who.via and not (who.via == "botops" and who.confirmed)):
+    """A person at their own browser: not a personal token, not a bot or a computer, and not the Assistant or BotOps acting
+    for them unless they act on the person's confirmation (`confirmed`: a yes to their read-back, or a tap on a Confirm
+    card). The Assistant's chat turn is a token too (`via_token`, auth.py chat_person), so it counts only when confirmed.
+    Confirmed, they file as that person; BotOps with its own rights is a bot and is refused."""
+    if (who.role not in ("owner", "human") or (who.via_token and who.via != "assistant")
+            or (who.via and not (who.via in CONFIRMED_VIA and who.confirmed))):
         raise Problem("forbidden", "Only a signed-in person can contact support.", 403)
 
 
@@ -235,28 +245,35 @@ def _answer(response, success):
 
 
 def _messages(value):
-    """HQ's message list cut down to the fields the page shows, whatever HQ sent."""
+    """HQ's message list cut down to the fields the page shows, whatever HQ sent. HQ calls a message's time `created`;
+    the hub keeps it as `created_at`."""
     out = []
     for item in (value if isinstance(value, list) else [])[:200]:
         if isinstance(item, dict) and isinstance(item.get("id"), int):
-            out.append({"id": item["id"], "created": str(item.get("created") or "")[:30],
+            out.append({"id": item["id"], "created_at": str(item.get("created") or item.get("created_at") or "")[:30],
                         "from": "person" if item.get("from") == "person" else "staff",
                         "body": str(item.get("body") or "")[:8000],
                         "has_diagnostics": item.get("has_diagnostics") is True})
     return out
 
 
+def _stored_messages(row):
+    """A ticket's stored messages; one stored before the time column renames has HQ's `created` instead of `created_at`."""
+    return [{**m, "created_at": m.get("created_at") or m.get("created") or ""} if "created" in m else m
+            for m in json.loads(row["messages"] or "[]")]
+
+
 def _last_activity(row):
     """When the ticket was last written on, by either side, or filed: an aware datetime (the epoch when none reads)."""
-    times = [H.parse_ts(m.get("created")) for m in json.loads(row["messages_json"] or "[]")] + [H.parse_ts(row["created"])]
+    times = [H.parse_ts(m.get("created_at")) for m in _stored_messages(row)] + [H.parse_ts(row["created_at"])]
     return max((t for t in times if t and t.tzinfo), default=EPOCH)
 
 
 def view(row):
     """A ticket as the page sees it. The HQ secret and id are not in it."""
-    messages = json.loads(row["messages_json"] or "[]")
-    return {"id": row["id"], "created": row["created"], "status": row["status"], "message": row["message"],
-            "email": row["email"], "sent": json.loads(row["sent_json"] or "{}"), "messages": messages,
+    messages = _stored_messages(row)
+    return {"id": row["id"], "created_at": row["created_at"], "status": row["status"], "message": row["message"],
+            "email": row["email"], "sent": json.loads(row["sent"] or "{}"), "messages": messages,
             "unread": sum(1 for m in messages if m["from"] == "staff" and m["id"] > row["seen_id"])}
 
 
@@ -269,6 +286,9 @@ def seal_plaintext_secrets(store, vault):
     is left alone. Returns how many were sealed. Run on start; a vault that cannot be opened now (KMS unreachable)
     leaves them for the next start or the next use (`Support.secret`)."""
     with store.transaction() as c:
+        # The table is made by Store.initialize, which can run after this (a fresh database): no table, nothing stored yet.
+        if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='support_tickets'").fetchone():
+            return 0
         rows = c.execute("SELECT id,hq_secret FROM support_tickets WHERE substr(hq_secret,1,?)<>?",
                          (len(SEALED), SEALED)).fetchall()
         for row in rows:
@@ -336,7 +356,7 @@ class Support:
                 from .views import roster
                 people = roster(c).get("people") or []
                 redactor = diagnostics.Redactor(diagnostics._domains(self.settings, {"people": people}),
-                    [(b["slug"], [b.get("display_name")]) for b in H.bots(c)],
+                    [(b["slug"], [b.get("display_name"), b["id"]]) for b in H.bots(c)],
                     [(p.get("id", ""), [p.get("name"), p.get("email")]) for p in people])
             value = redactor.clean(diagnostics.allowed(value))
             value.setdefault("capture", {})["edited"] = True
@@ -366,7 +386,7 @@ class Support:
                 if again:
                     return view(again)
             since = H.shift(H.now(), hours=-24)
-            recent = c.execute("SELECT count(*) FROM support_tickets WHERE actor=? AND created>?",
+            recent = c.execute("SELECT count(*) FROM support_tickets WHERE actor=? AND created_at>?",
                                (who.actor, since)).fetchone()[0]
         if recent >= PER_DAY:
             raise Problem("support_busy", "That is enough requests for today. Try again tomorrow.", 429)
@@ -418,7 +438,7 @@ class Support:
             raise Problem("support_unreachable", "Could not reach Tico support. Try again in a moment.", 502, retryable=True)
         ticket_id = "sup_" + secrets.token_hex(6)
         with self.store.transaction() as c:
-            c.execute("INSERT INTO support_tickets(id,actor,created,status,message,email,sent_json,hq_id,hq_secret,"
+            c.execute("INSERT INTO support_tickets(id,actor,created_at,status,message,email,sent,hq_id,hq_secret,"
                       "request_key) VALUES(?,?,?,?,?,?,?,?,?,?)",
                       (ticket_id, who.actor, H.now(), "open", message, email, encode(sent), hq_id,
                        self.vault.cipher.seal(c, _context(ticket_id), hq_secret), key or None))
@@ -428,55 +448,142 @@ class Support:
                 on_filed(c, ticket_id)
             return view(c.execute("SELECT * FROM support_tickets WHERE id=?", (ticket_id,)).fetchone())
 
+    def send_by_rule(self, who, approval_id, check=None):
+        """Send a bot's report the team rule lets go without a card (`bot_reports_direct`), once the route has drafted it.
+        The draft is decided as the install's default person under the team rule and sent through `_file_approved`, the
+        send a person's yes gets: the same HQ call, day limit, source and spend. `check(c)` is the privacy check for this
+        send, run under the write lock; when it refuses, the draft waits. Returns {ticket, sent, filed_as}, or None when the
+        draft waits for a person: the rule is off (read under the lock, so a report queued while the owner turned it off
+        waits), or a person already decided the draft. A bot that is paused or revoked is refused and nothing is sent. A
+        spent approval answers with its ticket whatever the rule says now.
+
+        A rule decision is taken back when its send fails, or when the rule is off by the time it is sent, so a draft is
+        never left decided by the rule without a ticket."""
+        if who.role != "bot":
+            return None
+        with self.sending:
+            return self._send_by_rule(who, approval_id, check)
+
+    def _send_by_rule(self, who, approval_id, check):
+        from . import lifecycle
+        refusal = None
+        with self.store.transaction() as c:
+            validate_identity(c, who)              # the bot still holds its credential, lease and state, under the lock
+            lifecycle.refuse_send(c, who, None, what="anything")
+            row = H.approval(c, approval_id)
+            if not row or row["kind"] != "support" or row["requested_by_id"] != who.actor:
+                return None
+            if not row["consumed_at"]:
+                if row["decided_via"] == RULE_VIA:
+                    if not team_rules.load(c)[RULE]:
+                        self._unrule(c, who, approval_id)    # the rule went off before this send: a person decides
+                        return None
+                elif row["decision"] is None:
+                    if not team_rules.load(c)[RULE]:
+                        return None
+                    try:
+                        if check is not None:
+                            check(c)
+                    except Problem:
+                        return None                  # this send is not allowed for its source: the draft waits
+                    person = H.default_human(c)
+                    if not person:
+                        raise Problem("identity", "This install has no person to file a report for yet.", 409)
+                    c.execute("SAVEPOINT domain_write")
+                    try:
+                        H.approval_decide(c, H.human_actor(person), approval_id, "approved", RULE_NOTE)
+                        c.execute("UPDATE approvals SET decided_via=? WHERE id=?", (RULE_VIA, approval_id))
+                        if row["message_id"]:
+                            # The notice the draft wrote for the default person is read and delivered with its decision,
+                            # as the person's own ack would leave it (app.py acknowledge): the message stays as history.
+                            H.mark_delivered(c, H.KEEPER, row["message_id"], recipient=H.human_actor(person))
+                            H.mark_read(c, H.KEEPER, row["message_id"], recipient=H.human_actor(person))
+                        c.execute("RELEASE domain_write")
+                    except H.Refused as exc:
+                        refusal = refused(c, who, exc)   # the decision undone, the refusal kept and counted
+                else:
+                    return None                      # a person decided it: their file_approved sends it, or it is declined
+        if refusal:
+            raise refusal
+        try:
+            sent = self._file_approved(who, approval_id)
+        except Exception:
+            with self.store.transaction() as c:
+                self._unrule(c, who, approval_id)    # not sent: the rule's decision is taken back, the draft waits
+            raise
+        return {"ticket": sent["ticket"], "sent": True, "filed_as": sent["filed_as"]}
+
+    def _unrule(self, c, who, approval_id):
+        """Take a team-rule decision back, while nothing has been sent on it: the draft waits for a person again."""
+        row = H.approval(c, approval_id)
+        if not row or row["decided_via"] != RULE_VIA or row["consumed_at"]:
+            return
+        c.execute("UPDATE approvals SET decision=NULL, decided_by_id=NULL, decided_at=NULL, decided_via=NULL, "
+                  "decided_for=NULL WHERE id=?", (approval_id,))
+        H.event(c, who.actor, "approval.undo", approval_id, {"was": row["decision"], "via": RULE_VIA})
+        H._recount(c, row["requested_by_id"])
+
     def file_approved(self, who, approval_id):
         """Send the report a person approved, for whoever asked for the approval. The ticket is filed as the person who
         approved it (theirs to read and answer, counted against their day) and the approval is spent in the same
         transaction that keeps the ticket: HQ refusing or out of reach spends nothing, so the call can be made again.
         A second call for a spent approval answers with the same ticket."""
         with self.sending:
+            return self._file_approved(who, approval_id)
+
+    def _file_approved(self, who, approval_id):
+        """The send itself, under the lock `sending` that file_approved and send_by_rule both hold."""
+        with self.store.read() as c:
+            row = H.approval(c, approval_id)
+            quarantined = H.is_bot(who.actor) and (H.bot(c, H.actor_id(who.actor)) or {}).get("state") == "quarantined"
+        if not row:
+            raise Problem("not_found", "Approval not found", 404)
+        if row["requested_by_id"] != who.actor:
+            raise Problem("forbidden", "Only whoever asked for this approval may send it.", 403)
+        if quarantined:
+            raise Problem("forbidden", "A quarantined bot sends nothing until a person clears it.", 403)
+        if row["kind"] != "support":
+            raise Problem("approval", f"{approval_id} is a {row['kind']} approval, not a support report.", 422)
+        if row["decision"] != "approved":
+            state = row["decision"] or "waiting for a person"
+            raise Problem("approval", f"This report is {state}: only a report a person approved is sent.", 409)
+        if row["decided_via"] == RULE_VIA and not row["consumed_at"]:
+            # The team rule decided it and nothing was sent: once the rule is off, the draft waits for a person.
+            with self.store.transaction() as c:
+                waits = not team_rules.load(c)[RULE]
+                if waits:
+                    self._unrule(c, who, approval_id)
+            if waits:
+                raise Problem("approval", "This report waits for a person: the team rule that would send it is off.", 409)
+        payload = row["payload"] or {}
+        if H.lint_support(payload) or not H.support_text_matches(payload):
+            raise Problem("approval", "The approved message no longer matches its hash; nothing was sent.", 409)
+        person = Identity(row["decided_by_id"], "human")
+        key = "approval:" + approval_id
+        with self.store.read() as c:      # a Health Monitor report a person approved is still the Health Monitor's
+            health = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='health_reports'").fetchone() \
+                and c.execute("SELECT 1 FROM health_reports WHERE approval_id=?", (approval_id,)).fetchone()
+        source = "health_monitor" if health else "bot_report"
+        if row["consumed_at"]:
             with self.store.read() as c:
-                row = H.approval(c, approval_id)
-                quarantined = H.is_bot(who.actor) and (H.bot(c, H.actor_id(who.actor)) or {}).get("state") == "quarantined"
-            if not row:
-                raise Problem("not_found", "Approval not found", 404)
-            if row["requested_by"] != who.actor:
-                raise Problem("forbidden", "Only whoever asked for this approval may send it.", 403)
-            if quarantined:
-                raise Problem("forbidden", "A quarantined bot sends nothing until a person clears it.", 403)
-            if row["kind"] != "support":
-                raise Problem("approval", f"{approval_id} is a {row['kind']} approval, not a support report.", 422)
-            if row["decision"] != "approved":
-                state = row["decision"] or "waiting for a person"
-                raise Problem("approval", f"This report is {state}: only a report a person approved is sent.", 409)
-            payload = row["payload"] or {}
-            if H.lint_support(payload) or not H.support_text_matches(payload):
-                raise Problem("approval", "The approved message no longer matches its hash; nothing was sent.", 409)
-            person = Identity(row["decided_by"], "human")
-            key = "approval:" + approval_id
-            with self.store.read() as c:      # a Health Monitor report a person approved is still the Health Monitor's
-                health = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='health_reports'").fetchone() \
-                    and c.execute("SELECT 1 FROM health_reports WHERE approval_id=?", (approval_id,)).fetchone()
-            source = "health_monitor" if health else "bot_report"
-            if row["consumed_at"]:
-                with self.store.read() as c:
-                    done = c.execute("SELECT * FROM support_tickets WHERE actor=? AND request_key=?",
-                                     (person.actor, key)).fetchone()
-                if not done:
-                    raise Problem("approval", f"{approval_id} was already spent at {row['consumed_at']}.", 409)
-                return {"ticket": view(done), "approval": approval_id, "filed_as": person.actor, "again": True}
+                done = c.execute("SELECT * FROM support_tickets WHERE actor=? AND request_key=?",
+                                 (person.actor, key)).fetchone()
+            if not done:
+                raise Problem("approval", f"{approval_id} was already spent at {row['consumed_at']}.", 409)
+            return {"ticket": view(done), "approval": approval_id, "filed_as": person.actor, "again": True}
 
-            def spend(c, _ticket_id=None):
-                spent = c.execute("UPDATE approvals SET consumed_at=? WHERE id=? AND consumed_at IS NULL",
-                                  (H.now(), approval_id)).rowcount
-                if spent:
-                    H.event(c, who.actor, "approval.consume", approval_id, {"kind": "support"})
+        def spend(c, _ticket_id=None):
+            spent = c.execute("UPDATE approvals SET consumed_at=? WHERE id=? AND consumed_at IS NULL",
+                              (H.now(), approval_id)).rowcount
+            if spent:
+                H.event(c, who.actor, "approval.consume", approval_id, {"kind": "support"})
 
-            ticket = self.file(person, SupportTicket(message=payload["message"],
-                                                     include_ids=payload.get("include_ids", True) is not False),
-                               key, on_filed=spend, source=source)
-            with self.store.transaction() as c:      # a ticket kept before its approval was spent (an older crash)
-                spend(c)
-            return {"ticket": ticket, "approval": approval_id, "filed_as": person.actor, "again": False}
+        ticket = self.file(person, SupportTicket(message=payload["message"],
+                                                 include_ids=payload.get("include_ids", True) is not False),
+                           key, on_filed=spend, source=source)
+        with self.store.transaction() as c:      # a ticket kept before its approval was spent (an older crash)
+            spend(c)
+        return {"ticket": ticket, "approval": approval_id, "filed_as": person.actor, "again": False}
 
     def write(self, who, ticket_id, text, attachment=""):
         """Add a message to one of the caller's tickets."""
@@ -524,7 +631,7 @@ class Support:
 
     def listing(self, who):
         with self.store.read() as c:
-            rows = c.execute("SELECT * FROM support_tickets WHERE actor=? ORDER BY created DESC, id DESC LIMIT ?",
+            rows = c.execute("SELECT * FROM support_tickets WHERE actor=? ORDER BY created_at DESC, id DESC LIMIT ?",
                              (who.actor, LISTED)).fetchall()
         tickets = [view(r) for r in rows]
         return {"enabled": True, "tickets": tickets, "unread": sum(t["unread"] for t in tickets)}
@@ -547,7 +654,7 @@ class Support:
         else:
             return False
         with self.store.transaction() as c:
-            c.execute("UPDATE support_tickets SET status=?, messages_json=COALESCE(?,messages_json), checked=? WHERE id=?",
+            c.execute("UPDATE support_tickets SET status=?, messages=COALESCE(?,messages), checked_at=? WHERE id=?",
                       (status, encode(messages) if messages is not None else None, H.now(), row["id"]))
         return True
 
@@ -558,7 +665,7 @@ class Support:
         now = H.now()
         with self.store.read() as c:
             rows = c.execute("SELECT * FROM support_tickets WHERE actor=? AND status!='gone' "
-                             "ORDER BY created DESC LIMIT ?", (who.actor, LISTED)).fetchall()
+                             "ORDER BY created_at DESC LIMIT ?", (who.actor, LISTED)).fetchall()
         active_since = H.parse_ts(now) - timedelta(seconds=ACTIVE_S)
         rows = sorted(rows, key=lambda r: (r["id"] == ticket, _last_activity(r)), reverse=True)
         failed, asked = False, 0
@@ -567,7 +674,7 @@ class Support:
                 wait = FRESH_S
             else:
                 wait = CLOSED_FRESH_S if row["status"] == "closed" else QUIET_FRESH_S
-            if row["checked"] and row["checked"] > H.shift(now, seconds=-wait):
+            if row["checked_at"] and row["checked_at"] > H.shift(now, seconds=-wait):
                 continue
             if asked == ASKED:
                 break
@@ -581,7 +688,7 @@ class Support:
 
     def read(self, who, ticket_id):
         row = self._own(who, ticket_id)
-        newest = max([m["id"] for m in json.loads(row["messages_json"] or "[]")] or [0])
+        newest = max([m["id"] for m in json.loads(row["messages"] or "[]")] or [0])
         with self.store.transaction() as c:
             c.execute("UPDATE support_tickets SET seen_id=MAX(seen_id,?) WHERE id=?", (newest, ticket_id))
         return self.one(who, ticket_id)

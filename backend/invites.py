@@ -9,15 +9,18 @@ registry_metadata `invites` ({person id: {at, by}}) so the People page can say w
 times, spend the address's daily invites and hide the reason.
 
 One request sends at most one email (`once`). The browser repeats a write whose answer it lost with the same
-Idempotency-Key, and the request cache (Store.mutate) only stores the answer after the email has gone, so `invite_sends`
-binds the request before the issuer is asked: a repeat of a sent request answers from it, an overlapping copy or one
-whose outcome nobody recorded is refused without sending, and a refusal replays as itself. A new click is a new key and
-sends again.
+Idempotency-Key, so the request is bound in `idempotency` (binding 'invites', subject the person's id) before the issuer
+is asked: a repeat of a sent request answers from it, an overlapping copy or one whose outcome nobody recorded is
+refused without sending, and a refusal replays as itself. A new click is a new key and sends again. A route that binds
+a request does not also `mutate` under the same key: one row per key. The access route keeps the time it recorded on
+the binding (`response` {"invited_at"}), so a repeat answers its own request's time. A route asks `replay` before it
+writes the roster, so a repeat never adds the person again, even one removed since (people_remove keeps the binding
+without the address).
 
 Create password is the other way in (Chris, Oct 25): an owner or admin asks the same issuer to make the person a Tico
 account with a generated password (`Oidc.make_account`, the issuer's POST /oauth2/accounts) and the page shows it once.
 Tico never keeps it: the route keeps no receipt (no `mutate`, so not the request cache), writes no event, log or
-notification with it, and binds the request in `invite_sends` like an invite, so a repeat whose answer was lost says
+notification with it, and binds the request in `idempotency` like an invite, so a repeat whose answer was lost says
 the account was made instead of asking again. Someone who already has a Tico account is refused: use Invite. The
 account signs in only here until its owner proves the email with Forgot password on the sign-in page.
 """
@@ -27,20 +30,17 @@ import json
 from .replication import rehearsal_on
 from .store import H, Problem, digest, encode
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS invite_sends(
- actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL, request_hash TEXT NOT NULL, person TEXT NOT NULL,
- state TEXT NOT NULL CHECK(state IN ('sending','sent','refused')),
- error_code TEXT, error_detail TEXT, created TEXT NOT NULL, updated TEXT NOT NULL,
- PRIMARY KEY(actor,operation,key));
-"""
 KEY = "invites"
+# The `idempotency` binding of an invite request (backend/store.py's table): subject is the person's id.
+BINDING = "invites"
 MADE = {
     "account_exists": "{name} already has a Tico account; use Invite.",
     "too_many": "Too many new accounts today. Try again tomorrow.",
     "invalid_email": "Tico accounts can't use {email}. Check the address.",
     "passwords_unavailable": "Tico accounts with a password aren't available right now. Try again later.",
 }
+# What a removed person's refused invite says on a repeat: the refusal named their address, which removal deletes.
+REMOVED = "The person this invite was for was removed."
 REASONS = {
     "too_many": "Too many invites to this address today. Try again tomorrow.",
     "invalid_email": "Tico's sign-in mail can't send to {email}. Check the address.",
@@ -51,18 +51,40 @@ REASONS = {
 
 def sent(c):
     """{person id: {at, by}} for every invite sent."""
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
-    value = json.loads(row["value_json"]) if row else {}
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    value = json.loads(row["value"]) if row else {}
     return value if isinstance(value, dict) else {}
 
 
 def record(c, actor, pid):
     at = H.now()
     invites = {**sent(c), pid: {"at": at, "by": actor}}
-    c.execute("INSERT INTO registry_metadata(key,value_json) VALUES(?,?) "
-              "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (KEY, encode(invites)))
+    c.execute("INSERT INTO registry_metadata(key,value) VALUES(?,?) "
+              "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (KEY, encode(invites)))
     H.event(c, actor, "person.invited", pid, {})
     return at
+
+
+def record_send(store, who, request, pid):
+    """The time this request's invite to `pid` is recorded at, kept on the request's own binding (`response`
+    {"invited_at"}) in the same transaction as the record: a repeat answers its own time, never another request's. A
+    sent binding with no time is a send whose record was lost, so it is recorded now."""
+    key, operation = request_key(request), request.url.path
+
+    def work(c):
+        row = c.execute("SELECT response FROM idempotency WHERE binding=? AND actor=? AND operation=? AND key=?",
+                        (BINDING, who.actor, operation, key)).fetchone()
+        try:
+            recorded = json.loads(row["response"]).get("invited_at") if row and row["response"] else None
+        except (ValueError, AttributeError):
+            recorded = None
+        if recorded:
+            return recorded
+        at = record(c, who.actor, pid)
+        c.execute("UPDATE idempotency SET response=?,updated_at=? WHERE binding=? AND actor=? AND operation=? AND key=?",
+                  (encode({"invited_at": at}), at, BINDING, who.actor, operation, key))
+        return at
+    return store.write(who, work)
 
 
 def request_key(request):
@@ -78,6 +100,21 @@ def once(store, auth, settings, who, request, body, person):
     an earlier copy of the request already did; a refusal, then or now, raises."""
     _available(auth, settings, person)
     return _once(store, who, request, body, person, lambda: send(auth, settings, person)) is not None
+
+
+def replay(store, who, request, body):
+    """The person an earlier copy of this request bound its key for, or None when the key is new and the route runs
+    the request. A bound key answers from its binding (`_once`): nothing is written or sent."""
+    key, operation = request_key(request), request.url.path
+    with store.read() as c:
+        row = c.execute("SELECT subject FROM idempotency WHERE binding=? AND actor=? AND operation=? AND key=?",
+                        (BINDING, who.actor, operation, key)).fetchone()
+    if not row:
+        return None
+    _once(store, who, request, body, None, None,
+          lambda name: ("invite_unknown", "This invite is still being sent, or Tico couldn't tell whether it went. Check "
+                                          "the People page before inviting again."))
+    return row["subject"]
 
 
 def make_password(store, auth, settings, who, request, body, person):
@@ -102,36 +139,45 @@ def _once(store, who, request, body, person, work, unknown=None):
     key, operation, hashed = request_key(request), request.url.path, digest(encode(body.model_dump()))
     with store.transaction() as c:
         validate_identity(c, who)
-        row = c.execute("SELECT * FROM invite_sends WHERE actor=? AND operation=? AND key=?",
-                        (who.actor, operation, key)).fetchone()
+        row = c.execute("SELECT * FROM idempotency WHERE binding=? AND actor=? AND operation=? AND key=?",
+                        (BINDING, who.actor, operation, key)).fetchone()
         if row:
-            if row["request_hash"] != hashed:
+            # A binding whose person was removed has no hash (people_remove): any copy of its request gets its answer.
+            if row["request_hash"] not in ("", hashed):
                 raise Problem("idempotency_conflict", "This key was used for different content", 409)
-            if row["state"] == "sent":
+            if row["state"] == "completed":
                 return None
             if row["state"] == "refused":
                 raise Problem(row["error_code"], row["error_detail"], 422)
-            name = person.get("name") or "this person"
+            name = (person or {}).get("name") or "this person"
             if unknown:
                 raise Problem(*unknown(name), 422)
             raise Problem("invite_unknown", f"This invite to {name} is still being sent, or Tico couldn't tell whether it "
                                             f"went. Check the People page or ask {name} before inviting again.", 422)
+        # An answer left under this key with no binding is an older release's roster add that committed before its
+        # invite was bound (migration 0050 removes those): nothing was sent for it, so the binding takes its place.
+        c.execute("DELETE FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
+                  (who.actor, operation, key))
         now = H.now()
-        c.execute("INSERT INTO invite_sends(actor,operation,key,request_hash,person,state,created,updated) "
-                  "VALUES(?,?,?,?,?,'sending',?,?)", (who.actor, operation, key, hashed, person["id"], now, now))
+        c.execute("INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at,updated_at,binding,"
+                  "subject,state) VALUES(?,?,?,?,NULL,?,?,?,?,'pending')",
+                  (who.actor, operation, key, hashed, now, now, BINDING, person["id"]))
     try:
         answer = work()
     except Problem as problem:
-        # A definite refusal replays as itself. Anything else leaves the request 'sending': its outcome is unknown, so
-        # no copy of it ever asks the issuer again.
+        # A definite refusal replays as itself. Anything else leaves the request pending: its outcome is unknown, so
+        # no copy of it ever asks the issuer again. A person removed while the issuer was asked (no hash) keeps no
+        # refusal text that names their address.
         with store.transaction() as c:
-            c.execute("UPDATE invite_sends SET state='refused',error_code=?,error_detail=?,updated=? "
-                      "WHERE actor=? AND operation=? AND key=?", (problem.code, problem.detail, H.now(),
-                                                                  who.actor, operation, key))
+            c.execute("UPDATE idempotency SET state='refused',error_code=?,"
+                      "error_detail=CASE WHEN request_hash='' THEN ? ELSE ? END,updated_at=? "
+                      "WHERE binding=? AND actor=? AND operation=? AND key=?",
+                      (problem.code, REMOVED, problem.detail, H.now(), BINDING, who.actor, operation, key))
         raise
     with store.transaction() as c:
-        c.execute("UPDATE invite_sends SET state='sent',updated=? WHERE actor=? AND operation=? AND key=?",
-                  (H.now(), who.actor, operation, key))
+        c.execute("UPDATE idempotency SET state='completed',updated_at=? "
+                  "WHERE binding=? AND actor=? AND operation=? AND key=?",
+                  (H.now(), BINDING, who.actor, operation, key))
     return answer if answer is not None else True
 
 

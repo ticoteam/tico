@@ -41,7 +41,7 @@ reason attached, exit 0. Every write command takes --dry-run.
 Exit codes: 0 ok, 1 failure (missing key, network, Google said no), 2 policy refusal.
 """
 
-import argparse, fnmatch, hashlib, json, mimetypes, os, shlex, sys, uuid, weakref
+import argparse, contextvars, fnmatch, hashlib, json, mimetypes, os, shlex, sys, uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -67,6 +67,12 @@ def open_calendar(mailbox):
     return auth.calendar_service(mailbox)
 
 
+# The connections the command running on this thread opened (Ctx). main() closes them when the command ends, on the
+# thread that opened them: a finalizer would close one on whichever thread the garbage collector runs on, and sqlite
+# refuses to close a connection from another thread.
+_COMMAND_CONNECTIONS = contextvars.ContextVar("mail_command_connections", default=None)
+
+
 def open_db():
     return db.connect(DB_PATH)
 
@@ -90,7 +96,9 @@ class Ctx:
                 if not soft:                            # `lint` and `review` need no mailbox
                     raise
         self.conn = open_db()
-        self._close_conn = weakref.finalize(self, self.conn.close)
+        opened = _COMMAND_CONNECTIONS.get()
+        if opened is not None:
+            opened.append(self.conn)
         self._gmail, self._calendar, self._policy = None, None, None
 
     @property
@@ -246,7 +254,7 @@ def cmd_e2e(args):
 
 def cmd_mint_token(args):
     """A short-lived access token for one mailbox, for the runner's supervisor to hand a turn
-    (runner/credential_socket.py). Prints the token and its expiry; the key itself never leaves."""
+    (runner_support/credential_socket.py). Prints the token and its expiry; the key itself never leaves."""
     try:
         token, expiry, granted = auth.mint_token(args.mailbox, args.service)
     except oauth.SignInFailed as e:
@@ -2624,6 +2632,7 @@ def cmd_sync_export(args):
         rows = db.unpushed(conn, mailbox=mailbox if mailbox else None,
                            mailboxes=None if mailbox or boxes is None else boxes,
                            limit=getattr(args, "limit", None) or SYNC_LIMIT)
+        db.annotate_known_senders(conn, rows)
     finally:
         conn.close()
     payload = {"ok": True, "count": len(rows), "messages": rows}
@@ -3065,6 +3074,8 @@ def main(argv=None):
         args._parser.error("--untriaged is label-based and cannot be combined with --new "
                            "or --since")
     pkg.JSON_ERRORS = bool(getattr(args, "json", False) or getattr(args, "format", "") == "json")
+    opened = []
+    scope = _COMMAND_CONNECTIONS.set(opened)
     try:
         return args.func(args) or 0
     except Refused as e:
@@ -3073,6 +3084,10 @@ def main(argv=None):
     except Failure as e:
         report(e, "failed")
         return 1
+    finally:
+        _COMMAND_CONNECTIONS.reset(scope)
+        for conn in opened:
+            conn.close()
 
 
 if __name__ == "__main__":

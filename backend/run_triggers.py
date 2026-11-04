@@ -6,8 +6,8 @@ Every run (`turns`, same id as its attempt) records three things, all in plain c
   `trigger_source` where there is a source to name); the claim copies it onto the run. A message a person
   wrote is `person_message`, and a message a bot wrote (a task comment, a direct message) is `comment`: the
   message is the wake and its author says which. A keeper wake nothing stamped is `other`.
-- tokens: `tokens_in` (all input), `cached_tokens` (the cached part of it, where the harness reports it),
-  `input_tokens` (the rest) and `output_tokens`, as the run's usage already records them.
+- tokens: `input_tokens` (the uncached input), `cached_tokens` (the cached part of the input, where the harness
+  reports it) and `output_tokens`, as the run's usage records them.
 - `did_nothing`: 1 when the run made no write Tico counts (`writes` is 0), else 0. Exact for every write that
   reaches Tico with the run's token, and for a git push from a worktree of the run's own task, which its runner
   reports with the result (`pushes`, see `pushed`). A push from anywhere else is not seen.
@@ -44,7 +44,7 @@ trigger or purpose is not known reads `unknown` for that field, and is still cou
 import re
 
 TRIGGERS = ("comment", "status_or_relation", "pr_checks", "stall_check", "schedule", "person_message",
-            "background_done", "release_published", "other")
+            "background_done", "release_published", "check_back", "other")
 OUTCOMES = ("acted", "no_change", "nothing_to_do")
 # What a person (or another bot) did with an acted run's result: `turn_result`.
 TASK_OUTCOMES = ("accepted", "edited", "overridden")
@@ -54,7 +54,7 @@ UNKNOWN = "unknown"
 # What a run is for when no caller said, by what woke it. The label is the work, not the wake, and stays short.
 TRIGGER_PURPOSES = {
     "comment": "answer comment", "status_or_relation": "react to task change", "pr_checks": "handle PR checks",
-    "stall_check": "check stalled task", "schedule": "run routine", "person_message": "answer person message",
+    "check_back": "follow up task", "stall_check": "check stalled task", "schedule": "run routine", "person_message": "answer person message",
     "background_done": "resume after background work", "release_published": "follow up a release",
 }
 # Bots whose work is one thing: a reviewer woken by a task change or a PR's checks is reviewing that PR.
@@ -115,7 +115,7 @@ def of_message(msg):
     kind = refs.get("trigger")
     if kind in TRIGGERS:
         return kind, refs.get("trigger_source")
-    author = str(msg.get("from_actor") or "")
+    author = str(msg.get("sender_id") or "")
     if author.startswith("human:"):
         return "person_message", msg.get("id")
     if author.startswith("bot:"):
@@ -144,7 +144,7 @@ def pushed(conn, turn_id, computer, pushes):
     """Add the pushes a runner reported for a run to its `writes`: only those from a worktree of the run's own task on
     that computer, and only while the run is still open, so a result sent again is not counted twice. A runner that
     reports none (an older one, or a run that pushed nothing) leaves the run as it was."""
-    row = conn.execute("SELECT task_id FROM turns WHERE id=? AND finished IS NULL", (turn_id,)).fetchone()
+    row = conn.execute("SELECT task_id FROM turns WHERE id=? AND finished_at IS NULL", (turn_id,)).fetchone()
     if not pushes or not row or not row[0]:
         return 0
     paths = {r[0] for r in conn.execute("SELECT path FROM task_links WHERE task_id=? AND kind='worktree' "
@@ -160,7 +160,7 @@ def rotation(conn, turn_id, rotated):
     older one, or a run that resumed) leaves `rotated` NULL."""
     if rotated is None:
         return 0
-    return conn.execute("UPDATE turns SET rotated=? WHERE id=? AND finished IS NULL", (rotated.reason, turn_id)).rowcount
+    return conn.execute("UPDATE turns SET rotated=? WHERE id=? AND finished_at IS NULL", (rotated.reason, turn_id)).rowcount
 
 
 # Why a run started a new session, in the words a task's history uses ("Started a new session: ..."). The first six are
@@ -202,7 +202,7 @@ def session(conn, turn_id, session):
     if session is None:
         return 0
     why = (session.why or "")[:60] or None
-    done = conn.execute("UPDATE turns SET session_kind=?, session_why=? WHERE id=? AND finished IS NULL",
+    done = conn.execute("UPDATE turns SET session_kind=?, session_why=? WHERE id=? AND finished_at IS NULL",
                         (session.kind, why, turn_id)).rowcount
     if done and session.kind == "new" and why != "none_saved":
         row = conn.execute("SELECT task_id FROM turns WHERE id=?", (turn_id,)).fetchone()
@@ -223,14 +223,15 @@ def turn_result(conn, actor, row, outcome, event, to=None):
     """Write the one `turn.outcome` event for the run that delivered `row`'s result (the task as it was before this
     change), when `actor` is neither its owner bot nor the keeper. `event` is H.event (this module is below hubdb).
     Returns the event row, or None when there is no result, no run, or the run already has its outcome."""
-    owner = str(row.get("owner") or "")
+    owner = str(row.get("owner_id") or "")
     if (outcome not in TASK_OUTCOMES or row.get("status") not in RESULT_STATES or not owner.startswith("bot:")
             or actor in (owner, "keeper")):
         return None
-    reached = conn.execute("SELECT max(ts) FROM task_events WHERE task_id=? AND field='status' AND new=?",
+    reached = conn.execute("SELECT max(created_at) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                           "AND kind='status' AND new=?",
                            (row["id"], row["status"])).fetchone()[0]
-    turn = conn.execute("SELECT id FROM turns WHERE bot=? AND task_id=? AND (? IS NULL OR started<=?) "
-                        "ORDER BY started DESC LIMIT 1", (owner[4:], row["id"], reached, reached)).fetchone()
+    turn = conn.execute("SELECT id FROM turns WHERE bot=? AND task_id=? AND (? IS NULL OR started_at<=?) "
+                        "ORDER BY started_at DESC LIMIT 1", (owner[4:], row["id"], reached, reached)).fetchone()
     if not turn or conn.execute("SELECT 1 FROM events WHERE target=? AND action='turn.outcome' LIMIT 1",
                                 (turn[0],)).fetchone():
         return None

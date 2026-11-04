@@ -9,7 +9,7 @@ from backend.tests.test_api import api, post, setup_attempt
 import pytest
 
 
-def test_store_replaces_legacy_queue_trigger_and_drains_queued_self_messages(tmp_path):
+def test_store_drops_legacy_queue_trigger_and_drains_queued_self_messages(tmp_path):
     settings = Settings(db_path=tmp_path / "old-queue.sqlite")
     store = Store(settings)
     store.initialize()
@@ -17,11 +17,14 @@ def test_store_replaces_legacy_queue_trigger_and_drains_queued_self_messages(tmp
         H.sync_registry(c, {"coo": {"name": "coo", "status": "active"}},
                         {"people": []})
         c.execute("DELETE FROM cloud_migrations WHERE version=8")
-        c.execute("DROP TRIGGER queue_bot_message")
+        # A database as an older release left it: it never recorded migration 0052 (nor any later one, which would run
+        # again after it), and still has the trigger.
+        c.execute("DELETE FROM schema_migrations WHERE version>='0052' AND version NOT LIKE 'legacy_%'")
+        c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
         c.execute("CREATE TRIGGER queue_bot_message AFTER INSERT ON messages "
-                  "WHEN NEW.to_actor LIKE 'bot:%' BEGIN "
-                  "INSERT INTO jobs(id,message_id,bot,created) "
-                  "VALUES(NEW.id,NEW.id,substr(NEW.to_actor,5),NEW.created); END")
+                  "WHEN NEW.recipient_id LIKE 'bot:%' BEGIN "
+                  "INSERT INTO jobs(id,message_id,bot_id,created_at) "
+                  "VALUES(NEW.id,NEW.id,substr(NEW.recipient_id,5),NEW.created_at); END")
         conversation = H.open_conversation(c, "bot:coo", ["bot:coo"], kind="chat")
         self_message = H._write_message(c, "bot:coo", "bot:coo", "legacy loop",
                                         conversation, "say", {}, None, None)
@@ -29,12 +32,18 @@ def test_store_replaces_legacy_queue_trigger_and_drains_queued_self_messages(tmp
                          (self_message["id"],)).fetchone()[0] == "queued"
     store.initialize()
     with store.transaction() as c:
+        # The start ran 0052 again (it was not recorded): the trigger is gone, and cloud step 8 drained the self message.
+        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='queue_bot_message'").fetchone()
         assert c.execute("SELECT state FROM jobs WHERE message_id=?",
                          (self_message["id"],)).fetchone()[0] == "completed"
-        H._write_message(c, "bot:coo", "bot:coo", "ignored by trigger",
+        H._write_message(c, "bot:coo", "bot:coo", "ignored by enqueue",
                          conversation, "say", {}, None, None)
         assert c.execute("SELECT count(*) FROM jobs").fetchone()[0] == 1
         assert c.execute("SELECT 1 FROM cloud_migrations WHERE version=8").fetchone()
+    store.initialize()
+    with store.read() as c:
+        # A later start recreates nothing: backend/enqueue.py queues in Python.
+        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='queue_bot_message'").fetchone()
 
 
 def test_restore_fences_credentials_and_preserves_uncertain_effects(api, tmp_path):
@@ -100,7 +109,7 @@ def test_a_run_the_last_process_held_is_flagged_at_start_and_resumes_if_it_lapse
     with TestClient(create_app(api.app.state.store.settings)) as restarted:
         store = restarted.app.state.store
         with store.read() as c:
-            [flag] = c.execute("SELECT detail_json FROM events WHERE action='attempt.update_cut' AND target=?",
+            [flag] = c.execute("SELECT detail FROM events WHERE action='attempt.update_cut' AND target=?",
                                (a["id"],)).fetchall()
         assert json.loads(flag[0])["cause"] == "restart"
         expire(restarted, a["id"])
@@ -112,6 +121,27 @@ def test_a_run_the_last_process_held_is_flagged_at_start_and_resumes_if_it_lapse
         again = claim(restarted, r)
         assert again["job_id"] == a["job_id"] and again["recovery"]["resume_session"] is True
         assert "by a Tico restart" in again["message"]["body"]
+
+
+def test_a_server_that_boots_again_while_a_run_is_live_flags_that_run_once(api):
+    """Each start flags the runs its last process held, but a run already flagged by a start gets no second event: after
+    the second boot it still has one restart flag. An update's flag is its own cause, so it is still written."""
+    from fastapi.testclient import TestClient
+    from backend.app import create_app
+    from backend.execution import flag_cut
+    r, _, a = setup_attempt(api)
+    post(api, f"attempts/{a['id']}/started", {"thread_id": "boot-twice"}, r["token"])
+
+    def flags():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT count(*) FROM events WHERE action='attempt.update_cut' AND target=?",
+                             (a["id"],)).fetchone()[0]
+    for _ in range(2):
+        with TestClient(create_app(api.app.state.store.settings)):
+            assert flags() == 1
+    with api.app.state.store.transaction() as c:
+        assert flag_cut(c, "update", "0.4.18") == 1
+    assert flags() == 2
 
 
 def test_every_cloud_migration_number_is_used_once_and_in_order():

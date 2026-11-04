@@ -6,6 +6,7 @@ import pytest
 from backend import hubdb as H, move_retry
 from backend.tests.test_github import api, get, headers  # noqa: F401
 from backend.tests.test_review_gate import ticket, move, HEAD, BASE
+from backend.tests.test_api import hold
 
 RECEIPT = f'Tests: base {BASE} head {HEAD}: 9 passed, 0 failed'
 
@@ -23,7 +24,7 @@ def step(api, task):
 def retries(api, task):
     with api.app.state.store.read() as c:
         return [json.loads(r[0]) for r in c.execute(
-            "SELECT new FROM task_events WHERE task_id=? AND field='move_retry' ORDER BY ts, rowid", (task['id'],))]
+            "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='move_retry' ORDER BY created_at, rowid", (task['id'],))]
 
 
 def tick(api):
@@ -32,7 +33,7 @@ def tick(api):
 
 def owned_by(api, slug):
     with api.app.state.store.read() as c:
-        return [r[0] for r in c.execute("SELECT title FROM tasks WHERE owner=?", (H.bot_actor(slug),))]
+        return [r[0] for r in c.execute("SELECT title FROM tasks WHERE owner_id=?", (H.bot_actor(slug),))]
 
 
 def test_refused_for_missing_receipt_moves_itself_when_the_receipt_is_posted(api):
@@ -49,7 +50,7 @@ def test_refused_for_missing_receipt_moves_itself_when_the_receipt_is_posted(api
     assert tick(api) == [task['id']]
     assert step(api, task) == 'Review 1'
     with api.app.state.store.read() as c:
-        mover = c.execute("SELECT actor FROM task_events WHERE task_id=? AND field='step' ORDER BY ts DESC, rowid DESC",
+        mover = c.execute("SELECT actor_id AS actor FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' ORDER BY created_at DESC, rowid DESC",
                           (task['id'],)).fetchone()[0]
     assert mover == H.KEEPER
     assert owned_by(api, 'cmo') == []       # the type's manager heard nothing
@@ -59,12 +60,12 @@ def test_refused_for_missing_receipt_moves_itself_when_the_receipt_is_posted(api
 def test_refused_for_failing_checks_moves_when_the_checks_pass(api):
     task = ticket(api, RECEIPT)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.checks',json(?)) WHERE task_id=? AND kind='pr'",
+        c.execute("UPDATE task_links SET detail=json_set(detail,'$.checks',json(?)) WHERE task_id=? AND kind='pr'",
                   (json.dumps({'python': 'failing'}), task['id']))
     refused = move(api, task)
     assert refused.status_code == 422 and 'Tico retries this move itself when the checks' in refused.text
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.checks',json(?)) WHERE task_id=? AND kind='pr'",
+        c.execute("UPDATE task_links SET detail=json_set(detail,'$.checks',json(?)) WHERE task_id=? AND kind='pr'",
                   (json.dumps({'python': 'passing'}), task['id']))
     assert tick(api) == [task['id']] and step(api, task) == 'Review 1'
 
@@ -102,7 +103,8 @@ def unreadable(api, monkeypatch, mode, response=None):
     from backend.store import Problem
     state = {'down': True}
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug, display_name, runtime, state) VALUES('devops-engineer','DevOps','fake','active')")
+        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('devops-engineer','devops-engineer','DevOps','active')")
+        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('devops-engineer','{\"runtime\":\"fake\"}','ana')")
     service = api.app.state.github_app
     # A configured app row: truthy for the gate's snapshot, mapping-shaped for link refreshes.
     monkeypatch.setattr(service, 'row', lambda c=None: {"org": "ticoteam"})
@@ -154,9 +156,9 @@ def owner_woken(api, task):
     """Per gate notice to the ticket's owner, whether it queued a turn for them."""
     with api.app.state.store.read() as c:
         return [bool(r[0]) for r in c.execute(
-            "SELECT (SELECT count(*) FROM jobs j WHERE j.message_id=m.id) FROM messages m WHERE m.to_actor=? "
-            "AND json_extract(m.refs_json,'$.task')=? AND json_extract(m.refs_json,'$.review_gate') IS NOT NULL",
-            (task['owner'], task['id']))]
+            "SELECT (SELECT count(*) FROM jobs j WHERE j.message_id=m.id) FROM messages m WHERE m.recipient_id=? "
+            "AND json_extract(m.refs,'$.task')=? AND json_extract(m.refs,'$.review_gate') IS NOT NULL",
+            (task['owner_id'], task['id']))]
 
 
 def test_temporary_github_failure_retries_on_the_timer_and_never_asks_devops(api, monkeypatch):
@@ -246,7 +248,7 @@ def test_a_pr_link_tico_cannot_resolve_is_never_routed_as_a_github_outage(api, m
     else:
         # No GitHub App configured: the gate reads the cached link, which has no head yet.
         monkeypatch.setattr(api.app.state.github_app, 'row', lambda c=None: None)
-        sql = "UPDATE task_links SET detail_json=json_remove(detail_json,'$.head_sha') WHERE task_id=? AND kind='pr'"
+        sql = "UPDATE task_links SET detail=json_remove(detail,'$.head_sha') WHERE task_id=? AND kind='pr'"
     with api.app.state.store.transaction() as c:
         c.execute(sql, (task['id'],))
     refused = move(api, task)
@@ -264,7 +266,7 @@ def test_the_install_owners_receipt_counts_on_ticos_retry(api):
     api.app.state.store.settings.owner_email = 'editor@acme.example'
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM registry_metadata WHERE key='owner'")
-        c.execute("INSERT INTO humans(id,name,email,teams_json) VALUES('editor','Editor','editor@acme.example','[]')")
+        c.execute("INSERT INTO humans(id,name,email,teams) VALUES('editor','Editor','editor@acme.example','[]')")
         H.task_comment(c, 'human:editor', task['id'], RECEIPT, wake=False)
     assert tick(api) == [task['id']] and step(api, task) == 'Review 1'
 
@@ -350,9 +352,9 @@ def test_retries_refused_again_expire_three_days_after_the_first_refusal(api):
     assert move(api, task).status_code == 422
     first = (datetime.now(timezone.utc) - timedelta(days=2, hours=12)).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
     with api.app.state.store.transaction() as c:    # the first refusal was two and a half days ago
-        c.execute('UPDATE task_events SET ts=? WHERE task_id=?', (first, task['id']))
-        c.execute("UPDATE task_events SET new=json_set(new,'$.at',?,'$.since',?) "
-                  "WHERE task_id=? AND field='move_retry'", (first, first, task['id']))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (first, task['id']))
+        c.execute("UPDATE history_events SET new=json_set(new,'$.at',?,'$.since',?) "
+                  "WHERE subject_type='task' AND subject_id=? AND kind='move_retry'", (first, first, task['id']))
         c.execute('UPDATE tasks SET note=? WHERE id=?', ('Still building the fix.', task['id']))
     assert tick(api) == []                          # retried now and refused again
     assert retries(api, task)[-1]['since'] == first
@@ -371,11 +373,11 @@ def test_a_private_tickets_outage_does_not_create_a_task_or_wake_a_manager(api, 
     assert move(api, task).status_code == 422
     with api.app.state.store.transaction() as c:
         source_outages.sync(c, api.app.state.store.settings)
-        assert not c.execute("SELECT 1 FROM tasks WHERE owner=?", (H.bot_actor('devops-engineer'),)).fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id=?", (H.bot_actor('devops-engineer'),)).fetchone()
         assert not c.execute("SELECT 1 FROM events WHERE action='blocker.routed'").fetchone()
-        for row in c.execute("SELECT body,refs_json FROM messages WHERE json_extract(refs_json,'$.source_outage') IS NOT NULL"):
-            assert task['id'] not in row['body'] + row['refs_json']
-            assert task['title'] not in row['body'] + row['refs_json']
+        for row in c.execute("SELECT body,refs FROM messages WHERE json_extract(refs,'$.source_outage') IS NOT NULL"):
+            assert task['id'] not in row['body'] + row['refs']
+            assert task['title'] not in row['body'] + row['refs']
     assert not any(owner_woken(api, task))
 
 
@@ -385,7 +387,7 @@ def test_a_private_tickets_receipt_comment_moves_it(api):
         c.execute('UPDATE tasks SET private=1 WHERE id=?', (task['id'],))
     assert move(api, task).status_code == 422
     with api.app.state.store.transaction() as c:    # the builder's receipt, as a comment rather than the note
-        H._write_message(c, task['owner'], task['requester'], RECEIPT, H.conversation(c, task['conversation_id']), 'say',
+        H._write_message(c, task['owner_id'], task['requester_id'], RECEIPT, H.conversation(c, task['conversation_id']), 'say',
                          {'task': task['id'], 'comment': True}, None, None)
     assert tick(api) == [task['id']]
     assert step(api, task) == 'Review 1'
@@ -395,9 +397,9 @@ def test_a_retry_does_not_pass_on_evidence_the_mover_cannot_read(api):
     task = ticket(api)
     with api.app.state.store.transaction() as c:      # a private review child only the owner reads, holding a receipt
         # Ana heads every bot that reports to no one, so cpo reports to another root person she does not manage.
-        roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         roster['people'].append({'id': 'zed', 'email': 'zed@acme.example'})
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(roster),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
         c.execute("UPDATE bot_config SET reports_to='human:zed' WHERE bot='cpo'")
         child = H.task_create(c, H.bot_actor('cpo'), 'Evidence', 'x', H.bot_actor('cpo'), parent_id=task['id'])
         c.execute("UPDATE tasks SET private=1, title='Review 1' WHERE id=?", (child['id'],))
@@ -442,8 +444,8 @@ def test_a_gate_hold_with_no_live_retry_goes_back_to_its_earlier_step(api):
     task = ticket(api)
     assert move(api, task).status_code == 422
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_events SET new=json_set(new,'$.since','2020-01-01T00:00:00.000000Z') "
-                  "WHERE task_id=? AND field='move_retry'", (task['id'],))
+        c.execute("UPDATE history_events SET new=json_set(new,'$.since','2020-01-01T00:00:00.000000Z') "
+                  "WHERE subject_type='task' AND subject_id=? AND kind='move_retry'", (task['id'],))
         c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
         task_blocked.sweep(c, datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z')
     assert step(api, task) == 'In Progress'
@@ -490,13 +492,13 @@ def test_a_refused_move_onto_another_board_is_retried_onto_that_board(api, revie
     task = general(api, ticket(api))
     assert cross_move(api, task, review_step).status_code == 422
     held = get(api, 'tasks/' + task['id'])['task']
-    assert held['type_id'] == H.GENERAL_TYPE and held['blocked_since']
+    assert held['type_id'] == H.GENERAL_TYPE and hold(held)['since']
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
     assert tick(api) == [task['id']]
     moved = get(api, 'tasks/' + task['id'])['task']
     assert moved['type_id'] == task_type(api) and moved['step']['name'] == review_step
-    assert not moved.get('blocked_since')
+    assert not hold(moved)
 
 
 def task_type(api):
@@ -514,8 +516,8 @@ def test_the_stranded_sweep_releases_another_boards_gate_hold_only_once_no_retry
     stamp = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
     with api.app.state.store.transaction() as c:
         assert H.sweep_stranded(c, stamp) == []     # past the sweep's grace, inside the retry's
-        c.execute("UPDATE task_events SET new=json_set(new,'$.since','2020-01-01T00:00:00.000000Z') "
-                  "WHERE task_id=? AND field='move_retry'", (task['id'],))
+        c.execute("UPDATE history_events SET new=json_set(new,'$.since','2020-01-01T00:00:00.000000Z') "
+                  "WHERE subject_type='task' AND subject_id=? AND kind='move_retry'", (task['id'],))
         assert H.sweep_stranded(c, stamp) == [(task['id'], 'open')]
     released = get(api, 'tasks/' + task['id'])['task']
-    assert released['status'] == 'open' and not released.get('blocked_since')
+    assert released['status'] == 'open' and not hold(released)

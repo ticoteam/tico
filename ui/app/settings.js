@@ -64,7 +64,7 @@ function settingsMachinesRefresh() {
   });
   return SETTINGS_PRESENCE.pending;
 }
-// Each model CLI's capabilities, from its manifest (GET /v2/models `harnesses`, runner/harnesses/*.toml): what the UI
+// Each model CLI's capabilities, from its manifest (GET /v2/models `harnesses`, runner-rs/harnesses/*.toml): what the UI
 // asks instead of naming CLIs. Fetched once; until then, or if the fetch fails, every capability reads as unknown.
 let HARNESS_ROWS = [];
 let HARNESS_ROWS_LOADING = null;
@@ -234,11 +234,12 @@ function pageSettings() {
             <p id="settings-team-icon-status" class="settings-cell-note" role="status"></p>
           </div>
         </div>` : ''}
-        <p class="settings-cell-note" id="settings-visuals">${settingsVisualsLine()}</p></section>
+        <p class="settings-cell-note" id="settings-visuals">${settingsVisualsLine()}</p>
+        ${S.me?.role === 'owner' ? '<div id="settings-bot-reports"></div>' : ''}</section>
       <section class="card" id="settings-company"><header><h2>Tico company</h2></header><div id="set-company"></div></section>` : ''}
       <section class="card" id="settings-assistant-pane"><header><h2>${esc(assistantName())}</h2><div class="row">
         <a class="ghost" href="${ASSISTANT}">Open chat</a>
-        ${settingsCanManageBot((S.emps || []).find(e => e.name === assistantBot())) ? `<a class="ghost" href="#/bot/${encodeURIComponent(assistantBot())}/more">Bot settings</a>` : ''}
+        ${settingsCanManageBot(botRow(assistantBot())) ? `<a class="ghost" href="#/bot/${encodeURIComponent(assistantBot())}/more">Bot settings</a>` : ''}
       </div></header><div id="settings-assistant-approvals"></div></section>
       <div id="settings-assistant"></div>
       ${S.me?.role === 'owner' ? `<section class="card" id="settings-privacy"><header><h2>Privacy</h2></header><div id="set-privacy">${skelRows(3, {card: true, dot: false})}</div></section>
@@ -398,7 +399,7 @@ function settingsShow(tab) {
         // The owner's one click when the team has no Assistant (ui/assistant.js): restore it or add it.
         owner && window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
         privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(),
-        company && settingsIsAdmin() && renderSettingsCompany()]).then(() => settingsReveal(SETTINGS_REVEAL));
+        company && settingsIsAdmin() && renderSettingsCompany(), owner && renderSettingsBotReports()]).then(() => settingsReveal(SETTINGS_REVEAL));
     }
   }
   const peoplePane = $('#settings-people');
@@ -475,6 +476,7 @@ async function renderSettingsAssistantApprovals() {
   let v, list;
   try { [v, list] = await Promise.all([get('/v2/assistant/settings'), get('/v2/assistant/decisions')]); }
   catch (e) { host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (!host.isConnected) return;   // Settings redrew while this loaded; the new page draws its own
   const name = esc(assistantName());
   const rows = (list.decisions || []).map(d => {
     const words = d.decided_for?.words ? `“${esc(d.decided_for.words)}”` : '';
@@ -489,7 +491,7 @@ async function renderSettingsAssistantApprovals() {
       ? `When you ask in its chat, your ${name} approves or declines your approvals. It reads the list back first, and only your own words count.`
       : 'Your team’s owner has turned this off for everyone (Settings > People).'}</p>
     ${rows ? `<h3>Decided by ${name} for you</h3><ul class="assistant-decisions">${rows}</ul>` : ''}`;
-  $('#assistant-decides').onchange = async ev => {
+  host.querySelector('#assistant-decides').onchange = async ev => {
     const box = ev.target;
     try { await post('/v2/assistant/settings', {decides_approvals: box.checked}); toast('Saved'); void renderSettingsAssistantApprovals(); }
     catch (e) { box.checked = !box.checked; settingsFieldError(box, e.message); }
@@ -501,21 +503,40 @@ async function renderSettingsAssistantApprovals() {
     void renderSettingsAssistantApprovals();
   });
 }
+// Settings > General > Team: whether a bot's report to the Tico team goes without a card (team rule bot_reports_direct,
+// backend/support.py send_by_rule). Owner only. Off, every bot report waits for a person's yes in Needs you.
+async function renderSettingsBotReports() {
+  const host = $('#settings-bot-reports');
+  if (!host || formBusy(host)) return;
+  let rules;
+  try { rules = (await get('/v2/access')).rules || {}; }
+  catch (e) { if (host.isConnected) host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (!host.isConnected) return;
+  host.innerHTML = `<label class="people-line"><input type="checkbox" role="switch" class="people-switch" id="bot-reports-direct"${rules.bot_reports_direct !== false ? ' checked' : ''} aria-label="Bots send reports to the Tico team without asking">
+    <span>Bots send reports to the Tico team without asking</span></label>`;
+  host.querySelector('#bot-reports-direct').onchange = async ev => {
+    const box = ev.target;
+    try { await put('/v2/access/rules', {bot_reports_direct: box.checked}); toast('Saved'); void renderSettingsBotReports(); }
+    catch (e) { box.checked = !box.checked; settingsFieldError(box, e.message); }
+  };
+}
 // Settings > General > Privacy: the one switch for the anonymous usage count, and a new random install ID (PRIVACY.md).
 async function renderSettingsPrivacy() {
   const host = $('#set-privacy');
   if (!host) return;
   let v;
-  try { v = await get('/v2/system/usage-count'); } catch (e) { host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  try { v = await get('/v2/system/usage-count'); } catch (e) { if (host.isConnected) host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (!host.isConnected) return; // Settings redrew while this was loading; the new card draws itself
   const forced = v.off_by && v.off_by !== 'setting';
   host.innerHTML = `<label class="privacy-row"><input type="checkbox" id="privacy-count"${v.enabled ? ' checked' : ''}${forced ? ' disabled' : ''}> Help count active installs</label>
     <p class="settings-cell-note">${forced ? (v.off_by === 'demo' ? 'Always off in the demo. ' : `Turned off by ${esc(v.off_by)}. `) : ''}A random ID, the version and three yes/no activity flags. <a href="${esc(v.doc)}" target="_blank" rel="noopener noreferrer">What is sent</a></p>
     <p class="settings-cell-note">${v.install_id ? `Install ID: <code>${esc(v.install_id)}</code> <button class="ghost" type="button" id="privacy-reset">Reset install ID</button>` : 'No install ID yet: one is made the first time the count is sent.'}</p>`;
-  $('#privacy-count').onchange = async ev => {
+  host.querySelector('#privacy-count').onchange = async ev => {
     try { await put('/v2/system/usage-count', {enabled: ev.target.checked}); toast('Saved'); void renderSettingsPrivacy(); }
     catch (e) { ev.target.checked = !ev.target.checked; settingsFieldError(ev.target, e.message); }
   };
-  if ($('#privacy-reset')) $('#privacy-reset').onclick = async ev => {
+  const reset = host.querySelector('#privacy-reset');
+  if (reset) reset.onclick = async ev => {
     const button = ev.currentTarget;
     if (!await settingsConfirm({title: 'Reset install ID?', ok: 'Reset install ID',
       text: 'Tico makes a new random ID. The old one is gone for good, so earlier counts can no longer be linked to this install.'})) return;
@@ -642,7 +663,7 @@ const STOPPED_NOTE = {
   dismiss: 'The human chose not to retry this delivery. Inspect the task separately.',
 };
 const reconcileStopped = (job, decision, detail = '') => post(`/v2/jobs/${encodeURIComponent(job.id)}/reconcile`, {
-  attempt_id: job.attempt_id, decision, note: detail ? `${STOPPED_NOTE[decision]} Details: ${detail}` : STOPPED_NOTE[decision],
+  run_id: job.run_id, decision, note: detail ? `${STOPPED_NOTE[decision]} Details: ${detail}` : STOPPED_NOTE[decision],
   acknowledge_uncertain_effects: true
 });
 const stoppedOutcome = (decision, deferred) => decision === 'mixed'
@@ -654,7 +675,7 @@ async function executionReview(bot, after = () => $('#settings-tabs') && loadSet
   const dialog = document.createElement('dialog'); dialog.className = 'tmodal tmodal-shell stopped-runs-dialog';
   dialog.setAttribute('aria-label', 'Stopped runs');
   // Open bot lives here, not on the Needs you card that opens this.
-  dialog.innerHTML = `<header class="tmodal-head"><h2>Stopped runs</h2><span class="spacer"></span><a class="ghost" href="#/bot/${esc(bot)}/more" data-open-bot>Open bot</a><button class="ghost" type="button" data-close>Close</button></header><div class="tmodal-body" data-review>Loading…</div>`;
+  dialog.innerHTML = `<header class="tmodal-head"><h2>Stopped runs</h2><span class="spacer"></span><a class="ghost" href="#/bot/${esc(encodeURIComponent(bot))}/more" data-open-bot>Open bot</a><button class="ghost" type="button" data-close>Close</button></header><div class="tmodal-body" data-review>Loading…</div>`;
   dialog.querySelector('[data-close]').onclick = () => dialog.close();
   dialog.querySelector('[data-open-bot]').onclick = () => dialog.close();
   dialog.addEventListener('close', () => dialog.remove());
@@ -663,13 +684,13 @@ async function executionReview(bot, after = () => $('#settings-tabs') && loadSet
   try {
     const {jobs} = await get(`/v2/bots/${encodeURIComponent(bot)}/execution-review`);
     host.innerHTML = jobs.length ? jobs.map(job => {
-      const saved = job.attempt?.final_text || job.output.map(event=>event.text).filter(Boolean).join('');
+      const saved = job.run?.final_text || job.output.map(event=>event.text).filter(Boolean).join('');
       const pick = STOPPED_PICK[job.stopped] || STOPPED_PICK.unknown, retry = pick.retry;
       const tools = (job.acted || []).join(', ');
       const button = (decision, label) => `<button type="submit" name="decision" value="${decision}"${(decision === 'resume') === retry ? '' : ' class="ghost"'}>${label}</button>`;
       return `<form data-job="${esc(job.id)}" class="stopped-run">
       <h3>${esc(job.task?.title || 'Interrupted conversation')}</h3>
-      <p data-stopped>Stopped ${esc(fmt(job.attempt?.started || job.attempt?.created))} ${esc(pick.what(tools))}.</p>
+      <p data-stopped>Stopped ${esc(fmt(job.run?.started_at || job.run?.created_at))} ${esc(pick.what(tools))}.</p>
       <p data-pick><strong>${esc(pick.say(tools))}</strong></p>
       <details data-details><summary>Details</summary>
         ${job.task ? `<p class="muted">Task ${esc(job.task.status)}${job.task.owner_name ? `, owner ${esc(job.task.owner_name)}` : ''}</p>` : ''}
@@ -720,5 +741,5 @@ async function executionReview(bot, after = () => $('#settings-tabs') && loadSet
 function renderSettingsServices() {
   const el = $('#set-services'); if (!el) return;
   const rows = SETTINGS_DATA.services;
-  el.innerHTML = `<div class="settings-services-list">${rows.map(service => `<div><strong>${esc(service.name || service.service)}</strong> · ${service.last_error ? `<span class="err">${esc(service.last_error)}</span>` : '<span class="ok">healthy</span>'}${service.last_success ? `<span class="settings-cell-note">${esc(ago(service.last_success))}</span>` : ''}</div>`).join('') || '<span class="muted">No health reports yet.</span>'}</div>`;
+  el.innerHTML = `<div class="settings-services-list">${rows.map(service => `<div><strong>${esc(service.name || service.service)}</strong> · ${service.last_error ? `<span class="err">${esc(service.last_error)}</span>` : '<span class="ok">healthy</span>'}${service.last_succeeded_at ? `<span class="settings-cell-note">${esc(ago(service.last_succeeded_at))}</span>` : ''}</div>`).join('') || '<span class="muted">No health reports yet.</span>'}</div>`;
 }

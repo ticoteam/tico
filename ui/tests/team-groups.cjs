@@ -14,6 +14,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile, beta} = require('./support/page.cjs');
+const LEDGER_ID = '01990000-0000-7000-8000-000000001ed9';
 const {unrouted} = require('./support/routes.cjs');
 
 const FULL = {see: true, read: true, write: true};
@@ -41,7 +42,7 @@ async function open(browser, me, branches = false) {
   const groups = [{id: 'marketing', name: 'Marketing', parent: ''}, {id: 'seo', name: 'SEO', parent: 'marketing'},
                   {id: 'sales', name: 'Sales', parent: ''}];
   const bot = (name, display_name, team, org_parent, extra = {}) => ({name, display_name, team, org_parent, host: 'keeper',
-    status: 'active', state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}], operator: 'ana', revision: 1, ...extra});
+    status: 'active', state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}], owner_id: 'ana', revision: 1, ...extra});
   const bots = [
     bot('cmo', 'CMO', 'marketing', 'p:ben', {reports_to: 'human:ben'}),
     bot('writer', 'Writer', 'seo', 'b:cmo', {reports_to: 'cmo'}),
@@ -51,10 +52,10 @@ async function open(browser, me, branches = false) {
     bot('channel', 'Channel Inbox', 'marketing', 'b:botops', {helper: true}),
   ];
   if (branches) bots.push(
-    bot('cmo-ben', 'CMO', 'marketing', 'p:ben', {shared_from: 'cmo', operator: 'ben'}),
-    bot('cmo-ana', 'CMO', 'marketing', 'p:ana', {shared_from: 'cmo', operator: 'ana'}),
-    bot('cmo-limited', 'CMO', 'marketing', 'p:ben', {is_branch: true, operator: 'ben', my_access: {see: true, read: false, write: false}}),
-    bot('cmo-unknown', 'CMO', 'marketing', 'p:ben', {shared_from: 'cmo', operator: null}),
+    bot('cmo-ben', 'CMO', 'marketing', 'p:ben', {shared_from: 'cmo', owner_id: 'ben'}),
+    bot('cmo-ana', 'CMO', 'marketing', 'p:ana', {shared_from: 'cmo', owner_id: 'ana'}),
+    bot('cmo-limited', 'CMO', 'marketing', 'p:ben', {is_branch: true, owner_id: 'ben', my_access: {see: true, read: false, write: false}}),
+    bot('cmo-unknown', 'CMO', 'marketing', 'p:ben', {shared_from: 'cmo', owner_id: null}),
   );
   const seats = [];
   const seatView = seat => ({...seat, kind: 'seat', stage: 'recruiting', can_edit: true,
@@ -108,7 +109,7 @@ async function open(browser, me, branches = false) {
     if (p === '/api/v2/seats' && method === 'GET') return json({seats: seats.filter(seat => !seat.filled).map(seatView)});
     if (p === '/api/v2/seats' && method === 'POST') {
       const body = request.postDataJSON(); calls.push(['POST', 'seats', body]);
-      const seat = {id: 'seat' + (seats.length + 1), team: '', created: '2026-10-24T00:00:0' + seats.length + 'Z', ...body};
+      const seat = {id: 'seat' + (seats.length + 1), team: '', created_at: '2026-10-24T00:00:0' + seats.length + 'Z', ...body};
       seats.push(seat);
       return json(seatView(seat));
     }
@@ -138,11 +139,12 @@ async function open(browser, me, branches = false) {
       if (seatSave.hire) return route.fulfill({status: seatSave.hire, contentType: 'application/json',
         body: JSON.stringify({error: {detail: 'Hiring failed'}})});
       seat.filled = true;
-      const slug = body.name.toLowerCase();
+      // A hired bot's id is not its slug (Ledger's here): the page opens by the id the reply gives.
+      const slug = body.name.toLowerCase(), id = slug === 'ledger' ? LEDGER_ID : slug;
       calls.push(['hired with', seat.description]);
       bots.push(bot(slug, body.name, '', seat.reports_to.startsWith('human:') ? 'p:' + seat.reports_to.slice(6) : 'b:' + seat.reports_to,
-        {reports_to: seat.reports_to, status: 'planned', onboarding_state: 'needs_setup', stage: 'onboarding'}));
-      return json({slug, name: body.name, seat: seat.id, stage: 'onboarding', reports_to: seat.reports_to, template: body.template, model: body.model});
+        {id, slug, reports_to: seat.reports_to, status: 'planned', onboarding_state: 'needs_setup', stage: 'onboarding'}));
+      return json({bot: id, slug, name: body.name, seat: seat.id, stage: 'onboarding', reports_to: seat.reports_to, template: body.template, model: body.model});
     }
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
@@ -583,7 +585,7 @@ async function teamAdd(browser) {
     await page.locator('#org-add-group').click();
     await page.getByRole('menuitem', {name, exact: true}).click();
   };
-  // The plus is reachable by keyboard and cancelling writes nothing.
+  // The plus is reachable by keyboard and canceling writes nothing.
   await page.locator('#org-add-group').focus();
   await page.keyboard.press('ArrowDown');
   await shot(page, 'team-add-menu-desktop');
@@ -627,8 +629,8 @@ async function teamAdd(browser) {
   assert.equal(await closeJob.textContent(), 'Close job');
   assert.equal(calls.some(c => c[1] === 'close'), false);
   await page.locator('[data-recruit-hire="bookkeeping"]').click();
-  await node(page, 'b:ledger').waitFor({state: 'attached'});
-  await page.waitForFunction(() => location.hash === '#/bot/ledger');
+  await node(page, 'b:' + LEDGER_ID).waitFor({state: 'attached'});
+  await page.waitForFunction(id => location.hash === '#/bot/' + id, LEDGER_ID);
   assert.deepEqual(recruits, [['POST', 'recruit', 'seat1', {}]]);
   assert.deepEqual(calls.filter(c => c[1] === 'hire'),
     [['POST', 'hire', 'seat1', {template: 'bookkeeping', model: '', name: 'Ledger'}]]);

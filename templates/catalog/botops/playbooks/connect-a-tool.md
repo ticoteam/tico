@@ -4,6 +4,10 @@ Triggered when a bot you build or repair needs a key, token or password, or a hu
 connect a tool. Budget 5 minutes. The human never leaves the chat, and the value never goes through you
 unless they pasted it themselves.
 
+Inputs: the bot that needs the tool, and the tool's name, from the human's chat request or the task that asks for it.
+
+Done when: the bot has its credential, or the card is open and the human has been told in one line what remains; the connection test's one-line result is on the task; no value appears in any note.
+
 ## 0. Choose the route: the vendor's MCP server first
 
 Bots own their tools and skills, and we prefer the vendor's own MCP server to anything we build. **Tico does not currently manage OAuth renewal

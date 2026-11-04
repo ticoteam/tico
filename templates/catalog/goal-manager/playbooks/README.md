@@ -1,11 +1,14 @@
 One file per recurring kind of work. A playbook is the checklist you would hand a new hire.
 
+- `commands.md`: the hub commands for goal work, by job, with their arguments. Run only these; read it before your first hub call.
 - `which-run.md`: which playbook a run needs, by the work it starts from.
 - `levels.md`: what Passive, level 2 and level 3 each allow, and the limit on Needs you items.
 - `strategy-and-bets.md`: the strategy page, bets, goals, KPIs, and the commands that read and write them.
 - `draft-the-strategy.md`: a task "Draft the strategy", or the owner asking through their Assistant. From the market pages and the
-  default guide, build claims the owner confirms or strikes, propose three to five bets and the four sections as
+  default guide, build claims the owner confirms or strikes, propose three to five bets and the sections as
   one `strategy_draft` proposal, and ask the owner to confirm and publish. Never write the page, never publish.
+- `keep-proof-current.md`: fill or refresh "How we know they want it" from the Growth numbers, support work, meetings,
+  Listening and what customer-facing bots learned, each fact with its source, as one `strategy_draft` proposal.
 - `bet-tripped.md`: a task "Bet N: may be wrong", filed by the server when a bet's wrong-if trips, at every level.
   One Decide card: retire, rewrite, or keep with a new wrong-if, and your pick.
 - `run-a-lens.md`: the owner asks for a lens, or a tripped bet or a weekly review calls for one. Answer its questions
@@ -37,7 +40,7 @@ to a file, then `hub proposal create --kind <kind> [--goal ID] [--kpi ID] --payl
 | `goal_why` | `--goal` | `{"why": "one line tying the goal to the vision"}` (only where the Strategy Bot is on, and only for a goal with no bet) |
 | `recovery` | `--goal` | `{"evidence": "...", "options": [{"label": "...", "actions": [...]}], "pick": 0}` (the Strategy Bot at level 2; `playbooks/recoveries.md`) |
 | `kpi_target` | `--kpi` and `--goal` | `{"kind": "improve", "baseline": 40, "target": 65, "deadline": "2026-12-31"}` or `{"kind": "maintain", "min": 40, "max": 60}` |
-| `strategy_draft` | nothing | any of `{"summary", "vision", "sections": {"serve", "sell", "know", "not", "extra": {key: {"title", "body"}}}, "bets": [{"id"?, "statement", "why"?, "rules_out"?, "wrong_if"?, "cites"?, "status"?, "ideas"?}]}`, where `wrong_if` is `{"kind": "kpi", "kpi_id", "direction": "above" \| "below", "threshold", "check_by"}`, `{"kind": "thesis", "market_id", "check_by"}` or `{"kind": "text", "text", "check_by"}`. An optional `"source"` says what prompted it (`bet_tripped`, `lens`, `briefing`). Partial: only the fields you send change. The owner confirms, and confirming writes the draft and the bets as them, at every level (`playbooks/draft-the-strategy.md`, `playbooks/bet-tripped.md`). Publishing stays a separate click of theirs |
+| `strategy_draft` | nothing | any of `{"summary", "vision", "sections": {"serve", "sell", "proof", "now", "know", "how", "not", "extra": {key: {"title", "body"}}}, "bets": [{"id"?, "statement", "why"?, "rules_out"?, "wrong_if"?, "cites"?, "status"?}]}`, where `wrong_if` is `{"kind": "kpi", "kpi_id", "direction": "above" \| "below", "threshold", "check_by"}`, `{"kind": "thesis", "market_id", "check_by"}` or `{"kind": "text", "text", "check_by"}`. An optional `"source"` says what prompted it (`bet_tripped`, `lens`, `briefing`). Partial: only the fields you send change. The owner confirms, and confirming writes the draft and the bets as them, at every level (`playbooks/draft-the-strategy.md`, `playbooks/bet-tripped.md`). Publishing stays a separate click of theirs |
 
 `direction` is up, down or range; `cadence` is daily, weekly or monthly. An improvement target needs a target and a
 deadline; a range needs a min, a max or both. The server refuses anything else with the reason.

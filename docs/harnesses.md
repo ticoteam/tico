@@ -11,7 +11,7 @@ and holds no harness.
 
 | Harness | Manifest | Providers | Installed with | Signs in with |
 |---|---|---|---|---|
-| Codex | `runner/harnesses/codex.toml` | OpenAI | npm `@openai/codex` | ChatGPT subscription (device code, from Settings) or `OPENAI_API_KEY` |
+| Codex | `runner-rs/harnesses/codex.toml` | OpenAI | npm `@openai/codex` | ChatGPT subscription (device code, from Settings) or `OPENAI_API_KEY` |
 | Claude Code | `claude-code.toml` | Anthropic | npm `@anthropic-ai/claude-code` | Claude subscription (link and pasted code, from Settings), `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` |
 | Gemini CLI | `gemini-cli.toml` | Google | npm `@google/gemini-cli` | `GEMINI_API_KEY` |
 | Antigravity (Gemini variant) | `gemini-cli.toml` `[variants.antigravity]` | Google | Operator installs `agy`; the runner never installs or updates it | Google account, signed in by the operator in `agy`; readiness checks only that `agy` is on PATH, a real run checks the sign-in; no MCP servers |
@@ -72,7 +72,7 @@ too; Muse's default there keeps the token in the login Keychain, outside the con
 into place and Cancel keeps. A saved login that points at the Keychain (from before this setting) shows as not
 ready, asking for a sign-in from Tico; Tico never reads or changes that Keychain item. Sign out runs `muse logout`;
 Switch account signs in to a temporary config folder and replaces the saved login only after success,
-for the computer's login. Cancelling keeps the old login. The runner retains the same protection for
+for the computer's login. Canceling keeps the old login. The runner retains the same protection for
 legacy named profiles, which Settings no longer lists.
 Version checks and sign-ins also set
 `MUSE_NO_AUTO_UPDATE=1` and `TBH_CREDENTIAL_BACKEND=file` (the manifest's `[env]`).
@@ -372,7 +372,7 @@ A harness is a manifest plus a host adapter.
 1. **Host adapter**: `runner-rs/src/hosts/<host>.rs` (`start_thread`, `start_turn`, `interrupt`, and events on the
    host's channel). Add it to the `Host` enum in `runner-rs/src/hosts/mod.rs` and to `make_host` in
    `runner-rs/src/execute.rs`.
-2. **Manifest**: `runner/harnesses/<id>.toml`. The file name is the id.
+2. **Manifest**: `runner-rs/harnesses/<id>.toml`. The file name is the id.
 
    ```toml
    id = "acme-agent"            # lowercase letters, digits, hyphens
@@ -461,7 +461,7 @@ another bot's home; all turns use the original login in its own home.
 | `tool_events` | The host emits one `tool` event per tool call, so a run with none provably did nothing | No evidence either way |
 | `mcp_transports` / `mcp_unsupported` | The MCP transports a run takes; the reason shown when it takes none | No MCP servers, "it has no MCP support in Tico" |
 | `resume_after_interrupt` | An interrupted thread can be continued | `true`. No longer read: an interrupted session is always kept and resumed ([sessions](sessions.md#checkpoints-and-resume)) |
-| `steer` | A message sent while a turn runs is written into that turn (Claude Code, Codex and pi; Claude Code also needs a CLI that echoes its input) | The message waits for the next turn; chat says so and offers Stop and redirect |
+| `steer` | A message sent while a turn runs is written into that turn (Claude Code, Codex and pi; Claude Code also needs a CLI that echoes its input) | The message waits for the next turn; DM says so and offers Stop and redirect |
 | `persistent_session` | One process per conversation is kept between turns (pi, Antigravity) | One process per turn |
 | `goal_runs_across_turns` | A native goal keeps the thread going after a turn completes, and a clear is reconciled | A goal ends with its turn |
 | `serial_cold_start` | An expired stored token is refreshed by the first turn; the others wait for it | Turns start together |
@@ -473,6 +473,7 @@ another bot's home; all turns use the original login in its own home.
 | `model_list` | `host`: the host adapter lists the models in readiness; `command`: the CLI lists them (`model_list_args`) | No model list |
 | `readiness` | The runner reports install and sign-in for it | `true`; `false` reports nothing, so checks say unknown |
 | `repo_permission_lint` | Readiness warns about permission rules in the bot's repository | No lint |
+| `packet_only` | A tidy check runs from a supplied packet without Hub MCP or checkout tools; Codex also uses its read-only sandbox | The harness cannot run tidy packets |
 | `repo_commands` | The bot's repository skills and commands are offered as chat commands | Built-in commands only |
 
 Goals, chat commands and controls stay probed: the runner reports them per installed version in its heartbeat.

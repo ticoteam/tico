@@ -61,7 +61,7 @@ async function open(browser, {route = '#/updates', viewport = PHONE, goalsDelay 
     if (p === '/api/status') return json({active: [], employees: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/goals/tree') goals.asked++;
-    if (p === '/api/v2/goals/tree') return new Promise(done => setTimeout(done, goalsDelay)).then(() => json({goals: [{id: 'g-1', title: 'Ship the Acme portal', owner: 'company', parent_id: null, status: 'green', rank: 0, kpis: []}], owners: {}, other_kpis: [], proposals: []}));
+    if (p === '/api/v2/goals/tree') return new Promise(done => setTimeout(done, goalsDelay)).then(() => json({goals: [{id: 'g-1', title: 'Ship the Acme portal', owner_id: 'company', parent_id: null, status: 'green', rank: 0, kpis: []}], owners: {}, other_kpis: [], proposals: []}));
     if (p === '/api/v2/goals/needs-you') return json({items: []});
     if (p === '/api/v2/strategy') return json({current: null, bets: [], may_edit: true});
     if (p === '/api/v2/conversations') return json({conversations: []});
@@ -93,13 +93,14 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       const {page, errors, goals} = await open(browser, {goalsDelay: 400});
       await page.locator('#tree li').first().waitFor();
       assert.deepEqual(await railKeys(page), ['side-update', 'overview', 'welcome', 'strategy', 'growth', 'updates', 'tasks', 'automations',
-        'library', 'rd-lib', 'rules', 'rd-rules', 'nav-pins', 'side-section', 'nav-inboxes-section'], tag + ': the order');
+        'library', 'rd-lib', 'rules', 'rd-rules', 'nav-pins', 'threads',
+        'side-section', 'nav-inboxes-section'], tag + ': the order');
       assert.equal(await page.getAttribute('a[data-nav="automations"]', 'href'), '#/automations', tag + ': Automations');
       for (const helper of ['b:mail-sorter', 'b:botops', 'b:librarian'])
         assert.equal(await page.locator(`#tree [data-org="${helper}"]`).count(), 0, `${tag}: ${helper} is off the Team list`);
       assert.equal(await page.locator('#tree [data-org="b:eng-lead"]').count(), 1, tag + ': the Team list keeps the chart');
       assert.equal(await page.getAttribute('a[data-nav="strategy"]', 'href'), '#/strategy/market', tag + ': Strategy opens on Market');
-      assert.deepEqual(await page.locator('#mobile-nav .mobile-nav-label').allInnerTexts(), PHONE_BAR, tag + ': the phone bar is the mock\'s');
+      assert.deepEqual(await page.locator('#mobile-nav .mobile-nav-item:not([hidden]) .mobile-nav-label').allInnerTexts(), PHONE_BAR, tag + ': the phone bar is the mock\'s');
       for (const [from, to] of [['#/tasks/routines', '#/automations'], ['#/recurring', '#/automations'], ['#/goals', '#/strategy/goals'],
         ['#/goals/g-1', '#/strategy/goals/g-1'], ['#/settings/listening', '#/strategy/market/listening']]) {
         await page.evaluate(h => { location.hash = h; }, from);
@@ -144,7 +145,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       const {page, errors} = await open(browser, {viewport: DESKTOP, route: '#/strategy/budget'});
       await page.locator('[data-bt-open="bot:builder"]').waitFor();
       const shown = await shownRail(page);
-      assert.deepEqual(shown, ['Overview', 'Strategy', 'Growth', 'Updates', 'Tasks', 'Automations', 'Library', 'Docs', 'Files', 'Meetings', 'Tools', 'Rules'], tag + ': the rail, with no Strategy Bot entry');
+      assert.deepEqual(shown, ['Overview', 'Strategy', 'Growth', 'Updates', 'Tasks', 'Automations', 'Library', 'Docs', 'Files', 'Meetings', 'Tools', 'Connections', 'Rules'], tag + ': the rail, with no Strategy Bot entry');
       assert.equal(await page.locator('#tree [data-org="b:goal-manager"]').count(), 0, tag + ': the Strategy Bot is off the Team list');
       assert.ok(!shown.includes('Goals'), tag + ': Goals left the rail');
       assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, tag + ': Message bots hidden');
@@ -158,7 +159,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       assert.equal(said, CAP_409.message, tag + ': the 409 reads as its message');
       const chat = await page.evaluate(m => {
         const div = document.createElement('div');
-        div.innerHTML = v2MessageHTML({id: 'm1', from_actor: 'bot:eng-lead', body: 'Sending the review to Ana.', created: new Date().toISOString(),
+        div.innerHTML = v2MessageHTML({id: 'm1', sender_id: 'bot:eng-lead', body: 'Sending the review to Ana.', created_at: new Date().toISOString(),
           run: {id: 'r1', status: 'done', did: [{kind: 'refused', rule: 'task_cap', text: m}]}});
         return div.textContent.replace(/\s+/g, ' ');
       }, CAP_409.message);

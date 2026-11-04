@@ -32,7 +32,7 @@ class Note(M.Contract):
     text: M.Text
     title: str = Field(default="", max_length=300)
     calendar: dict | None = None
-    slug: str = Field(default="auto", max_length=200)
+    bot_id: str = Field(default="auto", max_length=200)
 
 
 class Edit(M.Contract):
@@ -43,7 +43,7 @@ class Edit(M.Contract):
 
 
 class Send(M.Contract):
-    slug: str = Field(default="auto", max_length=200)
+    bot_id: str = Field(default="auto", max_length=200)
     instructions: str = Field(default="", max_length=200_000)
 
 
@@ -138,13 +138,13 @@ def replay_upload(store, request, payload):
     key = upload_key(request)
     with store.read() as c:
         validate_identity(c, who)
-        row = c.execute("SELECT request_hash,response_json FROM idempotency WHERE actor=? AND operation=? AND key=?",
+        row = c.execute("SELECT request_hash,response FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                         (principal, request.url.path, key)).fetchone()
     if row is None:
         return None
     if row["request_hash"] != request_digest(encode(payload)):
         raise Problem("idempotency_conflict", "This key was used for different content", 409)
-    result = json.loads(row["response_json"])
+    result = json.loads(row["response"])
     if isinstance(result, dict) and "_refusal" in result:
         refusal = result["_refusal"]
         raise Problem(refusal["code"], refusal["detail"], refusal["status"])
@@ -221,9 +221,9 @@ def save(c, meta, *, transcript=None, notes=None, readable=None):
                 notes if notes is not None else (old or {}).get("notes", ""), conn=c, readable=readable)
     control(c, meta["id"])
     # Typed notes need version history too, including intentionally empty edits.
-    c.execute("INSERT OR IGNORE INTO meeting_versions(meeting_id,content_hash,metadata_json,"
-              "transcript_original,transcript_readable,notes,created) "
-              "SELECT id,content_hash,metadata_json,transcript_original,transcript_readable,notes,updated "
+    c.execute("INSERT OR IGNORE INTO meeting_versions(meeting_id,content_hash,metadata,"
+              "transcript_original,transcript_readable,notes,created_at) "
+              "SELECT id,content_hash,metadata,transcript_original,transcript_readable,notes,updated_at "
               "FROM meetings WHERE id=?", (meta["id"],))
 
 
@@ -277,7 +277,7 @@ def view(c, who, rid, *, include_transcripts=False):
     state = c.execute("SELECT * FROM media_control WHERE meeting_id=?", (rid,)).fetchone()
     delivery = record["delivery"]
     if delivery and delivery["task_id"]:
-        meta["sent"] = {"task": delivery["task_id"], "slug": delivery["destination"], "sent_by": delivery["requested_by"]}
+        meta["sent"] = {"task": delivery["task_id"], "bot": delivery["destination"], "sent_by": delivery["requested_by"]}
     result = {**meta, "notes": record["notes"], "transcript_readable": record["transcript_readable"],
               "meeting_context": MS.context(record), "delivery": delivery,
               "version": state["version"] if state else 1, "turns": meta.get("turns", []),
@@ -288,7 +288,7 @@ def view(c, who, rid, *, include_transcripts=False):
         result["transcript_sources"] = [{"id": row["id"], "source": row["source"],
             "resource_type": row["resource_type"], "transcript_index": row["transcript_index"],
             "source_updated_at": row["source_updated_at"], "text": row["transcript_text"],
-            "turns": json.loads(row["turns_json"]),
+            "turns": json.loads(row["turns"]),
             "summary": row["summary_text"],
             "primary": row["content_hash"] == meta.get("transcript_import_hash")}
             for row in c.execute("SELECT t.* FROM recording_transcripts t WHERE t.meeting_id=? "
@@ -305,7 +305,7 @@ def outbox(c, rid):
     try:
         rows = c.execute("SELECT id,section,text,status,result_ref FROM meeting_items WHERE meeting_id=? "
                          "AND status!='dismissed' AND section IN ('doc','task','feature') "
-                         "ORDER BY created", (rid,)).fetchall()
+                         "ORDER BY created_at", (rid,)).fetchall()
     except Exception:
         return groups
     for row in rows:
@@ -351,7 +351,8 @@ def deliver(c, auth, who, rid, body, uploads):
     require_live(record)
     meta = record["metadata"]
     person = P.person(H.actor_id(who.actor), roster(c)) or {}
-    slug = body.slug if body.slug != "auto" else person.get("bot") or default_bot(c, auth.settings)
+    chosen = body.bot_id if body.bot_id != "auto" else person.get("bot") or default_bot(c, auth.settings)
+    slug = (H.resolve_bot(c, chosen) or {}).get("id", chosen)
     auth.target(c, who, slug, need="write")
     previous = record["delivery"]
     if previous:
@@ -362,12 +363,12 @@ def deliver(c, auth, who, rid, body, uploads):
                 raise Problem("delivery_sender", "The original sender must retry this delivery", 409)
             c.execute("UPDATE meeting_deliveries SET status='pending',error=NULL WHERE meeting_id=?", (rid,))
             return finish_delivery(c, auth, who, rid)
-        return {"id": rid, "slug": slug, "task": previous["task_id"], "pending": previous["status"] == "pending"}
+        return {"id": rid, "bot": slug, "task": previous["task_id"], "pending": previous["status"] == "pending"}
     extra = attachments(c, who, rid, uploads)
     meta["attachments"] = meta.get("attachments", []) + extra
     save(c, meta)
     c.execute("INSERT INTO meeting_deliveries(meeting_id,requested_by,sender_name,destination,instructions,"
-              "attachments_json,requested_at) VALUES(?,?,?,?,?,?,?)",
+              "attachments,requested_at) VALUES(?,?,?,?,?,?,?)",
               (rid, who.email, person.get("name") or who.email, slug, body.instructions,
                encode(meta["attachments"]), H.now()))
     return finish_delivery(c, auth, who, rid)
@@ -380,7 +381,7 @@ def finish_delivery(c, auth, who, rid):
     if not delivery or delivery["task_id"]:
         return None
     if meta["status"] != "done":
-        return {"id": rid, "slug": delivery["destination"], "pending": True}
+        return {"id": rid, "bot": delivery["destination"], "pending": True}
     # Recheck authorization at delivery time, not just when the request was queued.
     slug = delivery["destination"]
     auth.target(c, who, slug, need="write")
@@ -396,9 +397,9 @@ def finish_delivery(c, auth, who, rid):
         c.execute("INSERT INTO task_assets VALUES(?,?)", (task["id"], item["id"]))
     c.execute("UPDATE meeting_deliveries SET status='delivered',task_id=?,delivered_at=?,error=NULL WHERE meeting_id=?",
               (task["id"], H.now(), rid))
-    meta["sent"] = {"task": task["id"], "slug": slug, "sent_by": who.email}
+    meta["sent"] = {"task": task["id"], "bot": slug, "sent_by": who.email}
     save(c, meta)
-    return {"id": rid, "slug": slug, "task": task["id"], "pending": False}
+    return {"id": rid, "bot": slug, "task": task["id"], "pending": False}
 
 
 def write_upload(store, request, body, uploads, fn):
@@ -452,10 +453,12 @@ def blob_for(c, auth, who, bid):
     return row
 
 
-def install_media(app, store, auth, mutate, send_message, task_create, review_preflight, rule_check=None):
+def install_media(app, store, auth, mutate, send_message, task_create, review_preflight, rule_check=None,
+                  chat_checks=None, chat_write=None):
     from . import task_privacy as privacy
     blobs = Blobs(store.settings)
     app.state.blobs = blobs
+    store.blobs = blobs                 # what connections carry for the company page's logo (store.Store._take)
     from .file_metadata import Metadata
     app.state.file_metadata = Metadata(store, blobs)
 
@@ -484,7 +487,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                         kind=visuals.kind_of(item["content_type"], item["size"], visuals._head(blobs, upload["digest"])))
         if items:
             refs = {**message["refs"], "attachments": items}
-            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
+            c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(refs), message["id"]))
         return visuals.for_reader(app, store.settings, c, who, [H.message(c, message["id"])])[0]
 
     # POST /api/v2/uploads/assistant/messages uses this too (a person's own Assistant chat).
@@ -494,15 +497,21 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
 
     @app.post("/api/v2/uploads/chat/{bot}", openapi_extra=upload_contract(M.ChatCreate))
     async def chat_upload(request: Request, bot: str):
+        from . import ask_ingest
         who = request.state.identity
         human_only(who)
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         body, uploads = await form(request, M.ChatCreate, blobs, store)
-        def work(c):
-            message = send_message(c, who, M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs,
-                                                           delivery=body.delivery, defer_for=body.defer_for))
-            return {"conversation": H.conversation(c, message["conversation_id"]),
-                    "message": chat_uploads(c, who, bot, message, uploads, body.titles)}
-        return await asyncio.to_thread(write, request, body, uploads, work)
+        # The message is checked as `chat` checks one (the org rule check, then ask ingest), and written with its files.
+        sent = M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs, delivery=body.delivery,
+                               defer_for=body.defer_for)
+
+        def checked():
+            rc, ingest = chat_checks(request, who, bot, sent)
+            return ask_ingest.judged(store, ingest, lambda: write(request, body, uploads, lambda c: chat_write(
+                c, who, bot, sent, rc, ingest, uploads, body.titles)))
+        return await asyncio.to_thread(checked)
 
     @app.post("/api/v2/uploads/tasks", openapi_extra=upload_contract(M.TaskCreate))
     async def task_upload(request: Request):
@@ -538,8 +547,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         lifecycle.refuse_send(c, who, None, what="task questions")
         return person, parent
 
-    def question_unreadable(person):
-        return Problem("privacy", f"{H.actor_id(person)} cannot read this task, so they could not answer it: "
+    def question_unreadable(c, person):
+        return Problem("privacy", f"{H.actor_name(c, person)} cannot read this task, so they could not answer it: "
                        "ask someone who can read your work and its parent task", 403)
 
     def question_private(c, who, body, parent):
@@ -553,13 +562,13 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         (task_privacy.guest_for); returned for the write to make."""
         guest = privacy.guest_for(c, who, person, parent) if private else None
         if private and not privacy.question_party(c, who, person, parent, guest):
-            raise question_unreadable(person)
+            raise question_unreadable(c, person)
         try:
             auth.task_row(c, auth.identity_for_actor(c, person),
-                          {"id": "", "owner": who.actor, "requester": person if private else who.actor,
+                          {"id": "", "owner_id": who.actor, "requester_id": person if private else who.actor,
                            "private": int(private)})
         except Problem as exc:
-            raise question_unreadable(person) from exc
+            raise question_unreadable(c, person) from exc
         return guest
 
     def question_text(body, review_text=""):
@@ -599,12 +608,31 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         versions = [[e["file"], e["version"], e["digest"]] for e in review or []]
         return hashlib.sha256(json.dumps([text, versions]).encode()).hexdigest()
 
+    def question_shown_options(who, body):
+        """The options the person sees on the question as written: a review's own (file_reviews.options, from the
+        files as the write resolves them), else the bot's, else Yes / No. A review the write would refuse keeps the
+        bot's options: the write refuses it as it resolves."""
+        from . import file_reviews
+        if body.review:
+            with store.read() as c:
+                try:
+                    person, _ = question_checked(c, who, body)
+                    review, attachments = file_reviews.resolve(c, auth, blobs, who, person, body.review)
+                    return file_reviews.options(review, attachments, body.pick, body.options)
+                except Problem:
+                    pass
+        return body.options or [M.QuestionChoice(label="Yes"), M.QuestionChoice(label="No")]
+
     def question_ingest(who, body):
-        """Ask ingest's preflight of a task question (backend/ask_ingest.py), outside the write."""
+        """Ask ingest's preflight of a task question (backend/ask_ingest.py), outside the write: the question as the
+        person sees it, with the options it shows and the body the task is filed with."""
         from . import ask_ingest
         question = body.question.strip()
-        return ask_ingest.preflight(store, app.state.judge, who, body.on, body.title or question,
-                                    "\n\n".join(filter(None, (question, body.why, body.body))), kind="task_question")
+        options = question_shown_options(who, body)
+        asked = [{"question": question, "why": body.why,
+                  "options": [o.model_dump(include={"label", "description", "then", "recommended"}) for o in options]}]
+        return ask_ingest.preflight(store, app.state.judge, who, body.on, body.title or question, body.body or "",
+                                    kind="task_question", asked=asked)
 
     def question_replay(body, option_files, stored, review_seal=None):
         """What Send anyway needs to ask a held question again: the request without its option files' bytes (they are
@@ -670,7 +698,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         try:
             auth.task_row(c, auth.identity_for_actor(c, person), H.task(c, tid))
         except Problem as exc:
-            raise question_unreadable(person) from exc
+            raise question_unreadable(c, person) from exc
         picks, shown = options, asked
         if review:
             picks = file_reviews.options(review, attachments, body.pick, body.options)
@@ -705,6 +733,9 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             ask["questions"][0]["question"] = said_text
         if topic:
             ask["topic"] = topic
+        # Set here, after the request's ask is checked: a client cannot send it (the ask model forbids extra fields),
+        # so Replay can tell a task question from a comment ask (ask_ingest._judged_text).
+        ask["task_question"] = True
         if review:
             ask["review"] = {"files": review, **({"pick": True} if body.pick else {})}
             ask["attachments"] = attachments
@@ -776,7 +807,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             # which stays the bot's, rather than as a second task of its own.
             with store.read() as c:
                 own = {t["id"] for t in (H.task(c, tid) for tid in privacy.attempt_tasks(c, who.attempt_id))
-                       if t and t["owner"] == who.actor and t["status"] in H.ACTIVE_STATUSES}
+                       if t and t["owner_id"] == who.actor and t["status"] in H.ACTIVE_STATUSES}
             if len(own) == 1:
                 body = body.model_copy(update={"parent": own.pop()})
 
@@ -954,14 +985,14 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         def work(c):
             task = comment_rights(c, auth, who, tid)
             item = register(c, who, digest, size, body.name, content_type)
-            bot_actor = next((a for a in (who.actor, task["owner"], task["requester"]) if H.is_bot(a)), None)
+            bot_actor = next((a for a in (who.actor, task["owner_id"], task["requester_id"]) if H.is_bot(a)), None)
             fid, number = files.attach_task(c, who, tid, item, digest,
                                            H.actor_id(bot_actor) if bot_actor else default_bot(c, store.settings))
             c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, item["id"]))
             if body.note is not None or body.ask is not None:
                 edit_version(c, auth, who, tid, fid, number,
                              M.FileVersionEdit(note=body.note, ask=body.ask))
-            c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), tid))
+            c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), tid))
             # The task's own activity says a file was added, as it says a link was.
             preview = register(c, who, **poster)["id"] if poster else None
             file_added(c, who, tid, item, number, preview)
@@ -988,14 +1019,14 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
     def sources(request: Request):
         human_only(request.state.identity)
         with store.read() as c:
-            row = c.execute("SELECT last_success,last_error,detail_json FROM service_health "
+            row = c.execute("SELECT last_succeeded_at,last_error,detail FROM service_health "
                             "WHERE service='recording:close'").fetchone()
-            detail = json.loads(row["detail_json"] or "{}") if row else {}
+            detail = json.loads(row["detail"] or "{}") if row else {}
             if not row:
                 status = "needs_setup"
-            elif row["last_error"] and (not row["last_success"] or row["last_error"] >= row["last_success"]):
+            elif row["last_error"] and (not row["last_succeeded_at"] or row["last_error"] >= row["last_succeeded_at"]):
                 status = "error"
-            elif row["last_success"] and row["last_success"] >= H.shift(H.now(), minutes=-15):
+            elif row["last_succeeded_at"] and row["last_succeeded_at"] >= H.shift(H.now(), minutes=-15):
                 status = "syncing"
             else:
                 status = "delayed"
@@ -1004,20 +1035,20 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             for r in c.execute("SELECT source FROM meeting_importers WHERE enabled=1"):
                 if r["source"] not in IMPORTERS:
                     continue
-                health = c.execute("SELECT last_success,last_error,detail_json FROM service_health WHERE service=?",
+                health = c.execute("SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service=?",
                                    ("recording:" + r["source"],)).fetchone()
-                detail = json.loads(health["detail_json"] or "{}") if health else {}
+                detail = json.loads(health["detail"] or "{}") if health else {}
                 state = status_of(True, health, IMPORTERS[r["source"]]["interval"], H.now())
                 extra.append({"id": r["source"], "name": IMPORTERS[r["source"]]["name"],
                               "status": "needs_setup" if state == "waiting" else state,
-                              "last_success": health["last_success"] if health else None,
+                              "last_succeeded_at": health["last_succeeded_at"] if health else None,
                               "last_attempt": detail.get("last_attempt"), "last_import": detail.get("last_import"),
                               "pending": 0, "imported": detail.get("imported_total", 0),
                               "error_code": detail.get("error_code", "")})
             return {"sources": [
-                {"id": "import", "name": "Import", "status": "available", "last_success": None},
+                {"id": "import", "name": "Import", "status": "available", "last_succeeded_at": None},
                 {"id": "close", "name": "Close", "status": status,
-                 "last_success": row["last_success"] if row else None,
+                 "last_succeeded_at": row["last_succeeded_at"] if row else None,
                  "last_attempt": detail.get("last_attempt"), "last_import": detail.get("last_import"),
                  "pending": detail.get("pending", 0),
                  "imported": detail.get("imported", 0), "error_code": detail.get("error_code", "")},
@@ -1031,7 +1062,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             raise Problem("review", "review is pending, live or dismissed", 422)
         with store.read() as c:
             rows = []
-            for r in c.execute("SELECT id FROM meetings ORDER BY created DESC"):
+            for r in c.execute("SELECT id FROM meetings ORDER BY created_at DESC"):
                 try:
                     item = view(c, who, r[0])
                 except Problem:
@@ -1052,7 +1083,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
     def versions(request: Request, rid: str):
         with store.read() as c:
             authorized(c, request.state.identity, rid)
-            return {"versions": [{**dict(row), "metadata": json.loads(row["metadata_json"])}
+            return {"versions": [{**dict(row), "metadata": json.loads(row["metadata"])}
                                  for row in c.execute("SELECT * FROM meeting_versions WHERE meeting_id=? ORDER BY id DESC", (rid,))]}
 
     @app.post("/api/notes")
@@ -1063,7 +1094,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         def work(c):
             meta = new_note(c, request.state.identity, body, uploads)
             if request.url.path == "/api/send":
-                return deliver(c, auth, request.state.identity, meta["id"], Send(slug=body.slug), [])
+                return deliver(c, auth, request.state.identity, meta["id"], Send(bot_id=body.bot_id), [])
             return view(c, request.state.identity, meta["id"])
         return await asyncio.to_thread(write, request, body, uploads, work)
 

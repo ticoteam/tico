@@ -232,7 +232,11 @@ impl Tico {
     }
     /// Shares what is new, then reads the meeting back (and notes if it was paused or resumed).
     pub fn sync_live(&self, store: &Store, id: &str) -> Result<Value> {
-        self.push_live(store, id)?;
+        let _guard = store.live_lock();
+        self.sync_live_inner(store, id)
+    }
+    fn sync_live_inner(&self, store: &Store, id: &str) -> Result<Value> {
+        self.push_live_inner(store, id)?;
         let context = store.context(id)?;
         let view = self.call(
             &format!("/api/v2/live-meetings/{}", context.live_id),
@@ -245,6 +249,10 @@ impl Tico {
     /// Shares streamed turns and finished chunks as new transcript text while the meeting is
     /// live, and corrections of streamed turns while it is live or paused.
     pub fn push_live(&self, store: &Store, id: &str) -> Result<()> {
+        let _guard = store.live_lock();
+        self.push_live_inner(store, id)
+    }
+    fn push_live_inner(&self, store: &Store, id: &str) -> Result<()> {
         let record = store.get(id)?;
         let context = store.context(id)?;
         ensure!(
@@ -252,13 +260,27 @@ impl Tico {
             "Connect this meeting to Tico first"
         );
         let prefix = format!("/api/v2/live-meetings/{}", context.live_id);
+        if context.live_discarded {
+            return Ok(());
+        }
+        let record = shareable(&record, &context.paused_windows);
         let live = context.live_state == "live";
         if !live && context.live_state != "paused" {
             return Ok(());
         }
-        let streamed = store.live_words(id)?;
+        let mut streamed = store.live_words(id)?;
+        for words in streamed.values_mut() {
+            words.retain(|word| !excluded(&context.paused_windows, word.start_ms, word.end_ms));
+        }
         let mut db = store.db()?;
         let transaction = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        scrub_pending(
+            &transaction,
+            id,
+            &self.destination.id,
+            &context.paused_windows,
+            !context.paused_windows.is_empty(),
+        )?;
         let mut queue = Queue::read(&transaction, id, &self.destination.id)?;
         if live {
             queue.streamed(&transaction, &record, &streamed)?;
@@ -346,7 +368,91 @@ impl Tico {
         }
         Ok(())
     }
+    /// Pause is committed locally before touching the network. A failed or uncertain request
+    /// leaves sharing paused until the person explicitly resumes it.
+    pub fn control_live(&self, store: &Store, id: &str, action: &str, at_ms: u64) -> Result<()> {
+        ensure!(
+            ["pause", "resume", "discard"].contains(&action),
+            "Unknown live control"
+        );
+        let _guard = store.live_lock();
+        let context = store.context(id)?;
+        ensure!(
+            context.live_destination == self.destination.id && !context.live_id.is_empty(),
+            "Connect this meeting first"
+        );
+        ensure!(
+            context.live_state != "ended" || action == "discard",
+            "The meeting has ended"
+        );
+        ensure!(
+            !context.live_discarded || action == "discard",
+            "This meeting was discarded"
+        );
+        if action == "discard" {
+            let record = store.get(id)?;
+            ensure!(
+                record.state != "recording",
+                "Stop recording before discarding"
+            );
+            ensure!(
+                record.deliveries.is_empty(),
+                "This meeting was already filed"
+            );
+            store.update_context(id, |c| {
+                c.live_discarded = true;
+                Ok(())
+            })?;
+        } else if action == "pause" {
+            store.update_context(id, |c| {
+                pause_window(c, at_ms);
+                c.locally_paused = true;
+                Ok(())
+            })?;
+        }
+        if action == "pause" {
+            scrub_pause(store, id)?;
+        }
+        let reply = self.call(
+            &format!("/api/v2/live-meetings/{}/control", context.live_id),
+            Some(&json!({"action": if action == "discard" { "end" } else { action }})),
+            &format!("recorder:{id}:control:{}", uuid::Uuid::new_v4()),
+        )?;
+        let state = if action == "discard" {
+            "ended"
+        } else if action == "pause" {
+            "paused"
+        } else {
+            "live"
+        };
+        ensure!(
+            reply["state"] == state,
+            "Tico did not confirm the meeting control"
+        );
+        store.update_context(id, |c| {
+            if action == "resume" {
+                c.locally_paused = false;
+                if let Some((start, end)) =
+                    c.paused_windows.last_mut().filter(|(_, end)| end.is_none())
+                {
+                    *end = Some(at_ms.max(*start));
+                }
+            }
+            c.live_state = state.into();
+            Ok(())
+        })
+    }
     pub fn finish_live(&self, store: &Store, id: &str) -> Result<()> {
+        // Keep controls serialized through the final sync and end request.
+        let _guard = store.live_lock();
+        ensure!(
+            store.context(id)?.live_state != "paused",
+            "Resume sharing before Finish or Send"
+        );
+        ensure!(
+            !store.context(id)?.live_discarded,
+            "This meeting was discarded; its recording stays local"
+        );
         let record = store.get(id)?;
         ensure!(record.state != "recording", "Stop recording first");
         ensure!(
@@ -376,11 +482,15 @@ impl Tico {
         }) {
             return Ok(());
         }
-        // Edits for this meeting are refused from here until Send ends or fails, so the final
-        // pass below carries every edit that will be filed.
+        // Fence edits until the final sync and filing finish, while controls stay serialized.
         let _fence = fence_send(id);
-        self.sync_live(store, id)?;
-        // An edit reaches Tico only while the meeting is live or paused; one still unsent would be missing from the filed transcript.
+        self.sync_live_inner(store, id)?;
+        let context = store.context(id)?;
+        ensure!(
+            context.live_state != "paused",
+            "Resume sharing before Finish or Send"
+        );
+        // An unsent edit cannot appear in the filed transcript after the meeting ends.
         let unsent = pending_edits(&*store.db()?, id, &self.destination.id)?;
         ensure!(
             unsent == 0,
@@ -427,19 +537,263 @@ impl Tico {
 
 /// Saves the meeting's state as Tico reports it, so new text stops while it is paused and
 /// starts again once it is resumed there. An ended meeting stays ended.
-fn note_state(store: &Store, id: &str, view: &Value) -> Result<()> {
+pub(crate) fn note_state(store: &Store, id: &str, view: &Value) -> Result<()> {
     let state = match view["state"].as_str() {
-        Some(state @ ("live" | "paused")) => state,
+        Some(state @ ("live" | "paused" | "ended")) => state,
         _ => return Ok(()),
     };
     let current = store.context(id)?.live_state;
     if current == state || current == "ended" {
         return Ok(());
     }
+    let at_ms = if state == "paused" {
+        // The server supplies no capture timestamp for a remote pause. Keep the uncertain
+        // interval local, starting at the last acknowledged capture start (or earlier pending
+        // turn). This also covers words not transcribed when the pause was discovered.
+        let db = store.db()?;
+        let mut query = db.prepare("SELECT acknowledged,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=?")?;
+        let context = store.context(id)?;
+        let mut confirmed = 0;
+        let mut pending = u64::MAX;
+        for row in query.query_map([id, &context.live_destination], |r| {
+            Ok((r.get::<_, bool>(0)?, r.get::<_, String>(1)?))
+        })? {
+            let (ack, payload) = row?;
+            let start = serde_json::from_str::<Value>(&payload)?["start_ms"]
+                .as_u64()
+                .unwrap_or(0);
+            if ack {
+                confirmed = confirmed.max(start);
+            } else {
+                pending = pending.min(start);
+            }
+        }
+        confirmed.min(pending)
+    } else {
+        capture_time(&store.get(id)?)
+    };
     store.update_context(id, |context| {
+        if context.live_discarded || (context.locally_paused && state == "live") {
+            return Ok(());
+        }
+        if state == "paused" {
+            pause_window(context, at_ms);
+        }
+        if state == "live" {
+            if let Some((start, end)) = context
+                .paused_windows
+                .last_mut()
+                .filter(|(_, end)| end.is_none())
+            {
+                *end = Some(at_ms.max(*start));
+            }
+        }
         context.live_state = state.into();
         Ok(())
+    })?;
+    if state == "paused" {
+        scrub_pause(store, id)?;
+    }
+    Ok(())
+}
+
+/// Keep sequence numbers stable: overlapping pending turns become removal markers rather than
+/// holes. The full source stays local. Corrections already queued before discovering a pause
+/// are invalidated too; the next pass derives fresh corrections from the filtered recording.
+fn scrub_pending(
+    tx: &rusqlite::Transaction,
+    id: &str,
+    destination: &str,
+    windows: &[(u64, Option<u64>)],
+    corrections: bool,
+) -> Result<()> {
+    let mut query = tx.prepare("SELECT seq,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? AND acknowledged=0")?;
+    let rows = query
+        .query_map([id, destination], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    for (seq, text) in rows {
+        let mut payload: Value = serde_json::from_str(&text)?;
+        if excluded(
+            windows,
+            payload["start_ms"].as_u64().unwrap_or(0),
+            payload["end_ms"].as_u64().unwrap_or(u64::MAX),
+        ) {
+            payload["text"] = json!("[removed]");
+            tx.execute("UPDATE live_outbox SET payload_json=? WHERE recording_id=? AND destination_id=? AND seq=?", rusqlite::params![payload.to_string(), id, destination, seq])?;
+        }
+    }
+    if corrections {
+        let mut query = tx.prepare("SELECT c.rowid,c.payload_json,EXISTS(SELECT 1 FROM live_edits e WHERE e.recording_id=c.recording_id AND e.destination_id=c.destination_id AND e.seq=c.seq) FROM live_corrections c WHERE c.recording_id=? AND c.destination_id=? AND c.state=0")?;
+        let rows = query
+            .query_map([id, destination], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, bool>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for (rowid, text, edited) in rows {
+            let mut payload: Value = serde_json::from_str(&text)?;
+            // Explicit edits of public lines cannot be re-derived from audio. Preserve them;
+            // edits of overlapping lines still obey the pause privacy boundary.
+            if edited
+                && !excluded(
+                    windows,
+                    payload["start_ms"].as_u64().unwrap_or(0),
+                    payload["end_ms"].as_u64().unwrap_or(u64::MAX),
+                )
+            {
+                continue;
+            }
+            payload["text"] = json!("[removed]");
+            tx.execute(
+                "UPDATE live_corrections SET payload_json=? WHERE rowid=?",
+                rusqlite::params![payload.to_string(), rowid],
+            )?;
+        }
+    }
+    Ok(())
+}
+fn scrub_pause(store: &Store, id: &str) -> Result<()> {
+    let context = store.context(id)?;
+    let mut db = store.db()?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    scrub_pending(
+        &tx,
+        id,
+        &context.live_destination,
+        &context.paused_windows,
+        true,
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Capture timestamps, rather than transcription arrival time, define off-the-record speech.
+pub fn capture_time(record: &Recording) -> u64 {
+    let saved = record.chunks.iter().map(|c| c.end_ms).max().unwrap_or(0);
+    if record.state != "recording" {
+        return saved;
+    }
+    chrono::DateTime::parse_from_rfc3339(&record.started_at)
+        .ok()
+        .map(|start| {
+            (chrono::Utc::now() - start.with_timezone(&chrono::Utc))
+                .num_milliseconds()
+                .max(0) as u64
+        })
+        .unwrap_or(saved)
+        .max(saved)
+}
+fn pause_window(c: &mut crate::workspace::Context, at: u64) {
+    if c.paused_windows.last().is_none_or(|(_, end)| end.is_some()) {
+        c.paused_windows.push((at, None));
+    }
+    c.live_state = "paused".into();
+}
+fn excluded(windows: &[(u64, Option<u64>)], start: u64, end: u64) -> bool {
+    windows.iter().any(|(from, to)| {
+        start < to.unwrap_or(u64::MAX) && end.max(start.saturating_add(1)) > *from
     })
+}
+/// Make a network-only copy. Without word timings, omit an overlapping chunk in full: guessing
+/// a partial text boundary could disclose private speech. The stored recording is never edited.
+pub(crate) fn shareable(record: &Recording, windows: &[(u64, Option<u64>)]) -> Recording {
+    let mut shared = record.clone();
+    for chunk in &mut shared.chunks {
+        if chunk.words.is_empty() {
+            if excluded(windows, chunk.start_ms, chunk.end_ms) {
+                chunk.text.clear();
+            }
+        } else {
+            chunk
+                .words
+                .retain(|w| !excluded(windows, w.start_ms, w.end_ms));
+            chunk.text = chunk
+                .words
+                .iter()
+                .map(|w| w.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+    }
+    shared
+}
+/// Every task export shares the meeting's privacy and discard fences.
+pub fn item_send_blocked(context: &crate::workspace::Context) -> Option<&'static str> {
+    if context.live_discarded {
+        Some("This meeting was discarded; its recording stays local")
+    } else if context.live_state == "paused" || context.locally_paused {
+        Some("Resume sharing before sending an action item")
+    } else {
+        None
+    }
+}
+
+/// Exact text cannot reliably identify a reworded or number-normalized quote. Require
+/// review of kept titles and quotes when the recording contains paused speech.
+pub fn paused_review_required(context: &crate::workspace::Context) -> bool {
+    !context.paused_windows.is_empty()
+        && context.items.iter().any(|i| {
+            i.task_id.is_empty() && (!i.quote.trim().is_empty() || !i.title.trim().is_empty())
+        })
+}
+
+/// Kept draft items can disclose paused speech even though the transcript cannot.
+pub fn paused_quotes(record: &Recording, context: &crate::workspace::Context) -> bool {
+    let tokens = |s: &str| {
+        s.split_whitespace()
+            .map(|w| {
+                w.chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .flat_map(char::to_lowercase)
+                    .collect::<String>()
+            })
+            .filter(|w| !w.is_empty())
+            .collect::<Vec<_>>()
+    };
+    context
+        .items
+        .iter()
+        .filter(|i| i.task_id.is_empty() && !i.quote.trim().is_empty())
+        .any(|item| {
+            if excluded(
+                &context.paused_windows,
+                item.at_ms,
+                item.at_ms.saturating_add(1),
+            ) {
+                return true;
+            }
+            let quote = tokens(&item.quote);
+            if quote.is_empty() {
+                return false;
+            }
+            // Match the whole quote, retaining a pause flag for every matched token. A quote
+            // can start in public speech and continue across a pause or a chunk boundary.
+            ["me", "them"].iter().any(|channel| {
+                let mut text = Vec::new();
+                for chunk in record.chunks.iter().filter(|c| c.channel == *channel) {
+                    if chunk.words.is_empty() {
+                        let paused =
+                            excluded(&context.paused_windows, chunk.start_ms, chunk.end_ms);
+                        text.extend(tokens(&chunk.text).into_iter().map(|t| (t, paused)));
+                    } else {
+                        for word in &chunk.words {
+                            let paused =
+                                excluded(&context.paused_windows, word.start_ms, word.end_ms);
+                            text.extend(tokens(&word.text).into_iter().map(|t| (t, paused)));
+                        }
+                    }
+                }
+                text.windows(quote.len()).any(|span| {
+                    span.iter().map(|(t, _)| t).eq(quote.iter())
+                        && span.iter().any(|(_, paused)| *paused)
+                })
+            })
+        })
 }
 
 /// A pause this long ends a streamed turn, so the meeting sees who spoke when.
@@ -943,6 +1297,71 @@ impl<'a> Queue<'a> {
     }
 }
 
+#[cfg(test)]
+mod pause_tests {
+    use super::*;
+
+    #[test]
+    fn pause_boundaries_filter_both_channels_and_untimed_chunks_without_changing_local_text() {
+        let local: Recording = serde_json::from_value(json!({
+            "id":"synthetic", "title":"Pause boundaries", "started_at":"", "state":"stopped",
+            "microphone":"", "meeting_audio":true, "warning":"", "deliveries":[],
+            "chunks":[
+                {"id":"me", "recording_id":"synthetic", "channel":"me", "speaker":"Me", "start_ms":0, "end_ms":12000,
+                 "file":"", "status":"done", "signal":{"samples":0,"nonzero":0,"peak":0.,"rms":0.,"duration_ms":0,"sample_rate":16000},
+                 "text":"before crossing paused resumed", "error":"", "attempts":1,"provider":{},
+                 "words":[
+                     {"start_ms":1000,"end_ms":2000,"text":"before"},
+                     {"start_ms":4990,"end_ms":5010,"text":"crossing"},
+                     {"start_ms":6000,"end_ms":6100,"text":"paused"},
+                     {"start_ms":10000,"end_ms":10100,"text":"resumed"}]},
+                {"id":"them", "recording_id":"synthetic", "channel":"them", "speaker":"Meeting audio", "start_ms":4000, "end_ms":11000,
+                 "file":"", "status":"done", "signal":{"samples":0,"nonzero":0,"peak":0.,"rms":0.,"duration_ms":0,"sample_rate":16000},
+                 "text":"untimed private speech", "error":"", "attempts":1,"provider":{}}
+            ]
+        })).unwrap();
+        let shared = shareable(&local, &[(5000, Some(10000))]);
+        assert_eq!(shared.chunks[0].text, "before resumed");
+        assert!(shared.chunks[1].text.is_empty());
+        assert_eq!(local.chunks[0].words.len(), 4);
+        assert_eq!(local.chunks[1].text, "untimed private speech");
+        let open = shareable(&local, &[(5000, None)]);
+        assert_eq!(open.chunks[0].text, "before");
+    }
+    #[test]
+    fn pause_scrub_preserves_explicit_public_edits_but_not_overlapping_or_automatic_corrections() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = store.create("Synthetic pause and edits").unwrap();
+        let mut db = store.db().unwrap();
+        let tx = db.transaction().unwrap();
+        for (seq, start, edited) in [(1, 1000, true), (2, 6000, true), (3, 1000, false)] {
+            let payload = json!({"revision":2,"start_ms":start,"end_ms":start+100,"text":"Explicit public edit"});
+            tx.execute("INSERT INTO live_corrections(recording_id,destination_id,seq,revision,payload_json) VALUES(?,'synthetic',?,2,?)", rusqlite::params![record.id,seq,payload.to_string()]).unwrap();
+            if edited {
+                tx.execute("INSERT INTO live_edits(recording_id,destination_id,seq) VALUES(?,'synthetic',?)", rusqlite::params![record.id,seq]).unwrap();
+            }
+        }
+        scrub_pending(&tx, &record.id, "synthetic", &[(5000, Some(10000))], true).unwrap();
+        for (seq, expected) in [
+            (1, "Explicit public edit"),
+            (2, "[removed]"),
+            (3, "[removed]"),
+        ] {
+            let text: String = tx
+                .query_row(
+                    "SELECT payload_json FROM live_corrections WHERE recording_id=? AND seq=?",
+                    rusqlite::params![record.id, seq],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&text).unwrap()["text"],
+                expected
+            );
+        }
+    }
+}
 /// Meetings whose Send is under way. Edits to them are refused, so the final pass sends every edit
 /// Tico will file.
 static SENDING: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());

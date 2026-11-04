@@ -13,14 +13,18 @@ const CLOUD_STATES = {none: 'Not started yet', starting: 'Starting', running: 'R
   stopped: 'Stopped', deleted: 'Deleted', failed: 'Failed'};
 // The Computer select's values for the two cloud machines; any other value is a computer's id.
 const CLOUD_CHOICES = {'cloud-shared': 'shared', 'cloud-own': 'own'};
+// The names the Computer select shows for them; settings-bots.js search matches a bot's by the same words.
+const CLOUD_CHOICE_LABELS = {'cloud-shared': 'Shared cloud machine', 'cloud-own': 'Own cloud machine'};
 let CLOUD_SIZES = null;
 const cloudSizeName = name => name ? name[0].toUpperCase() + name.slice(1) : '';
 const cloudMachineOn = e => e?.cloud_machine?.mode === 'cloud';
 const cloudMachineShared = e => cloudMachineOn(e) && e.cloud_machine.placement !== 'own';
 const cloudMachinePick = value => CLOUD_CHOICES[value] || null;
 const cloudMachineValue = e => cloudMachineOn(e) ? (cloudMachineShared(e) ? 'cloud-shared' : 'cloud-own') : '';
+// The name of a bot's cloud machine as the Computer select shows it; '' for a bot not on one.
+const cloudMachineLabel = e => CLOUD_CHOICE_LABELS[cloudMachineValue(e)] || '';
 function cloudMachineOptionsHTML(current) {
-  return Object.entries({'cloud-shared': 'Shared cloud machine', 'cloud-own': 'Own cloud machine'}).map(([value, label]) =>
+  return Object.entries(CLOUD_CHOICE_LABELS).map(([value, label]) =>
     `<option value="${value}" ${value === current ? 'selected' : ''}>${label}</option>`).join('');
 }
 async function cloudMachineSizes() {
@@ -53,19 +57,25 @@ function cloudMachineFacts(machine) {
   if (!m) return '';
   return m.shared ? `Cloud machine · ${cloudSizeName(m.size)}` : `Cloud machine · ${empName(m.bot)} · ${cloudSizeName(m.size)}`;
 }
-// The bot editor's row under Computer: its machine's size and Always on, both held until Save bot (`stage`). The
-// shared machine's are the company's: only owners and admins change them.
+// The bot editor's rows under Computer: its machine's size, Pause after and Always on, all held until Save bot
+// (`stage`). The shared machine's are the company's: only owners and admins change them. Always on never pauses, so
+// Pause after is off while it is on.
 function cloudMachineRowHTML(e) {
   if (!cloudMachineOn(e)) return '';
   const m = e.cloud_machine, scope = cloudMachineShared(e) ? 'shared' : 'own';
   const may = (scope === 'shared' ? settingsIsAdmin() : settingsCanManageBot(e)) ? '' : 'disabled';
   const names = CLOUD_SIZES?.length ? CLOUD_SIZES : CLOUD_SIZE_NAMES.map(name => ({name}));
   const what = scope === 'shared' ? 'the shared cloud machine' : `${esc(e.display_name)}'s cloud machine`;
+  const pauseOff = (may || m.always_on) ? 'disabled' : '';
   return `<div class="sb-row" data-bot-cloud-row><span>Size</span><div class="rel-line">
-      <select class="settings-inline-select" data-bot-cloud-size="${esc(e.name)}" data-cloud-scope="${scope}" data-current="${esc(m.size)}" aria-label="Size of ${what}" ${may}>
+      <select class="settings-inline-select" data-bot-cloud-size="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${esc(m.size)}" aria-label="Size of ${what}" ${may}>
         ${names.map(size => `<option value="${esc(size.name)}" ${size.name === m.size ? 'selected' : ''}>${esc(cloudSizeLabel(size))}</option>`).join('')}
       </select>
-      <label class="bot-editor-check"><input type="checkbox" data-bot-cloud-always="${esc(e.name)}" data-cloud-scope="${scope}" data-current="${m.always_on}" ${m.always_on ? 'checked' : ''} ${may}> Always on</label>
+      <label class="bot-editor-check"><input type="checkbox" data-bot-cloud-always="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${m.always_on}" ${m.always_on ? 'checked' : ''} ${may}> Always on</label>
+    </div><span></span></div>
+    <div class="sb-row"><span>Pause after</span><div class="rel-line">
+      <input type="number" min="5" max="1440" step="1" class="settings-inline-select" data-bot-cloud-pause="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${m.pause_minutes}" value="${m.pause_minutes}" aria-label="Pause after, in minutes, for ${what}" ${pauseOff}>
+      <span class="muted">min</span>
     </div><span></span></div>
     <div class="sb-sub" data-bot-cloud-status>${esc(cloudMachineStatus(m))}</div>`;
 }

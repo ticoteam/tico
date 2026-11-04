@@ -271,6 +271,37 @@
    "default": false
   },
   {
+   "slug": "builder",
+   "template": "builder",
+   "name": "Builder",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Takes a Dev ticket that Head of Engineering has put on its step, builds the change on a branch with a test that proves it, opens the pull request and carries the ticket through review and QA fixes. It merges only when the team's merge rules allow it and the checks pass at the head.",
+   "when": "Offer when GitHub is connected and the team turns Dev tickets into code.",
+   "tags": [
+    "saas",
+    "github",
+    "code",
+    "developer-tools"
+   ],
+   "pains": [
+    "bugs and small changes wait in a queue before anyone starts on them",
+    "a fix goes back and forth between the author and the reviewers for days",
+    "a change is merged without a test that would have caught the bug",
+    "nobody can say which ticket a pull request came from or what it was meant to do"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_slack"
+   ],
+   "first_routine": "Dev ticket build · When a Dev ticket reaches In Progress",
+   "tools": [
+    "github"
+   ],
+   "default": false
+  },
+  {
    "slug": "chief-of-staff",
    "template": "chief-of-staff",
    "name": "Chief of Staff",
@@ -491,7 +522,7 @@
    "department": "core",
    "lead": false,
    "core": true,
-   "summary": "Every human's private Assistant: finds meetings, docs, files and tasks, makes tasks, hands work to the right bot and asks BotOps for new ones, always as that human and never more. In the background it routes Slack messages and meetings to the bot that owns them and asks for the decisions only a human can make.",
+   "summary": "Every human's private Assistant: does what that human asks, as them and never more, and reports what it did with the way to undo it. Finds meetings, docs, files and tasks, makes tasks, hands work to the right bot, and clears pile-ups at their source. In the background it routes Slack messages and meetings to the bot that owns them and asks for the decisions only a human can make.",
    "when": "Built in: every human gets a private Assistant that finds things and does them for them, and it routes work nobody was named for (Slack, meetings).",
    "tags": [],
    "pains": [],
@@ -1153,7 +1184,7 @@
    "department": "core",
    "lead": false,
    "core": true,
-   "summary": "Owns the strategy, the shape of the team and the goals. It proposes the Strategy page as claims the owner keeps or strikes, from the market pages and what the team already does; the owner writes and publishes it, never the bot. When a bet's wrong-if trips, it puts one card in front of the owner: retire, rewrite or keep. It is the steward of every KPI: it computes each one on its cadence, posts the reading with its evidence, and says when data is stale or missing instead of guessing. Goals link to the strategy's bets and get their colour from their KPIs, pace and deadline; a colour a human set stays theirs. When a KPI slips it asks the goal's owner what is happening and records the answer. It flags vague or duplicate goals; measures are optional, and every change to a definition or a target is a proposal the owner confirms.",
+   "summary": "Owns the strategy, the team's shape and the goals. Proposes the Strategy page as claims the owner keeps or strikes; the owner writes and publishes it, never the bot. When a bet's wrong-if trips, puts one card to the owner: retire, rewrite or keep. Computes each KPI on its cadence and posts the reading with its evidence; says when data is stale or missing instead of guessing. Sets each goal's colour from its KPIs, pace and deadline, unless a human set it. Asks a goal's owner what is happening when one slips, and flags vague or duplicate goals; measures are optional. Every change to a target or definition is a proposal the owner confirms.",
    "when": "Built in: proposes the team's strategy to the owner and keeps its bets honest against the market and the results, keeps every KPI up to date with evidence, sets goals' colours from them, asks a goal's owner what is happening when one slips, and proposes clearer goals and measures.",
    "tags": [],
    "pains": [],

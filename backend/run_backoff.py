@@ -45,7 +45,7 @@ ERROR_CHARS = 300
 
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS run_backoff(bot TEXT PRIMARY KEY, fails INTEGER NOT NULL DEFAULT 0, wait_until TEXT, "
-    "error_class TEXT, error TEXT, last_failed TEXT, held_at TEXT, task_id TEXT, released_at TEXT, released_by TEXT)",)
+    "error_class TEXT, error TEXT, last_failed_at TEXT, held_at TEXT, task_id TEXT, released_at TEXT, released_by TEXT)",)
 
 # A provider's limit named anywhere in an error: "You've hit your weekly limit", "usage limit reached", "rate limit".
 LIMIT_RE = re.compile(r"hit your (?:[a-z-]+ ){0,2}limit|\b(?:weekly|usage|session|monthly|spend(?:ing)?|rate|\d+-hour) "
@@ -112,8 +112,8 @@ def classify(c, aid, body, now=None):
     candidates = texts(c, aid, body)
     if body.fallback:
         rows = []
-        for event in c.execute("SELECT kind,payload_json FROM attempt_events WHERE attempt_id=? ORDER BY seq", (aid,)):
-            payload = json.loads(event['payload_json'])
+        for event in c.execute("SELECT kind,payload FROM attempt_events WHERE attempt_id=? ORDER BY seq", (aid,)):
+            payload = json.loads(event['payload'])
             text = payload.get('error') or payload.get('text') or ''
             if event['kind'] == 'diagnostic' and login_holds.HOP_RE.search(text):
                 rows = []
@@ -131,14 +131,14 @@ def classify(c, aid, body, now=None):
                 if reset:
                     body.limit_resets_at = login_holds._iso(reset)
                     break
-        for event in c.execute("SELECT id,payload_json FROM attempt_events WHERE attempt_id=? AND kind='error'",
+        for event in c.execute("SELECT id,payload FROM attempt_events WHERE attempt_id=? AND kind='error'",
                                (aid,)).fetchall():
             try:
-                payload = json.loads(event["payload_json"])
+                payload = json.loads(event["payload"])
             except ValueError:
                 continue
             if isinstance(payload, dict) and not payload.get("limit") and is_limit(payload.get("error"), now):
-                c.execute("UPDATE attempt_events SET payload_json=? WHERE id=?",
+                c.execute("UPDATE attempt_events SET payload=? WHERE id=?",
                           (json.dumps({**payload, "limit": True}), event["id"]))
         return USAGE_LIMIT
     if any(TOO_LONG_RE.search(t) for t in texts(c, aid, body)):
@@ -163,15 +163,15 @@ def too_long(c, settings, row, conversation_id, aid):
     """A run failed because its session's prompt was too large to send. A thread's first such failure marks it, and its
     next claim carries `compact_first` once (`take_compact`): the runner compacts the session before it runs. A run
     that already carried it and failed the same way again has a session compaction cannot save, so it starts anew."""
-    bot = row["bot"]
+    bot = row["bot_id"]
     if c.execute("SELECT 1 FROM compact_first WHERE bot=? AND conversation_id=? AND taken_by=?",
                  (bot, conversation_id, aid)).fetchone():
         c.execute("DELETE FROM compact_first WHERE bot=? AND conversation_id=?", (bot, conversation_id))
         turn = c.execute("SELECT task_id FROM turns WHERE id=?", (aid,)).fetchone()
         fresh_session(c, settings, bot, conversation_id, aid, turn[0] if turn else None)
         return
-    c.execute("INSERT INTO compact_first(bot,conversation_id,marked,taken_by) VALUES(?,?,?,NULL) "
-              "ON CONFLICT(bot,conversation_id) DO UPDATE SET marked=excluded.marked,taken_by=NULL",
+    c.execute("INSERT INTO compact_first(bot,conversation_id,marked_at,taken_by) VALUES(?,?,?,NULL) "
+              "ON CONFLICT(bot,conversation_id) DO UPDATE SET marked_at=excluded.marked_at,taken_by=NULL",
               (bot, conversation_id, H.now()))
     H.event(c, H.KEEPER, "session.compact_first", conversation_id, {"bot": bot, "attempt": aid})
 
@@ -210,10 +210,21 @@ def wait_for(fails):
     return min(FIRST_WAIT * 2 ** max(fails - 1, 0), MAX_WAIT)
 
 
-def refusal(c, bot):
+def get_many(c, bots):
+    """{bot: its row as get returns it} for every bot in `bots`, read in set queries (the claim checks each one)."""
+    from .hubdb import chunks
+    rows = {}
+    for part in chunks(bots):
+        for row in c.execute(f"SELECT * FROM run_backoff WHERE bot IN ({','.join('?' * len(part))})", part):
+            rows[row["bot"]] = dict(row)
+    return {bot: rows.get(bot, {}) for bot in bots}
+
+
+def refusal(c, bot, state=None):
     """Why a claim passes over all of the bot's work for its failed runs: "run_hold" while it is held (until its next
-    try is due), "backoff" until its wait ends, else None. Read only, as every refusal (execution.claim_refusal)."""
-    row = get(c, bot)
+    try is due), "backoff" until its wait ends, else None. Read only, as every refusal (execution.claim_refusal).
+    `state`: the bot's row as get returns it, when the caller has read it already."""
+    row = get(c, bot) if state is None else state
     if not row:
         return None
     if row["held_at"]:
@@ -236,7 +247,7 @@ def probe_due(c, bot, state, now=None):
     """Whether a held bot may take a try now: its time has come and none of its runs is out."""
     at = probe_at(state)
     return bool(at and at <= (now or H.now()) and not c.execute(
-        "SELECT 1 FROM attempts WHERE bot=? AND state IN ('leased','running') LIMIT 1", (bot,)).fetchone())
+        "SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1", (bot,)).fetchone())
 
 
 def probe(c, bot):
@@ -255,13 +266,13 @@ def probe(c, bot):
 
 
 def _since_failure(c, bot):
-    return get(c, bot).get("last_failed") or ""
+    return get(c, bot).get("last_failed_at") or ""
 
 
 def person_waiting(c, bot):
     """Whether a person wrote to the bot since its last failed run: the job a back-off wait lets through."""
-    return bool(c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? AND j.state='queued' "
-                          "AND m.from_actor LIKE 'human:%' AND m.created>? LIMIT 1", (bot, _since_failure(c, bot))).fetchone())
+    return bool(c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? AND j.state='queued' "
+                          f"AND {H.person_sent_sql()} AND m.created_at>? LIMIT 1", (bot, _since_failure(c, bot))).fetchone())
 
 
 def job_refusal(c, bot, message):
@@ -269,7 +280,7 @@ def job_refusal(c, bot, message):
     (execution.job_refusal)."""
     if refusal(c, bot) != "backoff":
         return None
-    fresh = str(message.get("from_actor") or "").startswith("human:") and str(message.get("created") or "") > _since_failure(c, bot)
+    fresh = H.person_sent(message) and str(message.get("created_at") or "") > _since_failure(c, bot)
     return None if fresh else "backoff"
 
 
@@ -289,7 +300,7 @@ def reset(c, bot):
 
 def fast(row, now):
     """Whether the run failed within FAST seconds of starting (its claim, for a run that never reported a start)."""
-    began, at = H.parse_ts(row["started"] or row["created"]), H.parse_ts(now)
+    began, at = H.parse_ts(row["started_at"] or row["created_at"]), H.parse_ts(now)
     return began is not None and at is not None and (at - began).total_seconds() < FAST
 
 
@@ -299,7 +310,7 @@ def failed(c, settings, row, body, aid, now=None):
     now = now or H.now()
     if not fast(row, now):
         return None
-    bot = row["bot"]
+    bot = row["bot_id"]
     text = (texts(c, aid, body) or [""])[0]
     kind = error_class(text)
     error = " ".join(text.split())[:ERROR_CHARS]
@@ -309,13 +320,13 @@ def failed(c, settings, row, body, aid, now=None):
     hold_now = fails >= HOLD_AFTER and not held
     if fails < HOLD_AFTER:
         wait = H.shift(now, seconds=wait_for(fails))
-    elif held and str(row["created"]) >= str(state["held_at"]):
+    elif held and str(row["created_at"]) >= str(state["held_at"]):
         wait = H.shift(now, seconds=probe_wait(fails))      # a try failed: the next one comes later
     else:
         wait = state.get("wait_until")                      # held now (hold sets it), or a run out before the hold
-    c.execute("INSERT INTO run_backoff(bot,fails,wait_until,error_class,error,last_failed) VALUES(?,?,?,?,?,?) "
+    c.execute("INSERT INTO run_backoff(bot,fails,wait_until,error_class,error,last_failed_at) VALUES(?,?,?,?,?,?) "
               "ON CONFLICT(bot) DO UPDATE SET fails=excluded.fails,wait_until=excluded.wait_until,"
-              "error_class=excluded.error_class,error=excluded.error,last_failed=excluded.last_failed",
+              "error_class=excluded.error_class,error=excluded.error,last_failed_at=excluded.last_failed_at",
               (bot, fails, wait, kind, error, now))
     if hold_now:
         hold(c, settings, bot, fails, kind, error, now)

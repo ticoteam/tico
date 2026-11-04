@@ -31,14 +31,17 @@ it, and you close the task. Sign in to each model subscription you chose (a Chat
 API key. One signed-in model is enough for the first result; Health lists the others until you sign in. You need no GitHub account or outside Tool. [Demo mode](docs/demo.md) does not run bots.
 
 1. In **Finish setup**, choose an AI provider, name your team and pick **Marketing** with **Content Marketer** (`content`) checked.
-   Assistant, BotOps, Librarian and Strategy Bot are the four built-in bots.
+   With no provider yet, write one bet and one line under **What we won't do**; any short sentence works.
+   Seven built-in bots are created: Assistant, BotOps, Librarian, Strategy Bot, Task Manager, Bookkeeper and Counsel.
 2. Use **Add computer** to join this computer, run the command shown, then **Create my team**.
 3. Open **Settings > Computers** and **Sign in** beside Codex or Claude Code; finish the provider's browser flow.
    Other harnesses and API credentials are covered in [Harnesses](docs/harnesses.md). Choose the bot's model in **Settings > Bots**.
 4. Before any real work, open **Settings > Health**: **Models** should read "Codex is signed in." (or Claude Code). If not, follow
    [first-result recovery](docs/install.md#first-result-recovery). With no spending limit set there is no cap; a limit pauses new
    work and lets a run in progress finish ([Usage](docs/usage.md)).
-5. Open Content Marketer and press **Set up**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
+5. On the team chart, open each seat and press **Hire** on its template, in any order. A seat hired before its manager
+   reports to the nearest hired manager above it until that manager is hired, then moves under it. On Content Marketer's
+   page, press **Start onboarding**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
    to give it readers, publishing plans, topics, voice examples and privacy rules; review its first draft in chat.
 6. On **Tasks > New task**, assign it the short draft from [Your first result](docs/install.md#your-first-result). The bot marks
    it Done with the draft file on the task. Read the draft, then close the task yourself: the requester closes it, not the bot.
@@ -113,7 +116,7 @@ is one team; several can run side by side on one Mac.
 For the shortest trial, use Docker above. For a native development setup, follow [Environments](docs/environments.md)
 and [register a Mac computer](docs/install.md#mac). Open the app, complete **Finish setup**, join the
 computer and sign in to your model provider. All four built-in repositories are created automatically. Each other role waits as a Recruiting seat; a bot is created only
-when you recruit one, and it is parked in **Needs setup** until you open it and press **Set up**; then follow [Your first result](docs/install.md#your-first-result).
+when you recruit one, and it is parked in **Needs setup** until you open it and press **Start onboarding**; then follow [Your first result](docs/install.md#your-first-result).
 Bots can allow [branches](docs/creating-bots.md#branches): personal tasks and chats on your computer, following the original's instructions and repository. Independent copies keep using `hub bot copy`.
 
 See [Setup reference](docs/onboarding.md) for the wizard's saved fields and [Creating bots](docs/creating-bots.md) for custom bots.
@@ -255,7 +258,7 @@ server's variable file; real hostnames, buckets, ARNs and humans live outside th
 |---|---|
 | `backend/` | The server: API, authorization, write layer, scheduler, backups, settings admin (FastAPI, SQLite) |
 | `runner-rs/` | The local runner (`tico-runner`): enrollment, readiness, leases, runs, subscription profiles, updates, and one host per model CLI in `runner-rs/src/hosts/` |
-| `runner/` | The runner's Python helpers: the `python -m runner run` shim, the connectors, Close transcript and meeting import jobs, catalog set-up and the update process |
+| `runner_support/` | The runner's Python helpers: the `python -m runner_support run` shim, the connectors, Close transcript and meeting import jobs, catalog set-up and the update process |
 | `clients/` | What bots and owners call: the `hub` CLI, the HTTP client, preflight, routine validation, team documents, and `environments.py` |
 | `ui/`, `app/` | The web interface and its browser tests; the Tauri desktop shell (Rust) |
 | `setup/` | `tico setup`, the guided Docker install of the server and of Linux runners |
@@ -319,7 +322,7 @@ Browser checks need `npm ci` and a Playwright browser (`npx playwright install c
 dependency: `marked` and the icon font are vendored in `ui/vendor/` with their licenses.
 
 The live checkout on an owner's Mac is what the runner executes: the launchd jobs run
-`python -m runner` with that directory as the working directory, and the bot job execs the Rust runner built
+`python -m runner_support` with that directory as the working directory, and the bot job execs the Rust runner built
 from that tree (rebuilt on restart when `runner-rs/` changed). A pull without a restart leaves the old code
 running (`scripts/tico status` says so explicitly). Do development in a git worktree, never in the live checkout, and use
 `scripts/tico update`, which pulls and restarts after waiting for runs in flight.

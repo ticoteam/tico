@@ -1,13 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "main",
-  "description": "Runtime template: only the selected server origin may use the native shell.",
-  "windows": [
-    "main"
-  ],
+  "identifier": "org",
+  "description": "Runtime template for one org's page: the shell copies it per org, naming that org's webview and origin. Only that page may use the native shell.",
+  "windows": [],
+  "webviews": [],
   "permissions": [
-    "core:default",
-    "core:event:default",
     "dialog:allow-ask",
     "dialog:allow-message",
     "dialog:allow-confirm",

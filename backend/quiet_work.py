@@ -31,7 +31,7 @@ CARRIED = "task.next-run.carried"
 SETTLED = "task.next-run.settled"
 STALE_HOURS = 2
 MAX_DAYS = 730
-# The task_events field each outcome is written under, so a task's own history says what became of each carriage.
+# The task history kind each outcome is written under, so a task's own history says what became of each carriage.
 FIELD = "quiet"
 WORKED, RETURNED, DEFERRED, HANDLED = "worked", "returned", "deferred", "handled"
 # What a carried task tells the run, beside its id and title (execution.claim): how to say "not now".
@@ -48,7 +48,7 @@ def _H():
 def condition(row):
     """The task's stored resume condition (a dict), or None."""
     try:
-        value = json.loads((row or {}).get("resume_json") or "null")
+        value = json.loads((row or {}).get("resume") or "null")
     except ValueError:
         return None
     return value if isinstance(value, dict) else None
@@ -78,33 +78,49 @@ def _task_name(row):
 # ------------------------------------------------------------------------------------------------ what it is now
 # The lookups below go through the snapshot's read cache (backend/read_cache.py), so a task list that read them for
 # all its quiet tasks together (`prime`) reads none of them again.
-OWN_JOB_COLUMNS = ("id", "attempt_id", "created", "state")
-CARRIED_SQL = "SELECT ts, detail_json FROM events WHERE action=? AND target=? ORDER BY ts"
-ATTEMPT_SQL = "SELECT id, bot, state, started, created, finished FROM attempts WHERE id=?"
+OWN_JOB_COLUMNS = ("id", "attempt_id", "created_at", "state")
+CARRIED_SQL = "SELECT created_at, detail FROM events WHERE action=? AND target=? ORDER BY created_at"
+ATTEMPT_SQL = "SELECT id, bot_id, state, started_at, created_at, finished_at FROM attempts WHERE id=?"
+
+
+def _eligibility(claimable):
+    if not claimable:
+        return ""
+    from .execution import scoped_sql, unfenced_sql
+    from .statuses import PARKED_SQL
+    # Queued work behind the runner's task fences cannot move the blocker. Already active jobs still count.
+    return ("AND (j.state!='queued' OR " + _H().person_sent_sql() + " OR NOT EXISTS "
+            "(SELECT 1 FROM bot_config pc WHERE pc.bot=j.bot_id "
+            f"AND pc.onboarding_state IN {PARKED_SQL} "
+            "AND m.sender_id<>'bot:'||coalesce(pc.reports_to,''))) "
+            f"AND (j.state!='queued' OR ({unfenced_sql()} AND {scoped_sql()})) ")
 
 
 def _own_job_sql(claimable=False):
-    eligibility = ""
-    if claimable:
-        from .execution import scoped_sql, unfenced_sql
-        from .statuses import PARKED_SQL
-        # Queued work behind the runner's task fences cannot move the blocker. Already active jobs still count.
-        eligibility = ("AND (j.state!='queued' OR m.from_actor LIKE 'human:%' OR NOT EXISTS "
-                       "(SELECT 1 FROM bot_config pc WHERE pc.bot=j.bot "
-                       f"AND pc.onboarding_state IN {PARKED_SQL} "
-                       "AND m.from_actor<>'bot:'||coalesce(pc.reports_to,''))) "
-                       f"AND (j.state!='queued' OR ({unfenced_sql()} AND {scoped_sql()})) ")
-    return ("SELECT j.id, j.attempt_id, j.created, j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
+    return ("SELECT j.id, j.attempt_id, j.created_at, j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE j.bot=? AND j.state IN ('queued','leased','running') AND {_H().unheld_sql()} "
+            f"WHERE j.bot_id=? AND j.state IN ('queued','leased','running') AND {_H().unheld_sql()} "
             f"AND {_H().MESSAGE_TASK_SQL}=? "
-            + eligibility +
-            "ORDER BY j.created LIMIT 1")
+            + _eligibility(claimable) +
+            "ORDER BY j.created_at LIMIT 1")
+
+
+def _own_jobs_sql(claimable, bots, tasks):
+    """_own_job_sql for many owners and tasks at once: every candidate job of those bots and tasks, oldest first, with
+    the bot and task each one belongs to (prime_own_jobs keeps the first per pair)."""
+    H = _H()
+    return ("SELECT j.id, j.attempt_id, j.created_at, j.state, j.bot_id AS bot_key, "
+            f"{H.MESSAGE_TASK_SQL} AS task_key FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "JOIN conversations cv ON cv.id=m.conversation_id "
+            f"WHERE j.bot_id IN ({','.join('?' * bots)}) AND j.state IN ('queued','leased','running') "
+            f"AND {H.unheld_sql()} AND {H.MESSAGE_TASK_SQL} IN ({','.join('?' * tasks)}) "
+            + _eligibility(claimable) +
+            "ORDER BY j.created_at")
 
 
 def _last_sql(outcomes):
-    return ("SELECT ts, old, new FROM task_events WHERE task_id=? AND field=? "
-            f"AND new IN ({','.join('?' * len(outcomes))}) ORDER BY ts DESC LIMIT 1")
+    return ("SELECT created_at, old, new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? "
+            f"AND new IN ({','.join('?' * len(outcomes))}) ORDER BY created_at DESC LIMIT 1")
 
 
 def own_job(conn, row, *, claimable=False):
@@ -112,9 +128,35 @@ def own_job(conn, row, *, claimable=False):
     from .read_cache import one
     H = _H()
     try:
-        return one(conn, _own_job_sql(claimable), (H.actor_id(row["owner"]), row["id"]))
+        return one(conn, _own_job_sql(claimable), (H.actor_id(row["owner_id"]), row["id"]))
     except Exception:  # noqa: BLE001 - a local hub has no jobs table
         return None
+
+
+def prime_own_jobs(conn, rows, *, claimable=False):
+    """own_job for many tasks in one read per 250 pairs (read_cache.prime): each (owner, task) pair's first job, as its
+    own_job read returns it, so a loop of own_job calls reads none of them again."""
+    from .read_cache import cache, prime
+    H = _H()
+    if cache(conn) is None:
+        return
+    wanted = sorted({(H.actor_id(row["owner_id"]), row["id"]) for row in rows if row.get("owner_id") and row.get("id")})
+    if not wanted:
+        return
+    pairs, first = set(wanted), {}
+    try:
+        for start in range(0, len(wanted), 250):
+            part = wanted[start:start + 250]
+            bots = sorted({bot for bot, _ in part})
+            tasks = sorted({tid for _, tid in part})
+            for row in conn.execute(_own_jobs_sql(claimable, len(bots), len(tasks)), (*bots, *tasks)):
+                key = (row["bot_key"], row["task_key"])
+                if key in pairs and key not in first:
+                    first[key] = {"id": row["id"], "attempt_id": row["attempt_id"],
+                                  "created_at": row["created_at"], "state": row["state"]}
+    except Exception:  # noqa: BLE001 - a local hub has no jobs table; own_job reads for itself
+        return
+    prime(conn, _own_job_sql(claimable), {key: first.get(key) for key in wanted})
 
 
 def carried_at(conn, aid, task_id):
@@ -122,8 +164,8 @@ def carried_at(conn, aid, task_id):
     from .read_cache import rows
     try:
         for r in rows(conn, CARRIED_SQL, (CARRIED, aid)):
-            if task_id in (json.loads(r["detail_json"] or "{}").get("tasks") or []):
-                return r["ts"]
+            if task_id in (json.loads(r["detail"] or "{}").get("tasks") or []):
+                return r["created_at"]
     except Exception:  # noqa: BLE001 - fail quiet: the view only loses the time
         return None
     return None
@@ -149,31 +191,32 @@ def prime(conn, rows):
     local hub without run tables, it reads nothing and each view reads for itself."""
     from .read_cache import cache, prime as seed, prime_rows
     H = _H()
-    rows = [row for row in rows if row.get("next_run") and H.is_bot(row.get("owner"))
+    rows = [row for row in rows if row.get("next_run") and H.is_bot(row.get("owner_id"))
             and row.get("status") in H.ACTIVE_STATUSES]
     if cache(conn) is None or not rows:
         return
     try:
         jobs = {}
-        for part in H.chunks(sorted({H.actor_id(row["owner"]) for row in rows})):
+        for part in H.chunks(sorted({H.actor_id(row["owner_id"]) for row in rows})):
             for job in conn.execute(
-                    "SELECT j.id, j.attempt_id, j.created, j.state, j.bot AS own_bot, "
+                    "SELECT j.id, j.attempt_id, j.created_at, j.state, j.bot_id AS own_bot, "
                     f"{H.MESSAGE_TASK_SQL} AS own_task FROM jobs j JOIN messages m ON m.id=j.message_id "
-                    "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot IN (%s) "
-                    f"AND j.state IN ('queued','leased','running') AND {H.unheld_sql()} ORDER BY j.created"
+                    "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot_id IN (%s) "
+                    f"AND j.state IN ('queued','leased','running') AND {H.unheld_sql()} ORDER BY j.created_at"
                     % ",".join("?" * len(part)),
                     part):
                 jobs.setdefault((job["own_bot"], job["own_task"]), {k: job[k] for k in OWN_JOB_COLUMNS})
-        seed(conn, _own_job_sql(), {(H.actor_id(row["owner"]), row["id"]):
-                                    jobs.get((H.actor_id(row["owner"]), row["id"])) for row in rows})
+        seed(conn, _own_job_sql(), {(H.actor_id(row["owner_id"]), row["id"]):
+                                    jobs.get((H.actor_id(row["owner_id"]), row["id"])) for row in rows})
         ids = [row["id"] for row in rows]
         outcomes = {(RETURNED,): {}, (WORKED, HANDLED): {}}
         for part in H.chunks(ids):
-            for event in conn.execute("SELECT task_id, ts, old, new FROM task_events WHERE task_id IN (%s) AND field=? "
-                                      "ORDER BY ts DESC" % ",".join("?" * len(part)), (*part, FIELD)):
+            for event in conn.execute("SELECT subject_id AS task_id, created_at, old, new FROM history_events "
+                                      "WHERE subject_type='task' AND subject_id IN (%s) AND kind=? "
+                                      "ORDER BY created_at DESC" % ",".join("?" * len(part)), (*part, FIELD)):
                 for wanted, last in outcomes.items():
                     if event["new"] in wanted:
-                        last.setdefault(event["task_id"], {k: event[k] for k in ("ts", "old", "new")})
+                        last.setdefault(event["task_id"], {k: event[k] for k in ("created_at", "old", "new")})
         for wanted, last in outcomes.items():
             seed(conn, _last_sql(wanted), {(tid, FIELD, *wanted): last.get(tid) for tid in ids})
         runs = sorted({aid for row in rows for aid in (row.get("carried_by"), (condition(row) or {}).get("run"))
@@ -181,13 +224,13 @@ def prime(conn, rows):
         for part in H.chunks(runs):
             marks = ",".join("?" * len(part))
             found = {a["id"]: a for a in conn.execute(
-                "SELECT id, bot, state, started, created, finished FROM attempts WHERE id IN (%s)" % marks, part)}
+                "SELECT id, bot_id, state, started_at, created_at, finished_at FROM attempts WHERE id IN (%s)" % marks, part)}
             seed(conn, ATTEMPT_SQL, {(aid,): found.get(aid) for aid in part})
             seed(conn, H.NEXT_RUN_CARRIER_SQL, {(aid,): found[aid] if aid in found and found[aid]["state"]
                                                 in H.NEXT_RUN_CARRIER_STATES else None for aid in part})
             carried = {aid: [] for aid in part}
-            for event in conn.execute("SELECT target, ts, detail_json FROM events WHERE action=? AND target IN (%s) "
-                                      "ORDER BY ts" % marks, (CARRIED, *part)):
+            for event in conn.execute("SELECT target, created_at, detail FROM events WHERE action=? AND target IN (%s) "
+                                      "ORDER BY created_at" % marks, (CARRIED, *part)):
                 carried[event["target"]].append(event)
             prime_rows(conn, CARRIED_SQL, {(CARRIED, aid): events for aid, events in carried.items()})
     except Exception:  # noqa: BLE001 - a local hub has no run tables: each view reads (and fails quiet) as before
@@ -196,7 +239,8 @@ def prime(conn, rows):
 
 def was_quiet(conn, task_id):
     """Whether this task ever was a quiet one: a Run now or a resume moved it to a run of its own."""
-    return conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='next_run' AND old='1' LIMIT 1",
+    return conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='next_run' "
+                        "AND old='1' LIMIT 1",
                         (task_id,)).fetchone() is not None
 
 
@@ -204,14 +248,14 @@ def view(conn, row, history=True):
     """Where a quiet task stands, for its view: None for an ordinary task. `history` also reads a task that was quiet
     until a Run now or a resume gave it a run of its own (one more indexed read; a list leaves it out)."""
     H = _H()
-    if not row or not H.is_bot(row.get("owner")) or row.get("status") not in H.ACTIVE_STATUSES:
+    if not row or not H.is_bot(row.get("owner_id")) or row.get("status") not in H.ACTIVE_STATUSES:
         return None
     quiet = bool(row.get("next_run"))
     if not quiet and not (history and was_quiet(conn, row["id"])):
         return None
     job = own_job(conn, row)
     if job:
-        return {"state": "queued", "job": job["id"], "run": job["attempt_id"], "since": job["created"],
+        return {"state": "queued", "job": job["id"], "run": job["attempt_id"], "since": job["created_at"],
                 "words": "A run of its own is " + ("going" if job["state"] != "queued" else "waiting") + "."}
     if not quiet:
         return None
@@ -244,24 +288,25 @@ def view(conn, row, history=True):
 
 # ------------------------------------------------------------------------------------------------ the carrier ends
 def worked(conn, row, bot, since, until=None):
-    """Whether bot `bot` (a slug) worked task `row` between `since` and `until`: a comment or message in its room, a
+    """Whether bot `bot` (its id) worked task `row` between `since` and `until`: a comment or message in its room, a
     change to its fields (step, status, note, ...), a link it added, or a pull request on the task opened or pushed
     to. A link refreshed from GitHub (checks, mergeable, review) is not work."""
     actor = "bot:" + bot
     until = until or "9999"
-    if conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND actor=? AND ts>=? AND ts<=? AND field<>? LIMIT 1",
+    if conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id=? "
+                    "AND created_at>=? AND created_at<=? AND kind<>? LIMIT 1",
                     (row["id"], actor, since, until, FIELD)).fetchone():
         return True
     if row.get("conversation_id") and conn.execute(
-            "SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND created>=? AND created<=? LIMIT 1",
+            "SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>=? AND created_at<=? LIMIT 1",
             (row["conversation_id"], actor, since, until)).fetchone():
         return True
-    if conn.execute("SELECT 1 FROM events WHERE action='github.pull_request' AND target=? AND ts>=? AND ts<=? "
-                    "AND json_extract(detail_json,'$.action') IN ('opened','synchronize') LIMIT 1",
+    if conn.execute("SELECT 1 FROM events WHERE action='github.pull_request' AND target=? AND created_at>=? AND created_at<=? "
+                    "AND json_extract(detail,'$.action') IN ('opened','synchronize') LIMIT 1",
                     (row["id"], since, until)).fetchone():
         return True
     try:
-        return conn.execute("SELECT 1 FROM task_links WHERE task_id=? AND added_by=? AND created>=? AND created<=? "
+        return conn.execute("SELECT 1 FROM task_links WHERE task_id=? AND added_by=? AND created_at>=? AND created_at<=? "
                             "LIMIT 1", (row["id"], actor, since, until)).fetchone() is not None
     except Exception:  # noqa: BLE001 - a local hub has no task_links table
         return False
@@ -290,7 +335,8 @@ def settle(conn, aid, bot, started):
 
 
 def _last_since(conn, task_id, outcome, since):
-    return conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND field=? AND new=? AND ts>=? LIMIT 1",
+    return conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? AND new=? "
+                        "AND created_at>=? LIMIT 1",
                         (task_id, FIELD, outcome, since)).fetchone() is not None
 
 
@@ -306,7 +352,7 @@ def defer(conn, actor, task_id, after=None, at=None, next_run=False, handled=Fal
     if not row:
         H.refuse(conn, actor, "not-found", f"no task {task_id}")
     H._task_private_writer(conn, actor, row)
-    if H.is_bot(actor) and not H.task_represents(conn, actor, row["owner"]):
+    if H.is_bot(actor) and not H.task_represents(conn, actor, row["owner_id"]):
         H.refuse(conn, actor, "identity", "only the task's own bot, its managers or a person say when it is picked up again")
     if sum(bool(x) for x in (after, at, next_run, handled)) != 1:
         H.refuse(conn, actor, "defer", "give one of --after <task>, --at <time>, --next-run or --handled")
@@ -317,14 +363,14 @@ def defer(conn, actor, task_id, after=None, at=None, next_run=False, handled=Fal
     if handled:
         if not aid:
             H.refuse(conn, actor, "defer", "no run has carried it yet, so there is nothing to have handled")
-        if row.get("resume_json"):
+        if row.get("resume"):
             # Done with it for now: a condition stored earlier no longer brings it back.
-            conn.execute("UPDATE tasks SET resume_json=NULL, updated=? WHERE id=?", (H.now(), task_id))
+            conn.execute("UPDATE tasks SET resume=NULL, updated_at=? WHERE id=?", (H.now(), task_id))
         H._task_event(conn, task_id, actor, FIELD, aid, HANDLED, "")
         return H.task(conn, task_id)
     was = condition(row)
     if next_run:
-        conn.execute("UPDATE tasks SET resume_json=NULL, carried_by=NULL, updated=? WHERE id=?", (H.now(), task_id))
+        conn.execute("UPDATE tasks SET resume=NULL, carried_by=NULL, updated_at=? WHERE id=?", (H.now(), task_id))
         H._task_event(conn, task_id, actor, FIELD, aid, RETURNED, "back to the next run")
         H.event(conn, actor, "task.next-run.deferred", task_id, {"next_run": True, "run": aid})
         return H.task(conn, task_id)
@@ -347,7 +393,13 @@ def defer(conn, actor, task_id, after=None, at=None, next_run=False, handled=Fal
         if stamp > H.shift(H.now(), days=MAX_DAYS):
             H.refuse(conn, actor, "date", f"defer for at most {MAX_DAYS} days; close it if nobody will")
         cond.update(kind="time", until=stamp)
-    conn.execute("UPDATE tasks SET resume_json=?, updated=? WHERE id=?", (json.dumps(cond), H.now(), task_id))
+        from . import task_check_backs
+        if task_check_backs.involved(row):
+            planned = min(stamp, row["check_back_at"]) if H.is_bot(actor) and task_check_backs.pending(row) else stamp
+            if H.is_bot(actor):
+                planned = min(planned, H.shift(H.now(), days=14))
+            task_check_backs.set_time(conn, row, planned, "Inspect the scheduled work and its resume condition.", system=True)
+    conn.execute("UPDATE tasks SET resume=?, updated_at=? WHERE id=?", (json.dumps(cond), H.now(), task_id))
     H._task_event(conn, task_id, actor, FIELD, aid, DEFERRED, describe(conn, cond))
     H.event(conn, actor, "task.next-run.deferred", task_id,
             {k: cond.get(k) for k in ("kind", "task", "until", "run")} | ({"was": was} if was else {}))
@@ -358,11 +410,11 @@ def defer(conn, actor, task_id, after=None, at=None, next_run=False, handled=Fal
 def resume(conn, row, why, trigger):
     """The condition came true: the task gets one run of its own, as Run now gives it, unless one already waits."""
     H = _H()
-    conn.execute("UPDATE tasks SET resume_json=NULL, next_run=0, updated=? WHERE id=?", (H.now(), row["id"]))
+    conn.execute("UPDATE tasks SET resume=NULL, next_run=0, updated_at=? WHERE id=?", (H.now(), row["id"]))
     H._task_event(conn, row["id"], H.KEEPER, "next_run", "1", "0", "resume: " + why)
     after = H.task(conn, row["id"])
     if not own_job(conn, after):
-        H._wake(conn, after, after["owner"], f"Resume: {after['title']}\n{why}",
+        H._wake(conn, after, after["owner_id"], f"Resume: {after['title']}\n{why}",
                 {"wake": "resume", "resume": why}, trigger=trigger)
     return after
 
@@ -371,8 +423,8 @@ def finished(conn, done_task):
     """`done_task` is done or closed: each open quiet task deferred until it resumes. Returns their ids."""
     H = _H()
     out = []
-    for row in H._rows(conn.execute("SELECT * FROM tasks WHERE resume_json IS NOT NULL AND next_run=1 "
-                                    "AND status='open' AND json_extract(resume_json,'$.task')=?", (done_task["id"],))):
+    for row in H._rows(conn.execute("SELECT * FROM tasks WHERE resume IS NOT NULL AND next_run=1 "
+                                    "AND status='open' AND json_extract(resume,'$.task')=?", (done_task["id"],))):
         name = _task_name(done_task) if H.task_private(conn, done_task) and not H.task_private(conn, row) \
             else done_task["title"]
         resume(conn, row, f"{name} is {done_task['status']}.", "status_or_relation")
@@ -381,9 +433,9 @@ def finished(conn, done_task):
 
 
 # Read through hubdb's tasks_resume_due (TASKS_RESUME_INDEX), whose predicate is this one's, word for word.
-DUE_SQL = ("SELECT * FROM tasks WHERE resume_json IS NOT NULL AND next_run=1 "
-           "AND status='open' AND json_extract(resume_json,'$.until')<=? "
-           "ORDER BY json_extract(resume_json,'$.until'), id")
+DUE_SQL = ("SELECT * FROM tasks WHERE resume IS NOT NULL AND next_run=1 "
+           "AND status='open' AND json_extract(resume,'$.until')<=? "
+           "ORDER BY json_extract(resume,'$.until'), id")
 
 
 def due(conn, at, failures=None):
@@ -407,18 +459,19 @@ def stale(conn, at=None, hours=STALE_HOURS):
     out = []
     try:
         rows = H._rows(conn.execute(
-            "SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.slug WHERE b.state='active' AND t.next_run=1 "
-            "AND t.status='open' AND t.resume_json IS NULL AND t.snoozed_until IS NULL "
-            "AND (t.carried_by IS NOT NULL OR EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=t.id "
-            "AND e.field=? AND e.new=?))", (FIELD, RETURNED)))
+            "SELECT t.* FROM tasks t JOIN bots b ON t.owner_id='bot:'||b.id WHERE b.state='active' AND t.next_run=1 "
+            "AND t.status='open' AND t.resume IS NULL AND t.snoozed_until IS NULL "
+            "AND (t.carried_by IS NOT NULL OR EXISTS (SELECT 1 FROM history_events e "
+            "WHERE e.subject_type='task' AND e.subject_id=t.id AND e.kind=? AND e.new=?))", (FIELD, RETURNED)))
     except Exception:  # noqa: BLE001 - a local hub without these tables has no runs
         return []
     for row in rows:
-        bot = H.actor_id(row["owner"])
+        bot = H.actor_id(row["owner_id"])
         last_work = _last(conn, row["id"], (WORKED, HANDLED, DEFERRED))
-        floor = last_work["ts"] if last_work else ""
-        first = conn.execute("SELECT old FROM task_events WHERE task_id=? AND field=? AND new=? AND ts>? "
-                             "ORDER BY ts LIMIT 1", (row["id"], FIELD, RETURNED, floor)).fetchone()
+        floor = last_work["created_at"] if last_work else ""
+        first = conn.execute("SELECT old FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? AND new=? "
+                             "AND created_at>? "
+                             "ORDER BY created_at LIMIT 1", (row["id"], FIELD, RETURNED, floor)).fetchone()
         aid = first["old"] if first else row.get("carried_by")
         since = carried_at(conn, aid, row["id"]) if aid else None
         if not since or since > cutoff:
@@ -429,7 +482,7 @@ def stale(conn, at=None, hours=STALE_HOURS):
             attempt = _attempt(conn, aid)
             going = not attempt or attempt["state"] in ("leased", "running")
             if _last_since(conn, row["id"], HANDLED, since) or worked(
-                    conn, row, bot, since, at if going else attempt["finished"] or at):
+                    conn, row, bot, since, at if going else attempt["finished_at"] or at):
                 continue
         out.append({"task": row, "bot": bot, "since": since, "run": aid})
     return out

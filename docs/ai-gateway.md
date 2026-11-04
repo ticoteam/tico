@@ -146,7 +146,7 @@ under 24 hours, including any fallback; its run details explain the shorter limi
   on the card turns it back on.
 - If Tico turns the Gateway off for your install, Health says "Tico AI Gateway was turned off for this install by
   Tico. Contact support." Decide and bots on Tico models stop, and the server stops asking for a key.
-- If the invite code doesn't work (expired, used by all the installs it allows, or cancelled), Health says so. Ask
+- If the invite code doesn't work (expired, used by all the installs it allows, or canceled), Health says so. Ask
   Tico Team for a new code and run the install command again with it, or paste a gateway key on the card.
 
 The Gateway counts each call against the install, its key, the model and the bot. It gets an id for the bot that only
@@ -248,9 +248,10 @@ saying the Tico AI Gateway cut the reply off.
 
 ## Settings → Gateway
 
-One flat page for the owner and admins: a line saying whether the Gateway is connected and this month's spend against its
-cap; **Picks in use** (name, model, version or Auto, number of bots, price); and **Services**, with each service's status
-(Live, On request, Coming soon), price and the tools that use it. The key and the connect controls stay in
+One flat page in the owner's and admins' Settings: a line saying whether the Gateway is connected (and, for the owner
+only, this month's spend against its cap); **API keys**, a link for the owner while the Gateway is connected
+([API keys](#api-keys)); **Picks in use** (name, model, version or Auto, number of bots, price); and **Services**, with
+each service's status (Live, On request, Coming soon), price and the tools that use it. The key and the connect controls stay in
 **Settings → Models**, one link away.
 
 Services today: **Decide** and **Classify** (live), **Inbox** email addresses (live) and numbers (on request), **Search** and **Fetch**
@@ -258,6 +259,42 @@ Services today: **Decide** and **Classify** (live), **Inbox** email addresses (l
 the same list with the `hub_gateway_catalog` tool and search the web with `hub_gateway_search` (`hub gateway catalog [query]`,
 `hub gateway search QUERY`, `hub gateway fetch URL`); search is billed like Low tokens plus $0.00875 per answered search, from the same cap. `hub_gateway_fetch` reads a page or PDF by URL, billed like Low tokens plus $0.00125 per page. The
 skill is `skills/gateway/SKILL.md`.
+
+## API keys
+
+To use the Gateway from other tools (your own code, Claude Code, Codex, curl), make an API key on
+[app.tico.dev/gateway](https://app.tico.dev/gateway#api-keys). The owner reaches it from **Settings → Gateway → API keys**.
+Each key has a name and a monthly cap in dollars billed ($1 to $100, $20 by default), and its use bills to the company's
+credit like its bots' use. The company's owners and admins on app.tico.dev make and revoke keys once the company has
+prepaid credit. The key is shown once.
+
+An API key calls only the model and service endpoints: chat, models, decisions, search, fetch, images, audio, markets,
+MCP and key. It can't reach billing, servers, computers, mail, webhooks, files or anything else of the company's.
+
+Bots don't need an API key: they use the install's Gateway key.
+
+OpenAI SDK:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="https://updates.tico.team/v1/gateway", api_key="<key>")
+reply = client.chat.completions.create(model="tico-general-medium",
+                                       messages=[{"role": "user", "content": "Hello"}])
+```
+
+Claude Code (the Gateway's tools over MCP):
+
+```sh
+claude mcp add --transport http tico https://updates.tico.team/v1/gateway/mcp --header "Authorization: Bearer <key>"
+```
+
+Search with curl:
+
+```sh
+curl https://updates.tico.team/v1/gateway/search -H "Authorization: Bearer <key>" \
+  -H "Content-Type: application/json" -d '{"query": "Tico AI Gateway", "max_results": 5}'
+```
 
 ## Images
 

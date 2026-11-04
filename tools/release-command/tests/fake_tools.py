@@ -55,7 +55,7 @@ elif name == 'gh':
             (root / 'main').write_text('e' * 40)
         if config.get('failed'):
             conclusion = 'failure'
-        elif count <= config.get('cancelled_watches', 0):
+        elif count <= config.get('canceled_watches', 0):
             conclusion = 'cancelled'
         else:
             conclusion = 'success'

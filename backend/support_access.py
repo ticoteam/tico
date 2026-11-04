@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS support_access(
  hq_session TEXT);
 CREATE INDEX IF NOT EXISTS support_access_live ON support_access(ended_at, expires_at);
 CREATE TABLE IF NOT EXISTS support_access_log(
- id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, ts TEXT NOT NULL, by TEXT NOT NULL, method TEXT, path TEXT,
+ id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, created_at TEXT NOT NULL, by TEXT NOT NULL, method TEXT, path TEXT,
  status INTEGER);
 CREATE INDEX IF NOT EXISTS support_access_log_session ON support_access_log(session_id, id);
 """
@@ -324,7 +324,7 @@ def pull_once(app, wait=PULL_WAIT):
         else:
             status, content_type, content = 410, "application/json", b'{"error":{"code":"ended","detail":"The session ended."}}'
         with store.transaction() as c:
-            c.execute("INSERT INTO support_access_log(session_id,ts,by,method,path,status) VALUES(?,?,?,?,?,?)",
+            c.execute("INSERT INTO support_access_log(session_id,created_at,by,method,path,status) VALUES(?,?,?,?,?,?)",
                       (row["id"], H.now(), by, str(request.get("method") or "")[:10].upper(),
                        str(request.get("path") or "")[:500], status))
         reply = {"rid": str(request.get("rid") or "")[:80], "status": status, "content_type": content_type,
@@ -474,7 +474,7 @@ class Access:
             require_on(self.settings, c)
         row = self._session(who, sid)
         with self.store.read() as c:
-            rows = c.execute("SELECT ts,by,method,path,status FROM support_access_log WHERE session_id=? "
+            rows = c.execute("SELECT created_at,by,method,path,status FROM support_access_log WHERE session_id=? "
                              "ORDER BY id DESC LIMIT ?", (sid, LOGGED)).fetchall()
             return {"session": view(c, row), "log": [dict(r) for r in rows]}
 

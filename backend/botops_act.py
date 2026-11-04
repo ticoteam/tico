@@ -40,20 +40,20 @@ def own_run(c, auth, attempt_id):
     a watcher's task, a stopped job's request, a routine BotOps set itself while it worked for someone, a task someone
     commented on."""
     from .store import H
-    turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=? AND a.bot=?",
+    turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=? AND a.bot_id=?",
                      (attempt_id, H.FLEET_MAINTAINER)).fetchone() if attempt_id else None
     msg = H.message(c, turn["message_id"]) if turn and turn["message_id"] else None
     refs = (msg or {}).get("refs") or {}
     # A converted routine's task is opened by its automation as BotOps itself (backend/automation_actions.py).
-    if not msg or msg["from_actor"] not in (H.KEEPER, "bot:" + H.FLEET_MAINTAINER):
+    if not msg or msg["sender_id"] not in (H.KEEPER, "bot:" + H.FLEET_MAINTAINER):
         return False
-    if msg["from_actor"] != H.KEEPER and not refs.get("automation"):
+    if msg["sender_id"] != H.KEEPER and not refs.get("automation"):
         return False
     if any(refs.get(key) for key in OTHERS_WORDS):
         return False
     task_id = H.message_task_id(msg)
     if not task_id:
-        return msg["from_actor"] == H.KEEPER and msg["kind"] == "notice" and refs.get("wake") == "update"
+        return msg["sender_id"] == H.KEEPER and msg["kind"] == "notice" and refs.get("wake") == "update"
     task = H.task(c, task_id)
     if refs.get("automation"):
         return _owners_automation_task(c, auth, task, refs)
@@ -65,9 +65,9 @@ def _owners_routine_task(c, auth, task):
     the routine (created and since changed only by them), the task itself, and anything said on it."""
     from .store import H
     keeper, botops = H.KEEPER, "bot:" + H.FLEET_MAINTAINER
-    if not task or task["requester"] != keeper or task["owner"] != botops:
+    if not task or task["requester_id"] != keeper or task["owner_id"] != botops:
         return False
-    made = c.execute("SELECT actor FROM events WHERE action='task.create' AND target=? ORDER BY ts,id LIMIT 1",
+    made = c.execute("SELECT actor FROM events WHERE action='task.create' AND target=? ORDER BY created_at,id LIMIT 1",
                      (task["id"],)).fetchone()
     if not made or made["actor"] != keeper:
         return False
@@ -87,11 +87,11 @@ def _owners_automation_task(c, auth, task, refs):
     from .store import H
     botops = "bot:" + H.FLEET_MAINTAINER
     automation_id = str(refs.get("automation") or "")
-    if not task or task["owner"] != botops or task["requester"] not in (H.KEEPER, botops):
+    if not task or task["owner_id"] != botops or task["requester_id"] not in (H.KEEPER, botops):
         return False
-    row = c.execute("SELECT owner, flow_json, trigger_type FROM automations WHERE id=? AND deleted_at IS NULL",
+    row = c.execute("SELECT owner_id, flow, trigger_type FROM automations WHERE id=? AND deleted_at IS NULL",
                     (automation_id,)).fetchone()
-    if not row or row["owner"] != botops or row["trigger_type"] != "schedule" \
+    if not row or row["owner_id"] != botops or row["trigger_type"] != "schedule" \
             or refs.get("trigger_source") != "automation:" + automation_id:
         return False
     # The run that opened this task is that automation's own, from its schedule or a Run now, not a chained event.
@@ -99,7 +99,7 @@ def _owners_automation_task(c, auth, task, refs):
                     (str(refs.get("automation_run") or ""), automation_id)).fetchone()
     if not run or refs.get("automation_chain"):
         return False
-    source = (H._json(row["flow_json"], {}) or {}).get("source")
+    source = (H._json(row["flow"], {}) or {}).get("source")
     if isinstance(source, dict) and source.get("kind") == "routine":
         found = c.execute("SELECT bot FROM schedules WHERE id=?", (source.get("id"),)).fetchone()
         if not found or found["bot"] != H.FLEET_MAINTAINER or not _owners_routine(c, auth, source["id"]):
@@ -111,20 +111,20 @@ def _owners_automation_task(c, auth, task, refs):
         actors.add(r["actor"])
     if not actors or any(a != H.KEEPER and not _is_owner(c, auth, a) for a in actors):
         return False
-    return _untouched(c, task, task["requester"])
+    return _untouched(c, task, task["requester_id"])
 
 
 def _owners_routine(c, auth, schedule_id):
     """A routine created through the API and since changed only by the owner (or the product)."""
     from .store import H
-    writers = c.execute("SELECT action,actor,detail_json FROM events WHERE target=? "
+    writers = c.execute("SELECT action,actor,detail FROM events WHERE target=? "
                         "AND action IN ('routine.created','routine.updated')", (schedule_id,)).fetchall()
     if not any(w["action"] == "routine.created" for w in writers):
         return False                # a routine from a bot.yaml: whoever pushed that file wrote it
     for w in writers:
         if w["actor"] == H.KEEPER:
             continue
-        if H._json(w["detail_json"], {}).get("via") == "assistant" or not _is_owner(c, auth, w["actor"]):
+        if H._json(w["detail"], {}).get("via") == "assistant" or not _is_owner(c, auth, w["actor"]):
             return False
     return True
 
@@ -133,10 +133,11 @@ def _untouched(c, task, writer):
     """Nobody but `writer` (who opened it) and BotOps changed the task's words or said anything on it."""
     from .store import H
     botops = "bot:" + H.FLEET_MAINTAINER
-    if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field IN ('title','body') AND actor NOT IN (?,?) LIMIT 1",
+    if c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind IN ('title','body') "
+                 "AND actor_id NOT IN (?,?) LIMIT 1",
                  (task["id"], writer, H.KEEPER)).fetchone():
         return False
-    said = c.execute("SELECT 1 FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? AND m.from_actor NOT IN (?,?,?) "
+    said = c.execute("SELECT 1 FROM message_refs m WHERE m.ref_task_id=? AND m.sender_id NOT IN (?,?,?) "
                      "LIMIT 1", (task["id"], H.KEEPER, botops, writer)).fetchone()
     return not said
 
@@ -156,9 +157,9 @@ def lend_lapsed(c, task):
     than the requester moved it back from done, closed or declined (the request it carried was finished), or the
     requester last spoke on it more than LEND_MAX_DAYS ago."""
     from .store import H
-    requester = task["requester"]
-    for row in c.execute("SELECT * FROM task_events WHERE task_id=? AND field='status' AND old IN (?,?,?) "
-                         "AND new NOT IN (?,?,?)", (task["id"], *TERMINAL, *TERMINAL)):
+    requester = task["requester_id"]
+    for row in c.execute("SELECT actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='status' AND old IN (?,?,?) AND new NOT IN (?,?,?)", (task["id"], *TERMINAL, *TERMINAL)):
         if row["actor"] != requester or dict(row).get("via"):
             # Re-asking on the same task can't clear this: the reopening stays in its history. The person's own new
             # words start a run with their rights anyway (a comment on the open task, or their BotOps chat).
@@ -166,16 +167,16 @@ def lend_lapsed(c, task):
                     "again, even after they reply. Only a run their own comment on it or their message in their BotOps chat "
                     "starts has their rights: in such a run, send no on_behalf_of; otherwise ask them there and end this run")
     spoke = []
-    made = c.execute("SELECT actor,detail_json FROM events WHERE action='task.create' AND target=? ORDER BY ts,id LIMIT 1",
+    made = c.execute("SELECT actor,detail FROM events WHERE action='task.create' AND target=? ORDER BY created_at,id LIMIT 1",
                      (task["id"],)).fetchone()
-    if made and made["actor"] == requester and H._json(made["detail_json"], {}).get("via") != "assistant":
-        spoke.append(task["created"])
+    if made and made["actor"] == requester and H._json(made["detail"], {}).get("via") != "assistant":
+        spoke.append(task["created_at"])
     origin = H.message(c, task["request_id"]) if task.get("request_id") else None
-    if origin and origin["from_actor"] == requester:
-        spoke.append(origin["created"])
-    comment = c.execute("SELECT max(m.created) FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? "
-                        "AND m.from_actor=? AND json_extract(m.refs_json,'$.comment') IS NOT NULL "
-                        "AND json_extract(m.refs_json,'$.via') IS NULL AND json_extract(m.refs_json,'$.assistant') IS NULL",
+    if origin and origin["sender_id"] == requester:
+        spoke.append(origin["created_at"])
+    comment = c.execute("SELECT max(m.created_at) FROM message_refs m WHERE m.ref_task_id=? "
+                        "AND m.sender_id=? AND json_extract(m.refs,'$.comment') IS NOT NULL "
+                        "AND json_extract(m.refs,'$.via') IS NULL AND json_extract(m.refs,'$.assistant') IS NULL",
                         (task["id"], requester)).fetchone()[0]
     if comment:
         spoke.append(comment)
@@ -191,6 +192,20 @@ _S = r"[^/]+"
 
 def _routes(*rows):
     return [(method, re.compile(API + path)) for method, path in rows]
+
+
+# Thread writes (docs/threads.md): posting, replying, editing, following, reading and managing members, as the person
+# who asked. The route checks that person's rights on the thread (backend/threads.py). `messages/` is in OWN for
+# BotOps' own messages, so `default_delegable` matches these routes before OWN.
+THREADS = _routes(
+    ("POST", r"threads"), ("PATCH", rf"threads/{_S}"),
+    ("POST", rf"threads/{_S}/(messages|read|read-all|members)"), ("DELETE", rf"threads/{_S}/members/{_S}"),
+    ("PUT", rf"threads/{_S}/follow"), ("DELETE", rf"threads/{_S}/follow"),
+    ("PUT", rf"threads/{_S}/pin"), ("DELETE", rf"threads/{_S}/pin"),
+    ("PATCH", rf"messages/{_S}"), ("DELETE", rf"messages/{_S}"), ("POST", rf"threads/messages/{_S}/task"),
+    ("PUT", rf"messages/{_S}/reactions/{_S}"), ("DELETE", rf"messages/{_S}/reactions/{_S}"),
+    ("POST", r"threads/dm"), ("POST", rf"threads/{_S}/open-earlier"), ("POST", rf"uploads/threads/{_S}/messages"),
+)
 
 
 # Runs at once, as the person. Some of these keep their own "always a click" rule inside the route (adding someone
@@ -210,6 +225,8 @@ DO = _routes(
     ("POST", rf"bots/{_S}/(archive|restore)"), ("POST", rf"bots/{_S}/agent-credential"), ("POST", rf"bots/{_S}/agent-credential/revoke"),
     ("POST", r"agents/pairings/(approve|decline)"),
     ("POST", rf"bots/{_S}/access"), ("PUT", rf"bots/{_S}/access"),
+    # A person's or a group's access (backend/teammate_access.py): the route checks the person manages them.
+    ("POST", rf"(people|humans|groups)/{_S}/access"), ("PUT", rf"(people|humans|groups)/{_S}/access"),
     ("PUT", rf"bots/{_S}/repositories"), ("PUT", rf"repositories/{_S}/{_S}"),
     ("PUT", "repositories/settings"), ("POST", "repositories/refresh"),
     ("PUT", rf"bots/{_S}/github-repos"), ("POST", r"github/repos"), ("DELETE", rf"github/repos/{_S}/{_S}"),
@@ -247,6 +264,17 @@ DO = _routes(
     ("PUT", rf"org/order/{_S}"),
     # Which Slack channels bots read and post in: an owner or an admin's call, which the route checks.
     ("POST", r"slack/channels"), ("POST", r"slack/channels/(remove|import)"),
+    # Linking a thread to a Slack channel, taking the link away and checking a suspended one again: an owner's or an
+    # admin's call, which the route checks (backend/slack_threads.py).
+    ("POST", r"slack/links"), ("DELETE", rf"slack/links/{_S}"), ("POST", rf"slack/links/{_S}/resume"),
+    # Calls: starting one, ending it, adding or removing its bots, asking again for action items and leaving. A join
+    # or a token is left out: it hands the person's media token to BotOps, so it stays with the person.
+    ("POST", rf"threads/{_S}/calls"), ("POST", rf"calls/{_S}/(end|leave|bots|action-items/retry)"),
+    ("DELETE", rf"calls/{_S}/bots/{_S}"),
+    # Withdrawing a held write to edit and resend it: its author's own call (backend/org_rule_check.py).
+    ("POST", rf"rule-holds/{_S}/withdraw"),
+    # Who reads an inbox: the route checks the person may change it.
+    ("PUT", rf"inbound/inboxes/{_S}/audience"),
     ("POST", rf"credentials/{_S}/grants"), ("POST", rf"credentials/{_S}/grants/{_S}/revoke"),
     ("DELETE", rf"credentials/{_S}"),
     # Computers: a restart, a model sign-in (its code is pasted in the app, never here), who may open its screen (opening
@@ -279,6 +307,16 @@ DO = _routes(
     ("PUT", r"screening"), ("POST", r"screening/test"),
     ("POST", r"settings/turn-budgets"),
     ("PUT", rf"system-routines/{_S}"), ("POST", rf"system-routines/{_S}/run"), ("POST", r"task-manager/turn-(on|off)"),
+    # The Company page's drafts, sources, stats and logo: the route checks the person is an owner or an admin. An
+    # edition is only drafted here; publishing, approving, overriding, retracting and correcting are not listed, so they
+    # are refused for BotOps (editions.require_person, require_own_click). Removing an audience's reader or invite is
+    # a way out, so it is direct. Turning an audience on is a card (`enables_audience`), checked before this list.
+    ("POST", r"audiences"), ("PATCH", rf"audiences/{_S}"),
+    ("POST", rf"audiences/{_S}/sources"), ("DELETE", rf"audiences/{_S}/sources/{_S}"),
+    ("POST", r"company-page/stats"), ("PATCH", rf"company-page/stats/{_S}"), ("DELETE", rf"company-page/stats/{_S}"),
+    ("POST", r"company-page/logo"), ("DELETE", r"company-page/logo"),
+    ("POST", r"editions"), ("PATCH", rf"editions/{_S}"), ("POST", rf"editions/{_S}/check"),
+    ("DELETE", rf"readers/{_S}"), ("DELETE", rf"audiences/{_S}/invites/{_S}"),
 )
 
 # Cards again when the owner turned "BotOps changes providers and limits without asking" off. A limit lowered is
@@ -304,6 +342,11 @@ CONFIRM = _routes(
     ("POST", r"slack/disconnect"), ("POST", r"github/app/disconnect"),
     # Picking a seat's candidate makes a bot (recruiting._may_hire: only on the person's own confirmation).
     ("POST", rf"seats/{_S}/hire"),
+    # The Company page (backend/company_page): what the page or a reader can see is the owner's own tap. Taking a
+    # reader's access away is direct (below).
+    ("PATCH", r"company-page"), ("DELETE", rf"audiences/{_S}"),
+    ("PUT", rf"audiences/{_S}/disclosure"), ("POST", rf"audiences/{_S}/disclosure/preset"),
+    ("POST", r"readers"), ("POST", r"readers/import"), ("PATCH", rf"readers/{_S}"),
 )
 
 # The messages route is a card unless it names a bot (`classify`).
@@ -315,6 +358,8 @@ ADMIN_ONLY = _routes(
     ("POST", rf"(runners|computers)/{_S}/member-bots"),
     ("POST", r"system/update"), ("PUT", r"directory"), ("POST", r"directory/(sync|preview)"),
     ("POST", r"(slack|github/app)/disconnect"), ("POST", rf"credentials/{_S}/grants/{_S}/revoke"),
+    ("PATCH", r"company-page"), ("DELETE", rf"audiences/{_S}"), ("PUT", rf"audiences/{_S}/disclosure"),
+    ("POST", r"readers"), ("POST", r"readers/import"), ("PATCH", rf"readers/{_S}"),
 )
 
 # Always the person's own tap when BotOps acts for them, whatever they said in chat: handing over the company, updating
@@ -332,6 +377,8 @@ PERSON_ONLY = [
     ("POST", re.compile(API + rf"access/(people|humans)/{_S}/password"), "A person makes someone a password in Settings > Humans"),
     ("POST", re.compile(API + r"me/tokens"), "A person makes their own personal API token in Settings"),
     ("POST", re.compile(API + r"directory/scim-token"), "The owner makes a SCIM token in Settings > Humans"),
+    # The invite's link is the only copy of its token (readers.create_invite), so it goes to the person, not the chat.
+    ("POST", re.compile(API + rf"audiences/{_S}/invites"), "A person makes a reader's invite link in Company page > Readers"),
 ]
 DETAIL_PERSON_ONLY = ": its value never goes to a bot, so BotOps does not do this for you."
 
@@ -369,15 +416,26 @@ def classify(method, path, body=None, rules=None, to_bot=None):
         return None
     if method == "GET":
         return None if NO_READ.fullmatch(path) else "do"
-    if any(m == method and p.fullmatch(path) for m, p in CONFIRM):
+    if any(m == method and p.fullmatch(path) for m, p in CONFIRM) or enables_audience(method, path, body):
         return "confirm"
     if method == "POST" and MESSAGES.fullmatch(path):
         return "do" if to_bot and isinstance(body, dict) and to_bot(body.get("to")) else "confirm"
     if rules and not rules.get("botops_direct", True) and any(m == method and p.fullmatch(path) for m, p in TIGHTENED):
         return "confirm"
-    if any(m == method and p.fullmatch(path) for m, p in DO):
+    if any(m == method and p.fullmatch(path) for m, p in DO + THREADS):
         return "do"
     return None
+
+
+AUDIENCE = re.compile(API + rf"audiences/{_S}")
+
+
+def enables_audience(method, path, body=None):
+    """Turning an audience on (Public, or a reader's audience) serves what its approved content says, so it is the
+    owner's own tap. Turning one off is a way out and stays direct."""
+    path, method = normalize(path) or "", str(method or "").upper()
+    return (method == "PATCH" and bool(AUDIENCE.fullmatch(path)) and isinstance(body, dict) and "enabled" in body
+            and bool(body["enabled"]))
 
 
 def person_only(method, path):
@@ -420,7 +478,7 @@ def card_for_person(method, path, body=None, rules=None, lowers=None, *, force_c
     if force_confirm:
         return True
     match = lambda routes: any(m == method and p.fullmatch(path) for m, p in routes)
-    if match(ALWAYS) or match(CONFIRM):
+    if match(ALWAYS) or match(CONFIRM) or enables_audience(method, path, body):
         return True
     if method == "PUT" and RULES.fullmatch(path) and own_powers(body):
         return True
@@ -442,6 +500,7 @@ SUMMARIES = [
     ("DELETE", re.compile(API + r"providers/gateway"), "Turn off the Tico AI Gateway (its saved key is forgotten)"),
     ("POST", re.compile(API + r"providers/gateway/automatic"), "Connect the Tico AI Gateway automatically again"),
     ("PUT", re.compile(API + rf"usage/(limits(/{_S})?|pools/.+)"), "Change a spending limit"),
+    ("PATCH", AUDIENCE, "Turn on a Company page audience"),
     ("DELETE", re.compile(API + rf"automations/{_S}"), "Delete an automation"),
     ("POST", re.compile(API + rf"automations/{_S}/delete"), "Delete an automation"),
 ]
@@ -564,8 +623,10 @@ def parse_body(raw):
 
 
 # BotOps' own: the run's plumbing and what BotOps says itself. Never switched to the requester by default.
+# Taking back its own Confirm card, and listing them (backend/assistant.py): BotOps' own cards, never run for a person.
 OWN = re.compile(API + r"(credential-runtime|runner-credential-.*|runner-watcher-credentials|attempts.*|jobs.*|runners/.*|"
-                 r"messages(/.*)?|chat/.*|conversations/.*|bots/" + "botops" + r"(/.*)?|files/(uploads|imports)|uploads/.*|me(/.*)?)")
+                 r"messages(/.*)?|chat/.*|conversations/.*|bots/" + "botops" + r"(/.*)?|files/(uploads|imports)|uploads/.*|me(/.*)?|"
+                 r"assistant/proposals|assistant/actions/" + _S + r"/withdraw)")
 
 
 def default_delegable(method, path, body=None, query=None):
@@ -573,6 +634,8 @@ def default_delegable(method, path, body=None, query=None):
     may do or propose for a person, and never its own plumbing or its own messages."""
     path = normalize(path)
     if path and str(method).upper() in ("GET", "POST") and re.fullmatch(API + rf"(?:runners|computers)/{_S}/logins(?:/{_S}(?:/cancel)?)?", path):
+        return classify(method, path, body) == "do"
+    if path and any(m == str(method).upper() and p.fullmatch(path) for m, p in THREADS):
         return classify(method, path, body) == "do"
     if not path or OWN.fullmatch(path):
         return False
@@ -620,6 +683,9 @@ def mail_settings_hint(bot, slug=""):
             + " > Mail sending, or with `hub bot mail " + (slug or bot) + " --send`")
 
 
+ROLE_FIX = "Your role can't change this: "     # `fix` for a person's role refused (app.py words a setting's who may)
+
+
 def fix(path, code, status, acting, names, base=""):
     """`{"fix", "link"}` for a refusal of a BotOps call, or None. `acting` is the identity the route checked;
     `names` maps actor ids to display names."""
@@ -655,5 +721,5 @@ def fix(path, code, status, acting, names, base=""):
         text = (asker + " asked for this without citing who wanted it, so BotOps had only " + asker + "'s rights: say "
                 "go ahead in your BotOps chat, or change " + where + " yourself")
     else:
-        text = "Your role can't change this: ask an owner or admin to change " + where
+        text = ROLE_FIX + "ask an owner or admin to change " + where
     return {"fix": text, "link": (base.rstrip("/") + "/" + link) if base else link}

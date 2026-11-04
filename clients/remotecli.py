@@ -43,7 +43,7 @@ def _delivery(args):
 
 def _rules_args(args):
     """`hub rules` flags as the API takes them: the Who and With flags become scope objects, the rest pass as they are."""
-    def scope(names, everyone=False, all_bots=False):
+    def scope(names, everyone=False, all_bots=False, outside_editions=False):
         out = {}
         if names:
             out["names"] = list(names)
@@ -51,9 +51,12 @@ def _rules_args(args):
             out["everyone"] = True
         if all_bots:
             out["all_bots"] = True
+        if outside_editions:
+            out["outside_editions"] = True
         return out or None
     if args.fn in ("rules add", "rules edit", "rules accept"):
-        who = scope(getattr(args, "who_names", None), getattr(args, "everyone", False), getattr(args, "all_bots", False))
+        who = scope(getattr(args, "who_names", None), getattr(args, "everyone", False), getattr(args, "all_bots", False),
+                    getattr(args, "outside_editions", False))
         if who is not None:
             args.who = who
     if args.fn in ("rules add", "rules edit"):
@@ -70,7 +73,8 @@ def _rules_args(args):
         args.cite = {"file_id": args.file_id, "section": getattr(args, "section", None) or "", "quote": args.quote}
         if getattr(args, "file_version", None):
             args.cite["version"] = args.file_version
-    for flag in ("who_names", "with_names", "everyone", "all_bots", "file_id", "section", "quote", "file_version"):
+    for flag in ("who_names", "with_names", "everyone", "all_bots", "outside_editions", "file_id", "section", "quote",
+                 "file_version"):
         if hasattr(args, flag):
             delattr(args, flag)
     return args
@@ -89,6 +93,8 @@ def via_tool(client, args, **more):
         fields["computer"] = args.computer  # explicit null is the bot's own internet; omission only reads
     if args.fn == "computer browser-exit" and "sharing" in fields:
         fields["sharing"] = fields["sharing"] == "on"
+    if args.fn == "thread update" and fields.pop("keep_forever", False):
+        fields["retention_days"] = None  # explicit null keeps its messages for good; omission leaves the policy alone
     fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
     fields.update(more)
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
@@ -161,7 +167,7 @@ def product_repo_create(client, name, *, confirm=None, stdin=None, stderr=None):
     else:
         print(f"Type {preview['repository']} to create it: ", end="", file=stderr, flush=True)
         if stdin.readline().strip() != preview["repository"]:
-            raise APIError("cancelled", "Confirmation did not match; no repository was created")
+            raise APIError("canceled", "Confirmation did not match; no repository was created")
     return client.post("github/product-repos", {
         "org": preview["org"], "name": preview["name"], "visibility": preview["visibility"],
         "auto_init": preview["auto_init"], "confirmed": True,
@@ -213,9 +219,25 @@ def counsel_held(args):
         raise SystemExit(f"{fn} is not available to Counsel: it has no credentials and sends nothing")
 
 
+# The aliases hubcli.parser() declares. Argparse keeps the spelling typed (`hub tasks list` sets cmd to "tasks"), and the
+# dispatch below tests the canonical names, so each alias is renamed once, here, before anything is dispatched on it.
+COMMAND_ALIASES = {"tasks": "task", "approvals": "approval", "automations": "automation", "bots": "bot", "rule": "rules"}
+SUBCOMMAND_ALIASES = {("task", "defer"): "later"}
+
+
+def canonical_names(args):
+    """Rename an aliased command or subcommand on a parsed line to the name it stands for. `fn` is already the canonical
+    name, set by each leaf of the parser."""
+    args.cmd = COMMAND_ALIASES.get(args.cmd, args.cmd)
+    if hasattr(args, "sub"):
+        args.sub = SUBCOMMAND_ALIASES.get((args.cmd, args.sub), args.sub)
+    return args
+
+
 def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
+    canonical_names(args)
     counsel_held(args)
     # A query may run for 20 s on the server before it is stopped, a decision's providers 25 s; leave room for that.
     client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=45 if args.cmd in ("decision", "gateway") else 30 if args.cmd == "sql" else 120 if args.cmd == "listening" or args.fn == "market import" else 130 if args.cmd == "inbound" else 15)
@@ -224,11 +246,17 @@ def run(args, who=None):
         return via_tool(client,args)
     if args.cmd == "rules":
         return via_tool(client, _rules_args(args))
-    if args.cmd == "mail":
+    if args.cmd in ("mail", "connections"):
+        return via_tool(client, args)
+    if args.cmd == "thread":
         return via_tool(client, args)
     if args.cmd == "finance":
         return via_tool(client, args, **({"operation_id": args.operation_id} if getattr(args, "operation_id", None) else {}))
     if args.cmd == "settings":
+        return via_tool(client, args)
+    if args.cmd == "feedback":
+        return via_tool(client, args)
+    if args.cmd == "call":
         return via_tool(client, args)
     if args.cmd in ("card", "pin"):
         return via_tool(client, args)
@@ -241,7 +269,7 @@ def run(args, who=None):
         with Path(args.file).open("rb") as source:
             return client.post_bytes("team/icon", source)
     if fn in ("task worktree add", "task worktree attach", "task worktree setup"):
-        from runner.worktrees import command
+        from runner_support.worktrees import command
         return command(client, args.worktree_sub, getattr(args, 'repo', None) or getattr(args, 'path', None), args.task)
     if args.cmd == "repo":
         from clients import hubtools
@@ -293,10 +321,11 @@ def run(args, who=None):
         return via_tool(client, Namespace(**fields), **more)
     if args.cmd == "template" or (args.cmd == "bot" and args.sub not in ("status", "recent", "repo-create")):
         return bots(client, args)
-    if fn in ("bot repo-create", "human add", "human list", "group list", "group update", "group delete", "tool list", "tool learn", "tool add", "tool update", "tool remove",
+    if fn in ("bot repo-create", "human add", "human list", "human access", "group list", "group update", "group delete", "group access", "tool list", "tool learn", "tool add", "tool update", "tool remove",
               "update create", "update redo", "update list", "update show", "update mark-read", "update reply", "update settings",
               "changelog list", "changelog mark-read",
               "needs-you start", "needs-you next", "needs-you respond", "needs-you commit", "needs-you abandon",
+              "needs-you show", "origin show",
               "brief", "pipeline", "mcp stats", "calendar list", "calendar status", "team show", "team budget", "org order", "org reports-to", "run list",
               "message list", "message mark-read", "bot recent", "agent pair show", "agent pair approve", "agent pair decline",
               "slack channel list", "slack channel add", "slack channel remove", "slack channel import",
@@ -305,8 +334,8 @@ def run(args, who=None):
     if fn == "run export":
         from clients import hubtools
         if not args.fixture:
-            return hubtools.BY_NAME["hub_run_export"]["fn"](client, {"attempt": args.attempt})
-        found = hubtools.run_export_full(client, args.attempt)
+            return hubtools.BY_NAME["hub_run_export"]["fn"](client, {"run": args.run})
+        found = hubtools.run_export_full(client, args.run)
         return {"written": hubtools.write_fixture(found, Path(args.out or "."))}
     if fn in ("task child create", "task tree", "task bulk", "task model"):
         return via_tool(client, args)
@@ -408,7 +437,7 @@ def run(args, who=None):
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     if args.cmd == "assistant":
         from clients import hubtools
-        if args.sub in ("read", "send"):
+        if args.sub in ("read", "send", "learn", "learned", "withdraw", "proposals", "change"):
             return via_tool(client, args)
         try:
             body = json.loads(args.body or "{}")
@@ -416,6 +445,7 @@ def run(args, who=None):
             raise APIError("body", "--body must be JSON") from None
         return hubtools.BY_NAME["hub_assistant_propose"]["fn"](client, {
             "summary": args.summary, "path": args.path, "method": args.method, "body": body,
+            "for_person": getattr(args, "for_person", None),
             "operation_id": os.environ.get("HUB_OPERATION_ID")})
     if args.cmd == "db":
         # Runs here, beside the credential; the hub only checks who is asking and keeps the audit.
@@ -556,6 +586,9 @@ def run(args, who=None):
             body = Path(args.body_file).read_text() if args.body_file else args.body
             payload = {"owner": target(args.owner), "title": args.title, "body": body,
                        "due": args.due, "goal_id": getattr(args, "goal", None) or None}
+            for field in ("check_back_at", "check_back_note"):
+                if getattr(args, field, None) is not None:
+                    payload[field] = getattr(args, field)
             if args.parent:
                 payload["relations"] = [{"task": args.parent, "kind": "parent"}]
             if getattr(args, "private", None) is not None:
@@ -592,6 +625,8 @@ def run(args, who=None):
                 from clients import hubtools
                 return hubtools.BY_NAME["hub_task_show_many"]["fn"](client, {"ids": ids})
             return client.get("tasks/" + ids[0])
+        if sub == "check-back":
+            return post(f"tasks/{args.id}/check-back", {"at": args.at or args.in_duration, "note": args.check_back_note})
         if sub == "run":
             return post(f"tasks/{args.id}/run-now", {})
         if sub in ("later", "defer"):           # `defer` is the older name
@@ -732,7 +767,7 @@ def run(args, who=None):
             if args.body_file:
                 args.body = Path(args.body_file).read_text()
         return tool(client, args)
-    if cmd in ("kpi", "proposal", "strategy", "brand", "gtm", "growth"):
+    if cmd in ("kpi", "proposal", "strategy", "brand", "growth"):
         return tool(client, args)
     if cmd == "lens":
         from clients import hubtools
@@ -829,6 +864,10 @@ def run(args, who=None):
         page = client.get(f"conversations/{args.conversation}/messages", before=args.before, since=args.since)
         return {"conversation": page.get("conversation"), "messages": page.get("messages", []),
                 "has_more": bool(page.get("has_more")), "next_before": page.get("next_before")}
+    if fn == "thread link-slack":                  # the MCP tool of the same name: the CLI and MCP run one function
+        from clients import hubtools
+        return hubtools.BY_NAME["hub_thread_link_slack"]["fn"](client, {
+            "thread": args.thread, "channel": args.channel, "history": args.history, "off": args.off, "operation_id": key})
     if cmd == "automation":
         return automation(client, args)
     if cmd == "release":
@@ -836,6 +875,10 @@ def run(args, who=None):
     if cmd == "approval":
         if sub == "show":
             return client.get("approvals/" + args.id)
+        if sub == "list":
+            query = {"status": args.status, "limit": args.limit, "offset": args.offset}
+            query.update({k: v for k, v in (("from", args.from_actor), ("before", args.before), ("since", args.since)) if v})
+            return client.get("approvals", **query)
         if sub == "read-back":
             return post("assistant/read-back", {"approvals": args.ids})
         if sub in ("approve", "decline"):
@@ -920,7 +963,7 @@ def bots(client, args):
             rows = listing.get("computers", []) if isinstance(listing, dict) else listing
             me = hubtools._as_person(client).get("me")
             person = str(me.get("actor") or me.get("id") or "").removeprefix("human:")
-            matches = [row for row in rows if not row.get("revoked_at") and row.get("operator") == person
+            matches = [row for row in rows if not row.get("revoked_at") and row.get("owner_id") == person
                        and args.computer in (row.get("id"), row.get("label"))]
             if len(matches) != 1:
                 raise APIError("computer", "Choose one of your computers by its id or unique label")
@@ -935,7 +978,8 @@ def bots(client, args):
                                     ("subtask_session", getattr(args, "subtask_session", None)),
                                     ("task_goal", getattr(args, "task_goal", None)),
                                     ("review_model", getattr(args, "review_model", None)),
-                                    ("capture_stream", getattr(args, "capture_stream", None))) if v is not None}
+                                    ("capture_stream", getattr(args, "capture_stream", None)),
+                                    ("new_slug", getattr(args, "new_slug", None))) if v is not None}
         if getattr(args, "subscribe_updates", None) is not None:
             picked = [p.strip() for p in args.subscribe_updates.split(",") if p.strip() and p.strip() != "none"]
             fields["update_subscriptions"] = picked
@@ -943,7 +987,7 @@ def bots(client, args):
             return hubtools.BY_NAME["hub_bot_update"]["fn"](client, fields)
         except ValueError as exc:
             raise APIError("not_found", str(exc)) from None
-    if args.fn in ("bot access", "bot mail", "bot owners", "bot setup-done", "bot ready", "bot place", "bot go-live", "bot model", "bot pause",
+    if args.fn in ("bot show", "bot access", "bot mail", "bot owners", "bot setup-done", "bot ready", "bot place", "bot go-live", "bot model", "bot pause",
                    "bot resume", "bot scope", "bot restore", "bot archive", "bot budget", "bot release", "bot profile",
                    "bot task-model") or (args.fn == "bot create" and args.record_only):
         from clients import hubtools
@@ -956,8 +1000,9 @@ def bots(client, args):
         fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
         return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
     if args.fn == "bot check":
-        from clients.manifest import repo_dir
-        problems = catalog.check(repo_dir(workspace, args.slug), args.slug)
+        from clients.botcopy import folder_of
+        from clients.manifest import folder_dir
+        problems = catalog.check(folder_dir(workspace, folder_of(client, args.slug), args.slug), args.slug)
         return {"ready": not problems, "problems": problems}
     if not args.template:
         raise APIError("usage", "hub bot create --template T builds the bot; --record-only only registers it")
@@ -968,10 +1013,12 @@ def bots(client, args):
     path = catalog.materialize(args.template, slug, workspace, client.get("config"),
                                record.get("answers") or {},
                                display_name=args.name or chosen.get("display_name"),
-                               instructions=chosen.get("instructions"))
+                               instructions=chosen.get("instructions"),
+                               folder=(registered or {}).get("folder"))
     result = {"path": str(path), "template": args.template, "slug": slug,
               "committed": catalog.committed(path),
-              "automations": seed_automations(client if registered is None else _person(client), slug, path),
+              "automations": seed_automations(client if registered is None else _person(client), slug, path,
+                                              (registered or {}).get("id")),
               **({"registered": registered} if registered else {})}
     result["github"] = github_repository(client, slug, path)
     return result
@@ -1008,7 +1055,7 @@ def github_repository(client, slug, path):
             # A bot the server has not registered stays on this computer, as before.
             return {"skipped": exc.detail, "note": f"register the bot, then hub bot repo-create {slug} --empty"}
         if exc.code == "github_repo_exists":
-            return {"repository": "bot-" + slug, "existing": True, "note": exc.detail}
+            return {"repository": path.name, "existing": True, "note": exc.detail}
         if exc.code == "github_permission_missing":
             raise APIError(exc.code, f"Not finished: {exc.detail} The bot stays planned and its files are in {path}; "
                            "finish and commit them there as usual.", exc.status, False, exc.operation_id) from None
@@ -1035,10 +1082,11 @@ def _person(client):
     return hubtools._as_person(client)
 
 
-def seed_automations(client, slug, path):
+def seed_automations(client, slug, path, bot_id=None):
     """The template's `routines:` (older: `schedules:`) become the new bot's first automations: each a schedule (or an
     event, or a webhook trigger) and one bot turn with the routine's text. The manifest is read once, here, with its
-    playbooks already rendered; from now on they are edited in Automations."""
+    playbooks already rendered; from now on they are edited in Automations. The actor is `bot:<id>` (a bot's id is
+    its primary key; its slug is only a label), looked up by slug when the registration did not return it."""
     from clients.manifest import manifest_path, routines_of
     from clients.routines import validate_schedules
     import yaml
@@ -1047,6 +1095,12 @@ def seed_automations(client, slug, path):
         entries = validate_schedules(declared, lambda rel: (path / rel).read_text())
     except (OSError, ValueError, TypeError, yaml.YAMLError) as exc:
         return {"error": f"bot.yaml routines: {exc}"}
+    if not entries:
+        return []
+    try:
+        actor = "bot:" + (bot_id or client.get("bots/" + slug)["id"])
+    except (APIError, KeyError, TypeError) as exc:
+        return {"error": f"the bot's id for its routines: {exc}"}
     seeded = []
     for entry in entries:
         on = entry["on"] or ""
@@ -1054,8 +1108,8 @@ def seed_automations(client, slug, path):
                    {"type": "event", "name": on} if on else
                    {"type": "schedule", "cron": entry["cron"], "tz": entry["timezone"]})
         made = client.post("automations", {
-            "name": entry["title"][:120], "owner": "bot:" + slug, "enabled": entry["enabled"], "trigger": trigger,
-            "steps": [{"id": "turn", "type": "bot_turn", "bot": "bot:" + slug,
+            "name": entry["title"][:120], "owner": actor, "enabled": entry["enabled"], "trigger": trigger,
+            "steps": [{"id": "turn", "type": "bot_turn", "bot": actor,
                        "prompt": entry["instructions"] or "Do this routine's work."}]})
         seeded.append(made.get("id") or (made.get("automation") or {}).get("id"))
     return seeded
@@ -1156,7 +1210,7 @@ def integration_text(page):
         out += [f"  {q['id']:<44} {q['title']}" for q in page["queries"]]
     notes = page.get("learnings") or []
     out += ["", f"## Learnings ({len(notes)}; add one with `hub tool learn {page['service']} \"...\"`)"]
-    out += [f"  {n['created'][:10]}  {n['actor']}: {n['text']}" for n in notes] or ["  none yet"]
+    out += [f"  {n['created_at'][:10]}  {n['actor']}: {n['text']}" for n in notes] or ["  none yet"]
     return "\n".join(out)
 
 
@@ -1255,11 +1309,11 @@ def _table(rows, cols):
 
 
 def growth_text(fn, result):
-    """`hub brand|gtm|growth ...` for a person: the summary as text, lists as tables, the rest as indented lines.
+    """`hub brand|growth ...` for a person: the summary as text, lists as tables, the rest as indented lines.
     `--json` prints the API response instead."""
     if not isinstance(result, dict):
         return "\n".join(_plain(result))
-    if fn in ("brand summary", "gtm summary"):
+    if fn == "brand summary":
         return result.get("text") or "Nothing published yet."
     if fn == "brand check":
         hits = result.get("hits") or []
@@ -1267,25 +1321,17 @@ def growth_text(fn, result):
             return f"No hits against brand v{result.get('n', 0)}." if result.get("n") else "No brand published yet."
         return "\n".join(f"{h['level']}: {h['kind']} \"{h['match']}\" at {h['index']}" + (f" ({h['rule']})" if h.get("rule") else "")
                          for h in hits)
-    if fn == "growth segment list":
-        return _table(result.get("segments") or [], [("id", "id"), ("name", "name"), ("status", "status"),
-                      ("motion", "motion"), ("buyer", "who_buys"), ("deal", "deal_size"),
-                      ("channels", lambda r: ", ".join(r.get("channels") or [])), ("ideas", "ideas")])
     if fn in ("growth channel list",):
         return _table(result.get("channels") or [], [("slug", "slug"), ("name", "name"), ("stage", "stage"),
                       ("track", "track"), ("owner", "owner_ref"), ("budget/mo", "budget_month")])
-    if fn in ("gtm sources", "growth source list"):
+    if fn == "growth source list":
         text = _table(result.get("sources") or [], [("id", "id"), ("truth for", "truth_for"), ("system", "system"),
                       ("reach", lambda r: f"{r.get('reach_kind')}:{r.get('reach_ref') or ''}".rstrip(":")), ("may", "may")])
         conflicts = result.get("conflicts") or []
         return text + ("\n\nConflicts:\n" + "\n".join(_plain(conflicts)) if conflicts else "")
-    if fn == "growth idea list":
-        return _table(result.get("ideas") or [], [("id", "task_id"), ("status", "status"), ("ice", "ice"),
-                      ("title", "title"), ("assignee", "assignee")])
     if fn == "growth economics":
         rows = list(result.get("rows") or []) + ([result["total"]] if result.get("total") else [])
         head = f"Month: {result.get('month') or 'none yet'}"
-        head += f"  Segment: {result['segment']}" if result.get("segment") else ""
         return head + "\n" + _table(rows, [
             ("channel", "name"), ("spend", "spend"), ("bot", "bot_cost"), ("new", "new_customers"), ("CAC", "cac"),
             ("months", "expected_months"), ("LTV", "ltv"), ("LTV:CAC", "ltv_cac"), ("payback", "payback_months")])
@@ -1294,6 +1340,14 @@ def growth_text(fn, result):
                       ("spend", "spend"), ("bot", "bot_cost"), ("new", "new_customers"), ("d30", "kept_d30"),
                       ("d90", "kept_d90"), ("d180", "kept_d180"), ("quality", "quality")])
     return "\n".join(_plain(result)) or "Nothing yet."
+
+
+def strategy_section_text(result, key):
+    """One section of the published strategy as text, for `hub strategy show --section`."""
+    current = result.get("current") if isinstance(result, dict) else None
+    if not current:
+        return "Nothing published yet."
+    return (current.get("sections") or {}).get(key) or ""
 
 
 def main(args, who=None):
@@ -1309,15 +1363,17 @@ def main(args, who=None):
             print(integrations_text(result))
         elif args.fn == "tool show" and not args.json:
             print(integration_text(result))
+        elif args.fn == "strategy show" and getattr(args, "section", None) and not args.json:
+            print(strategy_section_text(result, args.section))
         elif args.fn == "tool query-search" and not args.json:
             print(query_text(result) if args.query_id else queries_text(result))
-        elif args.cmd in ("brand", "gtm", "growth") and not getattr(args, "json", False):
+        elif args.cmd in ("brand", "growth") and not getattr(args, "json", False) and args.fn != "growth numbers":
             print(growth_text(args.fn, result))
         elif args.fn == "automation guide" and isinstance(result, dict) and "text" in result:
             print(result["text"])
         elif args.fn == "bot go-live" and isinstance(result, dict) and result.get("state") == "waiting_for_repository":
             # Not an error and nothing to retry: Tico finishes it when the computer reports the repository.
-            print(f"{result.get('bot')} is placed on {result.get('computer')} and waiting for it to get the repository. "
+            print(f"{args.bot} is placed on {result.get('computer')} and waiting for it to get the repository. "
                   "Tico finishes going live (turns it on and starts its setup) when "
                   f"{result.get('computer')} has the repository; nothing needs to run again.")
         else:

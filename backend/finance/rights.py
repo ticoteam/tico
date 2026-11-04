@@ -1,5 +1,5 @@
-"""Setting up a helper's Finance rights in one step (the Bookkeeper bot gets finance.book, ap, ar, pay and cards when it
-is added), inside the caller's transaction. What a right lets the holder ask is core/rights and core/kinds; this only
+"""Setting up a helper's Finance rights in one step (the Bookkeeper bot gets finance.book, ap, ar, pay, cards and rules
+when it is added), inside the caller's transaction. What a right lets the holder ask is core/rights and core/kinds; this only
 writes the grants a hire comes with."""
 import sqlite3
 from collections.abc import Iterable

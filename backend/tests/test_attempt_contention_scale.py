@@ -14,6 +14,7 @@ from backend.scheduler import Scheduler
 from backend.store import H, encode, _pooled
 from backend.tests.test_api import api, headers  # noqa: F401
 from backend.tests.test_attempt_contention import fleet
+from backend.enqueue import enqueue_stored
 
 
 @pytest.mark.slow
@@ -24,7 +25,7 @@ def test_busy_install_routes(api, monkeypatch):
     now = H.now()
     with store.transaction() as c:
         for j in range(8):
-            c.execute("INSERT INTO tags(id,key,label,created,updated) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO tags(id,key,label,created_at,updated_at) VALUES(?,?,?,?,?)",
                       (f'tag-{j}', f'label-{j}', f'Label {j}', now, now))
         for i in range(200):
             c.executemany('INSERT INTO task_tags(task_id,tag_id) VALUES(?,?)',
@@ -34,27 +35,29 @@ def test_busy_install_routes(api, monkeypatch):
         for i in range(100):
             for j in range(20):
                 mid = f'input-{i}-{j}'
-                c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created,refs_json,in_reply_to) "
+                c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs,in_reply_to) "
                           "VALUES(?,?,'human:ana','bot:ops','say','Synthetic input',?,?,?)",
                           (mid, f'room-{i}', now, encode({'task': f'task-{i}', 'answers': [f'message-{k}' for k in range(10)]}),
                            f'input-{i}-{j-1}' if j else None))
+                enqueue_stored(c, mid)
                 c.execute('INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)',
                           (f'attempt-{i}', mid))
                 c.execute("UPDATE jobs SET state='input',attempt_id=? WHERE id=?", (f'attempt-{i}', mid))
         # Distinct task lanes leave real work for concurrent claims. The heartbeat
         # reports every checkout, as a busy runner does, rather than an empty inventory.
-        c.execute('UPDATE runners SET capacity=200,capabilities_json=? WHERE id=?',
+        c.execute('UPDATE runner_states SET capacity=200,capabilities=? WHERE runner_id=?',
                   (encode([execution.LANES, execution.ROOTS]), computer['runner_id']))
         for i in range(197, 200):
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created,refs_json) "
+            c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
                       "VALUES(?,?,'human:ana','bot:ops','say','Synthetic queued work',?,?)",
                       (f'queued-{i}', f'room-{i}', now, encode({'task': f'task-{i}'})))
-        c.execute("UPDATE tasks SET updated=?,owner='bot:finance',private=0 WHERE id IN (" + ','.join('?' * 10) + ")",
+            enqueue_stored(c, f'queued-{i}')
+        c.execute("UPDATE tasks SET updated_at=?,owner_id='bot:finance',private=0 WHERE id IN (" + ','.join('?' * 10) + ")",
                   (H.shift(now, hours=-2), *(f'task-{i}' for i in range(100, 110))))
         # Fixture construction is not part of the lease workload. Start the real lease
         # clock only after all synthetic inputs have been inserted.
         original_lease = H.shift(H.now(), seconds=45)
-        c.execute("UPDATE attempts SET created=?,lease_until=?", (H.now(), original_lease))
+        c.execute("UPDATE attempts SET created_at=?,lease_until=?", (H.now(), original_lease))
     print("SCALE_SEED_SECONDS", round(time.monotonic() - started, 2), flush=True)
     rec = flight.Recorder()
     store.recorder, store.factory = rec, flight.connection_class(rec)
@@ -78,7 +81,7 @@ def test_busy_install_routes(api, monkeypatch):
         # An unrelated event commit invalidates main's data_version optimization. This is
         # deterministic traffic overlap, without sleeping or changing the live database.
         with store.transaction() as write:
-            write.execute("UPDATE tasks SET updated=? WHERE id='task-199'", (H.now(),))
+            write.execute("UPDATE tasks SET updated_at=? WHERE id='task-199'", (H.now(),))
         print("SCALE_PREPARE_SECONDS", round(time.monotonic() - started, 2), flush=True)
         prepared.set()
         return result
@@ -146,7 +149,7 @@ def test_busy_install_routes(api, monkeypatch):
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM attempts WHERE id LIKE 'attempt-%' AND state='running' AND lease_until>?", (H.now(),)).fetchone()[0] == 100
         assert c.execute("SELECT count(*) FROM attempts WHERE id LIKE 'attempt-%' AND lease_until>?", (original_lease,)).fetchone()[0] == 100
-        assert c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:finance'").fetchone()[0] >= 10
+        assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:finance'").fetchone()[0] >= 10
     # Wall-clock p95 under twelve threads on a shared VM varies run to run; the receipt above records it, and the lock
     # holds below are what the contention fix bounds. A hold is wall time, so it includes GIL waits behind the other
     # eleven threads: the heartbeat's cache-miss write runs about 0.2 s and has reached 0.87 s on a busy release VM with

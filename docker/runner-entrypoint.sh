@@ -7,7 +7,7 @@
 set -euo pipefail
 
 CONFIG="$HOME/runner.json"
-# Two users (SECURITY.md, runner/isolation.py). The supervisor is `ticorun` (10002), as in every earlier
+# Two users (SECURITY.md, runner_support/isolation.py). The supervisor is `ticorun` (10002), as in every earlier
 # image, and owns runner.json, its state and the tools directory. Every process that runs bot code is `bot`
 # (10003), in the same group so the workspace and the model logins work for both, and so an older image
 # can still run on a migrated volume (an update that is rolled back). Started as root with the
@@ -217,6 +217,6 @@ export TICO_SUPERVISED=1 TICO_RUNNER_SELF_UPDATE=0
 # The runner also supervises the meeting-importer and Close jobs the hub assigns here (runner-rs/src/sidejobs.rs).
 export TICO_SIDE_JOBS="${TICO_SIDE_JOBS:-1}"
 # The image's Rust runner, run directly: no checkout here moves, so there is nothing for the shim
-# (`python -m runner run`) to fetch. It finds the Python that runs `hub` and the side jobs through TICO_RUNNER_PYTHON.
+# (`python -m runner_support run`) to fetch. It finds the Python that runs `hub` and the side jobs through TICO_RUNNER_PYTHON.
 export TICO_ROOT="${TICO_ROOT:-/opt/tico}" TICO_RUNNER_PYTHON="${TICO_RUNNER_PYTHON:-$(command -v python)}"
 exec "$TICO_RUNNER_BIN" --config "$CONFIG" run

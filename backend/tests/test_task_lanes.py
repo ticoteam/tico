@@ -11,8 +11,8 @@ def task_bot(api, lanes, capability="task_lanes_v2", capacity=8, others=()):
     """`ops` keyed on tasks, assigned to a runner that does or does not advertise lanes."""
     with api.app.state.store.transaction() as c:
         for bot in ("ops", *others):
-            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (json.dumps({**config, "session": "task"}), bot))
+            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+            c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps({**config, "session": "task"}), bot))
     machine = runner(api)
     for bot in ("ops", *others):
         assign(api, machine, bot)
@@ -44,9 +44,10 @@ def test_task_lanes_run_side_by_side_and_each_lane_stays_serial(api):
 
 
 def test_a_bot_uses_all_places_and_next_place_goes_to_the_bot_with_fewest(api):
-    machine = task_bot(api, lanes=True, capacity=4, others=("finance",))
+    machine = task_bot(api, lanes=True, capacity=2, others=("finance",))
     tasks = [new_task(api, title) for title in ("first", "second", "third", "fourth", "fifth")]
-    # No per-bot cap or permanently empty place: every short start may be used.
+    # No per-bot cap or permanently empty place: every short start may be used. Twice the two places is the claim
+    # bound, so four turns lease and the fifth task waits for a free place.
     assert [claim(api, machine)["bot"] for _ in range(4)] == ["ops"] * 4
     assert claim(api, machine) is None
     assert get(api, "tasks/" + tasks[4]["id"])["waiting_for"] == "Waiting for a free turn on Test Mac"
@@ -94,7 +95,7 @@ def test_a_finished_lane_leaves_the_bot_running_and_stop_names_the_turn(api):
     # Two turns out: a stop without the attempt would be a guess.
     refused = post(api, "bots/ops/stop", {}, expected=409)
     assert refused["error"]["code"] == "ambiguous"
-    post(api, "bots/ops/stop", {"attempt_id": two["id"]})
+    post(api, "bots/ops/stop", {"run_id": two["id"]})
     post(api, f"attempts/{one['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."},
          machine["token"])
     with api.app.state.store.read() as c:
@@ -149,7 +150,7 @@ def test_a_pre_limit_lane_start_or_restore_cannot_release_the_cooldown(api, monk
         post(api, f"attempts/{two['id']}/started", {"thread_id": two["lane"]}, machine["token"])
         # A lease which lapsed while its worker continued; the runner still owns its lane.
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE attempts SET state='expired',finished=? WHERE id=?", (before, two["id"]))
+            c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (before, two["id"]))
             c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (two["job_id"],))
     monkeypatch.setattr(H, "now", lambda: H.shift(before, seconds=1))
     post(api, f"attempts/{one['id']}/started", {"thread_id": one["lane"]}, machine["token"])

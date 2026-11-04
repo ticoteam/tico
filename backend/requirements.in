@@ -21,3 +21,4 @@ pypdf>=6.21.2,<7
 
 python-multipart>=0.0.22,<1
 Pillow>=13.0,<14
+livekit>=1.1.21,<1.2     # real-time audio for call recording (backend/call_media.py); imported lazily

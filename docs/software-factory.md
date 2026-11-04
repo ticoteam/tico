@@ -9,7 +9,7 @@ the roles, drop the ones you don't need, and change the steps in Settings → Ta
 
 | # | Role | Starter template | What it does |
 |---|---|---|---|
-| 1 | Builder | `pr-reviewer` (Senior Software Engineer), set to build | Builds the change, does every fix step, merges under the Head of Engineering's rules |
+| 1 | Builder | `builder` (Builder), set to build | Builds the change, does every fix step, merges under the Head of Engineering's rules |
 | 2 | Reviewer 1 | `pr-reviewer`, preferably on a different model company from the Builder | Technical review: bugs and correctness, as comments on the ticket |
 | 3 | Reviewer 2 | `pr-reviewer`, on a third model if you have one | A second review of the updated change, only for larger or risky changes |
 | 4 | QA | `issue-triage` (QA Engineer) | Runs the acceptance tests before release, and again live after release |

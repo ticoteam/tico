@@ -22,24 +22,24 @@ function profileFieldsHTML(e, choices) {
   const opt = (v, label, cur) => `<option value="${esc(v)}"${String(v) === String(cur) ? ' selected' : ''}>${esc(label)}</option>`;
   const description = list.find(c => c.name === name)?.description || p.description || '';
   const lead = name === 'lead' ? `<label class="profile-field"><span class="muted">Digest at</span><select class="settings-inline-select" data-profile-key="digest_hour"${off}
-      aria-label="Digest hour for ${esc(empName(e.name))}">${Array.from({length: 24}, (_, h) => opt(h, profileHour(h), p.digest_hour ?? 9)).join('')}</select></label>` : '';
+      aria-label="Digest hour for ${esc(empName(e.id))}">${Array.from({length: 24}, (_, h) => opt(h, profileHour(h), p.digest_hour ?? 9)).join('')}</select></label>` : '';
   const custom = name === 'custom' ? `<div class="profile-custom" data-profile-custom>
       <label class="profile-field"><span class="muted">Pulls</span><select class="settings-inline-select" data-profile-key="pulls"${off}>${PROFILE_PULLS.map(([v, l]) => opt(v, l, p.pulls)).join('')}</select></label>
       <label class="profile-field"><span class="muted">Takes</span><select class="settings-inline-select" data-profile-key="takes"${off}>${PROFILE_TAKES.map(([v, l]) => opt(v, l, p.takes)).join('')}</select></label>
       <label class="sysr-switch">${peopleSwitch('data-profile-key="sweeps"', !!p.sweeps, !manage, 'Sweeps')}<span>Sweeps</span></label>
-      <a href="${AUTOMATIONS}?q=${encodeURIComponent(botDisplayName(e.name))}" data-profile-rules>Automations</a></div>` : '';
-  return `<select class="settings-inline-select" data-bot-profile="${esc(e.name)}" data-current="${esc(name)}" aria-label="Profile for ${esc(empName(e.name))}"${off}>
+      <a href="${AUTOMATIONS}?q=${encodeURIComponent(botDisplayName(e.id))}" data-profile-rules>Automations</a></div>` : '';
+  return `<select class="settings-inline-select" data-bot-profile="${esc(e.id)}" data-current="${esc(name)}" aria-label="Profile for ${esc(empName(e.id))}"${off}>
       ${list.map(c => opt(c.name, c.label, name)).join('')}</select>${lead}${custom}
     <p class="muted profile-words" data-profile-description>${esc(description)}</p>${p.summary ? `<p class="muted profile-words" data-profile-summary>${esc(p.summary)}</p>` : ''}`;
 }
 function profileRowHTML(e) {
-  return `<div class="sb-row"><span>Profile</span><div class="profile-box" data-bot-profile-box="${esc(e.name)}">${profileFieldsHTML(e, null)}</div><span></span></div>`;
+  return `<div class="sb-row"><span>Profile</span><div class="profile-box" data-bot-profile-box="${esc(e.id)}">${profileFieldsHTML(e, null)}</div><span></span></div>`;
 }
 async function profileMount(rows, slug) {
   const box = rows?.querySelector(`[data-bot-profile-box="${CSS.escape(slug)}"]`); if (!box) return;
   let choices;
   try { choices = await profileChoices(); } catch { return; }
-  const e = S.emps.find(row => row.name === slug);
+  const e = botRow(slug);
   if (!e || !box.isConnected || box.contains(document.activeElement)) return;
   box.innerHTML = profileFieldsHTML(e, choices);
 }
@@ -61,7 +61,7 @@ async function profileSave(slug, body, revision) {
 // revision, or null when the box shows what is saved. Picking Custom shows its own fields once saved.
 function profileStaged(target) {
   const box = target.closest('[data-bot-profile-box]'), slug = box?.dataset.botProfileBox;
-  if (!S.emps.find(row => row.name === slug)) return null;
+  if (!botRow(slug)) return null;
   const select = box.querySelector('[data-bot-profile]');
   const initial = el => el.type === 'checkbox' ? el.defaultChecked : [...(el.options || [])].find(o => o.defaultSelected)?.value ?? el.defaultValue;
   const valueOf = el => el.type === 'checkbox' ? el.checked : el.value;

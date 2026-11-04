@@ -43,6 +43,15 @@ def test_a_task_received_runs_its_owners_automation_only(api):
     assert len(done) == 1 and done[0]["status"] == "ok" and done[0]["trigger_ref"].startswith("task:")
 
 
+def test_a_task_received_without_a_type_reaches_its_automation_as_the_general_type(api):
+    """A task made with no type keeps a NULL type_id on its row; the trigger reads it as the general type, as the
+    task flow does, so a filter on task.type_id matches it (docs/tasks.md)."""
+    aid = make(api, {"type": "task_received", "to": "bot:ops",
+                     "filters": [{"field": "task.type_id", "op": "is", "value": "general"}]})
+    post(api, "tasks", {"owner": "ops", "title": "Untyped check", "body": "Please."})
+    assert len(runs(api, aid)["runs"]) == 1
+
+
 def test_trigger_filters_drop_a_run_and_count_it_for_the_day(api):
     aid = make(api, {"type": "task_received", "to": "bot:ops",
                      "filters": [{"field": "task.title", "op": "contains", "value": "urgent"}]})
@@ -92,7 +101,7 @@ def test_send_reply_follows_the_inbox_send_switch(api):
     fire(api, automations.on_mail, "ana@acme.example", mail("m2"))
     with api.app.state.store.read() as c:
         actions = [(r["msg_id"], r["action"]) for r in c.execute(
-            "SELECT msg_id, action FROM automation_mail_actions ORDER BY created")]
+            "SELECT msg_id, action FROM automation_mail_actions ORDER BY created_at")]
         off = c.execute("SELECT count(*) FROM events WHERE action='automation.send_off'").fetchone()[0]
     assert actions == [("m1", "send"), ("m2", "draft")] and off == 1
 
@@ -112,7 +121,7 @@ def test_only_the_inboxs_person_or_the_top_sets_its_switch(api):
 def listed(api, name, readers=()):
     """A channel on the team's Slack list (Settings > Tools > Slack)."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO slack_channels(key,name,readers_json,created,updated) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO slack_channels(key,name,readers,created_at,updated_at) VALUES(?,?,?,?,?)",
                   ("#" + name, name, json.dumps(list(readers)), "2026-10-28T00:00:00Z", "2026-10-28T00:00:00Z"))
 
 
@@ -188,9 +197,70 @@ def test_step_detail_is_pruned_after_30_days_and_the_run_row_stays(api):
     store = api.app.state.store
     from backend.store import H
     with store.transaction() as c:
-        automations.prune(c, H.shift(run["finished"], days=29))
+        automations.prune(c, H.shift(run["finished_at"], days=29))
     assert runs(api, aid)["runs"][0]["steps"]
     with store.transaction() as c:
-        automations.prune(c, H.shift(run["finished"], days=31))
+        automations.prune(c, H.shift(run["finished_at"], days=31))
     kept = runs(api, aid)["runs"][0]
     assert kept["id"] == run["id"] and kept["status"] == "ok" and kept["steps"] is None
+
+
+# ---------------------------------------------------------------------------------------------- mail fields
+NOOP = {"id": "sort", "type": "filter", "rules": [{"when": [{"field": "message.subject", "op": "contains",
+                                                           "value": "zz-never"}], "then": [{"do": "archive"}]}]}
+
+
+def arrived(msg_id, sender, labels=("INBOX",), attachments=(), known_sender=None):
+    return SimpleNamespace(**{**vars(mail(msg_id, sender=sender)), "labels": list(labels),
+                              "attachments": list(attachments), "known_sender": known_sender})
+
+
+def ran(api, aid):
+    return {r["trigger_ref"].rsplit(":", 1)[-1] for r in runs(api, aid)["runs"]}
+
+
+def payload_of(api, aid, msg_id):
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT saved_state FROM automation_runs WHERE automation_id=? AND trigger_ref=?",
+                        (aid, f"mail:ana@acme.example:{msg_id}")).fetchone()
+    return json.loads(row["saved_state"])["payload"]["message"]
+
+
+def test_mail_trigger_filters_read_the_category_domain_invite_and_known_sender(api):
+    def by(field, op, value):
+        return make(api, {"type": "message", "inbox": "ana@acme.example",
+                          "filters": [{"field": field, "op": op, "value": value}]}, [NOOP])
+
+    promo = by("message.category", "is", "promotions")
+    vendor = by("message.from_domain", "is", "vendor.example")
+    invite = by("message.is_calendar_invite", "is", "true")
+    known = by("message.known_sender", "is", "true")
+    not_known = by("message.known_sender", "is_not", "true")
+    arrivals = [
+        arrived("a1", "Billing@Vendor.Example", labels=("INBOX", "CATEGORY_PROMOTIONS")),
+        arrived("a2", "pat@customer.example", labels=("INBOX", "CATEGORY_SOCIAL"), known_sender=True,
+                attachments=[{"name": "invite.ics", "type": "text/calendar", "size": 10}]),
+        arrived("a3", "cal@partner.example", attachments=[{"name": "meeting.ics", "type": "application/octet-stream"}],
+                known_sender=False),
+        arrived("a4", "news@other.example"),
+    ]
+    for message in arrivals:
+        fire(api, automations.on_mail, "ana@acme.example", message)
+    assert ran(api, promo) == {"a1"}
+    assert ran(api, vendor) == {"a1"}
+    assert ran(api, invite) == {"a2", "a3"}                  # a text/calendar part, or an .ics file by name
+    assert ran(api, known) == {"a2"}
+    assert ran(api, not_known) == {"a1", "a3", "a4"}         # False and not-sent both read as not known
+
+
+def test_on_mail_sets_the_fields_on_the_payload(api):
+    aid = make(api, {"type": "message", "inbox": "ana@acme.example"}, [NOOP])
+    fire(api, automations.on_mail, "ana@acme.example", arrived("p1", "Billing@Vendor.Example",
+                                                               labels=("INBOX", "CATEGORY_PERSONAL")))
+    fire(api, automations.on_mail, "ana@acme.example", arrived("p2", "nodomain", known_sender=True))
+    primary = payload_of(api, aid, "p1")
+    assert primary["from_domain"] == "vendor.example" and primary["category"] == "primary"
+    assert primary["is_calendar_invite"] is False and primary["known_sender"] is None
+    bare = payload_of(api, aid, "p2")
+    assert bare["from_domain"] == "" and bare["category"] == "" and bare["known_sender"] is True
+

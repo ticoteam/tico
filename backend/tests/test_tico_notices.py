@@ -25,15 +25,16 @@ def send(hq, n="n1", relay=TICO, system=True, **more):
 
 def botops_messages(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM messages WHERE to_actor='bot:botops' ORDER BY rowid")]
+        return [dict(r) for r in c.execute("SELECT * FROM messages WHERE recipient_id='bot:botops' ORDER BY rowid")]
 
 
 @pytest.fixture(autouse=True)
 def botops(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                  "VALUES('botops','BotOps','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('botops','{}',NULL,'ana')")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('botops','botops','BotOps','','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('botops',?,NULL,'ana')",
+                  ('{"runtime":"fake","host":"keeper"}',))
 
 
 @pytest.fixture
@@ -65,7 +66,7 @@ def test_a_relayed_notice_reaches_the_rules_once_and_shows_once_beside_latest(ap
     assert len(judged) == 1
     assert judged[0]["notice_id"] == "n1" and judged[0]["kind"] == "info" and judged[0]["type"] == "info"
     assert judged[0]["trigger"] == "_tico" and judged[0]["via"] == "gateway"
-    assert [m["refs_json"] for m in botops_messages(api) if '"wake": "tico.notice"' in m["refs_json"]]    # the info note
+    assert [m["refs"] for m in botops_messages(api) if '"wake": "tico.notice"' in m["refs"]]    # the info note
 
     from backend import releases
     monkeypatch.setattr(releases.CHECKER, "extras", {"notices": [{"id": "n1", "versions": "0.4", "body": "x", "url": ""}],
@@ -83,9 +84,9 @@ def test_a_security_notice_wakes_botops_and_asks_the_owner(api, hq, judged):
     relay_for(api, hq)
     send(hq, "s1", kind="security", body="Rotate your Acme keys today.")
     service(api).tick()
-    wakes = [m for m in botops_messages(api) if '"wake": "tico.notice"' in m["refs_json"]]
-    assert len(wakes) == 1 and "Rotate your Acme keys today." in wakes[0]["body"] and wakes[0]["from_actor"] == H.KEEPER
-    assert json.loads(wakes[0]["refs_json"])["rule_id"] == "tico-notice-security-wake"
+    wakes = [m for m in botops_messages(api) if '"wake": "tico.notice"' in m["refs"]]
+    assert len(wakes) == 1 and "Rotate your Acme keys today." in wakes[0]["body"] and wakes[0]["sender_id"] == H.KEEPER
+    assert json.loads(wakes[0]["refs"])["rule_id"] == "tico-notice-security-wake"
     with api.app.state.store.read() as c:
         asked = c.execute("SELECT count(*) FROM events WHERE action='rule.event' AND target='tico-notice-security-ask'").fetchone()[0]
     assert asked == 1
@@ -165,5 +166,5 @@ def test_an_automation_on_the_tico_trigger_fires_and_webhook_received_is_not_jud
     api.app.state.store.automations.drain()
     assert [r["trigger_ref"] for r in get(api, f"automations/{aid}/runs")["runs"]] == ["webhook:_tico:notice:r1"]
     with api.app.state.store.read() as c:
-        tasks = c.execute("SELECT owner FROM tasks WHERE title='A notice'").fetchall()
+        tasks = c.execute("SELECT owner_id FROM tasks WHERE title='A notice'").fetchall()
     assert [t[0] for t in tasks] == ["bot:ops"]

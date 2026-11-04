@@ -86,49 +86,58 @@ pub(crate) fn remember_windows(profile: &str, reply: &Value) {
 }
 
 /// One read, with the profile's own Codex home and no API keys.
-pub async fn read_codex(profile: &crate::profiles::Profile, cancelled: &AtomicBool) -> Value {
+pub async fn read_codex(profile: &crate::profiles::Profile, canceled: &AtomicBool) -> Value {
     let Some(exe) = crate::env::which("codex", &std::env::var("PATH").unwrap_or_default()) else { return json!({"state": "unavailable"}) };
     let process: crate::env::Env = std::env::vars().collect();
     let mut env = profile.environment("codex", &process);
     for name in ["OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"] {
         env.remove(name);
     }
-    if cancelled.load(Ordering::SeqCst) {
+    if canceled.load(Ordering::SeqCst) {
         return json!({"state": "failed"});
     }
+    // A sign-out or sign-in after this point (accounts::forget) makes this read's answers stale: they are not kept.
+    let since = crate::accounts::read_started(&profile.name, "codex");
     // The bot user's, like the profile's sign-in and turns: app-server writes in CODEX_HOME.
     let mut cmd = crate::isolation::command(exe);
     cmd.arg("app-server").env_clear().envs(&env).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).kill_on_drop(true);
     let Ok(mut child) = cmd.spawn() else { return json!({"state": "failed"}) };
     let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else { return json!({"state": "failed"}) };
     let mut lines = BufReader::new(stdout).lines();
+    let mut account = None;
     let result = async {
         rpc(&mut stdin, &mut lines, 1, "initialize", json!({"clientInfo": {"name": "tico-keeper", "title": "Tico keeper", "version": "0.1"}})).await?;
         let note = json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}).to_string() + "\n";
         stdin.write_all(note.as_bytes()).await.map_err(|_| ())?;
-        if cancelled.load(Ordering::SeqCst) {
+        if canceled.load(Ordering::SeqCst) {
             return Err(());
         }
         let limits = rpc(&mut stdin, &mut lines, 2, "account/rateLimits/read", json!({})).await?;
         // The same session names the account and plan, read without a token refresh (crate::accounts).
         if let Ok(reply) = rpc(&mut stdin, &mut lines, 3, "account/read", json!({"refreshToken": false})).await {
-            if let Some(account) = crate::accounts::from_app_server(&reply) {
-                crate::accounts::remember(&profile.name, "codex", account);
-            }
+            account = crate::accounts::from_app_server(&reply);
         }
         Ok(limits)
     }
     .await;
-    if let Ok(reply) = &result {
-        remember_windows(&profile.name, reply);
-    }
+    // A read begun before a sign-in or sign-out is someone else's usage: not kept here, and not reported either.
+    let current = crate::accounts::keep_if_current(&profile.name, "codex", since, || {
+        if let Some(account) = account {
+            crate::accounts::remember(&profile.name, "codex", account);
+        }
+        if let Ok(reply) = &result {
+            remember_windows(&profile.name, reply);
+        }
+    });
     drop(stdin);
     if tokio::time::timeout(Duration::from_secs(5), child.wait()).await.is_err() {
         let _ = child.kill().await;
     }
+    // Again after the child's shutdown wait: a sign-in during it makes this read someone else's as well.
+    let current = current && crate::accounts::read_started(&profile.name, "codex") == since;
     match result {
-        Ok(reply) => weekly(&reply, crate::util::epoch_s()),
-        Err(()) => json!({"state": "failed"}),
+        Ok(reply) if current => weekly(&reply, crate::util::epoch_s()),
+        _ => json!({"state": "failed"}),
     }
 }
 
@@ -138,12 +147,12 @@ pub struct Refreshes {
     worker: Option<tokio::task::JoinHandle<()>>,
     result: Arc<Mutex<Option<Value>>>,
     work: Option<Value>,
-    pub cancelled: Arc<AtomicBool>,
+    pub canceled: Arc<AtomicBool>,
 }
 
 impl Default for Refreshes {
     fn default() -> Self {
-        Refreshes { polled: None, worker: None, result: Arc::new(Mutex::new(None)), work: None, cancelled: Arc::new(AtomicBool::new(false)) }
+        Refreshes { polled: None, worker: None, result: Arc::new(Mutex::new(None)), work: None, canceled: Arc::new(AtomicBool::new(false)) }
     }
 }
 
@@ -155,7 +164,7 @@ impl Refreshes {
 
     /// `ask`: whether to ask the server for work; None, every POLL_SECONDS.
     pub async fn poll(&mut self, runner: &Arc<Runner>, ask: Option<bool>) -> Result<(), ApiError> {
-        if self.cancelled.load(Ordering::SeqCst) {
+        if self.canceled.load(Ordering::SeqCst) {
             return Ok(());
         }
         let ask = match ask {
@@ -190,10 +199,10 @@ impl Refreshes {
         // Only a runtime whose weekly window a refresh can read (`weekly_usage = "refresh"`).
         let refreshable = crate::harness_tools::caps(&text_of(&work["runtime"]), "").weekly_usage == "refresh";
         self.work = Some(work);
-        let (slot, cancelled) = (self.result.clone(), self.cancelled.clone());
+        let (slot, canceled) = (self.result.clone(), self.canceled.clone());
         self.worker = Some(tokio::spawn(async move {
             let result = match profile {
-                Some(p) if refreshable => read_codex(&p, &cancelled).await,
+                Some(p) if refreshable => read_codex(&p, &canceled).await,
                 _ => json!({"state": "unavailable"}),
             };
             *slot.lock().unwrap() = Some(result);
@@ -202,7 +211,7 @@ impl Refreshes {
     }
 
     pub fn stop(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
+        self.canceled.store(true, Ordering::SeqCst);
     }
 }
 

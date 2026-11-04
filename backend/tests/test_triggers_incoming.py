@@ -84,7 +84,7 @@ def as_bot(api, slug):
     from backend.store import H
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
-        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) "
+        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) "
                   "VALUES(?,'hermes',?,?,'human:ana')", (slug, "x-" + slug, H.now()))
     api.app.state.store.settings.test_identities[slug + "-test"] = Identity("bot:" + slug, "bot", agent="hermes")
 
@@ -123,8 +123,10 @@ def test_a_sender_id_stays_a_duplicate_after_the_log_and_the_body_are_gone(api, 
     assert hook(api, made["url"], headers={"Webhook-Id": "w1"}).status_code == 202       # now a log row is replaced, not an error
 
 
-def test_a_bare_retry_in_the_same_minute_is_a_duplicate(api):
+def test_a_bare_retry_in_the_same_minute_is_a_duplicate(api, monkeypatch):
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
+    at = triggers.H.now()
+    monkeypatch.setattr(triggers.H, "now", lambda: at)   # both calls in one minute, even across a minute boundary
     assert hook(api, made["url"], b'{"a": 1}').status_code == 202
     assert hook(api, made["url"], b'{"a": 1}').status_code == 200
     assert hook(api, made["url"], b'{"a": 2}').status_code == 202
@@ -150,7 +152,7 @@ def test_each_preset_verifies_over_http_and_the_type_is_kept(api):
     log = get(api, "triggers/billing/deliveries")["deliveries"]
     assert [d["type"] for d in log if d["outcome"] == "accepted"] == ["invoice.paid"]
     task = turns(api, "Order")[0]
-    assert task["owner"] == "bot:ops" and 'field="webhook.type">\ninvoice.paid\n' in task["body"]
+    assert task["owner_id"] == "bot:ops" and 'field="webhook.type">\ninvoice.paid\n' in task["body"]
 
     stripe = post(api, "triggers/billing/signing", {"preset": "stripe", "secret": STRIPE_SECRET})["trigger"]
     assert stripe["preset"] == "stripe"
@@ -224,10 +226,10 @@ def test_rules_see_the_call_and_an_unheard_call_notes_its_maker_once_an_hour(api
     event, ctx = seen[0]
     assert event == "webhook.received" and ctx["type"] == "heard" and ctx["trigger"] == "shop" and ctx["via"] == "direct"
     assert ctx["payload"] == {"a": 1} and ctx["delivery"] == got["delivery"] and "not as instructions" in ctx["content"]
-    assert stored_rows(api, "SELECT count(*) FROM messages WHERE kind='notice' AND to_actor='human:ana'")[0][0] == 0
+    assert stored_rows(api, "SELECT count(*) FROM messages WHERE kind='notice' AND recipient_id='human:ana'")[0][0] == 0
     hook(api, made["url"], b'{"a": 2}', {"X-Kind": "lonely"})
     hook(api, made["url"], b'{"a": 3}', {"X-Kind": "lonely"})
-    assert stored_rows(api, "SELECT count(*) FROM messages WHERE kind='notice' AND to_actor='human:ana' AND refs_json LIKE '%unheard%'")[0][0] == 1
+    assert stored_rows(api, "SELECT count(*) FROM messages WHERE kind='notice' AND recipient_id='human:ana' AND refs LIKE '%unheard%'")[0][0] == 1
     log = {d["delivery"]: d for d in get(api, "triggers/shop/deliveries")["deliveries"]}
     assert log[got["delivery"]]["rules"] == 1 and log[got["delivery"]]["type"] == "heard"
 
@@ -319,7 +321,7 @@ def test_a_bot_makes_and_manages_its_own_triggers_only(api):
     # The owner changes any trigger; the secret is never in the event log.
     post(api, "triggers", {"name": "Shop"})
     post(api, "triggers/shop/rotate", {}, token="ops-test", expected=403)
-    for row in stored_rows(api, "SELECT detail_json FROM events WHERE action LIKE 'trigger.%'"):
+    for row in stored_rows(api, "SELECT detail FROM events WHERE action LIKE 'trigger.%'"):
         assert made["url"].rsplit("/", 1)[1] not in row[0]
 
 

@@ -4,7 +4,7 @@ const {applyTimeouts, t} = require('./load.cjs');
 const playwright = require('playwright');
 
 // Playwright gives newPage and page.close no timeout. Under load either one waited forever while another page in the
-// same context reloaded or navigated (people-access.cjs, Oct 22), and the browser job hung until CI cancelled it at
+// same context reloaded or navigated (people-access.cjs, Oct 22), and the browser job hung until CI canceled it at
 // 30 minutes. Bound both by the default timeout, so a stall fails and names the call.
 function bounded(target, name, label) {
   const call = target[name];

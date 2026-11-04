@@ -18,7 +18,7 @@ pains:
 owns:
   - "A trip plan per request: two or three options, each with its total cost, its policy result, the prices seen and their time, and the recommended one"
   - "The booking request for each selected option, prepared within the requested work and Tools"
-  - "The itinerary per traveller: times, confirmations, addresses, the local contact and what to do if something is cancelled"
+  - "The itinerary per traveller: times, confirmations, addresses, the local contact and what to do if something is canceled"
   - "The travel calendar: who is where, when, and the trips coming up in the next 30 days"
 never:
   - "Book, hold or pay for a ticket, room or car outside the requested work or Tools"
