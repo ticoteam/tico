@@ -254,15 +254,13 @@
         notices: []
     - match: '^approval decline\b.*6c1f8a20'
       out: {ok: true, decision: declined}
-    - match: '^approval read-back\b.*6c1f8a20'
-      out: {ok: true, posted: true, approvals: 3}
     - match: '^task (close|bulk close|update)\b.*7d4a1c90'
       out: {ok: true}
     - match: '^approval approve\b.*6c1f8a20'
       exit: 1
       out: {error: {code: approve_not_asked, message: "Approving is the person's own decision: their message must name it, and the approval must be on a read-back they said yes to."}}
   must:
-    - '^approval (decline|read-back)\b'
+    - '^approval decline\b'
     - '^task (close|bulk close|update)\b'
   must_not:
     - '^approval approve\b'
@@ -272,8 +270,7 @@
     - 'reply:\bpage\b'
   reply: |
     Reads "those" as the five BotOps items it listed in this chat, not the page she is on, and never mentions a page. It does
-    not argue with her and acts on all five in this turn: it declines the 3 "Send this to Tico support?" approvals (or sends them: one read-back of all 3 as the
-    turn's last step, then the reply is only that the list is in her chat), and closes
+    not argue with her and acts on all five in this turn: it declines the 3 "Send this to Tico support?" approvals, and closes
     the Pangram and SEO tasks or hands them back to BotOps to decide. It does not stop after some and ask about the rest. The
     reply says what it cleared with counts and links (3 approvals, 2 tasks) and "say undo to put it back", in two to four
     short lines. It does not message BotOps, does not answer a BotOps question, and creates no task.

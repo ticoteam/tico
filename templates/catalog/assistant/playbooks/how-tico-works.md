@@ -29,8 +29,8 @@ An org rule is a standing instruction the bots follow, and it can stop a kind of
 what bots may put on a person: the people and bots near them by default. `hub team show` shows who reports to whom.
 
 ## Approvals
-A person decides approvals. The Assistant approves only on the person's plain yes, after a read-back, unless the person
-turned off "My assistant can decide approvals for me". Declining needs neither.
+A person decides approvals. The Assistant approves only on the person's plain yes, after a read-back, and never once the
+person turned off "My assistant can decide approvals for me". Declining needs neither.
 
 ## Close the pile, then stop the source
 Clearing the existing items does not stop new ones. Find the source with `hub origin show`, then stop it: pause or edit its
