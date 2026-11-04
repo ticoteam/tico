@@ -49,16 +49,27 @@ const DIALOG_SCRIPT: &str = r#"
 })();
 "#;
 
+/// What only a Mac build answers: whether Tico Recorder is installed (`hasRecorder`) and opening it on the page's org
+/// (`openRecorder`).
+const RECORDER_SCRIPT: &str = r#"
+(() => {
+  if (!window.ticoNativeFeatures) return;
+  window.ticoNativeFeatures.push('openRecorder');
+})();
+"#;
+
 /// The bridge plus this shell's version, which Settings shows beside the server's.
 pub(crate) fn bridge_script(app: &App) -> String {
-    script_for(&app.package_info().version.to_string(), orgs::multi_org_build())
+    script_for(&app.package_info().version.to_string(), orgs::multi_org_build(), cfg!(target_os = "macos"))
 }
 
-/// The page script for a build: the bridge, the org features when this build keeps a list of orgs, and the version.
-fn script_for(version: &str, several_orgs: bool) -> String {
+/// The page script for a build: the bridge, the org features when this build keeps a list of orgs, the Recorder's on
+/// a Mac, and the version.
+fn script_for(version: &str, several_orgs: bool, recorder: bool) -> String {
     let version = serde_json::to_string(version).unwrap_or_else(|_| "\"\"".into());
     let extra = if several_orgs { ORG_SCRIPT } else { "" };
-    format!("{BRIDGE_SCRIPT}{DIALOG_SCRIPT}{extra}window.ticoNativeVersion = {version};\n")
+    let recorder = if recorder { RECORDER_SCRIPT } else { "" };
+    format!("{BRIDGE_SCRIPT}{DIALOG_SCRIPT}{extra}{recorder}window.ticoNativeVersion = {version};\n")
 }
 
 // ----------------------------------------------------------------------------- bridge
@@ -86,7 +97,7 @@ fn server_document(hub: Option<&url::Url>, caller: &str, open: Option<&str>, doc
 /// and its own `bootTiming` (one checked log line, so a prefetched open is timed too). Everything else (windows,
 /// menus, updates, opening the log) is the open page's alone.
 fn own_page_call(name: &str) -> bool {
-    matches!(name, "orgInfo" | "visualOrigin" | "multiOrg" | "bootTiming")
+    matches!(name, "orgInfo" | "visualOrigin" | "multiOrg" | "bootTiming" | "hasRecorder")
 }
 
 /// The org whose page this is, when the page is at that org's own origin: any org page, open or not.
@@ -173,6 +184,15 @@ pub(crate) fn bridge(app: App, webview: Webview, name: String, body: Option<Valu
         "showOrgMenu" => if orgs::multi_org_build() { popup_orgs(&app) },
         "addOrg" => {
             if orgs::multi_org_build() { add_org(&app); }
+        }
+        // Whether Record (Tico Recorder) can be offered instead of its download.
+        "hasRecorder" => return Ok(Value::Bool(crate::recorder::installed())),
+        // Record: the Recorder opens on the caller's own org, from its label, never an address the page names.
+        "openRecorder" => {
+            let org = org_of(webview.label()).and_then(|org| app.state::<AppState>().orgs.lock().unwrap().get(org).cloned());
+            if let Some(hub) = org.and_then(|org| org.hub()) {
+                crate::recorder::open_recorder(&hub);
+            }
         }
         _ => {}
     }
@@ -573,8 +593,8 @@ mod visual_bridge_tests {
         assert!(state.visual_origin.lock().unwrap().is_some());
         assert!(state.parked_visual.lock().unwrap().is_none());
         // Only calls about the page itself are let through from a page that is not on screen.
-        for name in ["orgInfo", "visualOrigin", "multiOrg", "bootTiming"] { assert!(own_page_call(name)); }
-        for name in ["openWindow", "checkForUpdates", "showLog", "showOrgMenu", "addOrg", "windowMode"] { assert!(!own_page_call(name)); }
+        for name in ["orgInfo", "visualOrigin", "multiOrg", "bootTiming", "hasRecorder"] { assert!(own_page_call(name)); }
+        for name in ["openWindow", "checkForUpdates", "showLog", "showOrgMenu", "addOrg", "windowMode", "openRecorder"] { assert!(!own_page_call(name)); }
     }
 
     #[test]
@@ -594,11 +614,12 @@ mod visual_bridge_tests {
         }
         // The page script carries no org data in any build, and only this build's org features.
         for several in [false, true] {
-            let script = script_for("0.5.0", several);
+            let script = script_for("0.5.0", several, several);
             for secret in secrets {
                 assert!(!script.contains(secret), "the page script carries {secret}");
             }
             assert_eq!(script.contains("'multiOrg'"), several);
+            assert_eq!(script.contains("'openRecorder'"), several, "Record is offered only by a Mac build");
         }
         assert!(BRIDGE_SCRIPT.contains("'orgInfo'"));
     }
@@ -620,7 +641,7 @@ mod visual_bridge_tests {
     #[test]
     fn a_page_alert_and_confirm_go_through_the_on_screen_check() {
         for several in [false, true] {
-            let script = script_for("0.5.0", several);
+            let script = script_for("0.5.0", several, !several);
             assert!(script.contains("window.alert =") && script.contains("window.confirm ="));
             assert!(script.contains("invoke('page_dialog'") && !script.contains("plugin:dialog"));
         }

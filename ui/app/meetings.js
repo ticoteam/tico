@@ -50,6 +50,7 @@ async function pageNotes() {
     $('#meet-review-bulk').hidden = true; meetReviewTabs(state); meetLoad(state, true);
   });
   $('#meet-settings').onclick = () => meetSettingsOpen(state);
+  meetRecorderLink();
   $('#meet-live-now').onclick = () => pageLiveMeetings();
   const dialog = $('#notes-modal');
   const closeNote = () => {
@@ -195,6 +196,19 @@ async function meetSettingsOpen(state) {
 // rest in a dialog (ui/meeting-importers.js).
 // Tico Recorder for Mac: the newest release's disk image.
 const MEET_RECORDER_DMG = 'https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg';
+// In the Mac app with Tico Recorder installed, Record opens the Recorder on this org instead (app/src/recorder.rs).
+// A browser can't tell, so it keeps the download.
+async function meetRecorderLink() {
+  if (!nativeHas('openRecorder')) return;
+  let installed = false;
+  try { installed = await nativeHandler('hasRecorder')?.postMessage(null) === true; } catch {}
+  const link = $('#meet-recorder');
+  if (!installed || !link) return;
+  const button = document.createElement('button');
+  Object.assign(button, {type: 'button', className: 'linkish', id: 'meet-recorder', textContent: 'Record'});
+  button.onclick = () => { try { Promise.resolve(nativeHandler('openRecorder')?.postMessage(null)).catch(() => {}); } catch {} };
+  link.replaceWith(button);
+}
 const MEET_SOURCES = [
   {id: 'granola', name: 'Granola'},
   {id: 'zoom', name: 'Zoom', logo: 'zoom'},

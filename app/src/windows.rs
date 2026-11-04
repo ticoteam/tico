@@ -959,6 +959,10 @@ fn sign_in_hooks(app: &App, hub: Option<url::Url>, page_org: Option<String>) -> 
 /// Whether a window follows a navigation; one it does not follow opens in the default browser, except from a page
 /// that is not on screen (a prefetch), which opens nothing.
 fn stays_in_app(opener: &App, signing_in: &AtomicBool, page_org: Option<&str>, hub: Option<&url::Url>, url: &url::Url) -> bool {
+    // Tico's answer to an approval page Tico Recorder asked this app to show goes to the Recorder from here.
+    if page_org.is_some_and(|org| crate::recorder::deliver(opener, org, url)) {
+        return false;
+    }
     let stays = follow_window(&opener.state::<AppState>(), signing_in, page_org.is_some(), hub, url);
     let on_screen = page_org.is_none_or(|org| active_org(opener).is_some_and(|open| open.id == org));
     if !stays && on_screen {

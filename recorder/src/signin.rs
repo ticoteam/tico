@@ -38,8 +38,9 @@ struct Server {
     register: String,
 }
 
-/// The address people know (example.com) or its runner. A sign-in proxy guards the first, so try `runner.` too.
-fn discover(address: &str) -> Result<Server> {
+/// Where the Tico at an address people know (example.com) may answer: there, or at its runner. A sign-in proxy
+/// guards the first, so `runner.` is tried too. A connection's `base_url` is one of these.
+pub fn candidates(address: &str) -> Result<Vec<String>> {
     let address = address.trim().trim_end_matches('/');
     let base = if address.contains("://") {
         address.to_owned()
@@ -54,8 +55,14 @@ fn discover(address: &str) -> Result<Server> {
     if !host.starts_with("runner.") && host.contains('.') && base.starts_with("https://") {
         candidates.push(base.replacen(&host, &format!("runner.{host}"), 1));
     }
+    Ok(candidates)
+}
+
+/// The address people know (example.com) or its runner.
+fn discover(address: &str) -> Result<Server> {
+    let address = address.trim().trim_end_matches('/');
     let client = network::client()?;
-    for candidate in candidates {
+    for candidate in candidates(address)? {
         let url = format!("{candidate}{PREFIX}/.well-known/oauth-authorization-server");
         let Ok(response) = client.get(&url).send() else {
             continue;
@@ -139,15 +146,31 @@ fn random() -> String {
     )
 }
 
-/// The one browser hop: wait for Tico to send the browser back with a code (or a refusal).
-fn callback(listener: &TcpListener, state: &str, issuer: &str) -> Result<String> {
+/// What a sign-in that waited too long ends with.
+pub const TIMED_OUT: &str = "Sign-in timed out. Try again and choose Allow in the browser";
+/// How long the Tico desktop app has to say it opened the approval page before the browser opens it instead.
+pub const DESKTOP_WAIT: Duration = Duration::from_secs(15);
+
+/// The one browser hop: wait for Tico to send the browser back with a code (or a refusal). With `fallback`, another
+/// app was asked to show the approval page; when it does not say so (`/opened` with this request's state) within
+/// its time, `fallback` shows the page instead.
+fn callback(
+    listener: &TcpListener,
+    state: &str,
+    issuer: &str,
+    mut fallback: Option<(Duration, Box<dyn FnOnce() + '_>)>,
+) -> Result<String> {
     listener.set_nonblocking(true)?;
     let started = Instant::now();
     loop {
-        ensure!(
-            started.elapsed() < WAIT,
-            "Sign-in timed out. Try again and choose Allow in the browser"
-        );
+        ensure!(started.elapsed() < WAIT, TIMED_OUT);
+        if fallback
+            .as_ref()
+            .is_some_and(|(wait, _)| started.elapsed() >= *wait)
+            && let Some((_, open)) = fallback.take()
+        {
+            open();
+        }
         let mut stream = match listener.accept() {
             Ok((stream, _)) => stream,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -164,12 +187,17 @@ fn callback(listener: &TcpListener, state: &str, issuer: &str) -> Result<String>
         let Ok(url) = Url::parse(&format!("http://127.0.0.1{path}")) else {
             continue;
         };
+        let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        let get = |name: &str| query.get(name).cloned().unwrap_or_default();
+        if url.path() == "/opened" && get("state") == state {
+            fallback = None;
+            let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+            continue;
+        }
         if url.path() != "/callback" {
             let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
             continue;
         }
-        let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
-        let get = |name: &str| query.get(name).cloned().unwrap_or_default();
         let ok = get("state") == state && (get("iss").is_empty() || get("iss") == issuer);
         let code = get("code");
         let message = if ok && !code.is_empty() {
@@ -197,6 +225,24 @@ fn callback(listener: &TcpListener, state: &str, issuer: &str) -> Result<String>
 
 /// Sign in to the Tico at `address` in the browser; returns the new connection, its access token and grant.
 pub fn sign_in(address: &str, open: impl FnOnce(&str)) -> Result<(Destination, String, Grant)> {
+    sign_in_through(
+        address,
+        |url| {
+            open(url);
+            false
+        },
+        |_| {},
+    )
+}
+
+/// `sign_in`, where `open` may hand the approval page to another app (the Tico desktop app), answering true. That
+/// app says it opened the page (`/opened` on the loopback); until it does, for at most `DESKTOP_WAIT`, nothing else
+/// opens, and then `fallback` opens the page (the browser).
+pub fn sign_in_through(
+    address: &str,
+    open: impl FnOnce(&str) -> bool,
+    fallback: impl FnOnce(&str),
+) -> Result<(Destination, String, Grant)> {
     let server = discover(address)?;
     let listener =
         TcpListener::bind("127.0.0.1:0").context("Could not listen for the sign-in answer")?;
@@ -230,8 +276,20 @@ pub fn sign_in(address: &str, open: impl FnOnce(&str)) -> Result<(Destination, S
             ("state", state.as_str()),
         ],
     )?;
-    open(url.as_str());
-    let code = callback(&listener, &state, &format!("{}{PREFIX}", server.runner))?;
+    let handed = open(url.as_str());
+    let page = url.as_str().to_owned();
+    let fallback: Option<(Duration, Box<dyn FnOnce() + '_>)> = handed.then(|| {
+        (
+            DESKTOP_WAIT,
+            Box::new(move || fallback(&page)) as Box<dyn FnOnce() + '_>,
+        )
+    });
+    let code = callback(
+        &listener,
+        &state,
+        &format!("{}{PREFIX}", server.runner),
+        fallback,
+    )?;
     let issued = oauth_post(
         &server.token,
         form(&[
@@ -332,4 +390,82 @@ pub fn open_browser(url: &str) {
         .spawn();
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        io::Read,
+        net::TcpStream,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
+
+    fn get(port: u16, path: &str) -> String {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(stream, "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
+        let mut answer = String::new();
+        let _ = stream.read_to_string(&mut answer);
+        answer
+    }
+
+    #[test]
+    fn the_desktop_app_saying_it_opened_the_page_keeps_the_browser_closed() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let browser = AtomicBool::new(false);
+        let app = std::thread::spawn(move || {
+            // Another request's state is not this one's answer; this one's is.
+            assert!(get(port, "/opened?state=other").starts_with("HTTP/1.1 404"));
+            assert!(get(port, "/opened?state=s1").starts_with("HTTP/1.1 204"));
+            std::thread::sleep(Duration::from_millis(400));
+            get(
+                port,
+                "/callback?state=s1&code=c1&iss=https%3A%2F%2Fr.example.com%2Fapi%2Fv2%2Foauth",
+            )
+        });
+        let code = callback(
+            &listener,
+            "s1",
+            "https://r.example.com/api/v2/oauth",
+            Some((
+                Duration::from_millis(300),
+                Box::new(|| browser.store(true, Ordering::SeqCst)),
+            )),
+        )
+        .unwrap();
+        assert_eq!(code, "c1");
+        assert!(app.join().unwrap().contains("Signed in"));
+        assert!(!browser.load(Ordering::SeqCst), "the browser never opened");
+    }
+
+    #[test]
+    fn no_answer_from_the_desktop_app_opens_the_browser_and_state_is_still_checked() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let browser = Arc::new(AtomicBool::new(false));
+        let opened = browser.clone();
+        let app = std::thread::spawn(move || {
+            while !opened.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            get(port, "/callback?state=forged&code=c1")
+        });
+        let seen = browser.clone();
+        let error = callback(
+            &listener,
+            "s1",
+            "https://r.example.com/api/v2/oauth",
+            Some((
+                Duration::ZERO,
+                Box::new(move || seen.store(true, Ordering::SeqCst)),
+            )),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("did not match"), "{error}");
+        assert!(app.join().unwrap().contains("Not signed in"));
+    }
 }
