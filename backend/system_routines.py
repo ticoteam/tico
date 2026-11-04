@@ -284,8 +284,8 @@ JOBS = [
         "Frees turns proven dead, keeps one Health finding per busy-turns incident and hands what it cannot fix to "
         "BotOps.", HOUSEKEEPING, "Every 10 seconds", 10, then=("free_dead_starts", "turns_finding")),
     Job("waiting_checks", "Waiting checks",
-        "Turns a bot's plain ask to a person into a small task. Bot tasks left waiting on nothing are no longer sent back "
-        "to work.",
+        "Turns a bot's plain ask to a person into a small task. It no longer sends a waiting task back to work; a "
+        "waiting task that waits on nothing is listed on the daily task check after a day.",
         HOUSEKEEPING, "Hourly", 3600, then=("ask_to_task",)),
     Job("snooze_ends", "Snooze ends",
         "Brings snoozed tasks back when their date comes and starts deferred runs that are due.",
@@ -547,6 +547,9 @@ def next_due(cfg, last, now):
         return business_open(max(last + timedelta(seconds=every), now) if last else now)
     if every:
         return max(last + timedelta(seconds=every), now) if last else None
+    if last is None and cfg.get("preset") == DAILY_UTC:
+        # Never run: its first run is the first 14:00 UTC after the scheduler first sees it on (Scheduler.due), not now.
+        return _occurrence(cfg, now) + timedelta(days=1)
     if due(cfg, now, last):
         return now
     return _occurrence(cfg, now) + timedelta(days=1)

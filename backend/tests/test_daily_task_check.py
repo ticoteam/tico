@@ -1,6 +1,8 @@
 """The daily task check (backend/daily_task_check.py): once a UTC day each active bot gets at most one wake, with one list of
-its tasks that have a missed update or have gone quiet. A task waiting on a person with nothing new is not listed, a task
-with a run already queued is not listed, and a bot with nothing to list gets no message. Synthetic fixtures only."""
+its tasks that have a missed update or have gone quiet. A task waiting on a person or a live blocker with nothing new
+is not listed, a task waiting on nothing is listed once quiet a day, Tico's own notices and check-backs are not news,
+a task with a run already queued is not listed, and a bot with nothing to list gets no message.
+Synthetic fixtures only."""
 from backend import daily_task_check
 from backend.store import H
 from backend.tests.test_api import api  # noqa: F401
@@ -36,6 +38,14 @@ def blocks(c, blocker, tid, when):
 def complete_jobs(c, slug="finance"):
     """The creation wakes ran: nothing is queued for the bot."""
     c.execute("UPDATE jobs SET state='completed' WHERE bot_id=?", (slug,))
+
+
+def note(c, tid, sender, when):
+    """A message in the task's conversation from `sender` (None for no sender), as Tico's wake notices land."""
+    conv = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (tid,)).fetchone()[0]
+    c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
+              "VALUES(?,?,?,?,'notice','Check on it.',NULL,?)",
+              (H.new_id(), conv, sender, H.bot_actor("finance"), when))
 
 
 def lists(c, slug="finance"):
@@ -138,3 +148,65 @@ def test_two_runs_on_one_utc_day_give_one_message_and_a_list_names_at_most_25_ta
         # The next UTC day the list is sent again, while the tasks are still quiet.
         assert "finance" in daily_task_check.run(c, H.shift(DAY, days=1))["woke"]
         assert len(lists(c)) == 2
+
+
+def test_tico_notices_and_unsent_messages_after_the_turn_are_not_news_and_do_not_reset_quiet(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        mine = task(c, "Renew the car insurance")
+        settle(c, mine["id"], "finance", ago(days=3))
+        note(c, mine["id"], H.KEEPER, ago(days=1))      # Tico's wake notice, a day after the turn
+        note(c, mine["id"], None, ago(days=1))          # a message with no sender
+        complete_jobs(c)
+        assert "finance" in daily_task_check.run(c, DAY)["woke"]
+        body = only_list(c)
+        assert f"{mine['id'][:8]} Renew the car insurance: Quiet for 3 days, nothing waiting on anyone" in body
+        assert "Update you may have missed" not in body
+
+
+def test_a_check_back_row_is_not_news_but_a_status_change_by_tico_is(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        plants = task(c, "Water the office plants")
+        settle(c, plants["id"], "finance", ago(days=3))
+        H._task_event(c, plants["id"], H.KEEPER, "check_back_note", "a", "b", "Look again tomorrow")
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_id=? AND kind='check_back_note'",
+                  (ago(days=1), plants["id"]))
+        moved = task(c, "File the expense report")
+        settle(c, moved["id"], "finance", ago(days=3))
+        H.history_event(c, "task", moved["id"], H.KEEPER, "status", "open", "waiting", "Moved by the hub")
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_id=? AND kind='status' AND actor_id=?",
+                  (ago(days=1), moved["id"], H.KEEPER))
+        complete_jobs(c)
+        assert "finance" in daily_task_check.run(c, DAY)["woke"]
+        body = only_list(c)
+        assert f"{plants['id'][:8]} Water the office plants: Quiet for 3 days, nothing waiting on anyone" in body
+        assert (f"{moved['id'][:8]} File the expense report: Update you may have missed: status changed by Tico "
+                "(1 since you last worked on it)") in body
+
+
+def test_a_waiting_task_that_waits_on_nothing_is_listed_after_two_days(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        stranded = task(c, "Confirm the delivery date")
+        settle(c, stranded["id"], "finance", ago(days=2))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (stranded["id"],))
+        complete_jobs(c)
+        assert "finance" in daily_task_check.run(c, DAY)["woke"]
+        assert f"{stranded['id'][:8]} Confirm the delivery date: Waiting on nothing for 2 days" in only_list(c)
+
+
+def test_a_waiting_task_held_by_a_live_blocker_or_by_a_person_is_not_listed(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        quote = H.task_create(c, H.human_actor("ana"), "Get the quote", "Ana gets it.", "human:ana")
+        van = task(c, "Book the van")
+        blocks(c, quote["id"], van["id"], ago(days=2))
+        settle(c, van["id"], "finance", ago(days=2))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (van["id"],))
+        landlord = task(c, "Ask the landlord")
+        settle(c, landlord["id"], "finance", ago(days=2))
+        c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana' WHERE id=?", (landlord["id"],))
+        complete_jobs(c)
+        assert "finance" not in daily_task_check.run(c, DAY)["woke"]
+        assert lists(c) == []

@@ -330,9 +330,13 @@ class Scheduler:
 
     def due(self, key, at, cfgs, last):
         """Whether a controlled job (backend/system_routines.py CONTROLS) runs now: on, and due on its saved preset since
-        its last start. Marked first, so a failing job retries on its preset, not every tick."""
+        its last start. Marked first, so a failing job retries on its preset, not every tick. A daily-UTC job that has
+        never run waits for the first 14:00 UTC after this process first sees it on, so a deploy does not run it
+        at once."""
         cfg = cfgs[key]
         mark = max([t for t in (self.marks.get(key), last.get(key)) if t], default=None)
+        if mark is None and cfg["on"] and cfg.get("preset") == SR.DAILY_UTC:
+            mark = self.marks.setdefault(key, at)
         if not cfg["on"] or not SR.due(cfg, at, mark):
             return False
         self.marks[key] = at

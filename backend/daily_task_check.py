@@ -5,16 +5,20 @@ checks' unstrand (hubdb.sweep_stranded), which woke a bot about one task at a ti
 
 A task is on its bot's list when it is the bot's, live (H.ACTIVE_STATUSES), readable to it, not snoozed, not already
 being run for it (a queued, leased or running job in its conversation), and either:
-- a missed update: something by anyone else landed on it after the bot last worked on it. That is a message in its
-  conversation, a change in its history (a creation row is not news), or a subtask or blocker that left active status.
-  The bot last worked on it at its latest turn on the task, or at a message or history row it wrote on it; a bot that
-  never did counts from the start. Or
-- gone quiet: nothing at all has happened on it for a day, its status is not `waiting`, no live blocker holds it, and
-  nothing is recorded to wait on (H.recorded_wait, which includes an unanswered ask).
+- a missed update: someone other than the bot and Tico did something on it after the bot last worked on it. That is a
+  message in its conversation, a change of its own (status, owner, step, waiting_on, due_at, title, body or acceptance,
+  by someone other than the bot; a creation row is not news), or a subtask or blocker that left active status. A status
+  change Tico made (a hub move) counts too. Tico's other bookkeeping (check-backs, rank, checkpoints, its wake notices)
+  never counts. The bot last worked on it at its latest turn on the task, or at a message or history row it wrote on
+  it; a bot that never did counts from the start. Or
+- gone quiet: nothing has changed on it for a day (a message from anyone but Tico, or one of the changes above by
+  anyone), and nothing holds it: it does not wait on someone (waiting_on), no live blocker holds it, and nothing is
+  recorded to wait on (H.recorded_wait, which includes an unanswered ask). A task left in `waiting` that waits on
+  nothing is quiet like any other.
 
 A bot whose profile has its stall sweeps off (rules.sweeps_on) gets no list, as the stall watcher left it alone.
 The day a bot was sent its list is kept in registry_metadata (`daily_task_check:<slug>`), so a second run that UTC day
-sends nothing."""
+sends nothing. The job's first run waits for its first 14:00 UTC (backend/scheduler.py, Scheduler.due)."""
 
 import sqlite3
 from datetime import timedelta
@@ -28,6 +32,14 @@ DAY_KEY = "daily_task_check:"   # registry_metadata: the UTC day a bot was last 
 MAX_LINES = 25                  # task lines in one list; the rest are counted
 TITLE_CHARS = 80
 QUIET_HOURS = 24
+# The changes to a task itself. Anything else a history row records (check-backs, rank, checkpoints) is bookkeeping.
+NEWS_KINDS = ("status", "owner", "step", "waiting_on", "due_at", "title", "body", "acceptance")
+_KINDS = "subject_type='task' AND subject_id=? AND kind IN (" + ",".join(f"'{kind}'" for kind in NEWS_KINDS) + ")"
+# Args: the task, the bot's last turn, the bot, Tico. A status change Tico made still counts.
+_MISSED = (_KINDS + " AND old IS NOT NULL AND created_at>? AND actor_id IS NOT NULL AND actor_id<>? "
+           "AND (actor_id<>? OR kind='status')")
+# Args: the bot, Tico. Messages with no sender are not from anyone, so they are not news either.
+_FROM_OTHERS = "sender_id IS NOT NULL AND sender_id<>? AND sender_id<>?"
 
 
 def run(c, at):
@@ -56,7 +68,7 @@ def run(c, at):
 
 def _list(c, slug, at):
     """The bot's list as one message's text, and how many tasks it names; (None, 0) when nothing needs a look."""
-    from . import task_relations as TR, task_snooze as TS
+    from . import task_snooze as TS
     actor = H.bot_actor(slug)
     now = H.parse_ts(at)
     cutoff = now - timedelta(hours=QUIET_HOURS)
@@ -74,11 +86,10 @@ def _list(c, slug, at):
             missed.append((when, _line(row, reason)))
             continue
         quiet_since = max(x for x in (row["updated_at"], base, _latest(c, row)) if x)
-        if (row["status"] != "waiting" and H.parse_ts(quiet_since) <= cutoff
-                and TR.live_blocker(c, row["id"], H.ACTIVE_STATUSES) is None
-                and H.recorded_wait(c, dict(row), at) is None):
-            days = int((now - H.parse_ts(quiet_since)).total_seconds() // 86400)
-            reason = f"Quiet for {days} day{'' if days == 1 else 's'}, nothing waiting on anyone"
+        if H.parse_ts(quiet_since) <= cutoff and not _holds(c, row, at):
+            span = _days(now - H.parse_ts(quiet_since))
+            reason = (f"Waiting on nothing for {span}" if row["status"] == "waiting"
+                      else f"Quiet for {span}, nothing waiting on anyone")
             quiet.append((quiet_since, _line(row, reason)))
     if not missed and not quiet:
         return None, 0
@@ -101,6 +112,19 @@ def _line(row, reason):
     return f"- {row['id'][:8]} {title}: {reason}"
 
 
+def _days(delta):
+    days = int(delta.total_seconds() // 86400)
+    return f"{days} day{'' if days == 1 else 's'}"
+
+
+def _holds(c, row, at):
+    """Whether something holds the task: a person it waits on, a live blocker, or a wait recorded for it (an unanswered
+    ask included)."""
+    from . import task_relations as TR
+    return bool(row.get("waiting_on")) or TR.live_blocker(c, row["id"], H.ACTIVE_STATUSES) is not None \
+        or H.recorded_wait(c, dict(row), at) is not None
+
+
 def _last_turn(c, row, slug, actor):
     """When the bot last worked on the task: its latest turn on it, or a message or history row it wrote on it."""
     return c.execute(
@@ -111,12 +135,11 @@ def _last_turn(c, row, slug, actor):
 
 
 def _news(c, row, actor, base):
-    """(count, latest time, what the latest was) of what anyone else did on the task since `base`, or None."""
+    """(count, latest time, what the latest was) of what others did on the task since `base`, or None."""
     tid, conv = row["id"], row["conversation_id"]
-    msgs = c.execute("SELECT count(*), max(created_at) FROM messages WHERE conversation_id=? AND coalesce(sender_id,'')<>? "
-                     "AND deleted_at IS NULL AND created_at>?", (conv, actor, base)).fetchone()
-    hist = c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
-                     "AND coalesce(actor_id,'')<>? AND old IS NOT NULL AND created_at>?", (tid, actor, base)).fetchone()[0]
+    msgs = c.execute("SELECT count(*), max(created_at) FROM messages WHERE conversation_id=? AND deleted_at IS NULL "
+                     f"AND {_FROM_OTHERS} AND created_at>?", (conv, actor, H.KEEPER, base)).fetchone()
+    hist = c.execute(f"SELECT count(*) FROM history_events WHERE {_MISSED}", (tid, base, actor, H.KEEPER)).fetchone()[0]
     related = H._rows(c.execute(
         "SELECT t.title, t.status, t.updated_at, r.kind FROM task_relations r JOIN tasks t ON t.id=r.from_task "
         f"WHERE r.to_task=? AND r.kind IN ('parent','blocks') AND t.status NOT IN ({_marks()}) AND t.updated_at>? "
@@ -126,14 +149,13 @@ def _news(c, row, actor, base):
         return None
     options = []
     if msgs[0]:
-        sender = c.execute("SELECT sender_id FROM messages WHERE conversation_id=? AND coalesce(sender_id,'')<>? "
-                           "AND deleted_at IS NULL AND created_at>? ORDER BY created_at DESC LIMIT 1",
-                           (conv, actor, base)).fetchone()[0]
+        sender = c.execute("SELECT sender_id FROM messages WHERE conversation_id=? AND deleted_at IS NULL "
+                           f"AND {_FROM_OTHERS} AND created_at>? ORDER BY created_at DESC LIMIT 1",
+                           (conv, actor, H.KEEPER, base)).fetchone()[0]
         options.append((msgs[1], f"a message from {_who(c, sender)}"))
     if hist:
-        latest = c.execute("SELECT created_at, kind, actor_id FROM history_events WHERE subject_type='task' AND subject_id=? "
-                           "AND coalesce(actor_id,'')<>? AND old IS NOT NULL AND created_at>? "
-                           "ORDER BY created_at DESC LIMIT 1", (tid, actor, base)).fetchone()
+        latest = c.execute(f"SELECT created_at, kind, actor_id FROM history_events WHERE {_MISSED} "
+                           "ORDER BY created_at DESC LIMIT 1", (tid, base, actor, H.KEEPER)).fetchone()
         options.append((latest["created_at"], f"{latest['kind']} changed by {_who(c, latest['actor_id'])}"))
     if related:
         top = related[0]
@@ -143,11 +165,11 @@ def _news(c, row, actor, base):
 
 
 def _latest(c, row):
-    """The newest message in the task's conversation or history row on the task, of anyone."""
-    msg = c.execute("SELECT max(created_at) FROM messages WHERE conversation_id=? AND deleted_at IS NULL",
-                    (row["conversation_id"],)).fetchone()[0]
-    hist = c.execute("SELECT max(created_at) FROM history_events WHERE subject_type='task' AND subject_id=?",
-                     (row["id"],)).fetchone()[0]
+    """The newest thing that resets the quiet clock: a message from anyone but Tico, or a change of the task itself (see
+    NEWS_KINDS) by anyone, Tico's status moves included. Tico's bookkeeping does not reset it."""
+    msg = c.execute("SELECT max(created_at) FROM messages WHERE conversation_id=? AND deleted_at IS NULL "
+                    "AND sender_id IS NOT NULL AND sender_id<>?", (row["conversation_id"], H.KEEPER)).fetchone()[0]
+    hist = c.execute(f"SELECT max(created_at) FROM history_events WHERE {_KINDS}", (row["id"],)).fetchone()[0]
     return max(x for x in (msg, hist) if x) if (msg or hist) else None
 
 

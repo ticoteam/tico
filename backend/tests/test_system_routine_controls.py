@@ -133,6 +133,42 @@ def test_daily_at_a_time_runs_once_a_day_after_that_time():
         datetime(2026, 10, 23, 9, 0, tzinfo=pt)
 
 
+def test_a_daily_utc_job_never_run_is_next_at_1400_utc_not_now():
+    cfg = {"on": True, "preset": SR.DAILY_UTC, "at": "14:00"}
+    assert SR.next_due(cfg, None, datetime(2026, 11, 3, 10, tzinfo=timezone.utc)) == \
+        datetime(2026, 11, 3, 14, tzinfo=timezone.utc)
+    assert SR.next_due(cfg, None, datetime(2026, 11, 3, 15, tzinfo=timezone.utc)) == \
+        datetime(2026, 11, 4, 14, tzinfo=timezone.utc)
+
+
+def test_the_daily_task_check_first_runs_at_1400_utc_after_a_deploy_not_at_once(api, monkeypatch):
+    from backend import daily_task_check
+    sent = []
+    monkeypatch.setattr(daily_task_check, "run", lambda c, at: sent.append(at) or {"woke": [], "listed": 0})
+    # One process: the wait for the first run starts at its first tick.
+    scheduler = Scheduler(api.app.state.store, api.app.state.execution)
+    scheduler.tick(datetime(2026, 11, 3, 10, tzinfo=timezone.utc))
+    scheduler.tick(datetime(2026, 11, 3, 13, 59, tzinfo=timezone.utc))
+    assert sent == [], "a deploy at 10:00 UTC does not send every bot its list at once"
+    scheduler.tick(datetime(2026, 11, 3, 14, 0, 5, tzinfo=timezone.utc))
+    assert len(sent) == 1
+    scheduler.tick(datetime(2026, 11, 3, 20, tzinfo=timezone.utc))
+    assert len(sent) == 1, "once a day"
+    scheduler.tick(datetime(2026, 11, 4, 14, 0, 5, tzinfo=timezone.utc))
+    assert len(sent) == 2
+
+
+def test_the_daily_task_check_deployed_after_1400_utc_waits_for_the_next_one(api, monkeypatch):
+    from backend import daily_task_check
+    sent = []
+    monkeypatch.setattr(daily_task_check, "run", lambda c, at: sent.append(at) or {"woke": [], "listed": 0})
+    scheduler = Scheduler(api.app.state.store, api.app.state.execution)
+    scheduler.tick(datetime(2026, 11, 3, 15, tzinfo=timezone.utc))
+    assert sent == []
+    scheduler.tick(datetime(2026, 11, 4, 14, 0, 5, tzinfo=timezone.utc))
+    assert len(sent) == 1
+
+
 def test_nightly_learnings_has_an_off_switch_on_by_default_and_off_means_no_run_that_night(api, monkeypatch):
     store = api.app.state.store
     started = []

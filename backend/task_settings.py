@@ -4,7 +4,8 @@ JOBS = {
     "assigned_tasks": ("open", 'Start assigned tasks on a free computer, up to each bot\'s "Keep N going".'),
     "stall_checks": ("open", "Every minute: drop queued work the bot can no longer read. Stalled tasks no longer wake a bot here."),
     "daily_task_check": ("open", "Once a day, one list to each bot of its tasks with a missed update or gone quiet."),
-    "waiting_checks": ("open", "Turn a bot's plain ask to a person into a small task. Waiting tasks are no longer sent back to work."),
+    "waiting_checks": ("open", "Turn a bot's plain ask to a person into a small task. A waiting task that waits on "
+                       "nothing is listed on the daily task check after a day."),
     "due_reminders": ("open", "Tell a bot its task is due. People get no reminder."),
     "snooze_ends": ("open", "Bring snoozed tasks back on their date."),
     "still_wanted": ("open", "Ask the task's person once whether a task idle for a week is still wanted."),
