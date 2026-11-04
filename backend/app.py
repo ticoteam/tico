@@ -579,8 +579,6 @@ def create_app(settings=None):
 
     @app.exception_handler(sqlite3.OperationalError)
     async def storage_handler(request, exc):
-        import traceback as _diag_traceback  # DIAGNOSTIC: remove before merge
-        _diag_traceback.print_exception(exc)  # DIAGNOSTIC: remove before merge
         telemetry.capture("request", exc, 503, route=error_route(request))
         request.state.telemetry_captured = True
         # The write lock stayed taken past store.WRITE_WAIT: a load answer, not a fault. Clients retry with the same
