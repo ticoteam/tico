@@ -76,7 +76,8 @@
   reply: |
     Declines the v0.5.17 publish approval (2a7f0c9e) as Dana, with a note that v0.5.20 replaced it, directly and with no Confirm
     card, because she named this one decline. It does not approve or decline any other approval. It says in a line what was
-    declined and that it is recorded as her decision through the Assistant. Nothing else.
+    declined and that it is recorded as her decision through the Assistant; the item's link and "say undo to put it back"
+    are part of that line. Nothing else: no history of the item and no remarks on other approvals.
 
 - id: approvals-no-setting-no-approve
   group: approvals
