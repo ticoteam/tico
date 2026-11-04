@@ -35,7 +35,10 @@ def ago(**kw):
 
 
 def task(c, title):
-    return H.task_create(c, H.human_actor("ana"), title, f"{title}, for the roundup.", "bot:finance")
+    """Created at the fixed DAY clock, so the runs' cutoffs do not depend on the real date."""
+    made = H.task_create(c, H.human_actor("ana"), title, f"{title}, for the roundup.", "bot:finance")
+    c.execute("UPDATE tasks SET created_at=? WHERE id=?", (DAY, made["id"]))
+    return made
 
 
 def settle(c, tid, slug, turned):
