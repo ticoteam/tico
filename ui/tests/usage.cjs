@@ -116,10 +116,13 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
     await dialog.getByRole('button', {name: 'Clear queue', exact: true}).click();
     await dialog.locator('[data-error]:not([hidden])').waitFor();
     assert.equal(await dialog.getByRole('button', {name: 'Clear queue', exact: true}).isEnabled(), true);
+    const failedRequests = purges.length; // The shared request helper retries a temporary server failure.
+    assert.ok(failedRequests > 0);
     purgeFails = false;
     await dialog.getByRole('button', {name: 'Clear queue', exact: true}).click();
     await dialog.waitFor({state: 'detached'});
-    assert.deepEqual(purges, [{scope: 'group:ops'}, {scope: 'group:ops'}]);
+    assert.equal(purges.length, failedRequests + 1);
+    assert.ok(purges.every(body => Object.keys(body).length === 1 && body.scope === 'group:ops'));
     assert.deepEqual(puts, [], 'clearing the queue never changes spending limits');
     await page.setViewportSize({width: 1440, height: 900});
 
