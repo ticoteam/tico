@@ -264,7 +264,8 @@ CREATE TABLE IF NOT EXISTS calendar_actions(
 CREATE INDEX IF NOT EXISTS calendar_actions_queue ON calendar_actions(status,created_at);
 CREATE TABLE IF NOT EXISTS mail_mailboxes(
  address TEXT PRIMARY KEY, person_id TEXT, runner_id TEXT, synced_at TEXT,
- message_count INTEGER NOT NULL DEFAULT 0, oldest_epoch INTEGER, newest_epoch INTEGER, error TEXT);
+ message_count INTEGER NOT NULL DEFAULT 0, oldest_epoch INTEGER, newest_epoch INTEGER, error TEXT,
+ watching_since_at TEXT);
 CREATE TABLE IF NOT EXISTS mail_agent_instructions(
  bot TEXT PRIMARY KEY REFERENCES bots(id), content TEXT NOT NULL,
  runner_id TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -2067,6 +2068,13 @@ class Store:
                 # (backend/redesign_migration.py repair_stale_review). Idempotent by its marker.
                 from . import redesign_migration as Redesign
                 Redesign.repair_stale_review(c)
+                # Inboxes the cutover moved with the Inbox Manager's whole instructions go to the short routing
+                # prompt, once (backend/redesign_migration.py repair_inbox_prompts). Idempotent by its marker. A
+                # failure here is logged, never raised: the repair is tried again at the next start.
+                try:
+                    Redesign.repair_inbox_prompts(c)
+                except Exception:  # noqa: BLE001 - startup goes on
+                    logging.getLogger(__name__).exception("inbox prompt repair failed; it is tried at the next start")
                 from . import releases as Releases
                 Releases.record_start(c, H.now())
                 from .credentials import FILE_MIGRATION, HUB_MIGRATION

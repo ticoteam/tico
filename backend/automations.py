@@ -35,6 +35,7 @@ The run state keeps every step's outputs for 30 days; after that `prune` keeps t
 import asyncio
 import contextlib
 import contextvars
+import hashlib
 import json
 import logging
 import threading
@@ -107,6 +108,9 @@ TURN_WAIT_DAYS = 1
 STALE_MINUTES = 15       # a claimed run not saved by then was cut off: queued again, to go on from its last save
 MAX_RESUMES = 3          # a run cut off this often is failed: it may be what stops the server
 MAX_CHAIN = 3            # automations started by automations: at most this deep, never the same one twice
+MAX_IN_FLIGHT = 10       # runs one automation has going at once, turns included; the rest queue
+TURN_SLOT_MINUTES = 30   # a turn holds its slot until it reports, up to this long: one that never reports frees it
+MAIL_LOOKBACK_HOURS = 24  # a mailbox's first sync acts on mail this recent; its watch then never moves
 RUN_GUARD_MINUTES = 10                  # the window a flood is counted in
 RUN_GUARD_BURST = 500                   # runs in RUN_GUARD_MINUTES, any refs: a flood, held; also the held runs kept
 RUN_GUARD_SPAN = 20                     # the minutes a sustained loop is watched over
@@ -1064,6 +1068,16 @@ def _no_input(c, row, settings, at, zone):
         return None
 
 
+def _stored_ref(ref):
+    """A run's trigger ref as the table keeps it, for both the insert and the dedupe lookup. A ref over 200 characters
+    (a long mailbox leaves no room for its message id) keeps its first 183 and the first 16 hex of its sha256, so two
+    refs that share a long prefix stay distinct and each finds its own run."""
+    text = str(ref or "")
+    if len(text) <= 200:
+        return text
+    return text[:183] + ":" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
 def queue(c, row, payload, ref="", *, manual=False, chain=()):
     """A queued run of this automation's current version, or None: an automation with a `find` runs one at a time (an
     occurrence while one is unfinished is passed over, counted as dropped), a schedule absorbs an occurrence
@@ -1077,15 +1091,17 @@ def queue(c, row, payload, ref="", *, manual=False, chain=()):
         return None
     if not manual and _absorbed(c, row):
         return None
-    if str(ref).startswith("due:") and c.execute(
+    stored = _stored_ref(ref)
+    if stored.startswith("due:") and c.execute(
             "SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=? AND status!='failed' LIMIT 1",
-            (row["id"], str(ref)[:200])).fetchone():
+            (row["id"], stored)).fetchone():
         # One due day, one run: a repeated or concurrent pass for the same day starts nothing new.
         return None
-    if str(ref).startswith("slack:") and c.execute(
+    if stored.startswith(("slack:", "mail:")) and c.execute(
             "SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=? LIMIT 1",
-            (row["id"], str(ref)[:200])).fetchone():
-        # One Slack message, one run: a channel message offered once may come back as an `@Tico` event.
+            (row["id"], stored)).fetchone():
+        # One Slack or mail message, one run: a message offered again (its mail row swept, or a label change exported
+        # it again) starts nothing new. The run stays after its message's row goes (automation_runs_trigger).
         return None
     held = _hold_row(c, row["id"])
     if held and manual:
@@ -1103,7 +1119,7 @@ def queue(c, row, payload, ref="", *, manual=False, chain=()):
         rid = "run_" + H.new_id()
         state = E.start(payload, manual=manual)
         c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,status,saved_state,chain) "
-                  "VALUES(?,?,?,?,?,?,?,?)", (rid, row["id"], row["version"], str(ref or "")[:200], H.now(),
+                  "VALUES(?,?,?,?,?,?,?,?)", (rid, row["id"], row["version"], stored, H.now(),
                                               "held" if on_hold else "queued", json.dumps(state, default=str),
                                               json.dumps(list(chain))))
         _count(c, row["id"], "runs")
@@ -1270,9 +1286,30 @@ def _calendar_invite(attachments):
     return False
 
 
-def on_mail(c, mailbox, message):
+def mail_watch(c, mailbox, synced_at):
+    """Where a mailbox's watch starts, as an ISO time: its message automations act on the mail received from there on,
+    once each. The first batch a mailbox sends sets it, a day before that sync (MAIL_LOOKBACK_HOURS), so the last day's
+    mail is news when a mailbox is connected. It never moves after that: a gap (an outage, a quiet weekend) leaves the
+    mail that arrived in it news, and the per-automation cap (MAX_IN_FLIGHT) paces the backlog. A mailbox from before
+    the watch was kept has none, so its first sync after the upgrade sets it the same way. The caller stores the result
+    on the mailbox's row (connectors `_refresh_mailbox`), which keeps the first one stored."""
+    row = c.execute("SELECT watching_since_at FROM mail_mailboxes WHERE address=?", (mailbox,)).fetchone()
+    if row and row["watching_since_at"]:
+        return row["watching_since_at"]
+    # In UTC: an offset in the sync's stamp is an instant, and H.shift would keep its local clock.
+    at = H.parse_ts(synced_at)
+    at = (at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at).astimezone(timezone.utc)
+    return (at - timedelta(hours=MAIL_LOOKBACK_HOURS)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def on_mail(c, mailbox, message, watch=None):
     """A new message in a person's mailbox (the mail connector's copy), for the automations of that mailbox's
-    person: whose it is is checked again now, since a person may have lost it since the save."""
+    person: whose it is is checked again now, since a person may have lost it since the save. `watch` (`mail_watch`):
+    a message received before the mailbox's watch began is old mail the sync brought back, and no automation hears it.
+    A message with no received time (0) is heard as it always was."""
+    epoch = int(getattr(message, "epoch", 0) or 0)
+    if watch and 0 < epoch < H.parse_ts(watch).timestamp():
+        return []
     raw = list(getattr(message, "attachments", None) or [])
     attachments = [a.get("name") if isinstance(a, dict) else str(a) for a in raw]
     sender = str(message.from_addr or "").lower()
@@ -1361,6 +1398,7 @@ def turn_done(c, attempt, outcome, text):
         return
     state = json.loads(run["saved_state"]) if run["saved_state"] else None
     c.execute("DELETE FROM automation_holds WHERE ref=?", (ref,))
+    _ring(c)   # the slot the turn held is free: a queued run of its automation may start now
     if state is None:
         c.execute("UPDATE automation_runs SET cost=round(cost+?,6) WHERE id=?", (cost, rid))
         return
@@ -1924,6 +1962,17 @@ class HubServices:
         self._write(work)
 
 
+# An automation's slots taken: its runs in flight (running, or waiting on a turn or a mail computer, not a batch time)
+# plus the turn holds still inside their slot window whose run is not already counted. Served by automation_runs_active
+# (migration 0080) and automation_holds_of, so it reads only this automation's rows. Counted once per automation per
+# claim pass (Hub.claim), not once per queued candidate.
+OCCUPIED = ("SELECT (SELECT count(*) FROM automation_runs f WHERE f.automation_id=:aid "
+            "AND f.status IN ('running','waiting') AND f.wake_at IS NULL) "
+            "+ (SELECT count(*) FROM automation_holds h WHERE h.automation_id=:aid AND h.created_at>:cutoff "
+            "AND h.run_id NOT IN (SELECT f.id FROM automation_runs f WHERE f.automation_id=:aid "
+            "AND f.status IN ('running','waiting') AND f.wake_at IS NULL))")
+
+
 class Hub:
     """What draining needs: the store, the settings and the app's judge."""
 
@@ -1938,13 +1987,30 @@ class Hub:
         return self._app()
 
     def claim(self):
+        # An automation's runs in flight (running, or waiting on a turn or a mail computer, not a batch time) are
+        # capped: a backlog of triggers (a first mail sync) starts MAX_IN_FLIGHT at a time, and the rest wait queued
+        # until one of them finishes or its turns answer. A run that ended with a turn still going (its last step is
+        # an llm step, which does not wait) keeps its slot through that turn's hold, which lapses after
+        # TURN_SLOT_MINUTES so a turn that never reports cannot block the automation.
+        cutoff = H.shift(H.now(), minutes=-TURN_SLOT_MINUTES)
         with self.store.transaction() as c:
-            row = c.execute("SELECT id FROM automation_runs WHERE status='queued' ORDER BY started_at LIMIT 1").fetchone()
-            if not row:
+            occupied = {}                     # automation id -> slots taken, counted once for this pass
+            pick = None
+            queued = c.execute("SELECT id, automation_id FROM automation_runs WHERE status='queued' "
+                               "ORDER BY started_at")
+            for r in queued:
+                aid = r["automation_id"]
+                if aid not in occupied:
+                    occupied[aid] = c.execute(OCCUPIED, {"aid": aid, "cutoff": cutoff}).fetchone()[0]
+                if occupied[aid] < MAX_IN_FLIGHT:
+                    pick = r["id"]
+                    break
+            queued.close()                    # the write below must not run under a read still open on the table
+            if pick is None:
                 return None
             c.execute("UPDATE automation_runs SET status='running',claimed_at=? WHERE id=? AND status='queued'",
-                      (H.now(), row["id"]))
-            return row["id"]
+                      (H.now(), pick))
+            return pick
 
     def drain(self, limit=200):
         """Run queued runs until none is left (or `limit`, so one request never drains forever)."""
@@ -1999,8 +2065,8 @@ class Hub:
                                      min(waits) if waits and status == "waiting" else None, rid))
             if status == "failed":
                 _due_failed(c, rid, _run_error(state))
-            if status == "queued":
-                _ring(c)
+            if status not in ("waiting", "held"):
+                _ring(c)   # queued again, or done: a run of this automation that the cap held back can start now
 
 
 # ---------------------------------------------------------------------------------------------------- mail actions

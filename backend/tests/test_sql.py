@@ -248,7 +248,8 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
                        "NOT LIKE 'computer-profiles:%'") == [
         "access", "access_bot_limit", "bot-chats-to-home", "bot_access", "ceo-bot", "company-turn-incident",
         "credential-file-migration-v1", "credential-file-migration-v2-hub", "credential-use-backfill", "docs_migrated",
-        "idempotency_messages.ready", "inbox-only-runners", "librarian_wording35", "librarian_wording36",
+        "idempotency_messages.ready", "inbox-only-runners", "inbox_prompt_repair", "librarian_wording35",
+        "librarian_wording36",
         "message_links.ready", "onboarding", "owner", "people", "redesign_cutover", "release-history",
         "repositories-access-migrated", "roadmap_ready_to_ship_step", "roadmaps_copies_cleared_by_field",
         "roadmaps_explicit_public_text", "stale_review_repair", "strategy-bot", "task_session_default",
