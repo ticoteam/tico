@@ -162,15 +162,16 @@ ensure_service_account() {
   say "Created service account $SA"
 }
 
-# Sets ENFORCED to yes when the policy in force on the project enforces the key rule, in either form, otherwise no.
+# Sets ENFORCED to yes or no when the policy in force on the project says so, in either form. When the policy can't be
+# read it is unknown, and key creation decides: a refusal that names the key policy still gets the override.
 enforced() {
   local constraint="$1"
   if ! gcloud org-policies describe "constraints/$constraint" --project="$PROJECT" --effective --format=json \
     </dev/null >"$TMP/policy.json" 2>"$TMP/policy.err"; then
-    if grep -qi 'not found' "$TMP/policy.err"; then ENFORCED=no; return; fi
-    die "Could not read the key policy. $(first_line "$TMP/policy.err")"
+    if grep -qi 'not found' "$TMP/policy.err"; then ENFORCED=no; else ENFORCED=unknown; fi
+    return
   fi
-  ENFORCED=$(python3 -I "$TMP/enforced.py" "$TMP/policy.json")
+  ENFORCED=$(python3 -I "$TMP/enforced.py" "$TMP/policy.json") || ENFORCED=unknown
 }
 
 grant_policy_admin() {
@@ -214,14 +215,25 @@ key_id() {
   python3 -I "$TMP/key_id.py" "$1"
 }
 
+# True when the last key creation was refused because of the key policy, which the setup can lift.
+refused_by_policy() {
+  grep -qi 'disableServiceAccountKeyCreation' "$TMP/key.err" && return 0
+  grep -qi 'FAILED_PRECONDITION' "$TMP/key.err" && grep -qi 'policy' "$TMP/key.err"
+}
+
 # Creates the key. A policy change can take a minute to apply, so a refusal is retried with a growing pause.
+# A refusal that names the key policy overrides both key constraints, once, then retries under the same KEY_WAIT budget.
 create_key() {
-  local attempt=0 started=$SECONDS
+  local attempt=0 started=$SECONDS fixed=0 constraint
   while :; do
     attempt=$((attempt + 1))
     if gcloud iam service-accounts keys create "$TMP/key.json" --iam-account="$SA" --project="$PROJECT" </dev/null \
       >/dev/null 2>"$TMP/key.err"; then
       break
+    fi
+    if [[ "$fixed" == 0 ]] && refused_by_policy; then
+      fixed=1
+      for constraint in "${KEY_POLICIES[@]}"; do override_policy "$constraint"; done
     fi
     if (( SECONDS - started >= KEY_WAIT )); then
       die "Google did not create the key. Organization policy changes can take a few minutes; run this again then. $(first_line "$TMP/key.err")"

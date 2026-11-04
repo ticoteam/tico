@@ -26,6 +26,9 @@ CALLER = 'admin@acme.example'
 ROLE = 'roles/orgpolicy.policyAdmin'
 KEY_POLICIES = ['iam.disableServiceAccountKeyCreation', 'iam.managed.disableServiceAccountKeyCreation']
 SECRET = 'FAKEKEYMATERIAL'
+GENERIC_REFUSAL = 'FAILED_PRECONDITION: Key creation is blocked.'
+POLICY_REFUSAL = ('FAILED_PRECONDITION: Key creation is not allowed by organization policy '
+                  'constraints/iam.disableServiceAccountKeyCreation.')
 ORPHAN = {'kid': 'orphan-old', 'validAfterTime': '2026-11-01T09:00:00.000000Z'}
 NEWER = {'kid': 'other-newer', 'validAfterTime': '2026-11-03T12:00:00.000000Z'}
 
@@ -87,7 +90,7 @@ elif POS[:3] == ['iam', 'service-accounts', 'keys']:
     if POS[3] == 'create':
         if state['key_refusals'] > 0:
             state['key_refusals'] -= 1
-            fail('ERROR: (gcloud.iam.service-accounts.keys.create) FAILED_PRECONDITION: Key creation is blocked.')
+            fail('ERROR: (gcloud.iam.service-accounts.keys.create) ' + state['key_refusal_text'])
         state['counter'] += 1
         kid = 'key%03d' % state['counter']
         with open(POS[4], 'w') as f:
@@ -106,6 +109,8 @@ elif POS[:3] == ['iam', 'service-accounts', 'keys']:
         state['deleted'].append(kid)
 elif POS[:2] == ['org-policies', 'describe']:
     name = POS[2].rsplit('/', 1)[-1]
+    if state['describe_refused']:
+        fail("ERROR: (gcloud.org-policies.describe) PERMISSION_DENIED: Permission 'orgpolicy.policies.get' denied.")
     if name in state['overridden']:
         print(json.dumps({'spec': {'rules': [{'enforce': False}]}}))
     elif name in state['enforced']:
@@ -191,7 +196,8 @@ else:
 
 DEFAULTS = {
     'orgs': ['111'], 'projects': [], 'sa': [], 'enforced': [], 'overridden': [], 'policy_sets': [], 'bindings': [],
-    'keys': [], 'deleted': [], 'counter': 0, 'key_refusals': 0, 'policy_needs_role': False, 'upload_mode': 'ok',
+    'keys': [], 'deleted': [], 'counter': 0, 'key_refusals': 0, 'key_refusal_text': GENERIC_REFUSAL,
+    'describe_refused': False, 'policy_needs_role': False, 'upload_mode': 'ok',
     'latest': True, 'active': None, 'uploaded': None, 'account': CALLER,
 }
 
@@ -238,8 +244,9 @@ class Hub:
                 'FAKE_LOG': str(self.log), 'FAKE_CODE': CODE, 'TMPDIR': str(self.scratch),
                 'TICO_RETRY_BASE': '0', 'TICO_KEY_WAIT': '5'}
 
-    def run(self, *args):
-        return subprocess.run(['bash', str(self.script), *(args or (CODE,))], env=self.env(), stdin=subprocess.DEVNULL,
+    def run(self, *args, **extra_env):
+        env = {**self.env(), **extra_env}
+        return subprocess.run(['bash', str(self.script), *(args or (CODE,))], env=env, stdin=subprocess.DEVNULL,
                               capture_output=True, text=True, timeout=120, start_new_session=True)
 
     def calls(self):
@@ -384,6 +391,42 @@ def test_a_policy_admin_role_already_held_is_left_alone(tmp_path):
     assert hub.gcloud('organizations', 'add-iam-policy-binding') == []
     assert hub.gcloud('organizations', 'remove-iam-policy-binding') == []
     assert hub.state()['bindings'] == [[f'user:{CALLER}', ROLE]]
+
+
+def test_a_key_refused_by_policy_with_unreadable_policies_is_overridden_once_then_retried(tmp_path):
+    hub = Hub(tmp_path, describe_refused=True, key_refusals=2, key_refusal_text=POLICY_REFUSAL)
+    result = hub.run()
+    assert result.returncode == 0, result.stderr
+    assert 'Done. Go back to Tico.' in result.stdout
+    assert len(hub.gcloud('org-policies', 'describe')) == 2
+    project = hub.state()['projects'][0]['id']
+    assert [s['name'] for s in hub.state()['policy_sets']] == [f'projects/{project}/policies/{n}' for n in KEY_POLICIES]
+    assert all(s['spec'] == {'rules': [{'enforce': False}]} for s in hub.state()['policy_sets'])
+    assert result.stdout.count('Allowing service account keys on the project') == 2
+    assert len(hub.gcloud('iam', 'service-accounts', 'keys', 'create')) == 3
+    assert hub.index('iam', 'service-accounts', 'keys', 'create') < hub.index('org-policies', 'set-policy')
+    assert hub.gcloud('organizations', 'add-iam-policy-binding') == []
+    assert hub.kids() == {hub.own_key()}
+
+
+def test_a_managed_policy_that_is_not_found_still_overrides_the_legacy_one(tmp_path):
+    hub = Hub(tmp_path, enforced=[KEY_POLICIES[0]])
+    result = hub.run()
+    assert result.returncode == 0, result.stderr
+    assert 'Done. Go back to Tico.' in result.stdout
+    project = hub.state()['projects'][0]['id']
+    assert [s['name'] for s in hub.state()['policy_sets']] == [f'projects/{project}/policies/{KEY_POLICIES[0]}']
+    assert len(hub.gcloud('iam', 'service-accounts', 'keys', 'create')) == 1
+
+
+def test_a_key_refusal_that_does_not_name_the_policy_leaves_the_policy_alone(tmp_path):
+    hub = Hub(tmp_path, key_refusals=5)
+    result = hub.run(TICO_KEY_WAIT='0')
+    assert result.returncode == 1
+    assert 'did not create the key' in result.stderr
+    assert hub.state()['policy_sets'] == []
+    assert len(hub.gcloud('iam', 'service-accounts', 'keys', 'create')) == 1
+    assert hub.gcloud('organizations', 'add-iam-policy-binding') == []
 
 
 def test_a_lost_upload_answer_is_fixed_by_running_again(tmp_path):
