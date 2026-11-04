@@ -185,9 +185,9 @@ def test_a_hold_counts_live_runs_once_even_when_claims_repeat(api, monkeypatch, 
     monkeypatch.setattr(usage_limits, "LOGGED", set())
     caplog.clear()
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO attempts(id, bot_id, created_at, state) VALUES(?, 'cpo', ?, ?)",
-                      [("live-lease", "2026-10-15T12:00:00Z", "leased"),
-                       ("live-run", "2026-10-15T12:00:00Z", "running")])
+        c.executemany("INSERT INTO attempts(id, bot_id, created_at, state) VALUES(?, ?, ?, ?)",
+                      [("live-lease", "cpo", "2026-10-15T12:00:00Z", "leased"),
+                       ("live-run", "product-design", "2026-10-15T12:00:00Z", "running")])
         mine = usage_limits.own(c, "ops")
         queries = []
         c.set_trace_callback(queries.append)
