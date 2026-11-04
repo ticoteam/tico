@@ -344,6 +344,18 @@ def test_a_failed_check_keeps_a_pending_key_pending_with_the_reason(api, private
     assert view["workspace"]["status"] == "pending" and view["workspace"]["last_error"] == answer["message"]
 
 
+def test_a_check_that_finds_no_such_mailbox_leaves_an_active_key_connected(api, private, covered, google):
+    covered((MAILBOX, "inbox-cara"))
+    state, _ = google
+    connected(api, private)
+    state["probe"] = 404
+    answer = check(api, {"mailbox": MAILBOX})
+    assert answer["ok"] is False and answer["error_kind"] == "not_found"
+    (row,) = rows(api)
+    assert row["status"] == "connected" and row["mint_failing_since"] is None
+    assert row["last_error"] == W.MESSAGES["not_found"] and row["probe_mailbox"] == MAILBOX
+
+
 def test_a_failed_check_turns_a_connected_key_failing_and_a_passing_one_restores_it(api, private, covered, google):
     covered((MAILBOX, "inbox-cara"))
     state, _ = google

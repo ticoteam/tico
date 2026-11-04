@@ -524,10 +524,15 @@ def _settle(c, row, mailbox, ok, kind, message, actor):
         # A pending key that fails its check stays pending: the active key keeps working meanwhile.
         c.execute("UPDATE google_workspaces SET last_error=?,checked_at=?,probe_mailbox=?,revision=revision+1,"
                   "updated_at=? WHERE id=? AND revision=?", (message, now, mailbox, now, row["id"], row["revision"]))
-    else:
+    elif kind in KEY_KINDS:
         c.execute("UPDATE google_workspaces SET status='failing',last_error=?,checked_at=?,probe_mailbox=?,"
                   "mint_failing_since=COALESCE(mint_failing_since,?),revision=revision+1,updated_at=? "
                   "WHERE id=? AND revision=?", (message, now, mailbox, now, now, row["id"], row["revision"]))
+    else:
+        # One mailbox missing (not_found), or a refusal that is not about the key, does not turn an active key failing:
+        # the reason is recorded and the key keeps working (KEY_KINDS).
+        c.execute("UPDATE google_workspaces SET last_error=?,checked_at=?,probe_mailbox=?,revision=revision+1,"
+                  "updated_at=? WHERE id=? AND revision=?", (message, now, mailbox, now, row["id"], row["revision"]))
     H.event(c, actor, "google.workspace.check", mailbox, {"ok": bool(ok), "kind": kind or ""})
     return True
 
@@ -726,8 +731,11 @@ def install(app, store):
         except OSError:
             raise Problem("not_built", "The setup script is not built on this server yet", 503) from None
         from . import census
-        with store.transaction() as c:
-            install_id = census.install_id_in(c)
+        with store.read() as c:
+            install_id = census.install_id_if_set(c)
+        if not install_id:      # only the first request of an install writes (census makes the id)
+            with store.transaction() as c:
+                install_id = census.install_id_in(c)
         label = hashlib.sha256(install_id.encode()).hexdigest()[:12]
         text = text.replace("__TICO_BASE__", settings.runner_url).replace("__TICO_INSTALL__", label)
         return Response(content=text, media_type="text/x-shellscript")
