@@ -65,8 +65,10 @@ gets a different page.
 - **The full view** has the page's versions (an older one opens in place) and, for whoever may manage it,
   **Archive**. The owner also has **Delete for good** ([Files](files.md#deleting-a-file-for-good)).
 - **A task** shows the pages pinned to it as cards at the top, a replaced page left out. **Link page** searches
-  existing pages and links the chosen one. Any person who can read the task may link a page they can read; the link
-  keeps the page's own access rules. Other task readers see only pages they can open, with no count of hidden pages.
+  existing pages and links the chosen one. Any person, or bot acting as itself, who can read the task may link a page
+  they can read; the link keeps the page's own access rules. Other task readers see only pages they can open, with no
+  count of hidden pages.
+  The task place's `can_link` controls linking; it grants no card editing or pin arranging rights (`can_edit`).
   **Unlink** is available to whoever linked it, the task's owner or requester, and the org owner.
 - **Pinned** to the Dashboard, a team page or a bot's sidebar ([Overview](overview.md)), a page shows as a card there.
   The full view lists where it is pinned, among the places the reader may open.

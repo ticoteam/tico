@@ -240,7 +240,7 @@ function taskPagesAdopt(d, task) {
     finally { slot.tpBusy = false; button.disabled = false; }
   };
   d.tpOff = liveOn('tasks', e => {
-    if (d.open && d.tpEl === slot && e.kind === 'files' && String(e.id) === id)
+    if (d.open && d.tpEl === slot && (e.kinds || [e.kind]).includes('files') && String(e.id) === id)
       liveSoon('task-pages:' + d.id + ':' + id, () => { if (d.open && d.tpEl === slot) void taskPagesLoad(d); }, 200);
   });
   void taskPagesLoad(d);
@@ -253,8 +253,8 @@ async function taskPagesLoad(d) {
     const r = await get('/v2/places/' + encodeURIComponent('task:' + slot.dataset.task), {fresh: true});
     if (d.tpEl !== slot || seq !== slot.tpSeq) return;
     const pins = (r.pins || []).filter(x => x.page && !x.page.replaced_by_id && !x.page.archived);
-    slot.hidden = !r.can_edit && !pins.length;
-    $('[data-tp-link]', slot).hidden = !r.can_edit;
+    slot.hidden = !r.can_link && !pins.length;
+    $('[data-tp-link]', slot).hidden = !r.can_link;
     const kept = slot.tpCards || new Map(), cards = new Map();
     for (const pin of pins) {
       const key = JSON.stringify([pin.page, pin.size, pin.can_unpin]);

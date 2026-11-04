@@ -263,7 +263,7 @@ it, when you may know) and `at`:
 ```
 id: 4120
 event: tasks
-data: {"seq": 4120, "actor": "human:ben", "at": "2026-10-05T10:00:01.120Z", "id": "t9", "kind": "update", "task": {...as GET /api/v2/tasks shows it...}}
+data: {"seq": 4120, "actor": "human:ben", "at": "2026-10-05T10:00:01.120Z", "id": "t9", "kind": "update", "kinds": ["files", "update"], "task": {...as GET /api/v2/tasks shows it...}}
 
 id: 4121
 event: runs
@@ -274,7 +274,7 @@ data: {"seq": 4121, "run_id": "a1", "conversation_id": "c1", "bot_id": "ops", "o
 
 | Topic | `data` |
 |---|---|
-| `tasks` | `id`, `kind` and `task`, or `gone: true` for a deleted task; `kind: files` invalidates the task's files and linked pages; `bulk: true` (no `id`) when one change touched more than 100 tasks, such as a type edit: read task lists in full |
+| `tasks` | `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and `task`, or `gone: true` for a deleted task; `files` in `kinds` invalidates the task's files and linked pages, even when `kind` is `update`; `bulk: true` (no `id`) when one change touched more than 100 tasks, such as a type edit: read task lists in full |
 | `messages` | `id`, `conversation_id` and `message`, or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal` |
 | `runs` | `run_id`, `conversation_id`, `bot_id`, and `output` (one step of the run) or `state` (the job's state, or the run's: [Runs](status-and-state.md#runs)) |
 | `bots` | `bot` and `status`, as `GET /api/v2/status` lists it |

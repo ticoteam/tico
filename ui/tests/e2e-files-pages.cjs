@@ -39,9 +39,16 @@ journey('e2e-files-pages', async ({hub, browser, phone}) => {
   const task = await must(hub, 'dana', 'POST', 'tasks', {owner: 'person:dana', title: 'Review the linked plan', body: 'Review.'});
   const id = (task.task || task).id;
   const reader = await open(browser, hub, 'priya', {phone, hash: '#/task/' + id});
+  const permissions = await must(hub, 'priya', 'GET', 'places/task:' + id);
+  assert.equal(permissions.can_edit, false, `${where}: the reader cannot arrange the task's cards`);
+  assert.equal(permissions.can_link, true, `${where}: the reader can link a page`);
   go(page, '#/task/' + id);
   const section = reader.locator('[data-task-pages]');
   await section.getByRole('button', {name: 'Link page', exact: true}).click();
+  // A later task update in the same batch must not hide the earlier files invalidation.
+  const refreshed = reader.waitForResponse(r => decodeURIComponent(new URL(r.url()).pathname) === '/api/v2/places/task:' + id);
+  await reader.evaluate(id => liveEmit('tasks', {id, kind: 'update', kinds: ['files', 'update']}), id);
+  assert.equal((await refreshed).status(), 200, `${where}: a coalesced files change refreshes the pages`);
   const search = reader.waitForResponse(r => new URL(r.url()).pathname === '/api/v2/files/search');
   await section.getByRole('searchbox', {name: 'Search pages'}).fill('Engineering weekly');
   assert.equal(new URL((await search).url()).searchParams.get('kind'), 'page', `${where}: the picker searches pages only`);

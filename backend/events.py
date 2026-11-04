@@ -1143,10 +1143,11 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
     # A change to more tasks than one event each is worth (FAN_CAP): one `bulk` event, read lists in full.
     bulk = [row for row in rows if row["kind"] == "bulk"]
     out = [(bulk[-1], {"bulk": True})] if bulk else []
-    last = {}
+    last, kinds = {}, {}
     for row in rows:
         if row["kind"] != "bulk":
             last[row["subject_id"]] = row
+            kinds.setdefault(row["subject_id"], set()).add(row["kind"])
     ids = list(last)
     if not ids:
         return out
@@ -1173,7 +1174,7 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
     views = {item["id"]: item for item in task_views(found, c, who, visible_sql)}
     present = {r[0] for r in c.execute(f"SELECT id FROM tasks WHERE id IN ({marks})", ids)}
     for task_id, row in last.items():
-        entry = {"id": task_id, "kind": row["kind"]}
+        entry = {"id": task_id, "kind": row["kind"], "kinds": sorted(kinds[task_id])}
         if task_id in views:
             entry["task"] = views[task_id]
         elif task_id not in present and _trashed_visible(c, who, task_id):

@@ -55,8 +55,10 @@ TAGS = {
 EVENTS_DESCRIPTION = (
     "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` "
     "(who made it, when the viewer may know) and `at`:\n"
-    "- `tasks`: `id`, `kind` (including `files` for page links) and `task` (as `GET /api/v2/tasks` shows it to the viewer), "
-    "or `gone: true` for a deleted task.\n"
+    "- `tasks`: `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and "
+    "`task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). "
+    "Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. "
+    "A `bulk: true` event without `id` means read task lists in full.\n"
     "- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; "
     "a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n"
     "- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or "
@@ -998,6 +1000,11 @@ SCHEMAS = {
                        "run_model": {"oneOf": [ref("TaskRunChoice"), {"type": "null"}]},
                        "comment_delivery": {"oneOf": [ref("CommentDelivery"), {"type": "null"}]}},
                        required=["task", "events", "children", "comments", "messages", "has_more"], actors=ACTORS),
+    "TaskEvent": obj({"seq": "i", "actor": "n", "at": "s", "id": "s",
+                      "kind": {"type": "string", "description": "The last change kind for this task in the batch"},
+                      "kinds": {"type": "array", "items": {"type": "string"}, "uniqueItems": True,
+                                "description": "All change kinds for this task in the batch; files invalidates files and linked pages"},
+                      "task": ref("Task"), "gone": "b"}, required=["seq", "actor", "at", "id", "kind", "kinds"]),
     "TaskReviewAskView": obj({"questions": "a", "who": "n", "by": "s"}),
     "ReviewAnswer": {"oneOf": [
         obj({"target": "o", "answers": "o", "other": "n", "dismiss": "b", "by": "s", "at": "s"}),
@@ -2430,7 +2437,9 @@ SCHEMAS['Card'] = obj({'id': 'n', 'template': {'enum': ['tasks_by_status', 'done
                       required=['id', 'template', 'heading', 'settings', 'hidden', 'data'])
 SCHEMAS['CardList'] = obj({'cards': items(ref('Card')), 'next': 'n'})
 SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'growth', 'team', 'bot', 'task', 'person']}, 'saved': 'b',
-                        'can_edit': 'b', 'month': {'type': 'string', 'description': 'growth: the month its cards read (YYYY-MM)'},
+                        'can_edit': 'b', 'can_link': {'type': 'boolean', 'description':
+                            'Task places: whether the reader may link a readable page; does not grant card or pin management'},
+                        'month': {'type': 'string', 'description': 'growth: the month its cards read (YYYY-MM)'},
                         'months': {'type': 'array', 'items': {'type': 'string'},
                                    'description': 'growth: the newest 24 months with cohort rows, oldest first'},
                         'pins': items(obj({'id': 'n', 'item': 'n', 'position': 'i', 'size': {'enum': ['small', 'medium', 'large']},
@@ -2826,6 +2835,7 @@ def spec(app):
             responses["200"] = {"description": "OK", "content": {"application/json": {"schema": ref(answer)}}}
         if path == "/api/v2/events":
             responses["200"] = {"description": EVENTS_DESCRIPTION,
+                                "x-task-event-schema": ref("TaskEvent"),
                                 "content": {"text/event-stream": {"schema": {"type": "string"}}}}
         if method == "get" and path.startswith("/api/v2/files/") and path.endswith("/versions/{number}"):
             responses["200"] = {"description": "The file's bytes (application/octet-stream, sent as an attachment)",

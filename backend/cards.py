@@ -12,8 +12,9 @@ A pin puts a page (`page:<file id>`) or a card (`card:<id>`) at a place, in orde
   lead the group or a group above it arrange it.
 - `bot:<slug>`, the bot's sidebar: its rows follow the page and card widgets saved with the sidebar
   (backend/bot_task_tabs.py), which keeps their order.
-- `task:<id>`, the top of a task: people who may read it link pages they can read. Unpinning is for whoever pinned
-  it, the task's owner or requester, or the org owner. A task pin widens nothing.
+- `task:<id>`, the top of a task: its owner, requester, people who may move tasks, and the org owner arrange it.
+  Readers (people, or bots acting as themselves) may link pages they can read. Unpinning is for whoever pinned it,
+  the task's owner or requester, or the org owner. A task pin widens nothing.
 - `person:<id>`, a person's My dashboard (the landing page): theirs alone. Only they read and arrange it, BotOps and
   the Assistant only when acting for them; an admin has no way in, and a card pinned there is known to no one else.
   `person:me` is the caller's own. Its cards are cards they made.
@@ -21,9 +22,10 @@ A pin puts a page (`page:<file id>`) or a card (`card:<id>`) at a place, in orde
 A Dashboard, team page, Growth page or My dashboard nobody saved shows its default cards (DEFAULTS) as pins without
 ids; saving it (PUT) makes them real, and every write saves it first.
 
-The pinning rule keeps a page's data from spreading on its own: a bot pins only its own pages and cards, to its own
-sidebar or a task it holds or asked for. A page a person pins to the Dashboard or a team page is readable by that place's
-audience (`widened`, read by backend/files.py file_visible), so a private task's file is never pinned there, and every
+The pinning rule keeps a page's data from spreading on its own: a bot pins only its own pages to its sidebar, and its
+own cards to its sidebar or a task it holds or asked for. At a task it can read, it may link any page it can read.
+A page a person pins to the Dashboard or a team page is readable by that place's audience (`widened`, read by
+backend/files.py file_visible), so a private task's file is never pinned there, and every
 pin and unpin of a page is in the file's activity. A pin on My dashboard widens nothing: its owner is its only reader,
 and each card and page there is still read with their own rights.
 """
@@ -880,7 +882,14 @@ def may_manage(ctx, kind, ident):
         return False
     if who.role == "bot":
         return not who.via and who.actor in (row["owner_id"], row["requester_id"])
-    return ctx.person
+    return ctx.person and (who.role == "owner" or who.actor in (row["owner_id"], row["requester_id"])
+                           or H.can_move(ctx.c, who.actor))
+
+
+def may_link(ctx, kind, ident):
+    """Only adding a page link to a task uses the reader's rights instead of the place manager's."""
+    return (kind == "task" and (ctx.person or (ctx.who.role == "bot" and not ctx.who.via))
+            and may_view(ctx, kind, ident))
 
 
 def may_unpin(ctx, pin, kind, ident):
@@ -1006,6 +1015,8 @@ def place_view(ctx, place):
         for pin in shown:
             pin["can_unpin"] = may_unpin(ctx, by_id[pin["id"]], kind, ident)
     out = {"place": place, "kind": kind, "saved": saved, "can_edit": may_manage(ctx, kind, ident), "pins": shown}
+    if kind == "task":
+        out["can_link"] = may_link(ctx, kind, ident)
     if kind == "growth":
         # The month picker: the month the cards read, and the newest months with cohort rows, oldest first.
         from . import growth_numbers as GN
@@ -1092,7 +1103,7 @@ def check_item(ctx, kind, item):
         raise Problem("not_found", "No such page", 404)
     if who.role == "bot" and kind == "growth":
         raise Problem("forbidden", "A bot pins only cards on the Growth page", 403)
-    if who.role == "bot" and row["bot_id"] != H.actor_id(who.actor):
+    if who.role == "bot" and kind != "task" and row["bot_id"] != H.actor_id(who.actor):
         raise Problem("forbidden", "A bot pins only its own pages; a person pins another bot's", 403)
     if kind in WIDENING and row["task_id"] and H.task_private(ctx.c, H.task(ctx.c, row["task_id"])):
         raise Problem("privacy", "Private task files stay on their task", 403)
@@ -1132,7 +1143,12 @@ def drop_pin(ctx, pin):
 
 
 def add_pin(ctx, place, item, size="medium", position=None):
-    kind, ident = require_manage(ctx, place)
+    kind, ident = require_view(ctx, place)
+    if kind == "task" and item.startswith("page:"):
+        if not may_link(ctx, kind, ident):
+            raise Problem("forbidden", "You cannot link pages here", 403)
+    else:
+        require_manage(ctx, place)
     check_item(ctx, kind, item)
     place = canonical(kind, ident)
     if kind == "bot":
