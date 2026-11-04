@@ -71,3 +71,28 @@ def test_a_converted_exceptions_rule_moves_in_its_flow_and_saved_version_and_run
     assert now["a2"] == untouched
     FLOWS.up(conn)
     assert flows() == (now, version), "a second run changes nothing"
+
+
+def test_a_call_webhook_payload_that_names_the_retired_event_is_not_renamed():
+    """An action's own data is not an event: a webhook that posts {"event": "exceptions"} keeps it, in a flow that
+    also holds a converted rule (which moves) and in a flow that holds only the webhook (which is left as it was)."""
+    conn = sqlite3.connect(":memory:")
+    for statement in automations.SCHEMA:
+        conn.execute(statement)
+    webhook = {"id": "r2", "type": "action", "enabled": True, "do": "call_webhook",
+               "args": {"url": "https://hooks.acme.example/tico", "data": {"event": "exceptions"}}}
+    mixed = json.loads(converted("Exceptions note", "exceptions"))
+    mixed["steps"].append(webhook)
+    only_webhook = json.dumps({"name": "Post exceptions", "owner": "human:ana", "enabled": True,
+                               "trigger": {"type": "event", "name": "tico.wake"}, "steps": [webhook]})
+    for aid, flow in (("a1", json.dumps(mixed)), ("a2", only_webhook)):
+        conn.execute("INSERT INTO automations(id,name,owner_id,trigger_type,enabled,flow,version,created_at,created_by_id,updated_at) "
+                     "VALUES(?,?,'human:ana','event',1,?,1,?,'human:ana',?)", (aid, aid, flow, NOW, NOW))
+
+    FLOWS.up(conn)
+    now = dict(conn.execute("SELECT id, flow FROM automations").fetchall())
+    moved = json.loads(now["a1"])
+    assert moved["steps"][0]["rules"][0]["when"] == [{"field": "event", "op": "is", "value": "task_roundup"}]
+    assert moved["steps"][0]["rules"][0]["then"][0]["args"]["rule"]["event"] == "task_roundup"
+    assert moved["steps"][1] == webhook, "the webhook's data keeps its event"
+    assert now["a2"] == only_webhook, "an automation with no converted rule is left exactly as it was"
