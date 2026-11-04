@@ -2,8 +2,8 @@
 each setting the server reads by name, the other keys in `extra` (backend/bot_settings.py).
 
 Each bot_config row's config is split as backend/bot_settings.split splits it, frozen here: a key goes to its column
-when its value has the column's type, otherwise it stays in `extra` under its own name, and a null value is dropped
-(it read as absent). A config that is not a JSON object (no reader could use it) becomes an empty declaration. A row
+when its value has the column's type, otherwise it stays in `extra` under its own name, and a null value stays in `extra`
+too, so it reads back as null. A config that is not a JSON object (no reader could use it) becomes an empty declaration. A row
 whose bot is gone has no settings row: bot_settings refers to bots(id).
 
 The triggers that read bot_config.config are dropped first (SQLite refuses to drop a column a trigger names);
@@ -42,7 +42,7 @@ def _fits(kind, value):
     if kind == "text":
         return isinstance(value, str)
     if kind == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
+        return isinstance(value, int) and not isinstance(value, bool) and -2**63 <= value <= 2**63 - 1
     if kind == "boolean":
         return isinstance(value, bool)
     return True
@@ -60,7 +60,7 @@ def split(text):
         kind = TYPES.get(key)
         if kind and _fits(kind, value):
             columns[key] = (1 if value else 0) if kind == "boolean" else _encode(value) if kind == "json" else value
-        elif value is not None:
+        else:
             extra[key] = value
     return columns, extra
 

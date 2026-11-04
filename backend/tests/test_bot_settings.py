@@ -9,6 +9,7 @@ import sqlite3
 from pathlib import Path
 
 from backend import bot_settings as BS
+from backend import hubdb as H
 from backend.config import Settings
 from backend.store import Store
 
@@ -38,7 +39,8 @@ def _bot(c, bot):
 
 
 def _random_config(rng):
-    pool = [*SETTINGS.items(), *ODD.items(), ("fallback", None), ("app_delivery", []), ("folder", None)]
+    pool = [*SETTINGS.items(), *ODD.items(), ("fallback", None), ("app_delivery", []), ("folder", None),
+            ("reports_to", None), ("stateless", None), ("compact_at", None)]
     return dict(rng.sample(pool, rng.randint(0, len(pool))))
 
 
@@ -51,8 +53,8 @@ def test_a_declaration_reads_back_as_written_from_python_and_from_sql(tmp_path):
             _bot(c, bot)
             config = {**SETTINGS, **ODD} if n == 0 else _random_config(rng)
             BS.write(c, bot, config)
-            wanted = {k: v for k, v in config.items() if v is not None}
-            if "repo_access_mode" not in wanted:        # a new bot gets the company default (the trigger)
+            wanted = dict(config)                      # a null is a value: it reads back as null
+            if wanted.get("repo_access_mode") is None:  # a new bot gets the company default (the trigger)
                 wanted["repo_access_mode"] = "own"
             assert BS.read(c, bot) == wanted
             assert json.loads(c.execute(BS.ONE_SQL, (bot,)).fetchone()[0]) == wanted
@@ -191,3 +193,47 @@ def test_migration_moves_every_declaration_drops_the_column_and_runs_once(tmp_pa
     before = sqlite3.connect(path).execute("SELECT * FROM bot_settings ORDER BY bot_id").fetchall()
     boot(path)
     assert sqlite3.connect(path).execute("SELECT * FROM bot_settings ORDER BY bot_id").fetchall() == before
+
+
+def test_an_explicit_null_reads_back_as_null_and_stateless_answers_as_before_the_move(tmp_path):
+    """A null is a value, not an absent key: hubdb.stateless() takes an explicit `stateless: null` over the template's
+    rule, before the move and after it alike."""
+    path = tmp_path / "hub.db"
+    _old_shape(path)
+    config = {"template": "tico-counsel", "stateless": None, "reports_to": None}
+    with sqlite3.connect(path) as c:
+        c.execute("INSERT INTO bots(id,slug,display_name,state,created_at) "
+                  "VALUES('nulls','nulls','nulls','active','2026-01-01')")
+        c.execute("INSERT INTO bot_config(bot,owner_id,config) VALUES('nulls','ana',?)", (json.dumps(config),))
+        text = c.execute("SELECT config FROM bot_config WHERE bot='nulls'").fetchone()[0]
+    before = H.stateless(json.loads(text))
+    assert H.stateless({"template": "tico-counsel"}) is True          # the rule a missing key gets
+    store = boot(path)
+    with store.read() as c:
+        assert _moved(c, "nulls") == config
+        assert json.loads(c.execute(BS.ONE_SQL, ("nulls",)).fetchone()[0]) == {**config, "profile": "doer",
+                                                                              "wake_preset": "performance"}
+        after = H.stateless(BS.read(c, "nulls"))
+    assert before is False and after is False
+
+
+def test_an_integer_past_64_bits_stays_in_extra_and_the_move_completes(tmp_path):
+    """SQLite stores whole numbers from -2**63 to 2**63-1 only: a bigger one stays in `extra`, so the write and the move
+    finish (an OverflowError would roll the migration back and block every start) and the value reads back exactly."""
+    path = tmp_path / "hub.db"
+    _old_shape(path)
+    config = {"turns_per_day": 2**63, "compact_at": -2**63, "max_run_minutes": 2**63 - 1, "model": "m"}
+    with sqlite3.connect(path) as c:
+        c.execute("INSERT INTO bots(id,slug,display_name,state,created_at) "
+                  "VALUES('huge','huge','huge','active','2026-01-01')")
+        c.execute("INSERT INTO bot_config(bot,owner_id,config) VALUES('huge','ana',?)", (json.dumps(config),))
+    store = boot(path)
+    with store.transaction() as c:
+        row = c.execute("SELECT turns_per_day, compact_at, max_run_minutes FROM bot_settings WHERE bot_id='huge'").fetchone()
+        assert tuple(row) == (None, -2**63, 2**63 - 1)
+        assert _moved(c, "huge") == config
+        assert type(json.loads(c.execute(BS.ONE_SQL, ("huge",)).fetchone()[0])["turns_per_day"]) is int
+        _bot(c, "fresh")
+        BS.write(c, "fresh", {"turns_per_day": 2**63, "compact_at": 2**63 - 1})
+        assert BS.read(c, "fresh") == {"turns_per_day": 2**63, "compact_at": 2**63 - 1, "repo_access_mode": "own"}
+        assert json.loads(c.execute(BS.ONE_SQL, ("fresh",)).fetchone()[0])["turns_per_day"] == 2**63

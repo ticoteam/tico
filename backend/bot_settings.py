@@ -4,9 +4,10 @@ name and the rest of the declaration (bot.yaml's other keys) in `extra`.
 This module is the one way in and out. A caller reads the whole declaration as the dict bot.yaml describes (`read`,
 `read_many`, or the `CONFIG` expression in SQL that reads it as JSON) and writes it back whole (`write`) or a few keys
 at a time (`update`, `remove`). A key goes to its column only when its value has the column's type (a text setting a
-string, a number a whole number, a flag a boolean, a structured one anything but null); otherwise it stays in `extra`
-under its own name, so a declaration reads back as it was written. A key whose value is null reads as absent. SQL that
-filters on a setting reads its column (`s.template`, `s.harness`), never a path into `extra`.
+string, a number a whole number inside 64 bits, a flag a boolean, a structured one anything but null); otherwise it
+stays in `extra` under its own name, null included, so a declaration reads back as it was written: a null reads as
+null and an absent key as absent. SQL that filters on a setting reads its column (`s.template`, `s.harness`), never a
+path into `extra`.
 
 The org-chart fields that live beside the declaration (owner, team, reports_to, description, repo, access...) stay on
 `bot_config`; a row there without a settings row reads as an empty declaration.
@@ -39,7 +40,8 @@ _NOTHING = "$.__absent__"
 def config_sql(alias="s"):
     """SQL for the whole declaration as JSON text from the bot_settings row aliased `alias` ('' for none). A missing
     row (a LEFT JOIN that found none) reads as '{}'. Scalars are patched over `extra`; structured settings are set
-    afterwards, so a null inside one is kept as it was written. It reads the same dict as `join`."""
+    afterwards, so a null inside one is kept as it was written. A null kept in `extra` survives too: the patch only
+    sets keys that have a value. It reads the same dict as `join`."""
     p = f"{alias}." if alias else ""
     scalars = []
     for key, kind in FIELDS:
@@ -72,7 +74,7 @@ def _fits(kind, value):
     if kind == "text":
         return isinstance(value, str)
     if kind == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
+        return isinstance(value, int) and not isinstance(value, bool) and -2**63 <= value <= 2**63 - 1
     if kind == "boolean":
         return isinstance(value, bool)
     return True
@@ -88,7 +90,7 @@ def _stored(kind, value):
 
 def split(config):
     """(columns, extra) for a declaration: {column: stored value} for every column (None where the key is absent or
-    does not fit), and the other keys as a dict."""
+    does not fit), and every other key, a null included, as a dict."""
     config = config if isinstance(config, dict) else {}
     columns = {key: None for key in COLUMNS}
     extra = {}
@@ -96,7 +98,7 @@ def split(config):
         kind = TYPES.get(key)
         if kind and _fits(kind, value):
             columns[key] = _stored(kind, value)
-        elif value is not None:
+        else:
             extra[key] = value
     return columns, extra
 
