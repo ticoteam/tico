@@ -10,7 +10,7 @@ from backend.store import H
 from backend import bot_settings as BS
 from backend import task_privacy as privacy
 from backend.auth import Identity
-from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401 (api: the fixture)
+from backend.tests.test_api import api, assign, claim, expire, get, post, ready, runner  # noqa: F401 (api: the fixture)
 from backend.tests.test_execution_review import aged, interrupted, job_state, restarted_mid_turn, rival, stop_partway, sweep
 
 TITLE = "Review ops's stopped runs held for a check"
@@ -530,3 +530,45 @@ def test_botops_lists_and_reconciles_a_held_run_on_a_private_task_without_its_wo
          token=botops_turn['token'])
     assert job_state(api, attempt['job_id']) == 'canceled'
     assert decision_of(api, attempt['job_id'])[-1]['decision'] == 'dismiss'
+
+
+def test_a_resumed_try_that_loses_its_lease_again_ends_quietly_after_four_hours(api):
+    """Codex P1. A resumed try whose computer keeps the lease lost waits for it only HELD_REVIEW_HOURS; after that it ends
+    quietly like any other held run, instead of waiting on its computer forever."""
+    machine, message, attempt = held(api)
+    stopped_two_hours(api, attempt['id'], minutes=241)
+    assert [d['state'] for d in sweep(api)] == ['queued']
+    ready(api, machine, ['ops'])
+    again = claim(api, machine)
+    assert again['job_id'] == attempt['job_id']
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {'ops': True},
+                                        "capabilities": ['capacity_continue_v1']}, token=machine['token'])
+    post(api, f"attempts/{again['id']}/started", {'thread_id': 'resumed-read'}, machine['token'])
+    post(api, f"attempts/{again['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}},
+        {'seq': 2, 'kind': 'tool', 'payload': {'tool': 'Read', 'status': 'started', 'item_id': 'r1', 'summary': 'notes.md'}},
+        {'seq': 3, 'kind': 'tool', 'payload': {'tool': 'Read', 'status': 'completed', 'item_id': 'r1'}}]}, machine['token'])
+    expire(api, again['id'])
+    assert claim(api, machine) is None
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'      # waiting for its computer, under 4h
+    stopped_two_hours(api, again['id'], minutes=241)
+    assert [d['state'] for d in sweep(api)] == ['canceled']
+    assert [d['decision'] for d in decision_of(api, attempt['job_id'])] == ['resume', 'dismiss']
+
+
+def test_an_ordinary_lease_expiry_resumes_with_the_outside_action_it_held_on_named(api):
+    """Codex P2. A run whose lease simply lapsed (no restart, no lease-loss continuation) that ran `gh pr merge` is held,
+    and its resume after four hours names that merge to check first, not 'nothing was recorded'."""
+    botops(api)
+    machine, message, attempt = restarted_mid_turn(api, [('Read', None), ('Bash', None)], reported=False)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempt_events SET payload=json_set(payload,'$.summary','gh pr merge 42 --squash') "
+                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload,'$.tool')='Bash' "
+                  "AND json_extract(payload,'$.status')='started'", (attempt['id'],))
+    aged(api, attempt['id'])
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    stopped_two_hours(api, attempt['id'], minutes=241)
+    assert [d['state'] for d in sweep(api)] == ['queued']
+    ready(api, machine, ['ops'])
+    body = claim(api, machine)['message']['body']
+    assert 'merge pull request' in body and 'No consumed approval or named irreversible outside action' not in body

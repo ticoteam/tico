@@ -887,7 +887,8 @@ def retry_facts(c, job, started, finished):
                       "AND json_extract(payload,'$.final')=1 LIMIT 1", (job['attempt_id'],)).fetchone()
     lease_lost = bool(attempt and attempt['state'] == 'expired' and started and attempt['thread_id']
                       and capacity_continue_on(computer) and reported and not acted and not final)
-    outside = outside_actions(c, job, started, finished) if restart or lease_lost or timeout or update else []
+    # Ordinary lease expiry holds on a recorded outside action too (any non-read call): its resume note must name it.
+    outside = outside_actions(c, job, started, finished) if restart or lease_lost or timeout or update or acted else []
     result = c.execute("SELECT result FROM attempts WHERE id=?", (job['attempt_id'],)).fetchone()
     result = json.loads(result[0] or '{}') if result else {}
     pending_source = result.get('source_pending') and not result.get('source_running')
@@ -6088,9 +6089,13 @@ class Execution:
                 # A try resumed after a held run was left unreviewed is not judged as "stopped twice": if it is held
                 # again it waits out HELD_REVIEW_HOURS like any held run, then ends quietly (_held_choice).
                 resumed_held = self._held_resumed(c, row)
+                # Unreviewed for HELD_REVIEW_HOURS since its attempt ended (the held branch below resumes or ends it).
+                held_expired = bool(row['attempt_id'] and (row['finished_at'] or row['created_at'])
+                                    <= H.shift(H.now(), hours=-HELD_REVIEW_HOURS))
                 # Only runs that started count: a claim that lapsed before its run began (a computer offline, the
-                # hub unreachable) says nothing about the request itself.
-                if started > 1 and facts['lease_lost'] and safe:
+                # hub unreachable) says nothing about the request itself. A resumed try that lost its lease again
+                # waits for its computer only until HELD_REVIEW_HOURS pass, then ends quietly like any held run.
+                if started > 1 and facts['lease_lost'] and safe and not (resumed_held and held_expired):
                     if not held:
                         H.event(c, H.KEEPER, 'job.held', row['attempt_id'],
                                 {'job_id': row['id'], 'tools': [], 'reason': 'Repeated lease loss; waiting for the computer.'})
@@ -6110,7 +6115,7 @@ class Execution:
                 if not safe or limit_cap or resumed_held:
                     why = ('cut by the run time limit twice in a row' if limit_cap else
                            'Review required before repeating possible effects.')
-                    if row['attempt_id'] and (row['finished_at'] or row['created_at']) <= H.shift(H.now(), hours=-HELD_REVIEW_HOURS):
+                    if held_expired:
                         # Unreviewed for HELD_REVIEW_HOURS: resumed once on its own, or ended quietly when its resumed try
                         # was held too. Nothing is repeated without the check-first note, as for an update cut.
                         decision, note = self._held_choice(c, row, facts, resumed_held)
