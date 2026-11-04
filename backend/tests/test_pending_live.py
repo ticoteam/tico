@@ -1,5 +1,4 @@
 """Shared editing, current authorization and per-window presence."""
-import json
 from concurrent.futures import ThreadPoolExecutor
 
 from backend import events, meeting_items
