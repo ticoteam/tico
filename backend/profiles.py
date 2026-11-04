@@ -51,6 +51,8 @@ MATERIALISED = "profile"                # `created_by` of the rows a custom prof
 RELEASE_QA_TITLE = re.compile(
     r"^(?:(?:Post[- ](?:Release|Launch)|Release)\s+QA(?:\s+(?:pass|sweep))?|Post[- ]Release\s+checks?)\s*(?::|$)", re.I)
 ACCEPTANCE_TITLE = re.compile(r"\blive acceptance\b", re.I)
+# A top-level production acceptance run is acceptance QA work (Dev 750, engineering ruling on 34f2faaf).
+PRODUCTION_ACCEPTANCE_TITLE = re.compile(r"\bproduction acceptance\b", re.I)
 # The numbers a former Token saver bot keeps.
 TOKEN_SAVER_OPTIONS = {"batch_seconds": TOKEN_SAVER_SECONDS, "batch_scope": "bot", "sweep_seconds": 2 * 3600}
 
@@ -199,8 +201,8 @@ def sweeps_on(c, bot):
 def is_review_task(c, row, *, parent_id=None):
     """One classification for creation, assignment, pull, wakes and Health.
 
-    Explicit release QA may be top-level. Gate and acceptance requests need a parent;
-    an untitled delegated child also qualifies while its parent is in a review/QA step.
+    Explicit release QA and a top-level production acceptance run may be top-level. Gate and live acceptance requests
+    need a parent; an untitled delegated child also qualifies while its parent is in a review/QA step.
     `parent_id` lets creation check the same rule before the child row exists.
     """
     from . import auto_tasks
@@ -209,7 +211,7 @@ def is_review_task(c, row, *, parent_id=None):
         return True
     parent_id = parent_id or (H.TR.parent_of(c, row["id"]) if row.get("id") else None)
     if not parent_id:
-        return False
+        return bool(PRODUCTION_ACCEPTANCE_TITLE.search(title))
     return bool(_check_title(c, H.task(c, parent_id), title) or ACCEPTANCE_TITLE.search(title)
                 or auto_tasks.review(c, row, parent_id=parent_id))
 

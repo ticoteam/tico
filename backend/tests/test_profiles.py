@@ -192,6 +192,7 @@ def test_release_qa_uses_one_classification_for_creation_pull_wake_and_health(ap
     pytest.param("Release QA checklist planning", False, id="qa-planning"),
     pytest.param("Post Release QA dashboard redesign", False, id="post-qa-dashboard"),
     pytest.param("Add acceptance tests for CSV export", True, id="acceptance-implementation"),
+    pytest.param("Implement production acceptance tests", True, id="production-acceptance-implementation"),
 ])
 def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
     with api.app.state.store.transaction() as c:
@@ -206,6 +207,26 @@ def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
         with pytest.raises(H.Refused) as raised:
             H.task_update(c, "bot:ops", ordinary["id"], owner="bot:checker")
         assert raised.value.rule == "profile"
+
+
+def test_a_top_level_production_acceptance_run_is_review_work_for_a_reviewer_and_health_stops_counting_it(api):
+    """Task 17112188 (QA (GPT), Reviewer profile) was counted by Health as non-review work (Dev 750, finding 34f2faaf).
+    A top-level production acceptance run is acceptance QA: the reviewer takes it, and the same classification clears
+    the finding for Health."""
+    with api.app.state.store.transaction() as c:
+        add_bot(c, "checker")
+        put(c, "checker", P.REVIEWER)
+        config = profile_of(c, "checker")
+        c.execute("DELETE FROM jobs")
+        made = H.task_create(c, "bot:ops",
+                             "Run waitlist production acceptance after existing release and admin gates clear",
+                             "x", "bot:checker")
+        row = H.task(c, made["id"])
+        assert made["type_id"] == H.GENERAL_TYPE and P.is_review_task(c, row)
+        assert P.pull_refusal(c, row, config) is None
+        assert last_to(c, "checker")["rule"] == "profile_reviewer_request"
+        assert jobs(c, "checker") == 1
+        assert P.mismatches(c) == []
 
 
 def test_health_counts_a_keepers_ordinary_task_for_a_reviewer_but_not_its_pool_review(api):
