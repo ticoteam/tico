@@ -417,8 +417,12 @@ pub fn command_program(command: &str) -> String {
 
 /// The words of the line's `hub` run, from its `hub` word on: the first run whose first word after assignments and
 /// redirections is `hub`. The line is cut at its separators only here, and only the command path is read from the run
-/// (through `hub_summary`), so a mis-split can at worst name a real command path.
+/// (through `hub_summary`), so a mis-split can at worst name a real command path. A line with a heredoc is never split:
+/// its body is text, and a `hub ...` line inside it runs nothing (`cat <<'EOF'` then `hub approval approve` reads `cat`).
 fn hub_run(command: &str) -> Option<Vec<String>> {
+    if command.contains("<<") {
+        return None;
+    }
     command_runs(command).into_iter().find_map(|run| {
         let words = shell_words(run)?;
         let at = program_index(&words)?;
@@ -1217,6 +1221,13 @@ mod tests {
         assert_eq!(command_program("hub needs-you show"), "hub needs-you show");
         assert_eq!(command_program("hub bot status history"), "hub bot status history");
         assert_eq!(command_program("hub nosuch command"), "hub");
+    }
+
+    #[test]
+    fn a_hub_line_inside_a_heredoc_body_is_text() {
+        assert_eq!(command_program("cat <<'EOF'\nhub approval approve\nEOF"), "cat");
+        assert_eq!(command_program("cat > /tmp/x <<EOF && echo ok\nhub task close 7f3a\nEOF"), "cat");
+        assert_eq!(command_program("hub automation create --file - <<'EOF'\n{\"name\": \"x\"}\nEOF"), "hub automation create");
     }
 
     #[test]

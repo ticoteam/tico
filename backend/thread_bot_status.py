@@ -183,12 +183,13 @@ def _step(c, attempt_id):
         except (TypeError, ValueError):
             value = {}
         rows.append((kind, value if isinstance(value, dict) else {}, created))
+    # A run whose newest event is a thought is thinking now, whatever it did before; one with nothing yet is starting.
+    newest = rows[0] if rows else None
+    if newest and newest[0] == "delta" and newest[1].get("delta_kind") == "thought":
+        return THINKING
     parts = reply_parts(list(reversed(rows)))
     if not parts:
-        # A run that has only thought so far is thinking; one with nothing yet is starting.
-        newest = rows[0] if rows else None
-        thinking = bool(newest) and newest[0] == "delta" and newest[1].get("delta_kind") == "thought"
-        return THINKING if thinking else STARTING
+        return STARTING
     last = parts[-1]
     if last["kind"] == "reply":
         return "Writing a reply"

@@ -419,3 +419,17 @@ def test_a_run_that_is_thinking_says_so_and_a_thought_wakes_the_chat(api):
                   "AND subject_id=?", (thread["id"],))
         assert thread_bot_status.send_trailing(c) == 1
     assert status_changes() == before + 2
+
+
+def test_a_thought_after_a_tool_reads_as_thinking():
+    import sqlite3
+    c = sqlite3.connect(":memory:")
+    c.execute("CREATE TABLE attempt_events(attempt_id TEXT, seq INTEGER, kind TEXT, payload TEXT, created_at TEXT)")
+
+    def add(seq, kind, payload):
+        c.execute("INSERT INTO attempt_events VALUES('a', ?, ?, ?, '2026-11-04T00:00:00.000Z')", (seq, kind, payload))
+    add(1, "tool", '{"tool": "Bash", "status": "completed", "summary": "npm", "item_id": "t1"}')
+    add(2, "delta", '{"delta_kind": "thought", "text": "Checking what failed"}')
+    assert thread_bot_status._step(c, "a") == thread_bot_status.THINKING
+    add(3, "tool", '{"tool": "Bash", "status": "started", "summary": "git", "item_id": "t2"}')
+    assert thread_bot_status._step(c, "a") != thread_bot_status.THINKING
