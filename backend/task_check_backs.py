@@ -322,14 +322,17 @@ def _cancel_moved(c, row, target):
     """Cancel this task's queued notices to this bot that no longer match the task (`stale`): its due time moved while
     one waited. A claim cancels those, but only on a computer that wakes, and a stopped cloud machine is not started for
     an obsolete notice (cloud_machines.bot_want). Left queued, it would hold the dedupe and nothing would be sent. A
-    notice a run already took is live, and stays."""
+    notice a run already took is live, and stays, as does one a run started and yielded on."""
     from .execution import suppress_notice
     H = _H()
     queued = c.execute("SELECT j.id,j.bot_id,j.attempt_id,j.message_id FROM task_check_back_wakes w "
                        "JOIN messages m ON m.id=w.message_id JOIN jobs j ON j.message_id=m.id "
                        "WHERE w.task_id=? AND m.recipient_id=? AND j.state='queued' "
                        "AND NOT EXISTS (SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id "
-                       "AND r.decision='resume')", (row["id"], target)).fetchall()
+                       "AND r.decision='resume') "
+                       # A run that started and yielded continues on this job (execution.obsolete_notices_sql): keep it.
+                       "AND NOT EXISTS (SELECT 1 FROM attempts ya WHERE ya.id=j.attempt_id AND ya.started_at IS NOT NULL "
+                       "AND ya.state='interrupted' AND json_extract(ya.result,'$.yielded'))", (row["id"], target)).fetchall()
     for job in queued:
         if stale(c, H.message(c, job["message_id"]), job["bot_id"]):
             suppress_notice(c, job, row["id"], "Check-back moved before its notice was delivered")
