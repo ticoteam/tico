@@ -1232,6 +1232,8 @@ function thvSheet(view, m) {
       m.body ? `<button type="button" data-pick="copy" aria-label="Copy">${THV_SVG.copy}</button>` : ''}${key ? `
       <button type="button" data-pick="up" aria-pressed="${mine === 'up'}" aria-label="Good">${FB_ICON.up}</button>
       <button type="button" data-pick="down" aria-pressed="${mine === 'down'}" aria-label="Not good">${FB_ICON.down}</button>` : ''}</div>`;
+  // The click the lift makes lands on the backdrop: it is not a tap to close.
+  d.addEventListener('click', ev => { if (view.pressQuiet > Date.now()) { ev.stopImmediatePropagation(); view.pressQuiet = 0; } }, true);
   d.showModal();
   d.onclick = ev => {
     const e = ev.target.closest('[data-pick-emoji]'), b = ev.target.closest('[data-pick]');
