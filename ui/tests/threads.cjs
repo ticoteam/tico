@@ -105,7 +105,7 @@ const homes = {'bot:ops': 'h-ops', 'human:bea': 'h-bea', 'human:cy': 'h-cy', 'hu
 
 // What a block below changes for the pages it opens: DM rows as the server sends them, a server with calls off, and
 // one without the rail (GET /v2/threads/rail answers 404).
-let dmRows = null, callsOff = false, railOff = false;
+let dmRows = null, callsOff = false, railOff = false, threadsOff = false, threadsGate = null;
 async function open(browser, who, {phone = false, sse = null} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
@@ -163,6 +163,10 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
       }
       const body = 'event: ready\ndata: {"seq":1}\n\n' + sse.queue.splice(0).map(d => `event: threads\nid: ${++sse.seq}\ndata: ${JSON.stringify(d)}\n\n`).join('');
       return route.fulfill({status: 200, contentType: 'text/event-stream', body}).catch(() => {});
+    }
+    if ((p === '/api/v2/threads' || p === '/api/v2/threads/rail') && method === 'GET') {
+      if (threadsOff) return json({error: 'not_found'}, 404);
+      if (threadsGate) await new Promise(go => threadsGate.push(go));
     }
     if (p === '/api/v2/threads' && method === 'GET') return json({attention: bob ? [] : attention, threads: bob ? [] : listed, dms: bob ? [] : dmRows || [dm, botDm],
       bot_dms: bob ? {} : {'bot:ops': 2}, next_cursor: null});
@@ -944,6 +948,31 @@ let browser = null;
     assert.deepEqual(seen.errors, []);
     await page.close();
     railOff = false;
+  }
+  // ---- Threads is in the sidebar and the phone bar from the first paint, before its read lands; only a server without
+  // threads (its reads answer 404) takes it away.
+  {
+    for (const phone of [false, true]) {
+      threadsGate = [];
+      const {page} = await open(browser, 'ana', {phone});
+      await page.goto('https://tico-ui.test/#/tasks');
+      await page.locator(phone ? '#mobile-threads' : '#nav-threads').waitFor();
+      assert.equal(await page.evaluate(() => THREADS.on), null, 'there before the first threads read lands');
+      if (phone) assert.equal(await page.locator('#mobile-search').isVisible(), false, 'Threads holds the bar\'s place, not Search');
+      const gate = threadsGate; threadsGate = null; gate.forEach(go => go());
+      await page.waitForFunction(() => THREADS.on === true);
+      await page.close();
+    }
+    threadsOff = true;
+    for (const phone of [false, true]) {
+      const {page} = await open(browser, 'ana', {phone});
+      await page.goto('https://tico-ui.test/#/tasks');
+      await page.waitForFunction(() => THREADS.on === false);
+      assert.equal(await page.locator(phone ? '#mobile-threads' : '#nav-threads').isVisible(), false, 'a server without threads has no link');
+      if (phone) await page.locator('#mobile-search').waitFor();
+      await page.close();
+    }
+    threadsOff = false;
   }
   {
     const {page} = await open(browser, 'bob', {phone: true});

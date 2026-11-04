@@ -153,13 +153,14 @@ async function threadsReady() {
 
 // ----------------------------------------------------------------- the sidebar
 function threadsSideRender() {
-  const on = THREADS.on === true;
+  // Shown from the first paint, before the first read lands: only a server without threads (THREADS.on false) hides it.
+  const on = THREADS.on !== false;
   const link = $('#nav-threads'); if (link) link.hidden = !on;
   // On a phone Threads takes Search's place in the bottom bar; global search is then in More (the drawer's footer).
   const tab = $('#mobile-threads'), search = $('#mobile-search');
   if (tab) tab.hidden = !on;
   if (search) search.hidden = on;
-  if (!on) return;
+  if (THREADS.on !== true) return;
   // The link and the phone tab carry the same count: what Catch up has left.
   const n = threadsCatchUp();
   for (const badge of [$('#nav-threads .nav-badge'), $('#mobile-threads .nav-badge')]) {
