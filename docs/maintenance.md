@@ -34,6 +34,8 @@ A step that is not moved here yet shows "on its old timer".
 
 When every Dream start is refused by the shared wake limiter, it keeps its daily attempt for a later run that day. A pass that starts a dream or encounters another refusal or failure counts for the day.
 
+Update skips before 05:00 company time without using up its cadence, so it can build the day's queue on a later run.
+
 ## Run now
 
 `POST /api/v2/maintenance/run`, or `hub maintenance run [--step KEY]`. A plain Run now uses the same claim and due rules as the schedule, so a step runs only when it is due. `--step` runs that one step even when it is not due; a switched off step stays off, and a step on its old timer is skipped. A run that is already going is returned instead of a second one. With an Idempotency-Key, a repeat of the same key returns the run that key made, and starts nothing.

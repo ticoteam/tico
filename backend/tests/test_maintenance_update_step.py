@@ -59,6 +59,43 @@ def turn(c, bot_id, writes=1, at=None, state="completed"):
     return turn_id
 
 
+@pytest.mark.parametrize("frequency,every,unit", [("week", None, None), ("custom", 24, "hours")])
+def test_an_early_update_skip_does_not_use_up_its_cadence(api, monkeypatch, frequency, every, unit):
+    store, auth = api.app.state.store, api.app.state.auth
+    now = ctx(api, EARLY)["now"]
+    monkeypatch.setattr(H, "now", lambda: now)
+    monkeypatch.setattr(updates, "writer_for", lambda *args: None)
+    with store.transaction() as c:
+        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key NOT IN ('collect','update')")
+        c.execute("UPDATE maintenance_steps SET frequency=?, custom_every=?, custom_unit=? WHERE key='update'",
+                  (frequency, every, unit))
+        ops = bid(c, "ops")
+        turn(c, ops)
+    for only in (None, "update"):
+        run, _ = maintenance.run_now(store, auth, "human:ana", step=only, wait=True)
+        logged = next(s for s in run["steps"] if s["step"] == "update")
+        assert logged["status"] == "skipped" and "05:00" in logged["reason"], run
+        with store.read() as c:
+            assert c.execute("SELECT last_started_at FROM maintenance_steps WHERE key='update'").fetchone()[0] is None
+            assert c.execute("SELECT cursor_at FROM maintenance_steps WHERE key='update'").fetchone()[0] is None
+            assert not c.execute("SELECT 1 FROM update_queue").fetchone(), "no cycle before 05:00 company time"
+    now = ctx(api, TUESDAY.replace(hour=12))["now"]     # exactly 05:00 Pacific
+    run, _ = maintenance.run_now(store, auth, "human:ana", wait=True)
+    logged = next(s for s in run["steps"] if s["step"] == "update")
+    assert logged["status"] == "pending" and logged["details"]["built"] > 0, run
+    with store.read() as c:
+        queued = {r["id"] for r in c.execute("SELECT id FROM update_queue WHERE day=?", (DAY,))}
+        assert states(c)[ops] == "queued"
+        assert c.execute("SELECT last_started_at FROM maintenance_steps WHERE key='update'").fetchone()[0] == now
+    again, _ = maintenance.run_now(store, auth, "human:ana", wait=True)
+    logged = next(s for s in again["steps"] if s["step"] == "update")
+    assert logged["status"] == "skipped" and logged["reason"] == "not due", again
+    forced, _ = maintenance.run_now(store, auth, "human:ana", step="update", wait=True)
+    assert forced["steps"][0]["details"]["built"] == 0, "Run now for Update keeps the existing day's queue"
+    with store.read() as c:
+        assert {r["id"] for r in c.execute("SELECT id FROM update_queue WHERE day=?", (DAY,))} == queued
+
+
 def test_the_scheduler_only_pumps_maintenances_cycle_and_completes_its_original_step(api, monkeypatch):
     store = api.app.state.store
     now = ctx(api, TUESDAY)["now"]

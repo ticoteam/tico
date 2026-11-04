@@ -276,6 +276,9 @@ def _steps(store, auth, run_id, only, tally):
             plan[key] = ("skipped", OLD_TIMER_REASON)
         elif only is None and not due(row, at):  # a step-only Run now runs that step whether or not it is due
             plan[key] = ("skipped", "not due")
+        elif key == "update" and at.astimezone(ZONE).hour < START_HOUR:
+            # An early skip must not start Update's cadence before the day's queue can be built.
+            plan[key] = ("skipped", f"before {START_HOUR:02d}:00 Pacific: today's cycle has not started")
         else:
             plan[key] = ("run", None)
     # Each step reads from its own cursor. Collect reads from the oldest cursor among the steps about to run.
