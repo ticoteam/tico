@@ -100,17 +100,28 @@ class Ctx:
         if opened is not None:
             opened.append(self.conn)
         self._gmail, self._calendar, self._policy = None, None, None
+        self._company = ()                              # () not read yet; read at the first write (Ctx.company)
+        self.read_company = lambda: pl.company(self.slug)
+
+    def company(self):
+        """What the company lets Tico do here, from Tico, read once and only when a write asks. Every Gmail and
+        Calendar write checks it, whichever credential this run holds."""
+        if self._company == ():
+            self._company = self.read_company()
+        return self._company
 
     @property
     def gmail(self):
         if self._gmail is None:
             self._gmail = open_gmail(self.mailbox)
+            self._gmail.company = self.company
         return self._gmail
 
     @property
     def calendar(self):
         if self._calendar is None:
             self._calendar = cal.Calendar(open_calendar(self.mailbox), self.mailbox)
+            self._calendar.company = self.company
         return self._calendar
 
     @property
@@ -1615,10 +1626,15 @@ def lint_line(res):
     return "; ".join(f"{x['id']} {x['message']}" for x in res["errors"])
 
 
-def label_thread(ctx, name, msgs, fallback_ids=()):
+def label_thread(ctx, name, msgs, fallback_ids=(), part_of=None):
+    """`part_of` is the draft or send this marker records (Gmail.marking): the company's box for that write holds it."""
     ids = [m["id"] for m in msgs or []] or [i for i in fallback_ids if i]
     if ids:
-        modify(ctx, ids, add=[name], action="label-add", detail={"label": name})
+        if part_of and not ctx.dry:
+            with ctx.gmail.marking(part_of):
+                modify(ctx, ids, add=[name], action="label-add", detail={"label": name})
+        else:
+            modify(ctx, ids, add=[name], action="label-add", detail={"label": name})
     return ids
 
 
@@ -1715,9 +1731,9 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
         thread_id = (d.get("message") or {}).get("threadId") or thread_id
         db.put_draft(ctx.conn, key, ctx.slug, ctx.mailbox, ctx.issue, to, subject,
                      thread_id, draft_id, message_id, review_id)
-        label_thread(ctx, lb.DRAFTED, msgs, [message_id])
+        label_thread(ctx, lb.DRAFTED, msgs, [message_id], part_of="drafts")
         if review_no:
-            label_thread(ctx, lb.NEEDS_OWNER, msgs, [message_id])
+            label_thread(ctx, lb.NEEDS_OWNER, msgs, [message_id], part_of="drafts")
     ctx.audit("draft", draft_id or key[:12],
               {"to": to, "cc": cc, "subject": subject, "thread": thread_id, "key": key,
                "created": created, "reply": bool(reply_to), "chars": len(body),
@@ -1916,7 +1932,7 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
     db.finish_send(ctx.conn, key, message_id, "sent",
                    miss=(ctx.slug, check_id) if ruled and ruled.get("failed") else None)
     handled = lb.handled(ctx.slug)
-    label_thread(ctx, handled, msgs, [message_id])
+    label_thread(ctx, handled, msgs, [message_id], part_of="send")
     ctx.audit("send", message_id or draft_id,
               {"to": to, "cc": cc, "subject": subject, "thread": thread_id, "key": key,
                "draft": draft_id, "attachments": names, "review": verdict.get("backend")})
@@ -2037,8 +2053,9 @@ def cmd_discard(args):
         if thread_id and thread_id not in db.draft_thread_ids(ctx.conn, ctx.mailbox):
             try:                                        # no hub draft left on the thread
                 ids = [m["id"] for m in ctx.gmail.thread(thread_id) or []]
-                modify(ctx, ids, remove=[lb.DRAFTED], action="label-remove",
-                       detail={"label": lb.DRAFTED})
+                with ctx.gmail.marking("drafts"):
+                    modify(ctx, ids, remove=[lb.DRAFTED], action="label-remove",
+                           detail={"label": lb.DRAFTED})
             except (Failure, Refused):
                 pass
     ctx.audit("discard", did, {"key": row["key"], "to": row["recipients"].split(","),
@@ -2452,6 +2469,11 @@ def cmd_connector_event(args):
     if end <= start or (end - start) > timedelta(days=7):
         raise Refused("The connector calendar action has an invalid interval.")
     ctx = Ctx(args, "schedule", mailbox=mailbox)
+    # A claimed action is never retried, so What Tico may do unread refuses it here (exit 2: nothing was created)
+    # rather than as a failure the runner must report as unknown.
+    if ctx.company() == pl.UNREAD:
+        raise Refused("Tico couldn't check the company's mail settings; try again",
+                      "Nothing was sent to Google. Schedule it again once Tico answers.")
     event_id = hashlib.sha256(str(request["id"]).encode()).hexdigest()[:32]
     event = ctx.calendar.create_hub_event(
         start, end, str(request["title"]).strip(), attendees, event_id,
@@ -2481,6 +2503,8 @@ def cmd_mail_action(args):
         return 2
     try:
         ctx = Ctx(args, actions.verb(request["action"]), mailbox=str(request["mailbox"]).strip().lower())
+        # An automation is Tico too, so What Tico may do holds it, read from Tico (policy.company): whatever the action
+        # on stdin says of it (a `company` field included) is ignored, since anything that can run this command writes it.
         result = actions.perform(ctx, request)
     except Refused as e:
         print(json.dumps({"ok": False, "retry": False, "detail": e.msg[:900]}))

@@ -1,5 +1,6 @@
-"""Quarantine stops preserve their cause. Work safe to repeat waits in the queue until the bot is active; a run that
-may already have acted outside Tico is held for review, never run again by itself when the quarantine lifts."""
+"""Quarantine stops preserve their cause. A run is judged as a computer's reported restart is: its work waits in the queue
+until the bot is active, with a note to check what it already did, unless a consumed approval, a fallback's unknown
+work or a named outside action holds it for review, never run again by itself when the quarantine lifts."""
 from backend import run_diagnostics
 from backend.store import H
 from backend.tests.test_api import api, claim, expire, get, post, ready, setup_attempt  # noqa: F401 (api: the fixture)
@@ -53,9 +54,9 @@ def end_reason(api, attempt):
         return run_diagnostics.metadata(c, attempt['id'])['end_reason']
 
 
-def test_a_quarantine_stops_a_turn_that_used_a_shell_with_its_reason_and_holds_its_job_for_review(api, time_machine):
-    """Its shell may have pushed, sent or paid: lifting the quarantine must not run it a second time. It takes the held
-    path every other lost run takes, so its job is uncertain and BotOps's review names it."""
+def test_a_quarantine_stops_a_turn_that_used_a_shell_and_requeues_it_with_a_note_when_it_lifts(api, time_machine):
+    """A shell is no outside action by itself, so the run goes back in the queue as a restart's does, not held. Its
+    resume note says a quarantine stopped it and to check what it already did before repeating anything."""
     # Keep the one-hour cooldown on the same UTC date as the expected stop reason.
     time_machine.move_to("2026-10-26T12:00:00Z", tick=False)
     machine, message, attempt = working(api)
@@ -72,21 +73,63 @@ def test_a_quarantine_stops_a_turn_that_used_a_shell_with_its_reason_and_holds_i
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0] == 'interrupted'
         assert H.bot(c, 'ops')['state'] == 'quarantined'
-    # Held, not queued and not canceled: the quarantine's Stop is no one's choice to drop it.
-    assert job_state(api, attempt['job_id']) == 'uncertain'
+    # Queued, not uncertain and not canceled, and nothing held for review.
+    assert job_state(api, attempt['job_id']) == 'queued'
     notice = get(api, f"conversations/{message['conversation_id']}/messages")[-1]
     assert notice['kind'] == 'notice' and notice['body'].startswith(line)
+    assert 'goes back in the queue and runs again when the quarantine lifts' in notice['body']
+    assert get(api, 'bots/ops/execution-review')['jobs'] == [] and sweep(api) == [] and review(api) is None
+    # Not while quarantined: the claim only hands work to an active bot.
+    ready(api, machine, ['ops'])
+    assert claim(api, machine) is None
+    lift(api)
+    ready(api, machine, ['ops'])
+    resumed = claim(api, machine)
+    assert resumed['job_id'] == attempt['job_id']
+    body = resumed['message']['body']
+    assert 'interrupted at' in body and 'by a quarantine' in body and 'Check what already happened first' in body
+
+
+def test_a_quarantine_stopped_turn_with_a_named_merge_is_held_for_review(api, time_machine):
+    """A merge may already have happened, so lifting the quarantine must not run it a second time: its job is held, and
+    BotOps's review names the merge."""
+    time_machine.move_to("2026-10-26T12:00:00Z", tick=False)
+    machine, message, attempt = working(api)
+    quarantine(api)
+    post(api, f"attempts/{attempt['id']}/events", {'events': [
+        {'seq': 4, 'kind': 'tool', 'payload': {'name': 'Bash', 'status': 'started',
+                                               'summary': 'gh pr merge 42 --squash'}}]}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 4}, machine['token'])
+    assert job_state(api, attempt['job_id']) == 'uncertain'
+    notice = get(api, f"conversations/{message['conversation_id']}/messages")[-1]
     assert HELD in notice['body'] and 'runs again when the quarantine lifts' not in notice['body']
-    # The sweep holds it for BotOps, as it does any lost run that used a tool that can change things.
     aged(api, attempt['id'])
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
-    assert attempt['job_id'] in review(api) and 'used shell' in review(api)
-    assert [j['id'] for j in get(api, 'bots/ops/execution-review')['jobs']] == [attempt['job_id']]
-    # Lifting the quarantine does not run it again: it waits for the review's decision.
+    assert attempt['job_id'] in review(api) and 'used Bash' in review(api)
     lift(api)
     ready(api, machine, ['ops'])
     assert claim(api, machine) is None
-    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+
+
+def test_a_quarantine_stopped_shell_run_held_before_this_rule_is_resumed_by_the_sweep(api, time_machine):
+    """A run a quarantine held before requeues judged it this way is resumed by the sweep, once it is old enough, with
+    the same note, so it does not wait for BotOps."""
+    time_machine.move_to("2026-10-26T12:00:00Z", tick=False)
+    machine, message, attempt = working(api)
+    quarantine(api)
+    post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 3}, machine['token'])
+    with api.app.state.store.transaction() as c:
+        # The job as it stood before this rule: held uncertain, with no decision.
+        c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (attempt['job_id'],))
+        c.execute("DELETE FROM job_recovery WHERE job_id=?", (attempt['job_id'],))
+    aged(api, attempt['id'])
+    assert [d['state'] for d in sweep(api)] == ['queued']
+    lift(api)
+    ready(api, machine, ['ops'])
+    body = claim(api, machine)['message']['body']
+    assert 'by a quarantine' in body and 'Check what already happened first' in body
 
 
 def test_a_quarantine_stopped_turn_that_only_read_runs_again_when_it_lifts(api, time_machine):
@@ -113,8 +156,9 @@ def test_a_quarantine_stopped_turn_that_only_read_runs_again_when_it_lifts(api, 
     assert claim(api, machine)['job_id'] == attempt['job_id']
 
 
-def test_a_read_only_turn_on_a_host_that_does_not_report_its_calls_is_held(api):
-    """Its silence proves nothing (`reports_tools`): held as the sweep holds any such run."""
+def test_a_quarantine_stopped_turn_on_a_host_that_does_not_report_its_calls_requeues(api):
+    """Its silence proves nothing and names no outside action, so, as on a restart, it runs again when the quarantine
+    lifts (`requeues`)."""
     machine, message, attempt = working(api, start=False)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'quarantined'}, machine['token'])
     post(api, f"attempts/{attempt['id']}/events", {'events': [
@@ -122,9 +166,8 @@ def test_a_read_only_turn_on_a_host_that_does_not_report_its_calls_is_held(api):
     quarantine(api)
     post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
     post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 1}, machine['token'])
-    assert job_state(api, attempt['job_id']) == 'uncertain'
-    aged(api, attempt['id'])
-    assert sweep(api) == [] and 'does not report its tool calls' in review(api)
+    assert job_state(api, attempt['job_id']) == 'queued'
+    assert get(api, 'bots/ops/execution-review')['jobs'] == []
 
 
 def test_a_quarantine_stopped_turn_that_used_up_an_approval_is_held(api):
@@ -151,16 +194,17 @@ def test_a_quarantine_only_a_person_lifts_says_so_and_names_no_refused_words(api
 
 def test_an_answer_finished_after_opening_a_pull_request_is_kept_on_the_run_and_held_for_review(api):
     """A finished answer from a quarantine-stopped run is never posted (a quarantined bot posts nothing). The run that
-    opened a pull request is held, not run again: the review shows the kept answer, so BotOps can see the work was done
-    and dismiss it rather than open a second pull request."""
+    merged a pull request (a named outside action) is held, not run again: the review shows the kept answer, so BotOps
+    can see the work was done and dismiss it rather than merge a second time."""
     machine, message, attempt = working(api)
     quarantine(api)
     assert post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])['stop'] is True
-    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'completed', 'last_seq': 3,
-         'text': 'Opened the pull request.'}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/events", {'events': [{'seq': 4, 'kind': 'tool', 'payload': {'name': 'Bash', 'status': 'started', 'summary': 'gh pr merge 42 --squash'}}]}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'completed', 'last_seq': 4,
+         'text': 'Merged the pull request.'}, machine['token'])
     with api.app.state.store.read() as c:
         row = c.execute("SELECT state,final_text FROM attempts WHERE id=?", (attempt['id'],)).fetchone()
-    assert tuple(row) == ('interrupted', 'Opened the pull request.')
+    assert tuple(row) == ('interrupted', 'Merged the pull request.')
     assert job_state(api, attempt['job_id']) == 'uncertain'
     assert end_reason(api, attempt).startswith('Quarantined: ')
     assert not [m for m in get(api, f"conversations/{message['conversation_id']}/messages") if m['sender_id'] == 'bot:ops']
@@ -214,6 +258,7 @@ def test_a_stopped_turn_that_used_a_shell_and_never_reported_back_is_held_for_re
     """The sweep dismisses a run a person stopped; a quarantine's Stop is not theirs, so its run is held instead."""
     machine, message, attempt = working(api)
     quarantine(api)
+    post(api, f"attempts/{attempt['id']}/events", {'events': [{'seq': 4, 'kind': 'tool', 'payload': {'name': 'Bash', 'status': 'started', 'summary': 'gh pr merge 42 --squash'}}]}, machine['token'])
     post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
     expire(api, attempt['id'])
     assert claim(api, machine) is None
@@ -225,8 +270,8 @@ def test_a_stopped_turn_that_used_a_shell_and_never_reported_back_is_held_for_re
     assert attempt['job_id'] in review(api)
     # Its late answer is filed on the run; the job stays held rather than canceled by the Stop.
     lift(api)
-    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'completed', 'last_seq': 3,
-         'text': 'Opened the pull request.'}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'completed', 'last_seq': 4,
+         'text': 'Merged the pull request.'}, machine['token'])
     assert job_state(api, attempt['job_id']) == 'uncertain'
 
 
@@ -269,7 +314,8 @@ def test_all_running_turns_stop_each_judged_on_its_own_with_folded_inputs_follow
     post(api, f"attempts/{first['id']}/started", {'thread_id': 'files'}, machine['token'])
     post(api, f"attempts/{first['id']}/events", {'events': [
         {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}},
-        {'seq': 2, 'kind': 'tool', 'payload': {'name': 'shell'}}]}, machine['token'])
+        {'seq': 2, 'kind': 'tool', 'payload': {'name': 'Bash', 'status': 'started',
+                                               'summary': 'gh pr merge 42 --squash'}}]}, machine['token'])
     folded = post(api, f"tasks/{task['id']}/comments", {'text': 'Include the archive.'})['comment']
     inputs = post(api, f"attempts/{first['id']}/inputs", {}, machine['token'])['messages']
     assert [m['id'] for m in inputs] == [folded['id']]

@@ -808,7 +808,7 @@ mod tests {
 
     fn org(id: &str, store: Option<Uuid>) -> Org {
         Org { id: id.into(), url: "https://acme.example.com/".into(), store: store.map(|store| store.to_string()),
-              name: String::new(), email: String::new(), added_at: String::new(), sign_in: false }
+              name: String::new(), email: String::new(), added_at: String::new(), sign_in: false, last_url: None }
     }
 
     #[test]

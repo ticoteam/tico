@@ -939,7 +939,7 @@ section.card>header .settings-head-act{margin-left:auto}
   .models-row select,.models-row input[type=text],.models-row input[type=url],.models-row input[type=password]{max-width:none}
   .subs-pick{max-width:160px}
 }
-/* Settings > Google (ui/google-connect.js): the Whole Workspace and Your account cards. */
+/* Settings > Google (ui/google-connect.js): the question, then the One account at a time and Whole Workspace paths. */
 .google-card{display:grid;gap:10px;min-width:0;padding:0 0 16px}
 .google-card+.google-card{border-top:1px solid var(--line);padding-top:16px}
 .google-card h3{margin:0;font-size:var(--t-base);font-weight:600}
@@ -957,3 +957,29 @@ section.card>header .settings-head-act{margin-left:auto}
 .google-confirm[hidden]{display:none}
 .google-error{color:var(--fail)}
 @media (max-width:760px){.google-field input,.google-upload input{max-width:none}}
+.google-choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;min-width:0}
+.google-choice{display:grid;gap:4px;text-align:left;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);font:inherit;font-size:var(--t-base);cursor:pointer}
+.google-choice:hover{border-color:var(--g5)}
+.google-choice:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+.google-choice .muted{font-size:var(--t-sm)}
+.google-how{display:flex;gap:2px;padding:3px;background:var(--surface2);border-radius:8px;align-self:flex-start;max-width:100%;flex-wrap:wrap}
+.google-how button{border:0;background:transparent;color:var(--muted);font-weight:600;padding:6px 14px;border-radius:6px;cursor:pointer}
+.google-how button:hover{color:var(--ink)}
+.google-how button[aria-pressed=true]{background:var(--surface);color:var(--ink);box-shadow:0 0 0 1px var(--line)}
+.google-prompt{display:grid;gap:8px;min-width:0}
+.google-prompt textarea{min-height:180px;font-family:var(--mono);font-size:var(--t-sm)}
+.google-more summary{cursor:pointer;font-size:var(--t-sm);color:var(--muted)}
+.google-more[open]{display:grid;gap:6px}
+.google-later h4{opacity:.55}
+.google-team{list-style:none;margin:0;padding:0;display:grid;min-width:0}
+.google-team li{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;padding:6px 0;border-top:1px solid var(--line);font-size:var(--t-sm);min-width:0}
+.google-team-who{flex:1 1 220px;min-width:0;overflow-wrap:anywhere}
+.google-team-status{color:var(--muted)}
+.google-team-status[data-status=connected],.google-team-status[data-status=workspace]{color:var(--ok)}
+.google-team-status[data-status=failing]{color:var(--fail)}
+.google-switch{margin:0;font-size:var(--t-sm)}
+.google-may-row{display:flex;align-items:flex-start;gap:10px;padding:6px 0;border-top:1px solid var(--line);min-width:0}
+.google-may-row>span{display:grid;gap:2px;min-width:0;overflow-wrap:anywhere}
+.google-may-row input{margin-top:3px}
+.google-may-row .muted{font-size:var(--t-sm)}
+.google-may-always{flex:none;width:13px}

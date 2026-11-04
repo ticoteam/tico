@@ -17,11 +17,11 @@ from backend.store import H
 from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.test_automation_turns import finish
 from clients.tico import APIError
-from connectors.mail import access, audit as audit_log, db, gmail as gm
+from connectors.mail import access, audit as audit_log, db, gmail as gm, policy as pl
 from connectors.mail import __main__ as cli
 from connectors.mail import actions as mail_actions, unsubscribe as unsub
 from connectors.mail.tests import fake
-from runner_support.connectors import ConnectorPublisher
+from runner_support.connectors import CalendarRefused, ConnectorPublisher
 
 BOX = "ana@acme.example"
 INVOICE = {"From": "Billing <billing@vendor.example>", "To": BOX, "Subject": "Invoice 4471",
@@ -65,8 +65,10 @@ class Computer:
             "m1", "t1", INVOICE, body="Please pay invoice 4471.", epoch_ms=int(time.time() * 1000) - 3_600_000)])
         self.worker = ConnectorPublisher({"url": "http://localhost:8765", "token": "unused",
                                           "owner_handle": access.OWNER, "projects_dir": str(tmp_path)},
-                                         client=Hub(api, token), mail=self.mail, action=self.action)
+                                         client=Hub(api, token), mail=self.mail, action=self.action,
+                                         event=self.event)
         self.worker.mail_boxes = [BOX]
+        self.calendar = fake.FakeCalendarService()
 
     def mail(self, args):
         rc, answer = run_cli(args)
@@ -75,6 +77,14 @@ class Computer:
 
     def action(self, action):
         return run_cli(["mail-action", "--as", access.OWNER, "--json"], json.dumps(action))[1]
+
+    def event(self, action):
+        """ConnectorPublisher.calendar_event, in this process: exit 2 is a refusal before Google was asked."""
+        rc, answer = run_cli(["connector-event", "--as", access.OWNER, "--json"], json.dumps(action))
+        if rc == 2:
+            raise CalendarRefused("Tico refused the calendar event before calling Google")
+        assert rc == 0, answer
+        return answer
 
     def sync(self):
         """The real sync: Gmail into mail.db, exported and published to the hub as this runner."""
@@ -95,6 +105,16 @@ def computer(api, tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "open_db", lambda: db.connect(tmp_path / "mail.db"))
     monkeypatch.setattr(audit_log, "AUDIT_PATH", tmp_path / "audit.jsonl")
     monkeypatch.setattr(access, "PROJECTS", tmp_path)
+    # The CLI runs as the owner and reads What Tico may do from the hub as this runner (policy.runner_company). The
+    # registration lives where TICO_RUNNER_CONFIG says, with none in the home, as a custom install has it: nothing the
+    # runner runs looks for one.
+    monkeypatch.setattr(pl, "RUNNER_GET", lambda path: box.worker.client.get(path))
+    monkeypatch.setattr(cli, "open_calendar", lambda mailbox: box.calendar)
+    (tmp_path / "home").mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere/runner.json").write_text(json.dumps({"url": "http://localhost:8765", "token": "unused"}))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("TICO_RUNNER_CONFIG", str(tmp_path / "elsewhere/runner.json"))
     box.token = machine["token"]
     return box
 
@@ -294,6 +314,44 @@ def test_a_send_claimed_after_the_switch_went_off_is_a_draft(api, computer):
     assert step["status"] == "ok" and step["outputs"]["detail"] == "send_off" and step["outputs"]["send_off"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM events WHERE action='automation.send_off'").fetchone()[0] == 1
+
+
+def test_what_tico_may_do_holds_automations_a_send_is_claimed_as_a_draft_which_organize_off_refuses(api, computer):
+    """Settings > Google > What Tico may do covers automations: Send mail off claims a send as a draft, as the inbox's
+    own switch does, and the connector reads the setting from the hub itself, so with Organize mail off too it refuses
+    the draft and the archive before Gmail is asked. An action that says otherwise on stdin changes nothing."""
+    automate(api, SEND)
+    automate(api, ARCHIVE)
+    automate(api, DRAFT)
+    computer.sync()
+    r = api.put("/api/v2/google/permissions", json={"organize_mail": False, "send_mail": False, "change_calendar": True},
+                headers=headers())
+    assert r.status_code == 200, r.text
+    actions = claim(api, computer.token)["actions"]
+    assert sorted(a["action"] for a in actions) == ["archive", "draft", "draft"]     # the send became a draft
+    assert all("company" not in a for a in actions)
+    for action in actions:
+        for forged in ({}, {"company": {}}, {"company": dict.fromkeys(("organize_mail", "send_mail"), True)}):
+            answer = computer.action(dict(action, **forged))
+            assert (answer["ok"], answer["retry"]) == (False, False) and "What Tico may do" in answer["detail"], answer
+    # A send made up on stdin, past the claim's draft, is refused the same way.
+    drafted = next(a for a in actions if a["action"] == "draft")
+    answer = computer.action(dict(drafted, action="send", company={}))
+    assert answer["ok"] is False and "What Tico may do" in answer["detail"], answer
+    assert "INBOX" in computer.gmail.store["m1"]["labelIds"] and computer.drafts() == [] and computer.gmail.sent == []
+
+
+def test_a_mail_action_that_cannot_read_what_tico_may_do_writes_nothing_and_is_retried(api, computer, monkeypatch):
+    automate(api, ARCHIVE)
+    computer.sync()
+    action, = claim(api, computer.token)["actions"]
+
+    def down(path):
+        raise APIError("unavailable", "the hub is down", 503)
+    monkeypatch.setattr(pl, "RUNNER_GET", down)
+    answer = computer.action(action)
+    assert (answer["ok"], answer["retry"]) == (False, True) and "couldn't check" in answer["detail"], answer
+    assert "INBOX" in computer.gmail.store["m1"]["labelIds"]
 
 
 def test_a_send_queued_with_the_switch_off_still_says_send_off_once_drafted(api, computer):
@@ -681,3 +739,37 @@ def test_reply_mode_with_the_send_switch_off_saves_a_draft(api, computer):
     assert computer.worker.mail_action_tick() == 1
     assert computer.gmail.sent == [] and len(computer.drafts()) == 1
     assert last_run(api, aid)["steps"][0]["outputs"]["actions"][0]["detail"] == "send_off"
+
+
+def test_change_calendar_off_refuses_a_booking_and_fails_what_was_queued_at_claim(api, computer):
+    """What Tico may do holds the calendar on the server too: no booking is queued while Change calendar is off, and one
+    queued before it went off fails at the claim instead of landing on the calendar later."""
+    booking = {"calendar": BOX, "title": "Planning", "start": "2099-01-01T09:00:00+00:00",
+               "end": "2099-01-01T09:30:00+00:00", "attendees": []}
+    queued = post(api, "calendar/appointments", booking)["action"]
+    r = api.put("/api/v2/google/permissions", json={"organize_mail": True, "send_mail": True, "change_calendar": False},
+                headers=headers())
+    assert r.status_code == 200, r.text
+    refused = api.post("/api/v2/calendar/appointments", json=booking, headers=headers())
+    assert refused.status_code == 403 and refused.json()["error"]["code"] == "company_off", refused.text
+    assert post(api, "connectors/calendar/actions/claim", {}, computer.token) == {"action": None}
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT status,error FROM calendar_actions WHERE id=?", (queued["id"],)).fetchone()
+        assert row["status"] == "failed" and "What Tico may do" in row["error"]
+        assert c.execute("SELECT count(*) FROM calendar_actions").fetchone()[0] == 1
+
+
+def test_the_runner_s_own_commands_need_no_owner_proof_wherever_its_registration_lives(api, computer):
+    """Sync, a mail action's lease and a calendar booking's claim run as the owner with the registration at
+    TICO_RUNNER_CONFIG (the fixture): each reads What Tico may do from the hub and nothing else about who runs it."""
+    automate(api, ARCHIVE)
+    computer.sync()
+    assert computer.worker.mail_action_tick() >= 1
+    assert "INBOX" not in computer.gmail.store["m1"]["labelIds"]
+    booking = {"calendar": BOX, "title": "Planning", "start": "2099-01-01T09:00:00+00:00",
+               "end": "2099-01-01T09:30:00+00:00", "attendees": []}
+    queued = post(api, "calendar/appointments", booking)["action"]
+    assert computer.worker.calendar_action_tick() == 1
+    assert len(computer.calendar.created_events) == 1
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT status FROM calendar_actions WHERE id=?", (queued["id"],)).fetchone()[0] == "succeeded"

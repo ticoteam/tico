@@ -17,6 +17,7 @@ from . import browser_exit, claim_holds, claim_loads, cloud_access, cloud_machin
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
+from .run_diagnostics import RESTART_TEXT, clean_stop_reported
 from .statuses import PARKED_SQL
 from .verdict_moves import HANDOFF_FIRST_SQL
 from .store import H, P, Problem, bot_readiness, digest, encode, message_page, readiness_document
@@ -702,11 +703,17 @@ LEGACY_OUTSIDE_PROGRAMS = {
 
 
 def restart_reported(c, attempt_id):
-    """Only the computer's terminal restart report relaxes generic tool uncertainty; a lost lease does not."""
+    """Only the computer's own report that it stopped the turn relaxes generic tool uncertainty; a lost lease does not.
+    A restart is its completion text (RESTART_TEXT). A clean stop is only its saved diagnostic (`clean_stop_reported`):
+    the completion text is the model's reply, so it never counts; the diagnostic still counts when the completion never
+    reached the hub."""
     row = c.execute("SELECT state,result FROM attempts WHERE id=?", (attempt_id,)).fetchone()
-    result = json.loads(row['result'] or '{}') if row else {}
-    return bool(row and row['state'] in ('interrupted', 'expired') and result.get('outcome') == 'interrupted'
-                and result.get('text') == 'Runner restarted during execution')
+    if not row or row['state'] not in ('interrupted', 'expired'):
+        return False
+    result = json.loads(row['result'] or '{}')
+    if result.get('outcome') == 'interrupted' and result.get('text') == RESTART_TEXT:
+        return True
+    return clean_stop_reported(c, attempt_id) is not None
 
 
 # Tico's update, or any restart of the hub, cuts the runs live then, mostly with no report from their computer, so each
@@ -3048,9 +3055,9 @@ class Execution:
                                  "WHERE j.attempt_id=? AND j.state IN ('leased','running','input')", (row["id"],)).fetchall()
                 # A lost lease may retry open work, but cannot undo Stop or resurrect a finished task.
                 # Inputs folded into a running turn have their own jobs: Stop applies only to its original request.
-                # A quarantine's Stop is not the person's choice to drop the request: a run safe to repeat goes back in
-                # the queue to run when the quarantine lifts, as it does when the runner hears that Stop (Dev 573). Any
-                # other run is held for review like a lost one: running it again could repeat an outside action.
+                # A quarantine's Stop is not the person's choice to drop the request: the run goes back in the queue to run
+                # when the quarantine lifts, as it does when the runner hears that Stop (Dev 573), unless a consumed
+                # approval, a fallback's unknown work or a named outside action holds it for review (`requeues`).
                 benched = quarantine_stops.stopped_by(c, row)
                 held_back = bool(benched) and not quarantine_stops.requeues(c, row)
                 if benched:
@@ -3090,6 +3097,8 @@ class Execution:
                 for job in jobs:
                     job_state = "canceled" if job["id"] in canceled else retry_state if state == "canceled" else state
                     c.execute("UPDATE jobs SET state=? WHERE id=?", (job_state, job["id"]))
+                    if benched and job_state == "queued":
+                        quarantine_stops.requeue(c, {"id": row["id"], "job_id": job["id"]}, H.now()[11:16])
                 H.turn_finish(c, H.KEEPER, row["id"], exit_code="failed" if state == "failed" else "interrupted",
                               summary=reason if state == "failed" else "Runner lease expired", usage_reason="no_result")
                 if row["stop_requested_at"]:
@@ -4880,8 +4889,8 @@ class Execution:
         row = self.attempt(c, who, aid, final=True)
         # A turn a quarantine stopped ends stopped whatever it reports: a quarantined bot can post no answer, so one
         # finished in the seconds before its runner heard stays on the run. Its job goes back in the queue with the
-        # rest of the turn's work, to run when the quarantine lifts, only when running it again repeats nothing
-        # (`quarantine_stops.requeues`); otherwise the whole turn's work is held for review, where the kept answer
+        # rest of the turn's work, to run when the quarantine lifts, unless `quarantine_stops.requeues` holds it for review
+        # (a consumed approval, a fallback's unknown work or a named outside action); the kept answer
         # shows what the run already finished (Dev 573).
         benched = quarantine_stops.stopped_by(c, row)
         # A turn that finished before its runner heard a restart's Stop (its computer's subscription changed) stays a
@@ -5233,6 +5242,8 @@ class Execution:
                   ("completed" if body.outcome == "completed" else "uncertain" if held_back else "queued" if benched
                    else "canceled" if stopped or no_copy
                    else "queued" if requeue else "uncertain", row["job_id"]))
+        if benched and not held_back and body.outcome != "completed":
+            quarantine_stops.requeue(c, row, H.now()[11:16])
         if tico_code == gateway.NOT_ISOLATED and not requeue:
             # Held as it is: never started, so `auto_reconcile` would resume it onto the same runner each sweep. It
             # waits for a person to move the bot or change its model, then retry or dismiss it.
@@ -5936,9 +5947,15 @@ class Execution:
         carries the task's hand-off note, and holds a second consecutive cut for review instead of dismissing it.
         A completed attempt breaks the consecutive-cut streak.
 
-        A computer-reported restart resumes on the next sweep even after a shell or local edit, unless a consumed
-        approval or a named merge, publish, send or payment requires review. Its note gives the interruption time
-        and asks it to check existing effects first. Lost leases without that report retain the conservative rule.
+        A computer-reported restart, or its clean stop (run_diagnostics.clean_stop_reported: the computer stopped the turn itself
+        and said so), resumes on the next sweep even after a shell or local edit, unless a consumed approval or a named
+        merge, publish, send or payment requires review. Its note gives the interruption time and asks it to check
+        existing effects first. Lost leases without that report retain the conservative rule.
+
+        A run a quarantine stopped is judged the same way (quarantine_stops.requeues): it resumes once the quarantine
+        lifts, unless a consumed approval, a fallback's unknown work or a named outside action holds it. Its note says it
+        was stopped by a quarantine and asks it to check what it already did first. A run the quarantine held before
+        this rule is resumed by the sweep the same way.
 
         A run Tico's update or a hub restart cut (cut_by_update) resumes on the next sweep whatever it used, a named
         outside action or a consumed approval included (its note names those to verify first): nobody is asked, and
@@ -6114,6 +6131,16 @@ class Execution:
                     decided.append(decision)
                     continue
                 limit_cap = facts['timeout'] and facts['limit_cuts'] >= 2
+                # A run a quarantine stopped is judged as a computer restart is (quarantine_stops.requeues): it resumes
+                # when the quarantine lifts unless a consumed approval, a fallback's unknown work or a named outside
+                # action holds it. Its note says it was stopped by a quarantine.
+                stopped_run = {'id': row['attempt_id'], 'job_id': row['id'], 'bot_id': row['bot_id'],
+                               'started_at': row['started_at'], 'stop_requested_at': row['stop_requested_at']}
+                if quarantine_stops.stopped_by(c, stopped_run) and not limit_cap and quarantine_stops.requeues(c, stopped_run):
+                    at = (row['finished_at'] or H.now())[11:16]
+                    decided.append(self._decide(c, row, row['attempt_id'], 'resume', quarantine_stops.resume_note(at),
+                                                H.KEEPER, action='job.auto_reconcile'))
+                    continue
                 if not safe or limit_cap or resumed_held:
                     why = ('cut by the run time limit twice in a row' if limit_cap else
                            'Review required before repeating possible effects.')
