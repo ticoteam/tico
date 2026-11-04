@@ -49,7 +49,8 @@ def loop(api, count, start=0):
             c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,created_at,updated_at,private) "
                       "VALUES(?,?,?,?,?,?,?,0)", (tid, "Looping " + tid, "human:ana", "bot:few-00", "open", OLD, OLD))
             for k in range(22):
-                c.execute("INSERT INTO task_events(id,task_id,created_at,actor,field,old,new) VALUES(?,?,?,?,?,?,?)",
+                c.execute("INSERT INTO history_events(id,subject_type,subject_id,created_at,actor_id,kind,old,new) "
+                          "VALUES(?,'task',?,?,?,?,?,?)",
                           (uuid.uuid4().hex, tid, H.shift(H.now(), minutes=-k), "human:ana", "status", "a", "b"))
 
 

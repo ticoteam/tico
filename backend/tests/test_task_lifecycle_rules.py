@@ -53,7 +53,7 @@ class LeavingClosed(Case):
         self.assertEqual((row["status"], row["closed_at"], row["closed_by_id"]), ("done", None, None))
         self.assertIsNotNone(row["done_at"])
         self.assertEqual({f for (f,) in self.conn.execute(
-            "SELECT field FROM task_events WHERE task_id=? AND new IS NULL", (t["id"],))}, {"closed_at", "closed_by"})
+            "SELECT kind AS field FROM history_events WHERE subject_type='task' AND subject_id=? AND new IS NULL", (t["id"],))}, {"closed_at", "closed_by"})
 
     def test_a_bot_refinishing_its_own_closed_task_drops_the_close_time(self):
         t = self.make(CMO, "Check the launch post links", CMO)
@@ -94,7 +94,7 @@ class LeavingClosed(Case):
                          (None, None))
         self.assertIsNotNone(H.task(self.conn, kept["id"])["closed_at"], "a closed task keeps its close time")
         self.assertEqual(H.clear_finished_close_times(self.conn), [])
-        self.assertEqual(len(self.conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND actor=? AND field "
+        self.assertEqual(len(self.conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id=? AND kind "
                                                "IN ('closed_at','closed_by')", (stuck["id"], H.KEEPER)).fetchall()), 2)
 
 
@@ -181,7 +181,7 @@ class Ownership(Case):
         H.task_update(self.conn, BEN, t["id"], owner="cmo")
         self.assertEqual(self.conn.execute("SELECT count(*) FROM messages WHERE recipient_id=?", (CMO,)).fetchone()[0],
                          before)
-        self.assertFalse(self.conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='owner'",
+        self.assertFalse(self.conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='owner'",
                                            (t["id"],)).fetchone())
 
     def test_a_bot_cannot_hand_on_a_task_a_person_closed(self):

@@ -53,7 +53,7 @@ def test_a_note_with_no_task_or_bot_stays_in_the_run_log(api):
     for values in ({}, MAIL, {"task": {"title": "No id"}}):
         done = act(api, "note", {"text": "Seen"}, values)
         assert done == {"ok": True, "detail": "noted in the run log", "note": "Seen"}, done
-    assert not sql(api, "SELECT id FROM task_events WHERE note='Seen'")
+    assert not sql(api, "SELECT id FROM history_events WHERE subject_type='task' AND note='Seen'")
 
 
 def test_wake_bot_wakes_it_with_the_run_on_the_notice(api):

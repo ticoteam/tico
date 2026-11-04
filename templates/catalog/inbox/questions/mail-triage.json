@@ -3,7 +3,7 @@
   "version": 1,
   "owner": "ana",
   "summary": "One inbox message from its brief listing (sender, subject, snippet, headers; no body): which bucket it belongs in, whether it asks for something, whether money or legal risk is involved, and how urgent. Run before any thread is opened (`mail inbox --decisions`).",
-  "state": ["mailbox", "from", "from_name", "to", "date", "subject", "snippet", "unsubscribe", "list_id", "attachments", "is_internal", "is_calendar_invite", "labels"],
+  "state": ["mailbox", "from", "from_name", "to", "date", "subject", "snippet", "unsubscribe", "list_id", "attachments", "is_internal", "is_calendar_invite", "labels", "from_domain", "category", "known_sender"],
   "questions": {
     "bucket": {
       "type": "choice",

@@ -83,8 +83,8 @@ def test_entering_review_1_files_the_check_to_the_least_busy_reviewer_and_wakes_
     assert check["title"] == "Review 1: PR #412" and check["owner_id"] == "bot:rev-a"
     assert check["requester_id"] == "bot:cpo", "filed as the builder's own request, so its verdict comes back to it"
     with api.app.state.store.read() as c:
-        head = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head'", (check["id"],)).fetchone()
-        filed = c.execute("SELECT actor,note FROM task_events WHERE task_id=? AND field='check_filed'", (task["id"],)).fetchone()
+        head = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head'", (check["id"],)).fetchone()
+        filed = c.execute("SELECT actor_id AS actor,note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_filed'", (task["id"],)).fetchone()
     assert head[0] == HEAD
     assert filed["actor"] == H.KEEPER and "rev-a" in filed["note"]
     age = woken(api, "rev-a", check["id"])
@@ -155,13 +155,13 @@ def test_turn_finish_consumes_pending_eligible_verdict_once_after_capture(api):
                   "provider": "openai", "est_cost_usd": 0.01, "billing": "subscription", "runtime": "codex",
                   "harness": "codex", "effort": "high", "profile": "engineering"}
         H.turn_finish(c, H.KEEPER, "review-turn", usage={**actual, "segments": [actual]})
-        events = c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='verdict_move'",
+        events = c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_move'",
                            (check["id"],)).fetchone()[0]
         assert events == 1
         moved_step = c.execute("SELECT s.name FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.id=?",
                                (task["id"],)).fetchone()[0]
         H.turn_finish(c, H.KEEPER, "review-turn", usage={**actual, "segments": [actual]})
-        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='verdict_move'",
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_move'",
                          (check["id"],)).fetchone()[0] == 1
     assert moved_step == "Review 1 Fixes"
 
@@ -219,7 +219,7 @@ def test_same_family_verdict_is_consumed_once_without_a_second_checker(api):
     with api.app.state.store.transaction() as c:
         _finish(c, "review-1", "rev-a", check, "claude-opus-5-5", "anthropic", "claude")
         assert H.task(c, check["id"])["status"] == "done" and _step(c, task) == "Review 1 Fixes"
-        moves = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_move' ORDER BY rowid",
+        moves = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_move' ORDER BY rowid",
                           (check["id"],)).fetchall()
         assert [json.loads(m[0])["attempt_id"] for m in moves] == ["review-1"]
         evidence = c.execute("SELECT builder_families,configured_families,checker_families "

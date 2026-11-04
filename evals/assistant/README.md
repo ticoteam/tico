@@ -121,5 +121,6 @@ keeping as a guard.
 - `cases/followups.yaml`: short replies that depend on the earlier chat ("yes", "undo", "no, only the old ones", "also the
   Health Monitor ones", "stop them from coming back"), carried as `history`.
 - `cases/live.yaml`: asks from the owner's real chat that went wrong: a model change across every bot, a short
-  follow-up answer, and an ambiguous reply that must not answer an open question for them.
+  follow-up answer, an ambiguous reply that must not answer an open question for them, a routing change for one bot's
+  tasks with a rule, and "those" read as the items just listed (not the page they are on).
 - `BASELINE.md`: the numbers for main, by model.

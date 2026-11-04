@@ -74,8 +74,8 @@ def since_map(c, rows):
         return {}
     ids = [r["id"] for r in rows]
     found = dict(c.execute(
-        f"SELECT task_id, max(created_at) FROM task_events WHERE task_id IN ({','.join('?' * len(ids))}) "
-        "AND field IN ('step','status') GROUP BY task_id", ids).fetchall())
+        f"SELECT subject_id, max(created_at) FROM history_events WHERE subject_type='task' "
+        f"AND subject_id IN ({','.join('?' * len(ids))}) AND kind IN ('step','status') GROUP BY subject_id", ids).fetchall())
     return {r["id"]: found.get(r["id"]) or r.get("created_at") for r in rows}
 
 
@@ -98,7 +98,8 @@ def _seen_by(c, row, who, at):
     """Whether `who` wrote in the ticket's room or changed it in the last SEEN_HOURS: they know how it stands."""
     since = H.shift(at, seconds=-SEEN_HOURS * 3600)
     return bool(c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>? "
-                          "AND deleted_at IS NULL UNION ALL SELECT 1 FROM task_events WHERE task_id=? AND actor=? "
+                          "AND deleted_at IS NULL UNION ALL SELECT 1 FROM history_events WHERE subject_type='task' "
+                          "AND subject_id=? AND actor_id=? "
                           "AND created_at>? LIMIT 1", (row.get("conversation_id") or "", who, since, row["id"], who,
                                                since)).fetchone())
 
@@ -222,8 +223,8 @@ def turn_ended(c, at=None):
     ids = [r["id"] for r in rows]
     for part in H.chunks(ids):
         starts.update(dict(c.execute(
-            f"SELECT task_id, max(created_at) FROM task_events WHERE task_id IN ({','.join('?' * len(part))}) "
-            "AND field IN ('step','status') GROUP BY task_id", part).fetchall()))
+            f"SELECT subject_id, max(created_at) FROM history_events WHERE subject_type='task' "
+            f"AND subject_id IN ({','.join('?' * len(part))}) AND kind IN ('step','status') GROUP BY subject_id", part).fetchall()))
     parked = H.parked_bots(c)
     cutoff = H.shift(at, minutes=-TURN_IDLE_MINUTES)
     woke = []

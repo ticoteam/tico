@@ -304,7 +304,7 @@ def test_a_run_says_whether_it_resumed_its_session_and_a_new_one_is_in_the_tasks
     assert (row["session_kind"], row["session_why"]) == (session["kind"], session.get("why"))
     assert row["rotated"] is None
     with api.app.state.store.read() as c:
-        notes = [e["note"] for e in c.execute("SELECT note FROM task_events WHERE task_id=? AND field='session'",
+        notes = [e["note"] for e in c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='session'",
                                               (task["id"],))]
     assert notes == ([said] if said else [])
 
@@ -331,7 +331,7 @@ def test_a_persons_clear_and_a_topic_change_in_a_task_room_are_in_the_tasks_hist
         room = c.execute("SELECT id FROM conversations WHERE task_id=?", (task["id"],)).fetchone()[0]
         views.clear_chat_session(c, api.app.state.store.settings, "human:ana", "ops", room)
         views.clear_chat_session(c, api.app.state.store.settings, "human:ana", "ops", room, {"reason": "topic_change"})
-        notes = [e["note"] for e in c.execute("SELECT note FROM task_events WHERE task_id=? AND field='session' "
+        notes = [e["note"] for e in c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='session' "
                                               "ORDER BY rowid", (task["id"],))]
     assert notes == ["Started a new session: a person cleared it",
                      "Started a new session: the conversation moved to a new topic"]
