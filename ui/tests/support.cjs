@@ -662,7 +662,8 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       messages: [{id: 1, created_at: at(5), from: 'staff', body: 'The report is with the team.'}]}]});
     await v.page.waitForFunction(() => window.supportState().enabled === true);
     await v.page.evaluate(() => window.supportPoll());
-    assert.equal(await v.page.locator('#support-pop').evaluate(el => el.open), false, 'a bot report reply does not open the chat');
+    // The chat is built the first time it opens: before that there is no dialog to look at.
+    assert.equal(await v.page.evaluate(() => !!document.getElementById('support-pop')?.open), false, 'a bot report reply does not open the chat');
     assert.equal(await v.page.locator('#support-open.has-unread').count(), 0, 'nor a dot on the ?');
     assert.equal(await v.page.evaluate(() => window.supportState().unread), 0);
     const read = v.page.waitForResponse(r => r.url().endsWith('/api/v2/support/tickets/sup_1/read'));
