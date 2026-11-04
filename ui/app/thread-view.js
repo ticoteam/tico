@@ -614,6 +614,12 @@ function threadViewsLive(topic, d) {
         thvDraw(view);
         continue;
       }
+      // Who a message asked, known just after it lands.
+      if (d.kind === 'routed' && d.message_id) {
+        const m = view.messages.find(x => x.id === d.message_id);
+        if (m) { m.routed = d.routed; thvDraw(view); }
+        continue;
+      }
       if (d.thread_id === view.id && d.thread) { view.thread = {...view.thread, ...d.thread}; thvDraw(view); }
       // A pin from another tab, or a manager's for everyone: the header's pin follows (`pinned` is this viewer's state).
       else if (d.thread_id === view.id && d.kind === 'pinned' && view.thread?.me) {
@@ -778,7 +784,8 @@ function thvComposerButtons(view) {
 // Steer now, Queue, Defer with its durations, then Set as goal (deliveryMenuHTML, pill.js). Steer, Queue and Defer are
 // the person's kept way (sendWayPick); Set as goal enters goal mode (chat-goal.js) for one goal and is never kept.
 // Someone who may not message the bot (Write) defers with no deadline, as on a task they are not on.
-const thvDirects = view => botByRef(view.composer?.slug)?.my_access?.write !== false;
+// Anyone in a DM with the bot may name a way to send; elsewhere it takes the right to direct the bot.
+const thvDirects = view => threadIsDm(view.thread) && !!view.thread?.me?.can_post || botByRef(view.composer?.slug)?.my_access?.write !== false;
 // The way a message goes (never goal: a goal is not a message), and what Send shows (goal in goal mode).
 const thvSendMode = view => thvDirects(view) ? SEND_WAY : 'defer:never';
 const thvWayMode = view => chatGoalThreadMode(view.composer) ? 'goal' : thvSendMode(view);
