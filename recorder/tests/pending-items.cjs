@@ -1,0 +1,70 @@
+// The saved Recorder panel uses the real window and a delayed Tauri write.
+require('../../ui/tests/support/browser.cjs');
+const {chromium} = require('playwright');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+(async () => {
+  const browser = await chromium.launch({headless:true});
+  try {
+    const page = await browser.newPage();
+    const errors = [];
+    page.on('pageerror', e => errors.push(e.message));
+    const root = path.resolve(__dirname, '../ui');
+    await page.route('http://recorder.example/**', route => {
+      const file = path.resolve(root, '.' + new URL(route.request().url()).pathname);
+      assert.ok(file.startsWith(root + path.sep));
+      return route.fulfill({path:file});
+    });
+    await page.goto('http://recorder.example/preview/index.html?scene=library');
+    await page.evaluate(() => {
+      const a = window.__PREVIEW__.state.meetings.m1.actions;
+      a.saved = true; a.actor = 'human:dana';
+      a.shared = {can_send:true, audience:['human:sam','human:dana'],
+        presence:{actors:[{actor:'human:sam',name:'Sam'}]},
+        sections:{task:[{id:'shared-1',section:'task',text:'Draft',status:'proposed',detail:{owner:'human:sam',body:'Details'}}]}};
+      window.pendingFixture = {a, calls:0, inflight:0, max:0, fail:false};
+      const original = window.__TAURI__.core.invoke;
+      window.__TAURI__.core.invoke = async (cmd, args) => {
+        if (cmd !== 'shared_item') return original(cmd, args);
+        const f = window.pendingFixture;
+        f.calls++; f.inflight++; f.max = Math.max(f.max, f.inflight);
+        if (f.hold) { const gate=f.hold; f.hold=null; await gate; }
+        f.inflight--;
+        if (f.fail) { f.fail=false; throw new Error('Offline'); }
+        const item = a.shared.sections.task[0];
+        if (args.body.text !== undefined) item.text=args.body.text;
+        Object.assign(item.detail,args.body.detail || {});
+        if (args.action === 'send') { item.status='pushed'; f.sent=args.body; }
+        return {item};
+      };
+    });
+    await page.locator('.row[data-id="m1"]').click();
+    await page.getByText('Sam is here',{exact:true}).waitFor();
+    const title=page.getByRole('textbox',{name:'Title',exact:true});
+    await page.evaluate(() => { const f=window.pendingFixture; f.hold=new Promise(resolve=>f.release=resolve); });
+    await title.fill('Saving draft');
+    await page.waitForFunction(()=>window.pendingFixture.inflight===1);
+    await title.fill('Newer words');
+    await page.getByRole('textbox',{name:'Details',exact:true}).click();
+    assert.equal(await title.inputValue(),'Newer words');
+    await page.evaluate(()=>window.pendingFixture.release());
+    await page.waitForFunction(()=>window.pendingFixture.a.shared.sections.task[0].text==='Newer words' && !window.pendingFixture.inflight);
+    await page.evaluate(()=>window.pendingFixture.fail=true);
+    await title.fill('Retry draft');
+    await page.getByRole('textbox',{name:'Details',exact:true}).click();
+    await page.getByRole('button',{name:'Retry',exact:true}).waitFor();
+    await page.evaluate(()=>window.pendingFixture.a.shared.sections.task[0].text='Someone else');
+    await page.getByRole('button',{name:'Retry',exact:true}).click();
+    await page.waitForFunction(()=>window.pendingFixture.a.shared.sections.task[0].text==='Retry draft');
+    await page.evaluate(() => { const f=window.pendingFixture; f.hold=new Promise(resolve=>f.release=resolve); });
+    await title.fill('Before send');
+    await page.waitForFunction(()=>window.pendingFixture.inflight===1);
+    await title.fill('Final words');
+    await page.getByRole('button',{name:'Send to Sam Okafor',exact:true}).click();
+    await page.evaluate(()=>window.pendingFixture.release());
+    await page.waitForFunction(()=>window.pendingFixture.sent?.text==='Final words');
+    assert.equal(await page.evaluate(()=>window.pendingFixture.max),1);
+    assert.deepEqual(errors,[]);
+    console.log('Recorder: in-flight draft, retry and final Send passed');
+  } finally { await browser.close(); }
+})().catch(error=>{console.error(error);process.exitCode=1;});

@@ -46,7 +46,7 @@ def check(c, auth, who, owner, *, record=None, live_id=None, roles=None, guest=N
         return None
     allowed = audience(c, auth, record=record, live=live)
     requester = requester or who.actor
-    readers = {owner, requester, *[a for role, values in (roles or {}).items()
+    readers = {owner, requester, *[H.resolve_actor(c, a) or a for role, values in (roles or {}).items()
                                   if role.strip().lower() == 'participant' for a in values]}
     if guest:
         readers.add(guest)

@@ -216,3 +216,19 @@ def test_future_link_proposal_column_is_redacted_at_every_boundary(api):
         assert result['item']['proposed_task_id'] is None
     outbox = api.get('/api/meetings/' + rid, headers=headers('cara-test')).json()['outbox']['task']
     assert all(i['proposed_task_id'] is None for i in outbox)
+
+
+def test_redesign_participants_audience_change_invalidates_access(api):
+    rid = record(api, {'private': True, 'participants': ['ben@acme.example']})
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.read() as c:
+        who = auth.identity_for_actor(c, 'human:ben')
+        after = events.latest(c)
+    watch = events.Watch(store, auth, who, meetings=[rid])
+    watch()
+    with store.transaction() as c:
+        c.execute("UPDATE meetings SET metadata=json_set(metadata,'$.audience','participants',"
+                  "'$.audience_emails',json('[\"ana@acme.example\"]')) WHERE id=?", (rid,))
+    with store.read() as c:
+        events.read(c, auth, who, after, topics=('meeting_items',), meetings=(rid,), watch=watch)
+    assert watch.drain() == [('meeting_items', {'meeting_id': rid, 'gone': True})]
