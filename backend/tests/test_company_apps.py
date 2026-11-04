@@ -100,6 +100,84 @@ def test_invalid_company_isolated_and_publishing_does_not_fetch_icon(tmp_path, m
     assert "TRAY_LABEL" not in (tmp_path / "env").read_text()
 
 
+def test_icon_download_recovers_from_restart_and_interrupted_body(monkeypatch, capsys):
+    from urllib.error import HTTPError, URLError
+    from scripts import company_apps
+
+    icon_url = ENTRY["url"] + ENTRY["icon_url"]
+    icon = b"\x89PNG\r\n\x1a\nlogo"
+    responses = iter([HTTPError(icon_url, 503, "private server unavailable", {}, None),
+                      URLError(icon_url), TimeoutError(icon_url), icon])
+    delays = []
+
+    class Body:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def read(self, size):
+            assert size == 1024 * 1024 + 1
+            value = next(responses)
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+    class Opener:
+        def open(self, request, timeout):
+            assert request.full_url == icon_url
+            assert timeout == 30
+            return Body()
+
+    monkeypatch.setattr(company_apps, "build_opener", lambda *args: Opener())
+    monkeypatch.setattr(company_apps.time, "sleep", delays.append)
+    assert company_apps.download_icon(icon_url) == icon
+    assert delays == [30, 60, 90]
+    output = capsys.readouterr()
+    assert icon_url not in output.out + output.err
+    assert "private server unavailable" not in output.out + output.err
+
+
+def test_icon_outage_is_bounded_and_keeps_private_errors_out_of_logs(tmp_path, monkeypatch, capsys):
+    from urllib.error import URLError
+    from scripts import company_apps
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "app").mkdir()
+    monkeypatch.setenv("TICO_COMPANY_APPS", json.dumps([ENTRY]))
+    monkeypatch.setenv("GITHUB_ENV", str(tmp_path / "env"))
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    attempts, delays = [], []
+
+    class Opener:
+        def open(self, request, timeout):
+            attempts.append(request.full_url)
+            raise URLError(ENTRY["url"])
+
+    monkeypatch.setattr(company_apps, "build_opener", lambda *args: Opener())
+    monkeypatch.setattr(company_apps.time, "sleep", delays.append)
+    assert main(["configure", "--company", key(ENTRY)]) == 1
+    assert len(attempts) == 8
+    assert delays == [30, 60, 90, 120, 120, 120, 120]
+    assert not (tmp_path / "app/company-icon.png").exists()
+    assert not (tmp_path / "app/company-config.json").exists()
+    output = capsys.readouterr()
+    assert all(value not in output.out + output.err for value in ENTRY.values())
+
+
+def test_icon_permission_error_fails_without_retry(monkeypatch):
+    from urllib.error import HTTPError
+    from scripts import company_apps
+
+    class Opener:
+        def open(self, request, timeout):
+            raise HTTPError(request.full_url, 403, "Forbidden", {}, None)
+
+    monkeypatch.setattr(company_apps, "build_opener", lambda *args: Opener())
+    monkeypatch.setattr(company_apps.time, "sleep", lambda *args: pytest.fail("Permanent errors must not retry"))
+    with pytest.raises(HTTPError):
+        company_apps.download_icon(ENTRY["url"] + ENTRY["icon_url"])
+
+
 def test_local_check_keeps_company_identity(tmp_path):
     import os
     from pathlib import Path
@@ -151,3 +229,22 @@ def test_public_workflow_and_company_ciphertext_artifact_boundary():
     assert "release" in release["jobs"]["macos-assets"]["needs"]
     assert "release" in release["jobs"]["desktop-assets"]["needs"]
     assert release["jobs"]["companies"]["strategy"]["fail-fast"] is False
+
+
+def test_optional_release_branches_start_after_core_publication():
+    from pathlib import Path
+    import yaml
+
+    root = Path(__file__).resolve().parents[2]
+    jobs = yaml.safe_load((root / ".github/workflows/release.yml").read_text())["jobs"]
+
+    def ancestors(job):
+        needs = jobs[job].get("needs", [])
+        if isinstance(needs, str):
+            needs = [needs]
+        return set(needs).union(*(ancestors(parent) for parent in needs))
+
+    core = {"validated", "runner-changes", "release"}
+    assert ancestors("release") == core - {"release"}
+    for job in jobs.keys() - core:
+        assert "release" in ancestors(job), f"{job} competes with core publication for job slots"

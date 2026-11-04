@@ -11,8 +11,11 @@ import os
 import re
 import subprocess
 import sys
+import time
 import uuid
+from http.client import IncompleteRead
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import build_opener, HTTPRedirectHandler, Request
 
@@ -105,6 +108,28 @@ class SafeRedirect(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def download_icon(icon_url):
+    # A company server may be restarting for the release while its desktop build starts.
+    for attempt in range(1, 9):
+        try:
+            with build_opener(SafeRedirect()).open(Request(icon_url), timeout=30) as response:
+                icon = response.read(1024 * 1024 + 1)
+        except (URLError, TimeoutError, ConnectionError, IncompleteRead) as exc:
+            if isinstance(exc, HTTPError) and exc.code not in (408, 429) and not 500 <= exc.code < 600:
+                raise
+            if attempt == 8:
+                raise
+            wait_s = min(attempt * 30, 120)
+            # Remote errors can contain private company URLs; report only the attempt and delay.
+            print(f"::warning::Company icon download failed (attempt {attempt}/8); retrying in {wait_s}s",
+                  file=sys.stderr, flush=True)
+            time.sleep(wait_s)
+            continue
+        if len(icon) > 1024 * 1024 or not icon.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise Invalid("Company icon must be a PNG up to 1 MB")
+        return icon
+
+
 def configure(entry, publishing=False):
     # No company identity is passed in process arguments or artifact names.
     base = url(entry.get("runner_url") or entry["url"])
@@ -121,11 +146,7 @@ def configure(entry, publishing=False):
     icon_url = entry["icon_url"]
     if icon_url.startswith("/"):
         icon_url = entry["url"].rstrip("/") + icon_url
-    with build_opener(SafeRedirect()).open(Request(icon_url), timeout=30) as response:
-        icon = response.read(1024 * 1024 + 1)
-    if len(icon) > 1024 * 1024 or not icon.startswith(b"\x89PNG\r\n\x1a\n"):
-        raise Invalid("Company icon must be a PNG up to 1 MB")
-    Path("app/company-icon.png").write_bytes(icon)
+    Path("app/company-icon.png").write_bytes(download_icon(icon_url))
     version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?(?:\+[A-Za-z0-9.-]+)?", version):
         raise Invalid("Company builds require a version tag")

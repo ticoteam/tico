@@ -439,7 +439,7 @@ The workflow then:
 - attaches the Mac runner and relay, `tico-runner-{macos-arm64,macos-x86_64}.gz`. No gate part runs on a Mac, so they
   are not built by validation: when `runner-rs` (its harness manifests included) and `relay-rs` did not change since the previous
   release, its Mac binaries are published with this one (a checkout checks a binary's `--build-id`, the source
-  fingerprint). When they did change, the `macos` job builds them beside the publication and `macos-assets` adds them
+  fingerprint). When they did change, the `macos` job builds them after the publication and `macos-assets` adds them
   to the published release, then rewrites both checksum files. Until then a Mac checkout's update says `waiting`
   (runner_support/release_update.py `binary_pending`) and tries again, instead of failing and waiting hours;
 - checks each validated image says it is `vX.Y.Z`, then points `ghcr.io/ticoteam/{tico,tico-runner,tico-updater}:vX.Y.Z`
@@ -457,7 +457,10 @@ rebuilds and pushes one small layer per image.
 
 ## Desktop apps follow the release
 
-The desktop app never holds up the server release. The Release workflow compares the tag with the previous release
+The desktop app never holds up the server release. Only `validated`, `runner-changes` and `release` run before core
+publication; the Mac binaries, desktop, recorder and company build branches start afterwards so their fan-out cannot
+compete with publication for job slots. A manual rebuild of an already published tag still runs those branches when
+`release` is skipped. The Release workflow compares the tag with the previous release
 tag: when nothing the shell is built from changed (`app/`, `scripts/app_release.py`, `scripts/company_apps.py` and the
 two desktop workflows), it builds nothing and copies the previous release's desktop files and `latest.json` onto the new
 release, with the manifest's URLs moved to the new tag. The app keeps its earlier version, so installed apps are not
@@ -583,7 +586,7 @@ images from the same release as the UI. Preserve inbound links when moving pages
 
 ## Company apps
 
-A version tag whose shell changed builds, beside the generic desktop app, `.github/workflows/company-app.yml` for
+A version tag whose shell changed builds, after core publication and beside the generic desktop app, `.github/workflows/company-app.yml` for
 each configured company: its macOS universal DMG and signed updater archive, Windows NSIS
 installer with signature, and Linux AppImage with signature plus Debian package. The app version
 is stamped from the tag. Company builds restore the generic build's Rust cache (compiled dependencies and the Tauri CLI)
@@ -616,6 +619,9 @@ files, public GitHub release assets or job summaries. Each list entry has these 
 
 `runner_url` and `prefix` are optional. `prefix` must match the server's storage prefix.
 `icon_url` is an HTTPS PNG URL or a path on `url`. URLs require HTTPS except loopback HTTP.
+Builds retry transient icon download errors up to eight times, waiting 30, 60, 90, then at most 120 seconds between
+attempts, so a server restarting for the update can recover. Permanent HTTP errors and invalid or oversized PNGs fail
+immediately; retry logs contain no company URL or remote error text.
 The UUID must remain stable across renames to preserve installed preferences and login state.
 
 Company apps put nothing in the macOS menu bar; the Dock shows the company logo with the
