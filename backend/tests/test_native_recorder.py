@@ -196,7 +196,7 @@ def test_recorder_sends_one_action_item_to_a_bot_and_files_the_meeting(api, tmp_
         body = tasks[0]["body"]
         assert f"“{COMMITMENT}”" in body and "Transcript around it:" in body
         assert "sent by" in body and "from Tico Recorder" in body
-        assert f"#/meetings/live={output['live_id']}" in body
+        assert f"#/meetings/live/{output['live_id']}" in body
         hidden = api.get(f"/api/v2/tasks/{sent['task_id']}", headers={"Authorization": "Bearer cara-test"})
         assert hidden.status_code in (403, 404)
 
