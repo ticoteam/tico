@@ -91,8 +91,18 @@ async function visualHandshake(browser) {
   assert.equal(await page.locator('iframe.vcard-frame').count(), 0);
   assert.deepEqual(reads, [], 'boot has not rendered a visual before the bridge ACK');
   const firstRead = page.waitForResponse(response => new URL(response.url()).origin === VISUAL);
+  // A pinned page drawn before the ACK is an Open card, and becomes its frame once the shell trusts the address.
+  assert.equal(await page.evaluate(src => {
+    const slot = document.createElement('div'); slot.id = 'pin-test';
+    slot.append(window.pageCard({file_id:'p1', title:'Plan', version:1, updated_at:'2026-01-01T00:00:00Z', src}, {size:'small'}));
+    document.body.append(slot);
+    return slot.querySelectorAll('.pg-card:not(.pg-framed) .pg-open').length;
+  }, VISUAL+'/visuals/'+TOKEN), 1, 'an untrusted page is an Open card');
   await ack(1, true);
   await page.locator('iframe.vcard-frame[src]').waitFor();
+  await page.locator('#pin-test .pg-card.pg-framed iframe.page-frame').waitFor();
+  assert.equal(await page.locator('#pin-test .pg-card').count(), 1, 'the pinned page is drawn again in place');
+  await page.evaluate(() => document.getElementById('pin-test').remove());
   await firstRead;
   assert.ok(reads.includes(VISUAL));
   // The open's timing goes to the shell once, as the page and kinds of read, never the bot, task or person.
@@ -104,7 +114,7 @@ async function visualHandshake(browser) {
   assert.ok(boot.marks.boot <= boot.marks.roster && boot.marks.roster <= boot.marks.route);
   assert.ok(boot.server.some(read => read.path === '/api/employees'));
   for (const read of boot.server) {
-    assert.match(read.path, /^\/api\/[a-z0-9:/-]*$/);
+    assert.match(read.path, /^\/api(\/v2)?\/([a-z][a-z-]*|:id)(\/:id)*$/, "the resource, then only :id");
     assert.doesNotMatch(read.path, /ops|ana|t1/, read.path);
     assert.ok(Number.isInteger(read.ms));
   }
@@ -405,6 +415,8 @@ let browser;
   assert.deepEqual(posted.filter(([name]) => name === 'windowMode'), [], 'the page no longer asks the shell for a window mode');
   assert.deepEqual(posted.filter(([name]) => name === 'visualOrigin'), [], 'older shells never receive the new command');
   assert.deepEqual(posted.filter(([name]) => name === 'bootTiming'), [], "nor the open's timing");
+  // The report is made once the page settles, which can come after the checks above.
+  await page.waitForFunction(() => window.ticoBootTiming, null, {timeout: 25000});
   const timing = await page.evaluate(() => window.ticoBootTiming);
   assert.equal(timing.route, '#/tasks', 'it stays in the page');
   assert.ok(timing.settled && timing.marks['paint-fresh'] >= timing.marks.route, 'the tasks page settles');
