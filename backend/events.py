@@ -2045,13 +2045,16 @@ def install(app, store, auth, task_views, task_view):
                     if beat.refused():
                         yield "event: expired\ndata: {}\n\n"
                         return
-                    wait = min(remaining, max(0.0, every - (time.monotonic() - quiet_since)))
+                    # Traffic can postpone a keepalive; access checks still have their own 60-second deadline.
+                    watch_wait = max(0.0, 60 - (time.monotonic() - (watch.checked_at or time.monotonic())))
+                    wait = min(remaining, watch_wait, max(0.0, every - (time.monotonic() - quiet_since)))
                     if await doorbell.wait(generation, wait):
                         # A thread page is a chat for this purpose: its messages stay prompt, inside the 1-second target.
                         await asyncio.sleep(gathered(GATHER_CHAT_SECONDS if conversations or threads_scope else GATHER_SECONDS,
                                                      read_at))
                     # Due whether or not the bell rang: rings for changes this viewer may not see send nothing.
-                    if time.monotonic() - quiet_since >= every:
+                    if time.monotonic() - quiet_since >= every or watch_wait <= 0 or (
+                            watch.checked_at is not None and time.monotonic() - watch.checked_at >= 60):
                         beat.start()
                         yield ": keepalive\n\n"
                         if beat.pending:
