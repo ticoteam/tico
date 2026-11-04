@@ -132,6 +132,22 @@ def test_the_flat_timeline_is_the_open_subtree_in_time_order_paged_by_the_same_c
     assert len(small["messages"]) >= 1 and small["next_cursor"]
 
 
+def test_a_flat_page_has_the_viewers_read_mark_in_the_root_and_each_sub_thread_on_it(api):
+    thread = new_thread(api)
+    a = say(api, thread["id"], "A")
+    side = sub_thread(api, a["id"])
+    b = say(api, side["id"], "B in the side thread")
+    c_ = say(api, thread["id"], "C")
+    assert "read_marks" not in timeline(api, thread["id"], "ben-test")
+    assert timeline(api, thread["id"], "ben-test", flat=1)["read_marks"] == {thread["id"]: 0, side["id"]: 0}
+    post(api, f"threads/{thread['id']}/read", {"seq": c_["seq"]}, token="ben-test")
+    post(api, f"threads/{side['id']}/read", {"seq": b["seq"]}, token="ben-test")
+    marks = timeline(api, thread["id"], "ben-test", flat=1)["read_marks"]
+    assert marks == {thread["id"]: c_["seq"], side["id"]: b["seq"]}
+    # A page with no sub-thread message still has the root's mark.
+    assert timeline(api, thread["id"], "ben-test", flat=1, limit=1)["read_marks"] == {thread["id"]: c_["seq"]}
+
+
 def test_a_flat_timeline_leaves_out_an_archived_sub_thread(api):
     thread = new_thread(api)
     a = say(api, thread["id"], "A")
@@ -171,7 +187,7 @@ def test_a_bot_whose_computer_is_offline_cant_reply_with_a_fix(api):
                   (machine["runner_id"],))
     [row] = bot_status(api, thread["id"])
     assert row["actor"] == "bot:ops" and row["state"] == "cant_reply" and row["detail"]
-    assert row["fix"]["href"] == "#/computer/" + machine["runner_id"]
+    assert row["fix"]["href"] == "#/settings/computers"
     assert timeline(api, thread["id"])["bot_status"] == [row]
 
 
@@ -190,7 +206,7 @@ def test_a_refused_claim_says_why_and_where_to_fix_it(api):
         assert queue_refusals.state(c, "ops")["reason"] == "not_ready"
     [row] = bot_status(api, thread["id"])
     assert row["state"] == "cant_reply" and "Test Mac" in row["detail"]
-    assert row["fix"]["href"] == "#/computer/" + machine["runner_id"]
+    assert row["fix"]["href"] == "#/settings/computers"
 
 
 def test_a_working_bot_names_its_run_and_up_next_never_names_a_place_the_viewer_cannot_read(api):

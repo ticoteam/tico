@@ -37766,7 +37766,7 @@
     },
     "/api/v2/threads/{thread_id}/timeline": {
       "get": {
-        "summary": "The thread in tree order, a page of its own messages at a time (`cursor` is the seq from next_cursor), each followed by its sub-thread's messages; a long branch has a `collapsed` row with the cursor that reads the rest. With `flat=1`: the thread and every open sub-thread under it the viewer reads, in time order, all at depth 0, paged the same way. Each message has `reply_to` and `routed`; the first page has `bot_status`",
+        "summary": "The thread in tree order, a page of its own messages at a time (`cursor` is the seq from next_cursor), each followed by its sub-thread's messages; a long branch has a `collapsed` row with the cursor that reads the rest. With `flat=1`: the thread and every open sub-thread under it the viewer reads, in time order, all at depth 0, paged the same way, with `read_marks`. Each message has `reply_to` and `routed`; the first page has `bot_status`",
         "operationId": "getThreadTimeline",
         "parameters": [
           {
@@ -69229,6 +69229,13 @@
               "$ref": "#/components/schemas/ThreadBotStatusRow"
             },
             "description": "First page only: the bots the root waits on, as `GET .../bot-status` gives them"
+          },
+          "read_marks": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "`flat` only: the viewer's last_read_seq in the root and in each thread a message on the page is in (0: read nothing)"
           }
         },
         "required": [

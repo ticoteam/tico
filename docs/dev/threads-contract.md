@@ -485,7 +485,9 @@ per viewer, so a client reads it from its loaded rows or the next timeline read.
 
 `GET .../timeline?flat=1`: the thread and its whole readable open subtree, in `seq` order, every message at
 `depth` 0 with no `sub_thread` branches; the same cursor (a seq), `limit`, byte cap, hidden-row folding and
-per-message check as the tree view.
+per-message check as the tree view. A flat page has no `sub_thread` summaries, so it carries `"read_marks": {"<thread
+id>": <the viewer's last_read_seq>}` for the root and each thread a message on the page is in (0 where the viewer has
+read nothing; one query, `threads.read_marks`): a client reads each message against its own thread's mark.
 
 ### 4.10 Bot status (`backend/thread_bot_status.py`)
 `GET /api/v2/threads/{id}/bot-status` → `{"bots": [...]}` for the thread's root, and the same list as `bot_status` on
@@ -495,14 +497,14 @@ has not posted in the root since; a delivery with no live job or running attempt
 first:
 ```json
 {"actor": "bot:legal", "name": "Legal", "state": "working|up_next|cant_reply", "detail": "...",
- "since": "<wait start>", "run_id": "<attempt id>|null", "fix": {"label": "Fix", "href": "#/computer/<id>"}|null}
+ "since": "<wait start>", "run_id": "<attempt id>|null", "fix": {"label": "Fix", "href": "#/settings/computers"}|null}
 ```
 - `working`: its run for this root is running; `detail` is the run's current step (its last tool or progress line,
   "Writing a reply", "Starting").
 - `up_next`: it is running elsewhere; "Finishing <task title>" or "Finishing # <thread title>" only when the viewer
   reads that task or thread, else "Busy with other work".
 - `cant_reply`, `fix` set: paused or draining → "Paused" (bot Info); its computer offline or none → "Its computer is
-  offline"; out of budget or quota → "Out of budget" (`#/finance`); no sign-in for its tool → "Claude sign-in needed on
+  offline" (Settings > Devices, `#/settings/computers`, as for a missing sign-in); out of budget or quota → "Out of budget" (`#/finance`); no sign-in for its tool → "Claude sign-in needed on
   <computer>" (the tool's login name); the loop guard capped it → "Waiting: too many bot turns this hour"; any other
   claim refusal → its `health.HELD` words. Refusals are the scheduler's `queue-refusal:<bot>` record (one per bot,
   carrying its computer), written only when the reason changes.
@@ -696,7 +698,7 @@ with no display name.
 | `GET /api/v2/threads?cursor=&limit=&sort=` | `threads.sidebar(c, viewer, cursor=None, limit=50, sort=None)` → `{"attention": [...], "threads": [...], "dms": [...], "bot_dms": {...}, "next_cursor"}`, ranked before it is paged: roots with an open Needs attention item for the viewer (`thread_attention.items`: mention, ask, an unread DM with another person in it, held post) or capped wakes the viewer can manage, then unread, then recent, newest first in each. `sort=recent` puts everything after Needs attention newest first; `sort=important` (the app's default) orders it by each root's `importance` (1-10, backend/thread_rank.py: a Decide pass ranks roots with new messages, at most once an hour each; never ranked = 5), highest first, then newest, and leaves out noise: level 1, and a task's thread whose task is finished or that no person owns or asked for. Every row carries `importance` (0 = noise by rule). A task's thread (audience `task`) is a candidate only while it has unread for the viewer (a person's message past their mark, or a delivery to them): parties and posters are no reason, and the filter is part of the same indexed query, so the page and its `next_cursor` agree with the rows. `attention`: the first group's rows on this page, capped ones with `"capped": n, "capped_since"`; the app shows it as Inbox. `bot_dms` (first page only): `{bot actor: unread}` for the viewer's DMs with one bot and no one else (`threads.bot_dm_unread`), which are not Needs attention: the Team list shows each count on its bot, whose page holds the DM. `person_dms` (first page only): the same for DMs with one person (`threads.person_dm_unread`). Each root row sums its live subtree for this viewer: `me.unread`, `me.activity`, `last_message_at`, and `activity_seq` (the newest `seq` under it). `cursor` is opaque |
 | `GET /api/v2/threads/{id}` | `threads.get(c, viewer, thread_id)` → thread view + `"breadcrumb": [{"id","title"}]` |
 | `GET /api/v2/threads/{id}/bot-status` | `thread_bot_status.status(c, viewer, root)` → `{"bots": [...]}` (§4.10) |
-| `GET /api/v2/threads/{id}/timeline?cursor=&limit=&flat=` | `threads.timeline(c, viewer, thread_id, cursor=None, limit=50, max_bytes=..., flat=False)` → `{"thread", "breadcrumb", "messages": [...], "next_cursor", "bot_status"}` (`bot_status` on the first page; `flat`: §4.9; every message has `reply_to` and `routed`); `next_cursor` and `limit` count the thread's own messages; each is followed by its sub-thread's rows in tree order (§5). Each message carries `depth` (its thread's depth in the tree: 0 in a root, 1 in a sub-thread), and a parent carries `"sub_thread": {"id", "title", "count", "last_seq", "last_read_seq", "unread", "more"}` (`count` and `unread` only of messages the viewer reads; `more` is how many are collapsed) |
+| `GET /api/v2/threads/{id}/timeline?cursor=&limit=&flat=` | `threads.timeline(c, viewer, thread_id, cursor=None, limit=50, max_bytes=..., flat=False)` → `{"thread", "breadcrumb", "messages": [...], "next_cursor", "bot_status", "read_marks"}` (`bot_status` on the first page; `flat` and its `read_marks`: §4.9; every message has `reply_to` and `routed`); `next_cursor` and `limit` count the thread's own messages; each is followed by its sub-thread's rows in tree order (§5). Each message carries `depth` (its thread's depth in the tree: 0 in a root, 1 in a sub-thread), and a parent carries `"sub_thread": {"id", "title", "count", "last_seq", "last_read_seq", "unread", "more"}` (`count` and `unread` only of messages the viewer reads; `more` is how many are collapsed) |
 | `POST /api/v2/threads/{id}/read {seq}` | `threads.mark_read` |
 | `POST /api/v2/threads/{id}/read-all` | `threads.mark_all_read` |
 | `GET /api/v2/threads/search?q=` | T2 (FTS5), filtered by `threads.readable` per message |

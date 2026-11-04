@@ -168,7 +168,8 @@ def _blocked(c, bot, location, refusal):
     slug = row.get("slug") or bot
     machine = location.get("machine") or {}
     computer = machine.get("runner_id")
-    computer_href = "#/computer/" + computer if computer else None
+    # Settings > Devices lists every computer, with its sign-ins: there is no page for one computer.
+    computer_href = "#/settings/computers" if computer else None
     if row.get("state") != "active" or c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1",
                                                  (bot,)).fetchone():
         return PAUSED, _fix("#/bot/" + slug + "/more")

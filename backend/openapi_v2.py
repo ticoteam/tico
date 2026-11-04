@@ -2616,7 +2616,10 @@ SCHEMAS.update({
                            "messages": items({"type": "object"}), "next_cursor": "n",
                            "bot_status": {"type": "array", "items": ref("ThreadBotStatusRow"),
                                           "description": "First page only: the bots the root waits on, as "
-                                                         "`GET .../bot-status` gives them"}},
+                                                         "`GET .../bot-status` gives them"},
+                           "read_marks": {"type": "object", "additionalProperties": {"type": "integer"},
+                                          "description": "`flat` only: the viewer's last_read_seq in the root and in "
+                                                         "each thread a message on the page is in (0: read nothing)"}},
                           required=["thread", "messages"]),
     "ThreadMembers": obj({"members": items(obj({"actor": "s", "role": "s", "added_by": "n", "created_at": "s"},
                                                required=["actor", "role"])),
@@ -2673,7 +2676,7 @@ STABLE.extend([
     ("/api/v2/threads/{thread_id}/timeline", "get", "Threads", "getThreadTimeline",
      "The thread in tree order, a page of its own messages at a time (`cursor` is the seq from next_cursor), each followed by its sub-thread's messages; a long branch has a `collapsed` row with the cursor that reads the rest. "
      "With `flat=1`: the thread and every open sub-thread under it the viewer reads, in time order, all at depth 0, "
-     "paged the same way. Each message has `reply_to` and `routed`; the first page has `bot_status`", "ThreadTimeline"),
+     "paged the same way, with `read_marks`. Each message has `reply_to` and `routed`; the first page has `bot_status`", "ThreadTimeline"),
     ("/api/v2/threads/{thread_id}/bot-status", "get", "Threads", "getThreadBotStatus",
      "The bots the thread's root waits on, at most 5, oldest wait first: `working` (its current step), `up_next` "
      "(finishing other work first) or `cant_reply` (what stops it, and `fix`)", "ThreadBotStatus"),
