@@ -18,9 +18,9 @@ const {t} = require('./support/load.cjs');
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     // Under automation the kept screen is off unless the page asks for it, as this script does.
-    await page.addInitScript(() => { window.EventSource = undefined; window.ticoBootSnap = true; });
+    await context.addInitScript(() => { window.EventSource = undefined; window.ticoBootSnap = true; });
     let person = 'ana', held = null;
-    await page.route('**/*', async route => {
+    await context.route('**/*', async route => {
       const p = new URL(route.request().url()).pathname;
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
@@ -142,6 +142,14 @@ const {t} = require('./support/load.cjs');
     const second = await keptAs(entry => entry?.route === '#/tasks', 'the new person gets their own');
     assert.equal(JSON.parse(second.who)[2], 'bo');
 
+    // A second tab of the same org, open and settled before the sign-out, has its own screen to keep.
+    const other = await context.newPage();
+    other.on('pageerror', e => errors.push(e.message));
+    await other.goto('https://tico-ui.test/#/tasks', {waitUntil: 'domcontentloaded'});
+    await other.getByRole('heading', {name: 'Tasks', exact: true}).waitFor();
+    await other.waitForFunction(() => performance.getEntriesByName('tico:paint-fresh').length === 1);
+    assert.equal(await other.evaluate(() => SNAP.who !== ''), true, 'the other tab would keep its screen');
+
     // Signing out while the copy is up takes it down at once, and leaves no screen behind (the navigation itself is
     // not followed).
     held = [];
@@ -165,6 +173,12 @@ const {t} = require('./support/load.cjs');
     await page.evaluate(() => { bootSnapSave(); window.dispatchEvent(new Event('pagehide')); });
     await page.waitForTimeout(300);
     assert.equal(await kept(), null, 'nothing is kept again after a sign-out in this page');
+    // Nor by the other tab, which never heard a 401: the sign-out reached it, and its leaving keeps nothing.
+    const otherAfter = await other.evaluate(() => { bootSnapSave(); window.dispatchEvent(new Event('pagehide')); return SNAP.who; });
+    assert.equal(otherAfter, '', "the other tab drops whose screen it was");
+    await other.close({runBeforeUnload: true});
+    await page.waitForTimeout(300);
+    assert.equal(await kept(), null, 'a sign-out in one tab bans keeping in every tab open before it');
     assert.deepEqual(errors, []);
     console.log('boot snap: the same person sees their last screen at once, outside #main; nothing private, nobody else, nothing after sign-out');
   } finally { await browser.close(); }
