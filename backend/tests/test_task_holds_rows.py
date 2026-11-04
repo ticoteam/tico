@@ -1,4 +1,4 @@
-"""Migration 0061: a task's holds are task_holds rows (backend/migrations/0061_task_holds.py)."""
+"""Migration 0074: a task's holds are task_holds rows (backend/migrations/0074_task_holds.py)."""
 import importlib
 import sqlite3
 
@@ -6,9 +6,9 @@ import pytest
 
 from backend import hubdb as H, runner_wire, status_values, task_delete, task_holds
 
-HOLDS = importlib.import_module("backend.migrations.0061_task_holds")
+HOLDS = importlib.import_module("backend.migrations.0074_task_holds")
 
-# The tasks table as the release before 0061 left it, cut to the columns this needs.
+# The tasks table as the release before 0074 left it, cut to the columns this needs.
 LEGACY = """
 CREATE TABLE tasks(
  id TEXT PRIMARY KEY, title TEXT, owner_id TEXT, status TEXT, created_at TEXT, updated_at TEXT, blocker_key TEXT,
@@ -18,8 +18,8 @@ CREATE INDEX tasks_snoozed ON tasks(snoozed_until) WHERE snoozed_until IS NOT NU
 CREATE INDEX tasks_blocked_since ON tasks(blocked_since) WHERE blocked_since IS NOT NULL;
 CREATE TRIGGER status_values_tasks_blocked_from_status_ins BEFORE INSERT ON tasks WHEN NEW.blocked_from_status
  IS NOT NULL AND NEW.blocked_from_status NOT IN ('open','review') BEGIN SELECT RAISE(ABORT, 'x'); END;
-CREATE TABLE task_events(id TEXT PRIMARY KEY, task_id TEXT, created_at TEXT, actor TEXT, field TEXT, old TEXT,
- new TEXT, note TEXT);
+CREATE TABLE history_events(id TEXT PRIMARY KEY, subject_type TEXT, subject_id TEXT, actor_id TEXT, kind TEXT,
+ old TEXT, new TEXT, note TEXT, created_at TEXT);
 """
 GATE = '{"head": "abc123", "kind": "qa", "pr": 7}'
 # The view a task gets from these rows: its holds list and the fields a claim hands a runner.
@@ -47,8 +47,9 @@ def conn(tmp_path):
               "VALUES('snoozed','Later','open','2026-10-01T00:00:00Z','2026-10-02T00:00:00Z','2026-11-03T08:00:00Z',"
               "'human:ana')")
     c.execute("INSERT INTO tasks(id,title,status,created_at,updated_at) VALUES('free','Free','open','x','y')")
-    c.execute("INSERT INTO task_events VALUES('e1','both','2026-10-03T12:00:00Z','human:sam','snoozed_until',NULL,"
-              "'2026-11-09T09:00:00Z','')")
+    c.execute("INSERT INTO history_events(id,subject_type,subject_id,actor_id,kind,old,new,note,created_at) "
+              "VALUES('e1','task','both','human:sam','snoozed_until',NULL,'2026-11-09T09:00:00Z','',"
+              "'2026-10-03T12:00:00Z')")
     yield c
     c.close()
 
@@ -134,3 +135,44 @@ def test_a_task_trashed_with_hold_columns_comes_back_with_its_holds(conn):
         "until_at": None, "from_step_id": None, "from_status": "doing", "gate": None, "cleared_at": None}
     assert task_holds.open_hold(conn, "free", "snoozed") is None
     assert "snoozed_until" in task_delete.HANDLED["tasks"]     # not refused as a value with no column
+
+
+def test_a_run_record_with_no_trigger_gets_the_default_and_a_bare_lease_stays_bare(conn):
+    # Migration 0072 left a run record whose turn had no trigger with a NULL trigger: 0074 gives it turn_start's
+    # default. A bare lease that never recorded anything has none, and stays NULL.
+    conn.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, job_id TEXT, bot_id TEXT, trigger TEXT, settled_at TEXT, "
+                 "exit TEXT, summary TEXT, outcome TEXT, input_tokens INTEGER)")
+    conn.executemany("INSERT INTO attempts VALUES(?,?,?,?,?,?,?,?,?)", [
+        ("record", None, "ops", None, "2026-10-02T00:00:00Z", "ok", None, None, None),
+        ("usage", None, "ops", None, None, None, None, None, 120),
+        ("bare", "job-1", "ops", None, None, None, None, None, None),
+        ("kept", None, "ops", "task", "2026-10-02T00:00:00Z", "ok", None, None, None),
+    ])
+    up(conn)
+    assert dict(conn.execute("SELECT id, trigger FROM attempts").fetchall()) == {
+        "record": "message", "usage": "message", "bare": None, "kept": "task"}
+
+
+def test_a_copy_that_moves_fewer_holds_than_the_columns_hold_stops_the_migration(conn, monkeypatch):
+    monkeypatch.setattr(HOLDS, "_copy", lambda conn, have: None)
+    conn.execute("BEGIN IMMEDIATE")
+    with pytest.raises(RuntimeError, match="0 open holds for 3 held tasks"):
+        HOLDS.up(conn)
+    conn.execute("ROLLBACK")
+    assert "snoozed_until" in {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
+    assert conn.execute("SELECT count(*) FROM sqlite_master WHERE name='task_holds'").fetchone()[0] == 0
+
+
+def test_a_hold_hubdb_wrote_before_the_migration_is_not_copied_twice(conn):
+    # hubdb.migrate makes task_holds before the migration files run, so a row can be there already: the copy skips a
+    # task's hold that has an open row, and the count reads only the tasks whose hold columns are set.
+    conn.execute(HOLDS.TABLE)
+    for statement in HOLDS.INDEXES:
+        conn.execute(statement)
+    conn.execute("INSERT INTO task_holds(task_id,kind,cause,created_at) "
+                 "VALUES('both','blocked','manual','2026-10-04T01:00:00Z')")
+    conn.execute("INSERT INTO task_holds(task_id,kind,created_at) VALUES('free','snoozed','2026-10-04T02:00:00Z')")
+    up(conn)
+    assert [tuple(r) for r in conn.execute(
+        "SELECT task_id, kind, cause FROM task_holds WHERE task_id='both' AND released_at IS NULL ORDER BY kind")] == [
+        ("both", "blocked", "manual"), ("both", "snoozed", None)]

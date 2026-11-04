@@ -431,7 +431,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "tags": tag_gate, "task_tags": by_task,
         "task_delegations": by_task,
         "task_requesters": by_task, "task_reminders": by_task, "task_assets": by_task, "task_links": by_task, "task_roles": by_task,
-        # A task's moves to Blocked and snoozes, open and past (migration 0061), read with their task.
+        # A task's moves to Blocked and snoozes, open and past (migration 0074), read with their task.
         "task_holds": by_task,
         # A relation is read only when the caller may read both of its tasks.
         "task_relations": "from_task IN (SELECT id FROM tasks) AND to_task IN (SELECT id FROM tasks)",

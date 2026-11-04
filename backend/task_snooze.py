@@ -1,7 +1,7 @@
 """Snoozing a task until a date.
 
 A snoozed task says "nobody plans to get to this until then". It keeps its status, owner, goal and
-place; only an open 'snoozed' hold is added (a task_holds row, migration 0061: until_at, by_id, reason, which a task row
+place; only an open 'snoozed' hold is added (a task_holds row, migration 0074: until_at, by_id, reason, which a task row
 reads as `snoozed_until`, `snoozed_by_id` and `snoozed_note` through hubdb.TASKS). Until that moment:
 
 - it is left out of the board, task lists (`GET /api/v2/tasks` unless `snoozed=all|only`), Needs you

@@ -2,7 +2,7 @@
 
 A hold is a mark on the ticket, not a place on the board: the ticket keeps the step it is in, and its wire status is
 waiting while it is held, so wakes, claims and the build clock see it held. The hold is the task's open 'blocked' row in
-task_holds (migration 0061; a task row reads it as blocked_since, blocked_reason, blocked_kind, blocked_from_step,
+task_holds (migration 0074; a task row reads it as blocked_since, blocked_reason, blocked_kind, blocked_from_step,
 blocked_from_status, blocked_gate through hubdb.TASKS): when it began and where clearing it returns the ticket, so
 clearing a hold never skips a review gate.
 """
@@ -13,7 +13,7 @@ from datetime import datetime
 
 def ensure(c):
     from . import hubdb as H
-    # The build clock. The hold itself is a task_holds row (migration 0061).
+    # The build clock. The hold itself is a task_holds row (migration 0074).
     H.add_column(c, 'tasks', 'building_started_at', 'TEXT')
     H.add_column(c, 'tasks', 'building_seconds', 'REAL NOT NULL DEFAULT 0')
 

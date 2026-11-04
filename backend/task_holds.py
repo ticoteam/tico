@@ -15,7 +15,7 @@ of them changes (`refresh`):
 The stranded sweep (hubdb.sweep_stranded) counts from the blocked hold's `cleared_at` (when the last hold cleared) or
 its `created_at` (when a wait on nothing began), never from a note: a note cannot keep a task waiting on nothing.
 
-A task's own holds, its move to Blocked and its snooze, are rows of `task_holds` (migration 0061), one open row of each
+A task's own holds, its move to Blocked and its snooze, are rows of `task_holds` (migration 0074), one open row of each
 kind; `put`, `change` and `release` below write them, and a task row read through hubdb.TASKS carries the open ones'
 fields under the names the code always read (`FIELDS`).
 """
@@ -365,7 +365,7 @@ def public(row, mark=None):
     return found
 
 
-# ----------------------------------------------------------------------------- the rows (migration 0061)
+# ----------------------------------------------------------------------------- the rows (migration 0074)
 # A task's open hold of each kind is one task_holds row. Code reads a task with its holds' fields under the names
 # below (hubdb.TASKS): a hold's column -> the field a task row carries.
 FIELDS = {
