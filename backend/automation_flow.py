@@ -27,7 +27,7 @@ MAX_DESTINATIONS = 20   # a flow's named chains that a filter rule's `to` may se
 MAX_DESTINATION_ACTIONS = 10
 CHOICE_MODES = ("draft", "reply")   # what a choose step's body does: a draft for review, or a reply sent
 MAX_CHOICES = 20                    # destinations one choose step picks between
-COLORS =("amber", "orange", "violet", "green", "blue", "teal", "pink", "gray", "red")
+COLORS = ("amber", "orange", "violet", "green", "blue", "teal", "pink", "gray", "red")
 NEXTS = ("end", "rule", "step")   # what a filter rule does once its actions ran (rule_next)
 MAX_TEXT = 8000
 MAX_PROMPT = 32000           # an llm or bot_turn prompt (an Inbox Manager's instructions can run long)
@@ -407,7 +407,7 @@ def check(flow):
     _check_steps(flow.get("steps", []), "steps", set(), 0, counts, targets)
     _need(not (owner.startswith("group:") and next(choosing(flow.get("steps")), None)), "steps",
           "a group's flow has no turn to choose with: a choose step needs a person's or a bot's flow")
-    out ={**flow, "owner": owner, "enabled": flow.get("enabled", True) is not False,
+    out = {**flow, "owner": owner, "enabled": flow.get("enabled", True) is not False,
            "builtin": flow.get("builtin") is True, "steps": flow.get("steps", [])}
     if out.get("destinations") is None:
         out.pop("destinations", None)
