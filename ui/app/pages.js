@@ -19,8 +19,9 @@ const pageBotName = x => {
   return bot && botRow(bot) ? botDisplayName(bot) : x.bot_name || bot || '';
 };
 // `link: false` inside a card that is itself a link: the replacing page's title without its own link.
+const pageLockHTML = p => p.restricted ? '<span class="nav-icon pg-lock" aria-label="Restricted">lock</span> ' : '';
 function pageStatusHTML(p, {link = true} = {}) {
-  const lock = p.restricted ? '<span class="nav-icon pg-lock" aria-label="Restricted">lock</span> ' : '';
+  const lock = pageLockHTML(p);
   if (p.replaced_by_id) {
     const title = esc(p.replaced_by_title || 'a newer page');
     return `<div class="pg-status pg-replaced">${lock}Replaced by ${link ? `<a href="${esc(pageHref(p.replaced_by_id))}">${title}</a>` : title}</div>`;
@@ -195,7 +196,7 @@ async function pageFullBody(state) {
   if (current && card.querySelector('iframe')) { body.replaceChildren(card); return; }
   card.querySelector('.pg-open')?.remove();
   delete card.pageData;                         // this view draws its own frame again (nativeVisualRepaint)
-  if (!current) card.querySelector('.pg-status').textContent = `v${state.shown} · an older version`;
+  if (!current) card.querySelector('.pg-status').innerHTML = pageLockHTML(p) + `v${state.shown} · an older version`;
   const box = document.createElement('div');
   box.className = 'pg-box pg-preview';
   box.innerHTML = skelRows(4);
