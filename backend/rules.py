@@ -148,7 +148,7 @@ WAKE_EVENTS = {
     "backlog": "updates held for the bot while it was away",
     "feed": "a Slack channel's messages were handed to the bot to read",
     "digest": "the bot's held updates were let go as one digest",
-    "exceptions": "the type manager's exceptions list has a new entry",
+    "exceptions": "the task roundup lists one of the type manager's exceptions",
 }
 # Events that wait as a note when no rule says otherwise: the next run carries them. A row may wake on any of them.
 NOTE_EVENTS = {
@@ -233,7 +233,7 @@ def _profile_rules():
     # steps, its subtasks' results, checks, verdicts and late or backlog notices wait for that run.
     add("manager", "profile_manager_assignment", "assignment", WAKE, "a task was given to it")
     add("manager", "profile_manager_request", "review_request", WAKE, "a sign-off was asked of it")
-    add("manager", "profile_manager_exceptions", "exceptions", WAKE, "its exceptions list has a new entry")
+    add("manager", "profile_manager_exceptions", "exceptions", WAKE, "the roundup lists one of its exceptions")
     timers("manager", OWN_TIMERS + OWN_WORK)
     add("manager", MANAGER_NOTE, "*", NOTE, "anything else: ticket news waits for its next run")
     add("responder", "profile_responder_note", "*", NOTE, "anything but a person")
@@ -407,6 +407,8 @@ def event_of(actor, kind, refs, body, floor=None):
     key = wake_rules.awaited(refs)
     if key:
         return AWAITED_EVENTS[key][0]
+    if refs.get("roundup_exceptions") is True and refs.get("wake") == "task_roundup":
+        return "exceptions"             # a manager's roundup list with one of its exceptions wakes it as one
     wake = refs.get("wake")
     if isinstance(wake, str):
         wake = WAKE_ALIASES.get(wake, wake)

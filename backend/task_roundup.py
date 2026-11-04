@@ -154,8 +154,10 @@ def send(c, plan):
     with isolated(c, WAKE, slug):
         try:
             # no_mentions: a task's title may say "@ana", which is text in the list, not a mention, so no person is delivered it.
-            message = H._write_message(c, H.KEEPER, actor, text, _room(c, slug), "notice",
-                                       RT.stamp({"wake": WAKE, "no_mentions": True}, WAKE), None, None)
+            # A list with an exception on it wakes its manager as one (rules.event_of); the rest waits as a note.
+            refs = {"wake": WAKE, "no_mentions": True, "roundup_exceptions": any(item["exception"] for item in shown)}
+            message = H._write_message(c, H.KEEPER, actor, text, _room(c, slug), "notice", RT.stamp(refs, WAKE),
+                                       None, None)
         except H.Refused:
             return 0                    # not told this run: a later run may try again
         if not _delivered(c, slug, message):
@@ -230,10 +232,10 @@ def _shared(shared, name, make):
     return shared[name]
 
 
-def _item(tid, line, key, *, due=False, event=None):
+def _item(tid, line, key, *, due=False, event=None, exception=False):
     """One line on a list: the task it names (None when it names none), its text, the registry key it is recorded under
     once sent, whether it consumes a due follow-up, and an event written with it (action, target, detail) or None."""
-    return {"tid": tid, "line": line, "mark": key, "due": due, "event": event}
+    return {"tid": tid, "line": line, "mark": key, "due": due, "event": event, "exception": exception}
 
 
 def _list(c, slug, at, shared):
@@ -387,7 +389,7 @@ def _exceptions(c, slug, actor, at, shared):
             else:
                 subject = entry.get("bot") or entry.get("step") or entry["kind"]
                 line, tid = f"- {subject}: {entry['cause']}, since {since}", None
-            out.append((EXCEPTIONS, entry["since"], _item(tid, line, key)))
+            out.append((EXCEPTIONS, entry["since"], _item(tid, line, key, exception=True)))
     return out
 
 
@@ -582,12 +584,16 @@ def _running(c, slug, row):
 
 
 def _delivered(c, slug, message):
-    """Whether the written message reached its bot. A bot run by a computer is woken only by the job its message started
-    (backend/enqueue.py). An external inbox (hermes and the other external harnesses, with no computer) gets no job: it reads
-    its inbox, so a message written there is delivered."""
-    if _external(c, slug):
+    """Whether the written message reached its bot. A bot run by a computer is woken by the job its message started
+    (backend/enqueue.py), or else the rules hold it as a quiet note the bot reads on its next run (wake_rules.hold): that is
+    delivered too, so a manager's lines without an exception wait there and are not written again each run. An external
+    inbox (hermes and the other external harnesses, with no computer) gets no job: it reads its inbox, so a message written
+    there is delivered."""
+    from . import wake_rules
+    if _external(c, slug) or _queued(c, message["id"]):
         return True
-    return _queued(c, message["id"])
+    refs = message.get("refs") if isinstance(message, dict) else None
+    return bool(isinstance(refs, dict) and refs.get(wake_rules.MARK))
 
 
 def _external(c, slug):
