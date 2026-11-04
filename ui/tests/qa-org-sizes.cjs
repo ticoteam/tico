@@ -229,9 +229,13 @@ async function pickerCase(browser, name) {
     await page.route('**/*', route => route.fulfill({contentType: 'text/html', body: PICKER[name]}));
     await page.goto('https://portal.test/desktop/orgs', {waitUntil: 'domcontentloaded'});
     try {
-      const wide = await page.evaluate(() => [...document.body.querySelectorAll('*')]
-        .filter(el => el.getBoundingClientRect().right > innerWidth + 0.5).slice(0, 6)
-        .map(el => `${el.tagName.toLowerCase()}.${String(el.className).split(' ').join('.')} right=${Math.round(el.getBoundingClientRect().right)}`));
+      // Text that runs past its box counts too: a long unbroken email in a block widens the page without widening the box.
+      const wide = await page.evaluate(() => [...document.body.querySelectorAll('*')].map(el => {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          return {el, right: Math.max(el.getBoundingClientRect().right, range.getBoundingClientRect().right)};
+        }).filter(({right}) => right > innerWidth + 0.5).slice(0, 6)
+        .map(({el, right}) => `${el.tagName.toLowerCase()}.${String(el.className).split(' ').join('.')} right=${Math.round(right)}`));
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
       record(where, 'the page does not scroll sideways', overflow <= 0, `${overflow}px wider than 390; ${json(wide)}`);
       const form = await page.locator('form[action="/desktop/orgs/done"]').count();
