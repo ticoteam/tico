@@ -307,14 +307,17 @@ function threadSettingsOpen(view) {
       }
       const group = audience === 'team' ? sel?.value || '' : null;
       if (audience === 'team' && !group) return;
-      const focus = el.name;
       void save(async path => patch(path, {audience, audience_group_id: group})).then(ok => {
         if (!ok) return;
-        draw();   // the Slack row goes with who can read
-        box.querySelector(focus === 'group' ? '[name=group]' : '[name=audience]:checked')?.focus();
+        if (box.querySelector('[name=group]')?.value) box.querySelector('[name=group] option[value=""]')?.remove();
+        // Only the Slack row goes with who can read: the other rows may hold changes still saving. A fresh host, so
+        // its listeners are not added twice.
+        const host = box.querySelector('.tcn-host'), fresh = host?.cloneNode(false);
+        if (host) { host.replaceWith(fresh); renderThreadConnect(view.thread, fresh); }
       });
     } else if (el.id === 'ths-pin') {
-      void save(async path => patch(path, {pinned_for_everyone: el.checked}));
+      const on = el.checked;
+      void save(async path => patch(path, {pinned_for_everyone: on}));
     } else if (el.id === 'ths-keep') {
       const days = el.value ? Number(el.value) : null;
       void save(async path => ({retention_days: days, ...(await patch(path, {retention_days: days}))}), {rail: false});

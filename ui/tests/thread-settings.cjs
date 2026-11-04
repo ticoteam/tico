@@ -53,7 +53,7 @@ async function open(browser, {phone = false} = {}) {
       org_groups: [{id: 'ops', name: 'Ops team', my_access: {see: true, read: true, write: true}}, {id: 'eng', name: 'Engineering', my_access: {see: true, read: true, write: true}}]});
     if (p === '/api/v2/events') return route.abort();
     if (p === '/api/v2/slack/links') return seen.slack++, json({links: [], available: false, next_cursor: null});
-    const rail = () => Object.values(threads).filter(t => t.audience === 'team' && !t.archived_at);
+    const rail = () => Object.values(threads).filter(t => ['team', 'members'].includes(t.audience) && !t.archived_at);
     if (p === '/api/v2/threads' && method === 'GET') return json({attention: [], threads: rail(), dms: [threads['t-dm']], bot_dms: {}, next_cursor: null});
     if (p === '/api/v2/threads/rail') return json({pinned: rail().filter(t => t.me.pinned), threads: rail().filter(t => !t.me.pinned), catch_up: 0, next_cursor: null, dms: {}});
     if (p === '/api/v2/threads/catch-up') return json({items: [], count: 0, next_cursor: null});
@@ -77,7 +77,7 @@ async function open(browser, {phone = false} = {}) {
       if (!what && method === 'PATCH') {
         const b = body(); seen.patches.push(b);
         if (b.title === 'Refused') return json({error: {code: 'invalid', detail: 'Not that name'}}, 422);
-        if (b.title === 'Slow plan') await new Promise(r => setTimeout(r, 600));
+        if (b.title === 'Slow plan' || b.audience === 'members') await new Promise(r => setTimeout(r, 600));
         const {archived, ...rest} = b;
         Object.assign(t, rest, 'archived' in b ? {archived_at: archived ? at(0) : null} : {});
         return json(t);
@@ -212,11 +212,18 @@ let browser = null;
     await dlg.locator('[data-notify="live"][aria-pressed="true"]').waitFor();
     assert.deepEqual(seen.follows, ['PUT:digest', 'PUT:muted', 'PUT:live']);
 
-    // Pin for everyone is a switch; Keep messages a select.
+    // Pin for everyone is a switch; Keep messages a select. Pin turned on while a slow audience save is out stays on:
+    // the audience save redraws only the Slack row.
+    slack = seen.slack;
+    await dlg.locator('input[name=audience][value=members]').check();
+    await until(page, () => seen.patches.length === 1, 'the slow audience');
     await dlg.locator('#ths-pin').click();
-    await until(page, () => seen.patches.length === 1, 'the pin');
-    assert.deepEqual(seen.patches[0], {pinned_for_everyone: true});
-    assert.equal(await dlg.locator('#ths-pin').isChecked(), true);
+    await until(page, () => seen.patches.length === 2, 'the pin');
+    assert.deepEqual(seen.patches, [{audience: 'members', audience_group_id: null}, {pinned_for_everyone: true}]);
+    await until(page, () => seen.slack > slack, 'the Slack row redraws after the slow audience');
+    assert.equal(await dlg.locator('#ths-pin').isChecked(), true, 'pin still shows on');
+    assert.equal(await dlg.locator('input[name=audience]:checked').getAttribute('value'), 'members');
+    seen.patches.splice(0, 1);
     await dlg.locator('#ths-keep').selectOption('90');
     await until(page, () => seen.patches.length === 2, 'keep 90');
     assert.deepEqual(seen.patches[1], {retention_days: 90});
@@ -232,7 +239,7 @@ let browser = null;
     dlg = await openPanel(page, 't-plan');
     assert.equal(await dlg.locator('#ths-keep').inputValue(), '');
     assert.equal(await dlg.locator('#ths-pin').isChecked(), true);
-    assert.equal(await dlg.locator('input[name=audience]:checked').getAttribute('value'), 'team');
+    assert.equal(await dlg.locator('input[name=audience]:checked').getAttribute('value'), 'members');
 
     // The one-off actions run and close the panel.
     await dlg.locator('[data-ths="read"]').click();
