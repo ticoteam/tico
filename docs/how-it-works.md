@@ -595,8 +595,8 @@ window and a gap between sweeps, and it grants no right.
 | **Custom** | what its rules say | its rules | what its settings say |
 
 A bot's own clock still wakes it: a routine or schedule wakes a Reviewer, Lead, Manager and Monitor, and a due date or a
-snooze ending wakes a Lead, Manager and Monitor; a Responder has no routines. The task roundup's lists go only to bots with sweeps on (a Doer, or a
-Custom bot that keeps them on). Doers pull open tasks themselves; the others start a task only when it is handed to them.
+snooze ending wakes a Lead, Manager and Monitor; a Responder has no routines. The task roundup's task lines go only to bots with sweeps on (a Manager or a Doer, or a
+Custom bot that keeps them on); a Reviewer, Lead, Responder or Monitor is listed only its questions and its own follow-up times. Doers pull open tasks themselves; the others start a task only when it is handed to them.
 **Custom** copies the profile's rows into the Rules table, marked as the profile's, to edit there; choosing a named profile
 again deletes them after a confirm. Set a profile in **Settings → Bots → Edit**, with `hub bot profile <bot> [name]`, MCP
 `hub_bot_profile`, or `POST /api/v2/bots/{bot}/profile` with `expected_revision` (`GET /api/v2/profiles` lists the choices

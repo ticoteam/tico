@@ -158,7 +158,7 @@ def effective(config):
 def summary(name, spec):
     """One line saying what the numbers mean for this profile."""
     from .wake_presets import _duration
-    sweep = f"; a stall check or routine runs at most every {_duration(spec['sweep_seconds'])}" if spec["sweeps"] else ""
+    sweep = f"; a routine runs at most every {_duration(spec['sweep_seconds'])}" if spec["sweeps"] else ""
     if name == DOER or (name == CUSTOM and spec["sweeps"]):
         return f"News about its tasks waits up to {_duration(spec['batch_seconds'])}{sweep}."
     if name == CUSTOM and spec["digest_hour"] is not None:     # a Lead's description and hour picker say it already

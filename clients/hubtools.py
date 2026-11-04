@@ -4416,7 +4416,7 @@ _PROFILES = ["doer", "reviewer", "lead", "manager", "responder", "monitor", "cus
        "sweep_seconds": {"type": "integer", "minimum": 0, "maximum": 604800, "description": "Least time between two runs of a sweep"},
        "digest_hour": {"type": "integer", "minimum": 0, "maximum": 23, "description": "Hour of a lead's daily digest, team time"},
        "pulls": {"type": "string", "enum": ["all", "review", "none"], "description": "Custom: which open tasks it starts by itself"},
-       "sweeps": {"type": "boolean", "description": "Custom: whether stall checks and automations may wake it"},
+       "sweeps": {"type": "boolean", "description": "Custom: whether the task roundup lists it its task sweep lines (late, backlog, assigned, restate, quiet tasks)"},
        "takes": {"type": "string", "enum": ["all", "review", "watcher", "none"], "description": "Custom: which tasks it may be given"},
        "confirm_drop_rules": {"type": "boolean", "description": "Leaving custom: delete the rules it copied"}},
       ("bot",), writes=True)

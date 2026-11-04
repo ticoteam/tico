@@ -137,15 +137,15 @@ ACTIONS = {
     "resend_questions": ("record questions unanswered for two business days as lines on their bots' task roundup",
                          ("question", "remind", "unanswered", "roundup")),
     "start_task": ("start the highest-ranked eligible assigned task in its own session", ("task", "start", "assigned", "On Deck", "prerequisite")),
-    "recover_assignment": ("wake an unattempted assignment once after one hour; show it in Health and its manager's Needs you two hours later",
-                           ("task", "assigned", "not started", "wake", "health", "manager")),
+    "recover_assignment": ("list an unattempted assignment once on its owner's task roundup after one hour; show it in Health and its manager's Needs you two hours later",
+                           ("task", "assigned", "not started", "roundup", "health", "manager")),
     "free_dead_starts": ("free turns proven dead: process gone and lease lost, or stopped before they started",
                          ("turn", "start", "dead", "stuck", "free", "busy")),
     "turns_finding": ("keep one Health finding per busy-turns incident and hand what it cannot fix to BotOps",
                       ("health", "turns", "incident", "botops", "busy")),
-    "send_task_roundup": ("send each bot one list of its tasks: a follow-up that came due, an unanswered question, a restate, "
-                          "a late ticket, an exception, a backlog, a missed update or a quiet task",
-                         ("tasks", "roundup", "wake", "missed", "quiet", "update", "late", "backlog", "exceptions")),
+    "send_task_roundup": ("send each bot one list of its tasks: a follow-up that came due, an unanswered question, an assignment "
+                          "not started, a restate, a late ticket, an exception, a backlog, a missed update or a quiet task",
+                         ("tasks", "roundup", "wake", "missed", "quiet", "update", "late", "backlog", "exceptions", "assigned")),
     "tell_earlier_messages": ("tell each manager of a bot once when its Home still holds closed history",
                               ("thread", "earlier", "closed", "history", "managers", "notice")),
     "wake_digest_bots": ("start one run for each bot with new messages in the threads it follows on digest",
@@ -192,7 +192,7 @@ JOBS = [
         "Starts eligible assigned work on a free computer turn; respects task caps, usage holds and computer capacity.",
         HOUSEKEEPING, "When a turn is free", records=False, then=("start_task",), when="free_turn"),
     Job("assignment_recovery", "Recover unstarted assignments",
-        "One recovery wake after an hour without an attempt, including Leads; waits and snoozes stay parked. "
+        "One roundup line after an hour without an attempt, for managers and doers; waits and snoozes stay parked. "
         "Still unstarted two hours later appears in Health and the manager's Needs you. Execution gates still apply.",
         HOUSEKEEPING, "Every 10 seconds", 10, records=False, then=("recover_assignment",)),
     Job("stale_review", "Stale ticket review",
@@ -264,9 +264,10 @@ JOBS = [
         "the task roundup lists those.",
         HOUSEKEEPING, "Every minute", 60, then=("drop_unreadable",)),
     Job("task_roundup", "Task roundup",
-        "Sends each bot one list of its tasks: a follow-up time that came, a question that went unanswered, a task to "
+        "Sends each bot one list of its tasks: a follow-up time that came, a question that went unanswered, an assignment not started, a task to "
         "restate, a Dev ticket late at its step, a manager's engineering exceptions, a step's backlog, an update it may have "
-        "missed, or a quiet task. Plain code: no model is called, and nothing to list is a quiet run.",
+        "missed, or a quiet task. Managers and doers get every line; a reviewer, lead, responder or monitor gets its questions "
+        "and its own follow-up times only. Plain code: no model is called, and nothing to list is a quiet run.",
         HOUSEKEEPING, "Three times a day (6am, noon, 6pm company time)", 21600, control=True, then=("send_task_roundup",)),
     Job("turn_fixer", "Turn fixer",
         "Frees turns proven dead, keeps one Health finding per busy-turns incident and hands what it cannot fix to "

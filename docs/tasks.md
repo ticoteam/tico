@@ -176,10 +176,11 @@ Hand a ready batch of On Deck tickets to builders in one pass. Each assigned tic
 own session and can start on a free turn; it does not need another Lead turn for each ticket.
 The ordinary task cap and prerequisite checks still apply to the whole batch.
 
-If an open assignment has no attempt after one hour, **Recover unstarted assignments** wakes its
-owner once, including a Lead. Waiting, snoozed and deferred work is excluded. The recovery wake
-does not bypass a task cap, an explicit automatic-start off switch or any execution hold. If it
-still has no attempt two hours after that wake, Health and its manager's Needs you show
+If an open assignment has no attempt after one hour, **Recover unstarted assignments** lists it once on its
+owner's task roundup as "Assigned, not started". Only sweeping bots get that line (managers and doers; a lead,
+reviewer, responder or monitor does not), and the assignment's own wake is unchanged. Waiting, snoozed and deferred
+work is excluded. The roundup line does not bypass a task cap, an explicit automatic-start off switch or any
+execution hold. If it still has no attempt two hours after that line, Health and its manager's Needs you show
 **Assigned, not started**, the task title and its current refusal reason. Only readers of that
 task see it; being the manager does not grant access to a private task. An attempt, a wait or
 completion clears the item. A new assignment starts its own one-hour clock.
@@ -378,12 +379,15 @@ that parks it warns the bot.
 
 The task roundup leaves a task off its bot's list while the bot has a run queued or running on it, or while the task
 waits on something recorded: a blocker, an open subtask, a pending approval, an unanswered question, a due date, a
-snooze, a stored resume, a pull request link armed with `--wake-once` or a milestone wait. A bot whose profile has no
-stall sweeps is never listed. The Task Manager's stalled-task list does not use these skips, so a task no check lists
+snooze, a stored resume, a pull request link armed with `--wake-once` or a milestone wait. A bot whose profile has its
+sweeps off (a reviewer, lead, responder or monitor) is listed only its unanswered questions and its own follow-up
+times. The Task Manager's stalled-task list does not use these skips, so a task no check lists
 still reaches its report.
 
-Tico does not wake a bot once for each stalled task, and does not escalate repeated stalls to BotOps. Each bot gets at
-most one list in each run of the task roundup (three times a day by default, at 6am, noon and 6pm company time): its lines (a follow-up time that came, an unanswered question, a task to restate, a late Dev ticket,
+Tico does not wake a bot once for each stalled task, and does not escalate repeated stalls to BotOps. The task roundup
+is the one grouped wake for a bot's tasks: each bot gets at most one list in each run (three times a day by default,
+at 6am, noon and 6pm company time), with its lines (a follow-up time that came, an unanswered question, an assignment
+not started, a task to restate, a late Dev ticket,
 an engineering exception, a backlog, a missed update or a quiet task; see [System routines](system-routines.md)). The list goes only to the bot, in its own notice room with Tico, so the roundup
 never tells a person about a task. A private task is named by its id alone: who set its follow-up and its note, and what
 changed on it, stay out of the line.
@@ -1218,12 +1222,12 @@ a 422, a steer, queue or goal by someone not on the task a 403, a goal on a task
 is saved.
 
 Tico no longer spot-checks running work one task at a time. A bot's open or doing task that makes no progress appears
-in its task roundup, one list per run (three times a day by default). A Dev ticket long at a working step is listed on its manager's task roundup, and again every seven days while it stays late.
+in its task roundup when the bot sweeps, one list per run (three times a day by default). A Dev ticket long at a working step is listed on its manager's task roundup, and again every seven days while it stays late.
 
 Human messages still wake the bot as before ([details](hub-sql.md#what-woke-each-run-and-what-it-did)).
 
 The **Stalled task check** no longer runs. Tico no longer wakes a bot about one quiet task, so Decide reads none of them.
-A quiet task still shows in its bot's task roundup and in the Task Manager's report.
+A quiet task still shows on its bot's task roundup (for a bot that sweeps) and in the Task Manager's report.
 
 `task_goal: on` on a bot (`hub bot update <slug> --task-goal on`, `hub_bot_update`, or the bot definition API; off by
 default) works each task it owns as a goal: the turn carries `task.goal` (the title and its acceptance criteria), and

@@ -170,7 +170,7 @@ def effective(config):
     batch = _duration(spec["batch_seconds"])
     summary = (f"{spec['label']}: finished requests and a person's review comments wait up to {batch}"
                + (" (at most one such wake per " + batch + ")" if spec["batch_scope"] == "bot" else "")
-               + f"; an enabled routine or stall check runs at most every {_duration(spec['sweep_seconds'])}. "
+               + f"; an enabled routine runs at most every {_duration(spec['sweep_seconds'])}. "
                "People, assignments, questions, awaited results, blockers and review requests wake it at once.")
     if own and own.get("digest_hour") is not None:
         summary = (f"The rest of the news arrives once a day, at {own['digest_hour']:02d}:00 team time. "

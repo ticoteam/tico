@@ -42,7 +42,7 @@ def test_a_task_with_a_recorded_wait_names_it_and_a_profile_without_sweeps_still
         c.execute("UPDATE jobs SET state='completed' WHERE bot_id='finance'")
         aged(c, row["id"], 6)
         assert H.recorded_wait(c, task()) is None
-        # A profile with no stall sweeps: the waits read the same, and the stalled list still names the task.
+        # A profile with its sweeps off: the waits read the same, and the stalled list still names the task.
         monkeypatch.setattr(rules, "sweeps_on", lambda conn, bot: False)
         assert row["id"] in [t["id"] for t in H.stalled_tasks(c)]
 

@@ -297,7 +297,7 @@ def test_a_verdict_a_handoff_and_a_child_or_blocker_result_are_a_note_for_a_mana
 
 
 def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_until_it_is_really_idle(api):
-    """A reviewer's profile has no stall sweeps; what its check waits on is read all the same."""
+    """A reviewer's profile has its sweeps off; what its check waits on is read all the same."""
     with api.app.state.store.transaction() as c:
         typ = board(c)
         row = ticket(c, typ, minutes=200)

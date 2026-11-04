@@ -3544,7 +3544,7 @@ def parser():
     s.add_argument("--digest-hour", dest="digest_hour", type=int, help="the hour (0-23, team time) of a lead's daily digest")
     s.add_argument("--pulls", choices=["all", "review", "none"], help="custom: which open tasks it starts by itself")
     s.add_argument("--sweeps", type=lambda v: {"on": True, "off": False}[v], metavar="on|off",
-                   help="custom: whether stall checks and automations may wake it")
+                   help="custom: whether the task roundup lists it its task sweep lines (late, backlog, assigned, restate, quiet tasks)")
     s.add_argument("--takes", choices=["all", "review", "watcher", "none"], help="custom: which tasks it may be given")
     s.add_argument("--confirm-drop-rules", dest="confirm_drop_rules", action="store_true", default=None,
                    help="leaving custom deletes the wake rules it copied into the rules table")
