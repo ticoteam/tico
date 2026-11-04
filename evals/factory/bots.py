@@ -124,7 +124,7 @@ class Bot:
         self.record["at"] = w.now()
         if self.slug in w.steer_bots:
             self.steer()
-        task = attempt.get("task") and w.task(attempt["task"]["id"])
+        task = attempt.get("task")   # the claim's view of the ticket, as start() read it (minutes and kind_of_turn key it)
         self.ends = w.now() + __import__("datetime").timedelta(minutes=self.minutes(task))
         return "started"
 
