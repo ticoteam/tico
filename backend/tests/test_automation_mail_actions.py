@@ -455,6 +455,10 @@ UNSUB_URL = "https://news.example.org/unsub?token=abc"
 UNSUBSCRIBE = {"id": "unsub", "type": "action", "do": "unsubscribe", "args": {}}
 UNSUB_THEN_ARCHIVE = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [
     {"do": "unsubscribe"}, {"do": "archive"}]}]}
+# A new-shaped flow: the unsubscribe is the rule's own action, the archive its destination's.
+UNSUB_TO_TIDY = {"id": "gate", "type": "filter", "rules": [
+    {"when": [], "then": [{"do": "unsubscribe"}], "to": "tidy"}]}
+TIDY = [{"id": "tidy", "name": "Tidy", "then": [{"do": "archive"}]}]
 
 
 @pytest.fixture
@@ -546,6 +550,24 @@ def test_a_chained_unsubscribe_that_never_reports_fails_the_run_and_skips_the_ar
     assert [a["detail"] for a in run["steps"][0]["outputs"]["actions"]] == [
         "no result after 3 tries", "skipped: an earlier action on this message failed"]
     assert unsubscriber == []
+
+
+def test_a_new_shaped_rules_unsubscribe_chains_its_destinations_archive_after_it(api, computer, unsubscriber):
+    """The rule's unsubscribe and its destination's archive are one step's actions on one message, so the archive is
+    claimed only once the unsubscribe reports ok, and the run records both in order."""
+    aid = automate(api, UNSUB_TO_TIDY, destinations=TIDY)
+    computer.sync()
+    first, = claim(api, computer.token)["actions"]
+    assert first["action"] == "unsubscribe"
+    assert claim(api, computer.token)["actions"] == []        # the archive waits: the unsubscribe is out, not done
+    post(api, f"automations/mail-actions/{first['id']}/result", {"ok": True, "detail": "unsubscribed"}, computer.token)
+    second, = claim(api, computer.token)["actions"]
+    assert second["action"] == "archive"
+    post(api, f"automations/mail-actions/{second['id']}/result", {"ok": True, "detail": "archived"}, computer.token)
+    run = last_run(api, aid)
+    assert run["status"] == "ok"
+    assert [(a["detail"], a["from"]) for a in run["steps"][0]["outputs"]["actions"]] == [
+        ("unsubscribed", "rule"), ("archived", "destination")]
 
 
 def test_a_chain_longer_than_the_recursion_limit_settles_and_the_mailbox_still_claims(api, computer):

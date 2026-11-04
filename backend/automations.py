@@ -1740,6 +1740,10 @@ class HubServices:
 
     def act(self, do, args, ctx):
         found = None
+        # A create_task is one occurrence task per producing action: its producer, `<step>@<slot>`, from
+        # automation_engine._filter. Every other action is ordered under the step's own id, so a step's mail actions on
+        # one message form one chain.
+        ident = (ctx.get("producer") or ctx.get("step")) if do == "create_task" else ctx.get("step")
         if do == "create_task":
             owner = str(args.get("owner") or "")
             bot = owner[4:] if owner.startswith("bot:") else "" if ":" in owner else owner
@@ -1752,8 +1756,7 @@ class HubServices:
         for _ in range(RULE_TRIES):
             rule = self._rule_check(do, args, ctx["values"], ctx.get("step"))
             try:
-                result = self._once(ctx, lambda c, rule=rule: self._ruled(c, rule, do, args, ctx["values"],
-                                                                         step=ctx.get("producer") or ctx.get("step")))
+                result = self._once(ctx, lambda c, rule=rule: self._ruled(c, rule, do, args, ctx["values"], step=ident))
                 break
             except TaskMoved:
                 continue                   # rolled back, nothing written or recorded: check it as it is now
