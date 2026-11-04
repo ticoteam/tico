@@ -19,7 +19,6 @@ use std::time::Duration;
 use tauri::webview::{NewWindowFeatures, NewWindowResponse};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
-use tauri_plugin_opener::OpenerExt;
 use url::Url;
 use uuid::Uuid;
 
@@ -203,7 +202,7 @@ fn new_window_handler(app: &App) -> impl Fn(Url, NewWindowFeatures) -> NewWindow
     let opener = app.clone();
     move |url, _| {
         if matches!(url.scheme(), "http" | "https") {
-            let _ = opener.opener().open_url(url.as_str(), None::<&str>);
+            crate::windows::open_in_browser(&opener, &url);
         }
         NewWindowResponse::Deny
     }
