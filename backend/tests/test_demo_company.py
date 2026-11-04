@@ -3,7 +3,7 @@ check behaviour (who owns what, what waits for whom, what every bot has done), n
 
 import re
 import sqlite3
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -47,13 +47,32 @@ def stored(path):
         return out
 
 
+@contextmanager
+def usage_clock_at(moment):
+    """The usage-limit windows read the wall clock when no time is given, so a build that runs across an hour
+    boundary reads two hours and its hourly spend differs. The windows read the moment given for the build."""
+    saved = U.datetime
+
+    class Pinned(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return moment
+
+    U.datetime = Pinned
+    try:
+        yield
+    finally:
+        U.datetime = saved
+
+
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
     """Two builds of the same date, back to back, read before any app has opened either database."""
-    first = demo.build(tmp_path_factory.mktemp("company"), now=NOW)
-    rows = stored(first.db_path)
-    second = demo.build(tmp_path_factory.mktemp("company-again"), now=NOW)
-    return first, rows, stored(second.db_path)
+    with usage_clock_at(NOW):
+        first = demo.build(tmp_path_factory.mktemp("company"), now=NOW)
+        rows = stored(first.db_path)
+        second = demo.build(tmp_path_factory.mktemp("company-again"), now=NOW)
+        return first, rows, stored(second.db_path)
 
 
 @pytest.fixture(scope="module")
