@@ -127,6 +127,8 @@ def test_nothing_leaves_the_machine(built):
                 assert api.get(path).status_code == 200
             assert api.post("/api/v2/market/ask", json={"question": "Who competes with us?"},
                             headers={"Idempotency-Key": "net-1"}).status_code == 200      # falls back to the graph, no model
+            from backend import market
+            assert market.complete.__module__ == "backend.market"   # the demo never replaces the model call for everyone
     server.close()
     assert demo.ATTEMPTS == ["example.com", "93.184.216.34", "api.github.com"]     # only the three we tried
     with pytest.raises(OSError):                                                   # and the block is gone outside

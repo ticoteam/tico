@@ -3321,6 +3321,7 @@ export type ModelSubscription = {
   updated_at: string;
   usage: {
   cost_usd_month: number | null;
+  reason?: string | null;
   resets_at?: string | null;
   used_pct: number | null;
   window: "5h" | "week" | null;
@@ -5170,6 +5171,23 @@ export type TeammateAccessView = {
 };
 };
 
+export type ThreadBotStatus = {
+  bots: Array<ThreadBotStatusRow>;
+};
+
+export type ThreadBotStatusRow = {
+  actor: string;
+  detail: string;
+  fix: {
+  href: string;
+  label: string;
+} | null;
+  name: string;
+  run_id: string | null;
+  since: string;
+  state: "working" | "up_next" | "cant_reply";
+};
+
 export type ThreadBrowse = {
   next_cursor: string | null;
   threads: Array<(ThreadView & {
@@ -5246,13 +5264,16 @@ export type ThreadMessage = {
   edited_at?: string | null;
   hidden?: boolean;
   id: string;
+  in_reply_to?: string | null;
   kind?: string;
   origin_id?: string | null;
   parent_message_id?: string | null;
   recipient_id?: string | null;
   refs?: Record<string, unknown>;
+  reply_to?: ThreadReplyQuote | null;
   revision?: number;
   root_id?: string | null;
+  routed?: ThreadRouted | null;
   sender_id?: string;
   seq: number;
   sub_thread?: Record<string, unknown> | null;
@@ -5277,6 +5298,7 @@ export type ThreadPatch = {
 export type ThreadPost = {
   defer_for?: string | null;
   delivery?: "steer" | "queue" | "defer" | null;
+  in_reply_to?: string | null;
   kind?: string;
   parent_message_id?: string | null;
   refs?: Record<string, unknown>;
@@ -5308,6 +5330,21 @@ export type ThreadReadAll = {
   threads: number;
 };
 
+export type ThreadReplyQuote = {
+  author?: string;
+  author_name?: string;
+  excerpt?: string;
+  hidden?: boolean;
+  id: string;
+};
+
+export type ThreadRouted = {
+  to: Array<{
+  actor: string;
+  name: string;
+}>;
+};
+
 export type ThreadSearch = {
   hits: Array<{
   created_at?: string;
@@ -5330,9 +5367,11 @@ export type ThreadSidebar = {
 };
 
 export type ThreadTimeline = {
+  bot_status?: Array<ThreadBotStatusRow>;
   breadcrumb?: Array<ThreadCrumb>;
   messages: Array<Record<string, unknown>>;
   next_cursor?: string | null;
+  read_marks?: Record<string, number>;
   thread: ThreadView;
 };
 
@@ -7581,6 +7620,13 @@ export type GetThreadParams = {
 export type GetThreadBody = never;
 export type GetThreadResponse = ThreadView;
 
+/** GET /api/v2/threads/{thread_id}/bot-status */
+export type GetThreadBotStatusParams = {
+  thread_id: string;
+};
+export type GetThreadBotStatusBody = never;
+export type GetThreadBotStatusResponse = ThreadBotStatus;
+
 /** GET /api/v2/threads/home/{actor} */
 export type GetThreadHomeParams = {
   actor: string;
@@ -7591,6 +7637,7 @@ export type GetThreadHomeResponse = ThreadView;
 /** GET /api/v2/threads/{thread_id}/timeline */
 export type GetThreadTimelineParams = {
   cursor?: string | null;
+  flat?: number;
   limit?: number | null;
   max_bytes?: number | null;
   thread_id: string;
@@ -10533,6 +10580,7 @@ export type UploadThreadMessageParams = {
 export type UploadThreadMessageBody = {
   defer_for?: string | null;
   delivery?: "steer" | "queue" | "defer" | null;
+  in_reply_to?: string | null;
   kind?: string;
   parent_message_id?: string | null;
   text?: string;

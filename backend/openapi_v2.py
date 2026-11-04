@@ -64,7 +64,9 @@ EVENTS_DESCRIPTION = (
     "- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md §9); an `activity` one also carries "
     "`counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` "
     "(how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row "
-    "without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`.\n"
+    "without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the "
+    "root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as "
+    "`GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n"
     "- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. "
     "With `needs=changes`: `count`, `version`, each bot's count (`bots`), and the ids `changed` and `removed` "
     "since `base` (null when more than 100 moved: read the list whole); read the changed items with "
@@ -2451,7 +2453,8 @@ SCHEMAS['ModelSubscription'] = obj({
     'status': {'enum': ['new', 'working', 'needs_reconnect']}, 'status_detail': 's', 'status_at': 'n', 'preview': 's',
     'revision': 'i', 'computers': items({'type': 'string'}),
     'usage': {'anyOf': [obj({'window': {'type': ['string', 'null'], 'enum': ['5h', 'week', None]}, 'used_pct': NUM_N,
-                             'cost_usd_month': NUM_N, 'resets_at': 'n'}, required=['window', 'used_pct', 'cost_usd_month']),
+                             'cost_usd_month': NUM_N, 'resets_at': 'n',
+                             'reason': {'type': ['string', 'null']}}, required=['window', 'used_pct', 'cost_usd_month']),
                         {'type': 'null'}]},
     'added_by': 's', 'added_by_name': 's', 'owner_id': 's', 'owner_name': 's', 'created_at': 's', 'updated_at': 's'},
     required=['id', 'name', 'kind', 'runtime', 'label', 'status', 'status_detail', 'status_at', 'preview', 'revision',
@@ -2598,11 +2601,37 @@ SCHEMAS.update({
                           "revision": "i", "refs": "o", "deleted": "b", "root_id": "n", "origin_id": "n",
                           "parent_message_id": "n", "depth": "i", "hidden": "b", "clipped": "b",
                           "sub_thread": {"type": ["object", "null"], "description": "The sub-thread branching from this "
-                                         "message: {id, count, last_seq, unread, more}"}},
+                                         "message: {id, count, last_seq, unread, more}"},
+                          "in_reply_to": "n",
+                          "reply_to": {"oneOf": [ref("ThreadReplyQuote"), {"type": "null"}],
+                                       "description": "The message this one answers (or a sub-thread message's "
+                                                      "parent): a quote, `{id, hidden: true}` when the viewer does not "
+                                                      "read it, or null"},
+                          "routed": {"oneOf": [ref("ThreadRouted"), {"type": "null"}],
+                                     "description": "Who routing asked to answer this message (`to` empty: nobody); "
+                                                    "null when routing never looked at it"}},
                          required=["id", "seq", "thread_id"]),
+    "ThreadReplyQuote": obj({"id": "s", "author": "s", "author_name": "s",
+                             "excerpt": {"type": "string", "description": "Plain text, at most 120 characters"},
+                             "hidden": "b"}, required=["id"]),
+    "ThreadRouted": obj({"to": items(obj({"actor": "s", "name": "s"}, required=["actor", "name"]))}, required=["to"]),
+    "ThreadBotStatusRow": obj({"actor": "s", "name": "s",
+                               "state": {"type": "string", "enum": ["working", "up_next", "cant_reply"]},
+                               "detail": "s", "since": "s", "run_id": "n",
+                               "fix": {"oneOf": [obj({"label": "s", "href": "s"}, required=["label", "href"]),
+                                                 {"type": "null"}],
+                                       "description": "Where to fix what stops it (cant_reply only)"}},
+                              required=["actor", "name", "state", "detail", "since", "run_id", "fix"]),
+    "ThreadBotStatus": obj({"bots": items(ref("ThreadBotStatusRow"))}, required=["bots"]),
     "ThreadCrumb": obj({"id": "s", "title": "s"}),
     "ThreadTimeline": obj({"thread": ref("ThreadView"), "breadcrumb": items(ref("ThreadCrumb")),
-                           "messages": items({"type": "object"}), "next_cursor": "n"},
+                           "messages": items({"type": "object"}), "next_cursor": "n",
+                           "bot_status": {"type": "array", "items": ref("ThreadBotStatusRow"),
+                                          "description": "First page only: the bots the root waits on, as "
+                                                         "`GET .../bot-status` gives them"},
+                           "read_marks": {"type": "object", "additionalProperties": {"type": "integer"},
+                                          "description": "`flat` only: the viewer's last_read_seq in the root and in "
+                                                         "each thread a message on the page is in (0: read nothing)"}},
                           required=["thread", "messages"]),
     "ThreadMembers": obj({"members": items(obj({"actor": "s", "role": "s", "added_by": "n", "created_at": "s"},
                                                required=["actor", "role"])),
@@ -2657,7 +2686,12 @@ STABLE.extend([
     ("/api/v2/threads/{thread_id}", "patch", "Threads", "updateThread",
      "Rename, archive or unarchive a thread, change who it is for, set how many days a root keeps its messages (`retention_days`, null for good), or pin a root for everyone (`pinned_for_everyone`; never a 1:1 DM, a Home, a task's or a meeting's thread); its managers only", "ThreadView"),
     ("/api/v2/threads/{thread_id}/timeline", "get", "Threads", "getThreadTimeline",
-     "The thread in tree order, a page of its own messages at a time (`cursor` is the seq from next_cursor), each followed by its sub-thread's messages; a long branch has a `collapsed` row with the cursor that reads the rest", "ThreadTimeline"),
+     "The thread in tree order, a page of its own messages at a time (`cursor` is the seq from next_cursor), each followed by its sub-thread's messages; a long branch has a `collapsed` row with the cursor that reads the rest. "
+     "With `flat=1`: the thread and every open sub-thread under it the viewer reads, in time order, all at depth 0, "
+     "paged the same way, with `read_marks`. Each message has `reply_to` and `routed`; the first page has `bot_status`", "ThreadTimeline"),
+    ("/api/v2/threads/{thread_id}/bot-status", "get", "Threads", "getThreadBotStatus",
+     "The bots the thread's root waits on, at most 5, oldest wait first: `working` (its current step), `up_next` "
+     "(finishing other work first) or `cant_reply` (what stops it, and `fix`)", "ThreadBotStatus"),
     ("/api/v2/threads/{thread_id}/members", "get", "Threads", "listThreadMembers",
      "Who a thread is for, a page at a time", "ThreadMembers"),
     ("/api/v2/threads/{thread_id}/members", "post", "Threads", "addThreadMember",
@@ -2665,7 +2699,9 @@ STABLE.extend([
     ("/api/v2/threads/{thread_id}/members/{actor}", "delete", "Threads", "removeThreadMember",
      "Remove a member from a thread (its managers)", "ThreadMemberChange"),
     ("/api/v2/threads/{thread_id}/messages", "post", "Threads", "postThreadMessage",
-     "Post a message in a thread, or in a sub-thread with `parent_message_id`; it passes the org rules first", "ThreadMessage"),
+     "Post a message in a thread, or in a sub-thread with `parent_message_id`; it passes the org rules first. "
+     "`in_reply_to` answers a message of the same root's open subtree the poster reads (422 `reply_target_invalid` "
+     "otherwise): the post stays in this thread, quoting it, and a bot replied to is woken", "ThreadMessage"),
     ("/api/v2/threads/{thread_id}/read", "post", "Threads", "markThreadRead",
      "Read up to `seq` in the thread; the highest mark wins, so a device that is ahead keeps its place", "ThreadRead"),
     ("/api/v2/threads/{thread_id}/read-all", "post", "Threads", "markThreadAndSubthreadsRead",
@@ -2686,8 +2722,8 @@ STABLE.extend([
      "A manager of a bot opens its Home's earlier shared-room messages to the Home's readers; a bot's Home only (422 "
      "otherwise), managers only (403)", "ThreadEarlier"),
     ("/api/v2/uploads/threads/{thread_id}/messages", "post", "Threads", "uploadThreadMessage",
-     "A person's message with files in a thread (multipart: text, titles and the files); each file is linked to the "
-     "message, under the chat upload limit", "ThreadUploaded"),
+     "A person's message with files in a thread (multipart: text, titles and the files, and `in_reply_to` as a post "
+     "takes it); each file is linked to the message, under the chat upload limit", "ThreadUploaded"),
     ("/api/v2/threads/messages/{message_id}/task", "post", "Threads", "makeTaskFromMessage",
      "A task from a message I read: the server copies its text and a link back, and the task is private unless the "
      "thread is company-wide", "TaskResult"),

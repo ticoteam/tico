@@ -292,16 +292,18 @@ function auBoardShape(flow) {
     b.rules = rules.map(r => ({...copy(r), next: auRuleNext(r)}));
     i++;
   }
-  // Questions: every one yes/no, rule k testing question k (yes at its minimum) and ending.
+  // Questions: every one yes/no, and each rule tests one of them (yes at its minimum) and ends. The board lists them in
+  // rule order, not in the order of the questions' keys: the hub stores a Decide's questions with their keys sorted.
   const qd = steps[i], qf = steps[i + 1], qids = inline(qd) ? Object.keys(qd.questions) : [];
   if (qids.length && qf?.type === 'filter' && qids.every(q => qd.questions[q]?.type === 'noul')) {
-    const rules = qf.rules || [];
+    const rules = qf.rules || [], used = new Set();
     if (rules.length !== qids.length) return null;
-    for (let k = 0; k < qids.length; k++) {
-      const r = rules[k], q = qd.questions[qids[k]];
-      if (!r || !one(r, `${qd.out}.${qids[k]}`, 'yes') || !toOk(r) || auRuleNext(r) !== 'end' || typeof q.instructions !== 'string') return null;
+    for (const r of rules) {
+      const qid = qids.find(q => r && one(r, `${qd.out}.${q}`, 'yes')), q = qid && qd.questions[qid];
+      if (!qid || used.has(qid) || !toOk(r) || auRuleNext(r) !== 'end' || typeof q.instructions !== 'string') return null;
+      used.add(qid);
       const min = r.when[0].min;   // kept as stored: no min stays none
-      b.questions.push({id: qids[k], text: q.instructions, ...(min == null || min === '' ? {} : {min}), then: copy(r.then || []), to: r.to || ''});
+      b.questions.push({id: qid, text: q.instructions, ...(min == null || min === '' ? {} : {min}), then: copy(r.then || []), to: r.to || ''});
     }
     Object.assign(b.src, {qd, qf});
     i += 2;
@@ -309,12 +311,16 @@ function auBoardShape(flow) {
   // The LLM: Sort (one choice over destination ids, each answer routed, the last rule the unsure default) or a turn.
   const sd = steps[i], sf = steps[i + 1], sq = inline(sd) ? Object.keys(sd.questions) : [];
   if (sq.length === 1 && sd.questions[sq[0]]?.type === 'choice' && sf?.type === 'filter') {
-    const q = sd.questions[sq[0]], opts = Array.isArray(q.criteria) ? q.criteria.map(String) : Object.keys(q.criteria || {});
-    const rules = sf.rules || [], last = rules[rules.length - 1], field = `${sd.out}.${sq[0]}`;
-    if (typeof q.instructions !== 'string' || !opts.length || rules.length !== opts.length + 1 || !opts.every(o => ids.has(o))) return null;
-    for (let k = 0; k < opts.length; k++) {
-      const r = rules[k];
-      if (!r || !one(r, field, opts[k]) || r.to !== opts[k] || (r.then || []).length || auRuleNext(r) !== 'end') return null;
+    const q = sd.questions[sq[0]], crit = Array.isArray(q.criteria) ? q.criteria.map(String) : Object.keys(q.criteria || {});
+    const rules = sf.rules || [], last = rules[rules.length - 1], field = `${sd.out}.${sq[0]}`, opts = [];
+    if (typeof q.instructions !== 'string' || !crit.length || rules.length !== crit.length + 1 || !crit.every(o => ids.has(o))) return null;
+    // The routes' order is the rules' order (the hub sorts a criteria map's keys): each of the first rules routes one
+    // criterion to its own destination, and every criterion has one.
+    for (let k = 0; k < crit.length; k++) {
+      const r = rules[k], o = (r?.when || [])[0]?.value;
+      if (!r || typeof o !== 'string' || !crit.includes(o) || opts.includes(o) || !one(r, field, o) || r.to !== o
+        || (r.then || []).length || auRuleNext(r) !== 'end') return null;
+      opts.push(o);
     }
     if ((last.when || []).length || !ids.has(last.to) || (last.then || []).length) return null;
     // The board shows one minimum for Sort, so routes with different ones keep the step list.
