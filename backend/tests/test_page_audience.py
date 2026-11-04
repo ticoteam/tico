@@ -172,6 +172,7 @@ def test_access_changes_record_old_and_new_but_readers_never_get_the_names(api):
         assert json.loads(event['detail'])['before'] is None
         assert json.loads(event['detail'])['after']['people'] == ['cara']
         assert not task_privacy.event_readable(c, 'human:cara', event)
+    with api.app.state.store.read() as c:
         sent, cursor, reset, more = events.read(c, api.app.state.auth, Identity('human:cara', 'human'), before, topics=('bots',))
         assert reset and not sent
     assert sql(api, f"SELECT detail FROM events WHERE target='{fid}' AND action='page.access_changed'", 'cara-test') == []
