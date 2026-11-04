@@ -256,7 +256,7 @@ def test_a_copy_of_a_database_from_before_the_history_move_keeps_its_change_logs
     with closing(sqlite3.connect(source)) as c, c:
         # Before 0064: no history table, the five logs are there, and the migration has not run.
         c.execute("DROP TABLE history_events")
-        c.execute("DELETE FROM schema_migrations WHERE version='0064_history_events'")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0064_history_events' AND version NOT LIKE 'legacy_%'")
         for statement in OLD:
             c.execute(statement)
         c.execute("INSERT INTO task_events VALUES('t1','task-1','2026-01-01T00:00:00Z','human:ana','status','open',"

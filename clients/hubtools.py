@@ -3580,7 +3580,7 @@ _AUTO_FIELDS = {
                              "{type: action, do, args}; args by do: draft_reply and send_reply body (or text), to, bot "
                              "(Slack send); forward to, body, webhook; label name (or tag); create_task title, body, owner, due (a date; a due trigger's day by default); "
                              "assign owner, text; note text (or note), bot; wake_bot bot, text; post_update to ([updates, market]), text (none posts what the bot_turn before it wrote); "
-                             "call_webhook webhook, type, data; archive and leave_for_you take none"},
+                             "call_webhook webhook, type, data; archive, leave_for_you and unsubscribe take none"},
 }
 
 
