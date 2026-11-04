@@ -12,7 +12,7 @@ import pytest
 
 from backend import bot_settings as BS
 from backend.enqueue import enqueue_stored
-from backend import scheduler, still_needed, task_check_backs, task_roundup
+from backend import scheduler, still_needed, task_check_backs, task_roundup, team_rules
 from backend import step_backlog as SB
 from backend import task_relations as TR
 from backend.store import H
@@ -1048,3 +1048,73 @@ def test_a_reviewer_is_woken_once_by_its_roundup_and_listed_only_its_returned_qu
         body = only_list(c)
         assert "no answer in two business days" in body
         assert named_in(body) == 1 and "Quiet for" not in body, "a reviewer gets no idle or quiet line"
+
+
+def test_a_missed_start_is_listed_once_for_its_time_and_not_again_on_the_next_run(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        tid = task(c, "Call the venue")["id"]
+        settle(c, tid, "finance", ago(days=2))
+        H._task_event(c, tid, H.KEEPER, "snoozed_until", ago(hours=5), None, "snooze over")
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=? AND kind='snoozed_until'",
+                  (ago(hours=3), tid))
+        complete_jobs(c)
+        assert "finance" in task_roundup.run(c, DAY)["woke"]
+        assert f"{tid[:8]} Call the venue: Snooze ended at 11:00 UTC and nothing has picked it up" in only_list(c)
+        assert "finance" not in task_roundup.run(c, H.shift(DAY, hours=2))["woke"], "listed once for that time"
+
+
+def test_a_deferred_time_that_passed_unfired_is_a_missed_start(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        tid = task(c, "Chase the invoice")["id"]
+        settle(c, tid, "finance", ago(days=2))
+        conv = H.task(c, tid)["conversation_id"]
+        c.execute("INSERT INTO deferrals(id,bot,kind,item,conversation_id,task_id,due_at,created_at,fired_job,settled_at,how,attempt) "
+                  "VALUES(?,?,'task',?,?,?,?,?,NULL,NULL,NULL,NULL)",
+                  (H.new_id(), "finance", tid, conv, tid, ago(hours=2), ago(hours=4)))
+        complete_jobs(c)
+        assert "finance" in task_roundup.run(c, DAY)["woke"]
+        assert f"{tid[:8]} Chase the invoice: Deferred time passed at 12:00 UTC and nothing has picked it up" in only_list(c)
+
+
+def test_a_waiting_task_held_only_by_bots_is_listed_on_its_blocker_bots_list_not_its_owners(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        blocker = H.task_create(c, H.human_actor("ana"), "Finish the menu", "Ops finishes it.", H.bot_actor("ops"))["id"]
+        mine = task(c, "Print the menu")["id"]
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
+        blocks(c, blocker, mine, ago(days=1))
+        complete_jobs(c)
+        complete_jobs(c, "ops")
+        assert task_roundup.run(c, DAY)["woke"] == ["ops"], "the blocker's bot is listed, not the owner"
+        assert f"{mine[:8]} Print the menu: Waiting on you" in only_list(c, "ops")
+        assert lists(c) == [], "the owner is not told about its own blocked task"
+        assert task_roundup.run(c, DAY)["woke"] == [], "listed once per update of the task"
+
+
+def test_a_stale_candidate_the_bot_owns_is_listed_once_while_the_stale_review_rule_is_on(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        team_rules.save(c, "human:ana", {"stale_review": True})
+        tid = task(c, "Ship the export button")["id"]
+        settle(c, tid, "finance", ago(days=9))
+        complete_jobs(c)
+        assert task_roundup.run(c, DAY)["woke"] == ["finance"]
+        body = only_list(c)
+        assert f"{tid[:8]} Ship the export button: Stale check: " in body
+        assert "Quiet for" not in body, "a task is named once, as its first kind"
+        assert task_roundup.run(c, DAY)["woke"] == [], "listed once per update of the task"
+
+
+def test_with_the_stale_review_rule_off_the_same_task_is_only_quiet(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        team_rules.save(c, "human:ana", {"stale_review": False})
+        tid = task(c, "Ship the export button")["id"]
+        settle(c, tid, "finance", ago(days=9))
+        complete_jobs(c)
+        assert task_roundup.run(c, DAY)["woke"] == ["finance"]
+        body = only_list(c)
+        assert f"{tid[:8]} Ship the export button: Quiet for 9 days, nothing waiting on anyone" in body
+        assert "Stale check" not in body
