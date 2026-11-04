@@ -20,23 +20,33 @@ const auApplies = a => !!a?.can_edit && !a.readonly && a.trigger?.type === 'mess
 
 /* The template's rules, questions and destinations with the old llm step as the LLM: its prompt as the instructions and
    its own fields (id, model, out...) kept, as Sort + draft for a person or a bot; a group has no turn to draft with, so
-   its prompt instructs the template's Sort. Read through the board (auBoardShape), so the result is a board; null when
-   the filled flow isn't one. */
+   its prompt instructs the template's Sort. A switched-off step stays off in what replaces it. Read through the board
+   (auBoardShape), so the result is a board unless it is off; null when the filled flow isn't one. A prompt longer than a
+   question's instructions may be (clients/judge.py MAX_INSTRUCTIONS) is refused, never cut. */
+const AU_MAX_INSTRUCTIONS = 8000;
 function auApplyFlow(a, filled) {
   const b = auBoardShape({...filled, trigger: a.trigger});
   if (!b) return null;
   const old = JSON.parse(JSON.stringify(a.steps[0])), as = auOwnerAs(a), L = b.llm;
-  const others = (filled.steps || []).filter(s => s !== b.src.ls);
-  if (others.some(s => s.id === old.id)) old.id = auNewId();
-  if (others.some(s => s.out && s.out === old.out)) delete old.out;
   const prompt = String(old.prompt || '').trim() ? old.prompt : L.prompt;
   if (as) {
+    // Only the rules and the questions stay beside the old step; a Sort it replaces goes.
+    const kept = [b.rules.length && b.src.rules, b.questions.length && b.src.qd, b.questions.length && b.src.qf].filter(Boolean);
+    if (kept.some(s => s.id === old.id)) old.id = auNewId();
+    if (kept.some(s => s.out && s.out === old.out)) delete old.out;
     delete old.choose;
     b.llm = {mode: 'draft', prompt, to: [...L.to], default: L.default, as};
     b.src = {...b.src, ls: old};
     delete b.src.sd; delete b.src.sf; delete b.src.sq;
-  } else b.llm = {...L, prompt};
-  return auBoardFlow(b);
+  } else {
+    if (L.to.length > 1 && [...String(prompt)].length > AU_MAX_INSTRUCTIONS)
+      throw new Error(`The prompt is over ${AU_MAX_INSTRUCTIONS.toLocaleString('en-US')} characters. Shorten it first.`);
+    b.llm = {...L, prompt};
+  }
+  const flow = auBoardFlow(b);
+  // The LLM's part is last: the llm step, a Sort's choice and its routes, or one-destination Sort's single rule.
+  if (old.enabled === false) flow.steps.slice(b.llm.mode === 'sort' && b.llm.to.length > 1 ? -2 : -1).forEach(s => { s.enabled = false; });
+  return flow;
 }
 
 async function auTemplates() {

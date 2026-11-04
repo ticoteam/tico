@@ -2,18 +2,35 @@
 // of an October inbox only (one llm step, no choose), it shows the filled template's destinations, then PATCHes the
 // template's rules, questions and destinations with the old step as the LLM (its prompt as the instructions, its id,
 // out and model kept, Sort + draft as the owner) and the automation renders as the board. A group's inbox gets Sort
-// with the old prompt; a refused fill shows in the dialog and saves nothing; the dialog fits a phone.
+// with the old prompt (8,000 characters at most, refused before Apply past that); a switched-off step's replacement
+// stays off; Blank's Sort, which goes, never renames the old step; a refused fill shows in the dialog and saves
+// nothing; the dialog fits a phone.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {openAutomations, filledTemplate, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs');
 
 const PROMPT = 'Read my mail. Draft replies to customers; leave anything about money for me.';
-const old = (id, owner, inbox) => ({id, name: 'Inbox ' + id, owner_id: owner, enabled: true, builtin: false, version: 3,
+const old = (id, owner, inbox, step = {}) => ({id, name: 'Inbox ' + id, owner_id: owner, enabled: true, builtin: false, version: 3,
   trigger: {type: 'message', inbox},
   steps: [{id: 'read', type: 'llm', as: owner.startsWith('person:') ? 'assistant:' + owner.slice(7) : undefined, prompt: PROMPT,
-    out: 'triage', model: 'claude-sonnet'}]});
+    out: 'triage', model: 'claude-sonnet', ...step}]});
 const tweak = fx => fx.automations.push(old('au_old', 'person:dana', 'dana@acme.example'),
-  old('au_team', 'group:engineering', 'slack:#eng'), old('au_omar', 'person:omar', 'omar@acme.example'));
+  old('au_team', 'group:engineering', 'slack:#eng'), old('au_omar', 'person:omar', 'omar@acme.example'),
+  old('au_off', 'group:engineering', 'slack:#eng', {enabled: false}),
+  old('au_long', 'group:engineering', 'slack:#eng', {prompt: 'x'.repeat(8001)}),
+  old('au_edge', 'group:engineering', 'slack:#eng', {prompt: 'x'.repeat(8000)}),
+  old('au_sorted', 'person:dana', 'dana@acme.example', {id: 'sort', out: 'sort'}));
+// Apply a template and hand back the PATCH it sent.
+async function apply(page, writes, tid) {
+  await openApply(page);
+  await page.locator(`.au-nd [data-tid="${tid}"]`).click();
+  await page.waitForSelector('.au-nd .au-nd-dests li');
+  await page.locator('.au-nd [data-go]').click();
+  await page.waitForFunction(() => !document.querySelector('dialog.au-nd'));
+  const w = writes.filter(x => x.method === 'PATCH');
+  assert.equal(w.length, 1);
+  return w[0].body;
+}
 const open = (browser, id, viewport = DESKTOP) => openAutomations(browser, {viewport, hash: '#/automations/' + id, tweak});
 async function openApply(page) {
   await page.locator('[data-more]').click();
@@ -95,6 +112,54 @@ async function openApply(page) {
       assert.match(await page.locator('.au-nd [data-error]').innerText(), /may not make an automation for person:omar/);
       assert.equal(await page.locator('.au-nd [data-go]').isDisabled(), true);
       assert.equal(writes.length, 0, 'a refused fill saves nothing');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
+    // A switched-off step stays off: the group's Sort that replaces it is saved off, so it shows as steps.
+    {
+      const {page, errors, writes} = await open(browser, 'au_off');
+      await page.waitForSelector('.au-card[data-open="read"]');
+      const body = await apply(page, writes, 'founder');
+      assert.deepEqual(body.steps.slice(-2).map(s => [s.type, s.enabled]), [['decide', false], ['filter', false]]);
+      assert.ok(body.steps.slice(0, -2).every(s => s.enabled !== false));
+      await page.waitForSelector('.au-card[data-open="draft"].off');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
+    // A group's prompt becomes a question's instructions: 8,000 characters apply, one more is refused before Apply.
+    {
+      const {page, errors, writes} = await open(browser, 'au_long');
+      await page.waitForSelector('.au-card[data-open="read"]');
+      await openApply(page);
+      await page.locator('.au-nd [data-tid="founder"]').click();
+      await page.waitForSelector('.au-nd [data-error]:not([hidden])');
+      assert.match(await page.locator('.au-nd [data-error]').innerText(), /over 8,000 characters\. Shorten it first/);
+      assert.equal(await page.locator('.au-nd [data-go]').isDisabled(), true);
+      assert.equal(writes.length, 0);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      const {page, errors, writes} = await open(browser, 'au_edge');
+      await page.waitForSelector('.au-card[data-open="read"]');
+      const body = await apply(page, writes, 'founder');
+      assert.equal(body.steps.find(s => s.questions?.route).questions.route.instructions.length, 8000);
+      await page.waitForSelector('.au-board');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
+    // Blank's Sort goes, so an old step named like it keeps its id and out.
+    {
+      const {page, errors, writes} = await open(browser, 'au_sorted');
+      await page.waitForSelector('.au-card[data-open="sort"]');
+      const body = await apply(page, writes, 'blank');
+      assert.deepEqual(body.steps, [{id: 'sort', type: 'llm', as: 'assistant:dana', prompt: PROMPT, out: 'sort', model: 'claude-sonnet',
+        choose: {to: ['me', 'archive'], default: 'me', mode: 'draft'}}]);
+      assert.deepEqual(body.destinations.map(d => d.id), ['me', 'archive']);
+      await page.waitForSelector('.au-board');
       assert.deepEqual(errors, []);
       await page.close();
     }

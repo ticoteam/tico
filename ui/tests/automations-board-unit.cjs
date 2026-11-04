@@ -172,4 +172,22 @@ const group = plain(context.auApplyFlow(groupOld, groupFill));
 assert.deepEqual(group.steps.map(s => s.type), ['decide', 'filter']);
 assert.equal(group.steps[0].questions.route.instructions, 'My rules.');
 assert.equal(context.auApplyFlow(october, {steps: [], destinations: []}), null, 'a fill that is no board applies nothing');
+// Blank's Sort goes, so an old step named like it keeps its id and out.
+const sortNamed = {...clone(october), steps: [{...october.steps[0], id: 'sort', out: 'sort'}]};
+const kept = plain(context.auApplyFlow(sortNamed, mine(templates.blank))).steps;
+assert.deepEqual(kept.map(s => [s.id, s.out]), [['sort', 'sort']]);
+// A switched-off step stays off in what replaces it: the draft turn, or a group's choice and its routes.
+const offOld = {...clone(october), steps: [{...october.steps[0], enabled: false}]};
+assert.equal(plain(context.auApplyFlow(offOld, mine(templates.founder))).steps.at(-1).enabled, false);
+const offGroup = {...clone(groupOld), steps: [{...october.steps[0], enabled: false}]};
+const og = plain(context.auApplyFlow(offGroup, mine(templates.blank))).steps;
+assert.deepEqual(og.map(s => s.enabled), [false, false]);
+assert.ok(plain(context.auApplyFlow(groupOld, mine(templates.blank))).steps.every(s => s.enabled !== false), 'on stays on');
+// A group's prompt becomes a question's instructions, at most 8,000 characters: longer is refused, never cut.
+const sized = n => ({...clone(groupOld), steps: [{...october.steps[0], prompt: 'x'.repeat(n)}]});
+assert.equal(plain(context.auApplyFlow(sized(8000), mine(templates.blank))).steps[0].questions.route.instructions.length, 8000);
+assert.throws(() => context.auApplyFlow(sized(8001), mine(templates.blank)), /over 8,000 characters/);
+// A person's turn takes the prompt as it is (an llm prompt may run to 32,000).
+const longMine = {...clone(october), steps: [{...october.steps[0], prompt: 'x'.repeat(9000)}]};
+assert.equal(plain(context.auApplyFlow(longMine, mine(templates.blank))).steps[0].prompt.length, 9000);
 console.log('automations-board-unit: ok');
