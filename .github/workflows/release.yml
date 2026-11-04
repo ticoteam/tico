@@ -188,7 +188,7 @@ jobs:
         env:
           PREVIOUS: ${{ needs.runner-changes.outputs.previous }}
         run: |
-          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" -R "$GITHUB_REPOSITORY" -D dist/runner \
+          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" -R "$GITHUB_REPOSITORY" -D dist/runner --clobber \
             -p 'tico-runner-macos-*.gz' -p 'tico-screen-relay-macos-*.gz'
           for platform in macos-arm64 macos-x86_64; do
             for name in tico-runner tico-screen-relay; do
@@ -430,7 +430,7 @@ jobs:
           PREVIOUS: ${{ needs.desktop-changes.outputs.previous }}
         run: |
           mkdir -p dist/desktop
-          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" --dir dist/desktop --pattern '*.dmg' --pattern '*.app.tar.gz' --pattern '*.app.tar.gz.sig' \
+          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" --dir dist/desktop --clobber --pattern '*.dmg' --pattern '*.app.tar.gz' --pattern '*.app.tar.gz.sig' \
             --pattern '*-setup.exe' --pattern '*-setup.exe.sig' --pattern '*.AppImage' --pattern '*.AppImage.sig' --pattern '*.deb' --pattern latest.json
           # Tico-Recorder's files match the patterns above. They belong to recorder-assets, and a copy here could
           # overwrite a newer recorder build of this tag.
@@ -523,7 +523,7 @@ jobs:
           PREVIOUS: ${{ needs.recorder-changes.outputs.previous }}
         run: |
           mkdir -p dist/recorder
-          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" --dir dist/recorder --pattern 'Tico-Recorder*' \
+          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" --dir dist/recorder --clobber --pattern 'Tico-Recorder*' \
             --pattern recorder-latest.json
           sed -i "s#/releases/download/$PREVIOUS/#/releases/download/$GITHUB_REF_NAME/#g" dist/recorder/recorder-latest.json
       - name: Add the recorder files to the release
