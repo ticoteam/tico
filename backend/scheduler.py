@@ -189,9 +189,21 @@ def run_thread_retention(store, auth, at, failures=None):
         run.did(SR.words_of(purged, "message", "Nothing past its time"), quiet=not purged)
 
 
+def run_daily_task_check(store, auth, at, failures=None):
+    # Once a day, each active bot gets at most one list of its tasks with a missed update or gone quiet
+    # (backend/daily_task_check.py). Plain code: no model call, and nothing to list is a quiet run.
+    with SR.recording(store, "daily_task_check", failures) as run:
+        from . import daily_task_check
+        with store.transaction() as c:
+            sent = daily_task_check.run(c, stamp(at))
+        run.did(SR.words_of({"bots woken": sent["woke"], "tasks listed": sent["listed"]}, none="Nothing to list"),
+                quiet=not sent["woke"])
+
+
 QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
          "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report,
-         "engineering_exceptions": run_engineering_exceptions, "bookkeeper_check": run_bookkeeper_check}
+         "engineering_exceptions": run_engineering_exceptions, "bookkeeper_check": run_bookkeeper_check,
+         "daily_task_check": run_daily_task_check}
 
 # The Bookkeeper's Watch (daily) and rules digest (weekly): their own cadence, not controlled jobs (CONTROLS has the
 # a person switches). The Bookkeeper's pause is their off switch.
@@ -777,7 +789,8 @@ class Scheduler:
                     ended = go_live.expire(c, at)
                 run.did(SR.words_of(ended, "go-live ended", "Nothing to end"), quiet=not ended)
         if self.stall_checked is None or at - self.stall_checked >= timedelta(minutes=1):
-            # Every minute: bot tasks nothing is going to move (H.wake_stalled).
+            # Every minute: the checks that stay per minute. A stalled task no longer wakes its bot here; the daily
+            # task check does that (backend/daily_task_check.py).
             self.stall_checked = at
             with SR.recording(self.store, "stall_checks") as run:
                 # Holds include person and approval waits that deliberately
@@ -789,31 +802,6 @@ class Scheduler:
                 for task_id in blocked_ids:
                     with locked('blocked_check:' + task_id) as c:
                         task_blocked.sweep(c, stamp(at), task_ids=[task_id])
-                # Discover candidates in a WAL snapshot, then recheck one task under each
-                # short lock. Unrelated runner writes can progress between tasks.
-                with self.store.read_transaction() as c:
-                    rows = [row for row in [*H.stalled_tasks(c, stamp(at)), *H.spot_check_tasks(c, stamp(at))]
-                            if not H.stall_skip(c, row, stamp(at))]
-                    task_ids = list(dict.fromkeys(row["id"] for row in rows))
-                    try:
-                        from . import stall_triage
-                        triage = stall_triage.inputs(c, stamp(at), rows)
-                    except Exception as exc:
-                        triage = []
-                        failures.append({"stall_triage": type(exc).__name__})
-                # Decide reads the quiet tasks that stand as at their bot's checkpoint (backend/stall_triage.py) on its
-                # own thread, off this lock; the wake loop below sees its verdict from the next minute on.
-                if triage:
-                    stall_triage.tick(self.store, triage, stamp(at))
-                woke = {key: [] for key in ("woke", "escalated", "checked", "stuck", "held", "retried")}
-                # Our earlier task wake must not make the same bot appear busy for
-                # the rest of this pass. Other newly queued work still fences it.
-                queued_here = []
-                for task_id in task_ids:
-                    with locked("stall_check:" + task_id) as c:
-                        result = H.wake_stalled(c, stamp(at), task_ids=[task_id], queued_here=queued_here)
-                        for key, values in result.items():
-                            woke.setdefault(key, []).extend(values)
                 # Dev tickets long at a working step: a status from a quiet owner, the late ones to their manager.
                 aged = {}
                 try:
@@ -854,9 +842,7 @@ class Scheduler:
                         timed_out = verdict_moves.timeouts(c, stamp(at))
                 except Exception as exc:
                     failures.append({"check_timeouts": type(exc).__name__})
-                acted = {"stalled tasks woken": woke.get("woke") or [], "sent to BotOps": woke.get("escalated") or [],
-                         "retried": woke.get("retried") or [], "held for setup": woke.get("held") or [],
-                         "asked for a status": aged.get("asked") or [], "late tickets told": aged.get("late") or [],
+                acted = {"asked for a status": aged.get("asked") or [], "late tickets told": aged.get("late") or [],
                          "checks timed out": timed_out, "tickets allocated": allocated, "backlogs reported": backlogged,
                          "late tickets nobody told": aged.get("untold") or [],
                          "owners woken after an idle turn": nudged,
@@ -876,7 +862,7 @@ class Scheduler:
                 except Exception as exc:
                     failures.append({"drop_unreadable": type(exc).__name__})
         if self.stranded is None or at - self.stranded >= timedelta(hours=1):
-            # Every hour: bot tasks parked as waiting with nothing left to wait on.
+            # Every hour: waiting tasks' holds, and plain asks to a person (backend/task_holds.py, person_asks.py).
             self.stranded = at
             try:
                 # Once after this shipped: every waiting task's reason put right, one wake per bot (task_holds.py).
@@ -885,18 +871,13 @@ class Scheduler:
                     task_holds.backfill(c, stamp(at))
             except Exception as exc:
                 failures.append({"task_holds_backfill": type(exc).__name__})
-            with SR.recording(self.store, "waiting_checks") as run:
-                with self.store.transaction() as c:
-                    moved = H.sweep_stranded(c, stamp(at))
-                run.did(SR.words_of(moved, "task sent back to work", "Nothing stranded"))
             # ...bot tasks waiting on a person with a plain ask become the bot's task blocked on one small subtask
-            # the person owns...
-            try:
+            # the person owns (the waiting checks' whole job now: nothing is sent back to work here)...
+            with SR.recording(self.store, "waiting_checks", failures, "person_asks") as run:
                 from . import person_asks
                 with self.store.transaction() as c:
-                    person_asks.migrate(c)
-            except Exception as exc:
-                failures.append({"person_asks": type(exc).__name__})
+                    moved = person_asks.migrate(c)
+                run.did(SR.words_of(moved, "plain ask made a task", "No plain asks to a person"))
             # ...and bot tasks waiting on a person with no plain ask: their bot is asked once to restate it.
             try:
                 from . import restate_asks

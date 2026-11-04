@@ -114,15 +114,10 @@ Nothing closes on its own. A task with no activity for 7 days gets one **Still w
 
 ## Spot checks
 
-Tico watches running tasks. A task with no progress for 30 minutes gets a status check in its session: checkpoint,
-or mark it blocked or done. With still no progress, Tico retries the bot once. Thirty minutes later, still nothing, the
-Home gets a **stuck** line and BotOps gets a task to find out why ([Work that is waiting](tasks.md#work-that-is-waiting)).
-Tico asks no person about a stuck bot. These count toward the stalled-task limit of three a day.
+Tico does not check running work one task at a time. A task with no progress shows in its bot's daily task check, once a
+UTC day. A Dev ticket long at a working step still gets a status ask from its owner.
 
-An idle task unchanged since its owner's last settled checkpoint skips a plain automatic stall or status check.
-Changed state or a missing checkpoint leaves the check eligible under the usual wake rules. Human messages still
-wake the bot as before, and leased or running sessions keep their recovery checks
-([details](hub-sql.md#what-woke-each-run-and-what-it-did)).
+Human messages still wake the bot as before ([details](hub-sql.md#what-woke-each-run-and-what-it-did)).
 
 ## Task goals
 

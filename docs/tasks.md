@@ -376,27 +376,23 @@ A note alone wakes nobody. A bot's task waiting with no blocker, subtask, approv
 person goes back to open after two hours (unless its due date says to look later), and the update
 that parks it warns the bot.
 
-A stall or status check leaves a task alone while its owner has a live session on it (a leased or running attempt)
-or the task waits on something recorded: a blocker, an open subtask, a pending approval, an unanswered question, a due
-date, a snooze, a stored resume, a pull request link armed with `--wake-once` or a milestone wait. A bot whose profile
-has no stall sweeps is never checked. A task held only by its own stalled subtasks is still checked (below), and the Task
-Manager's stalled-task list does not use these skips, so a task no sweep wakes still reaches its report.
+The daily task check leaves a task off its bot's list while the bot has a run queued or running on it, or while the task
+waits on something recorded: a blocker, an open subtask, a pending approval, an unanswered question, a due date, a
+snooze, a stored resume, a pull request link armed with `--wake-once` or a milestone wait. A bot whose profile has no
+stall sweeps is never listed. The Task Manager's stalled-task list does not use these skips, so a task no check lists
+still reaches its report.
 
-For unblocked open or doing tasks, automatic stalled-task wakes are limited to three in a rolling
-24 hours, spaced at least 30 minutes apart. Updating a note does not reset that limit. Repeated
-stalls are escalated to BotOps with a separate diagnostic for each source task. If BotOps itself is
-stuck or unavailable, the diagnostic goes to the human requester, or the team's default human for
-bot-requested work. An unresolved diagnostic is reused on later days. Health warns when repeated
-runs have escalated a public task without progress; an explicit run is still available.
+Tico does not wake a bot once for each stalled task, and does not escalate repeated stalls to BotOps. Each bot gets at
+most one daily task check a UTC day: one list of the tasks that have a missed update or have gone quiet (see
+[System routines](system-routines.md)).
 
 A task blocked by its own subtask is allowed (a question for a person in a subtask works that way),
 but relating it returns a warning: a subtask kept open until its parent finishes, such as a hold or
 an acknowledgement, never clears. When every blocker is such a subtask, owned by a bot, stalled five
 minutes and waiting on nothing of its own (not in review, no run of its own able to start or going, no blocker,
 no unanswered question or person it is waiting on, no future due date, snooze, stored resume or milestone wait),
-the task counts as stalled even while `waiting`, unless it is waiting on a person: its bot is woken with the way out, under
-the same limits, and BotOps's stuck list shows it with `own_blockers` while its bot is idle. Health's
-"Tasks not progressing" counts it once escalated, only when the viewer can read every live blocker.
+the task counts as stalled even while `waiting`, unless it is waiting on a person. Tico no longer wakes its bot for it;
+the Task Manager's report still lists it.
 A queued message to a bot still in setup counts as able to start only when it comes from a person or
 that bot's manager. A queued run fenced by an interrupted run of the same task or a scope limiting the bot
 to other work cannot move the blocker and does not exempt its parent. A blocker's review status exempts
@@ -1220,27 +1216,13 @@ delivery; `needs_action` takes none or `steer`; a `goal` takes no files and cann
 a 422, a steer, queue or goal by someone not on the task a 403, a goal on a task still in a thread a 409, and nothing
 is saved.
 
-Tico spot-checks running work. A bot's open or doing task whose own session ran in the last day (or runs now) and
-that has made no progress for 30 minutes (no checkpoint, comment, status change, message from its bot or finished
-turn) gets one "Status check: checkpoint where you are, or mark it blocked or done." in its session. Thirty minutes
-later with still no progress its bot is retried once; thirty minutes after that, still with no progress, it is reported
-stuck in its Home and BotOps gets a task to find out why. A stuck check never goes to a person as a question. These
-share the stall watcher's spacing and its cap of three a day, after which BotOps gets a task to find out why.
+Tico no longer spot-checks running work one task at a time. A bot's open or doing task that makes no progress appears
+in its daily task check, one list a UTC day. A Dev ticket long at a working step still gets a status ask from its owner.
 
-An idle task unchanged since its owner's last settled checkpoint skips a plain automatic stall or status check.
-Changed state or a missing checkpoint leaves the check eligible under the usual wake rules. Human messages still
-wake the bot as before ([details](hub-sql.md#what-woke-each-run-and-what-it-did)). A running session is not sent status
-checks or retries; they resume once its turn ends without progress.
+Human messages still wake the bot as before ([details](hub-sql.md#what-woke-each-run-and-what-it-did)).
 
-With the team's **Stalled task check** switched on (Settings > System routines, on by default, needs Tico Decide), a
-stalled task that stands as at its owner's last checkpoint is no longer left silent. Decide reads its last six messages
-once for that state and answers one of four things. *Waiting on someone*: the wait it names is set (a task the messages
-mention as a blocker, a date they mention as a snooze, or a person they name as the owner's own waiting-on, with a
-one-line ask in a small subtask), and no run starts. *Finished but unmarked*: the task is closed with a note crediting
-whoever spoke last; reopen it if that was wrong. *Stuck*: the one stall wake goes through with today's way-out text, under
-the usual spacing and daily cap. *Unsure*, or any answer under its confidence, nothing changes and the Task Manager's next
-report names the task with "class: unsure". Decide off, not set up, over its daily or hourly limit or failing leaves the
-check silent, as before. Nothing else is automatic after the wake.
+The **Stalled task check** no longer runs. Tico no longer wakes a bot about one quiet task, so Decide reads none of them.
+A quiet task still shows in its bot's daily task check and in the Task Manager's report.
 
 `task_goal: on` on a bot (`hub bot update <slug> --task-goal on`, `hub_bot_update`, or the bot definition API; off by
 default) works each task it owns as a goal: the turn carries `task.goal` (the title and its acceptance criteria), and
@@ -1707,10 +1689,10 @@ bot and whether it is due. When follow-up delivery is enabled, the web, phone an
 snooze can be longer. A human snooze takes precedence over an earlier inspection.
 
 Enable **Task check-backs** under Automations > System routines for the staged rollout. It starts off: dates are
-stored, but existing stall recovery stays in force until enabled. Enabling backfills missing appointments in
+stored, and nothing is delivered until it is enabled. Enabling backfills missing appointments in
 bounded batches, and the server scheduler delivers due appointments through the existing task session queue.
 No second session starts beside a running task. A paused, offline or limited bot retains its queued obligation;
-Health reports missing or overdue follow-ups. Turning the rollout off does not suppress existing recovery.
+Health reports missing or overdue follow-ups. Turning the rollout off stops new deliveries.
 
 On the wake, inspect the actual PR link, assignment/reservation, result and blocker. A missing readable child is
 not proof that a private child does not exist: check routing before creating a duplicate. Repair routine handoffs

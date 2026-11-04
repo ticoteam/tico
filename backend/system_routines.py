@@ -149,7 +149,8 @@ ACTIONS = {
                          ("turn", "start", "dead", "stuck", "free", "busy")),
     "turns_finding": ("keep one Health finding per busy-turns incident and hand what it cannot fix to BotOps",
                       ("health", "turns", "incident", "botops", "busy")),
-    "wake_stalled": ("wake the bot on a task nothing is moving", ("stalled", "wake", "tasks")),
+    "wake_daily_tasks": ("send each bot one list, once a day, of its tasks with an update it may have missed or gone quiet",
+                         ("tasks", "daily", "wake", "missed", "quiet", "update")),
     "nudge_asks": ("nudge a person once in their thread when a bot's ask to them stays unanswered for a day",
                    ("ask", "follow up", "nudge", "remind", "thread", "unanswered")),
     "wake_digest_bots": ("start one run for each bot with new messages in the threads it follows on digest",
@@ -163,7 +164,6 @@ ACTIONS = {
     "email_digest": ("email a person once an hour the threads they follow on digest that have new messages: titles, "
                      "unread counts and links, never the messages", ("email", "digest", "unread", "thread", "notify")),
     "drop_unreadable": ("drop queued work its bot can no longer read", ("queue", "drop")),
-    "unstrand": ("send bot tasks waiting on nothing back to work", ("waiting", "tasks")),
     "ask_to_task": ("turn a bot's plain ask to a person into a small task", ("ask", "tasks")),
     "end_snooze": ("bring snoozed tasks back when their date comes", ("snooze", "tasks")),
     "start_deferred": ("start deferred runs that are due", ("deferred", "runs")),
@@ -272,14 +272,21 @@ JOBS = [
         "On weekday mornings, sends questions unanswered for two business days back to their bots.",
         REMINDERS, "Hourly", 3600, then=("resend_questions",)),
     Job("stall_checks", "Stall checks",
-        "Wakes the bot on a task nothing is moving, and drops queued work its bot can no longer read.",
-        HOUSEKEEPING, "Every minute", 60, then=("wake_stalled", "drop_unreadable")),
+        "Every minute: asks for a status on long-running Dev work, nudges an owner after an idle turn, reports backlogs, "
+        "allocates waiting tickets, closes timed-out checks, and drops queued work its bot can no longer read. It does not "
+        "wake a bot about one stalled task: the daily task check does that.",
+        HOUSEKEEPING, "Every minute", 60, then=("drop_unreadable",)),
+    Job("daily_task_check", "Daily task check",
+        "Once a day, sends each bot one list of its tasks that have an update it may have missed or have gone quiet. "
+        "Plain code: no model is called, and nothing to list is a quiet run.",
+        HOUSEKEEPING, "Daily at 14:00 UTC", 86400, control=True, then=("wake_daily_tasks",)),
     Job("turn_fixer", "Turn fixer",
         "Frees turns proven dead, keeps one Health finding per busy-turns incident and hands what it cannot fix to "
         "BotOps.", HOUSEKEEPING, "Every 10 seconds", 10, then=("free_dead_starts", "turns_finding")),
     Job("waiting_checks", "Waiting checks",
-        "Sends bot tasks waiting on nothing back to work, and turns a bot's plain ask to a person into a small task.",
-        HOUSEKEEPING, "Hourly", 3600, then=("unstrand", "ask_to_task")),
+        "Turns a bot's plain ask to a person into a small task. Bot tasks left waiting on nothing are no longer sent back "
+        "to work.",
+        HOUSEKEEPING, "Hourly", 3600, then=("ask_to_task",)),
     Job("snooze_ends", "Snooze ends",
         "Brings snoozed tasks back when their date comes and starts deferred runs that are due.",
         HOUSEKEEPING, "Every 10 seconds", 10, then=("end_snooze", "start_deferred", "start_task")),
@@ -331,8 +338,8 @@ JOBS = [
     Job("doc_sync", "Document sync", "Refreshes linked documents from their sources.",
         HOUSEKEEPING, "Every few seconds", 5, records=False, then=("sync_docs",)),
     Job("stall_triage", "Stalled task check",
-        "Before a stall check stays silent on a quiet task nothing has changed on, Decide reads its last messages: "
-        "if it waits on someone it sets that wait, if it is finished it closes it, if it is stuck one wake goes through.",
+        "Not run any more: stall checks no longer wake a bot about one quiet task, so Decide reads none of them. "
+        "Its switch stays until the row is removed.",
         CHECKS, "When it happens", ai=True, control=True, labels=("stall-triage",), records=False, when="quiet_task",
         then=("triage_quiet",)),
     Job("topic_fresh", "Start fresh when the topic changes",
@@ -346,10 +353,11 @@ BY_KEY = {job.key: job for job in JOBS}
 
 
 # ----------------------------------------------------------------------------- what a person may change
-FIFTEEN, HOURLY, FOUR_HOURS, DAILY, BUSINESS, WEEKLY = "15m", "hourly", "4h", "daily", "business", "weekly"
+FIFTEEN, HOURLY, FOUR_HOURS, DAILY, BUSINESS, WEEKLY, DAILY_UTC = ("15m", "hourly", "4h", "daily", "business", "weekly",
+                                                                  "daily_utc")
 PRESETS = {FIFTEEN: ("Every 15 minutes", 900), HOURLY: ("Hourly", 3600), FOUR_HOURS: ("Every 4 hours", 4 * 3600),
            DAILY: ("Daily at {at}", None), BUSINESS: ("Hourly on weekdays, 08:00 to 18:00", 3600),
-           WEEKLY: ("Weekly", 7 * 86400)}
+           WEEKLY: ("Weekly", 7 * 86400), DAILY_UTC: ("Daily at {at} UTC", None)}
 BUSINESS_HOURS = (clock(8), clock(18))      # company time (updates.ZONE), Monday to Friday
 EVERY_PRESET = (FIFTEEN, HOURLY, FOUR_HOURS, DAILY)
 AI_PRESETS = (HOURLY, FOUR_HOURS, DAILY)        # a job that asks Decide is never offered every 15 minutes
@@ -387,12 +395,15 @@ CONTROLS = {
     "bookkeeper_check": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     "topic_fresh": Control(rule="topic_fresh"),
     "stall_triage": Control(rule="stall_triage"),
+    # Once a day at a UTC time, not company time: one list to each bot (backend/daily_task_check.py).
+    "daily_task_check": Control(presets=(DAILY_UTC,), preset=DAILY_UTC, at="14:00"),
 }
 
 
 QUICK_KEYS = ("still_wanted", "kpi_asks", "health_scan", "ask_deadlines", "task_manager_report",
               "engineering_exceptions", "bookkeeper_check", "bookkeeper_watch",
-              "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention")   # last runs read by backend/scheduler.py (QUICK and FIXED)
+              "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention",
+              "daily_task_check")   # last runs read by backend/scheduler.py (QUICK and FIXED)
 
 
 def zone():
@@ -496,7 +507,7 @@ def save_config(c, actor, key, on=None, preset=None, at=None):
 def _occurrence(cfg, at):
     """The latest HH:MM (company time) at or before `at`."""
     hour, minute = (int(x) for x in (cfg.get("at") or "00:00").split(":"))
-    local = at.astimezone(zone())
+    local = at.astimezone(timezone.utc if cfg.get("preset") == DAILY_UTC else zone())
     point = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
     return point if point <= local else point - timedelta(days=1)
 
@@ -826,7 +837,8 @@ def listing(c, settings, now=None, who=None, auth=None):
         then_words = [ACTIONS[key][0] for key in job.then]
         department = chart.get(job.department.lower(), job.department)
         item = {"key": job.key, "name": job.name, "what": job.what, "schedule": schedule, "ai": job.ai,
-                "controllable": job.control, "needed": job.group == HOUSEKEEPING, "records": job.records,
+                "controllable": job.control, "needed": job.group == HOUSEKEEPING and not job.control,
+                "records": job.records,
                 "group": job.group, "when": [when_words], "then": then_words,
                 "department": {"name": department, "in_chart": department.lower() in chart},
                 "switch": bool(ctl), "on": cfg["on"] if cfg else True,
