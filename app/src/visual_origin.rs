@@ -10,6 +10,7 @@ pub struct VisualOrigin {
 }
 
 impl VisualOrigin {
+    #[cfg(test)]
     pub fn new(hub: &Url, raw: &str) -> Option<Self> {
         Self::with_files(hub, raw, "")
     }
