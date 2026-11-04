@@ -15,8 +15,9 @@
 // page's own id space, so `$('#main')` and getElementById only ever find the real page; the host is aria-hidden,
 // inert and takes no pointer. route() draws the page into #main as always, hidden under it, and the copy goes the
 // moment that page settles, the person moves, the wait ends (boot-timing.js) or SNAP_SHOW_MAX_MS after it was shown,
-// whatever boot is still waiting on.
-// The entry goes, and a copy on screen with it, when this browser signs out (a sign-out link, or a lapsed session),
+// whatever boot is still waiting on (the page's loading rows then take its place, never a blank page).
+// The entry goes, and a copy on screen with it, when this browser signs out (a sign-out link, or a lapsed session;
+// nothing is kept again in that page),
 // when /me answers as anyone else or no one, and when the bundle or SNAP_SCHEMA changes; a screen over
 // SNAP_MAX_BYTES is not kept.
 // Under automation (navigator.webdriver) it is off unless the page sets window.ticoBootSnap = true first, so a browser
@@ -27,7 +28,9 @@ const SNAP_MAX_BYTES = 256 * 1024;
 const SNAP_SETTLE_MS = 1500, SNAP_SAVE_TRIES = 8;
 // The longest a kept screen stays up, from the moment it is shown.
 const SNAP_SHOW_MAX_MS = 12000;
-const SNAP = {db: null, who: '', shown: '', done: false, copy: null, timer: 0, watch: 0};
+// `banned`: signed out in this page. Nothing is kept again until a new load's /me names a person, whatever answer
+// (a late roster, a timer, pagehide) comes first.
+const SNAP = {db: null, who: '', shown: '', done: false, copy: null, timer: 0, watch: 0, banned: false};
 const snapOn = () => { try { return typeof indexedDB !== 'undefined' && (!navigator.webdriver || window.ticoBootSnap === true); } catch { return false; } };
 // The pages kept: Home, Overview, Tasks (its list, any view), Threads (the list) and a team's page.
 function snapRouteOk(hash) {
@@ -80,7 +83,8 @@ const snapRead = () => snapOn() ? snapTx('readonly', s => s.get(location.origin)
 const snapForget = () => snapOn() ? snapTx('readwrite', s => s.delete(location.origin)).catch(() => {}) : Promise.resolve();
 // Signed out, or someone else: nothing more is kept in this page, a copy on screen goes now, and what was kept goes.
 function bootSnapDrop() {
-  SNAP.who = ''; SNAP.done = true;
+  SNAP.who = ''; SNAP.done = true; SNAP.banned = true;
+  clearTimeout(SNAP.timer);
   bootSnapRelease();
   return snapForget();
 }
@@ -118,7 +122,7 @@ function snapPaint(main, kept) {
   main.style.visibility = 'hidden';
   SNAP.copy = host; SNAP.shown = kept.route;
   clearTimeout(SNAP.watch);
-  SNAP.watch = setTimeout(bootSnapRelease, SNAP_SHOW_MAX_MS);
+  SNAP.watch = setTimeout(snapWaited, SNAP_SHOW_MAX_MS);
   const loads = sheets.filter(el => el.tagName === 'LINK').map(el => new Promise(done => { el.onload = el.onerror = done; }));
   void Promise.race([Promise.all(loads), new Promise(done => setTimeout(done, 400))]).then(() => {
     if (SNAP.copy !== host) return;
@@ -127,6 +131,13 @@ function snapPaint(main, kept) {
   });
   // Any move of the person's own (another page, Back) shows that page as it draws.
   window.addEventListener('hashchange', bootSnapRelease, {once: true});
+}
+// The copy was up as long as it may be and boot is still waiting (a stalled roster): the page shows its own loading
+// rows in its place, never a blank page, and route() draws over them when boot gets there.
+function snapWaited() {
+  const main = document.getElementById('main');
+  if (SNAP.copy && main && !main.childElementCount) main.innerHTML = skelRows(6);
+  bootSnapRelease();
 }
 // Just before route(): a late read of the kept screen no longer draws, and boot opening another page (a first run)
 // takes the copy down at once.
@@ -150,7 +161,7 @@ function bootSnapRelease() {
 function bootSnapWho(me) {
   const who = authenticatedConfigPerson(me) ? snapWho(me) : '';
   if (!who) { void bootSnapDrop(); return; }
-  SNAP.who = who;
+  if (!SNAP.banned) SNAP.who = who;
 }
 // What a kept screen may never hold: anything that runs or loads on its own, and anything private.
 const SNAP_DROP = 'iframe,frame,object,embed,video,audio,canvas,script,noscript,dialog,template,img[src^="blob:"],'
@@ -174,7 +185,7 @@ function snapScreen() {
 // few times; a page that is never kept leaves the older entry, which shows only on its own address.
 function bootSnapSave(tries = 0) {
   clearTimeout(SNAP.timer);
-  if (!snapOn() || !SNAP.who || SESSION.out) return;
+  if (!snapOn() || SNAP.banned || !SNAP.who || SESSION.out) return;
   const screen = snapScreen();
   if (!screen) {
     if (tries && tries < SNAP_SAVE_TRIES) SNAP.timer = setTimeout(() => bootSnapSave(tries + 1), SNAP_SETTLE_MS);
