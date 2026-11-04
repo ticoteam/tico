@@ -178,7 +178,7 @@ def test_recorder_sends_one_action_item_to_a_bot_and_files_the_meeting(api, tmp_
         assert output["synthetic"] is True and output["chunks"] == 2
         assert output["drafts"] == 1
         assert output["assist"] == "You said you will update the launch plan (00:00)."
-        # Two transcriptions, one draft review, one private question: nothing else left the computer.
+        # Three transcriptions, one draft review, one private question: nothing else left the computer.
         assert sorted(provider_calls) == ["/audio/transcriptions"] * 3 + ["/chat/completions"] * 2
 
         # The live meeting opened private, with Ben and the bot let in.
@@ -196,7 +196,7 @@ def test_recorder_sends_one_action_item_to_a_bot_and_files_the_meeting(api, tmp_
         body = tasks[0]["body"]
         assert f"“{COMMITMENT}”" in body and "Transcript around it:" in body
         assert "sent by" in body and "from Tico Recorder" in body
-        assert f"#/meetings?live={output['live_id']}" in body
+        assert f"#/meetings/live={output['live_id']}" in body
         hidden = api.get(f"/api/v2/tasks/{sent['task_id']}", headers={"Authorization": "Bearer cara-test"})
         assert hidden.status_code in (403, 404)
 
