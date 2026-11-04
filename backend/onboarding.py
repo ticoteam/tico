@@ -968,9 +968,8 @@ class Onboarding:
         restored = bool(row and row["state"] == "archived")
         if restored:
             # The restore keeps the bot's own model and settings; only the name and description are renewed. The model
-            # is in the bot's config (bot_config.config): bots has no model column since migration 0043.
-            kept = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
-            kept_model = (H._json(kept[0], {}) or {}).get("model") if kept else ""
+            # is in the bot's declaration (bot_settings): bots has no model column since migration 0043.
+            kept_model = BS.read(c, slug).get("model")
             self.admin.create_bot(c, who, M.BotDefinitionCreate(
                 slug=slug, display_name=choice["display_name"], description=str(card.get("summary") or ""),
                 status="planned", repo=self._recorded_repo(c, slug), thread_mode="personal", model=kept_model or "restore",
@@ -1030,8 +1029,8 @@ class Onboarding:
         key it has had (`routines_seeded`), so a key stays seeded even if its schedule row is gone; a key whose row
         exists (deleted, moved to an automation or changed) counts as seeded too. (A bot BotOps builds gets these from
         `hub bot create`; a built-in one is made here.) Returns the keys it created."""
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
-        declared = (_json(row[0], {}) or {}) if row else {}
+        row = c.execute("SELECT 1 FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        declared = BS.read(c, slug)
         had = list(declared.get("routines_seeded") or [])
         seeded, made = list(had), []
         for entry in self._template_routines(c, template):
@@ -1068,7 +1067,7 @@ class Onboarding:
         except Problem:
             return []
         made = []
-        for bot in c.execute("SELECT bc.bot, bc.config FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+        for bot in c.execute(f"SELECT bc.bot, {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
                              "WHERE b.state='active'").fetchall():
             declared = _json(bot["config"], {}) or {}
             if declared.get("template") not in boot:

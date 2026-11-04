@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import hubdb as H
 from backend import invites
 from backend import migrations
@@ -294,6 +295,15 @@ def test_cloud_version_is_the_newest_cloud_step_store_writes():
     assert migrations.CLOUD_VERSION == newest
 
 
+def _config_restored(path):
+    """The file with bot_config.config back, each declaration copied into it from bot_settings: a database from before
+    0068, for the migrations that read the column (0043, 0061) to run on again."""
+    with sqlite3.connect(path) as c:
+        c.execute("ALTER TABLE bot_config ADD COLUMN config TEXT NOT NULL DEFAULT '{}'")
+        c.execute(f"UPDATE bot_config SET config=coalesce((SELECT {BS.CONFIG} FROM bot_settings s "
+                  "WHERE s.bot_id=bot_config.bot), '{}')")
+
+
 def _back_to_before(path, version):
     """The file as it was before `version` ran: the migration rows from it on are forgotten, so the next boot runs them."""
     with sqlite3.connect(path) as c:
@@ -368,6 +378,7 @@ def test_an_existing_bots_runtime_model_and_host_move_into_its_config_then_the_c
     the six legacy columns are dropped. cwd, thread_id and token_hash have nothing to move."""
     path = fresh(tmp_path)
     slug = "acme-bot"
+    _config_restored(path)
     with sqlite3.connect(path) as c:
         for column in ("runtime", "model", "host", "cwd", "thread_id", "token_hash"):
             c.execute(f"ALTER TABLE bots ADD COLUMN {column} TEXT")
@@ -381,7 +392,7 @@ def test_an_existing_bots_runtime_model_and_host_move_into_its_config_then_the_c
     boot(path)
     with sqlite3.connect(path) as c:
         columns = {row[1] for row in c.execute("PRAGMA table_info(bots)")}
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+        config = json.loads(c.execute(BS.ONE_SQL, (slug,)).fetchone()[0])
     assert not {"runtime", "model", "host", "cwd", "thread_id", "token_hash"} & columns
     assert {"id", "slug", "effort", "state"} <= columns
     # boot adds its own defaults to every config (profile, wake_preset, ...); only the three keys this moves are checked
@@ -401,6 +412,7 @@ def test_a_null_config_takes_the_columns_and_one_not_an_object_stops_0043(tmp_pa
     """Migration 0043: a config of JSON null counts as {} and gets the column values; a config that is not a JSON object
     stops the migration instead of dropping a runtime or model it cannot copy."""
     path = fresh(tmp_path)
+    _config_restored(path)
     with sqlite3.connect(path) as c:
         for column in ("runtime", "model", "host", "cwd", "thread_id", "token_hash"):
             c.execute(f"ALTER TABLE bots ADD COLUMN {column} TEXT")
@@ -416,7 +428,7 @@ def test_a_null_config_takes_the_columns_and_one_not_an_object_stops_0043(tmp_pa
     _back_to_before(path, "0043")
     boot(path)
     with sqlite3.connect(path) as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='null-bot'").fetchone()[0])
+        config = json.loads(c.execute(BS.ONE_SQL, ("null-bot",)).fetchone()[0])
     assert (config.get("runtime"), config.get("model")) == ("codex", "m1")
 
 

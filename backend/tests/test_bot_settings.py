@@ -1,8 +1,10 @@
 """A bot's declared settings live in bot_settings (backend/bot_settings.py): each declaration reads back as it was
-written, from Python and from SQL alike, and migration 0067 moves every existing bot_config.config there without
+written, from Python and from SQL alike, and migration 0068 moves every existing bot_config.config there without
 losing a key."""
+import importlib.util
 import json
 import random
+import re
 import sqlite3
 from pathlib import Path
 
@@ -80,7 +82,7 @@ def test_update_and_remove_keep_the_rest_of_the_declaration(tmp_path):
 
 
 def _old_shape(path):
-    """A database as main before migration 0067 left it: bot_config.config holds the declaration, a trigger reads it."""
+    """A database as main before migration 0068 left it: bot_config.config holds the declaration, a trigger reads it."""
     boot(path)
     with sqlite3.connect(path) as c:
         for name, in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='bot_settings'").fetchall():
@@ -88,7 +90,7 @@ def _old_shape(path):
         c.execute("DROP TABLE bot_settings")
         c.execute("ALTER TABLE bot_config ADD COLUMN config TEXT NOT NULL DEFAULT '{}'")
         c.execute("CREATE TRIGGER old_reads_config AFTER UPDATE OF config ON bot_config BEGIN SELECT 1; END")
-        c.execute("DELETE FROM schema_migrations WHERE version='0067_bot_settings'")
+        c.execute("DELETE FROM schema_migrations WHERE version='0068_bot_settings'")
         rows = [("full", {**SETTINGS, **ODD}), ("empty", {}), ("broken", None), ("list", [1, 2]),
                 *((f"many{n}", {"model": f"m{n}", "turns_per_day": n, "team": "ops"}) for n in range(1200))]
         for bot, config in rows:
@@ -98,6 +100,62 @@ def _old_shape(path):
             c.execute("INSERT INTO bot_config(bot,owner_id,config) VALUES(?,'ana',?)", (bot, text))
         c.execute("PRAGMA foreign_keys=OFF")
         c.execute("INSERT INTO bot_config(bot,owner_id,config) VALUES('gone','ana','{\"model\":\"x\"}')")
+
+
+# A trigger or view that names bot_config and reads its `config` column: `config` as a bare word, or as a column of an alias
+# (bc.config, NEW.config), never `bot_config` itself, nor a quoted 'config'.
+_COLUMN_READ = re.compile(r"(?<![\w$'])config\b", re.I)
+
+
+def _no_reader_of_the_column(c):
+    for name, sql in c.execute("SELECT name, sql FROM sqlite_master WHERE type IN ('trigger','view')").fetchall():
+        assert not (sql and "bot_config" in sql and _COLUMN_READ.search(sql)), name
+
+
+def _migration(name):
+    """A migration file as a module: its name starts with a number, so it is not importable by name."""
+    path = Path(BS.__file__).parent / "migrations" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_migration_0061_gives_a_team_that_0068_moves_into_bot_settings(tmp_path):
+    """Migration 0061 (a team-less bot takes its manager's group) runs before 0068 on a database from before the move:
+    the team it writes into the config is in bot_settings after 0068, and its team column is kept."""
+    path = tmp_path / "hub.db"
+    _old_shape(path)
+    people = {"people": [{"id": "ana", "team": "engineering"}], "org_groups": {"engineering": {"name": "Engineering"}}}
+    with sqlite3.connect(path) as c:
+        c.execute("DELETE FROM schema_migrations WHERE version='0061_bot_team_from_manager'")
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(people),))
+        c.execute("INSERT INTO bots(id,slug,display_name,state,created_at) "
+                  "VALUES('legacy','legacy','Legacy','active','2026-01-01')")
+        c.execute("INSERT INTO bot_config(bot,owner_id,config,reports_to) VALUES('legacy','ana',?,'human:ana')",
+                  (json.dumps({"model": "m"}),))
+    store = boot(path)
+    with store.read() as c:
+        assert c.execute("SELECT team FROM bot_config WHERE bot='legacy'").fetchone()[0] == "engineering"
+        assert BS.read(c, "legacy") == {"model": "m", "team": "engineering"}
+        assert "config" not in {r[1] for r in c.execute("PRAGMA table_info(bot_config)")}
+        _no_reader_of_the_column(c)
+
+
+def test_the_migrations_that_read_the_column_skip_a_new_file():
+    """On a new file the migrations run before any module table exists: 0043, 0061 and 0068 find no bots, bot_config or
+    registry to read, so they change nothing and the store's own schema makes the tables in their new shape."""
+    conn = sqlite3.connect(":memory:")
+    for name in ("0043_drop_bot_legacy_columns", "0061_bot_team_from_manager", "0068_bot_settings"):
+        _migration(name).up(conn)
+    assert conn.execute("SELECT count(*) FROM sqlite_master").fetchone()[0] == 0
+
+
+def test_a_new_file_has_no_trigger_or_view_reading_the_column(tmp_path):
+    store = boot(tmp_path / "new.db")
+    with store.read() as c:
+        assert "config" not in {r[1] for r in c.execute("PRAGMA table_info(bot_config)")}
+        _no_reader_of_the_column(c)
 
 
 def _moved(c, bot):
@@ -121,8 +179,9 @@ def test_migration_moves_every_declaration_drops_the_column_and_runs_once(tmp_pa
         assert c.execute("SELECT 1 FROM bot_settings WHERE bot_id='gone'").fetchone() is None
         triggers = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
         assert "old_reads_config" not in triggers
-        assert {"repository_new_bot_default", "wake_preset_hold", "queue_bot_message", "fin_view_bot_update",
+        assert {"repository_new_bot_default", "wake_preset_hold", "fin_view_bot_update",
                 "changes_runner_bot_settings_update"} <= triggers
+        _no_reader_of_the_column(c)
         # wake_presets.ensure gives every declaration its preset after the move, as it did inside config.
         assert c.execute("SELECT count(*) FROM bot_settings WHERE wake_preset IS NULL").fetchone()[0] == 0
     before = sqlite3.connect(path).execute("SELECT * FROM bot_settings ORDER BY bot_id").fetchall()

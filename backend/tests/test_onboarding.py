@@ -521,5 +521,5 @@ def test_a_restored_bot_keeps_the_model_its_config_names(environment):
         done = api.app.state.onboarding._turn_on(c, who, "coo", "assistant", "Coo", "bot.turned_on")
     assert done["restored"] is True
     with store.read() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='coo'").fetchone()[0])
+        config = BS.read(c, "coo")
     assert config["model"] == "claude-opus-5-5"

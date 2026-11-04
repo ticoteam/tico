@@ -135,7 +135,7 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 
 | Table | Columns worth knowing | Notes |
 |---|---|---|
-| `bots` | `id, slug, display_name, effort, state, created_at, last_turn_at` | `id` is the bot's permanent id, which actor strings and foreign keys use; `slug` is its name and can change. `state`: active, paused, planned, quarantined, archived; a bot's runtime, model and host are in its config (`bot_config.config`), not here |
+| `bots` | `id, slug, display_name, effort, state, created_at, last_turn_at` | `id` is the bot's permanent id, which actor strings and foreign keys use; `slug` is its name and can change. `state`: active, paused, planned, quarantined, archived; a bot's runtime, model and host are in its declaration (`bot_settings`), not here |
 | `bot_config` | `bot, team, owner_id, description, reports_to, repo, thread_mode, revision` | the team chart |
 | `bot_settings` | `bot_id, harness, model, reasoning_effort, template, profile, session, wake_preset, shared_from, extra` | a bot's declared settings (bot.yaml): one column per setting the server reads by name, the rest as JSON in `extra` |
 | `bot_status` | `bot, state, focus, task_id, changed_at, last_turn_at, last_result, next_due_at, open_tasks, needs_human` | live status; history in `bot_status_history(bot, state, focus, started_at, ended_at, reason, by)` |

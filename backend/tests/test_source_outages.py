@@ -24,7 +24,8 @@ def notices(c):
 def managers(c):
     from backend.health_monitor import SLUG
     c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES(?,?,?,'active')", (SLUG, SLUG, 'Health'))
-    c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')", (SLUG, '{"runtime":"fake"}'))
+    c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (SLUG,))
+    BS.write(c, SLUG, {"runtime": "fake"})
     c.execute("UPDATE task_types SET manager='coo',role='engineering' WHERE id='general'")
 
 

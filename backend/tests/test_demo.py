@@ -71,7 +71,8 @@ def test_every_bot_has_a_profile_and_no_one_is_told_of_a_change(built):
         assert told.fetchone()[0] == 0
         from backend import profiles
         from backend.store import H
-        configs = [H._json(config, {}) for (config,) in db.execute("SELECT config FROM bot_config")]
+        from backend import bot_settings as BS
+        configs = [H._json(config, {}) for (config,) in db.execute(f"SELECT {BS.CONFIG} FROM bot_config bc {BS.JOIN}")]
         assert configs and all(profiles.name_of(config) for config in configs)
 
 

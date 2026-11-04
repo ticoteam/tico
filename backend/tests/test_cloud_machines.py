@@ -1018,7 +1018,7 @@ def test_only_a_builder_by_name_gets_its_own_machine_by_default(cloud):
 
 def _config(c, bot, config):
     assert c.execute("SELECT 1 FROM bot_config WHERE bot=?", (bot,)).fetchone(), bot
-    c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(config), bot))
+    BS.write(c, bot, config)
 
 
 def test_a_builder_template_a_copy_of_one_or_a_numbered_builder_gets_its_own_machine(cloud):

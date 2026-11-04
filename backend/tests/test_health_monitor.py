@@ -693,8 +693,8 @@ def test_the_monitor_files_for_botops_and_a_task_for_a_person_is_refused(api):
         for slug in ("health-monitor", "botops"):
             c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES(?,?,?,'active')", (slug, slug, slug))
             c.execute("UPDATE bots SET state='active' WHERE id=?", (slug,))
-            c.execute("INSERT OR IGNORE INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')",
-                      (slug, encode({"name": slug, "runtime": "fake", "status": "active"})))
+            if c.execute("INSERT OR IGNORE INTO bot_config(bot,owner_id) VALUES(?,'ana')", (slug,)).rowcount:
+                BS.write(c, slug, {"name": slug, "runtime": "fake", "status": "active"})
         title, body = "Wake Support Agent (cloud) and check it reports in", "Its last check-in was 40 minutes ago."
         with pytest.raises(H.Refused) as refused:
             H.task_create(c, "bot:" + health_monitor.SLUG, title, body, "human:ana", lint=False)

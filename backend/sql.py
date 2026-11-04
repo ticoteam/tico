@@ -144,7 +144,8 @@ def bot_settings_masks(people, bare, groups):
     """bot_settings less the people and groups the caller may not see: the declaration's other keys (`extra`) lose a
     `team`, `reports_to` or `operator` naming one."""
     nobody = "(SELECT NULL WHERE 0)"
-    actors, ids, teams = qlist(people) if people else nobody, qlist(bare) if bare else nobody,         qlist(groups) if groups else nobody
+    actors, ids, teams = qlist(people) if people else nobody, qlist(bare) if bare else nobody, \
+        qlist(groups) if groups else nobody
     return {"extra": (
         "CASE WHEN source.extra IS NULL OR NOT json_valid(source.extra) THEN source.extra "
         "ELSE json_patch(source.extra, (SELECT json_group_object(key, NULL) FROM json_each(source.extra) "

@@ -10,7 +10,8 @@ import json
 
 import pytest
 
-from backend.store import H, encode
+from backend import bot_settings as BS
+from backend.store import H
 from backend.tests.test_api import api, post, setup_attempt  # noqa: F401
 
 
@@ -145,7 +146,7 @@ def _external(api, harness="hermes", computer=None):
         config = {"name": "ops", "runtime": "fake", "status": "active", "harness": harness}
         if computer:
             config["app_delivery"] = {"computer": computer}
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (encode(config),))
+        BS.write(c, "ops", config)
 
 
 def test_an_external_agents_bot_gets_no_job_unless_a_registered_computer_delivers_it(api):
@@ -212,22 +213,31 @@ _LEGACY_TRIGGER = (
     "VALUES(NEW.id,NEW.id,substr(NEW.recipient_id,5),NEW.created_at); END")
 
 
+_DECLARED = (("inbox", {"harness": "hermes"}),
+             ("desk", {"harness": "openclaw", "app_delivery": {"computer": "mac"}}),
+             ("gone", {"harness": "dots", "app_delivery": {"computer": "old-mac"}}),
+             ("ops", {"harness": "claude"}))
+
+
 def _bare(trigger):
+    """The trigger's database (bot_config.config, the oracle) when `trigger`, else the one enqueue reads: bot_settings."""
     import sqlite3
     conn = sqlite3.connect(":memory:")
     conn.executescript(
         "CREATE TABLE messages(id TEXT PRIMARY KEY, sender_id TEXT, recipient_id TEXT, refs TEXT, created_at TEXT);"
         "CREATE TABLE jobs(id TEXT PRIMARY KEY, message_id TEXT, bot_id TEXT, created_at TEXT);"
-        "CREATE TABLE bot_config(bot TEXT PRIMARY KEY, config TEXT);"
         "CREATE TABLE runners(id TEXT PRIMARY KEY, revoked_at TEXT);"
-        "INSERT INTO runners VALUES('mac', NULL), ('old-mac', '2026-01-01');"
-        "INSERT INTO bot_config VALUES"
-        "('inbox', '{\"harness\":\"hermes\"}'),"
-        "('desk', '{\"harness\":\"openclaw\",\"app_delivery\":{\"computer\":\"mac\"}}'),"
-        "('gone', '{\"harness\":\"dots\",\"app_delivery\":{\"computer\":\"old-mac\"}}'),"
-        "('ops', '{\"harness\":\"claude\"}');")
+        "INSERT INTO runners VALUES('mac', NULL), ('old-mac', '2026-01-01');")
     if trigger:
+        conn.execute("CREATE TABLE bot_config(bot TEXT PRIMARY KEY, config TEXT)")
+        for bot, config in _DECLARED:
+            conn.execute("INSERT INTO bot_config VALUES(?,?)", (bot, json.dumps(config)))
         conn.execute(_LEGACY_TRIGGER)
+    else:
+        conn.execute("CREATE TABLE bot_config(bot TEXT PRIMARY KEY)")
+        conn.execute(BS.TABLE)
+        for bot, config in _DECLARED:
+            BS.write(conn, bot, config)
     return conn
 
 

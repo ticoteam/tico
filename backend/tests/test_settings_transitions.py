@@ -282,7 +282,7 @@ def test_compact_at_offers_100k_and_saves_it_without_moving_the_default(api):
     post(api, "bots/cpo/compact-at", {"compact_at": 100_000, "expected_revision": revision})
     assert get(api, "bots/cpo")["compact_at"] == 100_000
     with api.app.state.store.read() as c:
-        assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='cpo'").fetchone()[0])["compact_at"] == 100_000
+        assert BS.read(c, "cpo")["compact_at"] == 100_000
     revision = get(api, "bots/cpo")["revision"]
     post(api, "bots/cpo/compact-at", {"compact_at": 123_000, "expected_revision": revision}, expected=422)
     assert get(api, "bots/cpo")["compact_at"] == 100_000

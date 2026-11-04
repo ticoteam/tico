@@ -750,10 +750,10 @@ def _follow_filled(c, who, seat_id, bot, now):
     from .settings_admin import SettingsAdmin, _set_parent
     for seat in c.execute("SELECT filled_by FROM seats WHERE reports_to=? AND closed_at IS NOT NULL AND filled_by<>''",
                           ("seat:" + seat_id,)).fetchall():
-        found = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (seat["filled_by"],)).fetchone()
+        found = c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (seat["filled_by"],)).fetchone()
         if not found:
             continue
-        placed = (json.loads(found["config"] or "{}") or {}).get("placed_under")
+        placed = BS.read(c, seat["filled_by"]).get("placed_under")
         if placed is None or (found["reports_to"] or "") != placed:
             continue
         try:

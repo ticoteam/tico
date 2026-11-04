@@ -2493,7 +2493,7 @@ def create_app(settings=None):
         it, only its profile for one who may only see it. `rows` (backend/bot_rows.py) holds what
         was read for every bot in the answer."""
         row = dict(bot)
-        # runtime, model and host are the bot's config (bot_config.config); a bot with no config has none of them.
+        # runtime, model and host are the bot's declaration (bot_settings); a bot with no declaration has none of them.
         row.update({"model": "", "runtime": "", "host": "dispatcher"})
         config = rows.config(bot["id"])
         assignment = rows.assignments.get(bot["id"]) if level["read"] else None
