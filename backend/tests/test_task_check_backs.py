@@ -789,3 +789,30 @@ def test_wake_that_never_reached_the_bot_is_repeated_not_quieted(followups, stat
         assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
                          "AND kind='check_back_quiet'", (row["id"],)).fetchone()[0] == 0
         assert len(wakes(c, row["id"])) == 2
+
+
+def test_parent_carrying_an_unread_child_result_is_repaired_and_escalated_not_quieted(followups, monkeypatch):
+    """An active parent owned by bot:ops carries a child result: the child is requested by bot:ops and done by another
+    owner, so its check is routed to the parent. Each routed wake's turn ends without the child closed or reopened. The
+    parent is repaired every pass and escalated once by the stall gate, never quieted."""
+    routed = []
+    monkeypatch.setattr(H, "_no_diagnosis", lambda *a: None)
+    monkeypatch.setattr(H, "_escalate_stuck", lambda c, row, count: routed.append(row["id"]))
+    with followups.app.state.store.transaction() as c:
+        parent = H.task_create(c, "human:ana", "Plan the rename", "Decide the rename plan.", "bot:ops", lint=False)
+        child = H.task_create(c, "bot:ops", "Check the returned result", "Read and dispose.", "bot:finance", lint=False)
+        c.execute("INSERT INTO task_relations VALUES(?,?,'parent','human:ana',?)", (child["id"], parent["id"], H.now()))
+        H.task_update(c, "bot:finance", child["id"], status="done")  # the routed check moves onto the parent
+        assert H.task(c, child["id"])["check_back_at"] is None and H.task(c, parent["id"])["check_back_at"]
+        for n in range(H.STALL_WAKES_PER_DAY):
+            due(c, H.task(c, parent["id"]))
+            assert CB.sweep(c)["woke"] == [parent["id"]]  # first wake, then one per pass: never quieted
+            handled(c, parent["id"])
+            CB.finished_turn(c, f"attempt-{n}", "ops", parent["id"])  # read the result; the child stays done
+            assert CB._repairs(c, H.task(c, parent["id"]))[0] == n + 1
+        due(c, H.task(c, parent["id"]))
+        assert CB.sweep(c)["woke"] == [] and routed == [parent["id"]]  # the stall gate escalates the parent once
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='check_back_quiet'", (parent["id"],)).fetchone()[0] == 0
+        assert len(wakes(c, parent["id"])) == H.STALL_WAKES_PER_DAY
+        assert H.task(c, child["id"])["status"] == "done"

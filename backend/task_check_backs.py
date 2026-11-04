@@ -166,6 +166,26 @@ def default_time(c, row, at, stagger=False):
     return H.shift(at, minutes=30, seconds=seconds)
 
 
+def routed_to(c, result):
+    """The row a returned result's check goes to: its parent while the parent is active and its consumer is the same bot,
+    else the result itself. ensure(), moved() and carries_result() all route by this one rule."""
+    H = _H()
+    consumer = actor_for(result)
+    parent = H.task(c, H.TR.parent_of(c, result["id"]) or "")
+    return parent if consumer and parent and parent["status"] in ACTIVE and actor_for(parent) == consumer else result
+
+
+def carries_result(c, row):
+    """Whether a returned child result, not yet disposed of (still done or declined), has its check routed to this row.
+    The row's quiet repeats would back off a result nobody has read or disposed of, so it keeps the repair path."""
+    H = _H()
+    for cid in H.TR.child_ids(c, row["id"]):
+        child = H.task(c, cid)
+        if child and child["status"] in RESULT and routed_to(c, child)["id"] == row["id"]:
+            return True
+    return False
+
+
 def ensure(c, row, at=None):
     H = _H()
     if "version" not in row or "check_back_at" not in row:
@@ -178,10 +198,8 @@ def ensure(c, row, at=None):
         if not enabled(c):
             clear(c, row)
             return  # results returned during shadow mode belong to the historical audit, not an enable-time queue
-        consumer = actor_for(row)
-        parent = H.task(c, H.TR.parent_of(c, row["id"]) or "")
-        if not consumer or parent and parent["status"] in ACTIVE and actor_for(parent) == consumer:
-            clear(c, row)
+        if not actor_for(row) or routed_to(c, row)["id"] != row["id"]:
+            clear(c, row)  # no consumer, or the check is routed to the parent
             return
     if not row.get("check_back_at"):
         set_time(c, row, default_time(c, row, at), system=True, at=at)
@@ -194,12 +212,10 @@ def moved(c, row, at=None):
     ensure(c, row, at)
     if row["status"] not in RESULT or not enabled(c):
         return
-    consumer = actor_for(row)
-    if not consumer:
+    if not actor_for(row):
         clear(c, H.task(c, row["id"]))  # human acceptance uses its existing question; self-work is finished
         return
-    parent = H.task(c, H.TR.parent_of(c, row["id"]) or "")
-    target = parent if parent and parent["status"] in ACTIVE and actor_for(parent) == consumer else row
+    target = routed_to(c, row)
     now = H.shift(at, seconds=5)
     until = target.get("check_back_at")
     set_time(c, target, min(until, now) if until and until > at else now,
@@ -451,7 +467,8 @@ def quiet(c, row, at):
     """A keeper-set repeat with nothing new: check later on a doubling back-off from 30 minutes, capped at the 8h repair
     cap, keeping the expected note. It is not a repair, so it never feeds the stall count that escalates work nothing moves.
     Never for a result (done or declined): a result the bot read but did not dispose of keeps the repair path, which counts
-    and escalates, so reading it cannot end its follow-up."""
+    and escalates, so reading it cannot end its follow-up. Never for a row carrying an unresolved child result
+    (carries_result): that result's check was routed here, so the same rule holds for the parent that receives it."""
     H = _H()
     state = stand(c, row)
     count = 0
@@ -608,8 +625,9 @@ def sweep(c, at=None, failures=None, task_ids=None):
                 result["blocked"].append(row["id"])
                 continue
             first = not c.execute("SELECT 1 FROM task_check_back_wakes WHERE task_id=? LIMIT 1", (row["id"],)).fetchone()
-            if not first and row["status"] not in RESULT and not explicit(c, row) and not changed(c, row):
-                quiet(c, row, at)  # keeper-set, not a result, and nothing moved: back off without counting as a repair
+            if not first and row["status"] not in RESULT and not carries_result(c, row) and not explicit(c, row) and not changed(c, row):
+                # keeper-set, carrying no unread result, and nothing moved: back off without counting as a repair
+                quiet(c, row, at)
                 continue
             if first:
                 firsts = c.execute("SELECT count(*) FROM task_check_back_wakes w JOIN messages m ON m.id=w.message_id "
