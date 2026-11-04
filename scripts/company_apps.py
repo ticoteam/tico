@@ -15,7 +15,9 @@ import socket
 import ssl
 import subprocess
 import sys
+import time
 import uuid
+from http.client import IncompleteRead
 from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.error import HTTPError, URLError
@@ -163,6 +165,28 @@ class SafeRedirect(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def download_icon(icon_url):
+    # A company server may be restarting for the release while its desktop build starts.
+    for attempt in range(1, 9):
+        try:
+            with build_opener(SafeRedirect()).open(Request(icon_url), timeout=30) as response:
+                icon = response.read(1024 * 1024 + 1)
+        except (URLError, TimeoutError, ConnectionError, IncompleteRead) as exc:
+            if isinstance(exc, HTTPError) and exc.code not in (408, 429) and not 500 <= exc.code < 600:
+                raise
+            if attempt == 8:
+                raise
+            wait_s = min(attempt * 30, 120)
+            # Remote errors can contain private company URLs; report only the attempt and delay.
+            print(f"::warning::Company icon download failed (attempt {attempt}/8); retrying in {wait_s}s",
+                  file=sys.stderr, flush=True)
+            time.sleep(wait_s)
+            continue
+        if len(icon) > 1024 * 1024 or not icon.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise Invalid("TICO_COMPANY_APPS.icon_url must serve a PNG up to 1 MB")
+        return icon
+
+
 def configure(entry, publishing=False):
     # No company identity is passed in process arguments or artifact names.
     base = url(entry.get("runner_url") or entry["url"])
@@ -184,10 +208,7 @@ def configure(entry, publishing=False):
     if icon_url.startswith("/"):
         icon_url = entry["url"].rstrip("/") + icon_url
     with operation("icon download (TICO_COMPANY_APPS.icon_url)"):
-        with build_opener(SafeRedirect()).open(Request(icon_url), timeout=30) as response:
-            icon = response.read(1024 * 1024 + 1)
-        if len(icon) > 1024 * 1024 or not icon.startswith(b"\x89PNG\r\n\x1a\n"):
-            raise Invalid("TICO_COMPANY_APPS.icon_url must serve a PNG up to 1 MB")
+        icon = download_icon(icon_url)
     with operation("icon file write"):
         Path("app/company-icon.png").write_bytes(icon)
     updater = {"endpoints": [base + "/download/latest.json"]}
