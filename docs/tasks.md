@@ -420,7 +420,7 @@ something. Plain code then decides from the answers, your settings and your open
 
 | The item | What happens |
 | --- | --- |
-| Repeats one of your open items | Joins it: the bot keeps its own, and your answer there goes back to it once. |
+| Repeats one of your open items | Joins it when the bot may read that item in full. Otherwise the item is judged as new. The bot keeps its own, and your answer there goes back to it once, if the bot can still read the item. |
 | A progress note | FYI: stays with the bot; no wait is set. |
 | A hands-only chore (grant access, merge, add a key) | **Hands needed**, its own group, up to its own budget (5). |
 | Work the bot could do itself, or unclear | Sent back to the bot. |
