@@ -266,7 +266,7 @@ async fn remove_store(app: &App, store: Uuid) -> bool {
 /// clear no counts: a 404, or Cloudflare Access in front (that hub signs in through Access, not its own page).
 /// No redirects are followed and no cookies are sent.
 async fn has_login(hub: Url) -> bool {
-    let Ok(http) = reqwest::Client::builder().timeout(Duration::from_secs(5))
+    let Ok(http) = reqwest::Client::builder().timeout(std::time::Duration::from_secs(5))
         .redirect(reqwest::redirect::Policy::none()).no_proxy().build() else { return true };
     let Ok(login) = hub.join(LOGIN_PATH) else { return false };
     match http.head(login).send().await {
