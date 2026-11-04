@@ -3,10 +3,11 @@
 use serde_json::Value;
 use tauri::webview::Webview;
 use tauri::Manager;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::orgs;
-use crate::windows::{open_meeting_window, org_label, Home};
+use crate::windows::{open_meeting_window, org_of, Home};
 use crate::{add_org, applog, emit_orgs, log_dir, org_count, popup_orgs, update_now, visual_origin, App, AppState, LOG_LINES};
 
 /// The page's side of the bridge: `window.ticoNative(name).postMessage(body)`, which
@@ -35,6 +36,19 @@ const ORG_SCRIPT: &str = r#"
 })();
 "#;
 
+/// The page's `alert` and `confirm`, as the dialog plugin makes them (`alert` returns at once, `confirm` returns a
+/// promise of true for OK), but through `page_dialog`, which shows them only for the page on screen. Org pages have
+/// no dialog plugin permission; this runs after the plugin's own script, so it is the one that stays.
+const DIALOG_SCRIPT: &str = r#"
+(() => {
+  if (!window.__TAURI__ || !window.__TAURI__.core) return;
+  const invoke = window.__TAURI__.core.invoke;
+  const text = message => message === undefined ? '' : String(message);
+  window.alert = message => { invoke('page_dialog', {confirm: false, message: text(message)}).catch(() => {}); };
+  window.confirm = message => invoke('page_dialog', {confirm: true, message: text(message)}).catch(() => false);
+})();
+"#;
+
 /// The bridge plus this shell's version, which Settings shows beside the server's.
 pub(crate) fn bridge_script(app: &App) -> String {
     script_for(&app.package_info().version.to_string(), orgs::multi_org_build())
@@ -44,7 +58,7 @@ pub(crate) fn bridge_script(app: &App) -> String {
 fn script_for(version: &str, several_orgs: bool) -> String {
     let version = serde_json::to_string(version).unwrap_or_else(|_| "\"\"".into());
     let extra = if several_orgs { ORG_SCRIPT } else { "" };
-    format!("{BRIDGE_SCRIPT}{extra}window.ticoNativeVersion = {version};\n")
+    format!("{BRIDGE_SCRIPT}{DIALOG_SCRIPT}{extra}window.ticoNativeVersion = {version};\n")
 }
 
 // ----------------------------------------------------------------------------- bridge
@@ -53,36 +67,68 @@ fn from_server(app: &App, webview: &Webview) -> bool {
     let document = webview.url().ok();
     let state = app.state::<AppState>();
     let list = state.orgs.lock().unwrap();
-    let open = list.active().map(|org| org_label(&org.id));
+    let open = list.active().map(|org| org.id.as_str());
     let connection = state.connection.lock().unwrap();
-    server_document(connection.as_ref().map(|c| &c.hub), webview.label(), open.as_deref(), document.as_ref())
+    let caller = org_of(webview.label()).unwrap_or_default();
+    server_document(connection.as_ref().map(|c| &c.hub), caller, open, document.as_ref())
 }
 
-/// The page is the open org's page: in that org's own webview, at that org's origin. Not the rail, not an org that is
-/// no longer open, and not a hosted file.
-fn server_document(hub: Option<&url::Url>, label: &str, open: Option<&str>, document: Option<&url::Url>) -> bool {
-    open == Some(label) && hub.zip(document).is_some_and(|(hub, document)| {
+/// The page is the open org's page: in that org's own webview (`caller`, the org its label names), at that org's
+/// origin. Not the rail, not an org that is no longer open, and not a hosted file.
+fn server_document(hub: Option<&url::Url>, caller: &str, open: Option<&str>, document: Option<&url::Url>) -> bool {
+    !caller.is_empty() && open == Some(caller) && hub.zip(document).is_some_and(|(hub, document)| {
         matches!(document.scheme(), "http" | "https") && document.username().is_empty()
             && document.password().is_none() && document.origin() == hub.origin()
     })
 }
 
-fn set_visual_origin(state: &AppState, label: &str, document: Option<&url::Url>, body: Option<&Value>) -> Result<bool, String> {
-    let list = state.orgs.lock().unwrap();
-    let open = list.active().map(|org| org_label(&org.id));
-    let connection = state.connection.lock().unwrap();
-    let hub = connection.as_ref().map(|c| &c.hub);
-    if !server_document(hub, label, open.as_deref(), document) {
-        return Err("Only the selected server's page may configure visuals.".into());
-    }
-    let mut visual = state.visual_origin.lock().unwrap();
-    // `{origin}`, or `{origin, files}` from a page that saw `visualFiles` in this shell's features: Tico file
-    // hosting's address, which shows pages and SVG when the server has no visual origin. Anything else clears.
+/// What a page that is not on screen (a prefetch) may still post: about itself only, so that it is ready when shown,
+/// and its own `bootTiming` (one checked log line, so a prefetched open is timed too). Everything else (windows,
+/// menus, updates, opening the log) is the open page's alone.
+fn own_page_call(name: &str) -> bool {
+    matches!(name, "orgInfo" | "visualOrigin" | "multiOrg" | "bootTiming")
+}
+
+/// The org whose page this is, when the page is at that org's own origin: any org page, open or not.
+fn page_org(app: &App, webview: &Webview) -> Option<String> {
+    let id = org_of(webview.label())?;
+    let hub = app.state::<AppState>().orgs.lock().unwrap().get(id)?.hub();
+    let document = webview.url().ok();
+    server_document(hub.as_ref(), id, Some(id), document.as_ref()).then(|| id.to_string())
+}
+
+/// `{origin}`, or `{origin, files}` from a page that saw `visualFiles` in this shell's features: Tico file hosting's
+/// address, which shows pages and SVG when the server has no visual origin. Anything else clears.
+fn visual_from(hub: Option<&url::Url>, body: Option<&Value>) -> Option<visual_origin::VisualOrigin> {
     fn text(value: Option<&Value>) -> Option<&str> { value.map_or(Some(""), Value::as_str) }
     let raw = body.and_then(Value::as_object)
         .filter(|object| object.contains_key("origin") && object.keys().all(|key| key == "origin" || key == "files"))
         .and_then(|object| Some((text(object.get("origin"))?, text(object.get("files"))?)));
-    *visual = hub.zip(raw).and_then(|(hub, (raw, files))| visual_origin::VisualOrigin::with_files(hub, raw, files));
+    hub.zip(raw).and_then(|(hub, (raw, files))| visual_origin::VisualOrigin::with_files(hub, raw, files))
+}
+
+fn set_visual_origin(state: &AppState, label: &str, document: Option<&url::Url>, body: Option<&Value>) -> Result<bool, String> {
+    let list = state.orgs.lock().unwrap();
+    let caller = org_of(label).unwrap_or_default();
+    let open = list.active().map(|org| org.id.as_str());
+    if open != Some(caller) {
+        // The prefetched page, hidden: its allowance waits apart from the open page's until it is shown.
+        let prefetched = state.prefetch.lock().unwrap().org.clone();
+        let hub = prefetched.filter(|id| id == caller).and_then(|id| list.get(&id).and_then(|org| org.hub()));
+        if hub.is_none() || !server_document(hub.as_ref(), caller, Some(caller), document) {
+            return Err("Only the selected server's page may configure visuals.".into());
+        }
+        let mut parked = state.parked_visual.lock().unwrap();
+        *parked = visual_from(hub.as_ref(), body);
+        return Ok(parked.is_some());
+    }
+    let connection = state.connection.lock().unwrap();
+    let hub = connection.as_ref().map(|c| &c.hub);
+    if !server_document(hub, caller, open, document) {
+        return Err("Only the selected server's page may configure visuals.".into());
+    }
+    let mut visual = state.visual_origin.lock().unwrap();
+    *visual = visual_from(hub, body);
     Ok(visual.is_some())
 }
 
@@ -96,14 +142,17 @@ pub(crate) fn bridge_reply(name: &str, count: usize) -> Value {
 /// also post `windowMode`, which is ignored now that the window has one mode.
 #[tauri::command]
 pub(crate) fn bridge(app: App, webview: Webview, name: String, body: Option<Value>) -> Result<Value, String> {
-    if !from_server(&app, &webview) { return Err("Only the selected server's page may call the app.".into()); }
+    let caller = if from_server(&app, &webview) || own_page_call(&name) { page_org(&app, &webview) } else { None };
+    let Some(caller) = caller else { return Err("Only the selected server's page may call the app.".into()) };
+    // The page's first call: the app on it is up (for the switch timing in the log).
+    crate::timing::ready(&app, &caller, &name);
     match name.as_str() {
         "visualOrigin" => return set_visual_origin(&app.state::<AppState>(), webview.label(), webview.url().ok().as_ref(), body.as_ref()).map(Value::Bool),
         "openWindow" => {
             // `recording` is what an older page called it.
             let id = body.as_ref().and_then(|b| b.get("meeting").or_else(|| b.get("recording"))).and_then(Value::as_str);
             // The caller's own org, from its label: a switch since the check must not open it on another org.
-            let caller = webview.label().strip_prefix("org-").and_then(|org| app.state::<AppState>().orgs.lock().unwrap().get(org).cloned());
+            let caller = org_of(webview.label()).and_then(|org| app.state::<AppState>().orgs.lock().unwrap().get(org).cloned());
             if let (Some(id), Some(home)) = (id, caller.and_then(|org| Home::of(&org))) {
                 open_meeting_window(&app, &home, id);
             }
@@ -130,6 +179,71 @@ pub(crate) fn bridge(app: App, webview: Webview, name: String, body: Option<Valu
     Ok(bridge_reply(&name, org_count(&app)))
 }
 
+/// The page dialogs open now. A switch (and a removal) waits until none is: the page that asked keeps the screen
+/// until its dialog is answered, so a dialog never shows over another org.
+pub(crate) static DIALOGS: DialogGate = DialogGate::new();
+
+pub(crate) struct DialogGate {
+    open: std::sync::Mutex<usize>,
+    answered: std::sync::Condvar,
+}
+
+/// One open dialog; it counts as answered when dropped.
+pub(crate) struct OpenDialog(&'static DialogGate);
+
+impl DialogGate {
+    const fn new() -> Self {
+        DialogGate { open: std::sync::Mutex::new(0), answered: std::sync::Condvar::new() }
+    }
+
+    pub(crate) fn opened(&'static self) -> OpenDialog {
+        *self.open.lock().unwrap() += 1;
+        OpenDialog(self)
+    }
+
+    /// Waits until every open dialog is answered.
+    pub(crate) fn wait_closed(&self) {
+        let mut open = self.open.lock().unwrap();
+        while *open > 0 {
+            open = self.answered.wait(open).unwrap();
+        }
+    }
+}
+
+impl Drop for OpenDialog {
+    fn drop(&mut self) {
+        let mut open = self.0.open.lock().unwrap();
+        *open = open.saturating_sub(1);
+        self.0.answered.notify_all();
+    }
+}
+
+/// The page's `alert` (`confirm` false) or `confirm`: a dialog over the main window, for the open org's page while
+/// it is on screen only, so a page built hidden for a prefetch never puts one over another org. Answers whether OK
+/// was chosen. The check and the dialog's opening happen under `changing`, which a switch holds: a switch under way
+/// finishes first (and the page, no longer on screen, is refused), and a switch after it waits for the answer
+/// (`DIALOGS`). Async, so it waits off the main thread, as the dialog plugin's own command does.
+#[tauri::command]
+pub(crate) async fn page_dialog(app: App, webview: Webview, confirm: bool, message: String) -> Result<bool, String> {
+    let open = {
+        let state = app.state::<AppState>();
+        let _changing = state.changing.lock().unwrap();
+        let shown = org_of(webview.label()).is_some_and(|id| crate::windows::page_on_screen(&app, id));
+        (shown && from_server(&app, &webview)).then(|| DIALOGS.opened())
+    };
+    let Some(open) = open else { return Err("Only the page on screen may show a dialog.".into()) };
+    let mut dialog = app.dialog().message(message).parent(&webview.window());
+    if confirm {
+        dialog = dialog.buttons(MessageDialogButtons::OkCancel);
+    }
+    let (answer, answered) = tokio::sync::oneshot::channel();
+    dialog.show_with_result(move |result| {
+        drop(open);
+        let _ = answer.send(result);
+    });
+    Ok(confirm && matches!(answered.await, Ok(MessageDialogResult::Ok)))
+}
+
 /// The open org's name and email from its page, kept for that org alone. Missing fields are blank.
 fn org_info(app: &App, label: &str, body: Option<&Value>) -> Result<(), String> {
     let object = body.and_then(Value::as_object).ok_or("The org details need a name and an email.")?;
@@ -144,7 +258,7 @@ fn org_info(app: &App, label: &str, body: Option<&Value>) -> Result<(), String> 
     // details to the org that opened next.
     let id = {
         let mut list = state.orgs.lock().unwrap();
-        let id = label.strip_prefix("org-").filter(|id| list.get(id).is_some()).map(str::to_string);
+        let id = org_of(label).filter(|id| list.get(id).is_some()).map(str::to_string);
         if let Some(id) = &id {
             list.set_details(id, &name, &email);
         }
@@ -325,7 +439,7 @@ mod visual_bridge_tests {
     const LABEL: &str = "org-o_7f3a0001";
 
     fn org(id: &str, url: &str, name: &str, email: &str) -> Org {
-        Org { id: id.into(), url: url.into(), store: None, name: name.into(), email: email.into(), added_at: String::new() }
+        Org { id: id.into(), url: url.into(), store: None, name: name.into(), email: email.into(), added_at: String::new(), sign_in: false }
     }
 
     /// One org, open, on its own page's label.
@@ -440,6 +554,30 @@ mod visual_bridge_tests {
     }
 
     #[test]
+    fn a_prefetched_page_keeps_its_own_visual_allowance_apart_from_the_open_one() {
+        const OTHER: &str = "https://tidy.example.com/";
+        let doc = Document { version: 1, active: Some(ORG.into()), orgs: vec![org(ORG, HUB, "", ""), org("o_bbbbbbbb", OTHER, "", "")] };
+        let state = AppState::new(Orgs::new(doc, None), Some(Config::new(url::Url::parse(HUB).unwrap())));
+        let (hub, other) = (url::Url::parse(HUB).unwrap(), url::Url::parse(OTHER).unwrap());
+        let body = serde_json::json!({"origin": ASSETS});
+        assert!(set_visual_origin(&state, "org-o_bbbbbbbb", Some(&other), Some(&body)).is_err(), "not prefetched: refused");
+        state.prefetch.lock().unwrap().org = Some("o_bbbbbbbb".into());
+        assert!(set_visual_origin(&state, "org-o_bbbbbbbb", Some(&hub), Some(&body)).is_err(), "only at its own origin");
+        assert_eq!(set_visual_origin(&state, "org-o_bbbbbbbb", Some(&other), Some(&body)), Ok(true));
+        assert!(state.visual_origin.lock().unwrap().is_none(), "the open page's allowance is untouched");
+        assert!(state.parked_visual.lock().unwrap().as_ref().unwrap().serves(Some(&other)));
+        // The open page's own allowance and navigation never touch the hidden page's, nor the other way round.
+        assert_eq!(set_visual_origin(&state, LABEL, Some(&hub), Some(&body)), Ok(true));
+        let signing_in = AtomicBool::new(false);
+        top_level_window(&state, &signing_in, true, Some(&other), &url::Url::parse("https://accounts.google.com/").unwrap());
+        assert!(state.visual_origin.lock().unwrap().is_some());
+        assert!(state.parked_visual.lock().unwrap().is_none());
+        // Only calls about the page itself are let through from a page that is not on screen.
+        for name in ["orgInfo", "visualOrigin", "multiOrg", "bootTiming"] { assert!(own_page_call(name)); }
+        for name in ["openWindow", "checkForUpdates", "showLog", "showOrgMenu", "addOrg", "windowMode"] { assert!(!own_page_call(name)); }
+    }
+
+    #[test]
     fn the_bridge_never_tells_an_org_about_another() {
         let acme = org("o_aaaaaaaa", "https://acme.example.com/", "Acme Lights", "ops@acme.example");
         let tidy = org("o_bbbbbbbb", "https://tidy.example.com/", "TIDY Team", "chris@tidy.example");
@@ -463,5 +601,28 @@ mod visual_bridge_tests {
             assert_eq!(script.contains("'multiOrg'"), several);
         }
         assert!(BRIDGE_SCRIPT.contains("'orgInfo'"));
+    }
+
+    #[test]
+    fn a_switch_waits_until_every_open_dialog_is_answered() {
+        static GATE: DialogGate = DialogGate::new();
+        GATE.wait_closed();
+        let (first, second) = (GATE.opened(), GATE.opened());
+        let (done, finished) = std::sync::mpsc::channel();
+        let switch = std::thread::spawn(move || { GATE.wait_closed(); done.send(()).unwrap(); });
+        drop(first);
+        assert!(finished.recv_timeout(std::time::Duration::from_millis(200)).is_err(), "one dialog is still open");
+        drop(second);
+        finished.recv_timeout(std::time::Duration::from_secs(5)).expect("the switch goes on once both are answered");
+        switch.join().unwrap();
+    }
+
+    #[test]
+    fn a_page_alert_and_confirm_go_through_the_on_screen_check() {
+        for several in [false, true] {
+            let script = script_for("0.5.0", several);
+            assert!(script.contains("window.alert =") && script.contains("window.confirm ="));
+            assert!(script.contains("invoke('page_dialog'") && !script.contains("plugin:dialog"));
+        }
     }
 }
