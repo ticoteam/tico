@@ -37,6 +37,9 @@ JOB_SECONDS = float(os.environ.get("TICO_CI_JOB_SECONDS", 180))
 SETUP_SECONDS = {"python": 45, "browser": 70}  # measured boot, checkout and warm install
 MAX_JOBS = 16
 UNTIMED_SCRIPT_SECONDS = 20  # a browser script with no measured time yet
+ATTEMPT_CONTENTION_FILE = "backend/tests/test_attempt_contention.py"
+ATTEMPT_CONTENTION_TEST = (ATTEMPT_CONTENTION_FILE +
+                           "::test_100_attempt_routes_during_heartbeat_and_scheduler")
 
 
 def guard_changelog(base, head="HEAD", root=None):
@@ -729,6 +732,17 @@ def run(plan_path, suite):
     (ROOT / "ci-results").mkdir(exist_ok=True)
     rust = cargo_tests(job.get("crates", [])) if suite == "conformance" else 0
     result = subprocess.run(command, cwd=ROOT, env=env)
+    if result.returncode == 0 and suite.startswith("python-") and ATTEMPT_CONTENTION_FILE in files:
+        # This slow lock-load acceptance is excluded by pytest.ini's default `not slow` filter. Run it after the
+        # measured shard, serially on its own 4-vCPU RunsOn job, so its capped two-CPU profile is isolated from xdist.
+        print(f"Running isolated contention acceptance: {ATTEMPT_CONTENTION_TEST}", flush=True)
+        focused = [sys.executable, "-m", "pytest", "-q", "-s", "-n", "0",
+                   "-o", "addopts=--import-mode=importlib -p no:warnings",
+                   "-o", "junit_family=xunit1", "--junitxml=ci-results/attempt-contention.xml",
+                   "-m", "slow or not slow", ATTEMPT_CONTENTION_TEST]
+        result = subprocess.run(focused, cwd=ROOT, env={**os.environ, "PYTEST_ADDOPTS": ""})
+        if result.returncode:
+            return result.returncode
     if result.returncode == 0 and not suite.startswith("browser-"):
         cases = list(ET.parse(ROOT / "ci-results" / f"{suite}.xml").iter("testcase"))
         if not any(t.find("skipped") is None for t in cases):
