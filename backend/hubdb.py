@@ -3958,8 +3958,14 @@ def migrate_task_privacy(conn):
     if not had_privacy:
         humans = {row[0] for row in conn.execute('SELECT id FROM humans')}
         bots = {row[0] for row in conn.execute('SELECT slug FROM bots')}
-        configs = {row[0]: _json(row[1]) for row in conn.execute(f'SELECT bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN}')} \
-            if _has_table(conn, 'bot_config') else {}
+        # Numbered step 23 runs on a file from before migration 0067 (the declaration still in bot_config.config);
+        # the store's cloud step 57 runs after the migrations (the declaration in bot_settings).
+        if not _has_table(conn, 'bot_config'):
+            configs = {}
+        elif 'config' in {row[1] for row in conn.execute('PRAGMA table_info(bot_config)')}:
+            configs = {row[0]: _json(row[1]) for row in conn.execute('SELECT bot,config FROM bot_config')}
+        else:
+            configs = {row[0]: _json(row[1]) for row in conn.execute(f'SELECT bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN}')}
         def sensitive_or_unknown(actor):
             if actor == KEEPER:
                 return False
