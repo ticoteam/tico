@@ -661,7 +661,8 @@ STABLE = [
      "The owner or an admin: switch a system routine on or off, pick its schedule preset (15m, hourly, 4h, daily, "
      "business) or its daily time", "SystemRoutineUpdate"),
     ("/api/v2/system-routines/{key}/run", "post", "Health", "runSystemRoutine",
-     "The owner or an admin: run one controlled system routine once, now; 409 while it is off or already running", None),
+     "The owner or an admin: run one controlled system routine once, now; 409 while it is off or already running. "
+     "task_roundup runs Maintenance Find stuck and returns {run, started}.", None),
     ("/api/v2/maintenance", "get", "Health", "getMaintenance",
      "The Maintenance run: its schedule, pause and monthly judge cap, each step with its switch, how often it runs and its cursor, the last run, the live run, the next run, and whether the viewer may change it", None),
     ("/api/v2/maintenance", "patch", "Health", "saveMaintenance",

@@ -122,6 +122,7 @@ const saved = async (page, writes, count, key) => {
       assert.equal(await page.locator('#set-system-routines h3').count(), 0, 'no group headings');
       assert.equal(await page.locator('#set-system-routines [data-sysr-search]').count(), 1);
       assert.equal(await page.locator('#set-system-routines [data-system-routine]').count(), 10);
+      assert.equal(await row(page, 'task_roundup').count(), 0, 'Task roundup controls moved to Maintenance Find stuck');
       // Each row: WHEN ... THEN ..., one department tag.
       assert.equal(await row(page, 'stale_review').locator('[data-sysr-rule]').innerText(),
         'WHEN every hour THEN check stale tickets AND suggest to each owner: mark done, close or check it');

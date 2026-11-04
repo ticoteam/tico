@@ -868,6 +868,11 @@
         "actor": "human:ana",
         "at": "<time>",
         "id": "<task>",
+        "kind": "update",
+        "kinds": [
+          "insert",
+          "update"
+        ],
         "seq": 80,
         "task": {
           "acceptance": "[]",
@@ -1158,6 +1163,11 @@
         "actor": "human:ana",
         "at": "<time>",
         "id": "<open_task>",
+        "kind": "update",
+        "kinds": [
+          "insert",
+          "update"
+        ],
         "seq": 97,
         "task": {
           "acceptance": "[]",
