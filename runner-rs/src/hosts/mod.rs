@@ -516,7 +516,7 @@ fn command_runs(command: &str) -> Vec<&str> {
 
 /// Whether the character at byte `i` starts a shell word: nothing, whitespace or an operator comes before it.
 fn starts_word(command: &str, i: usize) -> bool {
-    command[..i].chars().next_back().map_or(true, |p| p.is_whitespace() || ";|&()".contains(p))
+    command[..i].chars().next_back().is_none_or(|p| p.is_whitespace() || ";|&()".contains(p))
 }
 
 /// `hub` and the command path its words name, read in order from the positional words before the first flag: the first
