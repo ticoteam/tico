@@ -48,13 +48,23 @@ def pending(conn):
         _PENDING.reset(token)
 
 
+def _write_chain(conn):
+    """The automation chain behind this write, read the way automations decide what a write starts."""
+    from . import automations as A
+    return tuple(A.CHAIN.get() or A._turn_chain(conn))
+
+
 def enqueue(conn, event, task, actor, revision, *, field=None, new=None):
     if event not in TRIGGERS or H.NO_TRIGGERS.get():
         return
     state = _PENDING.get()
     facts = {"step_id" if field == "step" else field: new} if field in ("step", "status") else {}
+    rule_chain = _CHAIN.get()
+    auto_chain = () if rule_chain else _write_chain(conn)
     item = {"event": event, "task": task, "actor": actor, "revision": str(revision),
-            "chain": _CHAIN.get(), "facts": facts, "row": None}
+            "chain": rule_chain or auto_chain,
+            "by": "rule" if rule_chain else ("automation" if auto_chain else ""),
+            "facts": facts, "row": None}
     if state is not None and state["conn"] is conn:
         state["items"].append(item)
     else:
@@ -130,7 +140,10 @@ def judge(conn, item):
                                 (rule["id"], item["task"], item["event"], item["revision"], H.now())).rowcount:
                 continue
             if item["chain"]:
-                _history(conn, item, rule, action, "Skipped: an Action already caused this change; maximum chain depth is one")
+                why = ("Skipped: a routine made this change; a task a routine makes starts no task trigger"
+                       if item.get("by") == "automation" else
+                       "Skipped: an Action already caused this change; maximum chain depth is one")
+                _history(conn, item, rule, action, why)
                 continue
             count = conn.execute("SELECT count(*) FROM rule_task_runs WHERE rule_id=? AND fired=1 AND ran_at>?",
                                  (rule["id"], H.shift(H.now(), hours=-1))).fetchone()[0]

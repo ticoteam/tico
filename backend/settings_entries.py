@@ -408,5 +408,4 @@ NOT_SETTINGS = {
     ("POST", "tasks/{x}/requesters/{x}/delete"): "removes one requester from a public roadmap task",
     ("POST", "tasks/{x}/requesters{x}"): "adds one requester to a public roadmap task",
     ("POST", "postal/items/{x}/retry"): "tries one failed letter again",
-    ("POST", "automations"): "opens a new automation that is off and has no steps; Automations saves it (Dev 666)",
 }
