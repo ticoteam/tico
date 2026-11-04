@@ -476,9 +476,11 @@ def learning_feedback(c, row, posted=None):
             return
         saved = posted["learnings_saved"]
     if saved is None:
-        attempt = c.execute("SELECT a.final_text FROM jobs j JOIN attempts a ON a.id=j.attempt_id "
-                            "WHERE j.message_id=? AND j.bot_id=? AND j.state='completed'",
-                            (row["message_id"], row["bot"])).fetchone()
+        attempt = c.execute("SELECT a.final_text FROM learning_deliveries d "
+                            "JOIN jobs j ON j.message_id=d.message_id AND j.bot_id=d.recipient "
+                            "JOIN attempts a ON a.id=j.attempt_id "
+                            "WHERE d.update_batch_id=? AND d.recipient=? AND j.state='completed' LIMIT 1",
+                            (row["id"], row["bot"])).fetchone()
         match = re.search(r"(?im)^\s*learnings_saved:\s*(\d{1,2})\s*$", (attempt[0] or "") if attempt else "")
         saved = int(match[1]) if match else None
     if saved is not None:
@@ -489,10 +491,10 @@ def learning_feedback(c, row, posted=None):
 
 def settle_learnings(c):
     """A post can arrive before the turn's final reply; collect its count on a later pump tick."""
-    rows = c.execute("SELECT q.* FROM update_queue q JOIN jobs j ON j.message_id=q.message_id "
-                     "WHERE j.state='completed' AND EXISTS (SELECT 1 FROM learning_deliveries d "
-                     "WHERE d.update_batch_id=q.id AND d.recipient=q.bot AND d.settled_at IS NULL "
-                     "AND d.sent_at IS NOT NULL) ORDER BY q.sent_at DESC LIMIT 100").fetchall()
+    rows = c.execute("SELECT DISTINCT d.update_batch_id AS id,d.recipient AS bot,d.sent_at "
+                     "FROM learning_deliveries d JOIN jobs j ON j.message_id=d.message_id AND j.bot_id=d.recipient "
+                     "WHERE j.state='completed' AND d.settled_at IS NULL AND d.sent_at IS NOT NULL "
+                     "ORDER BY d.sent_at DESC LIMIT 100").fetchall()
     for row in rows:
         learning_feedback(c, row)
 
@@ -872,7 +874,7 @@ def send_request(c, row, assistant=None, delivery=False):
     c.execute("UPDATE update_queue SET state='sent', message_id=?, sent_at=?, delivery_only=? WHERE id=?",
               (message["id"], H.now(), int(delivery), row["id"]))
     if items:
-        learnings.mark_sent(c, row["bot"], row["id"], items)
+        learnings.mark_sent(c, row["bot"], row["id"], message["id"], items)
     return message
 
 

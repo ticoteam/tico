@@ -47,12 +47,15 @@ def up(conn):
     if columns["task_id"][3]:
         sql = conn.execute("SELECT sql FROM sqlite_master WHERE name='learning_deliveries'").fetchone()[0]
         _rebuild(conn, "learning_deliveries", re.sub(r"(task_id\s+TEXT)\s+NOT\s+NULL", r"\1", sql, flags=re.I))
-    for name, declaration in (("update_batch_id", "TEXT"), ("sent_item_keys", "TEXT"), ("sent_at", "TEXT"),
+    for name, declaration in (("update_batch_id", "TEXT"), ("message_id", "TEXT"), ("sent_item_keys", "TEXT"),
+                              ("sent_at", "TEXT"),
                               ("learnings_saved", "INTEGER CHECK(learnings_saved BETWEEN 0 AND 15)"),
-                              ("settled_at", "TEXT")):
+                              ("settled_at", "TEXT"), ("expired_at", "TEXT")):
         if name not in columns:
             conn.execute(f"ALTER TABLE learning_deliveries ADD COLUMN {name} {declaration}")
     conn.execute("CREATE INDEX IF NOT EXISTS learning_deliveries_pending ON learning_deliveries(recipient,update_batch_id) "
                  "WHERE task_id IS NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS learning_deliveries_batch ON learning_deliveries(update_batch_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS learning_deliveries_expiry ON learning_deliveries(recipient,created_at) "
+                 "WHERE task_id IS NULL AND update_batch_id IS NULL AND expired_at IS NULL")
     conn.execute("CREATE TABLE IF NOT EXISTS learning_cursors(source TEXT PRIMARY KEY,last_ts TEXT NOT NULL)")

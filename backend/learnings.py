@@ -367,7 +367,7 @@ def shared_item(c, item, bot):
     ids = {ref["task"]} if ref.get("task") else set()
     if ref.get("message"):
         message = H.message(c, ref["message"])
-        if not message or message.get("deleted_at") or message.get("restricted"):
+        if not message or message.get("deleted_at"):
             return False
         room = H.conversation(c, message["conversation_id"]) or {}
         audience = room.get("audience")
@@ -385,12 +385,10 @@ def shared_item(c, item, bot):
         return bool(ids or ref.get("message"))
     if item["source"] == "slack":
         return bool(c.execute("SELECT 1 FROM slack_events WHERE channel=? AND ts=? AND deleted_at IS NULL "
-                              "AND channel_kind<>'im'", (ref.get("channel"), ref.get("ts"))).fetchone())
+                              "AND channel_kind='channel' AND event_type='message.channels'",
+                              (ref.get("channel"), ref.get("ts"))).fetchone())
     if item["source"] == "mail":
-        return bool(c.execute("SELECT 1 FROM mail_messages m JOIN humans h ON lower(h.email)=lower(m.from_addr) "
-                              "WHERE m.mailbox=? AND m.msg_id=? AND lower(m.mailbox)=lower(m.from_addr) "
-                              "AND m.deleted_at IS NULL AND m.labels LIKE '%\"SENT\"%'",
-                              (ref.get("mailbox"), ref.get("msg_id"))).fetchone())
+        return False              # Mailbox grants never establish a company-wide audience.
     if item["source"] == "meeting":
         return bool(c.execute("SELECT 1 FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
                               "WHERE m.id=? AND m.review_state='live' AND mc.deleted_at IS NULL "
@@ -401,14 +399,25 @@ def shared_item(c, item, bot):
 
 def pending(c, bot, batch_id=None):
     """The top fifteen items across pending runs, or the items already sent in this batch."""
+    now = H.now()
+    since = H.shift(now, days=-7)
+    # Read-only previews exclude old items too; only the store's write transactions record expiry.
+    if getattr(c, "write_transaction", False):
+        for row in c.execute("SELECT run_id FROM learning_deliveries WHERE recipient=? AND task_id IS NULL "
+                             "AND update_batch_id IS NULL AND expired_at IS NULL AND created_at<? "
+                             "ORDER BY created_at LIMIT 100", (bot, since)).fetchall():
+            c.execute("UPDATE learning_deliveries SET expired_at=? WHERE run_id=? AND recipient=?",
+                      (now, row["run_id"], bot))
+            refresh_details(c, row["run_id"])
     sent = batch_id and c.execute("SELECT 1 FROM learning_deliveries WHERE recipient=? AND update_batch_id=? LIMIT 1",
                                   (bot, batch_id)).fetchone()
-    where = "d.update_batch_id=?" if sent else "d.update_batch_id IS NULL"
+    where = "d.update_batch_id=?" if sent else (
+        "d.update_batch_id IS NULL AND d.expired_at IS NULL AND d.created_at>=?")
     keys = "d.sent_item_keys" if sent else "d.item_keys"
     rows = c.execute("SELECT i.* FROM learning_deliveries d JOIN learning_items i ON i.run_id=d.run_id "
                      f"JOIN json_each({keys}) k ON k.value=i.item_key WHERE d.recipient=? AND d.task_id IS NULL AND {where} "
-                     "ORDER BY coalesce(json_extract(i.scores,?),0) DESC,i.created_at,i.run_id,i.item_key",
-                     (bot, *((batch_id,) if sent else ()), '$.' + json.dumps(bot)))
+                     "ORDER BY coalesce(json_extract(i.scores,?),0) DESC,i.created_at,i.run_id,i.item_key LIMIT 100",
+                     (bot, batch_id if sent else since, '$.' + json.dumps(bot)))
     out = []
     for row in rows:
         if shared_item(c, row, bot):
@@ -425,8 +434,11 @@ def pending(c, bot, batch_id=None):
 
 def delivery_details(c, run_id):
     """Counts only; an absent report stays unknown instead of counting as dropped."""
-    sent, saved, dropped, unreported, not_sent = {}, 0, 0, 0, 0
+    sent, saved, dropped, unreported, not_sent, expired = {}, 0, 0, 0, 0, 0
     for row in c.execute("SELECT * FROM learning_deliveries WHERE run_id=? AND task_id IS NULL", (run_id,)):
+        if row["expired_at"] is not None:
+            expired += len(json.loads(row["item_keys"]))
+            continue
         count = len(json.loads(row["sent_item_keys"] or "[]"))
         if row["update_batch_id"] is not None:
             sent[row["recipient"]] = count
@@ -436,7 +448,8 @@ def delivery_details(c, run_id):
         else:
             saved += row["learnings_saved"]
             dropped += count - row["learnings_saved"]
-    return {"items_sent": sent, "saved": saved, "dropped": dropped, "unreported": unreported, "not_sent": not_sent}
+    return {"items_sent": sent, "saved": saved, "dropped": dropped, "unreported": unreported, "not_sent": not_sent,
+            "expired": expired}
 
 
 def refresh_details(c, run_id):
@@ -453,7 +466,7 @@ def refresh_details(c, run_id):
                       (json.dumps({**json.loads(step["details"] or "{}"), **counts}), step["id"]))
 
 
-def mark_sent(c, bot, batch_id, items):
+def mark_sent(c, bot, batch_id, message_id, items):
     """Bind the exact request and its items in the message's transaction; retries keep that batch."""
     if c.execute("SELECT 1 FROM learning_deliveries WHERE recipient=? AND update_batch_id=? LIMIT 1",
                  (bot, batch_id)).fetchone():
@@ -462,10 +475,11 @@ def mark_sent(c, bot, batch_id, items):
     for item in items[:15]:
         by_run.setdefault(item["run_id"], []).append(item["item_key"])
     for row in c.execute("SELECT run_id FROM learning_deliveries WHERE recipient=? AND task_id IS NULL "
-                         "AND update_batch_id IS NULL", (bot,)).fetchall():
+                         "AND update_batch_id IS NULL AND expired_at IS NULL AND created_at>=?",
+                         (bot, H.shift(H.now(), days=-7))).fetchall():
         keys = by_run.get(row["run_id"], [])
-        c.execute("UPDATE learning_deliveries SET update_batch_id=?,sent_item_keys=?,sent_at=? "
-                  "WHERE run_id=? AND recipient=?", (batch_id, json.dumps(keys), H.now() if keys else None,
+        c.execute("UPDATE learning_deliveries SET update_batch_id=?,message_id=?,sent_item_keys=?,sent_at=? "
+                  "WHERE run_id=? AND recipient=?", (batch_id, message_id, json.dumps(keys), H.now() if keys else None,
                                                     row["run_id"], bot))
         refresh_details(c, row["run_id"])
 
@@ -496,7 +510,7 @@ def beta_stats(c, days=7):
     days = max(1, min(int(days), 30))
     since = utc(H.parse_ts(H.now()) - timedelta(days=days))
     stats = {"days": days, "runs": 0, "items_read": 0, "items_sent": {}, "saved": 0, "dropped": 0,
-             "unreported": 0, "not_sent": 0, "cost_usd": 0.0}
+             "unreported": 0, "not_sent": 0, "expired": 0, "cost_usd": 0.0}
     for row in c.execute("SELECT id,read_count,detail FROM learning_runs WHERE started_at>=?", (since,)):
         detail = json.loads(row["detail"])
         stats["runs"] += 1
@@ -505,7 +519,7 @@ def beta_stats(c, days=7):
         counts = delivery_details(c, row["id"])
         for bot, count in counts["items_sent"].items():
             stats["items_sent"][bot] = stats["items_sent"].get(bot, 0) + count
-        for key in ("saved", "dropped", "unreported", "not_sent"):
+        for key in ("saved", "dropped", "unreported", "not_sent", "expired"):
             stats[key] += counts[key]
     stats["cost_usd"] = round(stats["cost_usd"], 6)
     return stats
@@ -797,6 +811,8 @@ def night_view(c, auth, who, run, team_names):
         if not d["task_id"]:
             count = len(json.loads(d["sent_item_keys"] or "[]"))
             title = (f"{count} items sent in Update" if d["update_batch_id"] else f"{len(keys)} items waiting for Update")
+            if d["expired_at"] is not None:
+                title = f"{len(keys)} items expired"
             if d["learnings_saved"] is not None:
                 title += f"; {d['learnings_saved']} saved, {count - d['learnings_saved']} dropped"
         if entries or not d["task_id"]:

@@ -7,12 +7,13 @@ import sqlite3
 
 import pytest
 
-from backend import judge, learnings, updates
+from backend import judge, learnings, slack_gateway, updates
 from backend.maintenance_steps import learn as step
 from backend.maintenance_steps import update as update_step
 from backend.store import H
-from backend.tests.test_api import api  # noqa: F401
+from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401
 from backend.tests.test_bot_contact import bot
+from backend.tests.test_mail_api import put_mail
 
 
 def context(api, **changes):
@@ -63,13 +64,35 @@ def queue(c, bot_id="ops", day=None):
     return c.execute("SELECT * FROM update_queue WHERE bot=? AND day=?", (bot_id, day)).fetchone()
 
 
-def complete(c, row, text):
-    job, attempt = H.new_id(), H.new_id()
-    c.execute("INSERT OR REPLACE INTO jobs(id,message_id,bot_id,state,attempt_id,created_at) VALUES(?,?,?,'completed',?,?)",
-              (job, row["message_id"], row["bot"], attempt, H.now()))
-    c.execute("INSERT INTO attempts(id,job_id,bot_id,state,created_at,final_text) VALUES(?,?,?,'completed',?,?)",
-              (attempt, job, row["bot"], H.now(), text))
-    return attempt
+def start(api, row):
+    machine = runner(api)
+    assign(api, machine, row["bot"])
+    ready(api, machine, [row["bot"]])
+    with api.app.state.store.transaction() as c:
+        # Creation wakes are over; claim the Update request itself.
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id=? AND message_id<>?", (row["bot"], row["message_id"]))
+    attempt = claim(api, machine, row["bot"])
+    assert attempt is not None
+    with api.app.state.store.read() as c:
+        job = c.execute("SELECT message_id FROM jobs WHERE attempt_id=?", (attempt["id"],)).fetchone()
+        assert job[0] == row["message_id"]
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "update-turn"}, machine["token"])
+    return machine, attempt
+
+
+def complete(api, turn, text):
+    machine, attempt = turn
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": text, "last_seq": 0}, machine["token"])
+
+
+def keep_items(c, items, created_at=None):
+    now, run_id = created_at or H.now(), H.new_id()
+    c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES(?,?,'done',?)", (run_id, now[:10], now))
+    items = [{"author": "human:ana", "created_at": now, "label": item["key"], "text": "Keep this rule.",
+              "learnable": 0.9, "scores": {"ops": 0.9}, **item} for item in items]
+    learnings.dispatch(c, run_id, now[:10], items, {"ops": items}, {}, {})
+    c.execute("UPDATE learning_deliveries SET created_at=? WHERE run_id=?", (now, run_id))
+    return run_id
 
 
 def test_off_and_exhausted_cap_make_no_model_calls_or_deliveries(api, monkeypatch):
@@ -162,10 +185,12 @@ def test_update_sends_fifteen_across_runs_and_binds_the_exact_batch_once(api, mo
         assert len([line for line in message["body"].splitlines() if line.startswith("- Rule ")]) == 15
         rows = c.execute("SELECT * FROM learning_deliveries WHERE recipient='ops'").fetchall()
         assert {r["update_batch_id"] for r in rows} == {row["id"]}
+        assert {r["message_id"] for r in rows} == {message["id"]}
         assert sum(len(json.loads(r["sent_item_keys"])) for r in rows) == 15
         assert updates.request_slots(c, "ops")["learnings"] == []
         retry = updates.send_request(c, row, delivery=True)
         assert retry["body"] == message["body"]
+        assert {r[0] for r in c.execute("SELECT message_id FROM learning_deliveries")} == {message["id"]}
         detail = json.loads(c.execute("SELECT detail FROM learning_runs LIMIT 1").fetchone()[0])
         assert detail["items_sent"]["ops"] <= 15
 
@@ -217,6 +242,45 @@ def test_private_or_deleted_sources_stay_out_of_company_update(api, monkeypatch)
         assert updates.request_slots(c, "ops")["learnings"] == []
 
 
+def test_only_known_public_slack_messages_reach_company_update(api):
+    with api.app.state.store.transaction() as c:
+        items = []
+        for channel, channel_type in (("C_PUBLIC", "channel"), ("C_PRIVATE", "group"), ("C_UNKNOWN", None)):
+            event, why = slack_gateway.event_from({"event_id": channel, "team_id": "T_ACME", "event": {
+                "type": "message" if channel_type else "app_mention", "channel_type": channel_type,
+                "channel": channel, "ts": "1.0", "user": "U_ANA", "text": "Keep this rule."}}, "U_TICO")
+            assert why is None and event["channel_kind"] == "channel"
+            c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,ts,user_id,event_type,"
+                      "text,received_at) VALUES(?,?,?,'channel','1.0','1.0','U_ANA',?,'Keep this rule.',?)",
+                      (channel, "T_ACME", channel, event["event_type"], H.now()))
+            items.append({"key": channel, "source": "slack", "ref": {"channel": channel, "ts": "1.0"}})
+        keep_items(c, items)
+        assert [i["item_key"] for i in learnings.pending(c, "ops")] == ["C_PUBLIC"]
+
+
+def test_personal_sent_mail_stays_out_of_company_update(api):
+    mail = put_mail(api, "ana@acme.example", from_addr="ana@acme.example", labels=["SENT"], body="Personal salary plans.")
+    with api.app.state.store.transaction() as c:
+        keep_items(c, [{"key": "personal-mail", "source": "mail",
+                        "ref": {"mailbox": "ana@acme.example", "msg_id": mail["msg_id"]}}])
+        assert updates.request_slots(c, "ops")["learnings"] == []
+
+
+def test_real_public_task_comment_passes_provenance_but_private_comment_does_not(api):
+    with api.app.state.store.transaction() as c:
+        items = []
+        for private in (False, True):
+            task = H.task_create(c, "human:ana", "Invoice rules", "Friday is the cutoff.", "bot:ops", lint=False, private=private)
+            comment = H.task_comment(c, "human:ana", task["id"], "Keep the Friday cutoff.", wake=False)
+            assert H.message(c, comment["id"])["restricted"] == 1
+            items.append({"key": "private" if private else "public", "source": "task",
+                          "ref": {"message": comment["id"]}})
+        keep_items(c, items)
+        assert [i["item_key"] for i in learnings.pending(c, "ops")] == ["public"]
+        c.execute("UPDATE messages SET deleted_at=? WHERE id=?", (H.now(), items[0]["ref"]["message"]))
+        assert learnings.pending(c, "ops") == []
+
+
 def test_completed_delivery_parses_saved_count_and_logs_stats_once(api, monkeypatch):
     scoring(api, monkeypatch, count=4)
     store, ctx = api.app.state.store, context(api)
@@ -225,7 +289,12 @@ def test_completed_delivery_parses_saved_count_and_logs_stats_once(api, monkeypa
         row = queue(c)
         updates.send_request(c, row, delivery=True)
         sent = c.execute("SELECT * FROM update_queue WHERE id=?", (row["id"],)).fetchone()
-        complete(c, sent, "Kept two rules.\nlearnings_saved: 2")
+    turn = start(api, sent)
+    complete(api, turn, "Kept two rules.\nlearnings_saved: 2")
+    with store.transaction() as c:
+        attempt = c.execute("SELECT * FROM attempts WHERE id=?", (turn[1]["id"],)).fetchone()
+        assert attempt["state"] == "completed"
+        assert all(attempt[key] is not None for key in ("runner_id", "generation", "token_hash", "lease_until"))
         assert updates.settle_sent(c, sent) is False
         assert c.execute("SELECT state FROM update_queue WHERE id=?", (row["id"],)).fetchone()[0] == "delivered_without_update"
         delivery = c.execute("SELECT * FROM learning_deliveries").fetchone()
@@ -256,31 +325,108 @@ def test_structured_post_feedback_is_scoped_to_its_bot_and_batch(api, monkeypatc
 def test_final_feedback_after_a_post_is_collected_by_the_next_queue_tick(api, monkeypatch):
     scoring(api, monkeypatch, count=2)
     run_step(api)
-    with api.app.state.store.transaction() as c:
+    store = api.app.state.store
+    with store.transaction() as c:
         row = queue(c, day="2026-11-04")
         updates.send_request(c, row)
-        updates.post(c, "ops", "- Finished invoices", day=row["day"])
         sent = c.execute("SELECT * FROM update_queue WHERE id=?", (row["id"],)).fetchone()
+    turn = start(api, sent)
+    with store.transaction() as c:
+        updates.post(c, "ops", "- Finished invoices", day=row["day"])
         updates.settle_sent(c, sent)
-        complete(c, sent, "learnings_saved: 1")
+    complete(api, turn, "learnings_saved: 1")
+    with store.transaction() as c:
         updates.settle_learnings(c)
         assert c.execute("SELECT learnings_saved FROM learning_deliveries").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("resend", [False, True])
+def test_redo_keeps_the_original_delivery_turn_for_feedback(api, monkeypatch, resend):
+    scoring(api, monkeypatch, count=2)
+    run_step(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        row = queue(c)
+        updates.send_request(c, row, delivery=True)
+        sent = c.execute("SELECT * FROM update_queue WHERE id=?", (row["id"],)).fetchone()
+    turn = start(api, sent)
+    with store.transaction() as c:
+        updates.redo(c, row["kind"], row["day"], bots=["ops"])
+        redo = c.execute("SELECT * FROM update_queue WHERE id=?", (row["id"],)).fetchone()
+        assert redo["message_id"] is None
+        if resend:
+            assert updates.send_request(c, redo)["id"] != sent["message_id"]
+        assert c.execute("SELECT message_id FROM learning_deliveries").fetchone()[0] == sent["message_id"]
+    complete(api, turn, "learnings_saved: 1")
+    with store.transaction() as c:
+        updates.settle_learnings(c)
+        assert c.execute("SELECT learnings_saved FROM learning_deliveries").fetchone()[0] == 1
+        run_id = c.execute("SELECT run_id FROM learning_deliveries").fetchone()[0]
+        assert learnings.delivery_details(c, run_id)["saved"] == 1
 
 
 def test_missing_or_out_of_range_feedback_is_unreported(api, monkeypatch):
     scoring(api, monkeypatch, count=2)
     run_step(api)
-    with api.app.state.store.transaction() as c:
+    store = api.app.state.store
+    with store.transaction() as c:
         row = queue(c)
         updates.send_request(c, row, delivery=True)
         sent = c.execute("SELECT * FROM update_queue WHERE id=?", (row["id"],)).fetchone()
-        complete(c, sent, "Nothing new.")
+    complete(api, start(api, sent), "Nothing new.")
+    with store.transaction() as c:
         updates.settle_sent(c, sent)
         learnings.record_saved(c, "ops", row["id"], 3)
         stats = learnings.beta_stats(c)
         assert (stats["saved"], stats["dropped"], stats["unreported"]) == (0, 0, 2)
         learnings.record_saved(c, "ops", row["id"], 1)
         assert c.execute("SELECT learnings_saved FROM learning_deliveries").fetchone()[0] == 1
+
+
+def test_pending_expires_after_seven_days_without_writing_on_a_read_connection(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Invoice rules", "Friday is the cutoff.", "bot:ops", lint=False, private=False)
+        item = {"key": "rule", "source": "task", "ref": {"task": task["id"]}}
+        old = keep_items(c, [item], H.shift(H.now(), days=-8))
+        fresh = keep_items(c, [item], H.shift(H.now(), days=-6))
+    with store.read() as c:
+        c.execute("PRAGMA query_only=ON")
+        try:
+            assert [i["run_id"] for i in learnings.pending(c, "ops")] == [fresh]
+            assert c.execute("SELECT expired_at FROM learning_deliveries WHERE run_id=?", (old,)).fetchone()[0] is None
+        finally:
+            c.execute("PRAGMA query_only=OFF")
+    with store.transaction() as c:
+        assert [i["run_id"] for i in learnings.pending(c, "ops")] == [fresh]
+        assert c.execute("SELECT expired_at FROM learning_deliveries WHERE run_id=?", (old,)).fetchone()[0]
+        counts = learnings.delivery_details(c, old)
+        assert counts["expired"] == 1 and counts["not_sent"] == counts["unreported"] == 0
+        detail = json.loads(c.execute("SELECT detail FROM learning_runs WHERE id=?", (old,)).fetchone()[0])
+        assert detail["expired"] == learnings.beta_stats(c, days=30)["expired"] == 1
+        row = queue(c)
+        updates.send_request(c, row, delivery=True)
+        assert c.execute("SELECT update_batch_id FROM learning_deliveries WHERE run_id=?", (old,)).fetchone()[0] is None
+        c.execute("UPDATE learning_deliveries SET created_at=? WHERE run_id=?", (H.shift(H.now(), days=-8), fresh))
+        assert [i["run_id"] for i in learnings.pending(c, "ops", row["id"])] == [fresh]
+        assert c.execute("SELECT expired_at FROM learning_deliveries WHERE run_id=?", (fresh,)).fetchone()[0] is None
+
+
+def test_pending_checks_at_most_one_hundred_candidates(api, monkeypatch):
+    checked, original = [], learnings.shared_item
+
+    def shared(c, item, bot_id):
+        checked.append(item["item_key"])
+        return original(c, item, bot_id)
+
+    monkeypatch.setattr(learnings, "shared_item", shared)
+    with api.app.state.store.transaction() as c:
+        for run in range(7):
+            keep_items(c, [{"key": f"gone:{run}:{n}", "source": "task", "ref": {"task": "gone"}} for n in range(15)])
+        task = H.task_create(c, "human:ana", "Invoice rules", "Friday is the cutoff.", "bot:ops", lint=False, private=False)
+        keep_items(c, [{"key": "valid", "source": "task", "ref": {"task": task["id"]}, "scores": {"ops": 0.8}}])
+        assert learnings.pending(c, "ops") == []
+        assert len(checked) == 100
 
 
 def test_learnings_page_reads_pending_update_and_old_packet_receipts(api, monkeypatch):
@@ -338,11 +484,13 @@ def test_migration_0085_is_idempotent_and_keeps_old_rows_and_indexes():
         c.execute("INSERT INTO learning_deliveries VALUES('old','ops','packet-task','[\"item\"]','then')")
         migration.up(c)
         migration.up(c)
-        row = c.execute("SELECT task_id,item_keys,update_batch_id FROM learning_deliveries WHERE run_id='old'").fetchone()
-        assert row == ("packet-task", '["item"]', None)
+        row = c.execute("SELECT task_id,item_keys,update_batch_id,message_id,expired_at "
+                        "FROM learning_deliveries WHERE run_id='old'").fetchone()
+        assert row == ("packet-task", '["item"]', None, None, None)
         assert c.execute("SELECT night FROM learning_runs WHERE id='old'").fetchone()[0] == "same-day"
         c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES('again','same-day','quiet','now')")
         assert c.execute("SELECT 1 FROM sqlite_master WHERE name='old_learning_tasks'").fetchone()
+        assert c.execute("SELECT 1 FROM sqlite_master WHERE name='learning_deliveries_expiry'").fetchone()
         assert c.execute("SELECT task_id FROM old_packets WHERE task_id IS NOT NULL").fetchone()[0] == "packet-task"
         c.execute("INSERT INTO learning_deliveries(run_id,recipient,item_keys,created_at) VALUES('new','ops','[]','now')")
         assert c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

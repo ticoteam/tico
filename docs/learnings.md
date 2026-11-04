@@ -155,14 +155,18 @@ synced in from another platform (Grok, Dots, Muse) never gets a run here, so it 
 carries a short "Learnings for you" block, with at most 15 one-line items and their sources. Sources are checked
 again before sending: private tasks and restricted conversations stay out of a company session. A bot with no
 work gets a delivery-only turn and posts no update. No packet task is created.
+Slack items require a stored public-channel event; private channels and unknown audiences stay out. Mailbox
+access is restricted, so sent mail is excluded from Update delivery.
 
 The request and its receipts share the `update_queue` id (`update_batch_id`). Retries reuse those items; a redo of
-an old update consumes none. When several runs are pending, the highest scores go first and excess items count
+an old update consumes none. Each delivery also keeps its original request message id, so a redo cannot detach
+the original turn's feedback. Pending deliveries expire after seven days and count as expired. Selection checks
+at most 100 candidate items; when several runs are pending, the highest scores go first and excess items count
 as not sent. Original items stay readable on the Learnings page. The bot follows its memory working rules,
 commits its changes and reports `learnings_saved: n`, including zero, in its final reply or the update's structured
 fields. Saved counts are attributed to the oldest contributing run first. Drops count only reported items;
 an absent or invalid count stays unreported. Learn's run details and `learnings.beta_stats(c, days=7)` show reads,
-items sent per bot, saved, dropped, unreported, not sent and cost. Decide meters calls under the monthly cap,
+items sent per bot, saved, dropped, unreported, not sent, expired and cost. Decide meters calls under the monthly cap,
 including paid failures; a capped run sends nothing and keeps its cursors.
 
 **The page.** Learnings lists runs by day, including old packet tasks and new Update deliveries. It shows memory
