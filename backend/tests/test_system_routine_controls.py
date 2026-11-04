@@ -19,7 +19,7 @@ from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
 from backend.tests.test_stale_review import FakeDecide
 
 TIMED = {"stale_review", "still_wanted", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
-         "engineering_exceptions", "bookkeeper_check", "memory_tidy", "auto_dream"}   # the jobs with a schedule preset
+         "engineering_exceptions", "bookkeeper_check", "memory_tidy", "auto_dream", "task_roundup"}   # the jobs with a schedule preset
 
 
 def rows(api, token="ana-test"):
@@ -30,7 +30,7 @@ def test_admin_sees_a_switch_and_a_schedule_on_the_timed_jobs_and_housekeeping_h
     jobs = rows(api, "ben-test")
     timed = {k for k, j in jobs.items() if j["presets"]}
     assert timed == TIMED | {"task-rule-close-after-done"}
-    assert {k for k, j in jobs.items() if j["switch"]} == TIMED | {"topic_fresh", "stall_triage", "task-rule-close-after-done", "task_check_backs"}
+    assert {k for k, j in jobs.items() if j["switch"]} == TIMED | {"topic_fresh", "stall_triage", "task-rule-close-after-done"}
     for key in TIMED - {"health_scan"}:
         assert jobs[key]["can_change"] is True, key
     for key, job in jobs.items():
@@ -131,6 +131,61 @@ def test_daily_at_a_time_runs_once_a_day_after_that_time():
     assert not SR.due(cfg, morning + timedelta(hours=5), morning + timedelta(minutes=1, seconds=5))
     assert SR.next_due(cfg, morning + timedelta(minutes=1, seconds=5), morning + timedelta(hours=5)) == \
         datetime(2026, 10, 23, 9, 0, tzinfo=pt)
+
+
+def test_the_task_roundup_never_run_is_next_at_its_next_company_time_not_now():
+    # Three times a day, at 6am, noon and 6pm company time (Pacific: PST on 3 November 2026, UTC-8).
+    cfg = {"on": True, "preset": SR.THREE_DAILY, "at": "06:00"}
+    pt = SR.zone()
+    assert SR.next_due(cfg, None, datetime(2026, 11, 3, 3, tzinfo=pt)) == datetime(2026, 11, 3, 6, tzinfo=pt)
+    assert SR.next_due(cfg, None, datetime(2026, 11, 3, 7, tzinfo=pt)) == datetime(2026, 11, 3, 12, tzinfo=pt)
+    assert SR.next_due(cfg, None, datetime(2026, 11, 3, 19, tzinfo=pt)) == datetime(2026, 11, 4, 6, tzinfo=pt)
+    assert SR.next_due(cfg, None, datetime(2026, 11, 3, 6, tzinfo=pt)) == datetime(2026, 11, 3, 12, tzinfo=pt)
+
+
+def _simulated_clock(api, at):
+    """A run's start is stamped with the wall clock (H.now), and the scheduler reads its last start from that row.
+    Put the tick's own time back on any run stamped later than it, so a fixed test day is not blocked by today's clock."""
+    stamp = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE system_runs SET started_at=?, finished_at=? WHERE job='task_roundup' AND started_at>?",
+                  (stamp, stamp, stamp))
+
+
+def test_the_task_roundup_first_runs_at_its_next_company_time_after_a_deploy_not_at_once(api, monkeypatch):
+    from backend import task_roundup
+    sent = []
+    monkeypatch.setattr(task_roundup, "discover", lambda c, at: sent.append(at) or [])   # one call per run
+    pt = SR.zone()
+    # One process: the wait for the first run starts at its first tick.
+    scheduler = Scheduler(api.app.state.store, api.app.state.execution)
+
+    def tick(at):
+        scheduler.tick(at)
+        _simulated_clock(api, at)
+    tick(datetime(2026, 11, 3, 2, tzinfo=pt))
+    tick(datetime(2026, 11, 3, 5, 59, tzinfo=pt))
+    assert sent == [], "a deploy at 2am company time does not send every bot its list at once"
+    tick(datetime(2026, 11, 3, 6, 0, 5, tzinfo=pt))
+    assert len(sent) == 1
+    tick(datetime(2026, 11, 3, 9, tzinfo=pt))
+    assert len(sent) == 1, "no second run before noon"
+    tick(datetime(2026, 11, 3, 12, 0, 5, tzinfo=pt))
+    assert len(sent) == 2
+    tick(datetime(2026, 11, 3, 18, 0, 5, tzinfo=pt))
+    assert len(sent) == 3
+
+
+def test_the_task_roundup_deployed_after_a_company_time_waits_for_the_next_one(api, monkeypatch):
+    from backend import task_roundup
+    sent = []
+    monkeypatch.setattr(task_roundup, "discover", lambda c, at: sent.append(at) or [])   # one call per run
+    pt = SR.zone()
+    scheduler = Scheduler(api.app.state.store, api.app.state.execution)
+    scheduler.tick(datetime(2026, 11, 3, 7, tzinfo=pt))
+    assert sent == []
+    scheduler.tick(datetime(2026, 11, 3, 12, 0, 5, tzinfo=pt))
+    assert len(sent) == 1
 
 
 def test_nightly_learnings_has_an_off_switch_on_by_default_and_off_means_no_run_that_night(api, monkeypatch):

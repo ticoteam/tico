@@ -303,8 +303,7 @@ sent notes and notes between bots whose activity they may read.
 A deferred Task remains open with `next_run_waiting: true` until a run carries it. It then follows
 ordinary task states and needs a completion result. Close it with
 `hub task close <task-id> --note "Canceled before work began"` under the normal task permissions, or choose
-**Run now** on the task to start it sooner. Deferred does not mean delayed forever: its deadline starts a run. The
-stalled-task check leaves a deferred task alone until a run carries it.
+**Run now** on the task to start it sooner. Deferred does not mean delayed forever: its deadline starts a run. A deferred task is left alone until a run carries it.
 
 When a deferred task moves from Waiting back to Open, its existing queued notice can start its own run.
 That reopening supersedes an earlier deferral. A later deferral, a stored resume condition,

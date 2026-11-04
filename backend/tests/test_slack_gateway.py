@@ -11,6 +11,7 @@ import pytest
 
 from backend import hubdb as H
 from backend import slack_gateway as G
+from backend import task_check_backs
 from backend.config import Settings
 from backend.store import Store, encode
 from clients import judge as J
@@ -788,11 +789,17 @@ def task_reply(hub, private, attachments):
     return made["id"], reply
 
 
+def set_follow_up(hub, task):
+    """Ana sets the task's follow-up time: an explicit time, which the footer shows. Returns it."""
+    with hub.transaction() as c:
+        task_check_backs.set_time(c, H.task(c, task), H.shift(H.now(), hours=5), "Look at the chart", actor=H.human_actor("ana"))
+        return H.task(c, task)["check_back_at"]
+
+
 def test_a_task_reply_with_a_visual_links_to_that_message_in_the_task(gateway, hub):
     link_task_requester(hub)
     task, reply = task_reply(hub, False, [visual(), visual("svg", 2)])
-    with hub.read() as c:
-        followup = H.task(c, task)["check_back_at"]
+    followup = set_follow_up(hub, task)
     gateway.originate()
     gateway.mirror()
     gateway.deliver()
@@ -808,13 +815,26 @@ def test_a_task_reply_names_and_links_its_task(gateway, hub):
     task, _ = task_reply(hub, False, [])
     with hub.transaction() as c:
         c.execute("UPDATE tasks SET number=19332, title=? WHERE id=?", ("Voice <tokens> & keys", task))
-        followup = H.task(c, task)["check_back_at"]
+    followup = set_follow_up(hub, task)
     gateway.originate()
     gateway.mirror()
     gateway.deliver()
     [post] = gateway.slack.posts
     assert post["text"] == ("Here is the quarter.\n\n"
                             f"(sent from Legal on <https://tico.example.com/#/task/{task}|#19332 Voice &lt;tokens&gt; &amp; keys>)\nFollow up by {followup}")
+
+
+def test_a_task_reply_with_no_follow_up_time_has_no_follow_up_line(gateway, hub):
+    """Tico sets no follow-up time of its own, so a task nobody set one on gets no follow-up line in the footer."""
+    link_task_requester(hub)
+    task, reply = task_reply(hub, False, [visual()])
+    gateway.originate()
+    gateway.mirror()
+    gateway.deliver()
+    [post] = gateway.slack.posts
+    assert post["text"] == ("Here is the quarter.\n\n"
+                            f"<https://tico.example.com/?task={task}&amp;message={reply}|1 visual - view in Tico>"
+                            f"\n\n(sent from Legal on <https://tico.example.com/#/task/{task}|Q3 numbers>)")
 
 
 def test_a_private_task_reply_with_a_visual_never_reaches_slack(gateway, hub):
