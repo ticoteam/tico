@@ -1,7 +1,7 @@
 """Stop quarantined turns through the normal Stop protocol and preserve their reason.
 
 The first runner call records the quarantine reason on the attempt. Renewal returns
-it with Stop. Completion requeues the work of the run (`requeues`) until the bot becomes active again. A quarantine
+it with Stop. Completion requeues the work of the run (`requeues`) until its task/chat hold or bot quarantine lifts. A quarantine
 stops the run the hub itself chose to cut, so it is judged as a computer's reported restart is (retry_facts): only a
 consumed approval, a fallback whose work is unknown or a named outside action (merge, publish, send, payment) holds it
 for review. Such a run resumes with a note (`requeue`) that says it was stopped by a quarantine and to check what it
@@ -38,7 +38,7 @@ def line(c, bot, at=None, hold=None):
 
 
 def stop(c, row):
-    """Record the quarantine's Stop on `row`, a leased or running attempt of a quarantined bot whose runner still holds
+    """Record the quarantine's Stop on `row`, a leased or running attempt of held work whose runner still holds
     it, and return the attempt read again. A Stop already recorded (a person's, or this one) stands."""
     if row["stop_requested_at"]:
         return row

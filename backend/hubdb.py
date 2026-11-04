@@ -2699,8 +2699,8 @@ def quarantine_resumes(conn, slug):
 
 
 def lift_cooled_quarantines(conn, cooldown=QUARANTINE_COOLDOWN_S):
-    """A refusal-count quarantine is a cooldown: after an hour the bot runs again, with its count
-    started over. Runs from the scheduler's tick. Returns the bots let out."""
+    """After an hour, release refusal-count holds and bot quarantines and start their counts over.
+    Runs from the scheduler's tick. Returns the bots whose work was let out; escapes still need a person."""
     from . import task_quarantine
     cutoff = shift(now(), seconds=-cooldown)
     lifted = task_quarantine.release(conn, KEEPER, cutoff=cutoff)
@@ -2770,7 +2770,7 @@ def _actor_exists(conn, actor):
 
 
 def _writer(conn, actor):
-    """Rule 1: the actor must be someone hubdb knows, and not a quarantined bot."""
+    """Rule 1: the actor must be someone hubdb knows, outside a bot quarantine or a held turn."""
     if not actor_kind(actor):
         refuse(conn, str(actor), "identity", f"{actor!r} is not an actor")
     if not _actor_exists(conn, actor):
