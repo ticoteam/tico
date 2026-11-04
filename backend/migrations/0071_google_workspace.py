@@ -3,7 +3,9 @@
 `google_workspaces` holds the install's service-account key for its Workspace: the active row (`connected`, or `failing`
 after a check or token mints have failed for a while) and at most one `pending` replacement. The key is sealed
 (vault.cipher, context `google-workspace:<id>`). `google_setup_codes` keeps the hash of each setup command's code, its
-generation (only the newest generation may upload a key) and when it was used. `google_oauth_clients` is the OAuth
+generation (only the newest generation may upload a key) and when it was used. `google_setup_generations` is the counter
+those generations come from: one row, bumped in the same transaction as each code or upload, so a removed key or code
+never gives its number back. `google_oauth_clients` is the OAuth
 client an admin pasted in when the server's environment has none; its secret is sealed. `connector_reports` is each
 computer's health per service and account, so one computer's failure does not hide another's.
 
@@ -35,12 +37,17 @@ CONNECTOR_REPORTS = (
     "DEFAULT '', error TEXT NOT NULL DEFAULT '', failing_json TEXT NOT NULL DEFAULT '[]', ok_accounts_json TEXT NOT NULL "
     "DEFAULT '[]', reported_at TEXT NOT NULL, PRIMARY KEY(service, runner_id, account))"
 )
+GOOGLE_SETUP_GENERATIONS = (
+    "CREATE TABLE IF NOT EXISTS google_setup_generations(singleton INTEGER PRIMARY KEY CHECK (singleton = 1), "
+    "issued INTEGER NOT NULL)"
+)
 
 
 def up(conn):
     for statement in (GOOGLE_WORKSPACES, GOOGLE_WORKSPACES_PENDING, GOOGLE_SETUP_CODES, GOOGLE_OAUTH_CLIENTS,
-                      CONNECTOR_REPORTS):
+                      CONNECTOR_REPORTS, GOOGLE_SETUP_GENERATIONS):
         conn.execute(statement)
+    conn.execute("INSERT OR IGNORE INTO google_setup_generations(singleton, issued) VALUES(1, 0)")
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='google_connects'").fetchone():
         if "client_id" not in {row[1] for row in conn.execute("PRAGMA table_info(google_connects)")}:
             conn.execute("ALTER TABLE google_connects ADD COLUMN client_id TEXT")

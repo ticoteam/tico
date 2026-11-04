@@ -6,8 +6,9 @@ Cloud project, a service account or domain-wide delegation). Google sends their 
 `/api/v2/mail/google/callback`, which checks the state belongs to the same person and keeps the one-time code.
 The computer hosting the person's message bot claims it (a disconnect goes to the computer holding the grant), asks this
 server to trade it for the grant, confirms the account that signed in is the mailbox asked for and keeps the grant
-(connectors/mail/oauth.py `finish`). With no bot computer, a publisher takes a first connect, as before; a reconnect that
-moves the grant leaves the old holder a revocation to run (`google_revocations`).
+(connectors/mail/oauth.py `finish`). With no bot computer, a publisher takes a first connect, as before. A reconnect that
+moves the grant does not revoke the old one at Google: that would end the new grant too (one client, one person). The
+old holder's refresh token is inert, since only this server can add the secret and it refreshes only the current grant.
 
 The OAuth client secret never leaves this server. It is one secret for every team on Tico's public app, so no
 computer holds it: the code exchange (`/exchange`) and every later refresh (`/token`) go through here. The server
@@ -52,10 +53,6 @@ CREATE TABLE IF NOT EXISTS google_connects(
  updated_at TEXT NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS google_connects_oauth_state ON google_connects(oauth_state) WHERE oauth_state IS NOT NULL;
 CREATE TABLE IF NOT EXISTS google_mail_holders(runner_id TEXT PRIMARY KEY, holds INTEGER NOT NULL, seen_at REAL NOT NULL);
--- A grant an earlier computer still holds after a reconnect moved the person's grant elsewhere (plan v5 V): that
--- computer revokes it when it next claims, and the row goes. One per person and computer.
-CREATE TABLE IF NOT EXISTS google_revocations(person_id TEXT NOT NULL, runner_id TEXT NOT NULL, mailbox TEXT NOT NULL,
- created_at TEXT NOT NULL, PRIMARY KEY(person_id, runner_id));
 """
 # The SHA-256 of a grant's refresh token: the one being connected (`pending_hash`, from the exchange) and the one
 # connected (`grant_hash`, once the computer says connected). A fingerprint, never the token.
@@ -258,7 +255,7 @@ def claimable(c, runner_id, holds, named=False):
 
     A person's row goes to the computer hosting their message bot when there is one:
     - a first connect goes there while that computer is online; a publisher takes it only otherwise;
-    - a reconnect goes there, whoever held the earlier grant (its old holder is asked to revoke it, see google_result);
+    - a reconnect goes there, whoever held the earlier grant (the old holder's refreshes are then refused, see google_refresh);
     - a disconnect goes to the holder, the only computer that can revoke the grant it holds.
     With no bot computer, the rules are as they were: the holder; or, for a publisher, a first connect or a grant whose
     holder was removed, unless another computer has said it holds mail credentials recently."""
@@ -403,12 +400,6 @@ def install(app, store, member, mutate):
             # Only recent answers count (claimable), so older ones and revoked computers' go.
             c.execute("DELETE FROM google_mail_holders WHERE seen_at<? OR runner_id IN "
                       "(SELECT id FROM runners WHERE revoked_at IS NOT NULL)", (time.time() - HOLDER_SECONDS,))
-            # A grant this computer must revoke after a reconnect moved it (plan v5 V) comes before anything new here, so
-            # a connect never lands on a computer still holding the grant it replaces.
-            owed = c.execute("SELECT * FROM google_revocations WHERE runner_id=? ORDER BY created_at LIMIT 1",
-                             (runner["id"],)).fetchone()
-            if owed:
-                return {"connect": {"id": owed["person_id"], "action": "disconnect", "mailbox": owed["mailbox"]}}
             # The narrow gate (plan v4 O): a publisher, or a computer that hosts someone's message bot, or one holding a grant.
             hosted = any(host["runner"] == runner["id"] for host in google_rights.inbox_hosts(c).values())
             if not named and not hosted and not c.execute(
@@ -468,14 +459,20 @@ def install(app, store, member, mutate):
         if not wanted <= SERVICE_SCOPES[body.service]:
             raise Problem("scope", f"A {body.service} token from Connect Google carries only its read-only scopes", 422)
         with store.transaction() as c:
-            runner, _ = member(c, request.state.identity)
-            held = c.execute("SELECT 1 FROM google_connects WHERE lower(mailbox)=? AND holder=? AND grant_hash=? "
+            runner, named = member(c, request.state.identity)
+            held = c.execute("SELECT * FROM google_connects WHERE lower(mailbox)=? AND holder=? AND grant_hash=? "
                              "LIMIT 1", (body.mailbox.strip().lower(), runner["id"],
                                          fingerprint(body.refresh_token))).fetchone()
             if not held:
                 # Also a grant whose connected result never reached the server: the computer reconnects.
                 raise Problem("not_this_grant", "This computer holds no Connect Google grant from this server for that "
                                                 "mailbox", 403)
+            # The narrow gate (plan v4 O): a publisher, or the computer hosting the person's message bot. A grant that
+            # moved away from its bot's computer is refused here, and the answer says to reconnect (the mail CLI stops on it).
+            if not google_rights.may_row(runner["id"], named, held, google_rights.inbox_hosts(c)):
+                raise Problem("not_this_grant", "This computer no longer runs the message bot for that mailbox, so it does "
+                                                "not refresh its Connect Google grant. Reconnect it in Settings > Google.",
+                              403)
         with store.read() as c:
             client = oauth_client(c, settings)
         if client is None:
@@ -497,25 +494,12 @@ def install(app, store, member, mutate):
         with store.transaction() as c:
             runner, named = member(c, request.state.identity)
             row = c.execute("SELECT * FROM google_connects WHERE person_id=?", (person_id,)).fetchone()
-            owed = c.execute("SELECT * FROM google_revocations WHERE person_id=? AND runner_id=?",
-                             (person_id, runner["id"])).fetchone()
-            if owed and body.status == "disconnected" and not (
-                    row and row["runner_id"] == runner["id"] and row["status"] == "revoking"):
-                # The old grant this computer held is revoked (plan v5 V); the row's own connect or disconnect is not this.
-                c.execute("DELETE FROM google_revocations WHERE person_id=? AND runner_id=?", (person_id, runner["id"]))
-                H.event(c, "human:" + person_id, "mail.google.revoked", owed["mailbox"], {})
-                return {"ok": True}
             if not row:
                 raise Problem("not_found", "No Google connect is waiting for this person", 404)
             if row["runner_id"] != runner["id"] or row["status"] not in ("finishing", "revoking"):
                 raise Problem("state", "This Google connect is not this computer's to finish", 409)
             if not google_rights.may_row(runner["id"], named, row, google_rights.inbox_hosts(c)):
                 raise Problem("forbidden", google_rights.FORBIDDEN, 403)
-            if body.status == "connected" and row["holder"] and row["holder"] != runner["id"]:
-                # The grant it replaces stays on the computer that held it until that computer revokes it (plan v5 V).
-                c.execute("INSERT INTO google_revocations(person_id,runner_id,mailbox,created_at) VALUES(?,?,?,?) "
-                          "ON CONFLICT(person_id,runner_id) DO UPDATE SET mailbox=excluded.mailbox",
-                          (person_id, row["holder"], row["mailbox"], H.now()))
             if (row["status"] == "finishing") != (body.status != "disconnected"):
                 raise Problem("state", "That result does not answer this request", 409)
             kind = body.kind if body.kind in KINDS else ("error" if body.status == "failed" else None)

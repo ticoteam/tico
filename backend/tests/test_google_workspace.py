@@ -253,6 +253,46 @@ def test_keep_answers_only_for_an_upload_made_within_ten_minutes(api, private):
     assert r.status_code == 403
 
 
+def test_a_removed_key_never_gives_its_generation_back(api, private):
+    first = new_code(api)                                    # a setup command still out, generation one
+    admin = api.post(KEY, json={"key": key_json(private, "key-admin"), "domain": "acme.example"},
+                     headers=headers("ana-test"))
+    assert admin.status_code == 200 and admin.json()["keep_key_ids"] == ["key-admin"]
+    assert api.delete("/api/v2/google/workspace", headers=headers("ana-test")).status_code == 200
+    assert rows(api) == []                                   # the admin's key, and the row that carried its number, are gone
+    assert upload(api, first, key_json(private, "key-old"), expected=409)["error"]["code"] == "superseded"
+    assert rows(api) == []
+
+
+def test_setup_answers_and_the_key_view_say_which_generation_they_are(api, private):
+    first = api.post("/api/v2/google/workspace/setup-code", json={"domain": "acme.example"}, headers=headers("ana-test"))
+    second = api.post("/api/v2/google/workspace/setup-code", json={"domain": "acme.example"}, headers=headers("ana-test"))
+    assert first.status_code == 200 and second.status_code == 200
+    assert second.json()["generation"] == first.json()["generation"] + 1
+    upload(api, second.json()["code"], key_json(private))
+    shown = google_view(api)["workspace"]
+    assert shown["generation"] == second.json()["generation"]
+    assert [row["generation"] for row in rows(api)] == [second.json()["generation"]]
+
+
+def test_keep_refuses_once_the_person_who_made_the_code_is_no_longer_an_admin(api, private, monkeypatch):
+    code = new_code(api)
+    upload(api, code, key_json(private))
+    monkeypatch.setattr(api.app.state.store.settings, "credential_admins", ("ben@acme.example",))
+    r = api.post(KEEP, headers={"Authorization": "Setup " + code})
+    assert r.status_code == 403 and r.json()["error"]["code"] == "forbidden"
+
+
+def test_a_public_key_is_a_bad_key_named_as_one_not_a_server_error(api, private):
+    public = serialization.load_pem_private_key(private.encode(), password=None).public_key().public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    code = new_code(api)
+    answer = upload(api, code, key_json(public), expected=422)
+    assert answer["error"]["code"] == "key" and public not in json.dumps(answer)
+    assert rows(api) == []
+    upload(api, code, key_json(private))                     # the rejected key used no code
+
+
 def test_wrong_codes_lock_the_setup_for_a_minute(api, private):
     for i in range(W.BAD_CODES):
         upload(api, "wrong-%d" % i, key_json(private), expected=401)

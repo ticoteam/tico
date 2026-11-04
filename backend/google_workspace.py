@@ -28,6 +28,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import jwt
+from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Request
 from fastapi.responses import Response
 from pydantic import Field
@@ -296,8 +299,11 @@ def validate_key(key):
     if key.get("token_uri") != TOKEN_URI:
         raise Problem("key", "The key's token_uri is not Google's token endpoint", 422)
     try:
-        jwt.encode({"iss": key["client_email"], "aud": TOKEN_URI}, key["private_key"], algorithm="RS256")
-    except Exception:
+        signer = serialization.load_pem_private_key(key["private_key"].encode(), password=None)
+        if not isinstance(signer, rsa.RSAPrivateKey):      # a public key PEM loads, but cannot sign
+            raise ValueError("not an RSA private key")
+        jwt.encode({"iss": key["client_email"], "aud": TOKEN_URI}, signer, algorithm="RS256")
+    except (TypeError, ValueError, UnsupportedAlgorithm, jwt.PyJWTError):
         raise Problem("key", "The key's private_key is not a usable RSA key", 422) from None
     fields = {field: key[field].strip() for field in KEY_FIELDS}
     fields["project_id"] = str(key.get("project_id") or "").strip()[:200]
@@ -367,11 +373,17 @@ def _bad_code(now):
 
 
 def _newest(c):
-    """The newest generation issued. Setup codes and uploaded keys share one order, so an older code can never upload
-    over a newer key. Codes are never deleted, so this only goes up (a deleted key does not lower it)."""
-    found = c.execute("SELECT MAX(g) FROM (SELECT generation AS g FROM google_setup_codes UNION ALL "
-                      "SELECT generation AS g FROM google_workspaces)").fetchone()
-    return int(found[0] or 0)
+    """The newest generation issued, from the counter every setup command and every uploaded key takes its number from
+    (`_issue`). Setup codes and uploads share one order, so an older code can never upload over a newer key."""
+    return int(c.execute("SELECT issued FROM google_setup_generations WHERE singleton=1").fetchone()[0])
+
+
+def _issue(c):
+    """A new generation, for a setup command or an uploaded key, taken in the caller's transaction. The counter is kept
+    apart from the rows it numbers: removing a key or a code does not give its number back, so an older command stays
+    superseded after a disconnect."""
+    c.execute("UPDATE google_setup_generations SET issued=issued+1 WHERE singleton=1")
+    return _newest(c)
 
 
 def _code_row(c, code):
@@ -621,7 +633,8 @@ def _view(row):
     return {"status": row["status"], "domain": row["domain"], "project_id": row["project_id"],
             "client_id": row["client_id"], "scopes": scope_urls(), "delegation_url": delegation_url(row["client_id"]),
             "connected_at": row["connected_at"], "checked_at": row["checked_at"], "last_error": row["last_error"],
-            "probe": {"mailbox": row["probe_mailbox"]} if row["probe_mailbox"] else None}
+            "probe": {"mailbox": row["probe_mailbox"]} if row["probe_mailbox"] else None,
+            "generation": row["generation"]}
 
 
 def _pair(c):
@@ -665,7 +678,7 @@ def install(app, store):
                 payload = _parse_upload(raw)
                 domain = clean_domain(payload.get("domain"))
                 fields = validate_key(payload.get("key"))
-                return _store_pending(c, fields, domain, _newest(c) + 1, who.actor)
+                return _store_pending(c, fields, domain, _issue(c), who.actor)
         now = time.time()
         _check_locked(now)
         with store.transaction() as c:
@@ -716,11 +729,11 @@ def install(app, store):
             code = secrets.token_urlsafe(32)
             now = H.now()
             expires = H.shift(now, seconds=CODE_SECONDS)
-            generation = _newest(c) + 1
+            generation = _issue(c)
             c.execute("INSERT INTO google_setup_codes(code_hash,domain,created_by,created_at,expires_at,used_at,generation) "
                       "VALUES(?,?,?,?,?,NULL,?)", (code_hash(code), domain, who.actor, now, expires, generation))
             H.event(c, who.actor, "google.workspace.setup_code", domain, {"generation": generation})
-        return {"code": code, "command": command(settings, code), "expires_at": expires}
+        return {"code": code, "command": command(settings, code), "expires_at": expires, "generation": generation}
 
     @app.get(SETUP_PATH, include_in_schema=False)
     def setup_script():
@@ -766,6 +779,10 @@ def install(app, store):
             if used is None or now - used > USED_CODE_SECONDS:
                 raise Problem("forbidden", "This setup command has no upload to keep keys for, or its window has passed",
                               403)
+            # The same test as the upload: a removed admin's code gets no key ids.
+            if not _admin_of(c, row["created_by"], settings.credential_admins):
+                raise Problem("forbidden", "The person who made this setup command is no longer a credential "
+                                           "administrator", 403)
             return {"latest": row["generation"] >= _newest(c), "keep_key_ids": _keep_ids(c)}
 
     @app.post(CHECK_PATH)
