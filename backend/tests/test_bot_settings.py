@@ -131,7 +131,8 @@ def test_migration_0061_gives_a_team_that_0068_moves_into_bot_settings(tmp_path)
         # The migrations after 0061 are applied too (0067_home_merges among them): they go with it, the runner
         # refuses an unapplied migration that sorts before an applied one.
         c.execute("DELETE FROM schema_migrations WHERE version>='0061' AND version NOT LIKE 'legacy_%'")
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(people),))
+        c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                  (json.dumps(people),))
         c.execute("INSERT INTO bots(id,slug,display_name,state,created_at) "
                   "VALUES('legacy','legacy','Legacy','active','2026-01-01')")
         c.execute("INSERT INTO bot_config(bot,owner_id,config,reports_to) VALUES('legacy','ana',?,'human:ana')",
