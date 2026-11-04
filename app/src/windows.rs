@@ -123,7 +123,7 @@ mod capability_tests {
 pub(crate) fn build_window(app: &App) -> tauri::Result<()> {
     let Some(org) = active_org(app) else { return build_server_window(app) };
     if main_window(app).is_none() {
-        build_main(app)?;
+        keep_title_bar_reachable(&build_main(app)?);
     }
     if active_webview(app).is_none() {
         open_org_webview(app, &org)?;
@@ -767,11 +767,48 @@ pub(crate) fn show_window(app: &App) {
     }
 }
 
-/// What the window-state plugin keeps of the main window between launches: its size and place, and whether it is
-/// maximized or full screen. Visibility is left out: the window is built hidden and `show_window` shows it once the
-/// app is ready, so the plugin must neither show nor hide it.
+/// What the window-state plugin keeps of the main window between launches: its size and place. Visibility is left
+/// out: the window is built hidden and `show_window` shows it once the app is ready. Maximized and full screen are
+/// left out too: on quit the plugin refreshes only single-webview windows, and the main window holds several, so
+/// those two would be saved only when the window was closed first.
 pub(crate) fn frame_flags() -> StateFlags {
-    StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED | StateFlags::FULLSCREEN
+    StateFlags::SIZE | StateFlags::POSITION
+}
+
+/// Frames are compared in points on macOS, where one point space spans every display whatever its scale, and in
+/// physical pixels elsewhere, where the virtual screen is the consistent space.
+const POINTS: bool = cfg!(target_os = "macos");
+
+fn unit(scale: f64) -> f64 {
+    if POINTS && scale > 0.0 { scale } else { 1.0 }
+}
+
+/// A frame is usable when enough of its title bar lies on a connected display for the person to grab it. Frame and
+/// work areas are (x, y, width, height) in the same units.
+fn frame_reachable(frame: (f64, f64, f64, f64), areas: &[(f64, f64, f64, f64)]) -> bool {
+    let (x, y, w, _) = frame;
+    areas.iter().any(|&(ax, ay, aw, ah)| {
+        let (left, right) = (x.max(ax), (x + w).min(ax + aw));
+        let (top, bottom) = (y.max(ay), (y + 24.0).min(ay + ah));
+        right - left >= 80f64.min(w) && bottom > top
+    })
+}
+
+/// The plugin restores a saved frame when any corner lies on a display, which can leave the title bar off screen
+/// after a display is unplugged. Such a frame gives way to the default size, centred.
+fn keep_title_bar_reachable(window: &Window) {
+    let (Ok(position), Ok(size), Ok(scale)) = (window.outer_position(), window.outer_size(), window.scale_factor()) else { return };
+    let u = unit(scale);
+    let frame = (position.x as f64 / u, position.y as f64 / u, size.width as f64 / u, size.height as f64 / u);
+    let areas: Vec<_> = window.available_monitors().unwrap_or_default().iter().map(|m| {
+        let (area, u) = (m.work_area(), unit(m.scale_factor()));
+        (area.position.x as f64 / u, area.position.y as f64 / u, area.size.width as f64 / u, area.size.height as f64 / u)
+    }).collect();
+    if areas.is_empty() || frame_reachable(frame, &areas) {
+        return;
+    }
+    let _ = window.set_size(LogicalSize::new(1240.0, 820.0));
+    let _ = window.center();
 }
 
 /// The window-state plugin tracks only the main window. Org pages, meetings and the setup window keep no frame.
@@ -795,7 +832,22 @@ mod window_state_tests {
     fn the_app_decides_when_the_main_window_shows() {
         let flags = frame_flags();
         assert!(!flags.contains(StateFlags::VISIBLE));
-        assert!(flags.contains(StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED | StateFlags::FULLSCREEN));
+        assert_eq!(flags, StateFlags::SIZE | StateFlags::POSITION);
+    }
+
+    #[test]
+    fn a_saved_frame_is_kept_only_where_its_title_bar_can_be_grabbed() {
+        let laptop = (0.0, 25.0, 1512.0, 920.0);
+        let external = (1512.0, -200.0, 2560.0, 1415.0);
+        assert!(frame_reachable((100.0, 100.0, 1240.0, 820.0), &[laptop]));
+        assert!(frame_reachable((1700.0, 0.0, 1240.0, 820.0), &[laptop, external]));
+        // The external display was unplugged.
+        assert!(!frame_reachable((1700.0, 0.0, 1240.0, 820.0), &[laptop]));
+        // Title bar above the work area (its lower corners still on the laptop), or almost entirely off the right edge.
+        assert!(!frame_reachable((100.0, -500.0, 1000.0, 820.0), &[laptop]));
+        assert!(!frame_reachable((1480.0, 100.0, 1240.0, 820.0), &[laptop]));
+        assert!(frame_reachable((1400.0, 100.0, 1240.0, 820.0), &[laptop]));
+        assert!(!frame_reachable((100.0, 100.0, 1240.0, 820.0), &[]));
     }
 }
 
