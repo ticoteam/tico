@@ -16,6 +16,7 @@ assignment_turned_in
 assistant
 auto_awesome
 balance
+block
 bolt
 bug_report
 calendar_month
@@ -26,6 +27,7 @@ cast_for_education
 category
 celebration
 chair
+chat
 chat_bubble
 check
 check_circle
@@ -80,6 +82,7 @@ inbox
 integration_instructions
 inventory_2
 key_vertical
+label
 leaderboard
 lightbulb
 link
@@ -121,6 +124,7 @@ radio_button_unchecked
 receipt
 receipt_long
 record_voice_over
+reply
 request_quote
 reviews
 rocket_launch
@@ -137,7 +141,9 @@ settings_suggest
 shield_person
 shopping_cart
 smart_toy
+south
 star
+sticky_note_2
 stop_screen_share
 store
 strategy
@@ -155,8 +161,10 @@ tour
 travel_explore
 troubleshoot
 unarchive
+unsubscribe
 verified_user
 view_agenda
 view_timeline
 warning
 waving_hand
+webhook

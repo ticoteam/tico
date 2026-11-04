@@ -85,12 +85,12 @@ function auFieldsList() {
   if (AU.ed?.step?.type === 'decide' && AU.ed.step.out) AU.ed.qs.forEach(q => out.push(`${AU.ed.step.out}.${q.id}`));
   return [...new Set(out)];
 }
-function auCondRows(at, when) {
-  return (when || []).map((c, j) => `<div class="au-cond-row">
+function auCondRows(at, when, min = true) {
+  return (when || []).map((c, j) => `<div class="au-cond-row${min ? '' : ' nomin'}">
     ${auIn(`${at}.${j}.field`, c.field, 'Field', 'list="au-fields" aria-label="Field"')}
-    ${auSel(`${at}.${j}.op`, Object.entries(AU_OPS), c.op || 'is', 'aria-label="Test"')}
+    ${auSel(`${at}.${j}.op`, Object.entries(min ? AU_OPS : AU_BOARD_OPS), c.op || 'is', 'aria-label="Test"')}
     ${auIn(`${at}.${j}.value`, c.value, 'Value', 'aria-label="Value"')}
-    <span class="au-pct"><input type="number" data-b="${at}.${j}.min" data-pct min="0" max="100" step="5" value="${c.min != null && c.min !== '' ? Math.round(c.min * 100) : ''}" placeholder="Min" aria-label="Minimum confidence, percent"${auDis()}></span>
+    ${min ? `<span class="au-pct"><input type="number" data-b="${at}.${j}.min" data-pct min="0" max="100" step="5" value="${c.min != null && c.min !== '' ? Math.round(c.min * 100) : ''}" placeholder="Min" aria-label="Minimum confidence, percent"${auDis()}></span>` : ''}
     ${auX(at, j, 'Remove condition')}</div>`).join('');
 }
 
@@ -103,18 +103,19 @@ function auEdHTML() {
     + `<button class="linkish au-plus" type="button" data-op="nocap">Use the bot’s limit</button>`, {});
   if (ed.kind === 'trigger') return auFrame('Trigger', auTriggerFields(ed.trigger, ed), {icon: AU_TRIGGER_ICONS[ed.trigger.type]});
   if (ed.kind === 'run') return auFrame('Test run', auFld('Sample input', auTa('text', ed.text, 9), 'au-mono'), {icon: 'play_arrow', label: 'Run'});
+  if (ed.kind === 'board') return auBoardEdHTML(ed);
   const s = ed.step;
   const body = {filter: auFilterFields, decide: auDecideFields, llm: auLlmFields, find: auFindFields, bot_turn: auBotFields,
     paths: auPathsFields, action: auActionFields}[s.type]?.(s, ed) || '';
   return auFrame(auStepTitle(s), body, {tag: s.type, del: !ed.insert});
 }
-function auFrame(title, body, {tag = '', icon = '', save = true, del = false, label = 'Save'} = {}) {
+function auFrame(title, body, {tag = '', icon = '', save = true, del = false, label = 'Save', delOp = 'del', delLabel = 'Delete step'} = {}) {
   const ro = auRO();
   return `<div class="au-grab" aria-hidden="true"></div>
     <div class="au-edh">${tag ? auTag(tag) : icon ? `<span class="nav-icon" aria-hidden="true">${icon}</span>` : ''}<h3>${esc(title)}</h3>
       <span class="au-sp"></span><button class="au-x" type="button" data-op="close" aria-label="Close">✕</button></div>
     <form class="au-edb" novalidate>${body}<datalist id="au-fields">${auFieldsList().map(f => `<option value="${esc(f)}">`).join('')}</datalist></form>
-    ${save && !ro ? `<div class="au-edf">${del ? '<button class="linkish au-del" type="button" data-op="del">Delete step</button>' : ''}<span class="au-sp"></span>
+    ${save && !ro ? `<div class="au-edf">${del ? `<button class="linkish au-del" type="button" data-op="${delOp}">${esc(delLabel)}</button>` : ''}<span class="au-sp"></span>
       <button class="primary au-save" type="button" data-op="save">${esc(label)}</button></div>` : ''}`;
 }
 
@@ -220,10 +221,10 @@ function auActionFields(s) {
     assign: () => auFld('Assign to', auSel('step.args.owner', auWithCur(who, a.owner, auActorName(a.owner)), a.owner || '')),
     wake_bot: () => auFld('Bot', auSel('step.args.bot', auWithCur(auBots(), a.bot, auActorName(a.bot)), a.bot || '')),
     forward: () => auFld('To', auIn('step.args.to', a.to, 'name@acme.example')),
-    label: () => auFld('Label', auIn('step.args.label', a.label)),
+    label: () => auFld('Label', auIn('step.args.name', a.name ?? a.label)),
     note: () => auFld('Text', auTa('step.args.text', a.text, 4)),
     post_update: () => auFld('Text', auTa('step.args.text', a.text, 4)),
-    call_webhook: () => auFld('Webhook', auIn('step.args.endpoint', a.endpoint)),
+    call_webhook: () => auFld('Webhook', auIn('step.args.webhook', a.webhook ?? a.endpoint)),
   }[s.do];
   return auFld('Action', auSel('step.do', Object.entries(AU_ACTIONS), s.do, 'data-redraw')) + (args ? args() : '');
 }
@@ -246,6 +247,7 @@ function auPathSet(root, path, v) {
 function auEdWire(box) {
   const onField = e => {
     const t = e.target, b = t.dataset?.b, ed = AU?.ed;
+    if (ed?.kind === 'board' && auBoardField(t, e, ed)) return;
     if (!b || !ed) return;
     let v = t.type === 'checkbox' ? t.checked : t.value;
     if (t.hasAttribute('data-pct')) v = v === '' ? undefined : Math.max(0, Math.min(100, Number(v))) / 100;
@@ -287,6 +289,8 @@ function auEdWire(box) {
     if (op === 'close') { auEdClose(); return; }
     if (op === 'save') { void auEdSave(m); return; }
     if (op === 'del') { void auStepDelete(ed.id); return; }
+    if (op === 'bdel') { void auBoardDelete(ed, m); return; }
+    if (op === 'bmode') { ed.item.mode = m.dataset.v; auDrawSide(); return; }
     if (op === 'nocap') { void auSpendSave(null); return; }
     if (op === 'restore') { void auRestore(+m.dataset.n); return; }
     if (['diff', 'prop-on', 'discard'].includes(op)) { void auPropAct(op, +m.dataset.n, m); return; }
@@ -294,7 +298,7 @@ function auEdWire(box) {
     if (op === 'rm') list.splice(+m.dataset.i, 1);
     if (op === 'add') {
       if (!auPathGet(ed, at)) auPathSet(ed, at, list);
-      list.push({cond: {field: '', op: 'is', value: ''}, then: {do: 'archive', args: {}}, q: {id: 'question', type: 'noul', ask: '', opts: ''},
+      list.push({cond: {field: '', op: 'is', value: ''}, then: {do: 'archive', args: {}}, bact: auBoardNewAct(), q: {id: 'question', type: 'noul', ask: '', opts: ''},
         rule: {when: [{field: '', op: 'is', value: ''}], match: 'all', then: [{do: 'archive', args: {}}], stop: true},
         path: {name: 'Path ' + (list.length + 1), when: [], steps: []}}[m.dataset.tpl]);
     }
@@ -310,6 +314,7 @@ async function auEdSave(button) {
   if (!ed || auRO()) return;
   if (ed.kind === 'spend') { const v = String(ed.value ?? '').trim(); await auSpendSave(v === '' ? null : Number(v)); return; }
   if (ed.kind === 'run') { await auRunNow(ed, button); return; }
+  if (ed.kind === 'board') { await auBoardEdSave(ed, button); return; }
   if (button) button.disabled = true;
   let body;
   if (ed.kind === 'trigger') {
@@ -342,10 +347,15 @@ async function auEdSave(button) {
       }));
       delete step.set;
     }
+    // A rule that says where it goes next keeps that in step with Stop here (the hub refuses the two disagreeing).
+    if (step.type === 'filter') for (const r of step.rules || []) if ('next' in r) {
+      r.next = r.to || r.stop ? 'end' : r.next === 'end' ? 'step' : r.next;
+      r.stop = r.next === 'end';
+    }
     const steps = auClone(a.steps);
     if (ed.insert) auContainer(steps, ed.insert.key)?.arr.splice(ed.insert.index, 0, step);
     else { const hit = auFind(steps, ed.id); if (hit) hit.arr[hit.i] = step; }
-    body = {steps: auCleanSteps(steps)};
+    body = auFlowBody(steps);
   }
   const out = await auWrite(body, x => `Saved · v${x.version}`);
   if (out && AU?.ed === ed) { AU.ed = null; auDrawPane(); auDrawSide(); }
@@ -356,7 +366,7 @@ async function auStepDelete(id) {
   if (!hit) return;
   hit.arr.splice(hit.i, 1);
   const ed = AU.ed;
-  const out = await auWrite({steps: auCleanSteps(steps)}, x => `Step deleted · v${x.version}`);
+  const out = await auWrite(auFlowBody(steps), x => `Step deleted · v${x.version}`);
   if (out && AU?.ed === ed) { AU.ed = null; auDrawPane(); auDrawSide(); }
 }
 async function auSpendSave(v) {
@@ -440,6 +450,12 @@ async function auPropAct(op, n, button) {
 }
 
 // A flow as lines, for the diff: the trigger, then each step, paths indented under their fork.
+// A chain's actions with their arguments, so a changed owner, label or text shows in a diff.
+const auThenFull = then => (then || []).map(x => {
+  const k = auThenDo(x), args = Object.entries((x && typeof x === 'object' && x.args) || {}).filter(([, v]) => v != null && v !== '')
+    .map(([n, v]) => `${n}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(', ');
+  return (AU_ACTIONS[k] || AU_BOARD_ACTS[k] || k) + (args ? ` (${args})` : '');
+});
 function auFlowLines(flow) {
   const out = [];
   const t = flow?.trigger || {};
@@ -447,11 +463,18 @@ function auFlowLines(flow) {
   for (const c of t.filters || []) out.push('  filter ' + auCondText(c));
   const walk = (steps, pad) => (steps || []).forEach(s => {
     const off = s.enabled === false ? ' (off)' : '';
-    if (s.type === 'filter') (s.rules || []).forEach(r => out.push(`${pad}filter ${auCondsText(r.when, r.match)} → ${auThenWords(r.then).join(', ')}${off}`));
+    if (s.type === 'filter') (s.rules || []).forEach(r => {
+      const to = r.to ? ` → ${auDestName(r.to, flow?.destinations)}` : '', next = r.to ? '' : {rule: ' · move on', step: ' · next step'}[auRuleNext(r)] || '';
+      out.push(`${pad}filter ${auCondsText(r.when, r.match)} → ${auThenFull(r.then).join(', ')}${to}${next}${off}`);
+    });
     else if (s.type === 'decide') {
       out.push(`${pad}decide ${s.set ? auSetWords(s.set) : 'custom'} · ${s.level || 'medium'}${off}`);
-      if (!s.set) Object.entries(s.questions || {}).forEach(([q, d]) => out.push(`${pad}  question ${q} · ${(AU_QTYPES.find(([k]) => k === d.type) || [, d.type])[1]}`));
-    } else if (s.type === 'llm') out.push(`${pad}llm as ${auActorName(s.as)}: ${s.prompt || ''}${off}`);
+      if (!s.set) Object.entries(s.questions || {}).forEach(([q, d]) => out.push(`${pad}  question ${q} · ${(AU_QTYPES.find(([k]) => k === d.type) || [, d.type])[1]}${typeof d.instructions === 'string' && d.instructions ? ': ' + d.instructions : ''}`));
+    } else if (s.type === 'llm') {
+      out.push(`${pad}llm as ${auActorName(s.as)}: ${s.prompt || ''}${off}`);
+      const c = s.choose;
+      if (c) out.push(`${pad}  ${c.mode || ''} → ${(c.to || []).map(id => auDestName(id, flow?.destinations)).join(', ')} · unsure → ${auDestName(c.default, flow?.destinations)}`);
+    }
     else if (s.type === 'bot_turn') out.push(`${pad}bot turn ${auActorName(s.bot)}: ${s.prompt || ''}${off}`);
     else if (s.type === 'find') out.push(`${pad}find ${AU_FIND[s.source] || s.source} ${s.query || ''}${off}`.trim());
     else if (s.type === 'action') out.push(`${pad}${AU_ACTIONS[s.do] || s.do}${auActionArgs(s) ? ' ' + auActionArgs(s) : ''}${off}`);
@@ -461,6 +484,7 @@ function auFlowLines(flow) {
     }
   });
   walk(flow?.steps, '');
+  for (const d of flow?.destinations || []) out.push(`destination ${d.name || d.id}${d.name && d.name !== d.id ? ` (${d.id})` : ''}${d.color ? ' · ' + d.color : ''} → ${auThenFull(d.then).join(', ') || 'nothing'}`);
   return out;
 }
 // The changed lines between two flows (a longest-common-subsequence diff): "+ added", "- removed".
@@ -504,4 +528,192 @@ async function auRunNow(ed, button) {
     toast('Ran · ' + (out.run ? auRunOutcome(out.run) : 'queued'));
     if (AU.view === 'runs') { auDrawSide(); void auRunsLoad(AU); } else location.hash = auHref(a.id, 'runs');
   } catch (e) { toast(e.message, true); if (button?.isConnected) button.disabled = false; }
+}
+
+/* The board's pop-ups (automations-flow.js auBoardShape): a rule, a question, a destination or the LLM, one at a time
+   over the board (a sheet on a phone). Each edits a copy of its part (AU.ed.item); Save reads the board from the flow
+   again, puts the part back and writes the steps and destinations as one new version. */
+const auFreeId = (taken, prefix) => { let n = 1; while (taken.includes(prefix + n)) n++; return prefix + n; };
+// A new destination's id, from its name: lower case, letters first, unique on the board.
+function auDestId(name, dests) {
+  let base = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32);
+  if (!/^[a-z]/.test(base)) base = 'dest' + (base ? '_' + base : '');
+  const taken = dests.map(d => d.id);
+  if (!taken.includes(base)) return base;
+  let n = 2; while (taken.includes(`${base}_${n}`)) n++;
+  return `${base}_${n}`;
+}
+function auBoardOpen(key) {
+  const a = AU.cur, b = a && auBoardShape(a);
+  if (!b) return;
+  const [part, at] = key.split(':'), i = at === 'new' ? -1 : Number(at);
+  if (i < 0 && !a.can_edit) return;
+  const field = (AU_TRIGGER_FIELDS[a.trigger?.type] || [])[0] || '';
+  let item = {
+    rule: () => i < 0 ? {when: [{field, op: 'contains', value: ''}], match: 'all', then: [], next: 'end'} : b.rules[i],
+    q: () => i < 0 ? {id: auFreeId(b.questions.map(q => q.id), 'q'), text: '', min: AU_Q_MIN, then: [], to: ''} : b.questions[i],
+    dest: () => i < 0 ? {id: '', name: '', color: AU_DEST_COLORS[b.dests.length % AU_DEST_COLORS.length], then: []} : b.dests[i],
+    llm: () => b.llm,
+  }[part]?.();
+  if (!item) return;
+  item = auClone(item);
+  if (item.then) item.then = item.then.map(x => typeof x === 'string' ? {do: x, args: {}} : {...x, args: x.args || {}});
+  auEdOpen({kind: 'board', part, i, item});
+}
+// The actions a chain offers: mail actions first on a message flow; off mail, those that need a message are left out.
+function auBoardActs() {
+  const all = Object.entries(AU_BOARD_ACTS);
+  if (AU.cur?.trigger?.type === 'message') return all;
+  return [...all.filter(([k]) => !AU_MAIL_ACTS.includes(k)), ...all.filter(([k]) => AU_MAIL_ACTS.includes(k) && !AU_MAIL_ONLY.includes(k))];
+}
+const auBoardNewAct = () => AU?.cur?.trigger?.type === 'message' ? {do: 'archive', args: {}} : {do: 'create_task', args: {title: ''}};
+const auBoardTa = (b, v, ph) => `<textarea data-b="${b}" rows="3" spellcheck="true" placeholder="${esc(ph)}" aria-label="${esc(ph)}"${auDis()}>${esc(v ?? '')}</textarea>`;
+// An action's arguments, under it: what the hub reads for each (automation_flow.ACTION_ARGS).
+function auArgRows(at, k, a) {
+  const who = [...auPeople(), ...auBots()];
+  const f = {
+    create_task: () => auIn(`${at}.title`, a.title, 'Title', 'aria-label="Task title"')
+      + auSel(`${at}.owner`, [['', 'Owner'], ...auWithCur(who, a.owner, auActorName(a.owner))], a.owner || '', 'data-blank aria-label="Assign to"'),
+    assign: () => auSel(`${at}.owner`, auWithCur(who, a.owner, auActorName(a.owner)), a.owner || '', 'aria-label="Assign to"'),
+    wake_bot: () => auSel(`${at}.bot`, [['', 'Owner’s bot'], ...auWithCur(auBots(), a.bot, auActorName(a.bot))], a.bot || '', 'data-blank aria-label="Bot"')
+      + auIn(`${at}.text`, a.text, 'Message', 'aria-label="Message"'),
+    forward: () => auIn(`${at}.to`, a.to, 'name@acme.example', 'aria-label="Forward to"'),
+    label: () => auIn(`${at}.name`, a.name ?? a.tag, 'Label', 'aria-label="Label"'),
+    draft_reply: () => auBoardTa(`${at}.body`, a.body ?? a.text, 'Reply'),
+    send_reply: () => auBoardTa(`${at}.body`, a.body ?? a.text, 'Reply'),
+    note: () => auBoardTa(`${at}.text`, a.text, 'Note'),
+    post_update: () => auBoardTa(`${at}.text`, a.text, 'Update'),
+    call_webhook: () => auIn(`${at}.webhook`, a.webhook, 'Webhook id', 'aria-label="Webhook"'),
+  }[k];
+  return f ? `<div class="au-act-a">${f()}</div>` : '';
+}
+function auActRows(at, then) {
+  const acts = auBoardActs();
+  return (then || []).map((x, j) => {
+    const k = auActKey(x);
+    return `<div class="au-act"><span class="au-actn">${j + 1}</span><span class="nav-icon" aria-hidden="true">${AU_ACTION_ICONS[k] || 'bolt'}</span>
+      <select data-act="${at}.${j}" aria-label="Action ${j + 1}"${auDis()}>${auOpt(auWithCur(acts, k, AU_ACTIONS[k] || k), k)}</select>${auX(at, j, 'Remove action')}
+      ${auArgRows(`${at}.${j}.args`, k, x.args || {})}</div>`;
+  }).join('');
+}
+// The chain's last item: End, Move on (rules only) or go to a destination.
+function auEndRow(it, n, move, dests) {
+  const v = it.to ? 'to:' + it.to : move && it.next === 'rule' ? 'rule' : 'end', d = dests.find(x => x.id === it.to);
+  const go = dests.length ? `<optgroup label="Go to">${auOpt(dests.map(x => ['to:' + x.id, x.name || x.id]), v)}</optgroup>` : '';
+  return `<div class="au-act au-act-end"><span class="au-actn">${n}</span><span class="nav-icon" aria-hidden="true">${d ? auDestIcon(d) : v === 'rule' ? 'south' : 'block'}</span>
+    <select data-end aria-label="Then"${auDis()}>${auOpt([['end', 'End'], ...(move ? [['rule', 'Move on']] : [])], v)}${go}</select></div>`;
+}
+function auBoardEdHTML(ed) {
+  const it = ed.item, fresh = ed.i < 0, dests = auBoardShape(AU.cur)?.dests || [];
+  const chain = (move, end = true) => auBox('Then, in order', auActRows('item.then', it.then)
+    + (end ? auEndRow(it, (it.then || []).length + 1, move, dests) : '') + auPlus('item.then', 'bact', 'Action'));
+  let title = '', body = '';
+  if (ed.part === 'rule') {
+    title = fresh ? 'New rule' : `Rule ${ed.i + 1}`;
+    body = auBox('When', ((it.when || []).length > 1 ? auSel('item.match', [['all', 'All of'], ['any', 'Any of']], it.match || 'all', 'aria-label="Match"') : '')
+      + auCondRows('item.when', it.when, false) + auPlus('item.when', 'cond', 'Condition')) + chain(true);
+  } else if (ed.part === 'q') {
+    title = fresh ? 'New question' : `Question ${ed.i + 1}`;
+    body = auFld('Question', auBoardTa('item.text', it.text, 'Question'))
+      + auFld('Min confidence', `<span class="au-pct"><input type="number" data-b="item.min" data-pct min="0" max="100" step="5" value="${Math.round((it.min ?? AU_Q_MIN) * 100)}" aria-label="Min confidence, percent"${auDis()}></span>`)
+      + chain(false);
+  } else if (ed.part === 'dest') {
+    title = fresh ? 'New destination' : it.name || it.id;
+    body = auFld('Name', auIn('item.name', it.name, 'Name'))
+      + auBox('Color', `<div class="au-swatches" role="radiogroup" aria-label="Color">${AU_DEST_COLORS.map(c =>
+        `<label style="--c:var(--au-${c})"><input type="radio" name="au-dc" data-b="item.color" value="${c}" aria-label="${c}"${(it.color || '') === c ? ' checked' : ''}${auDis()}></label>`).join('')}</div>`)
+      + chain(false, false);
+  } else if (ed.part === 'llm') {
+    title = 'LLM';
+    body = auBox('Mode', `<span class="au-bseg" role="group" aria-label="Mode">${auBoardModes(AU.cur).map(([k, w]) =>
+        `<button type="button" data-op="bmode" data-v="${k}" aria-pressed="${it.mode === k}"${auDis()}>${esc(w)}</button>`).join('')}</span>`)
+      + auFld('Instructions', auTa('item.prompt', it.prompt, 6))
+      + auBox('Destinations', `<div class="au-bto">${dests.map(d => `<label class="au-chk"><input type="checkbox" data-bto="${esc(d.id)}"${it.to.includes(d.id) ? ' checked' : ''}${auDis()}>${esc(d.name || d.id)}</label>`).join('')}</div>`)
+      + auFld('Unsure', auSel('item.default', it.to.map(id => [id, auDestName(id, dests)]), it.default));
+  }
+  return auFrame(title, body, {del: !fresh && ed.part !== 'llm' && !(ed.part === 'dest' && dests.length < 2), delOp: 'bdel', delLabel: 'Delete'});
+}
+// The board's own fields: an action picked (Star is a STARRED label), where a chain ends, the LLM's destinations.
+function auBoardField(t, e, ed) {
+  const act = t.dataset?.act, end = t.hasAttribute?.('data-end'), bto = t.dataset?.bto;
+  if (act == null && !end && bto == null) return false;
+  if (e.type !== 'change') return true;
+  if (act != null) auPathSet(ed, act, t.value === 'star' ? {do: 'label', args: {name: 'STARRED'}} : {do: t.value, args: t.value === 'create_task' ? {title: ''} : {}});
+  else if (end) {
+    if (t.value.startsWith('to:')) Object.assign(ed.item, {to: t.value.slice(3), next: 'end'});
+    else Object.assign(ed.item, {to: '', next: t.value});
+  } else {
+    const on = new Set(ed.item.to.filter(x => x !== bto));
+    if (t.checked) on.add(bto);
+    ed.item.to = (auBoardShape(AU.cur)?.dests || []).map(d => d.id).filter(id => on.has(id));
+    if (!ed.item.to.includes(ed.item.default)) ed.item.default = ed.item.to[0] || '';
+  }
+  auDrawSide();
+  return true;
+}
+// Arguments as the hub reads them: a blank field says nothing.
+const auArgsClean = a => Object.fromEntries(Object.entries(a || {}).filter(([, v]) => v != null && String(v).trim() !== ''));
+async function auBoardEdSave(ed, button) {
+  const a = AU.cur, b = auBoardShape(a);
+  if (!b) return;
+  const it = auClone(ed.item), mail = a.trigger?.type === 'message', put = (list, x) => { if (ed.i < 0) list.push(x); else list[ed.i] = x; };
+  // Mail actions queue on the message and the rest run at once, so a chain lists them first.
+  const isMail = x => AU_MAIL_ACTS.includes(auActKey(x));
+  if (it.then) {
+    it.then = it.then.map(x => ({do: x.do, args: auArgsClean(x.args)}));
+    if (mail) it.then = [...it.then.filter(isMail), ...it.then.filter(x => !isMail(x))];
+  }
+  let problem = '';
+  if (ed.part === 'rule') {
+    if (!(it.when || []).every(c => String(c.field || '').trim())) problem = 'Each condition needs a field';
+    put(b.rules, it);
+  } else if (ed.part === 'q') {
+    it.text = String(it.text || '').trim();
+    if (!it.text) problem = 'Add the question';
+    put(b.questions, it);
+  } else if (ed.part === 'dest') {
+    it.name = String(it.name || '').trim();
+    if (!it.name) problem = 'Name the destination';
+    else if (ed.i < 0) { it.id = auDestId(it.name, b.dests); b.dests.push(it); b.llm.to.push(it.id); }
+    else b.dests[ed.i] = it;
+  } else if (ed.part === 'llm') {
+    if (!it.to.length) problem = 'Pick a destination';
+    else if (it.mode === 'sort' && it.to.length < 2) problem = 'Sort needs two destinations';
+    b.llm = {...b.llm, ...it, prompt: String(it.prompt || '').trim()};
+    if (b.llm.mode !== 'sort') b.llm.as ||= auOwnerAs(a);
+  }
+  if (problem) { toast(problem, true); return; }
+  if (button) button.disabled = true;
+  const out = await auWrite(auBoardFlow(b), x => `Saved · v${x.version}`);
+  if (out && AU?.ed === ed) { AU.ed = null; auDrawPane(); auDrawSide(); }
+  else if (button?.isConnected) button.disabled = false;
+}
+// Delete a rule, a question or a destination; whatever went to that destination ends instead.
+async function auBoardDelete(ed, button) {
+  const b = auBoardShape(AU.cur);
+  if (!b || ed.i < 0) return;
+  if (ed.part === 'rule') b.rules.splice(ed.i, 1);
+  else if (ed.part === 'q') b.questions.splice(ed.i, 1);
+  else if (ed.part === 'dest') {
+    const d = b.dests[ed.i];
+    if (!d || b.dests.length < 2 || !confirm(`Delete ${d.name || d.id}?`)) return;
+    b.dests.splice(ed.i, 1);
+    for (const r of [...b.rules, ...b.questions]) if (r.to === d.id) Object.assign(r, {to: '', next: 'end'});
+    b.llm.to = b.llm.to.filter(x => x !== d.id);
+    if (!b.llm.to.length) b.llm.to = [b.dests[0].id];
+    if (!b.llm.to.includes(b.llm.default)) b.llm.default = b.llm.to[0];
+  } else return;
+  button.disabled = true;
+  const out = await auWrite(auBoardFlow(b), x => `Deleted · v${x.version}`);
+  if (out && AU?.ed === ed) { AU.ed = null; auDrawPane(); auDrawSide(); }
+  else if (button?.isConnected) button.disabled = false;
+}
+// The LLM card's mode switch saves at once, as a step's own switch does.
+async function auBoardMode(mode) {
+  const a = AU.cur, b = a?.can_edit && auBoardShape(a);
+  if (!b || b.llm.mode === mode) return;
+  if (mode === 'sort' && b.llm.to.length < 2) { toast('Sort needs two destinations', true); return; }
+  b.llm.mode = mode;
+  if (mode !== 'sort') b.llm.as ||= auOwnerAs(a);
+  await auWrite(auBoardFlow(b), x => `Saved · v${x.version}`);
 }

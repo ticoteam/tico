@@ -310,7 +310,7 @@ function auDrawPane() {
   const top = pane.scrollTop;
   if (AU.view === 'runs') auRunsDraw(pane); else pane.innerHTML = auFlowHTML(AU.cur);
   pane.scrollTop = top;
-  if (AU.view !== 'runs') auPathsWire(pane);
+  if (AU.view !== 'runs') { auPathsWire(pane); auBoardWire(pane); } else AU.branchRO?.disconnect();
 }
 
 // The right side: an open editor, else nothing (the list or flow takes the width). A phone shows it as a sheet over the flow.
@@ -324,6 +324,8 @@ function auDrawSide() {
   const again = b && html ? ed.querySelector(`[data-b="${CSS.escape(b)}"]`) : null;
   if (again) { again.focus({preventScroll: true}); if (sel) try { again.setSelectionRange(...sel); } catch { /* not a text field */ } }
   AU.root.classList.toggle('ed-open', !!html);
+  // The board's pop-ups float over it on a computer; a phone keeps the sheet.
+  AU.root.classList.toggle('ed-pop', !!html && AU.ed?.kind === 'board');
   AU.root.querySelector('.au-scrim').hidden = !html;
 }
 
@@ -385,6 +387,8 @@ function auOnClick(e) {
   if ((m = t.closest('[data-runs-more]'))) { void auRunsLoad(AU, true); return; }
   if ((m = t.closest('[data-hold]'))) { void auHoldAct(m.dataset.hold); return; }
   if (t.closest('.au-sw')) return;
+  if ((m = t.closest('[data-bmode]'))) { if (!m.disabled) void auBoardMode(m.dataset.bmode); return; }
+  if ((m = t.closest('[data-board]'))) { auBoardOpen(m.dataset.board); return; }
   if ((m = t.closest('[data-open]'))) { auEdOpenStep(m.dataset.open, m.dataset.path); return; }
 }
 
