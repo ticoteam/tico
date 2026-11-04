@@ -12,6 +12,10 @@ there instead (Dev 137), and only one with none waits. When it ends, one queued 
 every other job on it waits for that turn's result: a success clears the hold, another limit saves a longer one. So a
 login sees at most one turn per hold window, however many jobs and bots wait on it. Try now ends the hold early the
 same way (`try_now`): one probe, and the cut-short window back if it meets the limit again.
+
+A company subscription given to computers (backend/model_subscriptions.py) is one login wherever it runs: its login is
+`sub:<id>` (SUBSCRIPTION) on every computer it is given to, and its hold is keyed without a computer, so a limit met on
+one computer holds every computer using it until the reset.
 """
 
 import json
@@ -29,6 +33,7 @@ PROBE_STALE = 900                 # a probe job that has not started within this
 LIVE_JOB = ("leased", "running")
 CAPACITY_WAIT = 120               # seconds held after a temporary model-capacity refusal
 CAPACITY_KIND = "temporary model capacity"
+REFUSED_KIND = "refused the request"
 
 # A provider out of capacity for the moment (runner-rs/src/hosts/mod.rs capacity_re): "Selected model is at capacity.
 # Please try a different model.", "overloaded_error", HTTP 503, "rate limited, try again in 20s". Quota or billing words
@@ -51,6 +56,10 @@ _RESET_RE = re.compile(r"\bresets\s+(?:(?P<month>[A-Za-z]{3})[a-z]*\.?\s+(?P<day
 _WINDOW_RE = re.compile(r"usage window resets at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)", re.I)
 
 
+# A provider turning the request down: the turn may carry the login's limit, but this line is what stopped it.
+_REFUSED_RE = re.compile(r"\bAPI Error: 4(?!29)\d\d\b|does not support this model", re.I)
+
+
 def capacity(notice):
     """Whether a limit notice is a provider's temporary model capacity, not a login's quota or plan."""
     notice = str(notice or "")
@@ -61,17 +70,49 @@ def _iso(at):
     return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
+SUBSCRIPTION = "sub:"
+
+
 def key(runner_id, profile, runtime):
+    if str(profile or "").startswith(SUBSCRIPTION):
+        return f"{PREFIX}{profile}|{runtime}"     # one login on every computer it is given to
     return f"{PREFIX}{runner_id}|{profile or ''}|{runtime}"
 
 
-def canonical(c, runner_id, profile, runtime):
+def subscription_login(subscription_id):
+    return SUBSCRIPTION + subscription_id
+
+
+def canonical(c, runner_id, profile, runtime, subscription=True, loads=None):
     """The login a profile's turns on `runtime` sign in with, as holds key it: "" (the computer's own) for a profile
-    the computer reports shares it (`shared_login`, runner-rs/src/fallback.rs `login`), else the profile."""
+    the computer reports shares it (`shared_login`, runner-rs/src/fallback.rs `login`), else the profile.
+    Inside a transaction it is answered once: a claim scan asks it per bot and per job, and the runner's readiness
+    document is parsed each time. Writes clear the read cache (backend/read_cache.py), so a changed runner is re-read.
+    The computer's subscription for `runtime`, while one is in effect there, is the login whatever the profile
+    (`subscription=False` asks for the computer's own login)."""
+    from .read_cache import cache
+    if subscription:
+        from .model_subscriptions import in_effect
+        found = in_effect(c, runner_id, runtime, loads=loads)
+        if found:
+            return subscription_login(found["id"])
+    if loads is not None:
+        return _canonical(c, runner_id, profile, runtime, loads)
+    values = cache(c)
+    if values is None:
+        return _canonical(c, runner_id, profile, runtime)
+    key = ("login_holds.canonical", runner_id, profile, runtime)
+    if key not in values:
+        values[key] = _canonical(c, runner_id, profile, runtime)
+    return values[key]
+
+
+def _canonical(c, runner_id, profile, runtime, loads=None):
     from .store import readiness_document
     from .read_cache import one
-    row = one(c, "SELECT readiness_json,capabilities_json FROM runners WHERE id=?", (runner_id,))
-    ready = readiness_document(row["readiness_json"]) if row else {}
+    row = (loads.runner_of(c, runner_id) if loads is not None
+           else one(c, "SELECT readiness,capabilities FROM runners_with_state WHERE id=?", (runner_id,)))
+    ready = readiness_document(row["readiness"]) if row else {}
     from .subscriptions import computer_logins
     current = row and computer_logins(row, ready)
     if not profile and current:
@@ -86,9 +127,14 @@ def canonical(c, runner_id, profile, runtime):
     return "" if report.get("shared_login") is True else profile
 
 
-def get(c, runner_id, profile, runtime):
-    from .read_cache import metadata
-    row = metadata(c, key(runner_id, profile, runtime))
+def get(c, runner_id, profile, runtime, loads=None):
+    """The hold on the login, as a dict ({} for none). `loads`: the claim's set of every hold (claim_loads), when read."""
+    k = key(runner_id, profile, runtime)
+    if loads is not None:
+        row = (loads.holds[k],) if k in loads.holds else None
+    else:
+        from .read_cache import metadata
+        row = metadata(c, k)
     try:
         value = json.loads(row[0]) if row else {}
     except ValueError:
@@ -97,7 +143,7 @@ def get(c, runner_id, profile, runtime):
 
 
 def _save(c, hold):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (key(hold["runner_id"], hold["profile"], hold["runtime"]), json.dumps(hold)))
 
 
@@ -244,10 +290,10 @@ def _probe_live(c, hold, now):
     return row["state"] == "queued" and (hold.get("probe_at") or "") > H.shift(now, seconds=-PROBE_STALE)
 
 
-def holding(c, runner_id, profile, runtime, job_id=None, now=None):
+def holding(c, runner_id, profile, runtime, job_id=None, now=None, loads=None):
     """Why no turn may start on the login now: "held" before the hold ends, "probing" while another job's probe turn
     is out after it; None when one may (with `job_id`, when that job may)."""
-    hold = get(c, runner_id, profile, runtime)
+    hold = get(c, runner_id, profile, runtime, loads)
     if not hold:
         return None
     now = now or H.now()
@@ -270,10 +316,14 @@ def take_probe(c, runner_id, profile, runtime, job_id, now=None):
 
 
 def on_runner(c, runner_id):
-    """Every saved hold on the computer's logins, oldest first."""
+    """Every saved hold on the computer's logins, oldest first, and on the subscriptions it is given."""
+    from .model_subscriptions import given_to
     out = []
-    for (value,) in c.execute("SELECT value_json FROM registry_metadata WHERE key LIKE ? ORDER BY key",
-                              (f"{PREFIX}{runner_id}|%",)):
+    keys = [key("", subscription_login(sid), runtime) for runtime, sid in given_to(c, runner_id)]
+    rows = c.execute("SELECT value FROM registry_metadata WHERE key LIKE ? ORDER BY key",
+                     (f"{PREFIX}{runner_id}|%",)).fetchall()
+    rows += [r for k in keys for r in c.execute("SELECT value FROM registry_metadata WHERE key=?", (k,))]
+    for (value,) in rows:
         try:
             hold = json.loads(value)
         except ValueError:
@@ -289,7 +339,7 @@ def for_attempt(c, attempt_id):
     if not attempt_id:
         return {}
     found = {}
-    for (value,) in c.execute("SELECT value_json FROM registry_metadata WHERE key LIKE ? AND value_json LIKE ?",
+    for (value,) in c.execute("SELECT value FROM registry_metadata WHERE key LIKE ? AND value LIKE ?",
                               (PREFIX + "%", f'%"{attempt_id}"%')):
         try:
             hold = json.loads(value)
@@ -305,10 +355,10 @@ def for_attempt(c, attempt_id):
 def limit_texts(c, attempt_id):
     """The attempt's limit errors and fallback notes in order: (kind, text)."""
     out = []
-    for row in c.execute("SELECT kind,payload_json FROM attempt_events WHERE attempt_id=? AND kind IN "
+    for row in c.execute("SELECT kind,payload FROM attempt_events WHERE attempt_id=? AND kind IN "
                          "('error','diagnostic') ORDER BY seq LIMIT 50", (attempt_id,)):
         try:
-            payload = json.loads(row["payload_json"])
+            payload = json.loads(row["payload"])
         except ValueError:
             continue
         if row["kind"] == "error" and payload.get("limit"):
@@ -375,8 +425,8 @@ _FALLBACK_RESET_RE = re.compile(r"\bresets ([0-9]{1,2}:[0-9]{2}[ap]m) \(UTC\)")
 
 def fallback_reset_notice(c, attempt_id):
     """The fallback's original limit notice and named UTC reset, pinned to when this run ended."""
-    row = c.execute("SELECT result_json,handed_runtime,finished FROM attempts WHERE id=?", (attempt_id,)).fetchone()
-    result = json.loads(row['result_json'] or '{}') if row else {}
+    row = c.execute("SELECT result,handed_runtime,finished_at FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    result = json.loads(row['result'] or '{}') if row else {}
     if not row or not result.get('fallback'):
         return None
     _, notice, limited = turn_steps(c, attempt_id, row['handed_runtime'], result)[-1]
@@ -385,7 +435,7 @@ def fallback_reset_notice(c, attempt_id):
     match = _FALLBACK_RESET_RE.search(notice)
     if not limited or not match:
         return None
-    reset = believable(reset_from_text(match[0], row['finished']), row['finished'])
+    reset = believable(reset_from_text(match[0], row['finished_at']), row['finished_at'])
     return {'notice': notice, 'reset': _iso(reset)} if reset else None
 
 
@@ -410,6 +460,8 @@ def window(notice):
         return CAPACITY_KIND
     if BILLING_LIMIT_RE.search(notice or ""):
         return "API quota or billing limit"
+    if _REFUSED_RE.search(notice or ""):
+        return f"{REFUSED_KIND} ({' '.join(notice.split())[:160]})"
     if re.search(r"\bweekly\b", notice or "", re.I):
         return "plan usage limit (weekly)"
     if re.search(r"\bsession limit\b|5-hour|five-hour", notice or "", re.I):
@@ -428,7 +480,13 @@ def source(c, attempt_id, runtime, result, profile="", runner_id=None, held=None
     own = (used if used is not None and not fallback else profile) or ""
     hop = (used if used is not None and fallback else profile) or ""
     if runner_id:
-        own, hop = canonical(c, runner_id, own, runtime), canonical(c, runner_id, hop, steps[-1][0])
+        from .model_subscriptions import handed
+
+        def login(name, rt):
+            given = handed(c, attempt_id, rt)
+            return (subscription_login(given["subscription_id"]) if given
+                    else canonical(c, runner_id, name, rt, subscription=False))
+        own, hop = login(own, runtime), login(hop, steps[-1][0])
     held_kind = window(held.get("error")) if held else ""
     if field(result, "primary_held") and field(result, "limited") and not fallback:
         # Sent away from its held login and no fallback started: nothing new was refused.
@@ -452,7 +510,7 @@ def recorded(c, attempt_id, result, runtime):
     if isinstance(result.get("limit_source"), dict):
         return result["limit_source"]
     # Keeper's events by action and target: the events_task_origin index.
-    row = c.execute("SELECT json_extract(detail_json,'$.runtime') FROM events WHERE actor=? AND action='attempt.limited' "
+    row = c.execute("SELECT json_extract(detail,'$.runtime') FROM events WHERE actor=? AND action='attempt.limited' "
                     "AND target=? LIMIT 1", (H.KEEPER, attempt_id)).fetchone()
     return source(c, attempt_id, (row and row[0]) or runtime or "primary", result)
 
@@ -465,10 +523,13 @@ def failure_line(result):
     if not isinstance(src, dict) or not src.get("runtime"):
         return None
     kind = src.get("kind") or ""
-    what = ("model capacity" if kind == CAPACITY_KIND else "quota" if src.get("billing") else "usage limit")
+    what = ("model capacity" if kind == CAPACITY_KIND else "quota" if src.get("billing")
+            else "request refused" if kind.startswith(REFUSED_KIND) else "usage limit")
     who = str(src["runtime"]).capitalize() + (" fallback" if src.get("role") == "fallback" else "")
     parts = [who + ("" if src.get("role") == "fallback" else ", primary")]
-    if src.get("profile"):
+    if str(src.get("profile") or "").startswith(SUBSCRIPTION):
+        parts.append("a saved subscription")
+    elif src.get("profile"):
         parts.append(f"login {src['profile']}")
     if src.get("model"):
         parts.append(f"model {src['model']}")
@@ -479,7 +540,8 @@ def label(src, at="", primary_until=""):
     """One line a person reads: "Fallback codex (the work login) API quota or billing limit at 20:05; primary claude
     not limited", "Primary claude plan usage limit (5-hour window)". `at` is when it was met; `primary_until` when the
     primary's own hold ends, for a fallback's limit met while the primary is held too."""
-    login = f" (the {src['profile']} login)" if src.get("profile") else ""
+    login = (" (a saved subscription)" if str(src.get("profile") or "").startswith(SUBSCRIPTION)
+             else f" (the {src['profile']} login)" if src.get("profile") else "")
     said = f"{src['role'].capitalize()} {src['runtime']}{login} {src['kind']}"
     if src.get("waiting"):
         return said + ", held from an earlier turn; no fallback could take this one"
@@ -495,14 +557,16 @@ def label(src, at="", primary_until=""):
     return said
 
 
-def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit, hopped=None):
+def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit, hopped=None, subscriptions_only=False):
     """Save or clear the logins' holds a finished turn shows, and return the hold that keeps the bot waiting, or {}.
     `profile` and `runtime` are the bot's own login. Every login the turn met a usage limit on is held, with the reset
     its own notice names, whatever the turn's outcome: an intermediate fallback that ran out stays held after a later
     one finishes the turn. A login the turn completed on is cleared, but only by a turn claimed after its hold began:
     a lane leased before the limit says nothing about the login now. `hopped` is the bot's fallback (execution.fallback_mark)
     when it met the limit and could not start the turn (execution.hop_failed): the bot waits out its own hold rather than
-    being sent there again, until it names another fallback."""
+    being sent there again, until it names another fallback. `subscriptions_only` (a check's turn) holds or clears only
+    the company subscriptions the turn signed in with: one is a login shared by every computer given it, while the
+    check keeps its own schedule (execution.complete) and the computer's own logins are left as they are."""
     # Sent away from its held login, no fallback ran it (none was ready, or it failed before it acknowledged the
     # turn): the turn ran nowhere, so no login met a limit; the hop its notes name only failed to start.
     unstarted = body.primary_held and body.limited and not body.fallback
@@ -512,10 +576,17 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit, hoppe
     if body.profile_used is not None:
         profile = body.profile_used
     hop_profile = body.profile_used if body.fallback and body.profile_used is not None else profile
-    claimed = (c.execute("SELECT created FROM attempts WHERE id=?", (attempt_id,)).fetchone() or [""])[0] or ""
+    claimed = (c.execute("SELECT created_at FROM attempts WHERE id=?", (attempt_id,)).fetchone() or [""])[0] or ""
     kept = {}
+    from .model_subscriptions import handed
     for n, (rt, notice, limited) in enumerate(steps):
-        login = canonical(c, runner_id, profile if n == 0 else hop_profile, rt)
+        # A step signed in with a company subscription met its limit (or worked) on that subscription, wherever it
+        # runs; any other step on the computer's own login.
+        given = handed(c, attempt_id, rt)
+        if subscriptions_only and not given:
+            continue
+        login = (subscription_login(given["subscription_id"]) if given
+                 else canonical(c, runner_id, profile if n == 0 else hop_profile, rt, subscription=False))
         last = n == len(steps) - 1
         if limited:
             if n == 0 and body.primary_held:
@@ -542,6 +613,8 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit, hoppe
             old = get(c, runner_id, login, rt)
             if old and claimed >= (old.get("since") or ""):
                 clear(c, runner_id, login, rt)
+    if subscriptions_only:
+        return {}
     if unstarted:
         # The bot waits out this hold rather than being sent to that fallback again (fallback_choice).
         own = canonical(c, runner_id, profile, runtime)

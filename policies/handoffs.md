@@ -48,6 +48,9 @@ refuses it once the rule is enforced; `hub task create --dry-run` shows what it 
   `hub task link <task-id> <pr url> --wake-once`, set the task `waiting` with that in its note, and end the turn
   instead of polling. Tico wakes you once, in this task, when the checks finish, it is approved or gets changes
   requested, or a release ships it, whichever comes first. The wake changes nothing on the task; you decide.
+- Waiting on something Tico cannot see (a reply by mail, a date, an outside system): `hub task snooze <task-id> --until <time>
+  --note "<what to check when you wake>"` and end the turn. On a pull request or release wait, add the same `--note` to
+  `hub task wait`. The note comes back in your wake, so you check that and not the whole thread.
 - Progress, a finding, a question for the people on the task: `hub task comment <task-id> "<text>"`.
   A comment is on the record with your name; it is not a chat.
 
@@ -88,7 +91,7 @@ hub task create --owner <slug> --title "<verb-first title>" --body "<what and wh
 It does not wake the bot. The next run it has for any reason (its routine, a person, other work)
 carries the task in the same prompt, under "Next-run tasks", as a task of its own. Handle each one
 in that run and mark it done or declined like any other. When the run that carries it is not the
-time to do it, store when it is: `hub task defer <id> --after <task>` (when that task is done),
+time to do it, store when it is: `hub task later <id> --after <task>` (when that task is done),
 `--at <time>` or `--next-run`; it then gets a run of its own. A run that neither works it nor
 defers it hands it back to the next run. Until a run carries it, closing it is a
 cancel and wakes nobody. Only a bot has a next run; a task for a person is always an ordinary one.

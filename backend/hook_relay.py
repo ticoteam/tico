@@ -9,7 +9,9 @@ The trigger's own address keeps working in parallel.
 Notices from Tico Team ride the same queue (backend/tico_notices.py): HQ keeps a system relay for the built-in trigger
 `_tico`, so a Gateway key alone is enough to receive them. The loop then pulls every minute instead of every 15
 seconds. That relay is recorded only from HQ's list of relays (`system: true`, asked at most hourly, and at once when a
-delivery names a relay not recorded yet); a delivery naming `_tico` from any other relay is dropped and acked.
+delivery names a relay not recorded yet); a delivery naming `_tico` from any other relay is dropped and acked. Physical
+mail (backend/postal_mail.py) and the QuickBooks and Xero calls (backend/finance/books_link.py) each have a system relay of
+their own, for the triggers `_mail` and `_finance`, under the same rule.
 
 The pull follows the mail loop (backend/inbound.py): `wait=0`, a cursor kept here, an ack after the work is committed,
 off the scheduler thread. Every outcome of `receive` (accepted, duplicate, refused, rate_limited, not_found) is
@@ -34,6 +36,7 @@ import threading
 import time
 import urllib.parse
 from datetime import timezone
+from typing import Any
 
 import httpx
 from fastapi import Request
@@ -43,6 +46,8 @@ from clients.gateway import user_agent
 
 from . import gateway_connection as GC
 from . import hubdb as H
+from . import outbound_tls
+from . import postal_mail
 from . import tico_notices
 from .auth import validate_identity
 from .models import Contract, Empty
@@ -62,6 +67,10 @@ FAILING_FOR = 15 * 60            # Health speaks after pulls have failed this lo
 OLD_PENDING = 3600               # ... or when the oldest waiting delivery is this old
 POISON = 5                       # a delivery whose handling raised this many times is skipped, so one cannot block the rest
 RELAY = re.compile(r"hr_[0-9a-f]{16}")
+# The system relays HQ makes per install, one for each trigger (hooks/store.py SYSTEM_RELAYS). Each is listed with
+# `system: true`, recorded from that list only, and fed only from the relay recorded for its own trigger.
+FINANCE_TRIGGER = "_finance"     # the books' calls: HQ's envelope, fed to the books connection it names (books_link)
+SYSTEM_TRIGGERS = (tico_notices.ID, postal_mail.TRIGGER, FINANCE_TRIGGER)
 
 
 def _prefix(address, relay_id):
@@ -92,9 +101,10 @@ class Stop(Exception):
 class Failed(Exception):
     """HQ did not answer, or answered something this server cannot use. `code` is stable and holds no HQ text."""
 
-    def __init__(self, code, status=0, body=None):
+    def __init__(self, code: str, status: int = 0, body: object = None) -> None:
         super().__init__(code)
-        self.code, self.status, self.body = code, status, body or {}
+        self.code, self.status = code, status
+        self.body: object = body or {}
 
 
 # ----------------------------------------------------------------------------- state
@@ -113,7 +123,7 @@ def save(c, **fields):
 
 def live(c):
     """The relay addresses people made, not the one HQ keeps for Tico Team's notices."""
-    return [dict(r) for r in c.execute("SELECT * FROM trigger_relays WHERE deleted_at IS NULL AND trigger_id<>? ORDER BY created",
+    return [dict(r) for r in c.execute("SELECT * FROM trigger_relays WHERE deleted_at IS NULL AND trigger_id<>? ORDER BY created_at",
                                        (tico_notices.ID,)).fetchall()]
 
 
@@ -124,7 +134,7 @@ def _row(c, trigger_id):
 def public(row):
     """The relay as a trigger shows it. `wake` is whether a delivery starts a sleeping server (HQ's switch, as last
     listed), null until HQ has said."""
-    return {"address_prefix": row["address_prefix"], "created": row["created"],
+    return {"address_prefix": row["address_prefix"], "created_at": row["created_at"],
             "wake": None if row["wake"] is None else bool(row["wake"])} if row else None
 
 
@@ -135,10 +145,41 @@ def attach(c, items):
         item["relay"] = public(relays.get(item["id"]))
 
 
-def forget(c, trigger_id):
+def forget(c: Any, trigger_id: str) -> None:
     """A deleted trigger loses its relay. Marked here, in the trigger's own transaction; HQ is told by the loop, so no
     network call waits inside a write."""
     c.execute("UPDATE trigger_relays SET deleted_at=? WHERE trigger_id=? AND deleted_at IS NULL", (H.now(), trigger_id))
+
+
+def keep(c, *, relay_id, trigger_id, prefix, by):
+    """HQ's relay kept as the trigger's live one, with its audit event."""
+    c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at) VALUES(?,?,?,?,?) "
+              "ON CONFLICT(relay_id) DO UPDATE SET trigger_id=excluded.trigger_id,address_prefix=excluded.address_prefix,"
+              "deleted_at=NULL,hq_gone=0", (relay_id, trigger_id, prefix, by, H.now()))
+    H.event(c, by, "trigger.relay_created", trigger_id, {"relay": relay_id})
+
+
+def record_system(c, trigger_id: str, relay_id: str) -> bool:
+    """Remember `relay_id` as this install's system relay for `trigger_id`, replacing an older one. False, and nothing
+    kept, for an id that is not a relay id. The caller has HQ's list (`system: true`) in hand; a delivery never records."""
+    if not RELAY.fullmatch(str(relay_id or "")):
+        return False
+    if relay_recorded(c, trigger_id, relay_id):
+        return True
+    c.execute("DELETE FROM trigger_relays WHERE trigger_id=? AND deleted_at IS NULL", (trigger_id,))
+    c.execute("INSERT OR REPLACE INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at,deleted_at,hq_gone) "
+              "VALUES(?,?,?,?,?,NULL,0)", (relay_id, trigger_id, "", H.KEEPER, H.now()))
+    return True
+
+
+def relay_recorded(c, trigger_id: str, relay_id: str) -> bool:
+    return c.execute("SELECT 1 FROM trigger_relays WHERE trigger_id=? AND relay_id=? AND deleted_at IS NULL",
+                     (trigger_id, relay_id)).fetchone() is not None
+
+
+def system_accepts(c, trigger_id: str, relay_id: str) -> bool:
+    """Whether a delivery for a system trigger from `relay_id` may be fed: only the relay recorded for that trigger."""
+    return bool(relay_id) and relay_recorded(c, trigger_id, relay_id)
 
 
 def clean_wake_url(value):
@@ -160,18 +201,20 @@ def clean_wake_url(value):
 class Link:
     """One Gateway key and base URL, read once from the connection (backend/gateway_connection.py)."""
 
-    def __init__(self, key, base, fingerprint):
+    def __init__(self, key: str, base: str, fingerprint: str) -> None:
         self.key, self.base, self.fingerprint = key, base, fingerprint
 
-    def call(self, method, path, body=None, idempotency=None, *, area="hooks", transport=None, cap=MAX_ANSWER):
+    def call(self, method: str, path: str, body: object = None, idempotency: str | None = None, *,
+             area: str = "hooks", transport: object = None, cap: int = MAX_ANSWER) -> dict[str, Any]:
         """One call to `<base>/<area>/<path>`. `area` and `cap` let the sleep client (backend/sleep_idle.py) share the
         key, the pinned client settings and the answer cap; `transport` is a test's fake HQ."""
-        headers = {"Authorization": "Bearer " + self.key, "User-Agent": user_agent(), "Accept-Encoding": "identity"}
+        sent = {"Authorization": "Bearer " + self.key, "User-Agent": user_agent(), "Accept-Encoding": "identity"}
         if idempotency:
-            headers["Idempotency-Key"] = idempotency[:200]
+            sent["Idempotency-Key"] = idempotency[:200]
         try:
-            with httpx.Client(transport=transport or TRANSPORT, timeout=TIMEOUT, trust_env=False, follow_redirects=False) as client:
-                with client.stream(method, f"{self.base}/{area}/{path}", json=body, headers=headers) as response:
+            with httpx.Client(transport=transport or TRANSPORT, timeout=TIMEOUT, trust_env=False, follow_redirects=False,
+                              verify=outbound_tls.context(trust_env=False)) as client:
+                with client.stream(method, f"{self.base}/{area}/{path}", headers=sent, json=body) as response:
                     raw = bytearray()
                     for chunk in response.iter_bytes():
                         raw.extend(chunk)
@@ -195,7 +238,7 @@ class Link:
         return answer
 
 
-def link_of(c, vault, settings):
+def link_of(c: Any, vault: Any, settings: Any) -> Link | None:
     """The Link for the connected key, or None. A base the key may not be sent to is no link."""
     key, base, _ = GC.target(c, vault, settings)
     if not key:
@@ -368,6 +411,28 @@ class HookRelay:
         headers = item.get("headers") if isinstance(item.get("headers"), dict) else {}
         headers = {str(k): str(v) for k, v in headers.items()}
         trigger_id, relay_id = str(item.get("trigger_id") or ""), str(item.get("relay_id") or "")
+        kick = False
+        if trigger_id == postal_mail.TRIGGER:
+            # A letter (backend/postal_mail.py) rides the system relay too and is only kept here: the download and the
+            # model calls run in the mail drain, never inside this transaction.
+            with self.store.transaction() as c:
+                if system_accepts(c, postal_mail.TRIGGER, relay_id):
+                    kick = postal_mail.arrived(c, body, str(item.get("delivery_id") or ""))
+                save(c, cursor=seq)
+            mail = getattr(self.app.state, "postal_mail", None)
+            if kick and mail:
+                mail.kick()
+            return True
+        if trigger_id == FINANCE_TRIGGER:
+            # HQ's envelope for a QuickBooks or Xero call (backend/finance/books_link.py): fed only from the relay recorded
+            # for `_finance`, to the books connection it names. Anything else from that relay is acked and not kept.
+            from .finance import actions as finance
+            with self.store.transaction() as c:
+                if system_accepts(c, FINANCE_TRIGGER, relay_id):
+                    finance.books_relayed(c, body, delivery_id=str(item.get("delivery_id") or ""),
+                                          received_at=received(item.get("received_at")), vault=self.vault(), auth=self.auth)
+                save(c, cursor=seq)
+            return True
         with self.store.transaction() as c:
             # Only a trigger that has this live relay here is fed: HQ's word alone never reaches another trigger. The
             # one built-in exception is `_tico`, fed only from the system relay HQ's list named (`learn_notice_relay`).
@@ -397,13 +462,13 @@ class HookRelay:
         return H.human_actor(pid) if pid else None
 
     def unknown_system_relay(self, items):
-        """Whether a delivery in this page names `_tico` through a relay not recorded here."""
-        wanted = {str(i.get("relay_id") or "") for i in items
-                  if isinstance(i, dict) and i.get("trigger_id") == tico_notices.ID}
+        """Whether a delivery in this page names a system trigger (SYSTEM_TRIGGERS) through a relay not recorded for it."""
+        wanted = {(str(i.get("trigger_id")), str(i.get("relay_id") or "")) for i in items
+                  if isinstance(i, dict) and i.get("trigger_id") in SYSTEM_TRIGGERS}
         if not wanted:
             return False
         with self.store.read() as c:
-            return wanted != {tico_notices.relay(c)}
+            return any(not relay_recorded(c, trigger_id, relay_id) for trigger_id, relay_id in wanted)
 
     def learn_notice_relay(self, link, force=False):
         """The relay HQ lists with `system: true` for `_tico` is the one that may feed it. Asked at most hourly, or at
@@ -420,14 +485,23 @@ class HookRelay:
             return
         self.listed = now()
         items = answer.get("items")
-        found = [i.get("relay_id") for i in items if isinstance(i, dict) and i.get("system") is True
-                 and i.get("trigger_id") == tico_notices.ID] if isinstance(items, list) else []
+        listed = items if isinstance(items, list) else []
+        found: dict[str, list] = {}
+        for item in listed:
+            if isinstance(item, dict) and item.get("system") is True and item.get("trigger_id") in SYSTEM_TRIGGERS:
+                found.setdefault(str(item["trigger_id"]), []).append(item.get("relay_id"))
         with self.store.transaction() as c:
-            for item in items if isinstance(items, list) else []:
+            for item in listed:
                 if isinstance(item, dict) and isinstance(item.get("wake"), bool):
                     c.execute("UPDATE trigger_relays SET wake=? WHERE relay_id=?", (int(item["wake"]), str(item.get("relay_id"))))
-            if len(found) == 1 and tico_notices.record_relay(c, found[0]):
-                tico_notices.ensure(c, self.owner(c))
+            for trigger_id, relays in found.items():
+                if len(relays) != 1:
+                    continue                            # two system relays listed for one trigger: neither is trusted
+                if trigger_id == tico_notices.ID:
+                    if tico_notices.record_relay(c, relays[0]):
+                        tico_notices.ensure(c, self.owner(c))
+                else:
+                    record_system(c, trigger_id, relays[0])
 
     def sweep_deleted(self, link):
         """Tell HQ about relays deleted here, a few at a time; HQ having no such relay is as good as deleted."""
@@ -474,7 +548,7 @@ class HookRelay:
             validate_identity(c, who)
             task_privacy.guard_write(c, who, request.url.path, self.auth)
             row = triggers._row(c, trigger_id)
-            triggers.may_manage(c, who, row)
+            triggers._may_change(c, who, row, "change")      # a Finance trigger's address is a finance admin's (spec 3.4)
             if triggers.builtin(trigger_id):
                 raise Problem("relay", f"{tico_notices.NAME} notices come through Tico Gateway already; there is no address to make", 422)
             relay = _row(c, trigger_id)
@@ -507,10 +581,7 @@ class HookRelay:
             elif existing:
                 pass                                # the same HQ relay (a concurrent retry with the same key): keep it
             else:
-                c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created) VALUES(?,?,?,?,?) "
-                          "ON CONFLICT(relay_id) DO UPDATE SET trigger_id=excluded.trigger_id,address_prefix=excluded.address_prefix,"
-                          "deleted_at=NULL,hq_gone=0", (relay_id, trigger_id, prefix, who.actor, H.now()))
-                H.event(c, who.actor, "trigger.relay_created", trigger_id, {"relay": relay_id})
+                keep(c, relay_id=relay_id, trigger_id=trigger_id, prefix=prefix, by=who.actor)
                 tico_notices.ensure(c, self.owner(c))      # HQ made this install's Tico Team relay with its first
         if extra:
             self.ask(link, "POST", f"relays/{extra}/delete", {}, "forget:" + extra, quiet=True)

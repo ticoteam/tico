@@ -62,6 +62,36 @@ def test_requests_and_sql_are_aggregated_per_minute_route_and_caller(store):
     assert process["requests"] == 21 and process["txns"] >= 1
 
 
+def test_a_slow_request_names_its_costliest_statements_and_keeps_no_values(store, monkeypatch):
+    """A slow page's sample says where its SQL time went: its costliest statement shapes, repeats folded into one with
+    their count, values never kept. A request past STATEMENT_KEYS distinct texts still counts every statement."""
+    monkeypatch.setattr(flight, "STATEMENT_KEYS", 3)
+    rec = store.recorder
+    many = "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<?) SELECT sum(x) FROM n"
+    with store.read() as c:                         # a pooled connection, opened before the request
+        cost, token = flight.request_started("GET", None)
+        try:
+            c.execute(many, (3_000_000,)).fetchone()
+            for task in ("secret-a", "secret-b", "secret-c", "secret-d"):
+                c.execute(f"SELECT * FROM tasks WHERE id='{task}'").fetchall()
+        finally:
+            flight.request_finished(token)
+    assert cost[2] == 5 and len(cost[3]) == 3
+    rec.request("GET /api/status", "human", 200, 1500, 10, "human:ana", cost)
+    rec.request("GET /api/status", "human", 200, 1600, 10, "human:ana", [900.0, 0.0, 40])   # an older-shaped cost
+    rec.drain(MINUTE)
+    taken = rec.take(MINUTE)
+    with store.transaction() as c:
+        flight.write(c, taken)
+        slow = flight.view(c, minutes=10, sections={"slow"}, now=int(time.time()) + 60)["slow"]
+    named = next(r for r in slow if r.get("top"))
+    assert [t["sql"] for t in named["top"]][0] == flight.fingerprint(many)
+    assert {"sql": "SELECT * FROM tasks WHERE id='?'", "n": 2, "ms": named["top"][1]["ms"]} in named["top"]
+    assert "secret" not in json.dumps(slow) and sum(1 for r in slow if "top" not in r) == 1
+    # The flight file, which a stalled server still writes, carries the same names.
+    assert [r["top"] for r in rec.pop_slow() if "top" in r] == [named["top"]]
+
+
 def test_a_stall_behind_the_write_lock_reaches_the_file_and_the_summary(store, capsys):
     """The write lock is held elsewhere, a writer waits for it, the event loop stops waking: the stall is in the file
     (class `lock`, with the waiting thread's stack) although the recorder's own table write could not get the lock,
@@ -112,8 +142,8 @@ def test_a_full_buffer_counts_what_it_drops(monkeypatch):
 def test_slow_request_upgrade_keeps_history_and_adds_nullable_attribution(tmp_path):
     path = tmp_path / 'synthetic.sqlite'
     with sqlite3.connect(path) as c:
-        c.execute('CREATE TABLE flight_slow(id INTEGER PRIMARY KEY,ts INTEGER,route TEXT,caller TEXT,actor TEXT,ms REAL,bytes INTEGER,status INTEGER)')
-        c.execute("INSERT INTO flight_slow(ts,route,ms) VALUES(?,?,?)", (MINUTE, 'GET /api/v2/tasks/{tid}', 1500))
+        c.execute('CREATE TABLE flight_slow(id INTEGER PRIMARY KEY,created_at INTEGER,route TEXT,caller TEXT,actor TEXT,ms REAL,bytes INTEGER,status INTEGER)')
+        c.execute("INSERT INTO flight_slow(created_at,route,ms) VALUES(?,?,?)", (MINUTE, 'GET /api/v2/tasks/{tid}', 1500))
     store = Store(Settings(db_path=path, registry_dir=tmp_path), flight.Recorder())
     store.initialize(seed_market=False)
     store.initialize(seed_market=False)
@@ -124,19 +154,21 @@ def test_slow_request_upgrade_keeps_history_and_adds_nullable_attribution(tmp_pa
 
 def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatch):
     with store.transaction() as c:
-        c.execute("CREATE TABLE size_fixture(created INTEGER, payload BLOB)")
+        c.execute("CREATE TABLE size_fixture(created_at INTEGER, payload BLOB)")
         # Large enough to appear in the top 40 alongside the initialized schema's tables/indexes.
         c.execute("INSERT INTO size_fixture VALUES(?, zeroblob(?))", (MINUTE, 128 * 1024))
-    monkeypatch.setattr(flight, "BIG", {**flight.BIG, "size_fixture": "created"})
-    scans = []
+    monkeypatch.setattr(flight, "BIG", {**flight.BIG, "size_fixture": "created_at"})
+    sizing, dbstat = [], []                      # the size pass's statements, and any that walk pages with dbstat
     read = store.read
 
     @contextmanager
     def traced_read():
         with read() as c:
             def trace(sql):
-                if "FROM dbstat" in sql:
-                    scans.append((sql, c.in_transaction))
+                if "dbstat" in sql:
+                    dbstat.append(sql)
+                if sql.startswith(("PRAGMA table_info", "PRAGMA index_info")):
+                    sizing.append((sql, c.in_transaction))
             c.set_trace_callback(trace)
             try:
                 yield c
@@ -149,7 +181,7 @@ def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatc
     with store.read() as c:
         first = flight._db(c, MINUTE)
     assert first["objects"]["size_fixture"] > 0
-    one_pass = len(scans)                        # one short read per object, so many queries make one pass
+    one_pass = len(sizing)                       # one short read per table and its indexes, so many statements make one pass
     assert one_pass > 1
     with store.transaction() as c:
         c.execute("INSERT INTO size_fixture VALUES(?, zeroblob(?))", (MINUTE + 1, 256 * 1024))
@@ -159,7 +191,7 @@ def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatc
     sampler.size_db(MINUTE + 7200)
     with store.read() as c:
         reused = flight._db(c, MINUTE + 7200)
-    assert len(scans) == one_pass
+    assert len(sizing) == one_pass
     assert reused["objects"] == first["objects"] and reused["objects_at"] == MINUTE
     assert reused["at"] == (MINUTE + 7200) // 3600 * 3600
     assert reused["rows"]["size_fixture"] == 2 and reused["oldest"]["size_fixture"] == MINUTE
@@ -167,12 +199,12 @@ def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatc
     sampler.size_db(MINUTE + 86400)
     with store.read() as c:
         refreshed = flight._db(c, MINUTE + 86400)
-        assert [r[1] for r in c.execute("PRAGMA table_info(flight_db)")] == [
-            "ts", "bytes", "wal_bytes", "free_bytes", "detail_json"]
-    assert len(scans) == 2 * one_pass
+        assert [r[0] for r in c.execute("SELECT name FROM pragma_table_info('flight_db')")] == [
+            "created_at", "bytes", "wal_bytes", "free_bytes", "detail"]
+    assert len(sizing) == 2 * one_pass
     assert refreshed["objects_at"] == MINUTE + 86400
     assert refreshed["objects"]["size_fixture"] > first["objects"]["size_fixture"]
-    assert all("aggregate=TRUE" in sql and not in_transaction for sql, in_transaction in scans)
+    assert not dbstat and all(not in_transaction for _, in_transaction in sizing)
 
 
 def test_owners_admins_and_bots_read_the_metrics(tmp_path):
@@ -189,7 +221,7 @@ def test_owners_admins_and_bots_read_the_metrics(tmp_path):
         with app.state.store.transaction() as c:
             H.sync_registry(c, {"qa": {"name": "QA", "status": "active"}},
                             {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
-            c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('qa','hermes','x',?,'human:ana')",
+            c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('qa','hermes','x',?,'human:ana')",
                       (H.now(),))
 
         def get(token, path="/api/v2/system/metrics"):
@@ -214,7 +246,7 @@ def test_owners_admins_and_bots_read_the_metrics(tmp_path):
             time.sleep(0.05)
         assert get("cara-test").status_code == 403 and get("runner-test").status_code in (401, 403)
         with app.state.store.transaction() as c:
-            c.execute("INSERT INTO flight_slow(ts,route,caller,actor,ms,bytes,status) VALUES(?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO flight_slow(created_at,route,caller,actor,ms,bytes,status) VALUES(?,?,?,?,?,?,?)",
                       (int(time.time()), "GET /api/v2/tasks", "human", "human:cara", 1500, 10, 200))
         slow = get("qa-test", "/api/v2/system/metrics?section=slow")
         assert slow.status_code == 200 and slow.json()["slow"][0]["ms"] == 1500
@@ -305,9 +337,9 @@ def test_minutes_become_hours_and_old_rows_go(store):
                       (hour + 60 * i, 60, "GET /api/v2/tasks", "bot", 1, 0, 5, ms, ms, ms, ms, json.dumps(hist)))
         c.execute("INSERT INTO flight_requests VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                   (now - 15 * 86400, 3600, "GET /x", "bot", 1, 0, 0, 1, 1, 1, 1, "{}"))
-        c.execute("INSERT INTO flight_slow(ts,route) VALUES(?,?)", (now - 15 * 86400, "GET /x"))
+        c.execute("INSERT INTO flight_slow(created_at,route) VALUES(?,?)", (now - 15 * 86400, "GET /x"))
         c.execute("INSERT INTO flight_sql VALUES(?,?,?,?,?,?,?)", (now - 91 * 86400, "SELECT N", 1, 1, 1, 1, "{}"))
-        c.execute("INSERT INTO flight_process(ts) VALUES(?)", (now - 60,))
+        c.execute("INSERT INTO flight_process(created_at) VALUES(?)", (now - 60,))
     flight.sweep(store, now)
     with store.read() as c:
         rows = [dict(r) for r in c.execute("SELECT * FROM flight_requests")]
@@ -316,7 +348,7 @@ def test_minutes_become_hours_and_old_rows_go(store):
         assert c.execute("SELECT count(*) FROM flight_process").fetchone()[0] == 1
     assert len(rows) == 1
     row = rows[0]
-    assert (row["ts"], row["span"], row["n"], row["bytes"], row["max_ms"]) == (hour, 3600, 3, 15, 4000)
+    assert (row["created_at"], row["span"], row["n"], row["bytes"], row["max_ms"]) == (hour, 3600, 3, 15, 4000)
     assert row["p95"] >= 4000 and row["p50"] < 25
 
 
@@ -345,6 +377,12 @@ def test_the_start_record_keeps_no_secret_and_flags_an_image_not_built_from_its_
     assert flight.provenance(settings, "0.3.22", image) == "match"
     (image / "backend" / "app.py").write_text("release = 1  # patched\n")
     assert flight.provenance(settings, "0.3.22", image) == "modified"
+    # The harness manifests the server reads (clients/harness_manifests.py) moved with runner-rs and still count.
+    (image / "runner-rs" / "harnesses").mkdir(parents=True)
+    (image / "runner-rs" / "harnesses" / "pi.toml").write_text("id = 'pi'\n")
+    before = code_hash.digest(image)
+    (image / "runner-rs" / "harnesses" / "pi.toml").write_text("id = 'pi'  # patched\n")
+    assert code_hash.digest(image) != before
 
 
 def test_a_long_write_names_its_route_and_code_site_in_the_file_the_log_and_the_events(store, monkeypatch, caplog):
@@ -404,7 +442,7 @@ def test_a_minute_the_lock_kept_out_is_written_with_the_next_one_or_named_as_mis
 
     def minutes():
         with store.read() as c:
-            return [r[0] for r in c.execute("SELECT ts FROM flight_process ORDER BY ts")]
+            return [r[0] for r in c.execute("SELECT created_at FROM flight_process ORDER BY created_at")]
 
     def errors(minute):
         rec.request("POST /api/v2/runners/heartbeat", "runner", 503, 30_000, 89)
@@ -432,7 +470,7 @@ def test_a_minute_the_lock_kept_out_is_written_with_the_next_one_or_named_as_mis
     errors(MINUTE + 300)
     assert minutes()[-2:] == [MINUTE + 240, MINUTE + 300] and MINUTE + 180 not in minutes()
     with store.read() as c:
-        gap = c.execute("SELECT detail_json FROM flight_events WHERE kind='recorder_gap'").fetchall()
+        gap = c.execute("SELECT detail FROM flight_events WHERE kind='recorder_gap'").fetchall()
     assert [json.loads(g[0]) for g in gap] == [{"minutes": [MINUTE + 180], "count": 1}]
 
 
@@ -459,7 +497,7 @@ def test_a_start_or_stall_the_lock_kept_out_keeps_the_time_it_happened(store, mo
     rec.drain(MINUTE + 180)
     sampler.flush(MINUTE + 180)
     with store.read() as c:
-        when = dict(c.execute("SELECT kind,ts FROM flight_events WHERE kind IN ('start','stall')").fetchall())
+        when = dict(c.execute("SELECT kind,created_at FROM flight_events WHERE kind IN ('start','stall')").fetchall())
         assert when == {"start": MINUTE + 5, "stall": MINUTE + 5} and flight.last_start(c)["at"] == MINUTE + 5
 
 
@@ -476,7 +514,7 @@ def test_a_retry_after_a_failing_write_keeps_order_drops_only_the_bad_batch_and_
         return sampler.flush(ts)
 
     def tables(c):
-        return ([r[0] for r in c.execute("SELECT ts FROM flight_process ORDER BY ts")],
+        return ([r[0] for r in c.execute("SELECT created_at FROM flight_process ORDER BY created_at")],
                 c.execute("SELECT count(*) FROM flight_slow").fetchone()[0],
                 c.execute("SELECT max(n) FROM flight_sql WHERE fingerprint=?",
                           (flight.fingerprint("SELECT 1"),)).fetchone()[0])
@@ -495,7 +533,7 @@ def test_a_retry_after_a_failing_write_keeps_order_drops_only_the_bad_batch_and_
     minute(MINUTE + 120)
     with store.read() as c:
         assert tables(c) == ([MINUTE, MINUTE + 60, MINUTE + 120], 3, 3)     # replayed in reverse, n would end at 1 or 2
-        gap = [json.loads(r[0]) for r in c.execute("SELECT detail_json FROM flight_events WHERE kind='recorder_gap'")]
+        gap = [json.loads(r[0]) for r in c.execute("SELECT detail FROM flight_events WHERE kind='recorder_gap'")]
     assert gap == [{"minutes": [MINUTE + 90], "count": 1}] and sampler.pending == [] and sampler.lost == []
 
 
@@ -547,7 +585,7 @@ def test_a_real_request_holding_the_lock_is_named_while_held_and_after(tmp_path,
     sampler.flush(MINUTE + 60)
     sampler.file.close()
     with store.read() as c:
-        holds = [json.loads(r[0]) for r in c.execute("SELECT detail_json FROM flight_events WHERE kind='long_hold'")]
+        holds = [json.loads(r[0]) for r in c.execute("SELECT detail FROM flight_events WHERE kind='long_hold'")]
     opened = [h for h in holds if h.get("open")]
     assert opened and opened[0]["route"] == "POST /api/v2/test-hold/{key}" and "hold_the_lock" in opened[0]["site"]
     assert any(not h.get("open") and h["route"] == "POST /api/v2/test-hold/{key}" for h in holds)   # and when it ended

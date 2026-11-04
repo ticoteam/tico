@@ -9,8 +9,12 @@ const {openStrategy, PHONE, DESKTOP, sideways, shot} = require('./support/strate
 
 const texts = (page, sel) => page.locator(sel).allInnerTexts().then(a => a.map(t => t.trim()));
 
-// On a phone the Strategy tabs sit above the view switch.
-const tabsFirst = page => page.evaluate(() => document.querySelector('.strat-tabs').getBoundingClientRect().bottom <= document.querySelector('.mkt-views').getBoundingClientRect().top + 1);
+// The Strategy tabs come first: above the view switch on a phone, and before it on the same row where the page is wide
+// enough (a computer, with no rail beside Strategy).
+const tabsFirst = page => page.evaluate(() => {
+  const tabs = document.querySelector('.strat-tabs').getBoundingClientRect(), views = document.querySelector('.mkt-views').getBoundingClientRect();
+  return tabs.bottom <= views.top + 1 || tabs.right <= views.left;
+});
 
 async function briefing(page, tag) {
   await page.locator('.rdb').waitFor();

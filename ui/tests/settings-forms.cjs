@@ -13,11 +13,11 @@ const {unrouted} = require('./support/routes.cjs');
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     const writes = [];
-    const computers = [{id: 'computer-1', label: 'Build server', operator: 'ana', bots: ['helper'], platform: 'linux',
-      last_seen: new Date().toISOString(), readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}}}}];
+    const computers = [{id: 'computer-1', label: 'Build server', owner_id: 'ana', bots: ['helper'], platform: 'linux',
+      last_seen_at: new Date().toISOString(), readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}}}}];
     let providers = {enabled: ['openai'], default: {runtime: 'codex', model: 'test-model'}, revision: 1,
       providers: [{id: 'openai', label: 'OpenAI', recommended: 'test-model'}]};
-    const bots = [{name: 'helper', display_name: 'Helper', status: 'active', operator: 'ana', can_manage: true, users: [], bot_owners: []}];
+    const bots = [{name: 'helper', display_name: 'Helper', status: 'active', owner_id: 'ana', can_manage: true, users: [], bot_owners: []}];
     await page.route('**/*', route => {
       const req = route.request(), p = new URL(req.url()).pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -37,7 +37,7 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/needs-you') return json({items: []});
       const github = {service: 'github', title: 'GitHub', kind: 'cli', summary: 'Code', access: 'gh CLI', credentials: ['GH_TOKEN'], declared_as: '',
-        writes: 'allowed', owner: 'Ana', aliases: [], status: 'not_configured', bots: [], connections: []};
+        writes: 'allowed', owner_id: 'Ana', aliases: [], status: 'not_configured', bots: [], connections: []};
       if (p === '/api/v2/tools') return json({integrations: [github]});
       if (p === '/api/v2/tools/github') return json({...github, queries: [], body: '', learnings: []});
       if (p === '/api/v2/github/app') return json({connected: false});
@@ -48,8 +48,8 @@ const {unrouted} = require('./support/routes.cjs');
         return json(providers);
       }
       if (p === '/api/v2/computers/computer-1/revoke') { writes.push({p, body: req.postDataJSON()}); computers[0].revoked_at = new Date().toISOString(); return json({revoked: true}); }
-      if (p === '/api/v2/chat/botops') { writes.push({p, body: req.postDataJSON()}); return json({}); }
-      if (p === '/api/v2/access') return json({people: [{id: 'ana', name: 'Ana', owner: true, role: 'owner', can_sign_in: true}], home_domain: 'example.com', allowed: [], allowed_domains: [], owner: {}, rules: {}});
+      if (p === '/api/v2/assistant/messages') { writes.push({p, body: req.postDataJSON()}); return json({}); }
+      if (p === '/api/v2/access') return json({people: [{id: 'ana', name: 'Ana', owner: true, role: 'owner', can_sign_in: true}], home_domain: 'example.com', allowed: [], allowed_domains: [], owner_id: {}, rules: {}});
       if (p === '/api/v2/me/tokens') return json({tokens: []});
       if (p === '/api/v2/slack/app') return json({configured: false});
       if (p === '/api/v2/meeting-importers') return json({importers: [], computers: []});
@@ -68,8 +68,10 @@ const {unrouted} = require('./support/routes.cjs');
     // Settings: loadSettings and a same-route redraw leave the Add computer and API token fields alone.
     await page.goto('https://tico-ui.test/#/settings/devices');
     const machine = page.locator('#machine-label'), token = page.locator('#settings-token-form input[name=label]');
-    await machine.waitFor(); await token.waitFor();
-    await machine.fill('Build server'); await token.fill('CI script');
+    await token.waitFor();
+    await token.fill('CI script');
+    await page.locator('#machine-add-open').click();
+    await machine.fill('Build server');
     // The same-route redraw starts its own loadSettings; wait for that one to finish too.
     await page.evaluate(async () => {
       await loadSettings();
@@ -80,6 +82,8 @@ const {unrouted} = require('./support/routes.cjs');
     });
     assert.equal(await machine.inputValue(), 'Build server', 'Computer name survives loadSettings');
     assert.equal(await token.inputValue(), 'CI script', 'Token label survives loadSettings');
+    assert.equal(await page.locator('#machine-add-dialog').evaluate(d => d.open), true, 'Add computer stays open through loadSettings');
+    await page.keyboard.press('Escape');
     await page.locator('[data-settings-tab=bots]').click();
     assert.equal(await page.locator('#settings-bots #settings-add-bot').isVisible(), true);
     assert.equal(await page.locator('#settings-devices #settings-add-bot').count(), 0);
@@ -117,25 +121,25 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await page.evaluate(() => SETTINGS_BOTS_VIEW.selected.size), 0);
     assert.equal(await page.locator('tr[data-settings-bot=helper] .sb-cell-access').getAttribute('aria-label'), 'Access: You: See · Read · Write');
     await page.setViewportSize({width: 1440, height: 900});
-    await page.locator('[data-settings-tab=devices]').click();
+    // Settings > Models > Defaults: the default fallback is on until the owner turns it off; the save says so and
+    // leaves the providers as they are.
+    await page.locator('[data-settings-tab=models]').click();
     await page.locator('#set-prov-save').waitFor();
-    assert.equal(await page.locator('#set-providers [data-model-login]').isVisible(), true);
-    assert.equal(await page.locator('#set-providers a[href="#/credentials"]').isVisible(), true);
-    // The default fallback is on until the owner turns it off; the save says so.
+    assert.equal(await page.locator('#set-prov [data-provider], #set-providers [data-model-login]').count(), 0, 'no provider boxes or sign-in prompts');
     assert.equal(await page.locator('#set-prov [data-provider-fallback]').isChecked(), true);
     await page.locator('#set-prov [data-provider-fallback]').uncheck();
-    await page.locator('#set-prov [data-provider]').uncheck();
+    const saves = () => writes.filter(row => row.p === '/api/v2/providers').length;
+    // The save redraws the form; the next edit waits for the new one.
+    await page.evaluate(() => { document.querySelector('#set-prov').dataset.before = '1'; });
     await page.locator('#set-prov-save').click();
-    await page.waitForFunction(() => !S.config.providers_configured);
-    assert.deepEqual(writes.find(row => row.p === '/api/v2/providers').body.enabled, []);
+    for (let i = 0; i < 100 && !saves(); i++) await new Promise(done => setTimeout(done, 50));
     assert.equal(writes.find(row => row.p === '/api/v2/providers').body.auto_fallback, false);
+    assert.equal('preset' in writes.find(row => row.p === '/api/v2/providers').body, false);
     // The check-model order was not edited, so the save leaves it alone instead of re-checking it.
     assert.equal('check_models' in writes.find(row => row.p === '/api/v2/providers').body, false);
-    // With nothing ticked it says bots wait for a provider (the models choices above have wording of their own).
-    await page.locator('#set-providers .muted', {hasText: 'Bots wait until you add an AI provider'}).waitFor();
-    assert.match(await page.locator('#set-providers').innerText(), /Bots wait until you add an AI provider/);
     // Edited, the order is sent as typed.
-    const saves = () => writes.filter(row => row.p === '/api/v2/providers').length, before = saves();
+    const before = saves();
+    await page.locator('#set-prov:not([data-before]) [data-provider-check]').waitFor();
     await page.locator('#set-prov [data-provider-check]').fill('grok, codex');
     await page.locator('#set-prov-save').click();
     for (let i = 0; i < 100 && saves() === before; i++) await new Promise(done => setTimeout(done, 50));
@@ -144,15 +148,15 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('#people-add').waitFor();
     await page.locator('[data-settings-tab=devices]').click();
     await page.locator('#set-machines .machine-name[data-computer-open=computer-1]').click();
-    page.once('dialog', confirm => confirm.accept());
     await page.locator('[data-computer-remove]').click();
+    await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
     await page.waitForFunction(() => !!SETTINGS_DATA.machines[0].revoked_at);
     assert.ok(writes.some(row => row.p === '/api/v2/computers/computer-1/revoke'));
     // The presence read can expose revoked_at before the action's remaining Settings reads finish.
-    await page.locator('#machine-enroll-status code', {hasText: 'docker compose'}).waitFor();
-    assert.match(await page.locator('#machine-enroll-status').innerText(), /docker compose/);
+    await page.locator('#machine-note code', {hasText: 'docker compose'}).waitFor();
+    assert.match(await page.locator('#machine-note').innerText(), /docker compose/);
     await page.locator('#set-machines .machine-card').waitFor({state: 'detached'});
-    const showRevoked = page.getByRole('checkbox', {name: 'Show revoked computers (1)', exact: true});
+    const showRevoked = page.getByRole('checkbox', {name: 'Show revoked (1)', exact: true});
     await showRevoked.check();
     assert.match(await page.locator('#set-machines .machine-card').innerText(), /Build server[\s\S]*revoked/);
     await page.evaluate(() => loadSettings());
@@ -167,9 +171,9 @@ const {unrouted} = require('./support/routes.cjs');
     await page.evaluate(() => settingsEditInstructions('helper'));
     await page.locator('textarea[name=changes]').fill('Use the updated support policy.');
     await page.locator('#bot-instructions-editor [type=submit]').click();
-    await page.waitForFunction(() => document.querySelector('[data-instructions-status]')?.textContent === 'Changes sent to BotOps.');
+    await page.waitForFunction(() => document.querySelector('[data-instructions-status]')?.textContent === 'Changes sent.');
     assert.equal(await page.locator('dialog[open]').count(), 0);
-    assert.match(writes.find(row => row.p === '/api/v2/chat/botops').body.text, /Instructions \(AGENT.md\).*Helper/);
+    assert.match(writes.find(row => row.p === '/api/v2/assistant/messages').body.text, /Instructions \(AGENT.md\).*Helper/);
     assert.deepEqual(errors, []);
     console.log('ok');
   } finally { await browser.close(); }

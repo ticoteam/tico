@@ -72,7 +72,7 @@ def test_a_whole_model_chart_is_accepted_before_choosing_its_file_transport(tmp_
     path.write_text(C.to_yaml(draft))
     s = settings.Settings()
     wizard.gather_company_file(argparse.Namespace(company_file=str(path), company=None), s)
-    assert len(starter.unpack(s.company_file_data)["bots"]) == 73
+    assert len(starter.unpack(s.company_file_data)["bots"]) == len(draft["bots"])
 
 
 def test_hosted_cli_carries_selected_file_through_machine_and_dns_setup(tmp_path, monkeypatch):

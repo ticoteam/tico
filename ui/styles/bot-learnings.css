@@ -1,15 +1,16 @@
 /* ui/styles/bot-learnings.css — The Learnings button beside a bot's name and its panel (ui/app/bot-learnings.js).
-   A panel on the right on a desktop, a sheet from the bottom on a phone. */
+   A panel on the right on a desktop, a sheet from the bottom on a phone. Dream mode (.dreaming) and the bot page's
+   dream card share a slow drifting sky: soft violet, teal and rose over the surface, the text on a scrim. */
 .bot-learn{position:relative;flex:none;display:inline-grid;place-items:center;width:28px;height:28px;margin-left:4px;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
 .bot-learn:hover{color:var(--ink);background:var(--hover)}
-.bot-learn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.bot-learn:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .bot-learn .nav-icon{width:18px;height:18px;font-size:18px;color:inherit}
 .bot-learn .bl-label{display:none}
 /* At the top of More on a phone it is a labelled row: icon, "Learnings", how many are new. */
 .bot-more-top .bot-learn{display:inline-flex;width:auto;gap:6px;margin:0;padding:6px 10px 6px 8px;border:1px solid var(--line);border-radius:8px;font:inherit;font-size:var(--t-base);color:var(--ink)}
 .bot-more-top .bot-learn .bl-label{display:inline}
 .bot-more-top .bot-learn .bl-n{position:static}
-.bot-learn .bl-n{position:absolute;top:0;right:-2px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;background:var(--accent);color:var(--accent-ink);font-size:var(--t-2xs);font-weight:700;line-height:14px;text-align:center;font-variant-numeric:tabular-nums}
+.bot-learn .bl-n{position:absolute;top:0;right:-2px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;background:var(--ink);color:var(--bg);font-size:var(--t-2xs);font-weight:600;line-height:14px;text-align:center;font-variant-numeric:tabular-nums}
 
 .learn-panel{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(460px,100vw);padding:0;border:0;border-left:1px solid var(--line);background:var(--surface);color:var(--ink);display:flex;flex-direction:column;box-shadow:-12px 0 40px rgba(0,0,0,.35)}
 .learn-panel:not([open]){display:none}
@@ -23,26 +24,92 @@
 .learn-body .md{padding-top:8px;font-size:var(--t-base)}
 .learn-warning{margin:8px 0;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-base)}
 .learn-list{list-style:none;margin:0;padding:0}
-.learn-row{padding:9px 0;border-bottom:1px solid var(--line);font-size:var(--t-base);line-height:18px}
-.learn-row.new .lr-subject::before{content:"";display:inline-block;width:6px;height:6px;margin:0 6px 1px 0;border-radius:50%;background:var(--accent)}
+.learn-row{padding:9px 0;border-bottom:1px solid var(--line);font-size:var(--t-base);line-height:var(--lh)}
+.learn-row.new .lr-subject::before{content:"";display:inline-block;width:6px;height:6px;margin:0 6px 1px 0;border-radius:50%;background:var(--ink)}
 .lr-subject{overflow-wrap:anywhere}
 .lr-meta,.lr-source,.lr-files,.lr-diff summary{font-size:var(--t-sm);color:var(--muted)}
 .lr-meta code{font-size:var(--t-xs)}
 .lr-local{color:var(--wait-ink)}
-.lr-source a{color:var(--accent-quiet)}
-.lr-source a:hover{color:var(--accent)}
+.lr-source a{color:var(--link-quiet)}
+.lr-source a:hover{color:var(--ink)}
 .lr-diff summary{cursor:pointer;overflow-wrap:anywhere}
-.lr-diff pre{margin:6px 0 0;padding:6px 0;border-radius:6px;background:var(--bg);font:var(--t-sm)/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto}
+.lr-diff pre{margin:6px 0 0;padding:6px 0;border-radius:6px;background:var(--bg);font:var(--t-sm)/var(--lh) var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto}
 .lr-diff pre>span{display:block;padding:0 8px;border-left:2px solid transparent}
 .lr-diff .add{color:var(--ink);background:var(--ok-bg);border-left-color:var(--ok)}
 .lr-diff .del{color:var(--muted);background:var(--fail-bg);border-left-color:var(--fail);text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--fail) 50%,transparent)}
-.lr-diff .hunk{color:var(--muted);line-height:1.1}
+.lr-diff .hunk{color:var(--muted);line-height:var(--lh-display)}
 .learn-more{margin-top:10px}
+
+/* Dream */
+.learn-panel,.dream-card-page,.bot-learn{--dream-v:#9a86f0;--dream-t:#45b9ae;--dream-r:#e3809f;--dream-blob:.42;--dream-scrim:color-mix(in srgb,var(--surface) 80%,transparent)}
+:root[data-theme="light"] :is(.learn-panel,.dream-card-page){--dream-blob:.3;--dream-scrim:color-mix(in srgb,var(--surface) 86%,transparent)}
+@media (prefers-color-scheme:light){:root[data-theme="system"] :is(.learn-panel,.dream-card-page){--dream-blob:.3;--dream-scrim:color-mix(in srgb,var(--surface) 86%,transparent)}}
+.learn-panel{position:relative;overflow:hidden}
+.learn-head,.learn-body{position:relative;z-index:1}
+.learn-head .learn-tabs{display:contents}
+.learn-dream{display:inline-flex;align-items:center;gap:4px;font-size:var(--t-sm)}
+.learn-dream .nav-icon{width:16px;height:16px;font-size:16px}
+.learn-panel.dreaming .learn-dream,.learn-panel.dreaming .learn-tabs{display:none}
+.learn-panel.dreaming .learn-head{border-bottom-color:transparent}
+.dream-sky{position:absolute;inset:0;z-index:0;overflow:hidden;pointer-events:none;background:linear-gradient(135deg,
+  color-mix(in srgb,var(--dream-v) 16%,var(--surface)),color-mix(in srgb,var(--dream-t) 13%,var(--surface)) 50%,
+  color-mix(in srgb,var(--dream-r) 15%,var(--surface)));background-size:220% 220%;animation:dream-drift 26s ease-in-out infinite alternate}
+.learn-panel:not(.dreaming) .dream-sky{display:none}
+.dream-sky i{position:absolute;width:75%;aspect-ratio:1;border-radius:50%;filter:blur(56px);opacity:var(--dream-blob)}
+.dream-sky i:nth-child(1){top:-18%;left:-22%;background:var(--dream-v);animation:dream-a 23s ease-in-out infinite alternate}
+.dream-sky i:nth-child(2){bottom:-22%;right:-28%;background:var(--dream-t);animation:dream-b 29s ease-in-out infinite alternate}
+.dream-sky i:nth-child(3){top:38%;left:28%;width:52%;background:var(--dream-r);opacity:calc(var(--dream-blob) * .75);animation:dream-c 21s ease-in-out infinite alternate}
+@keyframes dream-drift{from{background-position:0% 30%}to{background-position:100% 70%}}
+@keyframes dream-a{to{transform:translate(18%,22%) scale(1.15)}}
+@keyframes dream-b{to{transform:translate(-20%,-16%) scale(.9)}}
+@keyframes dream-c{to{transform:translate(-26%,14%) scale(1.2)}}
+@keyframes dream-fade{from{opacity:0;transform:translateY(4px)}}
+@keyframes dream-rise{from{opacity:0;transform:translateY(16px)}}
+@keyframes dream-breathe{50%{opacity:.55}}
+.dream-view{display:flex;flex-direction:column;gap:14px;min-height:100%;padding-top:12px}
+.dream-doing{align-self:center;max-width:36ch;margin:0 0 6px;text-align:center;font-size:var(--t-sm);color:var(--muted);overflow-wrap:anywhere}
+.dream-doing:empty{display:none}
+.dream-doing.fresh{animation:dream-fade 1.2s var(--ease) both}
+.dream-reason{align-self:center;max-width:52ch;margin:-2px 0 8px;text-align:center;font-size:var(--t-sm);color:var(--muted);overflow-wrap:anywhere}
+.dream-line{align-self:center;margin:18px 0 6px;padding:6px 14px;border-radius:999px;background:var(--dream-scrim);font-size:var(--t-lg);font-weight:500;letter-spacing:.01em;animation:dream-fade 1.2s var(--ease) both}
+.learn-panel .dream-content:empty+.dream-foot{margin-top:auto}
+.dream-content{display:flex;flex-direction:column;gap:10px}
+.dream-form{display:flex;flex-direction:column;gap:10px}
+.dream-q,.dream-summary,.dream-quiet,.dream-commits{padding:12px;border:1px solid color-mix(in srgb,var(--line) 70%,transparent);border-radius:10px;background:var(--dream-scrim)}
+.dream-q{display:flex;flex-direction:column;gap:8px;animation:dream-rise 1s var(--ease) both;animation-delay:calc(var(--i,0) * 140ms)}
+.dream-intro{font-size:var(--t-sm);color:var(--muted)}
+.dream-intro p,.dream-q-text p,.dream-summary p,.dream-quiet p{margin:0 0 4px}
+.dream-q-text{display:flex;gap:8px;font-size:var(--t-base);line-height:var(--lh)}
+.dream-n{flex:none;display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:color-mix(in srgb,var(--dream-v) 30%,var(--surface2));font-size:var(--t-sm);font-weight:600}
+.dream-chip{align-self:flex-start;max-width:100%;padding:3px 10px;border:1px dashed color-mix(in srgb,var(--dream-v) 55%,var(--line));border-radius:999px;background:none;color:var(--ink);font-size:var(--t-sm);text-align:left;cursor:pointer;overflow-wrap:anywhere}
+.dream-chip:hover{background:color-mix(in srgb,var(--dream-v) 14%,transparent)}
+.dream-q textarea{min-height:44px;font-size:var(--t-base)}
+.dream-actions{display:flex;justify-content:flex-end}
+.dream-commits{list-style:none;margin:0;padding:0 12px}
+.dream-commits .learn-row:last-child{border-bottom:0}
+.dream-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:auto;padding-top:8px;font-size:var(--t-sm)}
+.dream-foot a{color:var(--link-quiet)}
+/* While a dream runs, a small mark on the Learnings button. */
+.bot-learn.dreaming::after{content:"";position:absolute;bottom:1px;right:1px;width:7px;height:7px;border-radius:50%;background:linear-gradient(135deg,var(--dream-v),var(--dream-r));animation:dream-breathe 3s ease-in-out infinite}
+/* The bot page's card: its open questions, at small scale. */
+.dream-card-page{position:relative;overflow:hidden;margin:8px 0;padding:12px;border:1px solid var(--line);border-radius:12px}
+.dream-card-page>:not(.dream-sky){position:relative;z-index:1}
+.dream-page-head{display:flex;align-items:center;gap:6px;margin-bottom:8px;font-weight:600}
+.dream-page-head .nav-icon{width:16px;height:16px;font-size:16px}
+.dream-card-page .dream-form{max-width:640px}
+@media (prefers-reduced-motion:reduce){
+  .dream-sky,.dream-sky i,.dream-line,.dream-doing,.dream-q,.bot-learn.dreaming::after{animation:none!important}
+}
 @media (max-width:760px){
+  .learn-dream{min-height:44px;padding:0 12px}
+  .dream-chip{min-height:44px;padding:6px 12px}
+  .dream-actions .primary,.dream-foot button{min-height:44px;min-width:88px}
+  .dream-foot a{display:inline-flex;align-items:center;min-height:44px}
+  .learn-panel.dreaming{height:85dvh}
   .learn-panel{margin:auto 0 0;width:100vw;max-width:100vw;height:auto;max-height:85dvh;border-left:0;border-top:1px solid var(--line);border-radius:14px 14px 0 0;box-shadow:0 -12px 40px rgba(0,0,0,.35)}
   .learn-head{padding:14px 16px}
   .learn-switch button{padding:6px 10px;min-height:32px}
   .learn-head .tmodal-x{min-width:44px;min-height:44px}
   .learn-body{padding:4px 16px calc(16px + env(safe-area-inset-bottom))}
-  .bot-learn{width:36px;height:36px}
+  .bot-learn{width:40px;height:40px}
 }

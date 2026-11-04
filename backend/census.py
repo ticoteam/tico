@@ -59,19 +59,19 @@ def first_result(c, settings):
     the scan reads only the built-in bots' turns before it (tens of milliseconds at 20,000 Assistant turns)."""
     from .getting_started import built_in
     skip = sorted(built_in(settings))
-    row = c.execute("SELECT finished FROM attempts WHERE state='completed' AND finished IS NOT NULL AND bot NOT IN (%s) "
+    row = c.execute("SELECT finished_at FROM attempts WHERE state='completed' AND finished_at IS NOT NULL AND bot_id NOT IN (%s) "
                     "LIMIT 1" % ",".join("?" * len(skip)), skip).fetchone()
     return row[0] if row else ""
 
 
 def _load(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     value = json.loads(row[0]) if row else {}
     return value if isinstance(value, dict) else {}
 
 
 def _save(c, value):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (KEY, encode(value)))
 
 
@@ -82,6 +82,11 @@ def install_id_in(c):
         record["install_id"] = str(uuid.uuid4())
         _save(c, record)
     return record["install_id"]
+
+
+def install_id_if_set(c):
+    """This install's random ID when it has one, read only: `install_id_in` makes one inside a write transaction."""
+    return str(_load(c).get("install_id") or "")
 
 
 class Census:
@@ -119,7 +124,7 @@ class Census:
         since = H.shift(self.clock(), days=-WINDOW_DAYS)
         record = _load(c)
         people = str(record.get("last_person") or "") >= since
-        bots = c.execute("SELECT 1 FROM attempts WHERE state='completed' AND finished>=? LIMIT 1",
+        bots = c.execute("SELECT 1 FROM attempts WHERE state='completed' AND finished_at>=? LIMIT 1",
                          (since,)).fetchone() is not None
         return {"install_id": self._id(record, c), "version": version, "active_people": people, "active_bots": bots,
                 "first_result": bool(first_result(c, self.settings))}

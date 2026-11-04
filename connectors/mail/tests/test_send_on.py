@@ -58,7 +58,7 @@ def send_approval(to, files, draft="d-1", **row):
 
 def owner_order(slug="inbox"):
     """The owner's Tico message telling the bot to send: a standing yes for mail without files."""
-    return {"id": ORDER, "from_actor": f"human:{access.OWNER}", "to_actor": f"bot:{slug}",
+    return {"id": ORDER, "sender_id": f"human:{access.OWNER}", "recipient_id": f"bot:{slug}",
             "body": "Please send it to them."}
 
 
@@ -73,6 +73,13 @@ class Chain(Stage2):
     def decide(self, to, cc=(), slug="inbox", policy=None, body=BODY, **kw):
         return pl.check_send(policy or self.policy(), slug, "ana@acme.example", list(to), list(cc),
                              root=self.root, body=body, **kw)
+
+    def test_an_owner_message_to_a_bot_named_by_its_label_is_matched_by_the_bot_id(self):
+        bot_id = "0190f2a1-7c3e-7d1a-9b2e-5f4a3c2b1a00"             # Tico writes to_actor with the id, not the label
+        found = {f"messages/{ORDER}": owner_order(slug=bot_id), "bots/mira": {"id": bot_id, "stage": "active"}}
+        pl.HUB_GET = lambda path: found.get(path)
+        self.assertTrue(pl._hub_message_check(ORDER, "mira")["ok"])
+        self.assertFalse(pl._hub_message_check(ORDER, "inbox")["ok"])     # the label of another bot
 
     def test_the_sender_of_the_thread_being_answered_goes_without_approval(self):
         d = self.decide([AVA], thread_id=THREAD, thread_senders=[AVA])
@@ -131,6 +138,21 @@ class Chain(Stage2):
             pl.SERVER_GET = lambda slug: dict(off, bot=slug, onboarding=True)
             d = self.decide([STRANGER], approval=approval)
             self.assertEqual((d.allowed, d["gate"]), (False, "onboarding"), d)
+
+    def test_with_the_company_send_mail_off_no_bot_sends_whatever_its_switch_or_an_approval(self):
+        pl.RUN = harness.gh_answer(body=f"Send to: {STRANGER}")
+        hub(owner_order())
+        on = self.confirmed_setting("inbox")                            # sending on, ME a forward target
+        pl.SERVER_GET = lambda slug: dict(on, bot=slug, company_send=True)
+        self.assertTrue(self.decide([ME]).allowed)
+        for approval in (None, "77", ORDER):
+            pl.SERVER_GET = lambda slug: dict(on, bot=slug, company_send=False)
+            d = self.decide([ME] if approval is None else [STRANGER], approval=approval)
+            self.assertEqual((d.allowed, d["gate"]), (False, "company"), d)
+            self.assertIn("Settings > Google", d["reason"])
+        # A server from before the setting sends no company_send: the bot's own switch decides, as before.
+        pl.SERVER_GET = lambda slug: dict(on, bot=slug)
+        self.assertTrue(self.decide([ME]).allowed)
 
     def test_a_run_that_cannot_read_the_stage_sends_nothing_even_with_a_matching_approval(self):
         # No credential, Tico unreachable or a bad answer: the run cannot tell an onboarding bot from an Active one.

@@ -49,7 +49,7 @@ onboarding:
 first_routine:
   title: "Weekly reply review"
   cadence: "Fridays at 10:00 team time"
-  output: "reports/YYYY-MM-DD-reply-review.md: the sample, a score with the reason and a quote for each reply, patterns across the team, coaching notes as drafts, and what the docs should say differently"
+  output: "reports/YYYY-MM-DD-reply-review.md: a headline pass rate, how the sample was drawn, each sampled reply's scores with a reason and a quote, critical misses on their own line, patterns, coaching drafts for the owner, and what the docs should say differently"
   draft_only: true
 example_output: knowledge/examples/reply-review.md
 reasoning_effort: medium

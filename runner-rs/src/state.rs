@@ -1,5 +1,5 @@
 //! `state-<id>/runner.sqlite`: the durable outbox and session references, the same file and schema as
-//! `runner/state.py` (the Python side jobs' store). Tables and columns are only ever added, so an older runner can still read it.
+//! `runner_support/state.py` (the Python side jobs' store). Tables and columns are only ever added, so an older runner can still read it.
 
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -47,6 +47,10 @@ pub const SCHEMA: &str = "
       created TEXT NOT NULL, last_checked TEXT NOT NULL,
       PRIMARY KEY(resource_type,external_id));
 ";
+
+/// Event-write transactions this process has run (test builds only): a bench counts a drain's commits with it.
+#[cfg(test)]
+pub static APPENDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Clones share one connection, so a clone can carry a call to the blocking pool (`State::off`).
 #[derive(Clone)]
@@ -142,12 +146,36 @@ impl State {
 
     pub fn append(&self, aid: &str, kind: &str, payload: &Value) -> Result<i64, String> {
         let text = payload.to_string();
+        #[cfg(test)]
+        APPENDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.with(|c| {
             let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let seq: i64 = tx.query_row("SELECT coalesce(max(seq),0)+1 FROM events WHERE attempt_id=?", params![aid], |r| r.get(0))?;
             tx.execute("INSERT INTO events VALUES(?,?,?,?)", params![aid, seq, kind, text])?;
             tx.commit()?;
             Ok(seq)
+        })
+    }
+
+    /// Several event rows for one attempt in one transaction, numbered on from its last seq in the order given: one
+    /// `max(seq)` read and one commit. All or nothing: a row that fails leaves the outbox as it was. `rows` are
+    /// (kind, JSON payload) pairs, stored as `append` stores them.
+    pub fn append_batch(&self, aid: &str, rows: &[(String, String)]) -> Result<(), String> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        #[cfg(test)]
+        APPENDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.with(|c| {
+            let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let first: i64 = tx.query_row("SELECT coalesce(max(seq),0)+1 FROM events WHERE attempt_id=?", params![aid], |r| r.get(0))?;
+            {
+                let mut insert = tx.prepare_cached("INSERT INTO events VALUES(?,?,?,?)")?;
+                for (offset, (kind, text)) in rows.iter().enumerate() {
+                    insert.execute(params![aid, first + offset as i64, kind, text])?;
+                }
+            }
+            tx.commit()
         })
     }
 
@@ -434,6 +462,55 @@ mod tests {
         assert!(rows[0].payload.contains("\"ops\""));
         state.phase("a1", "synced").unwrap();
         assert!(state.unfinished().unwrap().is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_batch_numbers_its_rows_on_from_the_last_seq_in_arrival_order() {
+        let dir = temp();
+        let state = State::open(&dir).unwrap();
+        state.record(&json!({"id": "a1"})).unwrap();
+        state.record(&json!({"id": "a2"})).unwrap();
+        assert_eq!(state.append("a1", "delta", &json!({"text": "first"})).unwrap(), 1);
+        let rows = vec![
+            ("tool".to_string(), json!({"name": "ls"}).to_string()),
+            ("delta".to_string(), json!({"text": "second"}).to_string()),
+            ("message".to_string(), json!({"text": "third", "final": true}).to_string()),
+        ];
+        state.append_batch("a1", &rows).unwrap();
+        state.append_batch("a1", &[]).unwrap();
+        state.append("a2", "delta", &json!({"text": "other"})).unwrap();
+        let stored: Vec<(i64, String)> = state
+            .with(|c| {
+                let mut stmt = c.prepare("SELECT seq, kind FROM events WHERE attempt_id = 'a1' ORDER BY seq")?;
+                let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+                rows.collect()
+            })
+            .unwrap();
+        assert_eq!(stored, vec![(1, "delta".to_string()), (2, "tool".to_string()), (3, "delta".to_string()), (4, "message".to_string())]);
+        let batch = state.pending("a1").unwrap();
+        assert_eq!((batch[2]["payload"]["text"].as_str(), batch[3]["payload"]["final"].as_bool()), (Some("second"), Some(true)));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_batch_that_fails_takes_every_row_in_it() {
+        let dir = temp();
+        let state = State::open(&dir).unwrap();
+        state.record(&json!({"id": "a1"})).unwrap();
+        state.append("a1", "status", &json!({"yielded": "kept"})).unwrap();
+        // The store refuses one kind. The rows before it in the batch must not stay.
+        state.with(|c| c.execute_batch("CREATE TRIGGER refuse_boom BEFORE INSERT ON events WHEN NEW.kind = 'boom' BEGIN SELECT RAISE(ABORT, 'planted failure'); END;")).unwrap();
+        let rows = vec![
+            ("delta".to_string(), json!({"text": "lost"}).to_string()),
+            ("boom".to_string(), "{}".to_string()),
+            ("delta".to_string(), "{}".to_string()),
+        ];
+        let err = state.append_batch("a1", &rows).unwrap_err();
+        assert!(err.starts_with("runner.sqlite:"), "{err}");
+        let kinds: Vec<String> = state.pending("a1").unwrap().iter().map(|e| e["kind"].as_str().unwrap_or_default().to_string()).collect();
+        assert_eq!(kinds, vec!["status".to_string()]);
+        assert_eq!(state.append("a1", "delta", &json!({})).unwrap(), 2);
         std::fs::remove_dir_all(dir).ok();
     }
 

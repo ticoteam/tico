@@ -11,7 +11,7 @@
 .tag-form button { justify-self: start; }
 .tlabel [data-tag-key] { cursor: pointer; }
 .tlabel [data-tag-key]:hover { text-decoration: underline; }
-.tlabel [data-tag-key]:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.tlabel [data-tag-key]:focus-visible { outline:var(--focus-ring); outline-offset:var(--focus-offset); }
 .tag-form label:has(> input[type=checkbox]) { display: flex; align-items: center; gap: 8px; }
 .tag-advanced > summary { cursor: pointer; color: var(--muted); font-size: var(--t-sm); width: max-content; }
 .tag-advanced[open] { display: grid; gap: 12px; }

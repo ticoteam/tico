@@ -71,7 +71,7 @@ async function renderSettingsPeople() {
   const el = $('#set-people'); if (!el) return;
   try {
     const view = await get('/v2/access');
-    if (!$('#set-people')) return;
+    if (!el.isConnected) return;   // Settings redrew while this loaded
     const owner = S.me?.role === 'owner', home = view.home_domain || '', added = PEOPLE_ADDED;
     PEOPLE_ADDED = '';                                     // the reminder shows once, right after the add
     const mode = PEOPLE_MODE || (view.directory ? 'sync' : 'manual');
@@ -110,7 +110,9 @@ async function renderSettingsPeople() {
           <div class="people-cell-more">${owner && p.removable ? '<button class="ghost danger-text" type="button" data-person-act="remove">Remove</button>' : ''}<button class="ghost" type="button" data-person-act="restore">Restore</button></div></li>`).join('')}</ul></details>` : ''}
         <label class="people-line people-limit">Bot limit per member<input id="member-bot-limit" type="number" inputmode="numeric" min="0" max="1000" value="${esc(String(view.member_bot_limit))}"></label>
         ${owner ? `<div class="people-rules">${PEOPLE_RULES.map(([key, label]) => `<label class="people-line">${peopleSwitch(`data-rule="${key}"`, view.rules?.[key] !== false, false, label)}<span>${label}</span></label>`).join('')}
-          <label class="people-line"><span>Days a bot waits before it goes ahead (reversible, internal steps; sends, spending and deletes always wait)</span><input type="number" min="1" max="14" step="1" data-rule-days="go_ahead_days" value="${esc(String(view.rules?.go_ahead_days ?? 3))}" aria-label="Days a bot waits before it goes ahead"></label></div>` : ''}
+          <label class="people-line"><span>Days a bot waits before it goes ahead (reversible, internal steps; sends, spending and deletes always wait)</span><input type="number" min="1" max="14" step="1" data-rule-days="go_ahead_days" value="${esc(String(view.rules?.go_ahead_days ?? 3))}" aria-label="Days a bot waits before it goes ahead"></label>
+          <label class="people-line"><span>Reports a manager may create a week (BotOps asks; over the limit, the person above decides)</span><input type="number" min="0" max="50" step="1" data-rule-count="report_creates_per_week" value="${esc(String(view.rules?.report_creates_per_week ?? 3))}" aria-label="Reports a manager may create a week"></label>
+          <label class="people-line"><span>Reports a manager may archive or restore a week</span><input type="number" min="0" max="50" step="1" data-rule-count="report_archives_per_week" value="${esc(String(view.rules?.report_archives_per_week ?? 3))}" aria-label="Reports a manager may archive or restore a week"></label></div>` : ''}
       </section>`;
     if (mode === 'sync' && owner) window.mountDirectorySync?.($('#directory-sync'), renderSettingsPeople);   // ui/directory-sync.js
     if (owner) void peopleFromSetup($('#people-from-setup'));
@@ -215,7 +217,12 @@ async function renderSettingsPeople() {
       if (days >= 1 && days <= 14) change(() => put('/v2/access/rules', {[box.dataset.ruleDays]: days}), 'Saved', box);
       else settingsFieldError(box, 'Choose a number of days from 1 to 14.');
     });
-    $('#member-bot-limit').onchange = event => change(() => put('/v2/access/limits', {member_bot_limit: Number(event.target.value)}), 'Saved', event.target);
+    el.querySelectorAll('[data-rule-count]').forEach(box => box.onchange = () => {
+      const count = Math.round(Number(box.value));
+      if (count >= 0 && count <= 50) change(() => put('/v2/access/rules', {[box.dataset.ruleCount]: count}), 'Saved', box);
+      else settingsFieldError(box, 'Choose a number from 0 to 50.');
+    });
+    el.querySelector('#member-bot-limit').onchange = event => change(() => put('/v2/access/limits', {member_bot_limit: Number(event.target.value)}), 'Saved', event.target);
     el.querySelectorAll('.people-row').forEach(row => {
       const p = person(row.dataset.person), path = `/v2/access/humans/${encodeURIComponent(p.id)}`;
       const role = row.querySelector('[data-person-role]');

@@ -1,10 +1,7 @@
-"""Meeting importers that run on an enrolled computer and file through the hub's import API."""
+"""`import runner.importers`: runner_support/importers/ (runner/__init__.py). A package of its own, so
+`runner.importers.<module>` loads the forwarder beside this file and is the same module as runner_support's."""
+from runner_support import importers as _real
 
-REGISTRY = {"granola": ("granola", "Granola"),
-            "zoom": ("zoom", "Zoom"), "google-meet": ("google_meet", "GoogleMeet")}
 
-
-def importer_class(source):
-    import importlib
-    module, name = REGISTRY[source]
-    return getattr(importlib.import_module("." + module, __name__), name)
+def __getattr__(name):
+    return getattr(_real, name)

@@ -1,0 +1,78 @@
+# Anthropic Claude Code. Signs in with a Claude subscription (link, then a code pasted back).
+id = "claude-code"
+name = "Claude Code"
+host = "claude"
+runtime = "claude"
+executable = "claude"
+providers = ["anthropic"]
+
+[install]
+method = "npm"
+package = "@anthropic-ai/claude-code"
+
+[version]
+args = ["--version"]
+pattern = '(\d+\.\d+\.\d+)'
+
+[update]
+policy = "latest"
+
+[auth]
+methods = ["subscription", "api-key"]
+api_key_env = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]
+
+[login]
+command = ["auth", "login", "--claudeai"]
+terminal = true
+paste_code = true
+# Sign out (Settings > Computers): the CLI's own logout, and the files under HOME that hold the login, which a Switch
+# account moves into place only once the new sign-in has finished. `seed` is copied into the switch's own home first,
+# so the CLI's settings in it survive the switch.
+logout = ["auth", "logout"]
+files = [".claude/.credentials.json", ".claude.json"]
+seed = [".claude.json"]
+# On a Mac the CLI keeps this login in the Keychain, not in `files`, so it cannot be signed in on the side: Switch
+# account is not offered there (sign out, then sign in).
+keychain = ["darwin"]
+# Connect (Settings > Models): the command that signs a plan in for a company subscription, and how the result comes out.
+# This one prints a long-lived token and leaves the computer's own login as it was.
+connect = ["setup-token"]
+connect_token = "sk-ant-oat"
+
+# What Tico does differently for this CLI (docs/harnesses.md, Capabilities).
+[capabilities]
+packet_only = true
+terminal_login = ["auth", "login"]
+api_keys = "computer"
+# Switch to API key asks Anthropic about the new key before the subscription is signed out: one short reply, in an
+# empty home so the subscription cannot answer for it.
+api_key_check = ["-p", "--model", "haiku", "--max-turns", "1", "--output-format", "json", "Reply with the word OK"]
+subscription_marker = "signed in"
+subscription_profiles = true
+profile_home = "HOME"
+profile_dirs = [".claude"]
+# Claude Code reads CLAUDE_CONFIG_DIR ahead of $HOME/.claude: a profile's sign-in, check and turns never inherit it.
+profile_home_overrides = ["CLAUDE_CONFIG_DIR"]
+weekly_usage = "turns"
+account = "status-json"
+mcp_transports = ["http", "sse"]
+# An expired stored token is refreshed by the first turn, so turns wait for one to land before the rest start.
+serial_cold_start = true
+compaction = true
+# Every compaction, manual or automatic, is a `compact_boundary` system message in stream-json.
+compaction_events = true
+# A message for the running turn is written into it (stream-json input, needs a CLI that echoes it).
+steer = true
+resume_command = "claude --resume"
+model_list = "host"
+repo_permission_lint = true
+repo_commands = true
+
+[capabilities.sign_in_status]
+check = "json"
+args = ["auth", "status", "--json"]
+field = "loggedIn"
+method_field = "authMethod"
+ready_detail = "Signed in with Claude"
+missing_detail = "Claude login required"
+timeout_s = 30

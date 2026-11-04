@@ -221,10 +221,12 @@ def array_errors(value, schema, root, where):
 class Compare:
     """Whether a reader schema takes everything a writer schema allows, conservatively: a problem reported may be
     one a real value never hits, never the other way round. `lenient`: the reader ignores fields it does not know
-    (a runner reading an answer), rather than refusing them (a server reading a request)."""
+    (a runner reading an answer), rather than refusing them (a server reading a request). `gated`: paths whose
+    problems do not count, inside an optional value's `anyOf` too (the wire contract's `gated`)."""
 
-    def __init__(self, reader_root, writer_root, lenient):
+    def __init__(self, reader_root, writer_root, lenient, gated=()):
         self.reader_root, self.writer_root, self.lenient = reader_root, writer_root, lenient
+        self.gated = tuple(gated)
         self.problems, self.seen = [], set()
 
     def check(self, reader, writer, where):
@@ -253,12 +255,13 @@ class Compare:
             if key in reader:
                 tries = []
                 for option in reader[key]:
-                    sub = Compare(self.reader_root, self.writer_root, self.lenient)
+                    sub = Compare(self.reader_root, self.writer_root, self.lenient, self.gated)
                     sub.seen = set(self.seen)
                     sub.check(option, writer, where)
-                    if not sub.problems:
+                    problems = [p for p in sub.problems if not p.startswith(self.gated)]
+                    if not problems:
                         return
-                    tries.append(sub.problems)
+                    tries.append(problems)
                 best = min(tries, key=len)
                 self.problems.append("%s: no reader option takes what the writer sends (%s)" % (where, best[0]))
                 return
@@ -356,8 +359,8 @@ class Compare:
             self.problems.append("%s: the reader's pattern is %s, the writer's %s" % (where, reader["pattern"], writer.get("pattern")))
 
 
-def compare(reader, reader_root, writer, writer_root, lenient, where):
-    run = Compare(reader_root, writer_root, lenient)
+def compare(reader, reader_root, writer, writer_root, lenient, where, gated=()):
+    run = Compare(reader_root, writer_root, lenient, gated)
     run.check(reader, writer, where)
     return run.problems
 
@@ -384,7 +387,7 @@ def breaks(new, old, old_name="the previous release"):
                              name + ".request"):
                 found.append("old runner, new server: " + p)
             for p in compare(ref(old_end["request"]), old["requests"], ref(end["request"]), new["requests"], False,
-                             name + ".request"):
+                             name + ".request", gated):
                 if not any(p.startswith(g) for g in gated):
                     found.append("new runner, old server (list it under gated once the runner waits for it): " + p)
         answers = [("answer", end.get("answer"), old_end.get("answer"))] + [

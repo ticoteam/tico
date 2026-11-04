@@ -26,7 +26,7 @@ def test_a_bot_over_its_30_minute_limit_takes_no_new_turn_until_the_window_ends(
     assert claim(api, r) is None
     assert paused(api)["focus"] == "Paused: over its 30-minute limit"
     with api.app.state.store.read() as c:
-        started = c.execute("SELECT min(started) FROM turns WHERE bot='ops'").fetchone()[0]
+        started = c.execute("SELECT min(created_at) FROM attempts WHERE bot_id='ops'").fetchone()[0]
         at = datetime.fromisoformat(started[:19]).replace(tzinfo=timezone.utc)
         assert usage_limits.blocked(c, "ops", at=at) == "per_30m"
         assert usage_limits.blocked(c, "ops", at=at + timedelta(minutes=30)) is None    # the next window is empty
@@ -47,12 +47,6 @@ def test_a_child_group_limit_may_not_exceed_its_parent(api):
     put(api, "usage/pools/groups/product", {"daily_usd": 0.5})
 
 
-def stored(api, table, key, value):
-    with api.app.state.store.read() as c:
-        row = c.execute(f"SELECT * FROM {table} WHERE {key}=?", (value,)).fetchone()
-        return dict(row) if row else None
-
-
 def test_a_save_changes_only_the_fields_it_sends(api):
     groups(api, "eng")
     put(api, "usage/limits/ops", {"per_30m_usd": 2})
@@ -64,7 +58,8 @@ def test_a_save_changes_only_the_fields_it_sends(api):
     assert row["per_30m_usd"] is None and row["daily_usd"] == 20
     put(api, "usage/pools/groups/eng", {"per_30m_usd": 3})
     put(api, "usage/pools/groups/eng", {"daily_usd": 40})
-    assert stored(api, "usage_pools", "scope", "group:eng")["per_30m_usd"] == 3
+    with api.app.state.store.read() as c:
+        assert usage_limits.pool(c, "group:eng")["per_30m_usd"] == 3
     put(api, "usage/limits", {"per_30m_usd": 5})
     put(api, "usage/limits", {"daily_usd": 50})
     default = get(api, "usage/limits")["default"]

@@ -13,12 +13,12 @@ On **Tasks**, press **New task** and pick who it is for — any human or bot. On
 it through Tico's MCP. Each task shows who added it: you, another human, or a bot.
 
 **Where are the built-in bots?**
-**Assistant** and **BotOps** are in the main left rail; **Assistant** opens your private chat with it. The Strategy Bot proposes **Strategy** and is at the top of **Goals**: its routines, its last
+**Assistant** and **BotOps** are in the main left rail; **Assistant** opens your private DM with it. The Strategy Bot proposes **Strategy** and is at the top of **Goals**: its routines, its last
 run and a box to ask it to change a goal. **Docs** and **Strategy**'s Market tab have **Ask the Librarian** on the right (a button on a
 phone). All four are managed in **Settings > Bots**; they stay out of the team chart and the goal owner list.
 
 **What is on a bot's page?**
-Its name, the mark for the harness it runs on, up to three tool icons and its goal across the top, the chat below,
+Its name, the mark for the harness it runs on, up to three tool icons and its goal across the top, the Home below,
 and a rail down the right. By default the rail shows **Tasks**, **Updates**, **Files** and **Routines**, in that order.
 **Tasks** has four default tabs, each with a count:
 **Needs You** (what the bot needs from you; it opens first while it has rows), **Doing** (tasks assigned to this bot with Status Open or Doing, newest first),
@@ -49,9 +49,9 @@ Everyone opening the bot sees its saved layout. Your **Assistant** is the except
 Tabs scroll sideways when they do not fit, with no limit on the number of tabs. A hidden section is not shown outside edit mode.
 
 **How do I ask a bot a question?**
-Open the bot's page and use its **Chat** tab; the reply comes back into the same conversation.
-Work on a task happens in that task's own thread: tap the task's row in the chat to follow it or write to it.
-The chat itself gets one line when the task starts, is blocked, done, declined or stuck ([Sessions](sessions.md)).
+Open the bot's page and use its **Chat** tab; the reply comes back into the same thread.
+Work on a task happens in that task's own thread: tap the task's row in the Home to follow it or write to it.
+The Home itself gets one line when the task starts, is blocked, done, declined or stuck ([Sessions](sessions.md)).
 For anything across the team, ask your own external agent: **Connect an external agent** (the plug button beside
 your email) gives it a token and Tico's MCP ([Connect an external agent](connect-an-agent.md)).
 
@@ -81,7 +81,7 @@ Retrying does not restart that window.
 After that window expires, Tico keeps the draft, disables **Send**, and offers no **Retry** action.
 Pressing Enter or reconnecting does not send it either.
 The warning says **This message may already have sent. Check the chat before resending; edit or clear the draft to send a new message.**
-Check the chat before deciding whether to send it again.
+Check the Home before deciding whether to send it again.
 
 After the send finishes or reports an error, deliberately editing or clearing the text, or changing attachments, forgets the pending request ID.
 Tico also forgets it when the server confirms the send, including in a message box restored after switching bots and returning.
@@ -96,7 +96,7 @@ Other server refusals, including sign-in and access errors, leave delivery uncer
 Tico says **Not confirmed**, includes the server's reason, and warns **This message may already have sent.** and **Check the chat before resending.**
 This warning also appears alongside the sign-in banner.
 Your draft keeps its original request ID and first-attempt time.
-Check the chat before resending.
+Check the Home before resending.
 After signing in again or regaining access, press **Send** with the draft unchanged to reuse the same ID within the original 48-hour window.
 The expiry guard and deliberate draft changes described above still apply.
 
@@ -106,7 +106,7 @@ The slow-send line says **Still sending… uploading the file.** or gives the fi
 If Tico retries the upload, the line adds **trying again**.
 
 **How do I know my bot ran?**
-The conversation goes *Saved — queued* → *Starting* → *Working* → the reply. When the bot marks
+The thread goes *Saved — queued* → *Starting* → *Working* → the reply. When the bot marks
 a task done, the task shows under **Tasks → Done** with the bot's note.
 Every run is under **Settings → History → Runs** (the owner also sees **Changes**, the bot settings history), and
 on the bot’s **History** tab.
@@ -127,7 +127,7 @@ draft (kept in that connector's own log on the bot's computer), and a webhook se
 *Doing*: being worked on (*Doing · starting* until a computer picks it up). *Needs you*, or *Needs <Name>* for someone else: a
 human must act — a question, an approval, a blocked or declined item. The all-owners list groups these as **Needs a human**.
 A comment on a task answers that task's question, so the bot can ask its next question; it does not answer a different
-task in the same room. *Done*: finished, awaiting close.
+task in the same thread. *Done*: finished, awaiting close.
 
 **How do I answer a bot's question?**
 Open **Decide** from **Tasks**, or open the task's **Needs you** box. Both show the same question card.
@@ -169,8 +169,8 @@ reports. The same rule decides whose profile, goals, bot settings and routines y
 your own, and anyone's below you.
 
 **How do I add a routine?**
-**Automations → New automation**: pick a Schedule (a cron in a time zone), an Event or a Webhook
-trigger, then add a Bot turn step with the bot and the text it is told each time. A bot can set up
+**Automations → + New**: pick a Schedule (a cron in a time zone), an Event, a Webhook or Before a
+due date (a task N days before a date that repeats), then add a Bot turn step with the bot and the text it is told each time. A bot can set up
 its own with `hub automation create`. Details: [Routines](routines.md).
 
 **How do I change what a bot does?**
@@ -213,7 +213,7 @@ Assistant**. Tico writes the draft with one call to your company's own model, an
 in the company can already see: your tasks that are not private and your goals; the status changes you made and the
 comments you left and the questions you answered on those tasks; the meetings you were in that are not
 private (a short part of each); and your reports' updates. It leaves out approvals, and anything involving a private
-task or a bot not everyone may read. The draft is not written in an Assistant chat, so your private chats
+task or a bot not everyone may read. The draft is not written in an Assistant DM, so your private DMs
 with the Assistant never reach it. With no model provider key on the server, there are no drafts. Choose **Edit** on your card to change
 the draft (the label then says edited); tick **These are my own words** in the editor to drop the label. Once you have posted
 words of your own that day, a daily or a week in review, the Assistant does not draft for you that day. **Friday** is
@@ -230,26 +230,82 @@ carry a dot in the chart; updates further down are marked read as you see them, 
 open to everyone on the team (not to external agents); a bot's are open to anyone who may read that bot. Bots read them with
 `hub update list` (`--scope direct` for just their direct reports).
 
-## Leave work for the next run
+## Steer, queue or defer
 
-A **Note** gives a bot context without starting a run. A **Task** filed with `--next-run`
-(alias `--quiet`) is work to do, with an owner, status, result and history; creating it does not
-wake the bot. Use your [personal token or external agent](connect-an-agent.md) for the CLI:
+Anything you send a bot (a message, a task comment, a new task) reaches it one of three ways:
+
+| Way | When the bot gets it | Wakes it |
+| --- | --- | --- |
+| **Steer** | Into its turn running there now; right after it if its harness cannot steer | Yes |
+| **Queue** | Right after its current turn there, or now when it is idle | Yes |
+| **Defer** | With its next turn there, at the latest after a deadline (`30m`, `4h`, `2d`, ... or `never`) | Only at the deadline |
+
+"There" is the session the item lands in: a task's own thread for its comments, the Home for a message. A deferred
+task or message for the bot's next run of any kind (below) is tied to no session. A defer sent while the bot has a turn
+going in the same session goes in right after that turn, as a queue; a turn on another task does not count. A
+deadline wakes the bot, so only someone who may steer it can set one: anyone else's defer waits with no deadline.
+
+When the earliest deadline among the items waiting in a session comes, Tico starts one run there that carries them
+all; a deadline that comes while that run is still waiting joins it, and a turn there that carries everything first
+makes the run unneeded. Deferred tasks and messages tied to no session batch into one run per bot. A deadline never
+wakes a paused bot (it fires once the bot is back), and spend caps, turns at once and holds apply as to any run; a
+hosted server asleep when idle wakes for it. Each deadline fires once, across restarts. A turn's prompt counts what was
+deferred to it ("Deferred since your last turn: 2 comments, 1 task") and lists the deferred comments and messages
+themselves, up to 20 a turn; the rest wait for the next turn.
+
+Defaults, for a send that names no way (the API, CLI, MCP and Slack): Steer for a message and a comment on a task a
+bot owns, as before (when the bot is idle that is the same as Queue). A comment on a task a bot filed for a
+person is a Defer with a 24-hour deadline unless it @mentions a bot on the task (then a Queue). A deferred comment or
+task has a 24-hour deadline unless you pick one; a deferred thread message or deferred message has none. Steer does not
+apply to a new task (it has no turn yet). **Set as goal** is a separate action, apart in the send menu.
+
+In the web app a bot's chat (its Home and your DM with it) and a task's thread name a way every time. Send's icon shows it: an arrow for Steer, an arrow over
+lines for Queue, a clock for Defer (with its deadline), a target for Set as goal. The caret beside Send (or a
+right-click or long press on Send) offers **Steer now**, **Queue** and **Defer** with its durations, then **Set as
+goal**. The way you pick is kept for you on the server, across devices; it starts as Steer. Set as goal is for one
+goal (a **Goal** chip shows before the words), then Send goes back to your way. Someone who may not message the bot
+gets Defer with no deadline. A task with no bot on it and a thread between people have a plain Send. A custom client can read and set
+the same way with `GET` and `POST /api/v2/preferences/compose.send_way` (`{"value": "queue"}`; `steer`, `queue` or
+`defer:<30m|1h|4h|24h|2d|7d|never>`). The CLI and API take the same words:
 
 ```bash
-hub note create content "Use the revised tone guide for the next draft."
+hub chat send content "Skip the charts." --steer
+hub task comment <task-id> "Billing first." --defer 4h
+hub task create --owner content --title "Check the refund counts" --defer 2d
+```
+
+`POST /api/v2/chat/<bot>`, `POST /api/v2/tasks/<id>/comments` and `POST /api/v2/tasks` take `delivery` (`steer`,
+`queue` or `defer`; no `steer` on a new task) and `defer_for` (`<n>m`, `<n>h`, `<n>d` up to two years, or `never`;
+defer only). The answer's `sent_as` (`delivery`, `until`) says how it went. The MCP tools `hub_chat_send`,
+`hub_message_send`, `hub_task_comment` and `hub_task_create` take the same fields.
+
+A person's post in a bot's Home or a DM with a bot takes them too, as optional fields: `POST /api/v2/threads/<id>/messages`,
+`POST /api/v2/threads/dm` (with its first `body`) and `POST /api/v2/uploads/threads/<id>/messages` (form fields). A
+post that names no way goes as it always did, `refs` and all. A way on a reply or in a thread with no bot across is
+refused (422); Steer, Queue or a deadline from someone who may not message the bot is refused (403), and their Defer
+waits for the bot's next turn even while it runs there.
+
+## Leave work for the next run
+
+A **deferred message** gives a bot context without starting a run. A **deferred task** (`--defer`; the older
+`--next-run` and `--quiet` still work) is work to do, with an owner, status, result and history; creating it does not
+wake the bot. Both wait for the bot's next run of any kind; `--defer <time>` sets a deadline (24 hours for a task unless
+named, none for a message). Use your [personal token or external agent](connect-an-agent.md) for the CLI:
+
+```bash
+hub note create content "Use the revised tone guide for the next draft." --defer 4h
 hub note list --to content --waiting
 hub note delete <note-id>
 hub task create --owner content --title "Draft the weekly post" \
-  --body "Use the notes attached to this task." --next-run
+  --body "Use the deferred messages on this task." --defer
 ```
 
-`--text-file notes.txt` can replace the note text; `--body-file request.txt` can replace a task's
-body. Notes are only for other bots, never a human or the sender itself. You need Write access to
+`--text-file notes.txt` can replace the message text; `--body-file request.txt` can replace a task's
+body. Deferred messages (still `note` in the CLI and API) are only for other bots, never a human or the sender itself. You need Write access to
 leave one, and the normal task/contact permissions apply to deferred work. Never put a secret in either.
 
-The next run started by chat, a Routine or another task carries waiting notes and deferred tasks.
-For a Note, the API reports `waiting`, `carried` and `cancelled_at`. `carried` means a run received
+The next run started by a message, a Routine, another task or a deadline carries waiting deferred messages and tasks.
+For a deferred message, the API reports `waiting`, `carried` and `canceled_at`. `carried` means a run received
 it, not that the bot completed work. A failed run makes it waiting again. A sender or a human who
 can see it can cancel a waiting note; once a live or completed run carries it, it cannot be taken
 back. Cancellation keeps the history. Bots see notes sent by or to them; humans see their own
@@ -257,52 +313,53 @@ sent notes and notes between bots whose activity they may read.
 
 A deferred Task remains open with `next_run_waiting: true` until a run carries it. It then follows
 ordinary task states and needs a completion result. Close it with
-`hub task close <task-id> --note "Cancelled before work began"` under the normal task permissions, or choose
-**Run now** on the task to start it sooner. Deferred does not mean delayed forever: the stalled-task
-check can wake an idle bot after 30 minutes when no other work or Routine will move it.
+`hub task close <task-id> --note "Canceled before work began"` under the normal task permissions, or choose
+**Run now** on the task to start it sooner. Deferred does not mean delayed forever: its deadline starts a run. A deferred task is left alone until a run carries it.
 
 When a deferred task moves from Waiting back to Open, its existing queued notice can start its own run.
-That reopening supersedes an earlier next-run choice. A later deferral, a stored resume condition,
+That reopening supersedes an earlier deferral. A later deferral, a stored resume condition,
 snooze or prerequisite still holds it. A run already carrying it finishes first; if a run picked it up
 and worked it after the reopening, the queued notice does not start duplicate work. Health shows
 `task_next_run` while a deferral or carrier holds it. The normal automatic-start switch and task cap
 still apply, and only the requester, a person or BotOps may choose **Run now** early.
 
-The task shows where it stands, under **Quiet work** on the task and as `quiet` in `hub task show`:
+The task shows where it stands, under **Deferred** on the task and as `deferred` in `hub task show`
+(`quiet`, its older name, is still sent for one release):
 
 - **Eligible**: the bot's next run carries it.
-- **Delivered**: a run carried it; which run and when are shown. **Deferred** is a delivered task whose run said
+- **Delivered**: a run carried it; which run and when are shown. **Held** is a delivered task whose run said
   when to pick it up again.
 - **Queued**: it has a run of its own, waiting or going (after **Run now**, or when its resume condition came true).
 
-A run that carries a task it will not do now says when to pick it up, rather than in its reply's words:
+A run that carries a task it will not do now says when to pick it up, rather than in its reply's words
+(`hub task later`; `hub task defer` and `hub_task_defer` are its older names and still work):
 
 ```bash
-hub task defer <task-id> --after <other-task>   # when that task is done or closed
-hub task defer <task-id> --at 2026-10-20T09:00Z # at a time
-hub task defer <task-id> --next-run             # with the next run, whatever starts it
-hub task defer <task-id> --handled              # this run is done with it for now (MCP: hub_task_defer)
+hub task later <task-id> --after <other-task>   # when that task is done or closed
+hub task later <task-id> --at 2026-10-20T09:00Z # at a time
+hub task later <task-id> --next-run             # with the next run, whatever starts it
+hub task later <task-id> --handled              # this run is done with it for now (MCP: hub_task_later)
 ```
 
 When the condition comes true the task gets one run of its own, as **Run now** gives it. A run that ends without
 working a carried task (a comment, a step, status or note change, a pull request, or `--handled`) and without a
 condition hands it back: it is eligible again and the next run carries it, with a line in its history. The bot's
-own task, or a person, may defer it (`POST /api/v2/tasks/{id}/defer`). The Health Monitor names a quiet task handed
+own task, or a person, may set it (`POST /api/v2/tasks/{id}/later`, once `/defer`). The Health Monitor names a deferred task handed
 to a run more than two hours ago and not worked since, with no condition (`quiet_unworked`).
 
 The equivalent API calls are internal routes (subject to change); use your own rights and an
 `Idempotency-Key` on writes:
 
 ```text
-POST /api/v2/notes                    {"to":"bot:content","text":"Use the revised tone guide."}
+POST /api/v2/notes                    {"to":"bot:content","text":"Use the revised tone guide.","defer_for":"4h"}
 GET  /api/v2/notes?to=bot:content&waiting=true
 POST /api/v2/notes/<note-id>/cancel    {}
-POST /api/v2/tasks                    {"owner":"bot:content","title":"Draft the weekly post","body":"Use the attached notes.","next_run":true}
+POST /api/v2/tasks                    {"owner":"bot:content","title":"Draft the weekly post","body":"Use the attached notes.","delivery":"defer"}
 ```
 
 **Where do files go?**
-Files you attach to a task or a chat are stored privately by your team's Tico server and the bot downloads them
-for that conversation (up to ten files of 10 MB). A file a bot produces for you is attached to the
+Files you attach to a task or a message are stored privately by your team's Tico server and the bot downloads them
+for that thread (up to ten files of 10 MB). A file a bot produces for you is attached to the
 task the same way (`hub task attach`) and linked from its note; open it from the task or the link
 while signed in. Other files a bot publishes are listed on its page under Files ([Files](files.md)); a bot's own
 record stays in its repo's `reports/`. Meeting transcripts come from the tools that made them ([Meetings](meetings.md)).
@@ -320,7 +377,7 @@ channel history is owner-only in this view.
 A human: **Settings → People → Add manually** (an owner or admin), or sync them from the team's
 directory there; behind Cloudflare Access, also allow the address in its policy ([People](people.md)). A
 bot: **Settings > Bots > Add from template**, or ask BotOps to build it. Open the bot and press **Set up** to finish its
-first conversation. See [Creating bots](creating-bots.md) for custom Instructions and manual setup.
+first thread. See [Creating bots](creating-bots.md) for custom Instructions and manual setup.
 
 **How do I use my own branch of a bot?**
 Its owner enables **Allow branches**. Choose **Make my branch** on its page and your computer.
@@ -328,7 +385,7 @@ If all your computers already run the original or a branch of it, choose **Creat
 It starts when you add another computer in **Settings → Computers**. Without a GitHub App, the
 computer clones the original repository using your own git access; a local checkout can be reused.
 Health names the repository and clone command if that fails. You can also ask BotOps to fix it.
-The branch picker opens the original or a person's branch. New tasks and chats to the original go to your active branch.
+The branch picker opens the original or a person's branch. New tasks and messages to the original go to your active branch.
 Branches share instructions and repository lessons; `hub bot copy` creates an independent bot. See [Branches](creating-bots.md#branches).
 
 ## Tags and release checklists

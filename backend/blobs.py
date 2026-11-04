@@ -6,6 +6,7 @@ import contextlib
 import io
 import errno
 import json
+import logging
 import time
 import hashlib
 import os
@@ -18,8 +19,16 @@ from .store import H, Problem
 from . import blob_s3
 
 
+log = logging.getLogger("tico.storage")
+
 # How long an unreachable earlier place is skipped (Blobs._open_earlier).
 EARLIER_RETRY = 300
+# The digests a bucket does not have yet, for `copy_local`: each digest probes blob_locations' (digest, bucket) key, so
+# the copies already made are never listed or read. The index blobs_by_digest serves the scan of blobs.
+UNCOPIED_SQL = ("SELECT b.digest, MAX(b.content_type) AS content_type FROM blobs b "
+                "WHERE NOT EXISTS (SELECT 1 FROM blob_locations l WHERE l.digest=b.digest AND l.bucket=?) GROUP BY b.digest")
+# A refused upload starts a fresh write check when the last one began longer ago than this (Blobs._heal).
+HEAL_AFTER = 60
 # The place new files go to, fixed at one moment (`Blobs.target`): a copy that must land there whatever happens next.
 Target = collections.namedtuple("Target", "generation settings sources s3")
 
@@ -49,6 +58,8 @@ class Blobs:
         self._health_lock = threading.RLock()
         self._probe_lock = threading.Lock()
         self._probe_task = None
+        # When the last write check began (monotonic), and whether a refused upload's re-check is running (`_heal`).
+        self._checked, self._healing = None, False
         self._s3_failed = set()
         self.copy_status = {"done": 0, "total": 0, "running": False, "error": "", "failed": 0}
         # The server's own storage; `configure` may put a company bucket in its place.
@@ -60,7 +71,7 @@ class Blobs:
         self._earlier_down = {}
         # Bumped by `configure`, so a copy or probe begun for one target never records against another.
         self._generation = 0
-        self._loop = None
+        self._loop = self._store = None
         # Whether this disk's files are copied to a new place on their own, and why an upload is refused when the
         # place can't take it (`configure`).
         self._copy_disk, self._paused = True, ""
@@ -268,6 +279,7 @@ class Blobs:
                 raise Problem("storage_changed", "Where new files go changed; the file was not copied", 409)
             if self._write_failed or self._sources.selected is None:
                 detail = self._write_error or "S3 storage write check is still pending"
+                self._heal()
                 raise Problem("blob_storage", detail + "; retry without discarding your file", 503, True)
             s3, kind, sources = self._s3, self._sources.kind, self._sources
             settings, bucket = self.settings, self.bucket
@@ -473,13 +485,41 @@ class Blobs:
         except OSError as exc:
             raise Problem("blob_storage", "Stored file is unavailable; check S3 access and retained local copies", 503, True) from exc
 
-    def storage_loop(self, store, stop, retry_interval=30 * 60):
-        # `configure` starts a fresh loop for a new target; this one ends when the target changes.
-        self._loop = stop
-        generation = self._generation
-        self.copy_local(store, stop)
-        while self._write_failed and not stop.wait(retry_interval) and generation == self._generation:
-            self.copy_local(store, stop)
+    def storage_loop(self, store, stop, retry_interval=30 * 60, first_retry=30):
+        # `configure` starts a fresh loop for a new target; this one ends when the target changes. While writes fail,
+        # or a pass ends on an error, it checks again after `first_retry` seconds, twice as long each time after,
+        # up to `retry_interval`. An error never ends it: uploads stay refused until a check passes.
+        self._loop, self._store = stop, store
+        generation, wait = self._generation, first_retry
+        while True:
+            failed = False
+            try:
+                self.copy_local(store, stop)
+            except Exception:
+                failed = True
+                log.exception("File storage check or copy failed; trying again in %s s", wait)
+            if not (failed or self._write_failed) or stop.wait(wait) or generation != self._generation:
+                return
+            wait = min(wait * 2, retry_interval)
+
+    def _heal(self):
+        """Start one write check in the background for an upload refused because the last one failed, unless one is
+        running or began within HEAL_AFTER seconds: a server heals on its next upload, not the storage loop's next try."""
+        store, stop = self._store, self._loop
+        if store is None or stop is None or stop.is_set():
+            return
+        with self._probe_lock:
+            if self._healing or (self._checked is not None and time.monotonic() - self._checked < HEAL_AFTER):
+                return
+            self._healing, self._checked = True, time.monotonic()
+        def heal():
+            try:
+                self.check_write(store, stop)
+            except Exception:
+                log.exception("File storage write check failed")
+            finally:
+                self._healing = False
+        threading.Thread(target=heal, name="tico-storage-heal", daemon=True).start()
 
     def copy_local(self, store, stop, interval=0.25):
         if not self.bucket or self.rehearsal or stop.is_set() or not self._copy_disk:
@@ -488,9 +528,8 @@ class Blobs:
         if not self.check_write(store, stop) or generation != self._generation:
             return
         with store.read() as c:
-            rows = list(c.execute("SELECT digest,MAX(content_type) AS content_type FROM blobs GROUP BY digest"))
-            known = {r[0] for r in c.execute("SELECT digest FROM blob_locations WHERE bucket=?", (location,))}
-        rows = [r for r in rows if r["digest"] not in known and (self.directory / self.key(r["digest"])).is_file()]
+            rows = c.execute(UNCOPIED_SQL, (location,)).fetchall()
+        rows = [r for r in rows if (self.directory / self.key(r["digest"])).is_file()]
         self.copy_status.update(done=0, total=len(rows), running=bool(rows), error="", failed=0)
         self._copy_health(store)
         for row in rows:
@@ -537,6 +576,7 @@ class Blobs:
                     self._probe_task[2].set()
                 done, errors, cancel = threading.Event(), [], threading.Event()
                 self._probe_task = done, errors, cancel, self._generation
+                self._checked = time.monotonic()
                 class ProbeStop:
                     def is_set(self):
                         return cancel.is_set() or (stop is not None and stop.is_set())
@@ -561,8 +601,8 @@ class Blobs:
                 # Read and update together so a newly returned cleanup ID cannot be overwritten.
                 with self._health_lock:
                     with store.read() as c:
-                        row = c.execute("SELECT detail_json FROM service_health WHERE service='blob-s3'").fetchone()
-                    previous = json.loads(row["detail_json"] or "{}") if row else {}
+                        row = c.execute("SELECT detail FROM service_health WHERE service='blob-s3'").fetchone()
+                    previous = json.loads(row["detail"] or "{}") if row else {}
                     pending = {key: previous[key] for key in ("bucket", "key", "upload_id") if key in previous}
                     self._write_health(store, pending, self._write_error)
                 return False
@@ -581,8 +621,8 @@ class Blobs:
             generation, settings, sources, bucket = self._generation, self.settings, self._sources, self.bucket
             location = self.location
         with store.read() as c:
-            row = c.execute("SELECT detail_json FROM service_health WHERE service='blob-s3'").fetchone()
-        previous = json.loads(row["detail_json"] or "{}") if row else {}
+            row = c.execute("SELECT detail FROM service_health WHERE service='blob-s3'").fetchone()
+        previous = json.loads(row["detail"] or "{}") if row else {}
         # Retain at most one unfinished probe; retry cleanup before creating another. One left in a bucket
         # this server no longer writes to is not this target's to clean up (its keys may not reach it).
         pending = previous if previous.get("upload_id") and previous.get("location", location) == location else {}
@@ -610,8 +650,9 @@ class Blobs:
                 key = self.s3_key(hashlib.sha256(b"Tico storage write check").hexdigest(), settings)
                 result = client.create_multipart_upload(Bucket=bucket, Key=key, ServerSideEncryption="AES256")
                 pending = {"bucket": bucket, "key": key, "upload_id": result["UploadId"]}
-                self._write_health(store, pending, self._write_error or "S3 storage write check is still pending", location, sources)
-                if stop is not None and stop.is_set():
+                # Recorded so a later check can abort it if this one stops here; unrecorded, it is aborted now.
+                recorded = self._write_health(store, pending, self._write_error or "S3 storage write check is still pending", location, sources)
+                if recorded and stop is not None and stop.is_set():
                     return
                 client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=pending["upload_id"])
                 pending = {}
@@ -638,16 +679,23 @@ class Blobs:
         self._write_health(store, pending, error, location, sources)
 
     def _write_health(self, store, pending, error, location=None, sources=None):
+        """Record the write check's state; whether it was recorded. Best effort: a busy database must neither count as
+        an S3 failure nor stop the check, whose result lives in memory (`_write_failed`) either way."""
         detail = {**pending, "location": location or self.location, "error": error, "credentials": (sources or self._sources).kind}
-        with self._health_lock, store.transaction() as c:
-            c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,?,?) "
-                      "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=excluded.last_error,detail_json=excluded.detail_json",
-                      ("blob-s3", H.now() if not error else None, H.now() if error else None, json.dumps(detail)))
+        try:
+            with self._health_lock, store.transaction() as c:
+                c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,?,?) "
+                          "ON CONFLICT(service) DO UPDATE SET last_succeeded_at=excluded.last_succeeded_at,last_error=excluded.last_error,detail=excluded.detail",
+                          ("blob-s3", H.now() if not error else None, H.now() if error else None, json.dumps(detail)))
+        except Exception as exc:
+            log.warning("File storage check result not recorded: %s", type(exc).__name__)
+            return False
+        return True
 
     def _copy_health(self, store):
         with store.transaction() as c:
-            c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,?,?) "
-                      "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=excluded.last_error,detail_json=excluded.detail_json",
+            c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,?,?) "
+                      "ON CONFLICT(service) DO UPDATE SET last_succeeded_at=excluded.last_succeeded_at,last_error=excluded.last_error,detail=excluded.detail",
                       ("blob-copy", H.now() if not self.copy_status["error"] else None, H.now() if self.copy_status["error"] else None, json.dumps(self.copy_status)))
 
     def get(self, digest):
@@ -697,8 +745,8 @@ def register(c, who, digest, size, name, content_type="application/octet-stream"
     name = Path(str(name).replace("\\", "/")).name
     name = re.sub(r"[\x00-\x1f\x7f]", "", name)[:200] or "attachment"
     row = {"id": H.new_id(), "owner": who.actor, "digest": digest, "size": size,
-           "name": name, "content_type": content_type, "created": H.now()}
-    c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created) VALUES(:id,:owner,:digest,:size,:name,:content_type,:created)", row)
+           "name": name, "content_type": content_type, "created_at": H.now()}
+    c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(:id,:owner,:digest,:size,:name,:content_type,:created_at)", row)
     return brief(row)
 
 

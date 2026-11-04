@@ -8,13 +8,13 @@
 const AU_RANGES = {'5m': '30 s', '1h': '5 min', '24h': 'hour', '7d': '6 hours'};
 const AU_RANGE_SECONDS = {'5m': 300, '1h': 3600, '24h': 86400, '7d': 604800};
 const AU_RANGE_KEY = 'tico.automations.range';
-const AU_KINDS = ['message', 'task_received', 'schedule', 'webhook', 'listening', 'event', 'system'];
+const AU_KINDS = ['message', 'task_received', 'schedule', 'webhook', 'listening', 'event', 'due', 'system'];
 const AU_KIND_WORDS = {message: 'Message', task_received: 'Task received', schedule: 'Schedule', webhook: 'Webhook',
-  listening: 'Listening', event: 'Event', system: 'System job'};
+  listening: 'Listening', event: 'Event', due: 'Due date', system: 'System job'};
 const AU_KIND_ICONS = {...AU_TRIGGER_ICONS, system: 'settings'};
-const AU_STATES = [['on', 'On', 'ok'], ['failing', 'Last run failed', 'fail'], ['paused', 'Paused', 'wait'], ['off', 'Off', 'idle']];
+const AU_STATES = [['on', 'On', 'ok'], ['failing', 'Last run failed', 'fail'], ['hold', 'On hold', 'wait'], ['paused', 'Paused', 'wait'], ['off', 'Off', 'idle']];
 const AU_SORTS = [['last', 'Last run'], ['fail', 'Most failures'], ['runs', 'Most runs'], ['cost', 'Cost'], ['name', 'Name']];
-const AU_RUN_PILLS = {ok: 'ok', empty: 'ok', skipped: 'ok', failed: 'fail', waiting: 'waiting', running: 'in-progress', queued: 'in-progress'};
+const AU_RUN_PILLS = {ok: 'ok', empty: 'ok', skipped: 'ok', failed: 'fail', waiting: 'waiting', running: 'in-progress', queued: 'in-progress', held: 'waiting'};
 const AU_ALL_PAGE = 50;
 const AU_IDS_MAX = 200;   // ids sent with a Runs page; past this the page is narrowed on the client only
 
@@ -28,11 +28,11 @@ function auOverviewState() {
 
 // What each row is: its trigger as the filters group it, its state, its team and its trigger in plain words.
 const auKind = a => a.kind || a.trigger?.type || '';
-const auState = a => a.paused ? 'paused' : a.enabled === false ? 'off' : a.last_run?.status === 'failed' ? 'failing' : 'on';
+const auState = a => a.paused ? 'paused' : a.enabled === false ? 'off' : a.hold ? 'hold' : a.last_run?.status === 'failed' ? 'failing' : 'on';
 function auTeam(a) {
-  const g = a.group || (String(a.owner || '').startsWith('group:') ? a.owner : '');
+  const g = a.group || (String(a.owner_id || '').startsWith('group:') ? a.owner_id : '');
   if (g) return auGroupName(g);
-  const home = typeof rdoHome === 'function' && a.owner ? rdoHome(String(a.owner)) : '';
+  const home = typeof rdoHome === 'function' && a.owner_id ? rdoHome(String(a.owner_id)) : '';
   return home ? auGroupName(home) : '';
 }
 const auTrigLine = a => auKind(a) === 'system' ? a.schedule || a.controls?.schedule || 'Tico' : auSource(a.trigger) || AU_TRIGGER_WORDS[a.trigger?.type] || '';
@@ -42,8 +42,8 @@ function auMatches(a, f = AU.f) {
   if (f.trig.size && !f.trig.has(auKind(a))) return false;
   if (f.status && auState(a) !== f.status) return false;
   if (f.team && auTeam(a) !== f.team) return false;
-  if (f.owner && a.owner !== f.owner) return false;
-  return !f.q || [a.name, auTrigLine(a), auActorName(a.owner), AU_KIND_WORDS[auKind(a)], a.description]
+  if (f.owner && a.owner_id !== f.owner) return false;
+  return !f.q || [a.name, auTrigLine(a), auActorName(a.owner_id), AU_KIND_WORDS[auKind(a)], a.description]
     .join(' ').toLowerCase().includes(f.q);
 }
 const auShown = () => (AU.list || []).filter(a => auMatches(a));
@@ -55,7 +55,7 @@ function auAge(iso, ahead = false) {
   const s = Math.abs(ahead ? t - Date.now() : Date.now() - t) / 1000;
   return s < 60 ? 'now' : s < 3600 ? Math.round(s / 60) + 'm' : s < 86400 ? Math.round(s / 3600) + 'h' : Math.round(s / 86400) + 'd';
 }
-const auDur = r => { const s = r.finished ? (new Date(r.finished) - new Date(r.started)) / 1000 : NaN;
+const auDur = r => { const s = r.finished_at ? (new Date(r.finished_at) - new Date(r.started_at)) / 1000 : NaN;
   return isNaN(s) || s < 0 ? '' : s < 60 ? Math.round(s) + 's' : s < 3600 ? Math.round(s / 60) + 'm' : Math.round(s / 3600) + 'h'; };
 const auIcon = (name, cls = '') => `<span class="nav-icon${cls ? ' ' + cls : ''}" aria-hidden="true">${name}</span>`;
 
@@ -108,7 +108,7 @@ function auFacetsDraw() {
   const count = pred => list.filter(pred).length;
   const btn = (attr, val, on, lead, label, n) => `<button type="button" class="au-fb" ${attr}="${esc(val)}" aria-pressed="${on}">${lead}<span class="au-ft">${esc(label)}</span><span class="au-fn">${n}</span></button>`;
   const teams = [...new Set(list.map(auTeam).filter(Boolean))].sort((x, y) => x.localeCompare(y));
-  const owners = [...new Set(list.map(a => a.owner).filter(Boolean))].map(o => [o, auActorName(o)]).sort((x, y) => x[1].localeCompare(y[1]));
+  const owners = [...new Set(list.map(a => a.owner_id).filter(Boolean))].map(o => [o, auActorName(o)]).sort((x, y) => x[1].localeCompare(y[1]));
   box.innerHTML = `<div class="au-fg" role="group" aria-label="Trigger"><div class="au-lb">Trigger</div>
       ${AU_KINDS.map(k => btn('data-ftrig', k, f.trig.has(k), auIcon(AU_KIND_ICONS[k]), AU_KIND_WORDS[k], count(a => auKind(a) === k))).join('')}</div>
     <div class="au-fg" role="group" aria-label="Status"><div class="au-lb">Status</div>
@@ -116,7 +116,7 @@ function auFacetsDraw() {
     ${teams.length ? `<div class="au-fg" role="group" aria-label="Team"><div class="au-lb">Team</div>
       ${teams.map(t => btn('data-fteam', t, f.team === t, auIcon('groups'), t, count(a => auTeam(a) === t))).join('')}</div>` : ''}
     <div class="au-fg" role="group" aria-label="Owner"><div class="au-lb">Owner</div>
-      ${owners.map(([o, name]) => btn('data-fowner', o, f.owner === o, personCircle(name, 16), name, count(a => a.owner === o))).join('')}</div>`;
+      ${owners.map(([o, name]) => btn('data-fowner', o, f.owner === o, personCircle(name, 16), name, count(a => a.owner_id === o))).join('')}</div>`;
 }
 function auCtlDraw() {
   const ctl = AU.root.querySelector('.au-ctl'), list = AU.tab === 'list', n = auActive(AU.f);
@@ -145,12 +145,29 @@ function auSpark(b, w = 84, h = 18) {
       + (hf ? `<rect x="${x}" y="${h - hf}" width="${wd}" height="${hf}" rx="1" fill="var(--fail)"/>` : '');
   }).join('')}</svg>`;
 }
+// A wake rule that names a step its type does not have never fires: one short line, on the row and in the detail.
+function auWarn(a) {
+  const steps = [...new Set((a.problems || []).map(p => p.step))];
+  return steps.length ? `<span class="au-warn"><span class="nav-icon" aria-hidden="true">warning</span>`
+    + `${esc('Names a step its type does not have: ' + steps.join(', '))}</span>` : '';
+}
 function auPill(a) {
   const st = auState(a);
   return (a.pending ? '<span class="pill">Pending</span>' : '')
-    + (st === 'paused' ? '<span class="pill waiting">Paused</span>' : st === 'off' ? '<span class="pill">Off</span>' : '');
+    + (st === 'paused' ? '<span class="pill waiting">Paused</span>' : st === 'off' ? '<span class="pill">Off</span>'
+      : st === 'hold' ? '<span class="pill waiting">On hold</span>' : '');
 }
 const AU_DOTS = {ok: 'ok', empty: 'ok', skipped: 'ok', failed: 'fail', waiting: 'wait'};
+// The Next cell: when it next runs; for a due date, the due day over when its task opens.
+function auNextHTML(a) {
+  if (a.enabled === false || !a.next_run) return '—';
+  const at = new Date(a.next_run).getTime(), age = at > Date.now() ? auAge(a.next_run, true) : 'now';
+  if (auKind(a) === 'due' && a.next_due_at) {
+    const far = Date.parse(a.next_due_at) - Date.now() > 330 * 864e5;   // the year only once it could be mistaken
+    return `<span class="au-nx"><span class="au-nx-d">Due ${esc(auDay(a.next_due_at, far))}</span><span>${age === 'now' ? 'opens now' : 'opens in ' + esc(age)}</span></span>`;
+  }
+  return age === 'now' ? 'due' : 'in ' + esc(age);
+}
 // On a phone (auPhone, automations.js) the table's columns come in another order: redraw when the width crosses over.
 matchMedia('(max-width:760px)').addEventListener?.('change', () => { if (AU?.root && document.body.contains(AU.root)) auDrawTable(); });
 
@@ -158,14 +175,16 @@ function auTableHTML() {
   const st = AU.stats, n = st?.n || 0, zero = Array.from({length: n || 12}, () => ({ok: 0, failed: 0}));
   const stat = a => st?.per.get(a.id) || {runs: 0, failed: 0, cost: 0, buckets: zero};
   const rows = auShown().map(a => ({a, s: stat(a)}));
-  const last = r => r.a.last_run?.started || '';
+  const last = r => r.a.last_run?.started_at || '';
   const sorters = {last: (x, y) => last(y).localeCompare(last(x)), fail: (x, y) => y.s.failed - x.s.failed || y.s.runs - x.s.runs,
     runs: (x, y) => y.s.runs - x.s.runs, cost: (x, y) => y.s.cost - x.s.cost, name: (x, y) => String(x.a.name).localeCompare(String(y.a.name))};
   rows.sort(sorters[AU.sort] || sorters.last);
-  const keyOf = r => AU.group === 'trigger' ? auKind(r.a) : AU.group === 'owner' ? r.a.owner || '' : '';
+  const keyOf = r => AU.group === 'trigger' ? auKind(r.a) : AU.group === 'owner' ? r.a.owner_id || '' : '';
   const groups = [];
   for (const r of rows) { const k = keyOf(r); let g = groups.find(x => x.k === k); if (!g) groups.push(g = {k, rows: []}); g.rows.push(r); }
-  if (AU.group === 'trigger') groups.sort((x, y) => AU_KINDS.indexOf(x.k) - AU_KINDS.indexOf(y.k));
+  // A kind this page does not know yet goes after the known ones, not before them.
+  const rank = k => { const i = AU_KINDS.indexOf(k); return i < 0 ? AU_KINDS.length : i; };
+  if (AU.group === 'trigger') groups.sort((x, y) => rank(x.k) - rank(y.k));
   if (AU.group === 'owner') groups.sort((x, y) => auActorName(x.k).localeCompare(auActorName(y.k)));
   const label = k => AU.group === 'trigger' ? auIcon(AU_KIND_ICONS[k] || 'bolt') + esc(AU_KIND_WORDS[k] || auCap(k))
     : personCircle(auActorName(k), 16) + esc(auActorName(k));
@@ -173,11 +192,11 @@ function auTableHTML() {
   // Each column: its class (widths and folding in automations.css), heading and cell. A phone leads with what is read
   // first (name, last run, runs, failed) and scrolls sideways for the rest.
   const cols = {
-    name: ['au-tn', 'Name', ({a}) => `<div><a href="${auHref(a.id)}">${auIcon(AU_KIND_ICONS[auKind(a)] || 'bolt')}<span class="au-nm">${esc(a.name || 'Untitled')}</span></a>${auPill(a)}</div>`],
+    name: ['au-tn', 'Name', ({a}) => `<div><a href="${auHref(a.id)}">${auIcon(AU_KIND_ICONS[auKind(a)] || 'bolt')}<span class="au-nm">${esc(a.name || 'Untitled')}</span></a>${auPill(a)}</div>${auWarn(a)}`],
     trigger: ['au-tt', 'Trigger', ({a}) => esc(auTrigLine(a))],
-    owner: ['au-to', 'Owner', ({a}) => `<span title="${esc(auActorName(a.owner))}" aria-label="${esc(auActorName(a.owner))}">${personCircle(auActorName(a.owner), 18)}</span>`],
-    last: ['au-cl', 'Last run', ({a}) => a.last_run ? `<span class="au-lr"><span class="au-dot ${AU_DOTS[a.last_run.status] || 'idle'}" role="img" aria-label="${esc(AU_RUN_STATUS[a.last_run.status] || a.last_run.status)}"></span>${esc(auAge(a.last_run.started))}</span>` : '<span class="muted">—</span>'],
-    next: ['au-cx muted', 'Next', ({a}) => { const next = a.enabled !== false && a.next_run ? auAge(a.next_run, true) : ''; return next ? (next === 'now' ? 'due' : 'in ' + esc(next)) : '—'; }],
+    owner: ['au-to', 'Owner', ({a}) => `<span title="${esc(auActorName(a.owner_id))}" aria-label="${esc(auActorName(a.owner_id))}">${personCircle(auActorName(a.owner_id), 18)}</span>`],
+    last: ['au-cl', 'Last run', ({a}) => a.last_run ? `<span class="au-lr"><span class="au-dot ${AU_DOTS[a.last_run.status] || 'idle'}" role="img" aria-label="${esc(AU_RUN_STATUS[a.last_run.status] || a.last_run.status)}"></span>${esc(auAge(a.last_run.started_at))}</span>` : '<span class="muted">—</span>'],
+    next: ['au-cx muted', 'Next', ({a}) => auNextHTML(a)],
     trend: ['au-cs', 'Last ' + AU.range, ({s}) => auSpark(s.buckets || zero)],
     runs: ['au-n au-cn', 'Runs', ({s}) => s.runs ? s.runs.toLocaleString() : '<span class="muted">0</span>'],
     failed: ['au-n au-cf', 'Failed', ({s}) => s.failed || '—'],
@@ -223,7 +242,7 @@ function auAllHTML() {
   const table = rows.length ? `<table class="au-tbl-t au-all"><thead><tr><th class="au-cw">When</th><th class="au-cst">Status</th><th>Automation</th><th class="au-why">Started by</th><th class="au-out">Outcome</th>
       <th class="au-n au-cx">Steps</th><th class="au-n au-cx">Time</th><th class="au-n au-cc">Cost</th></tr></thead><tbody>
       ${rows.map(x => `<tr class="au-arow" role="button" tabindex="0" data-arun="${esc(x.id)}" data-aid="${esc(x.automation_id)}">
-        <td class="muted" title="${esc(fmt(x.started))}">${esc(auAge(x.started) === 'now' ? 'now' : auAge(x.started) + ' ago')}</td>
+        <td class="muted" title="${esc(fmt(x.started_at))}">${esc(auAge(x.started_at) === 'now' ? 'now' : auAge(x.started_at) + ' ago')}</td>
         <td><span class="pill ${AU_RUN_PILLS[x.status] || ''}">${esc(AU_RUN_STATUS[x.status] || auCap(x.status))}</span></td>
         <td class="au-tn"><div>${auIcon(AU_KIND_ICONS[x.trigger || kindOf(x.automation_id)] || 'bolt')}<span class="au-nm">${esc(x.automation_name || '')}</span></div></td>
         <td class="au-why" title="${esc(x.started_by || '')}">${esc(x.started_by || '')}</td>
@@ -240,7 +259,7 @@ function auDrawTable() {
   const box = AU.root.querySelector('.au-tbl');
   if (AU.listError) { box.innerHTML = `<p class="err au-pad">${esc(AU.listError)}</p>`; return; }
   if (AU.list === null) { box.innerHTML = '<p class="muted au-pad">Loading…</p>'; return; }
-  box.innerHTML = AU.tab === 'runs' ? auAllHTML() : auTableHTML();
+  patchLiveHTML(box, AU.tab === 'runs' ? auAllHTML() : auTableHTML());   // a fresh read that changed nothing moves nothing
   box.scrollTop = AU.scroll[AU.tab] || 0;
 }
 
@@ -309,15 +328,4 @@ function auOverviewWire(root) {
     // Scrolling near the end of the Runs tab reads the next page.
     if (AU.tab === 'runs' && AU.all?.next && !AU.all.loading && box.scrollTop + box.clientHeight > box.scrollHeight - 200) void auAllLoad(AU, true);
   }, {passive: true});
-}
-
-// What BotOps is told the viewer is looking at when no automation is open (refs.automations_filter, CONTRACT §2).
-function auBotScope() {
-  if (!AU) return {};
-  const f = AU.f, out = {range: AU.range, tab: AU.tab, shown: auShown().length};
-  if (f.q) out.q = f.q;
-  if (f.trig.size) out.trigger = [...f.trig];
-  for (const k of ['status', 'team', 'owner']) if (f[k]) out[k] = f[k];
-  if (AU.tab === 'runs' && AU.rstatus) out.run_status = AU.rstatus;
-  return {automations_filter: out};
 }

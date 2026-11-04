@@ -48,7 +48,7 @@ def test_a_bot_over_its_limit_takes_no_new_job_a_running_turn_finishes_and_raisi
     assert claim(api, r) is None                                                  # over the limit: nothing new starts
     assert paused(api)["state"] == "paused" and paused(api)["focus"] == "Paused: over its daily limit"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='ops' AND state='queued'").fetchone()[0] == 1   # parked, not lost
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops' AND state='queued'").fetchone()[0] == 1   # parked, not lost
     put(api, "usage/limits/ops", {"daily_usd": 50})
     assert claim(api, r) is not None                                              # raising the limit resumes it
     assert paused(api)["state"] != "paused"
@@ -118,9 +118,9 @@ def groups(api, ops_team):
     """Engineering with Product nested under it; ops in `ops_team`."""
     import json
     with api.app.state.store.transaction() as c:
-        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         people["org_groups"] = {"eng": {"name": "Engineering"}, "product": {"name": "Product", "parent": "eng"}}
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(people),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(people),))
         c.execute("UPDATE bot_config SET team=? WHERE bot='ops'", (ops_team,))
 
 
@@ -142,16 +142,16 @@ def test_a_group_or_team_limit_holds_every_bot_it_covers_and_an_hourly_limit_set
     assert pools["groups"]["eng"]["day_spent"] == 5 and pools["groups"]["eng"]["blocked"] == "daily"
     put(api, "usage/pools/groups/eng", {"daily_usd": None})                       # nothing left removes it
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM usage_pools WHERE scope='group:eng'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM budget_nodes WHERE team_id='eng'").fetchone()[0] == 0
     put(api, "usage/pools/company", {"weekly_usd": 4})
     assert claim(api, r) is None                                                  # the whole team's week is spent too
     assert paused(api)["focus"] == "Paused: the team is over its weekly limit"
     put(api, "usage/pools/company", {"weekly_usd": 400})
     assert claim(api, r) is not None
     with api.app.state.store.transaction() as c:                                  # an hour limit set before the half hour
-        c.execute("INSERT INTO usage_limits(bot, hourly_usd) VALUES('ops', 1)")
+        usage_limits.save_own(c, "ops", {**usage_limits.own(c, "ops"), "hourly_usd": 1}, None)
     with api.app.state.store.read() as c:
-        started = c.execute("SELECT min(started) FROM turns WHERE bot='ops'").fetchone()[0]
+        started = c.execute("SELECT min(created_at) FROM attempts WHERE bot_id='ops'").fetchone()[0]
         at = datetime.fromisoformat(started[:19]).replace(tzinfo=usage_limits.timezone.utc)
         assert usage_limits.blocked(c, "ops", at=at) == "hourly"                  # the run's own hour
         assert usage_limits.blocked(c, "ops", at=at + usage_limits.timedelta(hours=1)) is None

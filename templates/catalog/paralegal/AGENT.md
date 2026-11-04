@@ -35,20 +35,18 @@ If `state.md` says setup has not finished, do this before any other work:
    `knowledge/variations.md` and `knowledge/templates.md` from them.
 4. Check the first NDA waiting (or the last one signed) now, and start the index. Send nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub routine list`, tell the human what it does and that they can change it or turn it off, and
+   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
    log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
-Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within
-the requested work and granted Tools. Apply an owner’s routine changes directly.
+A message to an outsider is a draft on the task. It goes out only when a person has turned mail sending on in Tico and the task asks for it and a granted Tool allows it. Apply an owner's routine changes directly.
 
-Only when the work asks for it and your Tools allow it:
+These need the task to ask for them and a granted Tool to allow them. Otherwise they wait for a person:
 - **Accepting a variation** that `knowledge/variations.md` does not list.
 - **Changing the standard, a template or the variations list.** Record the change and its reason.
 
-Always:
-- Never type a signature, a personal address or an id number into a file.
+Never type a signature, a personal address or an id number into a file.
 
 ## Starting a run
 1. Read `state.md`, then the task with `hub task show <id>`.
@@ -63,7 +61,7 @@ Always:
 ## Talking to {{app_name}}
 NDAs arrive as tasks with the file attached. Find templates and signed copies with `hub doc search
 "<party> NDA"`. A question for the requester is `hub task ask <id>`, one open question per task. Where the contracts mailbox
-is connected, read threads only; a reply is a draft on the task ; draft until a person turns mail sending on in Tico.
+is connected, read threads only; a reply is a draft on the task. It goes out only when a person has turned mail sending on in Tico and the task asks for it and a granted Tool allows it.
 
 ## Quality standards
 - **Status first.** Each check opens with one of: ready for signature, needs changes, needs counsel.
@@ -74,6 +72,11 @@ is connected, read threads only; a reply is a draft on the task ; draft until a 
 - **Blanks are loud.** An outbound draft lists every blank you filled and the source of each value.
 - **Honest about gaps.** A clause the standard does not cover is "no team position", never judged.
 - Every check ends: **Summary for a human, not legal advice.**
+
+## Skills
+- `skills/check-an-nda-clause-by-clause/SKILL.md`: read before you give an inbound NDA a status.
+- `skills/fill-an-outbound-nda-from-template/SKILL.md`: read before you fill the team template for a request to send.
+- `skills/file-a-signed-agreement-in-the-index/SKILL.md`: read before you add a row for a signed agreement.
 
 ## Escalating
 Tell the requester at once when an NDA has a residuals clause, a non-solicit or non-compete, a one-way NDA

@@ -1,7 +1,6 @@
 // The ask filter on Needs you (backend/ask_ingest.py): a chore it let through sits under Hands needed; what it kept off
 // the plate today is one folded "Filtered for you" line at the foot, each with its asker and reason, and Let it through
-// posts once with no confirm. A Rehearsal item says what On would have done and has no button. Settings → Tasks holds
-// "What bots may put on you" and saves the next item's settings.
+// posts once with no confirm. Settings → Tasks holds "What bots may put on you" and saves the next item's settings.
 // NEEDS_SHOTS=<dir> also saves the screenshots for the PR.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -11,15 +10,15 @@ const {open} = require('./tasks-page.cjs');
 const SHOTS = process.env.NEEDS_SHOTS || '';
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 
-const base = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'human:ana', requester: 'bot:botops', status: 'open',
-  lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created: ago(600), updated: ago(60), ...over});
+const base = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'human:ana', requester_id: 'bot:botops', status: 'open',
+  lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created_at: ago(600), updated_at: ago(60), ...over});
 const TASKS = [base('t-access', 'Grant ops read access to the billing repo'), base('t-pick', 'Gusto or Rippling for payroll?')];
 const NEEDS = [{...TASKS[1], kind: 'task', need: 'decide'}, {...TASKS[0], kind: 'task', need: 'hands'}];
 const FILTERED = [
   {id: 'f-1', kind: 'task', task: 't-verify', title: 'Verify the cleanup ran', asker: 'bot:ops', asker_name: 'Ops',
-    outcome: 'sent_back', would: 'sent_back', reason: 'own_work', mode: 'on', created: ago(20), let_through_at: null},
+    outcome: 'sent_back', would: 'sent_back', reason: 'own_work', mode: 'on', created_at: ago(20), let_through_at: null},
   {id: 'f-2', kind: 'loose', task: null, title: 'Release at 17:00Z', asker: 'bot:release', asker_name: 'Release Manager',
-    outcome: 'through', would: 'fyi', reason: 'status', mode: 'rehearsal', created: ago(40), let_through_at: null},
+    outcome: 'fyi', would: 'fyi', reason: 'status', mode: 'on', created_at: ago(40), let_through_at: null},
 ];
 
 async function shot(target, name) {
@@ -57,12 +56,13 @@ async function shot(target, name) {
     const order = await page.locator('#task-body [data-group]').evaluateAll(gs => gs.map(g => g.dataset.group));
     assert.equal(order.at(-1), 'filtered', JSON.stringify(order));
     assert.equal(await line.evaluate(d => d.open), false, 'folded until opened');
+    assert.equal((await line.locator('.tl-gname').textContent()).trim(), 'Filtered for you');
     assert.equal((await line.locator('.tl-gcount').textContent()).trim(), '2');
     await line.locator('summary').click();
     const rows = line.locator('.tl-filtered-row');
     assert.match(await rows.nth(0).innerText(), /Ops:\s*Verify the cleanup ran[\s\S]*Sent back · Work a bot can do itself/);
-    assert.match(await rows.nth(1).innerText(), /Would have: fyi/);
-    assert.equal(await rows.nth(1).locator('[data-let-through]').count(), 0, 'Rehearsal has nothing to let through');
+    assert.match(await rows.nth(1).innerText(), /FYI · A progress note: nothing to decide/);
+    assert.equal(await rows.nth(1).locator('[data-let-through]').count(), 1, 'FYI kept off the plate has its own button');
     await shot(page, 'ask-filter-needs-you');
 
     // Let it through: one post, no confirm, and the row says so after the reload.
@@ -76,13 +76,14 @@ async function shot(target, name) {
     await page.route('**/api/v2/ask-ingest/settings', route => {
       if (route.request().method() === 'PUT') { saved.push(route.request().postDataJSON()); }
       return route.fulfill({contentType: 'application/json', body: JSON.stringify({
-        settings: {mode: 'rehearsal', budget: 10, chores_budget: 5, criteria: ['Strategy and positioning'], own: false},
-        team: {mode: 'rehearsal', budget: 10, chores_budget: 5, criteria: ['Strategy and positioning']},
-        modes: ['off', 'rehearsal', 'on'], may_edit_team: false})});
+        settings: {mode: 'off', budget: 10, chores_budget: 5, criteria: ['Strategy and positioning'], own: false},
+        team: {mode: 'off', budget: 10, chores_budget: 5, criteria: ['Strategy and positioning']},
+        modes: ['off', 'on'], may_edit_team: false})});
     });
     await page.evaluate(() => { location.hash = '#/settings/tasks'; });
     const card = page.locator('#set-ask-filter form.ask-filter');
     await card.waitFor();
+    assert.equal(await card.locator('input[name="mode"]').count(), 2, 'Off and On only');
     assert.match(await page.locator('#set-ask-filter').innerText(), /You use the team default/);
     await card.locator('input[name="mode"][value="on"]').check();
     await card.locator('input[name="budget"]').fill('15');
@@ -102,8 +103,8 @@ async function shot(target, name) {
       const body = route.request().postDataJSON();
       replays.push(body);
       const pages = [
-        {items: [{kind: 'task', ref: 't-1', title: 'Pick the launch date', asker: 'bot:ops', asker_name: 'Ops', created: ago(300), load: 4, would: 'through', reason: 'under_budget'}], next_offset: 1, total: 2},
-        {items: [{kind: 'loose', ref: 'm-1', title: 'Verify the cleanup ran', asker: 'bot:ops', asker_name: 'Ops', created: ago(200), load: 16, would: 'sent_back', reason: 'own_work'}], next_offset: null, total: 2}];
+        {items: [{kind: 'task', ref: 't-1', title: 'Pick the launch date', asker: 'bot:ops', asker_name: 'Ops', created_at: ago(300), load: 4, would: 'through', reason: 'under_budget'}], next_offset: 1, total: 2},
+        {items: [{kind: 'loose', ref: 'm-1', title: 'Verify the cleanup ran', asker: 'bot:ops', asker_name: 'Ops', created_at: ago(200), load: 16, would: 'sent_back', reason: 'own_work'}], next_offset: null, total: 2}];
       return route.fulfill({contentType: 'application/json', body: JSON.stringify(pages[body.offset ? 1 : 0])});
     });
     await page.waitForFunction(sel => { const day = document.querySelector(sel); return day && !day.dataset.beforeSave; }, DAY);
@@ -116,6 +117,6 @@ async function shot(target, name) {
     assert.match(await page.locator('[data-ask-replay-msg]').innerText(), /2 items; On would have kept 1 off your plate/);
     await shot(page.locator('#set-ask-filter-card'), 'ask-filter-replay');
     assert.deepEqual(errors, []);
-    console.log('Ask filter: Hands needed group, Filtered for you at the foot, Let it through once, Rehearsal rows, settings card, replay a day');
+    console.log('Ask filter: Hands needed group, Filtered for you at the foot, Let it through once, settings card, replay a day');
   } finally { await browser.close(); }
 })().catch(e => {console.error(e); process.exit(1);});

@@ -18,8 +18,10 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
     const page = await browser.newPage({viewport: {width: 1280, height: 860}, serviceWorkers: 'block'});
     const errors = [];
     let status = {cloud: true, keeper_alive: true, health_issues: [
+      // A quarantined bot is BotOps's to review, so the server says needs_person false (backend/views.py): it stays in
+      // Health and never lights the dot.
       {kind: 'bot', title: 'Builder needs attention', detail: 'The bot is quarantined. It tried a refused action.', bot: 'builder',
-        severity: 'error', needs_person: true, action: 'Review the refused action, then resume the bot on its page.'},
+        severity: 'error', needs_person: false, action: 'Review the refused action, then resume the bot on its page.'},
       // Diagnostics that do not need a person never light the dot.
       {kind: 'bot', title: 'Writer needs attention', detail: 'Usage limit; resumes at 14:00 UTC', bot: 'writer',
         severity: 'warning', needs_person: false}]};
@@ -32,6 +34,7 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
       {id: 'computers', label: 'Computers', status: 'ok', summary: '1 computer online.', fixes: []}]};
     const broken = health;
     let failStatus = false;
+    const restarts = [];
     page.on('pageerror', e => errors.push(e.message));
     const serve = async route => {
       const url = new URL(route.request().url()), p = url.pathname;
@@ -51,11 +54,10 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
       if (p === '/api/v2/health') return json(health);
       if (p === '/api/v2/health-monitor') return json({on: false, findings: []});
       if (p === '/api/v2/needs-you') return json({items: []});
+      if (p === '/api/v2/computers/r1/restart') { restarts.push(route.request().method()); return json({running: 0}); }
       return json(unrouted(p));
     };
     await page.route('**/*', serve);
-    // Snooze before startup so the automatic Needs you panel cannot cover account navigation.
-    await page.addInitScript(() => localStorage.setItem('tico.needsYou', JSON.stringify({snoozedUntil: Date.now() + 3600e3})));
     await page.goto('http://tico-ui.test/#/tasks');
     await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
     const settle = async () => { await page.evaluate(async () => { await refresh(false); await hlRefresh(); }); };
@@ -82,18 +84,17 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
 
     // The menu opens with one line per problem, worst first, each with its fix.
     const lines = page.locator('#account-menu .account-status-line');
+    // The quarantined bot is not here: BotOps reviews it, so it lives in Health only.
     assert.deepEqual(await lines.locator('.account-status-text').allInnerTexts(), [
-      'Builder needs attention: The bot is quarantined',
       "Models: Builder's Claude login was rejected",
       'Version: Tico 0.3.80 is available']);
-    assert.deepEqual(await lines.evaluateAll(rows => rows.map(row => row.dataset.level)), ['bad', 'bad', 'warn']);
-    assert.equal(await lines.nth(0).locator('a').getAttribute('href'), '#/bot/builder/more');
-    assert.equal(await lines.nth(1).locator('a').getAttribute('href'), '#/credentials');
-    assert.equal(await lines.nth(2).locator('[data-hl-click]').getAttribute('data-hl-click'), '#new-version', 'Update, as on Health');
-    assert.equal(await lines.nth(2).locator('[data-hl-click]').getAttribute('title'), 'Update');
+    assert.deepEqual(await lines.evaluateAll(rows => rows.map(row => row.dataset.level)), ['bad', 'warn']);
+    assert.equal(await lines.nth(0).locator('a').getAttribute('href'), '#/credentials');
+    assert.equal(await lines.nth(1).locator('[data-hl-click]').getAttribute('data-hl-click'), '#new-version', 'Update, as on Health');
+    assert.equal(await lines.nth(1).locator('[data-hl-click]').getAttribute('title'), 'Update');
     const text = (await page.locator('#account-menu .account-status').innerText());
     assert.doesNotMatch(text, /Writer|health_issues|uncertain_work|\bbad\b|\bwarn\b/, 'no internal words, nothing that clears itself');
-    await lines.nth(1).locator('a').click();
+    await lines.nth(0).locator('a').click();
     // Credentials live in Library › Tools: the link lands there.
     await page.waitForFunction(() => location.hash.startsWith('#/library/tools'));
     assert.equal(await page.locator('#account-menu').isHidden(), true, 'a fix closes the menu');
@@ -102,7 +103,7 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
     await page.mouse.move(0, 0);
     await dot.hover();
     await page.locator('#account-status-pop').waitFor();
-    assert.equal(await page.locator('#account-status-pop .account-status-line').count(), 3);
+    assert.equal(await page.locator('#account-status-pop .account-status-line').count(), 2);
     assert.equal(await page.locator('#account-menu').isHidden(), true);
     await page.mouse.move(700, 400);
     await page.locator('#account-status-pop').waitFor({state: 'hidden'});
@@ -148,9 +149,16 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
     assert.equal(await dot.getAttribute('data-level'), 'warn');
     assert.equal(await dots(), 1);
 
-    const restart = page.locator('#account-status-pop [data-account-needs-you]');
-    assert.equal(await restart.innerText(), 'Open', 'the action opens the restart panel rather than restarting');
-    assert.equal(await restart.getAttribute('title'), 'Open Needs you to restart this computer');
+    // The line's own Restart button sends the restart: no panel in between.
+    await dot.hover();
+    await page.locator('#account-status-pop').waitFor();
+    const restart = page.locator('#account-status-pop [data-runner-restart="r1"]');
+    assert.equal(await restart.innerText(), 'Restart');
+    await restart.click();
+    await page.waitForFunction(() => document.querySelector('#account-status-pop [data-runner-restart="r1"]')?.textContent === 'Restarting');
+    assert.deepEqual(restarts, ['POST'], 'one restart request for the computer');
+    await page.mouse.move(700, 400);
+    await page.locator('#account-status-pop').waitFor({state: 'hidden'});
 
     // Lost connection clears by itself: amber, with Retry.
     failStatus = true;
@@ -208,7 +216,6 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
     }
     const phone = await browser.newPage({viewport: {width: 390, height: 844}, hasTouch: true, isMobile: true, serviceWorkers: 'block'});
     await phone.route('**/*', serve);
-    await phone.addInitScript(() => localStorage.setItem('tico.needsYou', JSON.stringify({snoozedUntil: Date.now() + 3600e3})));
     await phone.goto('http://tico-ui.test/#/tasks');
     await phone.evaluate(async () => { await refresh(false); await hlRefresh(); setDrawer(true); });
     await phone.locator('#account').tap();

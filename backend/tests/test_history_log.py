@@ -25,7 +25,7 @@ def seed(api):
                                                          "body_sha256": "b" * 64, "mailbox": "ops@acme.example"},
                                    task_id=public["id"])
         H.approval_decide(c, "human:ana", other["id"], "declined")
-        c.execute("INSERT INTO credentials(id,name,kind,created,updated,updated_by) VALUES('k1','=Stripe key','token',?,?,'ana')",
+        c.execute("INSERT INTO credentials(id,name,kind,created_at,updated_at,updated_by) VALUES('k1','=Stripe key','token',?,?,'ana')",
                   (H.now(), H.now()))
         H.event(c, "bot:inbox", "credential.revealed", "k1", {"attempt": None})
         H.event(c, "human:ana", "automation.send_off", "auto-1", {"run": "r1"})
@@ -67,7 +67,7 @@ def test_the_log_shows_every_recorded_kind_and_a_member_only_what_sql_shows_them
         assert hidden not in seen
     assert not {"approval.asked", "approval.granted", "credential.revealed", "outbound.blocked"} & set(kinds(cara))
     # Each of Cara's rows is one her own SQL reads.
-    sql = post(api, "sql", {"sql": "SELECT 'task:'||id FROM task_events UNION ALL SELECT 'decision:'||id FROM messages "
+    sql = post(api, "sql", {"sql": "SELECT 'task:'||id FROM history_events WHERE subject_type='task' UNION ALL SELECT 'decision:'||id FROM messages "
                                    "UNION ALL SELECT 'permission.changed:'||id FROM events"}, token="cara-test")
     assert {i["id"] for i in cara["items"]} <= {row[0] for row in sql["rows"]}
 
@@ -130,3 +130,25 @@ def test_csv_is_the_owners_and_admins_and_never_runs_a_cell_as_a_formula(api):
         m.setattr(history_log, "CSV_MAX", 2)
         short = api.get("/api/v2/history.csv", headers=headers())
     assert len(list(csv.reader(io.StringIO(short.text)))) == 3 and "|" in short.headers["x-next"]
+
+
+def test_consolidated_history_only_shows_task_status_and_recorded_runs(api):
+    _, _, active = setup_attempt(api)
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Refresh pricing", "", "bot:ops", lint=False, private=False)
+        unrelated = H.history_event(c, "company", task["id"], "human:ana", "status", "draft", "published")
+        recorded = H.turn_start(c, "bot:ops", "ops", task_id=task["id"])["id"]
+        H.turn_finish(c, "bot:ops", recorded, exit_code="completed")
+    runs = get(api, "history?kind=run")["items"]
+    by_id = {row["id"]: row for row in runs}
+    assert by_id["run:" + active["id"]]["result"] == "running"
+    assert by_id["run:" + recorded]["result"] == "done"
+    assert by_id["run:" + recorded]["link"] == "/api/runs/" + recorded + "/log"
+    assert by_id["run:" + recorded]["task"]["id"] == task["id"]
+    with api.app.state.store.transaction() as c:
+        # A lease that never acquired a run record must not look like a running turn.
+        c.execute("UPDATE attempts SET trigger=NULL WHERE id=?", (active["id"],))
+    assert [row["id"] for row in get(api, "history?kind=run")["items"]] == ["run:" + recorded]
+    changes = get(api, "history?kind=task")["items"]
+    assert any(row["task"]["id"] == task["id"] for row in changes)
+    assert "task:" + unrelated not in {row["id"] for row in changes}

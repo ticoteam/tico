@@ -32,7 +32,7 @@ class Note(M.Contract):
     text: M.Text
     title: str = Field(default="", max_length=300)
     calendar: dict | None = None
-    slug: str = Field(default="auto", max_length=200)
+    bot_id: str = Field(default="auto", max_length=200)
 
 
 class Edit(M.Contract):
@@ -43,7 +43,7 @@ class Edit(M.Contract):
 
 
 class Send(M.Contract):
-    slug: str = Field(default="auto", max_length=200)
+    bot_id: str = Field(default="auto", max_length=200)
     instructions: str = Field(default="", max_length=200_000)
 
 
@@ -138,13 +138,13 @@ def replay_upload(store, request, payload):
     key = upload_key(request)
     with store.read() as c:
         validate_identity(c, who)
-        row = c.execute("SELECT request_hash,response_json FROM idempotency WHERE actor=? AND operation=? AND key=?",
+        row = c.execute("SELECT request_hash,response FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                         (principal, request.url.path, key)).fetchone()
     if row is None:
         return None
     if row["request_hash"] != request_digest(encode(payload)):
         raise Problem("idempotency_conflict", "This key was used for different content", 409)
-    result = json.loads(row["response_json"])
+    result = json.loads(row["response"])
     if isinstance(result, dict) and "_refusal" in result:
         refusal = result["_refusal"]
         raise Problem(refusal["code"], refusal["detail"], refusal["status"])
@@ -185,7 +185,7 @@ async def form(request, model, blobs, store, admit=None):
                     else:
                         fields[name] = data.decode("utf-8")
                 for field in ("calendar", "refs", "acceptance_criteria", "participants", "context", "titles",
-                              "labels", "links"):
+                              "labels", "links", "page"):
                     if field in fields:
                         fields[field] = json.loads(fields[field])
             else:
@@ -221,9 +221,9 @@ def save(c, meta, *, transcript=None, notes=None, readable=None):
                 notes if notes is not None else (old or {}).get("notes", ""), conn=c, readable=readable)
     control(c, meta["id"])
     # Typed notes need version history too, including intentionally empty edits.
-    c.execute("INSERT OR IGNORE INTO meeting_versions(meeting_id,content_hash,metadata_json,"
-              "transcript_original,transcript_readable,notes,created) "
-              "SELECT id,content_hash,metadata_json,transcript_original,transcript_readable,notes,updated "
+    c.execute("INSERT OR IGNORE INTO meeting_versions(meeting_id,content_hash,metadata,"
+              "transcript_original,transcript_readable,notes,created_at) "
+              "SELECT id,content_hash,metadata,transcript_original,transcript_readable,notes,updated_at "
               "FROM meetings WHERE id=?", (meta["id"],))
 
 
@@ -277,7 +277,7 @@ def view(c, who, rid, *, include_transcripts=False):
     state = c.execute("SELECT * FROM media_control WHERE meeting_id=?", (rid,)).fetchone()
     delivery = record["delivery"]
     if delivery and delivery["task_id"]:
-        meta["sent"] = {"task": delivery["task_id"], "slug": delivery["destination"], "sent_by": delivery["requested_by"]}
+        meta["sent"] = {"task": delivery["task_id"], "bot": delivery["destination"], "sent_by": delivery["requested_by"]}
     result = {**meta, "notes": record["notes"], "transcript_readable": record["transcript_readable"],
               "meeting_context": MS.context(record), "delivery": delivery,
               "version": state["version"] if state else 1, "turns": meta.get("turns", []),
@@ -288,7 +288,7 @@ def view(c, who, rid, *, include_transcripts=False):
         result["transcript_sources"] = [{"id": row["id"], "source": row["source"],
             "resource_type": row["resource_type"], "transcript_index": row["transcript_index"],
             "source_updated_at": row["source_updated_at"], "text": row["transcript_text"],
-            "turns": json.loads(row["turns_json"]),
+            "turns": json.loads(row["turns"]),
             "summary": row["summary_text"],
             "primary": row["content_hash"] == meta.get("transcript_import_hash")}
             for row in c.execute("SELECT t.* FROM recording_transcripts t WHERE t.meeting_id=? "
@@ -305,7 +305,7 @@ def outbox(c, rid):
     try:
         rows = c.execute("SELECT id,section,text,status,result_ref FROM meeting_items WHERE meeting_id=? "
                          "AND status!='dismissed' AND section IN ('doc','task','feature') "
-                         "ORDER BY created", (rid,)).fetchall()
+                         "ORDER BY created_at", (rid,)).fetchall()
     except Exception:
         return groups
     for row in rows:
@@ -351,7 +351,8 @@ def deliver(c, auth, who, rid, body, uploads):
     require_live(record)
     meta = record["metadata"]
     person = P.person(H.actor_id(who.actor), roster(c)) or {}
-    slug = body.slug if body.slug != "auto" else person.get("bot") or default_bot(c, auth.settings)
+    chosen = body.bot_id if body.bot_id != "auto" else person.get("bot") or default_bot(c, auth.settings)
+    slug = (H.resolve_bot(c, chosen) or {}).get("id", chosen)
     auth.target(c, who, slug, need="write")
     previous = record["delivery"]
     if previous:
@@ -362,12 +363,12 @@ def deliver(c, auth, who, rid, body, uploads):
                 raise Problem("delivery_sender", "The original sender must retry this delivery", 409)
             c.execute("UPDATE meeting_deliveries SET status='pending',error=NULL WHERE meeting_id=?", (rid,))
             return finish_delivery(c, auth, who, rid)
-        return {"id": rid, "slug": slug, "task": previous["task_id"], "pending": previous["status"] == "pending"}
+        return {"id": rid, "bot": slug, "task": previous["task_id"], "pending": previous["status"] == "pending"}
     extra = attachments(c, who, rid, uploads)
     meta["attachments"] = meta.get("attachments", []) + extra
     save(c, meta)
     c.execute("INSERT INTO meeting_deliveries(meeting_id,requested_by,sender_name,destination,instructions,"
-              "attachments_json,requested_at) VALUES(?,?,?,?,?,?,?)",
+              "attachments,requested_at) VALUES(?,?,?,?,?,?,?)",
               (rid, who.email, person.get("name") or who.email, slug, body.instructions,
                encode(meta["attachments"]), H.now()))
     return finish_delivery(c, auth, who, rid)
@@ -380,7 +381,7 @@ def finish_delivery(c, auth, who, rid):
     if not delivery or delivery["task_id"]:
         return None
     if meta["status"] != "done":
-        return {"id": rid, "slug": delivery["destination"], "pending": True}
+        return {"id": rid, "bot": delivery["destination"], "pending": True}
     # Recheck authorization at delivery time, not just when the request was queued.
     slug = delivery["destination"]
     auth.target(c, who, slug, need="write")
@@ -396,9 +397,9 @@ def finish_delivery(c, auth, who, rid):
         c.execute("INSERT INTO task_assets VALUES(?,?)", (task["id"], item["id"]))
     c.execute("UPDATE meeting_deliveries SET status='delivered',task_id=?,delivered_at=?,error=NULL WHERE meeting_id=?",
               (task["id"], H.now(), rid))
-    meta["sent"] = {"task": task["id"], "slug": slug, "sent_by": who.email}
+    meta["sent"] = {"task": task["id"], "bot": slug, "sent_by": who.email}
     save(c, meta)
-    return {"id": rid, "slug": slug, "task": task["id"], "pending": False}
+    return {"id": rid, "bot": slug, "task": task["id"], "pending": False}
 
 
 def write_upload(store, request, body, uploads, fn):
@@ -420,6 +421,13 @@ def blob_for(c, auth, who, bid):
     from . import task_privacy as privacy
     if not privacy.blob_readable(c, privacy.actor(who), bid):
         raise Problem("not_found", "File not found", 404)
+    # A letter's scan follows the letter's own policy (backend/postal_mail.py), its task's or the owner's alone.
+    from . import postal_mail
+    scan = postal_mail.scan_access(c, auth, who, bid)
+    if scan is not None:
+        if not scan:
+            raise Problem("not_found", "File not found", 404)
+        return row
     # Ownership of the company account is not ordinary access to another person's
     # private Tico attachment. Shared-room and task access is derived from the linked
     # object below, using the same authorization as its conversation or task.
@@ -445,10 +453,12 @@ def blob_for(c, auth, who, bid):
     return row
 
 
-def install_media(app, store, auth, mutate, send_message, task_create, review_preflight):
+def install_media(app, store, auth, mutate, send_message, task_create, review_preflight, rule_check=None,
+                  chat_checks=None, chat_write=None):
     from . import task_privacy as privacy
     blobs = Blobs(store.settings)
     app.state.blobs = blobs
+    store.blobs = blobs                 # what connections carry for the company page's logo (store.Store._take)
     from .file_metadata import Metadata
     app.state.file_metadata = Metadata(store, blobs)
 
@@ -477,24 +487,31 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                         kind=visuals.kind_of(item["content_type"], item["size"], visuals._head(blobs, upload["digest"])))
         if items:
             refs = {**message["refs"], "attachments": items}
-            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
+            c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(refs), message["id"]))
         return visuals.for_reader(app, store.settings, c, who, [H.message(c, message["id"])])[0]
 
-    # The owner's Strategy Bot chat takes pictures too (backend/assistant.py, POST /api/v2/uploads/assistant/messages).
+    # POST /api/v2/uploads/assistant/messages uses this too (a person's own Assistant chat).
     app.state.uploads = SimpleNamespace(form=lambda request, model, admit=None: form(request, model, blobs, store, admit),
                                         attach=chat_uploads,
                                         write=write)
 
     @app.post("/api/v2/uploads/chat/{bot}", openapi_extra=upload_contract(M.ChatCreate))
     async def chat_upload(request: Request, bot: str):
+        from . import ask_ingest
         who = request.state.identity
         human_only(who)
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         body, uploads = await form(request, M.ChatCreate, blobs, store)
-        def work(c):
-            message = send_message(c, who, M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs))
-            return {"conversation": H.conversation(c, message["conversation_id"]),
-                    "message": chat_uploads(c, who, bot, message, uploads, body.titles)}
-        return await asyncio.to_thread(write, request, body, uploads, work)
+        # The message is checked as `chat` checks one (the org rule check, then ask ingest), and written with its files.
+        sent = M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs, delivery=body.delivery,
+                               defer_for=body.defer_for)
+
+        def checked():
+            rc, ingest = chat_checks(request, who, bot, sent)
+            return ask_ingest.judged(store, ingest, lambda: write(request, body, uploads, lambda c: chat_write(
+                c, who, bot, sent, rc, ingest, uploads, body.titles)))
+        return await asyncio.to_thread(checked)
 
     @app.post("/api/v2/uploads/tasks", openapi_extra=upload_contract(M.TaskCreate))
     async def task_upload(request: Request):
@@ -518,6 +535,234 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             return result
         return await asyncio.to_thread(write, request, body, uploads, work)
 
+    def question_checked(c, who, body):
+        """A task question's cheap checks, run in the read before any upload and again in the write: who decides, and
+        the parent the bot may file under."""
+        person = H.resolve_actor(c, body.on)
+        if not person or not H.is_human(person) or not H.human(c, H.actor_id(person)):
+            raise Problem("validation", f"{body.on} is not a person on the team", 422)
+        parent = H.task(c, auth.task(c, who, auth.resolve_task(c, who, body.parent))["id"]) if body.parent else None
+        # Checked before the fold too: an open question kept from before onboarding is not a way to ask again.
+        from . import lifecycle
+        lifecycle.refuse_send(c, who, None, what="task questions")
+        return person, parent
+
+    def question_unreadable(c, person):
+        return Problem("privacy", f"{H.actor_name(c, person)} cannot read this task, so they could not answer it: "
+                       "ask someone who can read your work and its parent task", 403)
+
+    def question_private(c, who, body, parent):
+        return bool(body.private or privacy.private_execution(c, who) or H.private_tasks_default(c, who.actor)
+                    or parent and H.task_private(c, parent))
+
+    def question_readable_by(c, who, person, private, parent):
+        """The person reads the task a question makes, by every rule a read checks: a company-visible one by the bot's
+        activity access; a private one as its other party, given they read the run's private work. A question under a
+        private task with no person on it, from the bot that owns it, makes the person that task's one guest
+        (task_privacy.guest_for); returned for the write to make."""
+        guest = privacy.guest_for(c, who, person, parent) if private else None
+        if private and not privacy.question_party(c, who, person, parent, guest):
+            raise question_unreadable(c, person)
+        try:
+            auth.task_row(c, auth.identity_for_actor(c, person),
+                          {"id": "", "owner_id": who.actor, "requester_id": person if private else who.actor,
+                           "private": int(private)})
+        except Problem as exc:
+            raise question_unreadable(c, person) from exc
+        return guest
+
+    def question_text(body, review_text=""):
+        """What a task question says, as the org rule check reads it, one output: every line its card and task show
+        (title, body, question, why; each option's label, description, what happens and file name; the spend; what
+        happens with no answer; the files under review and the picks they make, `review_text`), never a file's
+        bytes. The hold keeps this same text for a later recheck."""
+        question = body.question.strip()
+        parts = [("Title", body.title or question), ("Body", body.body), ("Question", question),
+                 ("Why", body.why.strip())]
+        for option in body.options:
+            parts += [("Option", option.label), ("Description", option.description), ("Then", option.then),
+                      ("File", option.file.name if option.file else "")]
+        if body.spend:
+            parts.append(("Spend", f"{body.spend.label}: {body.spend.amount} for {body.spend.what} "
+                                   f"({body.spend.account})"))
+        if body.if_no_answer:
+            parts.append(("If no answer", body.if_no_answer.do))
+        return "\n\n".join([*(f"{label}: {value}" for label, value in parts if value), *filter(None, [review_text])])
+
+    def question_review_text(review, attachments, body):
+        """What a review question's card adds, as the org rule check reads it: each file's title and name (its chip),
+        and in a pick the options the files make (file_reviews.options: a label from each title, what happens)."""
+        from . import file_reviews
+        if not review:
+            return ""
+        lines = [f"File: {a['title'] or a['name']}" + (f" ({a['name']})" if a["title"] and a["name"] != a["title"]
+                                                        else "") for a in attachments]
+        if body.pick:
+            picks = file_reviews.options([dict(e) for e in review], attachments, True, body.options)
+            lines += [f"Option: {o.label}\n\nThen: {o.then}" for o in picks]
+        return "\n\n".join(lines)
+
+    def question_review_digest(text, review):
+        """What a review question's check read, sealed: the judged text and each version under review (file, version,
+        content digest), so a renamed file or a new current version under the same name no longer matches."""
+        versions = [[e["file"], e["version"], e["digest"]] for e in review or []]
+        return hashlib.sha256(json.dumps([text, versions]).encode()).hexdigest()
+
+    def question_shown_options(who, body):
+        """The options the person sees on the question as written: a review's own (file_reviews.options, from the
+        files as the write resolves them), else the bot's, else Yes / No. A review the write would refuse keeps the
+        bot's options: the write refuses it as it resolves."""
+        from . import file_reviews
+        if body.review:
+            with store.read() as c:
+                try:
+                    person, _ = question_checked(c, who, body)
+                    review, attachments = file_reviews.resolve(c, auth, blobs, who, person, body.review)
+                    return file_reviews.options(review, attachments, body.pick, body.options)
+                except Problem:
+                    pass
+        return body.options or [M.QuestionChoice(label="Yes"), M.QuestionChoice(label="No")]
+
+    def question_ingest(who, body):
+        """Ask ingest's preflight of a task question (backend/ask_ingest.py), outside the write: the question as the
+        person sees it, with the options it shows and the body the task is filed with."""
+        from . import ask_ingest
+        question = body.question.strip()
+        options = question_shown_options(who, body)
+        asked = [{"question": question, "why": body.why,
+                  "options": [o.model_dump(include={"label", "description", "then", "recommended"}) for o in options]}]
+        return ask_ingest.preflight(store, app.state.judge, who, body.on, body.title or question, body.body or "",
+                                    kind="task_question", asked=asked)
+
+    def question_replay(body, option_files, stored, review_seal=None):
+        """What Send anyway needs to ask a held question again: the request without its option files' bytes (they are
+        stored already, by digest), each file's size, name and type, the digests, and what its files under review
+        showed when it was checked (a digest: Send anyway refuses once that changed)."""
+        data = body.model_dump(mode="json")
+        for option in data.get("options") or []:
+            if option.get("file"):
+                option["file"]["content_base64"] = "-"
+        return {"body": data, "files": [list(f) if f else None for f in option_files], "stored": list(stored),
+                **({"review": review_seal} if body.review else {})}
+
+    def question_write(c, who, body, option_files, stored, ingest=None, snapshots=None, rc=None, review_checked=None):
+        """One task question, in its write, as the route asks it and Send anyway replays it. `option_files` is each
+        option's (size, name, type) or None, `stored` its blob digest. The org rule check's verdict comes first: held,
+        no task, fold, comment or note is written; warned, its line leads the question the person reads and the task's
+        body. `review_checked` is the digest of what the files under review showed when the check read them: changed
+        since (a file renamed, a new current version), the question is refused as `changed`, never asked unchecked."""
+        from . import ask_ingest, file_reviews, org_rule_check
+        options = body.options or [M.QuestionChoice(label="Yes"), M.QuestionChoice(label="No")]
+        question = body.question.strip()
+        asked = {"question": question, "why": body.why, "multi": body.multi,
+                 "options": [o.model_dump(include={"label", "description", "then", "recommended"}) for o in body.options]}
+        title = body.title or question
+        person, parent = question_checked(c, who, body)
+        private = question_private(c, who, body, parent)
+        guest = question_readable_by(c, who, person, private, parent)
+        # Files under review (backend/file_reviews.py): versions the person can open, and the options they make. What
+        # their card shows is judged with the question.
+        review = attachments = None
+        if body.review:
+            review, attachments = file_reviews.resolve(c, auth, blobs, who, person, body.review)
+        review_text = question_review_text(review, attachments, body)
+        review_seal = question_review_digest(review_text, review) if body.review else None
+        if review_checked is not None and review_seal != review_checked:
+            raise Problem("changed", "The files under review changed since the question was checked; ask it again",
+                          409)
+        rule = org_rule_check.apply(c, rc, question_text(body, review_text),
+                                    question_replay(body, option_files, stored, review_seal))
+        if rule and rule.get("held"):
+            if ingest:
+                ask_ingest.skipped(c, ingest, "held")
+            return org_rule_check.answer(rule)
+        said_text = org_rule_check.warned_text(rule, question) if rule else question
+        if guest:
+            H.task_reach(c, who.actor, parent, person)
+        topic = H.question_topic(body.topic)
+        # One open question per topic: asked again while the first waits, it joins that one (hubdb.fold_question).
+        found = H.open_question(c, who.actor, person, parent=parent["id"] if parent else None, topic=topic,
+                                private=private)
+        if found:
+            tid = found["task"]["id"]
+        else:
+            # The verdict, already applied, rides into the create: a warning line goes on the new task's body.
+            made = task_create(c, who, M.TaskCreate(
+                title=title, body=body.body or question, owner=who.actor, private=body.private,
+                relations=[M.TaskRelationRef(task=body.parent, kind="parent")] if body.parent else []), asked=person,
+                review_prs=snapshots, same=file_reviews.same_versions(review) if review else None,
+                rule=org_rule_check.decided(rule))
+            tid = made["task"]["id"]
+        # The person must be able to read the task by every rule a read checks, or the question would reach
+        # them (Slack, mail) while the task stays hidden from them.
+        try:
+            auth.task_row(c, auth.identity_for_actor(c, person), H.task(c, tid))
+        except Problem as exc:
+            raise question_unreadable(c, person) from exc
+        picks, shown = options, asked
+        if review:
+            picks = file_reviews.options(review, attachments, body.pick, body.options)
+            shown = {**asked, "options": [o.model_dump(include={"label", "description", "then", "recommended"})
+                                          for o in picks]}
+        spend = file_reviews.check_spend(body.spend, [o.label for o in picks])
+        # The asking rules (hubdb.lint_question) on the question as the bot wrote it: no options is a Yes / No.
+        H.require_plain_question(c, who.actor, person, [shown])
+        choices, pad = [], [None] * len(picks)
+        for option, item, digest in zip(picks, (list(option_files) + pad)[:len(picks)],
+                                        (list(stored) + pad)[:len(picks)]):
+            choice = {"label": option.label, **({"description": option.description} if option.description else {}),
+                      **({"then": option.then} if option.then else {}),
+                      **({"recommended": True} if option.recommended else {})}
+            if item:
+                size, name, kind = item
+                blob = register(c, who, digest, size, name, kind)
+                fid, number = files.attach_task(c, who, tid, blob, digest, H.actor_id(who.actor))
+                c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, blob["id"]))
+                c.execute("INSERT INTO blob_media(blob_id,poster_blob_id) VALUES(?,NULL)", (blob["id"],))
+                H._task_event(c, tid, who.actor, "file", None, blob["name"], "")
+                choice["file"] = f"{fid}@{number}"
+            choices.append(choice)
+        from .task_review import check_ask
+        ask = check_ask(c, tid, M.ReviewAsk(questions=[M.ReviewQuestion(
+            id="decision", header="", question=question, why=body.why.strip(), options=choices,
+            multi=body.multi)], who=person, if_no_answer=body.if_no_answer), auth, who, lint=False)
+        if rule and rule.get("warn"):
+            # Every card (Needs you, Decide, the Ask panel, the task page) reads the structured question, not the
+            # comment: the line leads it there too. Set on the stored ask, past the model's length cap, which the
+            # question as the bot wrote it met.
+            ask["questions"][0]["question"] = said_text
+        if topic:
+            ask["topic"] = topic
+        # Set here, after the request's ask is checked: a client cannot send it (the ask model forbids extra fields),
+        # so Replay can tell a task question from a comment ask (ask_ingest._judged_text).
+        ask["task_question"] = True
+        if review:
+            ask["review"] = {"files": review, **({"pick": True} if body.pick else {})}
+            ask["attachments"] = attachments
+        if spend:
+            ask["spend"] = spend
+        gate = None
+        if found:
+            if ingest:
+                ask_ingest.skipped(c, ingest, "folded")     # the question repeats one open on the person: it joins it
+            folded_body = org_rule_check.warned_text(rule, body.body) if body.body and rule else body.body
+            said = H.fold_question(c, who.actor, found, said_text, ask, title=body.title or question, body=folded_body)
+        else:
+            # Judged against the plate before the question is on it.
+            gate = ask_ingest.apply(c, ingest) if ask_ingest.matches(ingest, person) else None
+            if ingest and not gate:
+                ask_ingest.skipped(c, ingest, "target")
+            said = H.task_comment(c, who.actor, tid, said_text, ask=ask)
+            if gate:
+                ask_ingest.record(c, ingest, gate, tid, said["id"])
+            if gate and gate["acts"]:
+                H.task_ask_resolve(c, who.actor, tid, said["id"])
+            else:
+                H.task_update(c, who.actor, tid, status="waiting", waiting_on=person, note=said_text)
+        return {"task": H.task(c, tid), "folded": bool(found),
+                "question": next(m for m in H.task_comments(c, tid, actor=who.actor) if m["id"] == said["id"]),
+                **ask_ingest.reply(gate), **org_rule_check.answer(rule)}
+
     @app.post("/api/v2/task-questions")
     def task_question(request: Request, body: M.TaskQuestion):
         """A bot puts one decision to a person (`hub task question`): the task is the bot's own, the structured
@@ -528,7 +773,9 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         question is a private task whose parties are the bot and the person asked. Bytes stored for a write refused
         only by a later change stay: the same bytes may already back another file, so they are never deleted here.
         One open question per topic: asked again on the same topic (`topic`, else the same parent task) while the
-        first still waits on the person, it is folded into that one (`folded: true`) rather than filed again."""
+        first still waits on the person, it is folded into that one (`folded: true`) rather than filed again.
+        The question is checked against the org rules before the write, as one output to the person asked."""
+        from . import org_rule_check
         who = request.state.identity
         if who.role != "bot":
             raise Problem("identity", "A bot puts a question to a person this way; a person asks in a comment", 403)
@@ -560,7 +807,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             # which stays the bot's, rather than as a second task of its own.
             with store.read() as c:
                 own = {t["id"] for t in (H.task(c, tid) for tid in privacy.attempt_tasks(c, who.attempt_id))
-                       if t and t["owner"] == who.actor and t["status"] in H.ACTIVE_STATUSES}
+                       if t and t["owner_id"] == who.actor and t["status"] in H.ACTIVE_STATUSES}
             if len(own) == 1:
                 body = body.model_copy(update={"parent": own.pop()})
 
@@ -568,38 +815,6 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         # on the PR's current head and checks read afresh, so all-green hosted checks count (create_task).
         title = body.title or question
         snapshots = review_preflight(who, body.parent, child_title=title.strip()) if body.parent else None
-
-        def checked(c):
-            """The cheap checks, run in the read before any upload and again in the write: who decides, and the
-            parent the bot may file under."""
-            person = H.resolve_actor(c, body.on)
-            if not person or not H.is_human(person) or not H.human(c, H.actor_id(person)):
-                raise Problem("validation", f"{body.on} is not a person on the team", 422)
-            parent = H.task(c, auth.task(c, who, auth.resolve_task(c, who, body.parent))["id"]) if body.parent else None
-            # Checked before the fold too: an open question kept from before onboarding is not a way to ask again.
-            from . import lifecycle
-            lifecycle.refuse_send(c, who, None, what="task questions")
-            return person, parent
-
-        def unreadable(person):
-            return Problem("privacy", f"{H.actor_id(person)} cannot read this task, so they could not answer it: "
-                           "ask someone who can read your work and its parent task", 403)
-
-        def readable_by(c, person, private, parent):
-            """The person reads the task this question makes, by every rule a read checks: a company-visible one by
-            the bot's activity access; a private one as its other party, given they read the run's private work.
-            A question under a private task with no person on it, from the bot that owns it, makes the person that
-            task's one guest (task_privacy.guest_for); returned for the write to make."""
-            guest = privacy.guest_for(c, who, person, parent) if private else None
-            if private and not privacy.question_party(c, who, person, parent, guest):
-                raise unreadable(person)
-            try:
-                auth.task_row(c, auth.identity_for_actor(c, person),
-                              {"id": "", "owner": who.actor, "requester": person if private else who.actor,
-                               "private": int(private)})
-            except Problem as exc:
-                raise unreadable(person) from exc
-            return guest
 
         if any(decoded):
             replay = replay_upload(store, request, body.model_dump())
@@ -611,87 +826,78 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                     privacy.require_payload(c, who, replay)
                 return replay
             with store.read_transaction() as c:
-                person, parent = checked(c)
+                person, parent = question_checked(c, who, body)
                 # Checked here before anything is stored, and again in the write on the task as made.
-                private = bool(body.private or privacy.private_execution(c, who) or H.private_tasks_default(c, who.actor)
-                               or parent and H.task_private(c, parent))
-                readable_by(c, person, private, parent)
+                question_readable_by(c, who, person, question_private(c, who, body, parent), parent)
+        # The org rule check (backend/org_rule_check.py), outside the write as a new task's is: one output, to the
+        # person asked. A held question skips ask ingest's call.
+        review_text, review_seal = question_review_preflight(who, body) if rule_check else ("", None)
+        rc = rule_check(who, "task_question", question_text(body, review_text),
+                        lambda c: [H.resolve_actor(c, body.on)]) if rule_check else None
         # Ask ingest (backend/ask_ingest.py): judged before the write. Sent back with the filter on, the question is
         # withdrawn as soon as it is asked and the task does not wait on the person.
-        from . import ask_ingest
-        ingest = ask_ingest.preflight(store, app.state.judge, who, body.on, title,
-                                      "\n\n".join(filter(None, (question, body.why, body.body))),
-                                      kind="task_question")
+        with store.read() as c:
+            retry = store.saved(c, who, request.url.path, request.headers.get("idempotency-key"))
+        ingest = None if org_rule_check.holds(rc) or retry else question_ingest(who, body)
         # A question the asking rules refuse stores no bytes: the write below refuses it first.
         plain = not H.is_bot(who.actor) or not H.question_refusal(body.on, [asked])
         stored = [blobs.put(item[0], item[2]) if item and plain else None for item in decoded]
-
-        def work(c):
-            person, parent = checked(c)
-            private = bool(body.private or privacy.private_execution(c, who) or H.private_tasks_default(c, who.actor)
-                           or parent and H.task_private(c, parent))
-            guest = readable_by(c, person, private, parent)
-            if guest:
-                H.task_reach(c, who.actor, parent, person)
-            topic = H.question_topic(body.topic)
-            # One open question per topic: asked again while the first waits, it joins that one (hubdb.fold_question).
-            found = H.open_question(c, who.actor, person, parent=parent["id"] if parent else None, topic=topic,
-                                    private=private)
-            if found:
-                tid = found["task"]["id"]
-            else:
-                made = task_create(c, who, M.TaskCreate(
-                    title=title, body=body.body or question, owner=who.actor, private=body.private,
-                    relations=[M.TaskRelationRef(task=body.parent, kind="parent")] if body.parent else []), asked=person,
-                    review_prs=snapshots)
-                tid = made["task"]["id"]
-            # The person must be able to read the task by every rule a read checks, or the question would reach
-            # them (Slack, mail) while the task stays hidden from them.
-            try:
-                auth.task_row(c, auth.identity_for_actor(c, person), H.task(c, tid))
-            except Problem as exc:
-                raise unreadable(person) from exc
-            # The asking rules (hubdb.lint_question) on the question as the bot wrote it: no options is a Yes / No.
-            H.require_plain_question(c, who.actor, person, [asked])
-            choices = []
-            for option, item, digest in zip(options, decoded, stored):
-                choice = {"label": option.label, **({"description": option.description} if option.description else {}),
-                          **({"then": option.then} if option.then else {}),
-                          **({"recommended": True} if option.recommended else {})}
-                if item:
-                    data, name, kind = item
-                    blob = register(c, who, digest, len(data), name, kind)
-                    fid, number = files.attach_task(c, who, tid, blob, digest, H.actor_id(who.actor))
-                    c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, blob["id"]))
-                    c.execute("INSERT INTO blob_media(blob_id,poster_blob_id) VALUES(?,NULL)", (blob["id"],))
-                    H._task_event(c, tid, who.actor, "file", None, blob["name"], "")
-                    choice["file"] = f"{fid}@{number}"
-                choices.append(choice)
-            from .task_review import check_ask
-            ask = check_ask(c, tid, M.ReviewAsk(questions=[M.ReviewQuestion(
-                id="decision", header="", question=question, why=body.why.strip(), options=choices,
-                multi=body.multi)], who=person, if_no_answer=body.if_no_answer), auth, who, lint=False)
-            if topic:
-                ask["topic"] = topic
-            gate = None
-            if found:
-                said = H.fold_question(c, who.actor, found, question, ask, title=body.title, body=body.body)
-            else:
-                # Judged against the plate before the question is on it.
-                gate = ask_ingest.apply(c, ingest) if ask_ingest.matches(ingest, person) else None
-                said = H.task_comment(c, who.actor, tid, question, ask=ask)
-                if gate:
-                    ask_ingest.record(c, ingest, gate, tid, said["id"])
-                if gate and gate["acts"]:
-                    H.task_ask_resolve(c, who.actor, tid, said["id"])
-                else:
-                    H.task_update(c, who.actor, tid, status="waiting", waiting_on=person, note=question)
-            return {"task": H.task(c, tid), "folded": bool(found),
-                    "question": next(m for m in H.task_comments(c, tid, actor=who.actor) if m["id"] == said["id"]),
-                    **ask_ingest.reply(gate)}
-        result = mutate(request, body, work)
+        option_files = [(len(item[0]), item[1], item[2]) if item else None for item in decoded]
+        checked = review_seal if rc and body.review else None
+        from . import ask_ingest
+        result = ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: question_write(
+            c, who, body, option_files, stored, ingest, snapshots, rc, checked)))
         app.state.file_metadata.wake.set()
         return result
+
+    def question_review_preflight(who, body):
+        """What a review question's files show, read for the check outside the write as the write resolves them, and
+        its seal (question_review_digest); ("", None) when it has none. Files it cannot read seal as "", which no
+        digest equals: the write refuses them as it resolves them, or as `changed` once they resolve unchecked."""
+        from . import file_reviews
+        if not body.review:
+            return "", None
+        with store.read() as c:
+            try:
+                person, _ = question_checked(c, who, body)
+                review, attachments = file_reviews.resolve(c, auth, blobs, who, person, body.review)
+            except Problem:
+                return "", ""
+            text = question_review_text(review, attachments, body)
+            return text, question_review_digest(text, review)
+
+    def question_audience(c, bot, replay):
+        return [H.resolve_actor(c, replay["body"]["on"])]
+
+    def question_prepare(store_, bot, replay):
+        """Outside the write, as the route runs them: ask ingest's preflight, and the review gate's fresh read for a
+        question titled for a review step under a Dev ticket (the PR's head and checks as they are now)."""
+        body = M.TaskQuestion.model_validate(replay["body"])
+        out = {"ingest": question_ingest(bot, body), "snapshots": None}
+        if body.parent:
+            try:
+                out["snapshots"] = review_preflight(bot, body.parent, child_title=(body.title or body.question.strip())
+                                                    .strip())
+            except Problem:
+                pass                    # the write's own review gate refuses it, the hold kept
+        return out
+
+    from . import org_rule_check as rule_checks
+
+    @rule_checks.replayer("task_question", prepare=question_prepare, audience=question_audience)
+    def question_replay_write(c, bot, hold, replay, ingest, gate=None):
+        # The bytes of option files were stored before the hold; the replay registers them by digest. `ingest` is
+        # question_prepare's: ask ingest's preflight and the review gate's snapshots.
+        prepared = ingest or {}
+        body = M.TaskQuestion.model_validate(replay["body"])
+        if body.review and not replay.get("review"):
+            # Held without a seal of what its files showed: asking it would show files no check read.
+            raise Problem("changed", "The files under review changed since the question was checked; ask it again",
+                          409)
+        return question_write(c, bot, body,
+                              [tuple(f) if f else None for f in replay.get("files") or []], replay.get("stored") or [],
+                              prepared.get("ingest"), prepared.get("snapshots"), rule_checks.decided(gate),
+                              replay.get("review"))
 
     @app.get("/api/v2/tasks/{tid}/files")
     def task_files(request: Request, tid: str):
@@ -779,14 +985,14 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         def work(c):
             task = comment_rights(c, auth, who, tid)
             item = register(c, who, digest, size, body.name, content_type)
-            bot_actor = next((a for a in (who.actor, task["owner"], task["requester"]) if H.is_bot(a)), None)
+            bot_actor = next((a for a in (who.actor, task["owner_id"], task["requester_id"]) if H.is_bot(a)), None)
             fid, number = files.attach_task(c, who, tid, item, digest,
                                            H.actor_id(bot_actor) if bot_actor else default_bot(c, store.settings))
             c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, item["id"]))
             if body.note is not None or body.ask is not None:
                 edit_version(c, auth, who, tid, fid, number,
                              M.FileVersionEdit(note=body.note, ask=body.ask))
-            c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), tid))
+            c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), tid))
             # The task's own activity says a file was added, as it says a link was.
             preview = register(c, who, **poster)["id"] if poster else None
             file_added(c, who, tid, item, number, preview)
@@ -813,14 +1019,14 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
     def sources(request: Request):
         human_only(request.state.identity)
         with store.read() as c:
-            row = c.execute("SELECT last_success,last_error,detail_json FROM service_health "
+            row = c.execute("SELECT last_succeeded_at,last_error,detail FROM service_health "
                             "WHERE service='recording:close'").fetchone()
-            detail = json.loads(row["detail_json"] or "{}") if row else {}
+            detail = json.loads(row["detail"] or "{}") if row else {}
             if not row:
                 status = "needs_setup"
-            elif row["last_error"] and (not row["last_success"] or row["last_error"] >= row["last_success"]):
+            elif row["last_error"] and (not row["last_succeeded_at"] or row["last_error"] >= row["last_succeeded_at"]):
                 status = "error"
-            elif row["last_success"] and row["last_success"] >= H.shift(H.now(), minutes=-15):
+            elif row["last_succeeded_at"] and row["last_succeeded_at"] >= H.shift(H.now(), minutes=-15):
                 status = "syncing"
             else:
                 status = "delayed"
@@ -829,20 +1035,20 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             for r in c.execute("SELECT source FROM meeting_importers WHERE enabled=1"):
                 if r["source"] not in IMPORTERS:
                     continue
-                health = c.execute("SELECT last_success,last_error,detail_json FROM service_health WHERE service=?",
+                health = c.execute("SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service=?",
                                    ("recording:" + r["source"],)).fetchone()
-                detail = json.loads(health["detail_json"] or "{}") if health else {}
+                detail = json.loads(health["detail"] or "{}") if health else {}
                 state = status_of(True, health, IMPORTERS[r["source"]]["interval"], H.now())
                 extra.append({"id": r["source"], "name": IMPORTERS[r["source"]]["name"],
                               "status": "needs_setup" if state == "waiting" else state,
-                              "last_success": health["last_success"] if health else None,
+                              "last_succeeded_at": health["last_succeeded_at"] if health else None,
                               "last_attempt": detail.get("last_attempt"), "last_import": detail.get("last_import"),
                               "pending": 0, "imported": detail.get("imported_total", 0),
                               "error_code": detail.get("error_code", "")})
             return {"sources": [
-                {"id": "import", "name": "Import", "status": "available", "last_success": None},
+                {"id": "import", "name": "Import", "status": "available", "last_succeeded_at": None},
                 {"id": "close", "name": "Close", "status": status,
-                 "last_success": row["last_success"] if row else None,
+                 "last_succeeded_at": row["last_succeeded_at"] if row else None,
                  "last_attempt": detail.get("last_attempt"), "last_import": detail.get("last_import"),
                  "pending": detail.get("pending", 0),
                  "imported": detail.get("imported", 0), "error_code": detail.get("error_code", "")},
@@ -856,7 +1062,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             raise Problem("review", "review is pending, live or dismissed", 422)
         with store.read() as c:
             rows = []
-            for r in c.execute("SELECT id FROM meetings ORDER BY created DESC"):
+            for r in c.execute("SELECT id FROM meetings ORDER BY created_at DESC"):
                 try:
                     item = view(c, who, r[0])
                 except Problem:
@@ -877,7 +1083,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
     def versions(request: Request, rid: str):
         with store.read() as c:
             authorized(c, request.state.identity, rid)
-            return {"versions": [{**dict(row), "metadata": json.loads(row["metadata_json"])}
+            return {"versions": [{**dict(row), "metadata": json.loads(row["metadata"])}
                                  for row in c.execute("SELECT * FROM meeting_versions WHERE meeting_id=? ORDER BY id DESC", (rid,))]}
 
     @app.post("/api/notes")
@@ -888,7 +1094,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         def work(c):
             meta = new_note(c, request.state.identity, body, uploads)
             if request.url.path == "/api/send":
-                return deliver(c, auth, request.state.identity, meta["id"], Send(slug=body.slug), [])
+                return deliver(c, auth, request.state.identity, meta["id"], Send(bot_id=body.bot_id), [])
             return view(c, request.state.identity, meta["id"])
         return await asyncio.to_thread(write, request, body, uploads, work)
 
@@ -911,6 +1117,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             return view(c, request.state.identity, rid)
         return await asyncio.to_thread(write, request, body, uploads, work)
 
+    @app.post("/api/v2/meetings/{rid}/edit")
     @app.post("/api/meetings/{rid}/edit")
     def edit(request: Request, rid: str, body: Edit):
         def work(c):

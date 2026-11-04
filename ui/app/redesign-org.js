@@ -1,15 +1,15 @@
 /* ui/app/redesign-org.js — Strategy › Org (redesign PLAN §6 wave 6): the org chart, top down, the same chart on a phone
    (pinch and pan) and a desktop. The owner on top; under them the teammates outside groups and every top-level group,
    a group a dashed outline with its name on a tab that folds it. Inside a group the lead comes first and teammates hang
-   under whoever they report to. Helpers (BotOps, the Librarian, Assistants, message bots) are off
-   the chart. Tapping a teammate opens a sheet: their home group, and Move to… for the owner (any group) and a lead (the
+   under whoever they report to. Helpers (the Assistants and those behind them, message bots) are off the chart.
+   Tapping a teammate opens a sheet: their home group, and Move to… for the owner (any group) and a lead (the
    groups it leads), which moves them at once (PATCH /api/v2/groups/{id}). Anyone else sees the group only; org changes
-   beyond that are the Strategy Bot's to suggest in words and to make when the person asks it (redesign CONTRACT §3).
+   beyond that are asked of the person's Assistant, in words (redesign CONTRACT §3).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 const RDO_FOLDED_KEY = 'tico.org.chart.folded';
-let RDO = null;             // {groups: [GET /v2/groups rows], zoom, folded: Set of group ids}
+let RDO = null;             // {groups: [GET /v2/groups rows], zoom, folded: Set of group ids, manual: zoomed or panned by hand}
 let RDO_SEQ = 0;
 const rdoFoldedLoad = () => { try { return new Set(JSON.parse(localStorage.getItem(RDO_FOLDED_KEY) || '[]')); } catch { return new Set(); } };
 const rdoFoldedSave = () => { try { localStorage.setItem(RDO_FOLDED_KEY, JSON.stringify([...RDO.folded])); } catch {} };
@@ -19,9 +19,9 @@ const rdoFoldedSave = () => { try { localStorage.setItem(RDO_FOLDED_KEY, JSON.st
 const rdoGroups = () => RDO?.groups || S.orgGroups || [];
 const rdoGroup = id => rdoGroups().find(g => g.id === id) || (S.orgGroups || []).find(g => g.id === id) || null;
 const rdoGroupName = id => id ? rdoGroup(id)?.name || id : 'No group';
-const rdoRef = n => n.kind === 'person' ? 'person:' + n.id : 'bot:' + n.name;
-const rdoKey = n => n.kind === 'group' ? 'g:' + n.id : n.kind === 'person' ? 'p:' + n.id : 'b:' + n.name;
-const rdoName = n => n.kind === 'group' ? n.name : n.kind === 'person' ? (n.person?.name || n.id) : botDisplayName(n.name);
+const rdoRef = n => n.kind === 'person' ? 'person:' + n.id : 'bot:' + n.id;
+const rdoKey = n => n.kind === 'group' ? 'g:' + n.id : n.kind === 'person' ? 'p:' + n.id : 'b:' + n.id;
+const rdoName = n => n.kind === 'group' ? n.name : n.kind === 'person' ? (n.person?.name || n.id) : botDisplayName(n.id);
 function rdoRefName(ref) {
   const [kind, id] = [String(ref).split(':')[0], String(ref).slice(String(ref).indexOf(':') + 1)];
   if (kind === 'person' || kind === 'human') return (S.people || []).find(p => p.id === id)?.name || id;
@@ -30,7 +30,7 @@ function rdoRefName(ref) {
 // A teammate's home group: the `team` its roster row carries (backend/groups.py).
 function rdoHome(ref) {
   const id = ref.slice(ref.indexOf(':') + 1);
-  return (ref.startsWith('person:') ? (S.people || []).find(p => p.id === id)?.team : (S.emps || []).find(e => e.name === id)?.team) || '';
+  return (ref.startsWith('person:') ? (S.people || []).find(p => p.id === id)?.team : botRow(id)?.team) || '';
 }
 const rdoLeadOf = ref => rdoGroups().filter(g => g.lead === ref).map(g => g.id);
 // The leads of a group and of every group above it.
@@ -49,20 +49,26 @@ function rdoMoveTargets(from) {
 }
 
 // ----------------------------------------------------------------- the tree
-// The sidebar's chart (orgTreeByParent: groups, reports_to) without helpers (the Strategy Bot too) and recruiting seats.
-function rdoTree() {
-  const by = orgTreeWithHelpers(orgTreeByParent()), out = {};
-  for (const [k, kids] of Object.entries(by)) out[k] = kids.filter(n => n.kind !== 'seat' && !(n.kind === 'group' && n.helpers));
-  return out;
+// The sidebar's chart (orgTreeByParent: groups, reports_to) without helpers (the Strategy Bot too) and recruiting seats,
+// drawn as an org chart: the top person (the owner nobody is above, wherever their group is) at the root, and every
+// top-level group under the one it answers to (orgGroupHead), so a department sits under the person who runs it.
+// The top person's own group is the top of the chart, not an outline: whoever is in it hangs from them. `leadOf` gives a
+// group's lead (Rules › Internal reads the groups itself).
+function rdoTree(leadOf = id => rdoGroup(id)?.lead || '') {
+  const by = {};
+  for (const [k, kids] of Object.entries(orgTreeWithHelpers(orgTreeByParent()))) by[k] = kids.filter(n => n.kind !== 'seat' && !(n.kind === 'group' && n.helpers));
+  orgChartShape(by, rdoKey, leadOf);
+  by[''] = by[''] || [];
+  return by;
 }
+const rdoTopPerson = () => orgChartTop();
 function rdoTop(by) {
-  const roots = (by[''] || []).filter(n => n.kind === 'person');
-  return roots.find(n => n.id === S.me?.owner_id) || roots.find(n => n.person?.role === 'owner') || roots[0] || null;
+  const roots = (by[''] || []).filter(n => n.kind === 'person'), person = rdoTopPerson();
+  return roots.find(n => n.id === person?.id) || roots.find(n => n.id === S.me?.owner_id) || roots.find(n => n.person?.role === 'owner') || roots[0] || null;
 }
-// Teammates first (in the chart's order), then groups by their order; in a group its lead first.
-function rdoSorted(kids, gid) {
-  const lead = gid ? rdoGroup(gid)?.lead : '';
-  const rank = n => n.kind === 'group' ? 2 : lead && rdoRef(n) === lead ? 0 : 1;
+// People first, then teammates (in the chart's order), then groups by their order; in a group its lead first.
+function rdoSorted(kids, gid, lead = gid ? rdoGroup(gid)?.lead : '') {
+  const rank = n => n.kind === 'group' ? 2 : lead && rdoRef(n) === lead ? -1 : n.kind === 'person' ? 0 : 1;
   return kids.map((n, i) => [n, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || (a[0].kind === 'group' && b[0].kind === 'group' ? (a[0].order || 0) - (b[0].order || 0) : 0) || a[1] - b[1]).map(x => x[0]);
 }
 function rdoCount(by, key, seen = new Set()) {
@@ -75,19 +81,27 @@ function rdoCount(by, key, seen = new Set()) {
 function rdoCard(n, {top = false} = {}) {
   const ref = rdoRef(n), name = rdoName(n);
   const lead = rdoLeadOf(ref).length > 0;
-  const bot = n.kind === 'bot' ? (S.emps || []).find(e => e.name === n.name) : null;
-  const role = top ? 'Owner' : lead ? 'Lead' : String(bot?.role || '').trim().length <= 24 ? String(bot?.role || '').trim() : '';
-  const av = n.kind === 'person' ? personAvatar(n.person || {name}, 16) : avatar(n.name, 16);
-  const cls = ['rdo-card', top && 'top', lead && 'lead'].filter(Boolean).join(' ');
-  return `<button type="button" class="${cls}" data-rdo-ref="${esc(ref)}" aria-label="${esc(name)}" title="${esc(name)}"><b>${esc(name)}</b>
+  const bot = n.kind === 'bot' ? botRow(n.id) : null;
+  const title = n.kind === 'person' ? String(n.person?.title || '').trim() : '';
+  const role = title || (top ? 'Owner' : lead ? 'Lead' : String(bot?.role || '').trim().length <= 24 ? String(bot?.role || '').trim() : '');
+  const av = n.kind === 'person' ? personAvatar(n.person || {name}, 16) : avatar(n.id, 16);
+  const cls = ['rdo-card', n.kind === 'person' && 'person', top && 'top', lead && 'lead'].filter(Boolean).join(' ');
+  const label = title ? `${name} · ${title}` : name;
+  return `<button type="button" class="${cls}" data-rdo-ref="${esc(ref)}" aria-label="${esc(label)}" title="${esc(label)}"><b>${esc(name)}</b>
     <span class="rdo-r">${av}${role ? `<span class="rdo-rl">${esc(role)}</span>` : ''}</span></button>`;
 }
-// A teammate and, under it on a rail, whoever reports to it inside the same group.
+// A teammate and, under it on a rail, whoever reports to it inside the same group. A person who heads people or groups
+// has them side by side underneath instead, as the top person does. `ctx.group` draws a group in place of
+// rdoGroupBlock (Rules › Internal: always open, its tab selects it).
 function rdoNode(by, n, ctx, depth) {
   if (depth > 14 || ctx.seen.has(rdoKey(n))) return '';
   ctx.seen.add(rdoKey(n));
-  if (n.kind === 'group') return rdoGroupBlock(by, n, ctx, depth);
+  if (n.kind === 'group') return (ctx.group || rdoGroupBlock)(by, n, ctx, depth);
   const kids = rdoSorted(by[rdoKey(n)] || [], '');
+  if (n.kind === 'person' && kids.some(k => k.kind === 'person' || k.kind === 'group')) {
+    const cols = kids.map(k => rdoNode(by, k, ctx, depth + 1)).filter(Boolean);
+    return `<div class="rdo-br"><div class="rdo-top has-row">${rdoCard(n, ctx)}</div><ul class="rdo-row">${cols.map(c => `<li>${c}</li>`).join('')}</ul></div>`;
+  }
   const stack = kids.length ? `<ul class="rdo-stack">${kids.map(k => `<li class="${k.kind === 'group' ? 'is-g' : ''}">${rdoNode(by, k, ctx, depth + 1)}</li>`).join('')}</ul>` : '';
   return rdoCard(n, ctx) + stack;
 }
@@ -96,36 +110,25 @@ function rdoGroupBlock(by, g, ctx, depth) {
   const count = rdoCount(by, 'g:' + g.id);
   const body = kids.map(k => `<div class="rdo-gi${k.kind === 'group' ? ' is-g' : ''}">${rdoNode(by, k, ctx, depth + 1)}</div>`).join('');
   return `<section class="rdo-g${folded ? ' folded' : ''}" data-rdo-group="${esc(g.id)}">
-    <button type="button" class="rdo-tab" data-rdo-fold="${esc(g.id)}" aria-expanded="${folded ? 'false' : 'true'}" title="${esc(g.name)}"><span class="rdo-tn">${esc(g.name)}</span>${folded ? `<span class="rdo-n">${count}</span>` : ''}</button>
+    <button type="button" class="rdo-tab" data-rdo-fold="${esc(g.id)}" aria-expanded="${folded ? 'false' : 'true'}" title="${esc(g.name)}"><span class="rdo-cx" aria-hidden="true">›</span><span class="rdo-tn">${esc(g.name)}</span><span class="rdo-n">${count}</span></button>
     <div class="rdo-gb">${body}</div></section>`;
 }
-function rdoChartHtml() {
-  const by = rdoTree(), top = rdoTop(by);
-  const ctx = {seen: new Set()};
-  const row = top ? [...(by[rdoKey(top)] || []), ...(by[''] || []).filter(n => n !== top)] : (by[''] || []);
+function rdoChartHtml(by = rdoTree(), ctx = {seen: new Set()}) {
+  const top = rdoTop(by);
+  const row = top ? [...(by[rdoKey(top)] || []), ...(by[''] || []).filter(n => rdoKey(n) !== rdoKey(top))] : (by[''] || []);
   if (top) ctx.seen.add(rdoKey(top));
   const cols = rdoSorted(row, '').map(n => rdoNode(by, n, ctx, 0)).filter(Boolean);
   if (!top && !cols.length) return '<p class="muted rd-empty">No one on the chart yet.</p>';
   return (top ? `<div class="rdo-top${cols.length ? ' has-row' : ''}">${rdoCard(top, {top: true})}</div>` : '')
     + (cols.length ? `<ul class="rdo-row">${cols.map(c => `<li>${c}</li>`).join('')}</ul>` : '');
 }
-function rdoDraw() {
+function rdoDraw({refit = false} = {}) {
   const cv = $('#rdo-cv'), pane = $('#rdo-pane');
   if (!cv || !pane) return;
   cv.innerHTML = rdoChartHtml();
   rdoFitHeight();
-  if (RDO.zoom == null) {
-    // First look: the whole width when it fits with names still readable (12px or more), else readable, centred on
-    // the owner, and panned by dragging.
-    cv.style.zoom = 1;
-    const fit = (pane.clientWidth - 2) / Math.max(1, cv.scrollWidth);
-    const name = parseFloat(getComputedStyle(cv.querySelector('.rdo-card b') || cv).fontSize) || 13;
-    RDO.zoom = Math.max(0.85, 12 / name, Math.min(1, fit));
-    rdoZoom(RDO.zoom);
-    rdoCentre();
-    return;
-  }
-  rdoZoom(RDO.zoom);
+  if (RDO.zoom == null || (refit && !RDO.manual)) rdoFit();
+  else rdoSize();
 }
 // On a phone the chart's frame runs down to the tab bar, so the page itself does not scroll.
 function rdoFitHeight() {
@@ -135,24 +138,96 @@ function rdoFitHeight() {
   const bar = $('#mobile-nav'), bottom = bar && bar.getClientRects().length ? bar.getBoundingClientRect().top : innerHeight;
   pane.style.height = Math.max(240, Math.floor(bottom - pane.getBoundingClientRect().top - 12)) + 'px';
 }
-// The owner's card in the middle of the frame, across.
-function rdoCentre() {
-  const pane = $('#rdo-pane'), top = $('#rdo-cv .rdo-card.top');
-  if (!pane || !top) return;
-  const a = top.getBoundingClientRect(), b = pane.getBoundingClientRect();
-  pane.scrollLeft += (a.left + a.width / 2) - (b.left + b.width / 2);
+
+// The chart is scaled with a transform, which leaves its layout box alone, so a sizer under it holds the scaled size for
+// the pane to scroll: at least the pane's width (a narrower chart sits in its middle), else the chart plus RDO_PAD a side,
+// so the first and last columns show whole when panned to either end.
+const RDO_PAD = 12;
+const rdoMotion = () => !matchMedia('(prefers-reduced-motion: reduce)').matches;
+// The transform as painted now, mid-transition too, so a zoom that interrupts another starts from what is on screen.
+function rdoNow() {
+  const t = getComputedStyle($('#rdo-cv')).transform;
+  if (!t || t === 'none') return {s: RDO.zoom || 1, x: 0, y: 0};
+  const m = new DOMMatrixReadOnly(t);
+  return {s: m.a, x: m.e, y: m.f};
 }
-function rdoZoom(z, at) {
+function rdoLayout(z) {
+  const cv = $('#rdo-cv'), sz = $('#rdo-sz'), pane = $('#rdo-pane');
+  RDO.cvW = cv.offsetWidth; RDO.cvH = cv.offsetHeight;
+  const w = cv.offsetWidth * z, h = cv.offsetHeight * z, width = Math.max(pane.clientWidth, Math.ceil(w + 2 * RDO_PAD));
+  sz.style.width = width + 'px'; sz.style.height = Math.ceil(h) + 'px';
+  return {x: (width - w) / 2, y: 0, s: z};
+}
+// Paint the chart at `at`. Animated, it first takes back the scroll the zoom just made (so nothing jumps), then eases to
+// `at`; the point under the fingers or the pane's middle stays put the whole way, as both ends hold it there.
+function rdoPaint(at, from) {
+  const cv = $('#rdo-cv'), end = `translate(${at.x}px,${at.y}px) scale(${at.s})`;
+  cv.style.transition = 'none';
+  if (from && rdoMotion()) {
+    cv.style.transform = `translate(${from.x}px,${from.y}px) scale(${from.s})`;
+    void cv.offsetWidth;
+    cv.style.transition = '';
+  }
+  cv.style.transform = end;
+  const pct = $('#rdo-pct');
+  if (pct) pct.textContent = Math.round(at.s * 100) + '%';
+}
+// The chart changed size (a fold, a redraw) or the pane did: lay it out again at the same zoom.
+function rdoSize() {
+  if (RDO?.zoom == null || !$('#rdo-cv')) return;
+  rdoPaint(rdoLayout(RDO.zoom));
+}
+// The whole width when it fits with names still readable (12px or more), the owner then over the middle of its row; else
+// readable and the owner in the middle of the frame, the rest a drag away.
+function rdoFit({animate = false} = {}) {
   const cv = $('#rdo-cv'), pane = $('#rdo-pane');
   if (!cv || !pane) return;
-  const old = Number(cv.style.zoom) || 1;
+  const name = parseFloat(getComputedStyle(cv.querySelector('.rdo-card b') || cv).fontSize) || 13;
+  const fit = (pane.clientWidth - 2 * RDO_PAD) / Math.max(1, cv.offsetWidth);
+  const readable = Math.ceil(12 / name * 1000) / 1000;
+  RDO.manual = false;
+  rdoZoom(fit >= readable ? Math.min(1, fit) : readable, {animate, centre: true});
+}
+function rdoZoom(z, {at, animate = false, centre = false} = {}) {
+  const cv = $('#rdo-cv'), pane = $('#rdo-pane');
+  if (!cv || !pane) return;
   z = Math.max(0.35, Math.min(1.6, z));
-  // Keep the point under the fingers (or the pane's middle) where it was.
+  const now = RDO.zoom == null ? null : rdoNow(), left = pane.scrollLeft, top = pane.scrollTop;
   const mx = at ? at.x : pane.clientWidth / 2, my = at ? at.y : pane.clientHeight / 2;
-  const cx = (pane.scrollLeft + mx) / old, cy = (pane.scrollTop + my) / old;
+  const owner = centre && cv.querySelector('.rdo-card.top');
   RDO.zoom = z;
-  cv.style.zoom = z;
-  pane.scrollLeft = cx * z - mx; pane.scrollTop = cy * z - my;
+  const lay = rdoLayout(z);
+  if (centre) {
+    // The owner's middle in the chart's own (unscaled) pixels.
+    let x = cv.offsetWidth / 2;
+    if (owner) { x = owner.offsetWidth / 2; for (let el = owner; el && el !== cv; el = el.offsetParent) x += el.offsetLeft; }
+    pane.scrollLeft = lay.x + x * z - pane.clientWidth / 2;
+    pane.scrollTop = 0;
+  } else if (now) {
+    // Keep the point under the fingers (or the pane's middle) where it was.
+    pane.scrollLeft = lay.x + (left + mx - now.x) / now.s * z - mx;
+    pane.scrollTop = lay.y + (top + my - now.y) / now.s * z - my;
+  }
+  rdoPaint(lay, animate && now ? {x: now.x + pane.scrollLeft - left, y: now.y + pane.scrollTop - top, s: now.s} : null);
+}
+
+// Fold or unfold a group where it stands: folding fades and lifts its teammates out, then the outline closes; unfolding
+// opens the outline, then fades them in. The height changes at once; only opacity and transform move.
+function rdoFold(id) {
+  RDO.folded.has(id) ? RDO.folded.delete(id) : RDO.folded.add(id);
+  rdoFoldedSave();
+  const fold = RDO.folded.has(id);
+  const g = $(`#rdo-cv .rdo-g[data-rdo-group="${CSS.escape(id)}"]`), tab = g?.querySelector(':scope>.rdo-tab'), body = g?.querySelector(':scope>.rdo-gb');
+  if (!g || !tab || !body) { rdoDraw(); return; }
+  tab.setAttribute('aria-expanded', String(!fold));
+  body.getAnimations().forEach(a => a.cancel());
+  const set = () => { g.classList.toggle('folded', RDO.folded.has(id)); rdoSize(); };
+  if (!rdoMotion()) { set(); return; }
+  const css = getComputedStyle(document.documentElement);
+  const timing = {duration: parseFloat(css.getPropertyValue('--dur')) || 180, easing: css.getPropertyValue('--ease').trim() || 'ease-out'};
+  const hidden = {opacity: 0, transform: 'translateY(-6px)'}, shown = {opacity: 1, transform: 'none'};
+  if (fold) body.animate([shown, hidden], timing).onfinish = set;
+  else { set(); body.animate([hidden, shown], timing); }
 }
 
 // ----------------------------------------------------------------- the page
@@ -160,18 +235,23 @@ async function pageRdOrg() {
   const main = $('#main'), seq = ++RDO_SEQ;
   main.classList.add('strategy-layout', 'rd-org-layout');
   RDO ||= {groups: null, zoom: null, folded: rdoFoldedLoad()};
-  RDO.zoom = null;
-  main.innerHTML = strategyHeadHtml('org') + `<div class="rdo-wrap"><div class="rdo-pane" id="rdo-pane"><div class="rdo-cv rd-org" id="rdo-cv"></div></div>
-      <div class="rdo-zoom" role="group" aria-label="Zoom"><button type="button" class="ghost" data-rdo-zoom="out" aria-label="Zoom out">−</button>
-        <button type="button" class="ghost" data-rdo-zoom="in" aria-label="Zoom in">+</button></div></div>`;
+  RDO.zoom = null; RDO.manual = false;
+  main.innerHTML = strategyHeadHtml('org') + `<div class="rdo-wrap">
+      <div class="rdo-bar" role="toolbar" aria-label="Zoom"><button type="button" class="ghost" data-rdo-zoom="out" aria-label="Zoom out">−</button>
+        <span class="rdo-pct" id="rdo-pct" aria-hidden="true">100%</span>
+        <button type="button" class="ghost" data-rdo-zoom="in" aria-label="Zoom in">+</button>
+        <button type="button" class="ghost rdo-fit" data-rdo-zoom="fit" title="Fit the chart to the frame">Fit</button></div>
+      <div class="rdo-pane" id="rdo-pane"><div class="rdo-sz" id="rdo-sz"><div class="rdo-cv rd-org" id="rdo-cv"></div></div></div></div>`;
   rdoWire($('#rdo-pane'));
   window.removeEventListener('resize', rdoFitHeight); window.addEventListener('resize', rdoFitHeight);
   rdoDraw();
+  // Once the web font is in (or given up on), fit again: names in another face measure differently.
+  document.fonts?.ready.then(() => { if (seq === RDO_SEQ && $('#rdo-cv') && !RDO.manual) rdoFit(); });
   // The groups with their leads.
   const groups = await get('/v2/groups').catch(() => null);
   if (seq !== RDO_SEQ || !$('#rdo-cv')) return;
   if (groups) RDO.groups = Array.isArray(groups) ? groups : groups.groups || [];
-  rdoDraw();
+  rdoDraw({refit: true});
 }
 // After a move: the roster (homes) and the groups (leads) again.
 async function rdoReload() {
@@ -182,6 +262,28 @@ async function rdoReload() {
 }
 
 function rdoWire(pane) {
+  // A new width, or the chart changing size on its own (a web font arriving), fits it again unless the person has zoomed
+  // or panned since the last fit; a fold or a redraw has laid it out already. A frame later, so the change is not made
+  // inside the observer's own pass.
+  RDO.ro?.disconnect();
+  let width = 0, queued = false;
+  RDO.ro = new ResizeObserver(() => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      if (!pane.isConnected) { RDO.ro?.disconnect(); return; }
+      // The pane's own height follows the chart, so only its width counts, and its outer width at that: a scrollbar
+      // coming or going is not a new frame, and refitting on it could see-saw. Anything else would cut a zoom's easing short.
+      const cv = $('#rdo-cv'), w = pane.offsetWidth, wider = width && w !== width;
+      const moved = RDO.cvW != null && cv.offsetWidth !== RDO.cvW, taller = RDO.cvH != null && cv.offsetHeight !== RDO.cvH;
+      width = w;
+      if ((wider || moved) && !RDO.manual) rdoFit();
+      else if (wider || moved || taller) rdoSize();
+    });
+  });
+  RDO.ro.observe(pane); RDO.ro.observe($('#rdo-cv'));
+  const byHand = () => { RDO.manual = true; };
   // Pinch to zoom; one finger pans the pane natively (touch-action: pan-x pan-y).
   let pinch = null;
   const mid = (t, box) => ({x: (t[0].clientX + t[1].clientX) / 2 - box.left, y: (t[0].clientY + t[1].clientY) / 2 - box.top});
@@ -190,8 +292,10 @@ function rdoWire(pane) {
   pane.addEventListener('touchmove', ev => {
     if (!pinch || ev.touches.length !== 2) return;
     ev.preventDefault();
-    rdoZoom(pinch.z * dist(ev.touches) / pinch.d, mid(ev.touches, pane.getBoundingClientRect()));
+    byHand();
+    rdoZoom(pinch.z * dist(ev.touches) / pinch.d, {at: mid(ev.touches, pane.getBoundingClientRect())});
   }, {passive: false});
+  pane.addEventListener('touchmove', byHand, {passive: true});
   pane.addEventListener('touchend', ev => { if (ev.touches.length < 2) pinch = null; });
   // A mouse drags the chart about (a finger pans natively); a drag is not a tap on the card it started on.
   let drag = null;
@@ -203,7 +307,7 @@ function rdoWire(pane) {
     if (!drag) return;
     const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
     if (!drag.moved && Math.hypot(dx, dy) < 5) return;
-    drag.moved = true; pane.classList.add('dragging');
+    drag.moved = true; byHand(); pane.classList.add('dragging');
     pane.scrollLeft = drag.left - dx; pane.scrollTop = drag.top - dy;
   });
   const end = () => { if (drag?.moved) { pane.classList.remove('dragging'); pane.dataset.dragged = '1'; setTimeout(() => delete pane.dataset.dragged, 0); } drag = null; };
@@ -212,25 +316,25 @@ function rdoWire(pane) {
   pane.addEventListener('click', ev => { if (pane.dataset.dragged) { ev.stopPropagation(); ev.preventDefault(); } }, true);
   // A trackpad's pinch arrives as a wheel with ctrlKey.
   pane.addEventListener('wheel', ev => {
+    byHand();
     if (!ev.ctrlKey) return;
     ev.preventDefault();
     const box = pane.getBoundingClientRect();
-    rdoZoom(RDO.zoom * Math.exp(-ev.deltaY / 200), {x: ev.clientX - box.left, y: ev.clientY - box.top});
+    rdoZoom(RDO.zoom * Math.exp(-ev.deltaY / 200), {at: {x: ev.clientX - box.left - pane.clientLeft, y: ev.clientY - box.top - pane.clientTop}});
   }, {passive: false});
 }
 
 document.addEventListener('click', ev => {
   if (!ev.target.closest?.('.rd-org-layout')) return;
   const fold = ev.target.closest('[data-rdo-fold]');
-  if (fold) {
-    const id = fold.dataset.rdoFold;
-    RDO.folded.has(id) ? RDO.folded.delete(id) : RDO.folded.add(id);
-    rdoFoldedSave(); rdoDraw();
-    $(`[data-rdo-fold="${CSS.escape(id)}"]`)?.focus();
+  if (fold) { rdoFold(fold.dataset.rdoFold); return; }
+  const zoom = ev.target.closest('[data-rdo-zoom]');
+  if (zoom) {
+    const how = zoom.dataset.rdoZoom;
+    if (how === 'fit') rdoFit({animate: true});
+    else { RDO.manual = true; rdoZoom(RDO.zoom * (how === 'in' ? 1.25 : 0.8), {animate: true}); }
     return;
   }
-  const zoom = ev.target.closest('[data-rdo-zoom]');
-  if (zoom) { rdoZoom(RDO.zoom * (zoom.dataset.rdoZoom === 'in' ? 1.25 : 0.8)); return; }
   const card = ev.target.closest('[data-rdo-ref]');
   if (card) rdoSheet(card.dataset.rdoRef);
 });

@@ -20,7 +20,7 @@ const {unrouted} = require('./support/routes.cjs');
     const CHANGES = ['h1', 'o1', 'h2', 'h3', 'o2', 'h4', 'h5'].map((id, i) => ({
       id, bot: id.startsWith('h') ? 'helper' : 'ops', field: 'identity',
       before: {display_name: `Name ${i + 1}`, description: ''}, after: {display_name: `Name ${i + 2}`, description: ''},
-      actor: 'ana', via: '', transition_id: null, created: at(i * 10), undone_at: null, can_undo: true}));
+      actor: 'ana', via: '', transition_id: null, created_at: at(i * 10), undone_at: null, can_undo: true}));
     // A change still in progress: the owner's first page carries it, and no later page does.
     const PENDING = {id: 'tr1', bot: 'ops', kind: 'model', state: 'prepared', progress: {prepared: 0, total: 1},
       checkpoints: []};
@@ -31,7 +31,7 @@ const {unrouted} = require('./support/routes.cjs');
       return {changes: slice, next_before: start + 2 < rows.length ? slice.at(-1).id : null};
     };
     const bot = (name, display_name, revision) => ({name, display_name, description: '', status: 'active',
-      state: 'active', host: 'keeper', can_chat: true, can_manage: true, operator: 'ana',
+      state: 'active', host: 'keeper', can_chat: true, can_manage: true, owner_id: 'ana',
       my_access: {see: true, read: true, write: true}, schedules: [], revision, thread_mode: 'personal', users: [],
       online: true, machine: null});
     const bots = [bot('helper', 'Helper', 3), bot('ops', 'Ops', 5)];
@@ -125,6 +125,8 @@ const {unrouted} = require('./support/routes.cjs');
 
     // The owner's Changes: page one carries the change in progress; each Show older appends the next page.
     await page.goto('https://tico-ui.test/#/settings/history');
+    assert.deepEqual(await page.evaluate(() => [100000, 250000].map(tokens => settingsValue('compact_at', tokens))), ['100k', '250k'],
+      'a Compact at change is labelled with its size, 100k included');
     await page.locator('[data-history-view=changes]').click();
     await page.waitForFunction(() => location.hash === '#/settings/history?view=changes');
     await waitForChanges(owner, 2);
@@ -180,6 +182,17 @@ const {unrouted} = require('./support/routes.cjs');
     await page.evaluate(() => setDrawer(false));
     assert.equal(await showMore(card).isVisible(), true);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    // A role lost while the owner's controls are still painted hides Changes and CSV; the old Runs link still opens Runs.
+    await page.goto('https://tico-ui.test/#/settings/history?view=changes');
+    await waitForChanges(owner, 2);
+    await page.evaluate(() => { S.me.role = 'human'; S.me.bot_admin = false; settingsShow('runs'); });
+    assert.equal(await page.locator('#set-runs').isVisible(), true);
+    await page.evaluate(() => settingsHistoryShow('changes'));
+    await page.waitForFunction(() => document.querySelectorAll('#set-log .log-row:not(.log-head)').length === 1);
+    assert.equal(await page.locator('#set-history').isVisible(), false);
+    assert.equal(await page.locator('[data-history-view=changes]').isVisible(), false);
+    assert.equal(await page.locator('#set-log').isVisible(), true);
+    assert.equal(await page.locator('#log-csv').count(), 0);
     assert.deepEqual(errors, []);
     console.log('PASS: settings history pages: the Log from a filtered address; Show older on the owner Changes and a bot card; Undo on appended rows');
   } finally { await browser.close(); }

@@ -6,6 +6,7 @@ import pytest
 from backend import hubdb as H, task_blocked, task_relations as TR
 from backend.tests.test_review_gate import api, ticket, move, get
 from backend.tests.test_github import post
+from backend.tests.hold_rows import set_holds
 
 
 def _park_step(api, task):
@@ -24,15 +25,13 @@ def test_a_ticket_parked_by_hand_in_a_teams_waiting_step_stays_and_holds_never_l
     with api.app.state.store.transaction() as c:
         row = H.task(c, parked['id'])
         assert (row['step_id'], row['status'], row['blocked_kind']) == (step, 'waiting', 'manual')
-        # Neither the hourly sweep nor a restart moves it out: a person parked it.
-        H.sweep_stranded(c, H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1))
+        # A restart does not move it out: a person parked it.
         H.migrate(c)
         assert H.task(c, parked['id'])['step_id'] == step
         assert any(s['id'] == step for s in H.type_get(c, parked['type_id'])['steps'])
-        # A hold Tico finds goes to Blocked, never to the team's step.
+        # A hold Tico finds keeps the ticket in its step, and never moves it into the team's.
         task_blocked.hold(c, held['id'], 'Waiting on a dependency')
-        blocked = next(s['id'] for s in H.type_get(c, held['type_id'])['steps'] if s['name'] == 'Blocked')
-        assert H.task(c, held['id'])['step_id'] == blocked
+        assert (H.task(c, held['id'])['step_id'], H.task(c, held['id'])['status']) == (held['step_id'], 'waiting')
         # A status write on the parked ticket keeps it in its step.
         H._set_status(c, H.KEEPER, H.task(c, parked['id']), 'waiting', note='Still waiting')
         assert H.task(c, parked['id'])['step_id'] == step
@@ -42,17 +41,50 @@ def test_a_ticket_parked_by_hand_in_a_teams_waiting_step_stays_and_holds_never_l
         assert (row['status'], row['blocked_since']) == ('doing', None)
 
 
+def _without_step(api, task, step):
+    with api.app.state.store.transaction() as c:
+        typ = H.type_get(c, task['type_id'])
+        H.type_update(c, H.KEEPER, typ['id'], steps=[s for s in typ['steps'] if s['id'] != step])
+
+
+def test_deleting_a_waiting_step_returns_its_parked_ticket_to_the_step_it_left(api):
+    parked = ticket(api)
+    step = _park_step(api, parked)
+    assert move(api, parked, 'Waiting On Dependency').status_code == 200
+    _without_step(api, parked, step)
+    with api.app.state.store.transaction() as c:
+        row = H.task(c, parked['id'])
+        assert (row['step_id'], row['status'], row['blocked_since']) == (parked['step_id'], 'doing', None)
+
+
+def test_deleting_a_waiting_step_sends_a_ticket_whose_return_step_is_gone_to_on_deck(api):
+    parked = ticket(api)
+    step = _park_step(api, parked)
+    with api.app.state.store.transaction() as c:
+        typ = H.type_get(c, parked['type_id'])
+        H.type_update(c, H.KEEPER, typ['id'], steps=[{'name': 'On Deck', 'status': 'open'}, *typ['steps']])
+        deck = next(s['id'] for s in H.type_get(c, typ['id'])['steps'] if s['name'] == 'On Deck')
+    assert move(api, parked, 'Waiting On Dependency').status_code == 200
+    with api.app.state.store.transaction() as c:
+        set_holds(c, parked['id'], blocked_from_step='a step long gone')
+    _without_step(api, parked, step)
+    with api.app.state.store.transaction() as c:
+        row = H.task(c, parked['id'])
+        assert (row['step_id'], row['status'], row['blocked_since']) == (deck, 'open', None)
+
+
 def _dev(tmp_path):
     c = sqlite3.connect(tmp_path / 'hub.db', isolation_level=None)
     c.row_factory = sqlite3.Row
     H.migrate(c)
-    c.execute("INSERT INTO task_types(id,name,created,updated) VALUES('dev','Dev tickets','x','x')")
+    c.execute("INSERT INTO task_types(id,name,created_at,updated_at) VALUES('dev','Dev tickets','x','x')")
     for position, (ident, name, status) in enumerate([
             ('deck', 'On Deck', 'open'), ('progress', 'In Progress', 'doing'),
             ('staging', 'Pending Push To Staging', 'doing'), ('closed', 'Closed', 'closed')]):
         c.execute('INSERT INTO task_steps(id,type_id,name,position,status) VALUES(?,?,?,?,?)',
                   (ident, 'dev', name, position, status))
     for ident in ('retired', 'chosen'):
+        # Held in the working step they are in: a hold moves no ticket, so only its status says it waits.
         c.execute("INSERT INTO tasks(id,title,status,body,note,type_id,step_id) VALUES(?,?,'waiting','x','','dev','staging')",
                   (ident, 'A ticket'))
         H._task_event(c, ident, 'human:ana', 'step', 'progress', 'staging')
@@ -64,16 +96,15 @@ def _dev(tmp_path):
 def test_a_return_step_an_upgrade_made_resumes_at_on_deck_and_a_chosen_one_is_kept(tmp_path):
     c = _dev(tmp_path)
     H.migrate(c)
-    blocked = next(s['id'] for s in H.type_get(c, 'dev')['steps'] if s['name'] == 'Blocked')
     retired, chosen = H.task(c, 'retired'), H.task(c, 'chosen')
-    assert retired['step_id'] == chosen['step_id'] == blocked
+    assert retired['step_id'] == chosen['step_id'] == 'staging'
     assert (retired['blocked_from_step'], retired['blocked_from_status']) == (None, 'open')
     assert chosen['blocked_from_step'] == 'staging'
-    events = c.execute('SELECT count(*) FROM task_events').fetchone()[0]
+    events = c.execute("SELECT count(*) FROM history_events WHERE subject_type='task'").fetchone()[0]
     H.migrate(c)
-    assert c.execute('SELECT count(*) FROM task_events').fetchone()[0] == events
+    assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task'").fetchone()[0] == events
     for ident in ('retired', 'chosen'):
-        c.execute("UPDATE tasks SET blocked_kind='dependency' WHERE id=?", (ident,))
+        set_holds(c, ident, blocked_kind='dependency')
         task_blocked.reconcile(c, ident)
     assert H.task(c, 'retired')['step_id'] == 'deck'
     assert H.task(c, 'chosen')['step_id'] == 'staging'
@@ -104,19 +135,7 @@ def test_a_person_parking_a_held_ticket_in_a_teams_waiting_step_makes_the_hold_m
         assert (H.task(c, held['id'])['step_id'], H.task(c, held['id'])['status']) == (step, 'waiting')
 
 
-def test_the_stranded_sweep_leaves_a_ticket_a_person_parked_while_it_was_held(api):
-    held = ticket(api)
-    step = _park_step(api, held)
-    blocker = _held_on_a_blocker(api, held)
-    assert move(api, held, 'Waiting On Dependency').status_code == 200
-    with api.app.state.store.transaction() as c:
-        # The blocker finished without telling the ticket: only the sweep is left to notice.
-        c.execute("UPDATE tasks SET status='done' WHERE id=?", (blocker['id'],))
-        H.sweep_stranded(c, H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1))
-        assert H.task(c, held['id'])['step_id'] == step
-
-
-def test_an_upgrade_parks_a_bots_ticket_in_a_teams_waiting_step_on_any_board_and_the_sweep_leaves_it(api):
+def test_an_upgrade_parks_a_bots_ticket_in_a_teams_waiting_step_on_any_board(api):
     with api.app.state.store.transaction() as c:
         typ = H.type_create(c, H.KEEPER, 'Content', [{'name': 'Drafting', 'status': 'doing'},
                                                      {'name': 'Waiting On Review', 'status': 'waiting'}])
@@ -128,7 +147,6 @@ def test_an_upgrade_parks_a_bots_ticket_in_a_teams_waiting_step_on_any_board_and
         c.execute("UPDATE tasks SET status='waiting', step_id=? WHERE id=?", (step, task['id']))
         H.migrate(c)
         assert H.task(c, task['id'])['blocked_kind'] == 'manual'
-        H.sweep_stranded(c, H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1))
         assert (H.task(c, task['id'])['step_id'], H.task(c, task['id'])['status']) == (step, 'waiting')
 
 
@@ -136,7 +154,7 @@ def test_a_person_parks_a_bots_own_ticket_in_a_teams_waiting_step_without_a_note
     parked = ticket(api)
     step = _park_step(api, parked)
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE tasks SET requester=owner WHERE id=?', (parked['id'],))    # the bot asked for it itself
+        c.execute('UPDATE tasks SET requester_id=owner_id WHERE id=?', (parked['id'],))    # the bot asked for it itself
         # The bot's own move still says why: nobody else will answer a ticket it parks for itself.
         with pytest.raises(H.Refused) as refused:
             H.task_update(c, 'bot:cpo', parked['id'], step='Waiting On Dependency')
@@ -165,8 +183,6 @@ def test_a_person_moving_a_bots_ticket_into_a_teams_blocked_step_on_a_content_bo
         assert (row['step_id'], row['status'], row['blocked_kind']) == (step, 'waiting', 'manual')
         H.task_update(c, H.KEEPER, blocker['id'], status='done')
         assert (H.task(c, task['id'])['step_id'], H.task(c, task['id'])['status']) == (step, 'waiting')
-        H.sweep_stranded(c, H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1))
-        assert (H.task(c, task['id'])['step_id'], H.task(c, task['id'])['status']) == (step, 'waiting')
 
 
 def test_an_upgrade_holds_a_bots_ticket_already_in_a_teams_blocked_step_on_a_content_board(api):
@@ -181,5 +197,4 @@ def test_an_upgrade_holds_a_bots_ticket_already_in_a_teams_blocked_step_on_a_con
         c.execute("UPDATE tasks SET status='waiting', step_id=? WHERE id=?", (step, task['id']))
         H.migrate(c)
         assert H.task(c, task['id'])['blocked_kind'] == 'manual'
-        H.sweep_stranded(c, H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1))
         assert (H.task(c, task['id'])['step_id'], H.task(c, task['id'])['status']) == (step, 'waiting')

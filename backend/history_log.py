@@ -1,8 +1,8 @@
 """Settings > History > Log: what every teammate did, asked and was stopped from doing, newest first
 (`GET /api/v2/history`), and the same list as CSV for the owner and the Admins (`GET /api/v2/history.csv`).
 
-Nothing new is recorded. Each kind is read from where Tico already keeps it: runs from `turns`, task status changes
-from `task_events`, approvals asked and decided from `approvals`, sends the send switch kept as drafts
+Nothing new is recorded. Each kind is read from where Tico already keeps it: runs from `attempts`, task status changes
+from `history_events`, approvals asked and decided from `approvals`, sends the send switch kept as drafts
 (`automation.send_off`), credential reveals and permission changes from `events`, and people's answers to bots'
 questions (decisions) from `messages`.
 
@@ -93,47 +93,49 @@ def _sources(kinds):
         out.append((kind, select, at, actor, about))
 
     if "run" in kinds:
-        add("run", "SELECT 'run:'||t.id AS rid, t.started AS at, 'bot:'||t.bot AS actor, NULL AS about, t.id AS ref, "
-                   "t.exit AS exit, t.task_id AS task_id, k.title AS title FROM turns t "
-                   "LEFT JOIN tasks k ON k.id=t.task_id WHERE t.started IS NOT NULL", "t.started", "'bot:'||t.bot", None)
+        add("run", "SELECT 'run:'||t.id AS rid, t.created_at AS at, 'bot:'||t.bot_id AS actor, NULL AS about, t.id AS ref, "
+                   "t.exit AS exit, t.task_id AS task_id, k.title AS title FROM attempts t "
+                   "LEFT JOIN tasks k ON k.id=t.task_id WHERE (t.job_id IS NULL OR t.trigger IS NOT NULL)",
+            "t.created_at", "'bot:'||t.bot_id", None)
     if "task" in kinds:
-        add("task", "SELECT 'task:'||e.id AS rid, e.ts AS at, e.actor AS actor, k.owner AS about, k.id AS task_id, "
-                    "k.title AS title, e.old AS old, e.new AS new FROM task_events e JOIN tasks k ON k.id=e.task_id "
-                    "WHERE e.field='status' AND e.ts IS NOT NULL", "e.ts", "e.actor", "k.owner")
+        add("task", "SELECT 'task:'||e.id AS rid, e.created_at AS at, e.actor_id AS actor, k.owner_id AS about, k.id AS task_id, "
+                    "k.title AS title, e.old AS old, e.new AS new FROM history_events e JOIN tasks k ON k.id=e.subject_id "
+                    "WHERE e.subject_type='task' AND e.kind='status' AND e.created_at IS NOT NULL",
+            "e.created_at", "e.actor_id", "k.owner_id")
     if "approval.asked" in kinds:
-        add("approval.asked", "SELECT 'approval.asked:'||a.id AS rid, a.created AS at, a.requested_by AS actor, "
+        add("approval.asked", "SELECT 'approval.asked:'||a.id AS rid, a.created_at AS at, a.requested_by_id AS actor, "
                               "a.decision_owner AS about, a.kind AS what, a.decision AS decision, a.task_id AS task_id, "
                               "k.title AS title FROM approvals a LEFT JOIN tasks k ON k.id=a.task_id "
-                              "WHERE a.created IS NOT NULL", "a.created", "a.requested_by", "a.decision_owner")
+                              "WHERE a.created_at IS NOT NULL", "a.created_at", "a.requested_by_id", "a.decision_owner")
     for kind, decision in (("approval.granted", "approved"), ("approval.denied", "declined")):
         if kind in kinds:
-            add(kind, f"SELECT '{kind}:'||a.id AS rid, a.decided_at AS at, a.decided_by AS actor, "
-                      "a.requested_by AS about, a.kind AS what, a.decision AS decision, a.task_id AS task_id, "
+            add(kind, f"SELECT '{kind}:'||a.id AS rid, a.decided_at AS at, a.decided_by_id AS actor, "
+                      "a.requested_by_id AS about, a.kind AS what, a.decision AS decision, a.task_id AS task_id, "
                       "k.title AS title FROM approvals a LEFT JOIN tasks k ON k.id=a.task_id "
                       f"WHERE a.decision='{decision}' AND a.decided_at IS NOT NULL",
-                "a.decided_at", "a.decided_by", "a.requested_by")
+                "a.decided_at", "a.decided_by_id", "a.requested_by_id")
     events = {"outbound.blocked": f"e.action='{SEND_OFF}'",
               "credential.revealed": "e.action IN (" + ",".join(f"'{a}'" for a in REVEALS) + ")",
               "permission.changed": "e.action IN (" + ",".join(f"'{a}'" for a in PERMISSIONS) + ")"}
     for kind, which in events.items():
         if kind in kinds:
             about = ("CASE WHEN e.action IN ('credential.granted','credential.revoked') "
-                     "THEN json_extract(e.detail_json,'$.subject') "
+                     "THEN json_extract(e.detail,'$.subject') "
                      "WHEN e.action LIKE 'bot.%' THEN 'bot:'||e.target "
                      "WHEN e.action='person.access_edited' THEN 'human:'||e.target "
-                     "WHEN json_extract(e.detail_json,'$.bot') IS NOT NULL THEN 'bot:'||json_extract(e.detail_json,'$.bot') END")
+                     "WHEN json_extract(e.detail,'$.bot') IS NOT NULL THEN 'bot:'||json_extract(e.detail,'$.bot') END")
             # Read by action (the store's events_action_target index), never by scanning events since a time.
-            add(kind, f"SELECT '{kind}:'||e.id AS rid, e.ts AS at, e.actor AS actor, {about} AS about, "
-                      "e.action AS action, e.target AS target, e.detail_json AS detail FROM events e "
-                      f"WHERE {which}", "e.ts", "e.actor", about)
+            add(kind, f"SELECT '{kind}:'||e.id AS rid, e.created_at AS at, e.actor AS actor, {about} AS about, "
+                      "e.action AS action, e.target AS target, e.detail AS detail FROM events e "
+                      f"WHERE {which}", "e.created_at", "e.actor", about)
     if "decision" in kinds:
         # A person's answer to a question: the answers of people only, never a bot's reply to a person's ask.
-        add("decision", "SELECT 'decision:'||m.id AS rid, m.created AS at, m.from_actor AS actor, m.to_actor AS about, "
+        add("decision", "SELECT 'decision:'||m.id AS rid, m.created_at AS at, m.sender_id AS actor, m.recipient_id AS about, "
                         "m.body AS answer, q.body AS asked, k.id AS task_id, k.title AS title FROM messages m "
                         "LEFT JOIN messages q ON q.id=m.in_reply_to "
-                        "LEFT JOIN tasks k ON k.id=coalesce(json_extract(m.refs_json,'$.task'),json_extract(q.refs_json,'$.task')) "
-                        "WHERE m.kind='answer' AND m.from_actor IN (SELECT value FROM json_each(:people))",
-            "m.created", "m.from_actor", "m.to_actor")
+                        "LEFT JOIN tasks k ON k.id=coalesce(json_extract(m.refs,'$.task'),json_extract(q.refs,'$.task')) "
+                        "WHERE m.kind='answer' AND m.sender_id IN (SELECT value FROM json_each(:people))",
+            "m.created_at", "m.sender_id", "m.recipient_id")
     return out
 
 
@@ -210,7 +212,7 @@ def install(app, store, auth):
             link = "#/task/" + task["id"] if task else ""
             if kind == "run":
                 subject = task["title"] if task else "No task"
-                # turns.exit is the outcome's word ("completed", "interrupted", …); older rows hold a process code.
+                # attempts.exit is the outcome's word ("completed", "interrupted", …); older rows hold a process code.
                 done = r["exit"] in ("completed", "0", 0)
                 result = "running" if r["exit"] is None else "done" if done else str(r["exit"])
                 link = "/api/runs/" + r["ref"] + "/log"

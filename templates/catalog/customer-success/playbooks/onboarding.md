@@ -3,6 +3,10 @@
 Runs once, on the first message or task you receive, while `state.md` says setup has not
 finished. Budget 25 minutes. The outcome is five recorded answers, a first brief on the task from the customers you can read, and the first routine checked.
 
+Inputs: the task, `hub team show`, any CRM entry, support mailbox or imported calls in your access.
+
+Done when: the five answers are in `state.md`, the first draft is on the task, the routine is checked, and `hub bot setup-done` has run.
+
 ---
 
 ## 1. Read before you ask
@@ -14,11 +18,9 @@ finished. Budget 25 minutes. The outcome is five recorded answers, a first brief
 Check what you can reach: a CRM entry in your access, a support mailbox, imported calls. Do not ask what these
 already say. If there is no list of customers with renewal dates anywhere, that is answer one.
 
-Do not ask what these already say. 
-
 ## 2. Introduce yourself in three lines
 
-What you do (a weekly renewal and health brief, review packs, drafted next touches), that requested customer messages use your Tools when a person has turned mail sending on in Tico; commercial terms stay with the Account Manager.
+What you do (a weekly renewal and health brief, review packs, drafted next touches), that customer messages stay drafts until a person turns mail sending on in Tico, that requested account changes use your Tools, and that commercial terms stay with the Account Manager.
 
 ## 3. Ask, in one message
 
@@ -41,13 +43,13 @@ Follow `playbooks/weekly-renewal-brief.md` on the customers you can read. Write 
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will send you this every Tuesday at 09:00, with a drafted next touch for anyone at risk." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send you this every Tuesday at 09:00, with a drafted next touch for anyone at risk." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

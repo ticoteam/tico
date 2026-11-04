@@ -20,7 +20,8 @@
    "model_switch_type_v1",
    "model_remove_v1",
    "model_switch_to_key_v1",
-   "turns_at_once_v1"
+   "turns_at_once_v1",
+   "private_lanes_v1"
   ],
   "capacity": 4,
   "from_the_future": true,
