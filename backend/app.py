@@ -1239,8 +1239,9 @@ def create_app(settings=None):
                 task.add_done_callback(lambda t: t.cancelled() or t.exception())
             if pending:
                 await asyncio.wait(pending, timeout=0.05)
+        # A part still running (its thread outlives the brief wait) is left out, as is one stopped or failed.
         parts = [(path, *task.result()) for path, task in tasks.items()
-                 if not task.cancelled() and task.exception() is None]
+                 if task.done() and not task.cancelled() and task.exception() is None]
         return fast_json.RawJsonResponse(b'{"reads":{' + b",".join(
             json.dumps(path).encode() + b':{"status":' + str(status).encode() + b',"etag":' + json.dumps(etag).encode()
             + b',"body":' + body + b"}" for path, status, etag, body in parts) + b"}}")

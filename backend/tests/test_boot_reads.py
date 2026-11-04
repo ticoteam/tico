@@ -53,3 +53,22 @@ def test_a_part_past_its_budget_is_left_out_for_the_page_to_ask_alone(api):
     # Nothing is done in no time: every part is left out, and the answer still comes, at once.
     assert r.status_code == 200 and r.json() == {"reads": {}}
     assert tuple(api.get("/api/v2/boot", headers=auth).json()["reads"]) == READS
+
+
+def test_a_part_whose_thread_outlives_the_wait_is_left_out(api):
+    """A sync read in a worker thread cannot be stopped: still running after the wait, it is left out, not a 500."""
+    import time
+    route = next(r for r in api.app.routes if getattr(r, "path", "") == "/api/status")
+    real = route.dependant.call
+
+    def slow(**values):
+        time.sleep(2)
+        return real(**values)
+    route.dependant.call = slow
+    try:
+        r = api.get("/api/v2/boot", headers={"Authorization": "Bearer ana-test"})
+    finally:
+        route.dependant.call = real
+    assert r.status_code == 200
+    reads = r.json()["reads"]
+    assert "/api/status" not in reads and reads["/api/employees"]["status"] == 200
