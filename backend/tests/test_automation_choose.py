@@ -46,7 +46,7 @@ def run_choose(text, *, ok=True, services=None, mode="draft", to=("legal", "sale
     f = flow(llm(choosing(to=to, default=default, mode=mode)), destinations=DESTS, **extra)
     run = E.execute(f, MESSAGE, services)
     assert run["status"] == "waiting", run
-    E.answer(run, "msg_1", text, cost=0.02, ok=ok)
+    E.answer(run, "msg_1", text, cost=0.02, ok=ok, flow=f)
     return E.advance(f, run, services), services
 
 
@@ -167,7 +167,7 @@ def test_a_crash_after_the_draft_then_resume_repeats_no_effect():
     services = Memo(crash_on="create_task")
     f = flow(llm(choosing()), destinations=DESTS)
     run = E.execute(f, MESSAGE, services)
-    E.answer(run, "msg_1", json.dumps({"to": "legal", "body": "Sending."}))
+    E.answer(run, "msg_1", json.dumps({"to": "legal", "body": "Sending."}), flow=f)
     saved = json.loads(json.dumps(run))   # what the hub saves when the answer comes in
     with pytest.raises(Crash):
         E.advance(f, run, services)       # the draft is out; the chain's create_task crashes
@@ -203,7 +203,7 @@ def test_a_bot_turn_a_chosen_destination_reads_waits_for_it_and_that_destination
     assert E.answer(run, "msg_1", "Northwind cut its price.")
     run = E.advance(f, run, services)
     assert statuses(run) == [("brief", "ok"), ("draft", "waiting")]
-    assert E.answer(run, "msg_2", json.dumps({"to": "legal", "body": "Sending."}), cost=0.02)
+    assert E.answer(run, "msg_2", json.dumps({"to": "legal", "body": "Sending."}), cost=0.02, flow=f)
     run = E.advance(f, run, services)
     assert services.acted == [("draft_reply", {"body": "Sending."}),
                               ("note", {"text": "Brief: Northwind cut its price."})]
@@ -231,36 +231,59 @@ def test_a_queued_choose_run_takes_its_owner_as_it_is_now_and_starts_no_turn_as_
 
 
 @pytest.mark.parametrize("owner", ["group:legal-team", "bot:other"])
-def test_a_waiting_choose_run_whose_owner_changed_sends_no_reply_and_runs_only_the_default(owner):
+def test_a_choose_answer_that_comes_after_the_owner_moved_sends_no_reply_and_runs_only_the_default(owner):
     step = {**llm(choosing()), "as": "bot:ops"}
     f = {**flow(step, destinations=DESTS), "owner": "bot:ops"}
     services = Services()
     run = E.execute(f, MESSAGE, services)
     assert run["status"] == "waiting" and services.turns[0]["who"] == "bot:ops"
-    assert E.answer(run, "msg_1", json.dumps({"to": "legal", "body": "Sending the deck today."}))
-    run = E.advance({**f, "owner": owner}, run, services)
+    moved = {**f, "owner": owner}
+    assert E.answer(run, "msg_1", json.dumps({"to": "legal", "body": "Sending the deck today."}), flow=moved)
+    run = E.advance(moved, run, services)
     assert services.acted == [("label", {"name": "Sales"})]
     out = run["steps"][0]["outputs"]
     assert out["skipped"] == "owner changed" and out["error"] and out["to"] == "sales"
     assert run["status"] == "ok" and run["threads"][0]["state"] == "done"
 
 
-def test_a_crash_after_a_chosen_destinations_effect_then_an_owner_change_runs_the_default_with_its_own_effects():
-    """The chosen destination's first effect ran and was kept, then the run crashed before its checkpoint, and the owner
-    changed before the resume. The default destination's chain has its own slots, so its action runs, and nothing that
-    already ran is repeated or served from the other destination's kept result."""
+def test_a_crash_after_the_chosen_chain_then_an_owner_change_resumes_the_recorded_chain():
+    """The reply and the chosen chain's first effect ran and were kept, then the run crashed before its checkpoint. The
+    owner changed after the answer, which was made while it was valid: the recorded choice runs as recorded, so the rest
+    of its chain runs, nothing repeats, and the default destination does not run."""
     services = Memo(crash_after="create_task")
     f = flow(llm(choosing()), destinations=DESTS)
     run = E.execute(f, MESSAGE, services)
-    assert E.answer(run, "msg_1", json.dumps({"to": "legal", "body": "Sending."}))
+    assert E.answer(run, "msg_1", json.dumps({"to": "legal", "body": "Sending."}), flow=f)
     saved = json.loads(json.dumps(run))   # what the hub saves when the answer comes in
     with pytest.raises(Crash):
-        E.advance(f, run, services)       # the reply and the chosen chain's first effect are out; the crash follows
+        E.advance(f, run, services)       # the reply and the chain's first effect are out; the crash follows
     resumed = E.advance({**f, "owner": "group:legal-team"}, saved, services)
-    assert services.acted == [("draft_reply", {"body": "Sending."}), ("create_task", {"title": "Review"}),
-                              ("label", {"name": "Sales"})]
-    assert len(services.keys) == len(set(services.keys)) == 3
+    assert services.acted == [("draft_reply", {"body": "Sending."}), ("create_task", {"title": "Review"})]
+    assert len(services.keys) == len(set(services.keys)) == 2
     out = resumed["steps"][0]["outputs"]
-    assert out["skipped"] == "owner changed" and out["to"] == "sales"
-    assert [(a["do"], a["from"], a["ok"]) for a in out["actions"]] == [("label", "destination", True)]
+    assert out["to"] == "legal" and "skipped" not in out and "error" not in out
+    assert [(a["do"], a["from"], a["ok"]) for a in out["actions"]] == [
+        ("draft_reply", "reply", True), ("create_task", "destination", True)]
     assert resumed["status"] == "ok" and resumed["threads"][0]["state"] == "done"
+
+
+def test_a_crash_after_the_reply_then_an_owner_change_keeps_the_reply_in_the_record():
+    """The reply went out and the crash came before the checkpoint, and the owner moved after the answer. The recorded
+    choice still has its body, so the resume finds the reply committed (`_once`) and keeps it in the record: nothing is
+    sent twice and nothing is lost."""
+    step = {**llm(choosing()), "as": "bot:ops"}
+    f = {**flow(step, destinations=DESTS), "owner": "bot:ops"}
+    services = Memo(crash_after="draft_reply")
+    run = E.execute(f, MESSAGE, services)
+    assert E.answer(run, "msg_1", json.dumps({"to": "legal", "body": "Sending."}), flow=f)
+    saved = json.loads(json.dumps(run))
+    with pytest.raises(Crash):
+        E.advance(f, run, services)
+    resumed = E.advance({**f, "owner": "group:legal-team"}, saved, services)
+    assert services.acted == [("draft_reply", {"body": "Sending."}), ("create_task", {"title": "Review"})]
+    assert len(services.keys) == len(set(services.keys)) == 2
+    out = resumed["steps"][0]["outputs"]
+    assert out["to"] == "legal" and "skipped" not in out
+    assert [(a["do"], a["from"], a["ok"]) for a in out["actions"]] == [
+        ("draft_reply", "reply", True), ("create_task", "destination", True)]
+    assert resumed["status"] == "ok"
