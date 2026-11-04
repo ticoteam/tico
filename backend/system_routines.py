@@ -272,8 +272,8 @@ JOBS = [
         "code: nothing past its time is a quiet run.",
         HOUSEKEEPING, "Every 15 minutes", 900, then=("purge_thread_messages",)),
     Job("invariant_checks", "Production checks",
-        "Reads a few production invariants in plain code, shows each failing one on Health and raises one task for its "
-        "owner; the task is closed when the check passes.",
+        "Reads a few production invariants in plain code and shows each failing one on Health. Check health files each "
+        "one as a BotOps task, closed when the check passes.",
         HOUSEKEEPING, "Every 15 minutes", 900, then=("check_invariants",)),
     Job("go_live_expiry", "Go-live expiry", "Ends a go-live waiting for a computer that never reports.",
         HOUSEKEEPING, "Every 10 minutes", 600, then=("end_go_live",)),

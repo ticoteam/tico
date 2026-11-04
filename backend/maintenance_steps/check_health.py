@@ -3,8 +3,8 @@
 Four readers feed it, each one read in the run's snapshot:
   - the code checks in backend/maintenance_health.py (the Health Monitor's old checks), and the busy-process records a
     computer posts hourly (`local_busy`, written by the server route, read here while fresh);
-  - the production checks, backend/invariants.py CHECKS, through their `read` functions. Their `sweep` side effects (owner
-    tasks, closing tasks on clear) are not used: every finding goes through this step's lifecycle;
+  - the production checks, backend/invariants.py CHECKS, through their `read` functions. The invariant sweep keeps only the
+    Health page's state for them and files no task: every finding goes through this step's lifecycle, as `inv:<check id>`;
   - the Health page's own checks (backend/health.py `view`), warn and bad ones, read as the owner (a read, no write). The
     mail sending check is left out: the mail reader below files it with its approval;
   - mail asks (backend/mail_settings.py `alerts`): a bot that asks to send mail, or to forward it, without a person's approval.
@@ -15,8 +15,8 @@ Lifecycle, per finding (its local key) and per signature (what it is, never wher
     a new computer with the same problem comments once, and a problem that clears gets a "cleared" comment that wakes BotOps
     to close the task. A task BotOps has closed is opened again the next time the problem shows;
   - a mail ask also gets an approval, raised by BotOps on its task, that turns mail sending on when a person approves it;
-  - a Tico bug is not a task: it goes through the report path (backend/maintenance_health.py `report`), which the caller runs
-    outside the write transaction for the signatures in `details.reports_due`;
+  - a Tico bug is not a task: it goes through the report path (backend/maintenance_health.py `report`). `run` calls it after
+    its write transaction, for the signatures in `details.reports_due`, and the answers go to `details.reports`;
   - with no active BotOps bot nothing is written: the findings are listed in `details.unrouted` on the step's row.
 
 Check health never writes to a person. The one exception is the Tico bug report path, which the team rule
@@ -36,6 +36,7 @@ from ..store import H
 log = logging.getLogger("tico.maintenance.check_health")
 
 BOTOPS = MH.BOTOPS
+REGISTRY_PREFIX = "health-task:"  # registry_metadata key per signature: {task, keys, count, last_comment, cleared, approvals}
 MAIL_CHECK = "mail_ask"
 BUSY_FRESH_HOURS = 2         # a busy process not posted this long clears: its computer stopped sampling
 REREPORT_HOURS = 24          # a Tico bug already reported is reported again (a comment) at most this often
@@ -63,8 +64,9 @@ TAGS = {
     "slow": "noisy", "runner_load": "noisy", "performance": "noisy", "disk": "noisy", "turns": "noisy",
     MAIL_CHECK: "noisy",
 }
-# A Health page check the mail reader already files, so the page reader leaves it out.
-PAGE_LEFT_OUT = {"mail_sending"}
+# Health page checks this step files another way, so the page reader leaves them out: the mail reader files mail_sending
+# with its approval, and `invariant:<id>` rows are the production checks, which the invariant reader files as `inv:<id>`.
+PAGE_LEFT_OUT = {"mail_sending", "invariant"}
 FIX_PAGE = ("BotOps: open the check on Settings > Health for the detail, fix the cause it names, and the check clears on the "
             "next run. A fix only a person can make reaches a person as a Needs you card on this task.")
 FIX_MAIL = ("BotOps: ask the person who manages this bot to approve turning mail sending on. The approval on this task turns "
@@ -73,8 +75,14 @@ FIX_RUN = "BotOps: nothing to do by hand; the check clears when the next run no 
 
 
 def tag_of(check_id):
-    """`urgent` or `noisy` for a finding's check id (a page check is tagged by its Health page id)."""
-    base = check_id[len("page:"):].split(":", 1)[0] if check_id.startswith("page:") else check_id
+    """`urgent` or `noisy` for a finding's check id: a page check by its Health page id (`page:disk:<computer>` is `disk`),
+    a production check by its own id (`inv:lease_overdue` is `lease_overdue`)."""
+    if check_id.startswith("page:"):
+        base = check_id[len("page:"):].split(":", 1)[0]
+    elif check_id.startswith("inv:"):
+        base = check_id[len("inv:"):]
+    else:
+        base = check_id
     return TAGS.get(base, "noisy")
 
 
@@ -85,26 +93,38 @@ def task_of(c, signature):
 
 
 def run(c, ctx):
-    """The step, inside the run's transaction (the Maintenance engine's contract)."""
+    """The step, as the Maintenance engine calls it. `c` is a pooled read connection with no transaction open: every reader
+    reads it. The lifecycle writes in the store's own write transaction (ctx["store"]). The Tico bug reports are filed after
+    that transaction, outside any write lock, for the signatures it named (`details.reports_due`); their answers go to
+    `details.reports`. The engine needs to know none of this."""
+    store = ctx["store"]
     checked, found, notes = gather(c, ctx)
-    return apply(c, ctx, checked, found, notes)
+    with store.transaction() as w:
+        result = apply(w, ctx, checked, found, notes)
+    due = result["details"].get("reports_due", [])
+    if due:
+        support = getattr(store, "report_support", None)     # support.py sets it on the app's store; none without an app
+        result["details"]["reports"] = MH.file_reports(store, ctx["auth"], ctx["settings"], support, due)
+    return result
 
 
 def run_once(store, auth, settings):
     """The step on its own, for the scheduler's timer until the Maintenance run replaces it: the readers in one read
-    snapshot (no write lock while the page and the checks read), then the lifecycle in one short write transaction."""
-    ctx = context(auth, settings)
+    snapshot (no write lock while the page and the checks read), then the lifecycle in one short write transaction. The
+    Tico bug reports are filed by the caller (MH.check), as before."""
+    ctx = context(auth, settings, store)
     with store.read_transaction() as r:
         checked, found, notes = gather(r, ctx)
     with store.transaction() as c:
         return apply(c, ctx, checked, found, notes)
 
 
-def context(auth, settings):
-    """The run context when there is no Maintenance run: the same shape as the run's ctx, with auth for the Health page."""
+def context(auth, settings, store=None):
+    """The run context: the same shape the Maintenance run gives a step (with `store`, the write transaction and the
+    report path go through it); with no store, the timer's context reads and writes through the caller."""
     now = H.now()
     return {"run_id": "timer", "window_start": None, "window_end": now, "settings": settings, "now": now, "cap": None,
-            "auth": auth}
+            "auth": auth, "store": store}
 
 
 # --------------------------------------------------------------------------------------------------------------- readers
@@ -163,8 +183,8 @@ def _invariant_findings(c, now, at, notes):
         if hits:
             shown = ", ".join(hits[:invariants.EXAMPLES])
             detail = f"{check.says}\n\n{len(hits)} found. Examples: {shown}."
-            out.append(MH._finding(f"inv:{check.id}", check.id, MH.SETUP, f"Production check: {check.label}", detail,
-                                   f"{check.look} {FIX_RUN}", severity=MH.WARN))
+            out.append(MH._finding(f"inv:{check.id}", f"inv:{check.id}", MH.SETUP, f"Production check: {check.label}",
+                                   detail, f"{check.look} {FIX_RUN}", severity=MH.WARN))
     return read, out
 
 
@@ -281,8 +301,12 @@ def apply(c, ctx, checked, found, notes):
         else:
             details["pending"].append(key)
 
-    # 3. Setup findings: one BotOps task per signature. Tico bugs are reported (returned for the caller to file).
-    for sig in sorted(filed_sigs | gone_sigs):
+    # 3. Setup findings: one BotOps task per signature. Tico bugs are reported (returned for the caller to file). A task
+    # registered for a signature with nothing filed left (a task seeded by the Health Monitor's retirement, or one whose
+    # rows were lost) clears too, so BotOps is never left a task that nothing will ever close. Skipped on a run where a
+    # reader failed: its rows are unread, not gone.
+    registered = set() if unread else _registered_signatures(c)
+    for sig in sorted(filed_sigs | gone_sigs | registered):
         rows = _filed_rows(c, sig)
         if not rows:                                   # nothing filed is left for this signature: it cleared
             woke += _cleared_comment(c, sig, now, details)
@@ -469,7 +493,13 @@ def _botops_active(c):
 
 
 def _reg_key(sig):
-    return "health-task:" + sig
+    return REGISTRY_PREFIX + sig
+
+
+def _registered_signatures(c):
+    """Every signature with a BotOps task registered (open or not): the step's registry, one row per signature."""
+    return {row["key"][len(REGISTRY_PREFIX):] for row in c.execute(
+        "SELECT key FROM registry_metadata WHERE key LIKE ?", (REGISTRY_PREFIX + "%",)).fetchall()}
 
 
 def _reg_get(c, key):

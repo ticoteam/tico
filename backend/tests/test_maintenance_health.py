@@ -14,6 +14,7 @@ import importlib.util
 import json
 import sqlite3
 import time
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -568,6 +569,163 @@ def test_a_release_approval_ready_past_the_setting_is_one_finding_counted_not_re
     assert finding(api, key)["present"] == 0
 
 
+def fake_check(check_id, hits, label="Runs past their lease"):
+    """A production check that reads `hits`: the tests are about what Check health does with a hit, not the read."""
+    return SimpleNamespace(id=check_id, label=label, says="Runs whose lease ended over 10 minutes ago.",
+                           look="The runner that holds each run.", owner="botops", read=lambda c, ctx: list(hits))
+
+
+def task_count(api):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT count(*) FROM tasks").fetchone()[0]
+
+
+def filed_keys(api):
+    with api.app.state.store.read() as c:
+        return [row["key"] for row in c.execute("SELECT key FROM health_findings WHERE present=1 ORDER BY key")]
+
+
+def run_step(api, when):
+    """One Check health run as the Maintenance engine calls it: run(c, ctx) on a pooled read connection."""
+    store, auth = api.app.state.store, api.app.state.auth
+    ctx = check_health.context(auth, store.settings, store)
+    ctx["now"] = when
+    with store.read() as r:
+        return check_health.run(r, ctx)
+
+
+def test_the_step_runs_on_a_read_only_connection_and_files_through_the_store(environment, readers, code_findings):
+    api, _ = built(environment)
+    store, auth = api.app.state.store, api.app.state.auth
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
+    ctx = check_health.context(auth, store.settings, store)
+    with store.read() as r:
+        r.execute("PRAGMA query_only=1")          # a write on the read connection fails from here on
+        try:
+            result = check_health.run(r, ctx)
+        finally:
+            r.execute("PRAGMA query_only=0")
+    assert result["woke"] == 1 and result["details"]["filed"] == ["push_stuck:A"]
+    assert [t["owner_id"] for t in botops_tasks(api)] == ["bot:botops"]
+
+
+def test_a_tico_bug_the_step_finds_is_reported_by_run_after_its_write_transaction(environment, readers, code_findings, hq):
+    api, _ = built(environment)
+    now, sig = datetime.now(timezone.utc), MH.signature("queue_idle")
+    code_findings[:] = [item("queue_idle", key="queue_idle:bot-1", kind=MH.BUG, title="Work waits with no turn")]
+    run_step(api, now)                                     # noisy: pending until its second run
+    result = run_step(api, now + timedelta(minutes=1))
+    assert result["details"]["reports_due"] == [sig]
+    assert result["details"]["reports"][sig]["ticket"] and len(hq.tickets) == 1
+
+
+def test_the_readers_write_nothing_on_the_read_connection(environment, monkeypatch):
+    # The real readers, the Health page's own checks included: a reader that wrote would fail on the read connection and
+    # be noted here.
+    api, runner = built(environment)
+    store, auth = api.app.state.store, api.app.state.auth
+    runner_errors(api, runner, STREAM)
+    monkeypatch.setattr(hosted_updates, "notice", lambda *a, **k: {})
+    monkeypatch.setattr(replication, "status", lambda *a, **k: {})
+    ctx = check_health.context(auth, store.settings, store)
+    with store.read() as r:
+        r.execute("PRAGMA query_only=1")
+        try:
+            _, found, notes = check_health.gather(r, ctx)
+        finally:
+            r.execute("PRAGMA query_only=0")
+    assert notes == {}, notes
+    assert any(row["key"].startswith("event_stream:") for row in found)
+
+
+def test_one_production_check_hit_is_one_botops_task_and_no_person_task(environment, readers, monkeypatch):
+    api, _ = built(environment)
+    monkeypatch.setattr(invariants, "CHECKS", [fake_check("lease_overdue", ["r1", "r2"])])
+    result = run(api)
+    assert [t["title"] for t in botops_tasks(api)] == ["Health: Production check: Runs past their lease"]
+    assert result["woke"] == 1 and result["details"]["filed"] == ["inv:lease_overdue"]
+    with api.app.state.store.read() as c:
+        person = c.execute("SELECT count(*) FROM tasks WHERE title LIKE '%Production check%' "
+                           "AND owner_id NOT LIKE 'bot:%'").fetchone()[0]
+    assert person == 0
+
+
+def test_a_production_check_on_the_health_page_is_filed_once_as_an_invariant(environment, readers, monkeypatch):
+    api, _ = built(environment)
+    monkeypatch.setattr(invariants, "CHECKS", [fake_check("lease_overdue", ["r1"])])
+    row = {"id": "invariant:lease_overdue", "label": "Runs past their lease", "status": "warn", "summary": "x", "fixes": []}
+    monkeypatch.setattr(health, "view", lambda c, *a, **k: {"checks": [row]})
+    run(api)
+    assert filed_keys(api) == ["inv:lease_overdue"]
+    assert finding(api, "inv:lease_overdue")["check_id"] == "inv:lease_overdue"
+
+
+def test_the_invariant_sweep_raises_no_task_and_keeps_only_the_health_state(environment, readers, monkeypatch):
+    api, _ = built(environment)
+    store, auth = api.app.state.store, api.app.state.auth
+    monkeypatch.setattr(invariants, "CHECKS", [fake_check("lease_overdue", ["r1"])])
+    before = task_count(api)
+    assert invariants.sweep(store, auth, store.settings, datetime.now(timezone.utc)) == {"lease_overdue": 1}
+    assert task_count(api) == before
+    with store.read() as c:
+        assert tuple(c.execute("SELECT firing, count, task_id FROM invariant_state WHERE check_id='lease_overdue'")
+                     .fetchone()) == (1, 1, None)
+
+
+def test_the_health_page_links_a_production_check_to_the_botops_task_check_health_filed(environment, readers, monkeypatch):
+    api, _ = built(environment)
+    store = api.app.state.store
+    monkeypatch.setattr(invariants, "CHECKS", [fake_check("lease_overdue", ["r1"])])
+    invariants.sweep(store, api.app.state.auth, store.settings, datetime.now(timezone.utc))
+    with store.read() as c:
+        assert invariants.health_checks(c)[0]["fixes"] == [], "the sweep raised no task to link"
+    run(api)
+    (task,) = botops_tasks(api)
+    with store.read() as c:
+        (row,) = invariants.health_checks(c)
+    assert row["id"] == "invariant:lease_overdue"
+    assert row["fixes"] == [{"label": "Open the alert", "href": "#/tasks/" + task["id"], "tab": "", "click": ""}]
+
+
+def test_a_task_whose_finding_rows_are_gone_gets_its_cleared_comment(environment, readers, code_findings):
+    api, _ = built(environment)
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
+    run(api)
+    (task,) = botops_tasks(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM health_findings")               # rows lost (a restore): nothing says the problem is there
+    code_findings.clear()
+    run(api)
+    assert said(api, task["id"], "Cleared at") and registry(api, "push_stuck")["cleared"] is True
+
+
+def test_the_first_run_adopts_the_health_monitor_task_it_still_has_instead_of_opening_one(environment, readers, code_findings):
+    api, _ = built(environment)
+    store = api.app.state.store
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
+    sig = MH.signature("push_stuck")
+    with store.transaction() as c:
+        # The Health Monitor as it was: its bot, its finding, and the task its watcher filed for that finding.
+        c.execute("INSERT INTO bots(id,slug,display_name,state,created_at) VALUES(?,?,?,?,?)",
+                  (HM_SLUG, HM_SLUG, "Health Monitor", "active", H.now()))
+        c.execute("INSERT INTO health_findings(key,signature,check_id,kind,title,detail,fix,first_seen_at,last_seen_at,"
+                  "present,occurrences,severity) VALUES(?,?,?,?,?,?,?,?,?,1,3,'warn')",
+                  ("push_stuck:A", sig, "push_stuck", MH.SETUP, "Pushes are stuck", "detail", "fix", H.now(), H.now()))
+        tid = H.task_create(c, H.KEEPER, "Pushes are stuck", "The Health Monitor's task.", H.bot_actor("botops"),
+                            lint=False)["id"]
+        c.execute("UPDATE tasks SET owner_id=? WHERE id=?", (f"bot:{HM_SLUG}", tid))
+        c.execute("INSERT INTO watcher_items(bot,key,task_id,created_at) VALUES(?,?,?,?)", (HM_SLUG, "hm:push_stuck:A", tid, H.now()))
+    with store.transaction() as c:
+        retire_migration().up(c)
+    result = run(api)
+    assert botops_tasks(api) == [], "no new Health task: the migrated one is adopted"
+    with store.read() as c:
+        task = H.task(c, tid)
+    assert task["status"] in H.ACTIVE_STATUSES and task["owner_id"] == "bot:botops"
+    assert registry(api, "push_stuck")["task"] == tid and result["woke"] == 0
+    assert result["details"]["tasks"] == {sig: tid}
+
+
 def retire_migration():
     spec = importlib.util.spec_from_file_location("retire_health_monitor", MIGRATION)
     module = importlib.util.module_from_spec(spec)
@@ -575,65 +733,163 @@ def retire_migration():
     return module
 
 
-def legacy_db(botops="active", health_monitor=True):
-    """A database with the tables the migration reads and writes, and the Health Monitor as it was."""
+LEGACY_SCHEMA = """
+CREATE TABLE bots(id TEXT PRIMARY KEY, slug TEXT, state TEXT);
+CREATE TABLE bot_config(bot TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 1, definition_updated_at TEXT,
+                        definition_updated_by TEXT);
+CREATE TABLE bot_settings(bot_id TEXT PRIMARY KEY, extra TEXT, updated_at TEXT);
+CREATE TABLE bot_status(bot TEXT PRIMARY KEY, open_tasks INTEGER NOT NULL DEFAULT 0, needs_human INTEGER NOT NULL DEFAULT 0,
+                        updated_at TEXT);
+CREATE TABLE assignments(bot TEXT, runner_id TEXT, generation INTEGER, updated_at TEXT, updated_by TEXT);
+CREATE TABLE jobs(id TEXT PRIMARY KEY, bot_id TEXT, state TEXT);
+CREATE TABLE schedules(id TEXT PRIMARY KEY, bot TEXT, deleted_at TEXT, updated_at TEXT);
+CREATE TABLE schedule_config(schedule_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE tasks(id TEXT PRIMARY KEY, title TEXT, owner_id TEXT, status TEXT, closed_at TEXT, closed_by_id TEXT,
+                   updated_at TEXT, note TEXT, version INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE history_events(id TEXT PRIMARY KEY, subject_type TEXT, subject_id TEXT, actor_id TEXT, kind TEXT, old TEXT,
+                            new TEXT, note TEXT, action_id TEXT, via TEXT, data TEXT, created_at TEXT);
+CREATE TABLE health_findings(key TEXT PRIMARY KEY, signature TEXT, present INTEGER NOT NULL DEFAULT 1,
+                             occurrences INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE watcher_items(bot TEXT NOT NULL, key TEXT NOT NULL, task_id TEXT NOT NULL, created_at TEXT NOT NULL,
+                           PRIMARY KEY(bot, key));
+CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE invariant_state(check_id TEXT PRIMARY KEY, firing INTEGER NOT NULL DEFAULT 0, count INTEGER NOT NULL DEFAULT 0,
+                             examples TEXT NOT NULL DEFAULT '[]', checked_at TEXT, started_firing_at TEXT, task_id TEXT);
+"""
+PUSH, RUNNER = MH.signature("push_stuck"), MH.signature("runner_errors")
+REG = "health-task:"
+
+
+def legacy_db(botops="active", health_monitor="active"):
+    """The tables the migration reads and writes, as they were. The Health Monitor is in `health_monitor`'s state (None: no
+    such bot), with its findings, its watcher links and its open tasks; the production checks have alerts open."""
     conn = sqlite3.connect(":memory:")
-    conn.executescript("""
-        CREATE TABLE bots(id TEXT PRIMARY KEY, state TEXT);
-        CREATE TABLE assignments(bot TEXT, runner_id TEXT, generation INTEGER, updated_at TEXT, updated_by TEXT);
-        CREATE TABLE jobs(id TEXT PRIMARY KEY, bot_id TEXT, state TEXT);
-        CREATE TABLE tasks(id TEXT PRIMARY KEY, title TEXT, owner_id TEXT, status TEXT, closed_at TEXT,
-                           closed_by_id TEXT, updated_at TEXT, note TEXT);
-        CREATE TABLE task_events(id TEXT PRIMARY KEY, task_id TEXT, created_at TEXT, actor TEXT, field TEXT,
-                                 old TEXT, new TEXT, note TEXT);
-    """)
-    conn.executemany("INSERT INTO bots VALUES(?,?)", [("coo", "active"), ("botops", botops)]
-                     + ([(HM_SLUG, "active")] if health_monitor else []))
+    conn.executescript(LEGACY_SCHEMA)
+    bots = [("coo", "active"), ("botops", botops)] + ([(HM_SLUG, health_monitor)] if health_monitor else [])
+    conn.executemany("INSERT INTO bots(id,slug,state) VALUES(?,?,?)", [(b, b, s) for b, s in bots])
+    conn.execute("INSERT INTO bot_config(bot,revision,definition_updated_at,definition_updated_by) VALUES(?,3,'t0','ana')",
+                 (HM_SLUG,))
+    conn.execute("INSERT INTO bot_settings(bot_id,extra,updated_at) VALUES(?,?,'t0')", (HM_SLUG, json.dumps({"model": "m1"})))
+    conn.executemany("INSERT INTO bot_status(bot,open_tasks,needs_human,updated_at) VALUES(?,?,0,'t0')",
+                     [(HM_SLUG, 5), ("botops", 1)])
     conn.execute("INSERT INTO assignments VALUES(?,'R1',1,'t','t')", (HM_SLUG,))
     conn.executemany("INSERT INTO jobs VALUES(?,?,?)", [("j1", HM_SLUG, "queued"), ("j2", HM_SLUG, "completed")])
-    conn.executemany("INSERT INTO tasks(id,title,owner_id,status) VALUES(?,?,?,?)", [
-        ("t1", "Watch the runner", "bot:health-monitor", "open"),
-        ("t2", "Check the event stream", "health-monitor", "review"),
-        ("t3", "An old finding", "bot:health-monitor", "done"),
-        ("t4", "Ana's own task", "human:ana", "open")])
+    conn.executemany("INSERT INTO schedules(id,bot,deleted_at,updated_at) VALUES(?,?,?,'t0')",
+                     [("s1", HM_SLUG, None), ("s2", HM_SLUG, "t0")])
+    conn.executemany("INSERT INTO health_findings(key,signature,present,occurrences) VALUES(?,?,?,?)",
+                     [("push_stuck:A", PUSH, 1, 3), ("push_stuck:B", PUSH, 1, 2), ("runner_errors:R1", RUNNER, 0, 1)])
+    conn.executemany("INSERT INTO watcher_items(bot,key,task_id,created_at) VALUES(?,?,?,'t0')", [
+        (HM_SLUG, "hm:push_stuck:A", "t1"), (HM_SLUG, "hm:runner_errors:R1", "t2"), (HM_SLUG, "hm:push_stuck:B", "t5")])
+    conn.executemany("INSERT INTO tasks(id,title,owner_id,status,updated_at) VALUES(?,?,?,?,'t0')", [
+        ("t1", "Pushes are stuck", "bot:health-monitor", "open"),           # its finding is push_stuck:A: moves
+        ("t2", "Runner errors", "health-monitor", "review"),                # its finding cleared: moves, registered empty
+        ("t5", "Pushes are stuck (B)", "bot:health-monitor", "open"),       # the same signature as t1: superseded
+        ("t6", "Watch a thing", "bot:health-monitor", "doing"),             # no finding: superseded
+        ("t3", "An old finding", "bot:health-monitor", "done"),             # not open: left alone
+        ("t4", "Ana's own task", "human:ana", "open"),                     # not the Health Monitor's: left alone
+        ("t7", "Production check: Runs past their lease", "human:ana", "open"),
+        ("t8", "Production check: Tasks in progress with no run", "bot:coo", "open"),
+        ("t9", "Production check: Write lock held too long", "bot:botops", "closed")])
+    conn.executemany("INSERT INTO invariant_state(check_id,firing,count,examples,task_id) VALUES(?,?,?,'[]',?)", [
+        ("lease_overdue", 1, 2, "t7"), ("task_stuck", 0, 0, "t8"), ("long_holds", 1, 1, "t9")])
     return conn
 
 
-def test_the_archive_moves_open_tasks_to_botops_and_archives_the_bot():
+def statuses(conn):
+    return dict(conn.execute("SELECT id,status FROM tasks"))
+
+
+def owners(conn):
+    return dict(conn.execute("SELECT id,owner_id FROM tasks"))
+
+
+def test_the_archive_archives_the_bot_the_way_archive_bot_does():
     conn = legacy_db()
     retire_migration().up(conn)
     assert conn.execute("SELECT state FROM bots WHERE id=?", (HM_SLUG,)).fetchone()[0] == "archived"
     assert conn.execute("SELECT count(*) FROM assignments WHERE bot=?", (HM_SLUG,)).fetchone()[0] == 0
-    assert dict(conn.execute("SELECT id,state FROM jobs").fetchall()) == {"j1": "canceled", "j2": "completed"}
-    assert dict(conn.execute("SELECT id,owner_id FROM tasks").fetchall()) == {
-        "t1": "bot:botops", "t2": "bot:botops", "t3": "bot:health-monitor", "t4": "human:ana"}
-    events = conn.execute("SELECT task_id,field,new,actor FROM task_events ORDER BY task_id").fetchall()
-    assert [tuple(e) for e in events] == [("t1", "owner_id", "bot:botops", "keeper"), ("t2", "owner_id", "bot:botops", "keeper")]
+    assert dict(conn.execute("SELECT id,state FROM jobs")) == {"j1": "canceled", "j2": "completed"}
+    assert conn.execute("SELECT revision,definition_updated_by FROM bot_config WHERE bot=?", (HM_SLUG,)).fetchone() == (4, "keeper")
+    assert json.loads(conn.execute("SELECT extra FROM bot_settings WHERE bot_id=?", (HM_SLUG,)).fetchone()[0]) == {
+        "model": "m1", "status": "archived"}
+    assert dict(conn.execute("SELECT schedule_id,enabled FROM schedule_config")) == {"s1": 0}
+    assert dict(conn.execute("SELECT id,deleted_at IS NOT NULL FROM schedules")) == {"s1": 1, "s2": 1}
+    assert conn.execute("SELECT deleted_at FROM schedules WHERE id='s2'").fetchone()[0] == "t0", "kept, not re-stamped"
+    assert dict(conn.execute("SELECT bot,open_tasks FROM bot_status")) == {HM_SLUG: 0, "botops": 4}
 
 
-def test_running_the_archive_again_changes_nothing():
-    conn, migration = legacy_db(), retire_migration()
+def test_a_linked_open_task_moves_to_botops_and_the_rest_of_the_health_monitors_close():
+    conn = legacy_db()
+    retire_migration().up(conn)
+    assert {k: v for k, v in owners(conn).items() if k in ("t1", "t2", "t4", "t7", "t8")} == {
+        "t1": "bot:botops", "t2": "bot:botops", "t4": "human:ana", "t7": "bot:botops", "t8": "bot:botops"}
+    assert statuses(conn) == {"t1": "open", "t2": "review", "t3": "done", "t4": "open", "t5": "closed", "t6": "closed",
+                              "t7": "open", "t8": "open", "t9": "closed"}
+    assert conn.execute("SELECT owner_id FROM tasks WHERE id='t3'").fetchone()[0] == "bot:health-monitor"
+
+
+def test_each_moved_task_is_registered_for_its_signature_so_the_step_adopts_it():
+    conn = legacy_db()
+    retire_migration().up(conn)
+    entries = {row[0][len(REG):]: json.loads(row[1]) for row in conn.execute("SELECT key,value FROM registry_metadata")}
+    for entry in entries.values():
+        assert entry.pop("last_comment"), "the migration's day is the last comment: the next one comes a day on"
+    assert entries == {
+        PUSH: {"task": "t1", "keys": 2, "count": 5, "cleared": False, "approvals": {}},
+        RUNNER: {"task": "t2", "keys": 0, "count": 0, "cleared": False, "approvals": {}},
+        MH.signature("inv:lease_overdue"): {"task": "t7", "keys": 1, "count": 2, "cleared": False, "approvals": {}},
+        MH.signature("inv:task_stuck"): {"task": "t8", "keys": 1, "count": 0, "cleared": False, "approvals": {}},
+    }
+
+
+def test_the_invariant_alerts_lose_their_task_link_and_a_closed_one_is_left_alone():
+    conn = legacy_db()
+    retire_migration().up(conn)
+    assert dict(conn.execute("SELECT check_id,task_id FROM invariant_state")) == {
+        "lease_overdue": None, "task_stuck": None, "long_holds": None}
+    assert statuses(conn)["t9"] == "closed" and owners(conn)["t9"] == "bot:botops"
+
+
+def test_every_change_is_a_history_event_as_the_keeper():
+    migration = retire_migration()
+    conn = legacy_db()
     migration.up(conn)
-    before = conn.execute("SELECT id,owner_id,status FROM tasks ORDER BY id").fetchall()
-    migration.up(conn)
-    assert conn.execute("SELECT count(*) FROM task_events").fetchone()[0] == 2
-    assert conn.execute("SELECT id,owner_id,status FROM tasks ORDER BY id").fetchall() == before
+    assert conn.execute("SELECT subject_type,subject_id,kind,old,new,actor_id,note FROM history_events WHERE subject_id='t1'"
+                        ).fetchall() == [("task", "t1", "owner", "bot:health-monitor", "bot:botops", "keeper", migration.NOTE)]
+    (closed,) = conn.execute("SELECT kind,new,note FROM history_events WHERE subject_id='t6'").fetchall()
+    assert closed[0:2] == ("status", "closed") and closed[2].startswith("Superseded: its bot is retired")
+    assert conn.execute("SELECT count(*) FROM history_events").fetchone()[0] == 6, "t1, t2, t7, t8 move; t5, t6 close"
 
 
-def test_with_no_active_botops_the_open_tasks_close_as_superseded():
+def test_with_no_active_botops_every_open_task_closes_as_superseded():
     conn = legacy_db(botops="paused")
     retire_migration().up(conn)
-    rows = conn.execute("SELECT id,status,closed_by_id,note FROM tasks WHERE id IN ('t1','t2') ORDER BY id").fetchall()
-    assert [tuple(r[:3]) for r in rows] == [("t1", "closed", "keeper"), ("t2", "closed", "keeper")]
-    assert all(r[3].startswith("Superseded: Health Monitor retired") for r in rows)
-    assert conn.execute("SELECT owner_id,status FROM tasks WHERE id='t3'").fetchone() == ("bot:health-monitor", "done")
+    assert statuses(conn) == {"t1": "closed", "t2": "closed", "t3": "done", "t4": "open", "t5": "closed", "t6": "closed",
+                              "t7": "closed", "t8": "closed", "t9": "closed"}
+    assert conn.execute("SELECT count(*) FROM registry_metadata").fetchone()[0] == 0
+    assert conn.execute("SELECT count(*) FROM invariant_state WHERE task_id IS NOT NULL").fetchone()[0] == 0
+    assert conn.execute("SELECT note FROM tasks WHERE id='t7'").fetchone()[0].startswith("Superseded: ")
 
 
-def test_a_database_without_the_health_monitor_is_left_alone():
-    conn = legacy_db(health_monitor=False)
+def test_running_the_migration_again_changes_nothing():
+    conn, migration = legacy_db(), retire_migration()
+    migration.up(conn)
+    queries = ("SELECT id,owner_id,status FROM tasks ORDER BY id", "SELECT count(*) FROM history_events",
+               "SELECT key,value FROM registry_metadata ORDER BY key", "SELECT check_id,task_id FROM invariant_state ORDER BY check_id",
+               "SELECT id,state FROM bots ORDER BY id", "SELECT bot,open_tasks FROM bot_status ORDER BY bot")
+    before = [conn.execute(q).fetchall() for q in queries]
+    migration.up(conn)
+    assert [conn.execute(q).fetchall() for q in queries] == before
+
+
+@pytest.mark.parametrize("health_monitor", [None, "archived"])
+def test_without_a_health_monitor_to_retire_its_tasks_stay_and_the_invariant_alerts_still_move(health_monitor):
+    conn = legacy_db(health_monitor=health_monitor)
     retire_migration().up(conn)
-    assert conn.execute("SELECT count(*) FROM task_events").fetchone()[0] == 0
-    assert conn.execute("SELECT owner_id FROM tasks WHERE id='t1'").fetchone()[0] == "bot:health-monitor"
+    owned = owners(conn)
+    assert owned["t1"] == "bot:health-monitor" and owned["t2"] == "health-monitor"
+    assert owned["t7"] == "bot:botops" and owned["t8"] == "bot:botops"
+    assert conn.execute("SELECT count(*) FROM history_events WHERE subject_id IN ('t1','t2','t5','t6')").fetchone()[0] == 0
 
 
 def test_a_default_login_out_of_quota_is_a_finding_until_a_turn_there_completes(environment, readers):
