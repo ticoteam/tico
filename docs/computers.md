@@ -81,9 +81,10 @@ with **waiting: computer not reporting**, because a computer that stops reportin
 never reported is not held. The server also ends a run that has gone silent (no heartbeat or event for 5 minutes)
 once it is past its bot's max_run_minutes plus 5 minutes, without waiting for the computer.
 This includes turns with a reservation that have not started yet. Running turns continue. New starts resume when
-the hold clears. A person's own message to a bot (a chat, a message in its task) still starts, ahead of
-the waiting turns, when the computer has a free turn; Tico's notices and messages between bots wait. This brake does
-not change your account, model or computer size.
+the hold clears. A person's own message to a bot still starts, ahead of the waiting turns, when the computer has a
+free turn. That is a chat, a message in its task, or a reply to a question the bot asked. A person's message in a
+thread that wakes the bot counts too, such as an @mention. Tico's routine notices, sweeps and rule wake-ups wait, and so do
+messages between bots. This brake does not change your account, model or computer size.
 
 During an update, server and runner negotiate the start rules through heartbeat and claim. Older runners retain
 their existing delivery leases, including preparation already underway, until they update. Those starts have no new
