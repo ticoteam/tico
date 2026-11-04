@@ -25,9 +25,13 @@ function frameWork(events) {
   assert.ok(work.some(ms => ms > 0), 'frame thread clock advances');
   const tasks = events.filter(e => e.ph === 'X' && e.name === 'ThreadControllerImpl::RunTask'
     && e.pid === start.pid && e.tid === start.tid && e.ts < end.ts && e.ts + e.dur > start.ts);
-  assert.ok(tasks.length && tasks.every(e => Number.isFinite(e.tdur) && e.tdur >= 0), 'frame trace needs task CPU durations');
+  assert.ok(tasks.some(e => Number.isFinite(e.tdur)), 'frame trace needs task CPU durations');
+  // Chromium omits thread clocks on some microsecond tasks. Their elapsed duration is a conservative upper bound
+  // on CPU work, not zero. A trace with no task clocks at all still fails above.
+  const taskWork = tasks.map(e => e.tdur ?? e.dur);
+  assert.ok(taskWork.every(us => Number.isFinite(us) && us >= 0), 'task durations are nonnegative');
   return {frames: frames.length, p95: percentile(work, .95), max: Math.max(...work),
-    task: Math.max(...tasks.map(e => e.tdur)) * CPU_RATE / 1000};
+    task: Math.max(...taskWork) * CPU_RATE / 1000};
 }
 
 function assertFrameWork(name, work) {

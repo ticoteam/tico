@@ -21,6 +21,10 @@ assert.throws(() => assertFrameWork('one busy frame', frameWork(spike)), /frame 
 
 const foreign = {...trace().at(-1), pid: 99, tdur: 1000000};
 assert.deepEqual(frameWork([...trace(), foreign]), plain, 'only the page renderer is charged');
+const untimed = {name: 'ThreadControllerImpl::RunTask', ph: 'X', pid: 7, tid: 9, ts: 2000, dur: 1};
+assert.deepEqual(frameWork([...trace(), untimed]), plain, 'a microsecond task without thread clocks is bounded by elapsed time');
+assert.throws(() => assertFrameWork('untimed task', frameWork([...trace(), {...untimed, dur: 13000}])), /task CPU max/,
+  'a missing task clock cannot hide expensive work');
 assert.throws(() => frameWork([]), /starts before/);
 assert.throws(() => frameWork(trace().filter(e => e.args?.data.message !== 'dot-perf:frame')), /samples/);
 assert.throws(() => frameWork(trace().map(({tts, ...e}) => e)), /thread clocks/);
