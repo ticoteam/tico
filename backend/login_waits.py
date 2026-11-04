@@ -126,17 +126,17 @@ def unknown_holder(c, aid):
 
 
 def paused(c, aid, state, result_json):
-    """Why a run stopped to let another turn have its shared login (it continues next), or None."""
-    if state != "interrupted":
+    """Why a run paused for a shared login or an update, including a hand-back reported after lease expiry."""
+    if state not in ("interrupted", "expired"):
         return None
     try:
         result = json.loads(result_json or "{}") or {}
     except (TypeError, ValueError):
         result = {}
-    if not isinstance(result, dict) or not result.get("yielded"):
-        return None
     line = _payload(c, aid, "status", "yielded").get("yielded")
-    return clip(line, 200) if isinstance(line, str) and line.strip() else PAUSED
+    if isinstance(line, str) and line.strip():
+        return clip(line, 200)
+    return PAUSED if isinstance(result, dict) and result.get("yielded") else None
 
 
 def moved(c, aid, bot, who=None, auth=None):

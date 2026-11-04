@@ -46,6 +46,8 @@ HELD_UNREVIEWED = 2 * 3600
 SILENT_KINDS = {"error", "diagnostic", "status"}
 NO_EFFECT_TRIES = 3
 PRE_START_TRIES = 10        # lapsed leases before start: a broken computer must not retry forever
+# Count missed starts across hub restarts without making old computer trouble exhaust today's retries.
+PRE_START_WINDOW_HOURS = 24
 # A run that found the Tico AI Gateway unavailable goes back in the queue (at most NO_EFFECT_TRIES - 1 times), and the
 # bot first waits this long, doubled for each try: an outage is not asked again every few seconds.
 GATEWAY_BACKOFF = 60
@@ -2264,6 +2266,20 @@ HAND_BACK_WAIT = 15          # seconds before a handed-back job is handed out ag
 HAND_BACK_MAX = 300
 
 
+def failed_starts(c, job_id):
+    """Recent missed starts caused by the computer, excluding hub cuts and planned hand-backs.
+
+    flag_cut records leased attempts too; cut_by_update requires a started run because it decides resumption.
+    A drain's pause event can arrive before its completion, so it excuses a lapsed lease on its own."""
+    return c.execute("SELECT count(*) FROM attempts a WHERE a.job_id=? AND a.started_at IS NULL "
+                     "AND a.state='expired' AND a.finished_at>=? "
+                     "AND NOT EXISTS(SELECT 1 FROM events e WHERE e.target=a.id AND e.action=?) "
+                     "AND NOT coalesce(json_extract(a.result,'$.yielded'),0) "
+                     "AND NOT EXISTS(SELECT 1 FROM attempt_events e WHERE e.attempt_id=a.id AND e.kind='status' "
+                     "AND json_type(e.payload,'$.yielded')='text' AND trim(json_extract(e.payload,'$.yielded'))!='')",
+                     (job_id, H.shift(H.now(), hours=-PRE_START_WINDOW_HOURS), UPDATE_CUT)).fetchone()[0]
+
+
 def handed_back_until(c, job):
     """When a job its computer last handed back before starting (Execution.hand_back) may be claimed again, or None.
     A runner claims every quarter second, so without this wait a step that fails fast before every start would spend
@@ -3062,8 +3078,7 @@ class Execution:
                 stamp_attempt(c, row["id"], row["runner_id"], "end")
                 gateway_connection.forget(c, row["id"])
                 if row["state"] == "leased" and state == "queued" and not benched:
-                    tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=? AND started_at IS NULL "
-                                      "AND state='expired'", (row["job_id"],)).fetchone()[0]
+                    tries = failed_starts(c, row["job_id"])
                     if tries >= PRE_START_TRIES:
                         computer = c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
                         label = (computer["label"] if computer else None) or "its Computer"
@@ -3118,11 +3133,10 @@ class Execution:
         """A run its computer took and never started, its attempt already `expired`: its lease lapsed, or its
         computer handed it back (hand_back). Nothing ran, so nothing is held for review and the bot is not crashed:
         the job waits in the queue again and the bot's status line says so softly (last_stop). After PRE_START_TRIES
-        such runs the job fails instead, with a reason that names the computer, told to the person who asked.
-        The count survives server restarts: a broken computer must not take the same job forever."""
+        such runs within PRE_START_WINDOW_HOURS the job fails instead, with a reason that names the computer, told
+        to the person who asked. Hub cuts and planned pauses do not count; the window survives server restarts."""
         state, reason = "queued", ""
-        tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=? AND started_at IS NULL "
-                          "AND state='expired'", (row["job_id"],)).fetchone()[0]
+        tries = failed_starts(c, row["job_id"])
         bot = H.bot(c, row["bot_id"])
         if tries >= PRE_START_TRIES:
             computer = c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone()

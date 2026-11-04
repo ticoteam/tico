@@ -176,6 +176,61 @@ def test_a_planned_pause_reason_is_scrubbed_and_never_taken_from_reply_text(api)
     assert secret not in reason and 'private partial reply' not in reason
 
 
+def test_a_late_update_hand_back_keeps_its_saved_pause_and_does_not_use_a_start_retry(api, monkeypatch):
+    from backend import execution
+
+    monkeypatch.setattr(execution, 'PRE_START_TRIES', 1)
+    machine, _, a = setup_attempt(api)
+    line = 'Handed back before starting because the computer is updating; queued to continue'
+    post(api, f"attempts/{a['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'yielded': line}}]}, machine['token'])
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (H.shift(H.now(), seconds=-1), a['id']))
+        api.app.state.execution.expire(c)
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (a['job_id'],)).fetchone()[0] == 'queued'
+    # The saved event proves the pause even before its completion reaches the hub.
+    assert listed(api, a['id'])['end_reason'] == line
+    result = post(api, f"attempts/{a['id']}/complete",
+                  {'outcome': 'interrupted', 'yielded': True, 'last_seq': 1}, machine['token'])
+    assert result['filed']
+    with api.app.state.store.read() as c:
+        row = c.execute('SELECT state,result FROM attempts WHERE id=?', (a['id'],)).fetchone()
+        assert row['state'] == 'expired' and json.loads(row['result'])['yielded']
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (a['job_id'],)).fetchone()[0] == 'queued'
+    turn = listed(api, a['id'])
+    assert turn['end_reason'] == line and turn['failure_reason'] == line
+
+
+def test_a_late_yield_report_without_a_pause_event_uses_the_pause_fallback(api):
+    from backend.login_waits import PAUSED
+
+    machine, _, a = setup_attempt(api)
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (H.shift(H.now(), seconds=-1), a['id']))
+        api.app.state.execution.expire(c)
+    result = post(api, f"attempts/{a['id']}/complete",
+                  {'outcome': 'interrupted', 'yielded': True, 'last_seq': 0}, machine['token'])
+    assert result['filed']
+    assert listed(api, a['id'])['end_reason'] == PAUSED
+
+
+def test_canceling_an_expired_run_takes_precedence_over_its_late_pause(api):
+    machine, _, a = start(api)
+    post(api, f"attempts/{a['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'yielded': 'Paused for the computer to update'}}]}, machine['token'])
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (H.shift(H.now(), seconds=-1), a['id']))
+        api.app.state.execution.expire(c)
+    post(api, 'bots/ops/stop', {'run_id': a['id']})
+    result = post(api, f"attempts/{a['id']}/complete",
+                  {'outcome': 'interrupted', 'yielded': True, 'last_seq': 1}, machine['token'])
+    assert result['filed']
+    assert listed(api, a['id'])['end_reason'] == 'Canceled by human:ana'
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM attempts WHERE id=?', (a['id'],)).fetchone()[0] == 'expired'
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (a['job_id'],)).fetchone()[0] == 'canceled'
+
+
 def silent_since(api, aid, started):
     """A run started at `started_at`, with no heartbeat and no event since: its computer went quiet at that moment."""
     with api.app.state.store.transaction() as c:

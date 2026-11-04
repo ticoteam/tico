@@ -85,7 +85,7 @@ def reason(c, row: AttemptRow, outcome, summary=''):
     result = json.loads(row['result'] or '{}')
     if result.get('text') == RESTART_TEXT:
         return RESTART_TEXT
-    # Planned pauses are status events, not errors. Keep the computer's reason for the run list too.
+    # A saved pause event or late yield report explains even an expired lease. Stop above still takes precedence.
     from .login_waits import paused
     yielded = paused(c, row['id'], row['state'], row['result'])
     if yielded:

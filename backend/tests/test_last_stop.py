@@ -156,16 +156,15 @@ def test_a_run_its_computer_never_started_after_every_try_names_the_computer(api
 
 
 @pytest.mark.parametrize("handed_back", [False, True])
-def test_failed_starts_keep_their_retry_limit_across_server_restarts(api, monkeypatch, handed_back):
+def test_ten_failed_starts_within_a_day_fail_the_job_across_server_restarts(api, handed_back):
     from backend import execution, models
     from backend.auth import Identity
 
-    monkeypatch.setattr(execution, "PRE_START_TRIES", 2)
     machine, message, attempt = setup_attempt(api)
     store = api.app.state.store
     who = Identity("runner:" + machine["runner_id"], "runner", runner_id=machine["runner_id"])
     job_id = attempt["job_id"]
-    for _ in range(2):
+    for _ in range(10):
         # A new server reads the same durable jobs and attempts after each failed start.
         restarted = execution.Execution(store, api.app.state.execution.auth)
         with store.transaction() as c:
@@ -181,10 +180,60 @@ def test_failed_starts_keep_their_retry_limit_across_server_restarts(api, monkey
     assert attempt is None
     with store.read() as c:
         assert c.execute("SELECT state FROM jobs WHERE id=?", (job_id,)).fetchone()[0] == "failed"
-        assert c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (job_id,)).fetchone()[0] == 2
+        assert c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (job_id,)).fetchone()[0] == 10
     replies = get(api, f"conversations/{message['conversation_id']}/messages")
     assert [m["body"] for m in replies if m["sender_id"] == "bot:ops"] == [
         "Your ops couldn't start on Test Mac; check that Computer"]
+
+
+@pytest.mark.parametrize("handed_back", [False, True])
+def test_failed_starts_older_than_a_day_do_not_use_the_retry_budget(api, monkeypatch, handed_back):
+    from backend import execution
+
+    monkeypatch.setattr(execution, "PRE_START_TRIES", 2)
+    machine, _, attempt = setup_attempt(api)
+    for n in range(3):
+        if handed_back:
+            post(api, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
+        else:
+            lapse(api, attempt)
+        with api.app.state.store.transaction() as c:
+            assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == (
+                "failed" if n == 2 else "queued")
+            # Only the first miss ages out; the two recent misses must still exhaust the budget.
+            finished = (H.shift(H.now(), hours=-execution.PRE_START_WINDOW_HOURS, seconds=-1) if n == 0
+                        else H.shift(H.now(), seconds=-execution.HAND_BACK_MAX - 1))
+            c.execute("UPDATE attempts SET finished_at=? WHERE id=?", (finished, attempt["id"]))
+        if n < 2:
+            ready(api, machine, ["ops"])
+            attempt = claim(api, machine)
+            assert attempt
+
+
+@pytest.mark.parametrize(("cause", "handed_back"), [("update", False), ("restart", True)])
+def test_hub_cut_expiries_do_not_use_the_retry_budget(api, monkeypatch, cause, handed_back):
+    from backend import execution
+
+    monkeypatch.setattr(execution, "PRE_START_TRIES", 2)
+    machine, _, attempt = setup_attempt(api)
+    for n in range(4):
+        if n < 2:
+            with api.app.state.store.transaction() as c:
+                assert execution.flag_cut(c, cause) == 1
+        if handed_back:
+            post(api, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
+        else:
+            lapse(api, attempt)
+        with api.app.state.store.transaction() as c:
+            # Two hub cuts cost no retries; the next two ordinary misses still fail the job.
+            assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == (
+                "failed" if n == 3 else "queued")
+            c.execute("UPDATE attempts SET finished_at=? WHERE id=?",
+                      (H.shift(H.now(), seconds=-execution.HAND_BACK_MAX - 1), attempt["id"]))
+        if n < 3:
+            ready(api, machine, ["ops"])
+            attempt = claim(api, machine)
+            assert attempt
 
 
 def test_the_latest_failed_start_is_not_hidden_by_an_older_held_run(api):
