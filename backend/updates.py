@@ -129,6 +129,9 @@ def effective_kind(kind, slides, day=None):
 
 
 def settings(c, bot):
+    # Counsel speaks only on the private task it was asked to read; it cannot publish an update.
+    if bot == H.COUNSEL:
+        return {"daily": False, "weekly": False}
     row = c.execute("SELECT daily, weekly FROM update_settings WHERE bot=?", (bot,)).fetchone()
     return {"daily": bool(row["daily"]) if row else True, "weekly": bool(row["weekly"]) if row else True}
 
@@ -137,6 +140,8 @@ def set_settings(c, bot, daily=None, weekly=None):
     now = settings(c, bot)
     daily = now["daily"] if daily is None else bool(daily)
     weekly = now["weekly"] if weekly is None else bool(weekly)
+    if bot == H.COUNSEL and (daily or weekly):
+        raise Problem("updates_unavailable", "Counsel speaks only on its own task and cannot publish updates", 422)
     c.execute("INSERT INTO update_settings(bot,daily,weekly) VALUES(?,?,?) ON CONFLICT(bot) DO UPDATE SET "
               "daily=excluded.daily, weekly=excluded.weekly", (bot, int(daily), int(weekly)))
     return {"daily": daily, "weekly": weekly}
@@ -287,7 +292,8 @@ def build_queue(c, day, kind, assistant=None):
         "SELECT b.id, b.slug, (SELECT max(u.created_at) FROM updates u WHERE u.bot=b.id) last_update, "
         "(SELECT last_turn_at FROM bot_status s WHERE s.bot=b.id) last_turn "
         "FROM bots b LEFT JOIN update_settings us ON us.bot=b.id "
-        "WHERE b.state='active' AND coalesce(us." + ("daily" if kind == "daily" else "weekly") + ",1)=1").fetchall()
+        "WHERE b.state='active' AND b.id<>? AND coalesce(us." + ("daily" if kind == "daily" else "weekly") + ",1)=1",
+        (H.COUNSEL,)).fetchall()
     depth = depths(c, [r["id"] for r in rows])
     order = sorted(rows, key=lambda r: (-depth[r["id"]], r["last_update"] or "", r["last_turn"] or "", r["slug"]))
     for rank, row in enumerate(order):
@@ -797,7 +803,7 @@ def redo(c, kind, day, bots=None, managers=False):
     if when.isoformat() > today():
         raise Problem("day", "A redo is for today or an earlier day", 422)
     rows = c.execute("SELECT b.id FROM bots b LEFT JOIN update_settings us ON us.bot=b.id WHERE b.state='active' "
-                     "AND coalesce(us." + kind + ",1)=1 ORDER BY b.slug").fetchall()
+                     "AND b.id<>? AND coalesce(us." + kind + ",1)=1 ORDER BY b.slug", (H.COUNSEL,)).fetchall()
     ids = {b: (H.resolve_bot(c, b) or {}).get("id", b) for b in bots or ()}
     chosen = [r["id"] for r in rows if not bots or r["id"] in ids.values()]
     unknown = sorted(b for b, bid in ids.items() if bid not in chosen)
