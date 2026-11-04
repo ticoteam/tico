@@ -124,7 +124,9 @@ const {t} = require('./support/load.cjs');
     await page.waitForFunction(() => !document.querySelector('[data-boot-snap]'), null, {timeout: t(20000)});
     assert.ok(Date.now() - shownAt > 8000, 'it stayed up until the wait ended');
     const stalled = await copyState();
-    assert.deepEqual({routed: stalled.routed, shown: stalled.mainShown}, {routed: 0, shown: ''}, 'down while boot still waits');
+    assert.deepEqual({routed: stalled.routed, shown: stalled.mainShown, drawn: stalled.mainKids > 0}, {routed: 0, shown: '', drawn: true},
+      'down while boot still waits, its loading rows in its place, never a blank page');
+    assert.equal(await page.evaluate(() => !!document.querySelector('#main .skel')), true);
     const late = held; held = null; late.forEach(answer => answer());
     await heading().waitFor();
 
@@ -155,7 +157,14 @@ const {t} = require('./support/load.cjs');
     });
     assert.deepEqual(out, {host: false, kids: 0, shown: ''}, 'nothing of the screen is left on the page');
     await keptAs(entry => entry === null, 'sign-out drops the kept screen');
+    // The roster answering after the sign-out, the page settling and leaving keep nothing either.
     const rest = held; held = null; rest.forEach(answer => answer());
+    await heading().waitFor();
+    await page.waitForFunction(() => performance.getEntriesByName('tico:paint-fresh').length === 1);
+    await page.waitForTimeout(2500);
+    await page.evaluate(() => { bootSnapSave(); window.dispatchEvent(new Event('pagehide')); });
+    await page.waitForTimeout(300);
+    assert.equal(await kept(), null, 'nothing is kept again after a sign-out in this page');
     assert.deepEqual(errors, []);
     console.log('boot snap: the same person sees their last screen at once, outside #main; nothing private, nobody else, nothing after sign-out');
   } finally { await browser.close(); }
