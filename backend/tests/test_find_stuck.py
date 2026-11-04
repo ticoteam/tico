@@ -7,14 +7,20 @@ import importlib
 import sqlite3
 
 from backend import task_roundup
+from backend.store import H
 from backend.maintenance_steps import find_stuck as FS
 from backend.tests.test_api import api  # noqa: F401  (fixture)
-from backend.tests.test_task_roundup import DAY, ago, build_clock, complete_jobs, lists, only_list, settle, task  # noqa: F401
+from backend.tests.test_task_roundup import (  # noqa: F401
+    DAY, NOON, ago, build_clock, complete_jobs, lists, named_in, only_list, settle, started, task,
+)
 
 
-def run_find_stuck(store, at=DAY):
+def run_find_stuck(store, at=DAY, settings=None):
+    ctx = {"store": store, "now": at}
+    if settings is not None:
+        ctx["settings"] = settings
     with store.read_transaction() as c:
-        return FS.run(c, {"store": store, "now": at})
+        return FS.run(c, ctx)
 
 
 def test_the_step_reads_the_bots_on_its_connection_and_sends_each_through_the_store(api):
@@ -59,6 +65,39 @@ def test_a_delivered_list_is_recorded_once_with_every_task_it_named(api, monkeyp
     assert run_find_stuck(store)["woke"] == 1
     assert len(calls) == 1 and calls[0][0] == "finance"
     assert sorted(calls[0][1]) == sorted([first, second]), "one record per delivered list, with every task it named"
+
+
+def test_the_step_sends_at_most_max_bots_oldest_line_first_and_the_rest_wait_for_the_next_run(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        # Created finance, coo, ops: neither creation order nor name order is the age order (ops, coo, finance).
+        for slug, title, turned in (("finance", "Draft the grant report", ago(days=9)), ("coo", "Sign the menu", ago(days=10)),
+                                    ("ops", "Print the menu", ago(days=12))):
+            settle(c, task(c, title, owner=H.bot_actor(slug))["id"], slug, turned)
+            complete_jobs(c, slug)
+    assert run_find_stuck(store, settings={"max_bots": 2})["details"]["woken"] == ["ops", "coo"]
+    with store.read_transaction() as c:
+        assert lists(c, "finance") == [], "the bot past the cap is not sent this run"
+    assert run_find_stuck(store, at=NOON, settings={"max_bots": 2})["details"]["woken"] == ["finance"]
+
+
+def test_a_task_the_limiter_holds_is_dropped_from_its_list_while_an_eligible_one_is_sent(api, monkeypatch):
+    store = api.app.state.store
+    with store.transaction() as c:
+        held = task(c, "Draft the grant report")["id"]
+        eligible = task(c, "Chase the quote")["id"]
+        settle(c, held, "finance", ago(days=3))
+        settle(c, eligible, "finance", ago(days=3))
+        complete_jobs(c)
+    monkeypatch.setattr(FS.LIMITS, "allow", lambda c, bot_id, task_id=None: task_id != held)
+    result = run_find_stuck(store)
+    assert result["details"]["woken"] == ["finance"]
+    assert result["details"]["limited"] == [held]
+    with store.read() as c:
+        body = only_list(c)
+        assert named_in(body) == 1 and f"{eligible[:8]} Chase the quote" in body
+        assert held[:8] not in body
+        assert task_roundup._mark(c, task_roundup.LISTED_KEY + held) is None, "a held task is not recorded as listed"
 
 
 def test_migration_0084_withdraws_only_the_keepers_open_still_wanted_questions():

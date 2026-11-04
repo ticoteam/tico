@@ -12,7 +12,7 @@ import pytest
 
 from backend import bot_settings as BS
 from backend.enqueue import enqueue_stored
-from backend import scheduler, still_needed, task_check_backs, task_roundup, team_rules
+from backend import scheduler, still_needed, task_check_backs, task_roundup
 from backend import step_backlog as SB
 from backend import task_holds as TH
 from backend import task_relations as TR
@@ -36,9 +36,9 @@ def ago(**kw):
     return H.shift(DAY, **{k: -v for k, v in kw.items()})
 
 
-def task(c, title):
+def task(c, title, owner="bot:finance"):
     """Created at the fixed DAY clock, so the runs' cutoffs do not depend on the real date."""
-    made = H.task_create(c, H.human_actor("ana"), title, f"{title}, for the roundup.", "bot:finance")
+    made = H.task_create(c, H.human_actor("ana"), title, f"{title}, for the roundup.", owner)
     c.execute("UPDATE tasks SET created_at=? WHERE id=?", (DAY, made["id"]))
     return made
 
@@ -1061,7 +1061,7 @@ def test_a_missed_start_is_listed_once_for_its_time_and_not_again_on_the_next_ru
                   (ago(hours=3), tid))
         complete_jobs(c)
         assert "finance" in task_roundup.run(c, DAY)["woke"]
-        assert f"{tid[:8]} Call the venue: Snooze ended at 11:00 UTC and nothing has picked it up" in only_list(c)
+        assert f"{tid[:8]} Call the venue: Snooze ended at 09:00 UTC and nothing has picked it up" in only_list(c)
         assert "finance" not in task_roundup.run(c, H.shift(DAY, hours=2))["woke"], "listed once for that time"
 
 
@@ -1084,6 +1084,7 @@ def test_a_waiting_task_held_only_by_bots_is_listed_on_its_blocker_bots_list_not
     with store.transaction() as c:
         blocker = H.task_create(c, H.human_actor("ana"), "Finish the menu", "Ops finishes it.", H.bot_actor("ops"))["id"]
         mine = task(c, "Print the menu")["id"]
+        started(c, mine, "finance", ago(days=1))
         c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
         blocks(c, blocker, mine, ago(days=1))
         complete_jobs(c)
@@ -1123,6 +1124,7 @@ def test_a_waiting_task_already_listed_for_its_update_is_not_read_by_task_holds_
     with store.transaction() as c:
         blocker = H.task_create(c, H.human_actor("ana"), "Finish the menu", "Ops finishes it.", H.bot_actor("ops"))["id"]
         mine = task(c, "Print the menu")["id"]
+        started(c, mine, "finance", ago(days=1))
         c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
         blocks(c, blocker, mine, ago(days=1))
         complete_jobs(c)
@@ -1148,6 +1150,7 @@ def test_a_task_held_by_two_bots_is_listed_to_both_in_one_run_and_to_neither_on_
         for tid in (ops, coo):
             c.execute("UPDATE tasks SET created_at=?, updated_at=? WHERE id=?", (ago(days=2), ago(days=2), tid))
         mine = task(c, "Print the menu")["id"]
+        started(c, mine, "finance", ago(days=1))
         c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
         blocks(c, ops, mine, ago(days=1))
         blocks(c, coo, mine, ago(days=1))
@@ -1162,28 +1165,82 @@ def test_a_task_held_by_two_bots_is_listed_to_both_in_one_run_and_to_neither_on_
         assert (lists(c, "ops"), lists(c, "coo")) == before, "neither bot is sent the task again with no update to it"
 
 
-def test_a_stale_candidate_the_bot_owns_is_listed_once_while_the_stale_review_rule_is_on(api):
+def test_a_blocker_that_cannot_read_the_owners_task_gets_no_line(api, monkeypatch):
     store = api.app.state.store
+    real = H.bot_reads_task
+
+    def unread_by_ops(conn, bot, row):
+        if bot == H.bot_actor("ops") and row["title"] == "Print the menu":
+            return False
+        return real(conn, bot, row)
+
+    monkeypatch.setattr(H, "bot_reads_task", unread_by_ops)
     with store.transaction() as c:
-        team_rules.save(c, "human:ana", {"stale_review": True})
-        tid = task(c, "Ship the export button")["id"]
-        settle(c, tid, "finance", ago(days=9))
+        blocker = task(c, "Finish the menu", owner=H.bot_actor("ops"))["id"]
+        settle(c, blocker, "ops", ago(days=3))     # ops has a list of its own (its quiet blocker), so the check is not vacuous
+        mine = task(c, "Print the menu")["id"]
+        started(c, mine, "finance", ago(days=1))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
+        blocks(c, blocker, mine, ago(days=1))
         complete_jobs(c)
-        assert task_roundup.run(c, DAY)["woke"] == ["finance"]
-        body = only_list(c)
-        assert f"{tid[:8]} Ship the export button: Stale check: " in body
-        assert "Quiet for" not in body, "a task is named once, as its first kind"
-        assert task_roundup.run(c, DAY)["woke"] == [], "listed once per update of the task"
+        complete_jobs(c, "ops")
+        task_roundup.run(c, DAY)
+        ops = lists(c, "ops")
+        assert ops and not any(mine[:8] in body for body in ops), "a blocker that cannot read the owner's task names nothing"
 
 
-def test_with_the_stale_review_rule_off_the_same_task_is_only_quiet(api):
+def test_a_missed_start_is_listed_for_three_days_after_its_deadline_and_not_longer(api):
     store = api.app.state.store
     with store.transaction() as c:
-        team_rules.save(c, "human:ana", {"stale_review": False})
-        tid = task(c, "Ship the export button")["id"]
-        settle(c, tid, "finance", ago(days=9))
+        recent = task(c, "Call the venue")["id"]
+        old = task(c, "Chase the old one")["id"]
+        settle(c, recent, "finance", ago(days=3))
+        settle(c, old, "finance", ago(days=5))
+        H._task_event(c, recent, H.KEEPER, "snoozed_until", ago(days=2), None, "snooze over")
+        H._task_event(c, old, H.KEEPER, "snoozed_until", ago(days=4), None, "snooze over")
         complete_jobs(c)
-        assert task_roundup.run(c, DAY)["woke"] == ["finance"]
+        assert "finance" in task_roundup.run(c, DAY)["woke"]
         body = only_list(c)
-        assert f"{tid[:8]} Ship the export button: Quiet for 9 days, nothing waiting on anyone" in body
-        assert "Stale check" not in body
+        assert f"{recent[:8]} Call the venue: Snooze ended at 14:00 UTC and nothing has picked it up" in body
+        assert f"{old[:8]} Chase the old one: Snooze ended" not in body, "a missed start older than three days is history"
+
+
+def test_a_deferral_a_bot_made_on_a_task_another_bot_owns_is_not_its_missed_start(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        tid = task(c, "Chase the invoice", owner=H.bot_actor("ops"))["id"]
+        settle(c, tid, "ops", ago(days=2))
+        conv = H.task(c, tid)["conversation_id"]
+        c.execute("INSERT INTO deferrals(id,bot,kind,item,conversation_id,task_id,due_at,created_at,fired_job,settled_at,how,attempt) "
+                  "VALUES(?,?,'task',?,?,?,?,?,NULL,NULL,NULL,NULL)",
+                  (H.new_id(), "finance", tid, conv, tid, ago(hours=2), ago(hours=4)))
+        complete_jobs(c)
+        complete_jobs(c, "ops")
+        task_roundup.run(c, DAY)
+        assert not any("Deferred time passed" in body for body in lists(c, "finance") + lists(c, "ops")), (
+            "the bot that made the deferral is not told of a task it does not own")
+
+
+def test_a_snooze_notice_written_to_an_external_inbox_is_its_delivery_so_no_start_is_listed(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        BS.update(c, "finance", {"harness": "hermes"})   # an external agent with no computer: its inbox is its delivery
+        tid = task(c, "Call the venue")["id"]
+        settle(c, tid, "finance", ago(days=2))
+        H._task_event(c, tid, H.KEEPER, "snoozed_until", ago(hours=5), None, "snooze over")
+        note(c, tid, H.KEEPER, ago(hours=3))
+        complete_jobs(c)
+        task_roundup.run(c, DAY)
+        assert not any("Snooze ended" in body for body in lists(c)), "a snooze notice written to the external inbox was delivered"
+
+
+def test_an_external_inbox_with_no_notice_since_its_snooze_ended_has_a_missed_start(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        BS.update(c, "finance", {"harness": "hermes"})
+        tid = task(c, "Call the venue")["id"]
+        settle(c, tid, "finance", ago(days=2))
+        H._task_event(c, tid, H.KEEPER, "snoozed_until", ago(hours=5), None, "snooze over")
+        complete_jobs(c)
+        assert "finance" in task_roundup.run(c, DAY)["woke"]
+        assert f"{tid[:8]} Call the venue: Snooze ended at 09:00 UTC and nothing has picked it up" in only_list(c)
