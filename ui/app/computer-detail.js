@@ -453,7 +453,8 @@ function machineSettingsHTML(machine) {
   return body || `<p class="muted">${machine.revoked_at ? `Revoked ${esc(ago(machine.revoked_at))}.` : 'Nothing to change here.'}</p>`;
 }
 // The computer's name, with Rename for an owner or admin: the name becomes a field with Save and Cancel.
-let COMPUTER_RENAMING = '';
+// COMPUTER_RENAME_EDIT counts edit sessions, so a save that answers late touches only the session that sent it.
+let COMPUTER_RENAMING = '', COMPUTER_RENAME_EDIT = 0;
 function computerNameHTML(machine) {
   const title = `<h2 id="computer-detail-title"${COMPUTER_RENAMING === machine.id ? ' class="sr-only"' : ''}>${esc(machine.label)}</h2>`;
   if (!settingsIsAdmin() || machine.revoked_at) return title;
@@ -464,6 +465,7 @@ function computerNameHTML(machine) {
 }
 function computerRenameShow(id) {
   COMPUTER_RENAMING = id;
+  COMPUTER_RENAME_EDIT++;
   computerDetailPaint(true);
   const input = $('#set-machines dialog.computer-detail [data-computer-rename-input]');
   input?.focus(); input?.select();

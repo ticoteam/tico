@@ -363,15 +363,19 @@ async function settingsComputerRename(form) {
   const label = input.value.trim();
   settingsFieldClear(input);
   if (!label || label.length > 100) { settingsFieldError(input, 'Enter 1 to 100 characters.'); input.focus(); return; }
-  const buttons = [...form.querySelectorAll('button')];
+  const buttons = [...form.querySelectorAll('button')], edit = COMPUTER_RENAME_EDIT;
   buttons.forEach(button => { button.disabled = true; });
   try {
     await post(`/v2/computers/${encodeURIComponent(id)}/label`, {label});
     const machine = (SETTINGS_DATA.machines || []).find(row => row.id === id);
     if (machine) machine.label = label;
-    COMPUTER_RENAMING = '';
-    computerDetailPaint(true);
-    $('#set-machines dialog.computer-detail [data-computer-rename]')?.focus();
+    // Only the edit that sent it closes: the pop-up may show another computer, or another edit, by now.
+    const dialog = $('#set-machines dialog.computer-detail');
+    if (dialog?.open && dialog.dataset.computer === id && COMPUTER_RENAMING === id && COMPUTER_RENAME_EDIT === edit) {
+      COMPUTER_RENAMING = '';
+      computerDetailPaint(true);
+      dialog.querySelector('[data-computer-rename]')?.focus();
+    }
     toast('Renamed');
     await loadSettings();
   } catch (error) {
