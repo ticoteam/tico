@@ -104,6 +104,7 @@
         "computer_logins_v1": {"type": "boolean"},
         "onboarding": {"type": "string"},
         "mailboxes": {"type": "array", "items": {"type": "string"}},
+        "mailbox_levels": {"type": "object", "x-note": "Each of `mailboxes` with this bot's level on it, read or read_write (backend/mailbox_access.py levels_for). An older server omits it; a runner that ignores it mints full scope for `mailboxes` as before.", "additionalProperties": {"type": "string", "enum": ["read", "read_write"]}},
         "next_run": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "notes": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "deferred": {"type": "string", "x-note": "The prompt's block on what was deferred to this turn: its count line (\"Deferred since your last turn: 2 comments, 1 task\"), then the deferred comments and messages themselves, one a line, a bounded page; empty when nothing; an older server omits it."},

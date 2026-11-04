@@ -895,6 +895,8 @@ def company(slug):
         return runner_company()
     row = _server_row(slug)
     if row is None:
+        if access.entries(access._manifest(slug)):
+            return UNREAD                               # a bot here whose own mail setting Tico did not answer
         # Not a bot with a mail setting (a person's own run): What Tico may do as Tico answered about this run's access.
         try:
             got = access.answer(slug).get("company")

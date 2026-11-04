@@ -83,8 +83,9 @@ def test_a_tico_team_like_company_keeps_every_access_it_has(api):
         assert got[(SUPPORT, "bot", "ops")] == ("read", "migration")          # can: [read] only reads now
         assert got[(SUPPORT, "person", "cara")] == ("read_write", "migration")   # the shared inbox she had a bot on
         assert got[(ANA, "bot", "finance")] == ("read_write", "migration")
-        # org_read: read on the mailboxes below ana (ben's, and cara's message-bot mailbox, support@).
+        # org_read: read on the mailboxes below ana (ben's, cara's, and cara's message-bot mailbox, support@).
         assert got[(BEN, "bot", "finance")] == ("read", "migration")
+        assert got[(CARA, "bot", "finance")] == ("read", "migration")
         assert got[(SUPPORT, "bot", "finance")] == ("read", "migration")
         assert not any(kind == "person" and address == BEN for address, kind, _ in got)   # ben's own: implicit
         assert made == {"mailboxes": len(rows(c)), "accesses": len(got)}
