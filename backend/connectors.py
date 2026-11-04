@@ -312,12 +312,15 @@ def install_connectors(app, store, execution, mutate):
         runner = google_rights.runner_of(execution, c, who)
         return runner, google_rights.publishes(store, execution, c, runner)
 
-    def reader(c, who):
+    def reader(c, who, mailbox=None):
         """The gate of a connector call that a publisher or a computer owning a mailbox may make (plan v3 B, v4 O).
-        Anyone else gets publisher()'s refusal, as before."""
+        Anyone else gets publisher()'s refusal, as before. With `mailbox`, a computer that owns nothing is told why about
+        that mailbox first (workspace_owned or personal_grant, else forbidden)."""
         runner, named = member(c, who)
         owned = workspace.owned_mailboxes(c, runner["id"])
         if not named and not owned:
+            if mailbox:
+                google_rights.check(c, runner["id"], named, mailbox, owned)
             raise Problem("forbidden", google_rights.FORBIDDEN, 403)
         return runner, named, owned
 
@@ -582,7 +585,7 @@ def install_connectors(app, store, execution, mutate):
     @app.post("/api/v2/connectors/mail/messages")
     def mail_publish(request: Request, body: MailPublish):
         def work(c):
-            runner, named, owned = reader(c, request.state.identity)
+            runner, named, owned = reader(c, request.state.identity, body.mailbox)
             google_rights.check(c, runner["id"], named, body.mailbox, owned)
             seen = set()
             for message in body.messages:
