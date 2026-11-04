@@ -36,9 +36,16 @@ def test_private_audience_and_participant_read_access(api):
     assert items(api, rid)['audience'] == ['human:ana', 'human:ben']
     sent = push(api, rid, item, {'detail': {'owner': 'human:ana'}})['item']
     assert get(api, 'tasks/' + sent['result_ref'], 'ben-test')['task']['private']
+    assert sent['result_ref'] in {task['id'] for task in get(api, 'tasks', 'ben-test')['tasks']}
     with api.app.state.store.read() as c:
         assert c.execute("SELECT actor FROM task_roles WHERE task_id=? AND role='participant' ORDER BY actor",
                          (sent['result_ref'],)).fetchall()
+        from dataclasses import replace
+        auth = api.app.state.auth
+        carried = replace(auth.identity_for_actor(c, 'human:ana'), task_actor='human:ben')
+        assert auth.task(c, carried, sent['result_ref'])
+        assert c.execute('SELECT id FROM tasks WHERE id=? AND (' + auth.task_sql(c, carried) + ')',
+                         (sent['result_ref'],)).fetchone()
 
 
 def test_redacts_mutation_replay_listing_and_outbox(api):

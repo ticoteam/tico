@@ -747,7 +747,7 @@ class Auth:
         return False
 
     def task_sql(self, c, who, delegations="task_delegations", unreadable=None):
-        """Company tasks respect bot activity controls; private tasks admit parties, their managers and a guest.
+        """Company tasks respect bot activity controls; private tasks also admit checked meeting participants.
 
         Type-wide work, task ancestry and delegation never widen private visibility.
         `delegations` stays accepted for compatibility with the guarded SQL caller.
@@ -770,7 +770,8 @@ class Auth:
         if who.task_actor:
             actor = A.q(who.task_actor)
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
-            audience += f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} OR guest={actor})"
+            audience += (f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} "
+                         f"OR guest={actor} OR ({participant_sql(c, actor)}))")
         return audience
 
     def operator(self, c, who, bot):
