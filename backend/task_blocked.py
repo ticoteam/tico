@@ -32,8 +32,9 @@ def stamp_builds(c):
         unstamped = ("FROM tasks WHERE type_id=? AND status='doing' AND building_started_at IS NULL "
                      "AND building_seconds=0 AND created_at LIKE '____-__-__T%'")
         if c.execute("SELECT 1 " + unstamped + " LIMIT 1", (typ[0],)).fetchone():
-            c.execute("UPDATE tasks SET building_started_at=coalesce((SELECT max(created_at) FROM task_events e WHERE "
-                      "e.task_id=tasks.id AND e.field='step' AND e.new=tasks.step_id),created_at) "
+            c.execute("UPDATE tasks SET building_started_at=coalesce((SELECT max(created_at) FROM history_events e WHERE "
+                      "e.subject_type='task' AND e.subject_id=tasks.id AND e.kind='step' AND e.new=tasks.step_id),"
+                      "created_at) "
                       "WHERE id IN (SELECT id " + unstamped + ")", (typ[0],))
 
 
@@ -68,7 +69,7 @@ def forget_retired_resumes(c):
             "SELECT t.id,t.blocked_from_step,t.step_id FROM tasks t JOIN task_types ty ON ty.id=t.type_id "
             "WHERE ty.role='engineering' AND t.blocked_since IS NOT NULL "
             "AND t.blocked_from_step IS NOT NULL").fetchall():
-        moves = c.execute("SELECT new,note FROM task_events WHERE task_id=? AND field='step' "
+        moves = c.execute("SELECT new,note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' "
                           "ORDER BY created_at DESC,rowid DESC LIMIT 2", (task_id,)).fetchall()
         retired_here = bool(moves) and moves[0][0] == saved and moves[0][1] == H.RETIRED_WAITING
         held_in_blocked = (len(moves) == 2 and moves[0][0] == step and moves[1][0] == saved
@@ -92,7 +93,7 @@ def leave_retired_blocked(c):
     for task_id, type_id, saved, step_id in rows:
         steps = {s[0]: (s[1], s[2]) for s in c.execute(
             "SELECT id,name,status FROM task_steps WHERE type_id=?", (type_id,)).fetchall()}
-        came_from = c.execute("SELECT old FROM task_events WHERE task_id=? AND field='step' AND new=? "
+        came_from = c.execute("SELECT old FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' AND new=? "
                               "ORDER BY created_at DESC,rowid DESC LIMIT 1", (task_id, step_id)).fetchone()
         target = next((sid for sid in (saved, came_from and came_from[0])
                        if sid in steps and steps[sid][1] in H.ACTIVE_STATUSES and steps[sid][1] != 'waiting'), None)

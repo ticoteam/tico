@@ -104,7 +104,8 @@ def defer(conn, bot, kind, item, *, conversation_id="", task_id=None, defer_for=
     if kind == "task" and task_id and due:
         from . import task_check_backs
         row = H.task(conn, task_id)
-        explicit = conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='check_back_explicit' LIMIT 1", (task_id,)).fetchone()
+        explicit = conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? "
+                                "AND kind='check_back_explicit' LIMIT 1", (task_id,)).fetchone()
         if row and task_check_backs.involved(row) and not explicit:
             task_check_backs.set_time(conn, row, due, "Inspect the deferred assignment at its delivery deadline.", system=True)
     return due

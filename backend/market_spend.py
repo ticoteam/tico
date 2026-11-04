@@ -13,7 +13,7 @@ tables of its own:
 - **sources**: the shipped catalog (`market_sources/catalog.yaml`) and a team's own additions (`market_sources`).
 
 Only the owner and the Librarian write (`market.require_writer`). Each write that changes what a segment is worth is a
-`market_events` row on the segment, so a bet that cites the segment trips (backend/strategy.py). A proposed size is
+market history row on the segment, so a bet that cites the segment trips (backend/strategy.py). A proposed size is
 logged but does not trip a bet: only an accepted size is something a bet rests on.
 """
 

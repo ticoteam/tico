@@ -120,6 +120,10 @@ class Run:
                 self.release(w, i)
                 self.assign(w, team)
                 w.scheduler_pass()
+                # A parked turn asks for its computer place again before this tick's claims, the earliest parked first:
+                # the server grants places in claim order (start_places.reserve).
+                for bot in sorted((b for b in team.all if b.parked and b.available), key=lambda b: b.parked_since):
+                    bot.retry_start()
                 bots = list(team.all)
                 self.rng.shuffle(bots)
                 for bot in bots:
@@ -129,7 +133,7 @@ class Run:
                         bot.recover()
                     if s.claim == "bot":
                         self.bot_turns(w, bot)
-                    elif bot.running and w.now() >= bot.ends:
+                    elif bot.due(w.now()):
                         bot.end()
                 if s.claim == "runner":
                     self.sweep(w)
@@ -142,7 +146,7 @@ class Run:
     def bot_turns(self, w, bot):
         """One bot's turns under per-bot claims: finish the running one, then claim the next while the bot is free."""
         for _ in range(8):
-            if bot.running and w.now() >= bot.ends:
+            if bot.due(w.now()):
                 bot.end()
             if bot.running or not bot.available:
                 break
@@ -169,7 +173,7 @@ class Run:
         (reasons)."""
         self.stale_round(w.now())
         body = self.runner_body(team)
-        free = w.capacity - sum(1 for b in team.all if b.running)
+        free = w.capacity - self.places_used(team)
         if self.back_check:
             # The computer's readiness as the heartbeat before this round's claims told the server it (the sim sends
             # that heartbeat once the scenario changes who is available).
@@ -178,7 +182,11 @@ class Run:
         pool = self.pool(team, body)
         before, held = self.queued_before(w, pool)
         started, started_bots, started_jobs, answers, fallback = 0, [], [], [], 0
-        for _ in range(max(0, free)):
+        claims = 0
+        # The claims go on while the computer holds fewer places than its capacity. A parked turn holds no place, so a
+        # round may claim past its free places, up to the server's bound on leased work (runner-rs runner.rs claim_next).
+        while claims < 2 * w.capacity and self.places_used(team) < w.capacity:
+            claims += 1
             body = self.runner_body(team)
             _, reply = self.claim_once(w, body)
             answers.append(reply)
@@ -186,8 +194,8 @@ class Run:
             if not attempt:
                 break
             bot = team.bot(attempt["bot"])
-            bot.start(attempt)
-            started += 1
+            if bot.start(attempt):
+                started += 1
             started_bots.append(bot.slug)
             started_jobs.append(attempt.get("job_id"))
             fallback += bot.runtime != PRIMARY
@@ -205,6 +213,10 @@ class Run:
                          f"{answers[-1] if answers else None}")
             mark["why"] = " | ".join(lines)
         self.marks.append(mark)
+
+    def places_used(self, team):
+        """The computer's places in use: its running turns, less the parked ones, which hold no place."""
+        return sum(1 for b in team.all if b.running and not b.parked)
 
     def pool(self, team, body):
         """The bots a round may hand work to: available on this computer, not running a turn (its lane is busy), not
@@ -432,8 +444,8 @@ class Run:
                        + (f" blocked: {t['blocked_since']}" if t["blocked_since"] else ""))
             for c in self.w.checks(t["id"]):
                 out.append(f"  {c['title']}: {c['owner_id']} {c['status']} verdict={c['verdict']} head={str(c['verdict_head'])[:7]}")
-            for e in self.w.sql("SELECT e.created_at, e.actor, e.field, coalesce(s.name, e.new) new, e.note FROM task_events e "
-                                "LEFT JOIN task_steps s ON s.id=e.new WHERE e.task_id=? AND e.field IN ('step','verdict_move',"
+            for e in self.w.sql("SELECT e.created_at, e.actor_id AS actor, e.kind AS field, coalesce(s.name, e.new) new, e.note FROM history_events e "
+                                "LEFT JOIN task_steps s ON s.id=e.new WHERE e.subject_type='task' AND e.subject_id=? AND e.kind IN ('step','verdict_move',"
                                 "'round_skipped','step_skipped','allocated','merge_wake','verdict_wait') ORDER BY e.created_at, e.rowid",
                                 (t["id"],)):
                 out.append(f"  {e['created_at'][11:16]} {e['actor'][:14]:14} {e['field']:13} {str(e['new'])[:60]} {str(e['note'] or '')[:60]}")
@@ -482,7 +494,8 @@ class Run:
                 peak_queue[bot] = max(peak_queue[bot], n)
         return {
             "turns": len(turns), "work": kinds["work"] + kinds["review"], "noise": kinds["noise"],
-            "stale": sum(1 for r in turns if r["stale"]), "silent": kinds["silent"], "crash": kinds["crash"],
+            "stale": sum(1 for r in turns if r["stale"]), "parked": sum(1 for r in turns if r.get("parked")),
+            "silent": kinds["silent"], "crash": kinds["crash"],
             "limited": kinds["limited"], "cost": round(self.cost(), 2), "steps": dict(steps),
             "peak_queue": dict(peak_queue.most_common(4)), "peak_doing": dict(self.peak_doing),
             "refused": sum(1 for r in turns if str(r["action"]).startswith("refused")),

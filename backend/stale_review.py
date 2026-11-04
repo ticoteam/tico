@@ -146,7 +146,8 @@ def _blocker_reason(c, row):
 
 
 def _snooze_reason(c, row, at):
-    ended = c.execute("SELECT created_at FROM task_events WHERE task_id=? AND field='snoozed_until' AND note='snooze over' "
+    ended = c.execute("SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='snoozed_until' "
+                      "AND note='snooze over' "
                       "ORDER BY created_at DESC LIMIT 1", (row["id"],)).fetchone()
     if not ended or ended[0] > H.shift(at, hours=-SNOOZE_GRACE_HOURS):
         return None

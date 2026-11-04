@@ -151,7 +151,7 @@ def after_verdict(c, check):
     attempt_id = attempt["id"] if attempt else None
     pending = {"check_id": check["id"], "attempt_id": attempt_id, "step": name, "head": head,
                "verdict": verdict}
-    existing = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_wait' "
+    existing = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_wait' "
                          "ORDER BY rowid DESC LIMIT 1", (ticket["id"],)).fetchone()
     if not existing or H._json(existing["new"], {}).get("check_id") != check["id"] or \
             H._json(existing["new"], {}).get("attempt_id") != attempt_id or \
@@ -164,7 +164,7 @@ def after_verdict(c, check):
 
 def _judged_head(c, check):
     """The head a check was filed for (its review_head), for a check finished with no verdict line."""
-    found = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
+    found = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
                       "ORDER BY created_at DESC,rowid DESC LIMIT 1", (check["id"],)).fetchone()
     return str(found[0] if found else "").split(",")[0]
 
@@ -185,7 +185,7 @@ def after_capture(c, check_id, head, attempt_id):
     step = ticket and F.check_step(c, check, ticket)
     if not step:
         return None
-    marker = c.execute("SELECT rowid,new FROM task_events WHERE task_id=? AND field='verdict_wait' "
+    marker = c.execute("SELECT rowid,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_wait' "
                        "ORDER BY rowid DESC LIMIT 1", (ticket["id"],)).fetchone()
     pending = H._json(marker["new"], {}) if marker else {}
     if (pending.get("check_id"), pending.get("attempt_id"), pending.get("head"), pending.get("verdict")) != \
@@ -280,10 +280,11 @@ def _passed(c, ticket, step, why):
 def delivery(c, check):
     """What the verdict's delivery to the builder carries (hubdb._deliver_subtask_result): the outcome
     `after_verdict` kept for the check's current verdict and head, or None."""
-    row = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_move' ORDER BY created_at DESC, rowid DESC "
+    row = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_move' "
+                    "ORDER BY created_at DESC, rowid DESC "
                     "LIMIT 1", (check["id"],)).fetchone()
     out = H._json(row[0], {}) if row else None
-    marker = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_wait' "
+    marker = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_wait' "
                        "ORDER BY rowid DESC LIMIT 1", (TR.parent_of(c, check["id"]) or "",)).fetchone()
     pending = H._json(marker["new"], {}) if marker else {}
     turn = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started_at DESC,id DESC LIMIT 1",
@@ -317,7 +318,8 @@ def _skipped(c, row, step, head):
     was skipped (timed out) at that head and no check there failed the head."""
     if F.skip_target(c, row, step):
         return True
-    if not c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='round_skipped' AND new=? LIMIT 1",
+    if not c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='round_skipped' "
+                     "AND new=? LIMIT 1",
                      (row["id"], f"{step['id']}:{head}")).fetchone():
         return False
     verdict = _verdict_at(c, row, step, head)
@@ -364,7 +366,8 @@ def merge_text(c, row, pr, head):
 
 def _merge_woken(c, row, head):
     """Record the merge wake for this head; False when one was already sent for it."""
-    if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='merge_wake' AND new=? LIMIT 1",
+    if c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='merge_wake' "
+                 "AND new=? LIMIT 1",
                  (row["id"], head)).fetchone():
         return False
     H._task_event(c, row["id"], H.KEEPER, "merge_wake", None, head, "")
@@ -456,11 +459,13 @@ def timeouts(c, at=None):
                                       f"({','.join('?' * len(H.ACTIVE_STATUSES))})",
                                       (step["id"], *H.ACTIVE_STATUSES)).fetchall():
             ticket = _ticket(c, H.task(c, ticket_id))
-            entered = c.execute("SELECT created_at FROM task_events WHERE task_id=? AND field='step' AND new=? "
+            entered = c.execute("SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' "
+                                "AND new=? "
                                 "ORDER BY created_at DESC,rowid DESC LIMIT 1", (ticket_id, step["id"])).fetchone()
             if not ticket or not entered or (at - H.parse_ts(entered[0])).total_seconds() < hours * 3600:
                 continue
-            if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field IN ('round_skipped','step_skipped') "
+            if c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind IN ('round_skipped','step_skipped') "
                          "AND created_at>=? LIMIT 1", (ticket_id, entered[0])).fetchone():
                 continue        # skipped already: the merge, its builder's to do, is what it waits for
             head = next((_head(p) for p in _prs(c, ticket) if _head(p)), "")
