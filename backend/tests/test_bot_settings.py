@@ -11,7 +11,6 @@ from pathlib import Path
 from backend import bot_settings as BS
 from backend import hubdb as H
 from backend.config import Settings
-from backend.finance.store import tico as FIN
 from backend.store import Store
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -187,10 +186,10 @@ def test_migration_moves_every_declaration_drops_the_column_and_runs_once(tmp_pa
         assert c.execute("SELECT 1 FROM bot_settings WHERE bot_id='gone'").fetchone() is None
         triggers = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
         assert "old_reads_config" not in triggers
-        # The Finance trigger that moves when a bot's manager changes (backend/finance/store/tico.py ORG_TRIGGERS).
-        manager_trigger = next(name for name, when, _why in FIN.ORG_TRIGGERS if "reports_to ON bot_config" in when)
-        assert {"repository_new_bot_default", "wake_preset_hold", manager_trigger,
-                "changes_runner_bot_settings_update"} <= triggers
+        assert {"repository_new_bot_default", "wake_preset_hold", "changes_runner_bot_settings_update"} <= triggers
+        # Finance's trigger on a bot's manager names bot_config but not its config column, so 0068 keeps it.
+        bot_config_triggers = [sql for (sql,) in c.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND tbl_name='bot_config'")]
+        assert any("reports_to" in sql for sql in bot_config_triggers)
         _no_reader_of_the_column(c)
         # wake_presets.ensure gives every declaration its preset after the move, as it did inside config.
         assert c.execute("SELECT count(*) FROM bot_settings WHERE wake_preset IS NULL").fetchone()[0] == 0

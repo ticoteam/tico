@@ -76,6 +76,10 @@ def _old_shape_database(path):
     conn.execute(OLD_RUNNERS_DDL)
     for schema in (store.SCHEMA, bot_tools.SCHEMA, files.SCHEMA):
         conn.executescript(schema.replace("REFERENCES bots(id)", "REFERENCES bots(slug)"))
+    # v0.5's bot_config held each declaration in `config`, which migration 0043 reads. Today's SCHEMA has no such column
+    # (migration 0068 moves it to bot_settings), so the fixture adds it back.
+    if "config" not in {row[1] for row in conn.execute("PRAGMA table_info(bot_config)")}:
+        conn.execute("ALTER TABLE bot_config ADD COLUMN config TEXT NOT NULL DEFAULT '{}'")
     return conn
 
 
