@@ -41,7 +41,10 @@ Repo = Annotated[str, Field(max_length=200), AfterValidator(repo_reference)]
 
 
 class Contract(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    # defer_build: a model's validator is built when it is first used (a route's body, a model_validate), not when this
+    # module is imported. The server imports about 300 of them on every start and many are only parts of others; the
+    # schema, the validation and the OpenAPI document are the same either way (subclasses inherit this).
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, defer_build=True)
 
 
 class TurnLevels(Contract):
