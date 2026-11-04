@@ -1136,8 +1136,30 @@ def test_a_waiting_task_already_listed_for_its_update_is_not_read_by_task_holds_
             return real(conn, row)
 
         monkeypatch.setattr(TH, "holds", counting)
-        assert task_roundup._blocked_waits(c, DAY).get("ops", []) == []
-        assert mine not in seen, "a task marked as listed for this update is skipped before its holds are read"
+        assert task_roundup._blocked_waits(c, NOON).get("ops", []) == []
+        assert mine not in seen, "a task marked by an earlier run for this update is skipped before its holds are read"
+
+
+def test_a_task_held_by_two_bots_is_listed_to_both_in_one_run_and_to_neither_on_the_next_run(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        ops = H.task_create(c, H.human_actor("ana"), "Finish the menu", "Ops finishes it.", H.bot_actor("ops"))["id"]
+        coo = H.task_create(c, H.human_actor("ana"), "Sign off the menu", "The COO signs it off.", H.bot_actor("coo"))["id"]
+        for tid in (ops, coo):
+            c.execute("UPDATE tasks SET created_at=?, updated_at=? WHERE id=?", (ago(days=2), ago(days=2), tid))
+        mine = task(c, "Print the menu")["id"]
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
+        blocks(c, ops, mine, ago(days=1))
+        blocks(c, coo, mine, ago(days=1))
+        complete_jobs(c)
+        complete_jobs(c, "ops")
+        complete_jobs(c, "coo")
+        assert sorted(task_roundup.run(c, DAY)["woke"]) == ["coo", "ops"], "each blocker's bot is listed in the same run"
+        assert f"{mine[:8]} Print the menu: Waiting on you" in only_list(c, "ops")
+        assert f"{mine[:8]} Print the menu: Waiting on you" in only_list(c, "coo")
+        before = (lists(c, "ops"), lists(c, "coo"))
+        task_roundup.run(c, NOON)
+        assert (lists(c, "ops"), lists(c, "coo")) == before, "neither bot is sent the task again with no update to it"
 
 
 def test_a_stale_candidate_the_bot_owns_is_listed_once_while_the_stale_review_rule_is_on(api):

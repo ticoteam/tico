@@ -399,7 +399,7 @@ def _blocked_waits(c, at):
                              "WHERE tasks.status='waiting' AND tasks.owner_id LIKE 'bot:%' AND b.state='active' "
                              "ORDER BY tasks.updated_at"))
     for row in rows:
-        if TS.snoozed(row, at) or _blocked_marked(c, row):
+        if TS.snoozed(row, at) or _blocked_marked(c, row, at):
             continue
         found = TH.holds(c, row)
         if not found or any(h["kind"] == "private" or not h["on"] or not H.is_bot(h["on"]) for h in found):
@@ -412,11 +412,13 @@ def _blocked_waits(c, at):
     return out
 
 
-def _blocked_marked(c, row):
-    """True when a blocked line is already marked for this task at this update, for any blocker: it was listed, so its
-    holds are not read again. The mark key is task_roundup:blocked:<slug>:<task id>:<updated_at> (see _key)."""
-    return c.execute("SELECT 1 FROM registry_metadata WHERE instr(key, ?) = 1 AND instr(key, ?) > 0 LIMIT 1",
-                     (f"{SENT_KEY}blocked:", f":{row['id']}:{row['updated_at']}")).fetchone() is not None
+def _blocked_marked(c, row, at):
+    """True when a blocked line was marked for this task at this update by an earlier run: it was listed, so its holds are
+    not read again. A mark this run wrote carries a time at or after `at` (send_detail stamps it with _later(at, ...)), so
+    it does not count: a task held by two bots is listed to each of them in one run, since send rebuilds the waits after
+    the first bot's mark is written. Mark keys are task_roundup:blocked:<slug>:<task id>:<updated_at> (see _key)."""
+    return c.execute("SELECT 1 FROM registry_metadata WHERE instr(key, ?) = 1 AND instr(key, ?) > 0 AND value < ? LIMIT 1",
+                     (f"{SENT_KEY}blocked:", f":{row['id']}:{row['updated_at']}", at)).fetchone() is not None
 
 
 def _blocked_by(c, slug, actor, at, shared):
