@@ -460,6 +460,14 @@ class Scheduler:
                 with locked("queue_refusals:" + change[0]) as c:
                     with isolated(c, "queue_refusals", change[0], failures):
                         queue_refusals.apply(c, change)
+        # A running turn's step the bot status throttle held back is sent now (backend/thread_bot_status.py).
+        from . import thread_bot_status
+        with self.store.read() as c:
+            trailing = thread_bot_status.trailing_roots(c)
+        if trailing:
+            with locked("thread_bot_status") as c:
+                with isolated(c, "thread_bot_status", "trailing", failures):
+                    thread_bot_status.send_trailing(c, trailing)
         # A milestone wait whose pull request merged or release was published, while the server was down or
         # before its wake was written, gets its one wake (backend/milestone_waits.py).
         from . import milestone_waits

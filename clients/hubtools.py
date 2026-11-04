@@ -5724,10 +5724,13 @@ def thread_list(api, args):
 @tool("hub_thread_show", "One thread in tree order: each message is followed by the sub-thread that branched from it, "
       "with its depth. A long sub-thread shows its latest messages under a collapsed row: hub_thread_show on that thread "
       "with the row's cursor reads the rest. Also its title and breadcrumb. Paged over the thread's own messages; "
-      "next_cursor reads on.",
-      {"thread": THREAD_ID, "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT}, required=("thread",))
+      "next_cursor reads on. flat: the thread and its open sub-threads as one list in time order, each message with the "
+      "reply_to it answers.",
+      {"thread": THREAD_ID, "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT,
+       "flat": {"type": "boolean", "default": False, "description": "One list in time order"}}, required=("thread",))
 def thread_show(api, args):
-    return api.get(_thread_path(args["thread"], "timeline"), cursor=args.get("cursor"), limit=args.get("limit"))
+    return api.get(_thread_path(args["thread"], "timeline"), cursor=args.get("cursor"), limit=args.get("limit"),
+                   **({"flat": 1} if args.get("flat") else {}))
 
 
 @tool("hub_thread_create", "Start a thread. Its audience decides who reads it: members (the people and bots you add; "
@@ -5749,20 +5752,31 @@ def thread_create(api, args):
     return api.post("threads", body, key=_key(args))
 
 
-@tool("hub_thread_post", "Post a message to a thread. kind ask asks the person or bot in `to` for an answer. A name in "
-      "the text does not add anyone: someone outside the thread gets a warning and nothing else, until you add them "
-      "with hub_thread_members_add.",
+@tool("hub_thread_post", "Post a message to a thread. kind ask asks the person or bot in `to` for an answer. To answer "
+      "one message, give its id as reply_to: your message stays in the thread, quoting the one it answers, and a bot "
+      "you reply to hears it as an @mention. A name in the text does not add anyone: someone outside the thread gets a "
+      "warning and nothing else, until you add them with hub_thread_members_add.",
       {"thread": THREAD_ID, "text": _s("The message"),
        "kind": {"type": "string", "enum": ["say", "ask"], "default": "say"},
        "to": THREAD_ACTOR,
+       "reply_to": _s("The id of the message this answers, in the same thread or a sub-thread under it"),
        "refs": {"type": "array", "items": {"type": "string"}, "description": "References like task:<id>"}},
       required=("thread", "text"), writes=True)
 def thread_post(api, args):
-    return api.post(_thread_path(args["thread"], "messages"), _thread_message(args), key=_key(args))
+    return api.post(_thread_path(args["thread"], "messages"), _thread_message(args, in_reply_to=args.get("reply_to")),
+                    key=_key(args))
+
+
+@tool("hub_thread_bot_status", "The bots a thread is waiting on, and why: working (with its current step), up next "
+      "(finishing other work first) or can't reply (with what stops it and where to fix it). Five at most, oldest "
+      "wait first.",
+      {"thread": THREAD_ID}, required=("thread",))
+def thread_bot_status(api, args):
+    return api.get(_thread_path(args["thread"], "bot-status"))
 
 
 @tool("hub_thread_reply", "Reply in a message's sub-thread: a side branch under that message, made on its first reply. "
-      "Use it for a side topic; the main discussion stays in the thread.",
+      "Only for a separate side topic; to answer a message, use hub_thread_post with reply_to.",
       {"thread": THREAD_ID, "message": _s("The message the reply branches from"), "text": _s("The reply"),
        "refs": {"type": "array", "items": {"type": "string"}, "description": "References like task:<id>"}},
       required=("thread", "message", "text"), writes=True)
@@ -5960,7 +5974,8 @@ def thread_delete(api, args):
       {"thread": THREAD_ID, "path": _s("A local file on this computer"), "text": _s("The message's text, optional"),
        "kind": {"type": "string", "enum": ["say", "ask"], "default": "say", "description": "say, or ask for an answer"},
        "to": _s("The person or bot an ask is for"),
-       "under": _s("The message whose sub-thread the file goes under (optional)")},
+       "under": _s("The message whose sub-thread the file goes under (optional)"),
+       "reply_to": _s("The id of the message this answers (optional): the file stays in the thread, quoting it")},
       required=("thread", "path"), writes=True)
 def thread_upload(api, args):
     if not hasattr(api, "post_multipart"):
@@ -5968,7 +5983,7 @@ def thread_upload(api, args):
     from . import bot_files as BF
     path, _ = BF.local_file(BF.checkout_root(), args["path"])
     fields = {"text": args.get("text"), "kind": args.get("kind"), "to": args.get("to"),
-              "parent_message_id": args.get("under")}
+              "parent_message_id": args.get("under"), "in_reply_to": args.get("reply_to")}
     fields = {name: value for name, value in fields.items() if value is not None}
     return api.post_multipart("uploads/threads/" + quote(str(args["thread"]), safe="") + "/messages", {"file": path},
                               fields, key=_key(args))

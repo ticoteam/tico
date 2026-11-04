@@ -835,6 +835,8 @@ HELD = {
     "cooling_off": ("Waiting out a usage limit, or a Tico AI Gateway outage, before it tries again", RUNS),
     "readiness_unknown": ("{computer} has not said whether it can run this bot", COMPUTERS),
     "sign_in_rejected": ("Its model sign-in was rejected on {computer}", COMPUTERS),
+    # The computer read a plan's sign-in as ready, and no plan signs it in now (execution.signed_in_by_lapsed_plan).
+    "sign_in_missing": ("Its model is not signed in on {computer}", COMPUTERS),
     "login_upgrade": ("Update {computer} to use one login per AI tool; its bots wait without changing accounts",
                       COMPUTERS),
     # A bot with Browse through runs only on a runner that takes it there (backend/browser_exit.py CAPABILITY).

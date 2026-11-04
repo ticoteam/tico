@@ -29,7 +29,8 @@
 #   4 upgrade     "Update now" (POST /api/v2/system/update) moves the server to the candidate; the previous updater
 #                 applies the candidate's bundle and then replaces itself with the candidate's updater
 #   5 old runner  the previous release's runner, still running, against the candidate server: a turn in the same
-#                 session and a second worktree (v0.3.11, v0.3.36 and v0.3.37 broke exactly there)
+#                 session (migration 0067 moves the chat into the Home: a fresh thread there) and a second worktree
+#                 (v0.3.11, v0.3.36 and v0.3.37 broke exactly there)
 #   6 new runner  the computer moves to the candidate runner on the same volume: its turn still has the HUB_ variable
 #                 (v0.2.31 dropped them), continues the same session, the seeded worktree is still there and the
 #                 older releases' rows are intact; with the harness's saved sessions gone, the next turn still answers
@@ -130,7 +131,7 @@ esac
 WORK="$(mktemp -d)"
 DIR="$WORK/install"
 mkdir -p "$DIR" "$WORK/releases/download"
-RESULTS=() STATE_ID="" FAILED=0 SEED_THREAD="" SEED_TASK=""
+RESULTS=() STATE_ID="" FAILED=0 SEED_THREAD="" SEED_TASK="" SEED_CONVERSATION=""
 
 dc() { docker compose -p "$PROJECT" --project-directory "$DIR" "$@"; }
 say() { printf '  %s\n' "$*"; }
@@ -369,6 +370,7 @@ step_seed() {
   post "credentials/$credential/grants" '{"subject": "bot:botops"}' >/dev/null || return 1
   SEED_TASK="$(new_task "Acme launch checklist")" || return 1
   ask seed env=HUB_BUCKET worktree="$SEED_TASK" || return 1
+  SEED_CONVERSATION="$(cat "$WORK/conversation")"
   SEED_THREAD="$(fact thread)"
   [ "$(fact HUB_BUCKET)" = "$(bucket_sha)" ] || { say "the seed turn did not get HUB_BUCKET: $(cat "$WORK/reply")"; return 1; }
   [ "$(fact worktree)" = ok ] || { say "the seed turn could not add a worktree: $(cat "$WORK/reply")"; return 1; }
@@ -419,7 +421,15 @@ step_old_runner() {
   [ "$(docker inspect --format '{{.Config.Image}}' "$RUNNER" | sed 's/.*://')" = "$PREV" ] || { say "the runner is not on $PREV"; return 1; }
   task="$(new_task "Acme pricing page")" || return 1
   ask old worktree="$task" || return 1
-  [ "$(fact thread)" = "$SEED_THREAD" ] || { say "the $PREV runner did not continue the seeded session: $(cat "$WORK/reply")"; return 1; }
+  if [ "$(current_room "$SEED_CONVERSATION")" != "$SEED_CONVERSATION" ]; then
+    # The seeded chat moved into the bot's Home on the update (backend/bot_home_merge.py): this turn starts a new thread
+    # there, so the Home's thread is the baseline for the checks after this one.
+    [ "$(fact thread)" != "$SEED_THREAD" ] || { say "the chat moved to the Home but the $PREV runner kept the seeded thread: $(cat "$WORK/reply")"; return 1; }
+    [ "$(cat "$WORK/conversation")" = "$(current_room "$SEED_CONVERSATION")" ] || { say "the $PREV runner's turn did not land in the Home"; return 1; }
+    SEED_THREAD="$(fact thread)"
+  else
+    [ "$(fact thread)" = "$SEED_THREAD" ] || { say "the $PREV runner did not continue the seeded session: $(cat "$WORK/reply")"; return 1; }
+  fi
   [ "$(fact worktree)" = ok ] || { say "the $PREV runner could not add a worktree: $(cat "$WORK/reply")"; return 1; }
   [ "$(worktree_state "$task" | tr '\n' ' ')" = "present on-disk " ] || { say "the $PREV runner's new worktree is $(worktree_state "$task" | tr '\n' ' ')"; return 1; }
 }
