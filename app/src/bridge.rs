@@ -36,6 +36,44 @@ const ORG_SCRIPT: &str = r#"
 })();
 "#;
 
+/// The microphone, camera and screen a page captures, as this shell sees them whatever the page's version: the page
+/// says `capture` ({live}) when it starts or stops sending any, so a switch away closes a page in a call rather
+/// than keep it hidden; `window.__ticoCapture.hide()`, which a switch away runs, stops every capture track at once,
+/// and refuses new ones until `show()`, so a join that finishes while hidden turns nothing on.
+const CAPTURE_SCRIPT: &str = r#"
+(() => {
+  const media = navigator.mediaDevices, Track = window.MediaStreamTrack;
+  if (!media || !Track || !window.__TAURI__ || !window.__TAURI__.core || window.__ticoCapture) return;
+  const invoke = window.__TAURI__.core.invoke;
+  const live = new Set();
+  let hidden = false, said = false;
+  const say = () => {
+    for (const track of live) if (track.readyState !== 'live') live.delete(track);
+    if ((live.size > 0) === said) return;
+    said = live.size > 0;
+    invoke('bridge', {name: 'capture', body: {live: said}}).catch(() => {});
+  };
+  const stop = Track.prototype.stop, clone = Track.prototype.clone;
+  const watch = track => { live.add(track); track.addEventListener('ended', say); return track; };
+  const end = () => { for (const track of live) { try { stop.call(track); } catch (e) {} } say(); };
+  Track.prototype.stop = function () { stop.call(this); if (live.has(this)) say(); };
+  Track.prototype.clone = function () { const copy = clone.call(this); if (live.has(this)) watch(copy); return copy; };
+  for (const name of ['getUserMedia', 'getDisplayMedia']) {
+    const ask = media[name];
+    if (typeof ask !== 'function') continue;
+    media[name] = function (...args) {
+      if (hidden) return Promise.reject(new DOMException('The page is not on screen', 'NotAllowedError'));
+      return ask.apply(this, args).then(stream => {
+        stream.getTracks().forEach(watch);
+        if (hidden) end(); else say();
+        return stream;
+      });
+    };
+  }
+  Object.defineProperty(window, '__ticoCapture', {value: Object.freeze({hide() { hidden = true; end(); }, show() { hidden = false; }})});
+})();
+"#;
+
 /// The page's `alert` and `confirm`, as the dialog plugin makes them (`alert` returns at once, `confirm` returns a
 /// promise of true for OK), but through `page_dialog`, which shows them only for the page on screen. Org pages have
 /// no dialog plugin permission; this runs after the plugin's own script, so it is the one that stays.
@@ -58,7 +96,7 @@ pub(crate) fn bridge_script(app: &App) -> String {
 fn script_for(version: &str, several_orgs: bool) -> String {
     let version = serde_json::to_string(version).unwrap_or_else(|_| "\"\"".into());
     let extra = if several_orgs { ORG_SCRIPT } else { "" };
-    format!("{BRIDGE_SCRIPT}{DIALOG_SCRIPT}{extra}window.ticoNativeVersion = {version};\n")
+    format!("{BRIDGE_SCRIPT}{DIALOG_SCRIPT}{CAPTURE_SCRIPT}{extra}window.ticoNativeVersion = {version};\n")
 }
 
 // ----------------------------------------------------------------------------- bridge
@@ -82,11 +120,12 @@ fn server_document(hub: Option<&url::Url>, caller: &str, open: Option<&str>, doc
     })
 }
 
-/// What a page that is not on screen (a prefetch) may still post: about itself only, so that it is ready when shown,
-/// and its own `bootTiming` (one checked log line, so a prefetched open is timed too). Everything else (windows,
-/// menus, updates, opening the log) is the open page's alone.
+/// What a page that is not on screen (a prefetch, or one kept since a switch away) may still post: about itself
+/// only, so that it is ready when shown, its own `bootTiming` (one checked log line, so a prefetched open is timed
+/// too), and whether it is capturing (`capture`). Everything else (windows, menus, updates, opening the log) is the
+/// open page's alone.
 fn own_page_call(name: &str) -> bool {
-    matches!(name, "orgInfo" | "visualOrigin" | "multiOrg" | "bootTiming")
+    matches!(name, "orgInfo" | "visualOrigin" | "multiOrg" | "bootTiming" | "capture")
 }
 
 /// The org whose page this is, when the page is at that org's own origin: any org page, open or not.
@@ -174,6 +213,11 @@ pub(crate) fn bridge(app: App, webview: Webview, name: String, body: Option<Valu
         "bootTiming" => {
             let since = app.state::<AppState>().page_opened.lock().unwrap().remove(webview.label()).map(|at| at.elapsed().as_millis());
             log::info!("{}", boot_line(body.as_ref(), since)?);
+        }
+        // The page started or stopped sending a microphone, camera or screen (CAPTURE_SCRIPT).
+        "capture" => {
+            let live = body.as_ref().and_then(|b| b.get("live")).and_then(Value::as_bool).unwrap_or(false);
+            crate::windows::note_capture(&mut app.state::<AppState>().capturing.lock().unwrap(), &caller, live);
         }
         // The org menu, at the page's point. It lists the shell's own orgs; the page is told nothing back.
         "showOrgMenu" => if orgs::multi_org_build() { popup_orgs(&app) },
@@ -579,7 +623,7 @@ mod visual_bridge_tests {
         assert!(state.visual_origin.lock().unwrap().is_some());
         assert!(state.parked_visual.lock().unwrap().is_none());
         // Only calls about the page itself are let through from a page that is not on screen.
-        for name in ["orgInfo", "visualOrigin", "multiOrg", "bootTiming"] { assert!(own_page_call(name)); }
+        for name in ["orgInfo", "visualOrigin", "multiOrg", "bootTiming", "capture"] { assert!(own_page_call(name)); }
         for name in ["openWindow", "checkForUpdates", "showLog", "showOrgMenu", "addOrg", "windowMode"] { assert!(!own_page_call(name)); }
     }
 
@@ -621,6 +665,15 @@ mod visual_bridge_tests {
         drop(second);
         finished.recv_timeout(std::time::Duration::from_secs(5)).expect("the switch goes on once both are answered");
         switch.join().unwrap();
+    }
+
+    #[test]
+    fn every_page_reports_its_capture_and_stops_it_when_hidden() {
+        for several in [false, true] {
+            let script = script_for("0.5.0", several);
+            assert!(script.contains("name: 'capture'") && script.contains("__ticoCapture"));
+            assert!(script.contains("'getUserMedia', 'getDisplayMedia'"));
+        }
     }
 
     #[test]

@@ -14,6 +14,8 @@ let CALL = null;           // the call this tab is in: {id, threadId, title, con
 let CALL_LIB_LOAD = null;
 // Each join takes the next number; a join that a newer one overtook stops before it turns the microphone on.
 let CALL_GEN = 0;
+// Joins on their way (asked for, not yet in the call or given up).
+let CALL_JOINS = 0;
 // Named here so scripts/build-icon-font.py keeps them in the icon subset.
 const CALL_ICONS = {mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', bot: 'smart_toy', leave: 'call_end'};
 
@@ -78,6 +80,10 @@ function callLib() {
   return CALL_LIB_LOAD;
 }
 async function callJoin(threadId, call, title) {
+  CALL_JOINS++;
+  try { await callJoinNow(threadId, call, title); } finally { CALL_JOINS--; }
+}
+async function callJoinNow(threadId, call, title) {
   const gen = ++CALL_GEN;
   if (CALL) await callLeave();
   if (gen !== CALL_GEN) return;
@@ -219,5 +225,28 @@ function callBotPick(button) {
     catch (e) { toast(e?.message || 'Could not add the bot'); }
   });
 }
-// Leaving the page leaves the call, so nobody stays in a call they can no longer see.
-addEventListener('pagehide', () => { if (CALL) { CALL.leaving = true; try { CALL.room?.disconnect(); } catch {} } });
+// Every track this tab sends (microphone, screen; never a camera) stops now, before the room is told.
+function callStopLocal(here) {
+  for (const pub of here.room?.localParticipant?.trackPublications?.values?.() || []) {
+    try { pub.track?.stop?.(); } catch {}
+    try { pub.track?.mediaStreamTrack?.stop?.(); } catch {}
+  }
+}
+// The page goes out of sight: the call ends for this tab at once (its microphone and screen stop, its seat is given
+// back), and a join still on its way stops before it turns anything on. Answers whether a call was on or on its way.
+function callHidden() {
+  const inCall = !!CALL || CALL_JOINS > 0;
+  CALL_GEN++;
+  const here = CALL;
+  if (here) {
+    here.leaving = true;
+    callStopLocal(here);
+    post(callPath(here.id) + '/leave', {}).catch(() => {});
+    callDone(here);
+  }
+  return {inCall};
+}
+// Leaving the page leaves the call, so nobody stays in a call they can no longer see. The desktop app runs the same
+// when it hides an org's page to show another org's (no pagehide comes then): window.ticoPageHidden.
+addEventListener('pagehide', () => { callHidden(); });
+window.ticoPageHidden = () => callHidden();

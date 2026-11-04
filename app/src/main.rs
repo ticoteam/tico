@@ -43,7 +43,7 @@ const MIN_HEIGHT: u32 = 400;
 pub(crate) const LOG_LINES: usize = 200;
 
 /// The shell's state. When more than one lock is held, they are taken in this order: changing, orgs, prefetch,
-/// connection, visual_origin, parked_visual, shown, kept.
+/// connection, visual_origin, parked_visual, shown, kept, capturing.
 struct AppState {
     connection: Mutex<Option<Config>>,
     visual_origin: Mutex<Option<visual_origin::VisualOrigin>>,
@@ -64,6 +64,9 @@ struct AppState {
     // The pages kept hidden after a switch away, each closing windows::KEEP_FOR after it went hidden unless it is
     // shown again first, with the visual allowance each had when open.
     kept: Mutex<windows::Kept>,
+    // The orgs whose page says it is sending a microphone, camera or screen (a call): a switch away closes that page
+    // rather than keep it hidden.
+    capturing: Mutex<HashSet<String>>,
     // The page built hidden for the org the pointer rests on in the rail, and the visual allowance it sent while
     // hidden, which becomes the open one when it is shown.
     prefetch: Mutex<windows::Prefetch>,
@@ -87,6 +90,7 @@ impl AppState {
             changing: Mutex::new(()),
             shown: Mutex::new(Vec::new()),
             kept: Mutex::new(windows::Kept::default()),
+            capturing: Mutex::new(HashSet::new()),
             prefetch: Mutex::new(windows::Prefetch::default()),
             parked_visual: Mutex::new(None),
             traces: Mutex::new(Vec::new()),
@@ -448,6 +452,7 @@ async fn remove_org(app: &App, id: &str) {
                     *state.status.lock().unwrap() = HubStatus::default();
                     state.shown.lock().unwrap().clear();
                     *state.kept.lock().unwrap() = windows::Kept::default();
+                    state.capturing.lock().unwrap().clear();
                     // The setup window first, so that the app keeps a window while the main one goes.
                     let _ = build_server_window(app);
                     if let Some(window) = main_window(app) {
