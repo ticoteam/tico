@@ -216,7 +216,7 @@ def test_a_held_task_cannot_ride_along_with_another_tasks_next_run(api):
     post(api, f"attempts/{attempt['id']}/renew", {}, machine["token"])
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET next_run=1 WHERE id=?", (task["id"],))
+        c.execute("UPDATE tasks SET next_run=1,status='open' WHERE id=?", (task["id"],))
     other = new_task(api, "Check the archive")
     attempt = post(api, "jobs/claim", {"next_run": True, "start_places": True}, machine["token"])["attempt"]
     assert attempt["task"]["id"] == other["id"] and attempt["next_run"] == []
