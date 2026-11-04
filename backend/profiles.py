@@ -55,9 +55,14 @@ ACCEPTANCE_TITLE = re.compile(r"\blive acceptance\b", re.I)
 # that reads as a run counts: it opens with a run verb, or with the phrase itself. Anything else, including any
 # request that builds or changes the acceptance tests, is ordinary work.
 PRODUCTION_ACCEPTANCE_TITLE = re.compile(r"\bproduction acceptance\b", re.I)
+#   A run verb names the acceptance itself (optionally one word such as the feature), and what follows is a run's
+#   object or a preposition, not a checklist, plan or note about it.
+_ACCEPTANCE_RUN_AFTER = (
+    r"(?=\s*$|\s*[:,(]|\s+(?:for|after|on|against|in|at|with|from|to|before|during|of|and|through|across"
+    r"|tests?|suite|run|pass|sweep|checks?|again|now|today|as|once)\b)")
 PRODUCTION_ACCEPTANCE_RUN_TITLE = re.compile(
-    r"^(?:(?:run|rerun|re-run|execute|perform|carry out|complete|finish|check|verify|do)\b"
-    r"|production acceptance run\b)", re.I)
+    r"^(?:(?:run|rerun|re-run|execute|perform|carry out|complete|finish|check|verify|do)\b(?:\s+[\w-]+){0,2}?"
+    r"\s+production acceptance\b" + _ACCEPTANCE_RUN_AFTER + r"|production acceptance run\b)", re.I)
 # The numbers a former Token saver bot keeps.
 TOKEN_SAVER_OPTIONS = {"batch_seconds": TOKEN_SAVER_SECONDS, "batch_scope": "bot", "sweep_seconds": 2 * 3600}
 
