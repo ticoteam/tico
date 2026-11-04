@@ -1,6 +1,7 @@
-"""A message's run is found by its automation and trigger ref (`mail:<mailbox>:<msg_id>`, `slack:...`), so a message that is
-offered again starts nothing new (backend/automations.py `queue`). The run outlives the message's row (mail_messages is
-swept after retention), so this lookup must not scan the automation's runs: this index makes it a seek.
+"""A message's run is found by its automation and trigger ref (`mail:<mailbox>:<msg_id>`, `slack:...`), so a message
+that is offered again starts nothing new (backend/automations.py `queue`). The run outlives the message's row
+(mail_messages is swept after retention), so this lookup must not scan the automation's runs: this index makes it a
+seek.
 
 The table is built here as well, the way migration 0050 builds its own: a new file runs the migration files before the
 module's CREATE, so the index would have no table to sit on. The definition is the one automations.py makes; both are
