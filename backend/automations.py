@@ -2013,11 +2013,15 @@ def _cancel_mail(c, run_id, state=None):
 
 def _chain_end(c, mid, state):
     """The queued actions chained after `mid` (the same step's later ones on its message) will not run: they take
-    `state`, and so do the ones chained after them. Claimed ones cannot be here: a successor waits for its predecessor."""
-    waiting = c.execute("SELECT id FROM automation_mail_actions WHERE \"after\"=? AND state='queued'", (mid,)).fetchall()
-    for row in waiting:
-        c.execute("UPDATE automation_mail_actions SET state=? WHERE id=?", (state, row["id"]))
-        _chain_end(c, row["id"], state)
+    `state`, and so do the ones chained after them. Claimed ones cannot be here: a successor waits for its predecessor.
+    Walks the chain with a work list, not recursion: a chain can be longer than Python's recursion limit."""
+    todo = [mid]
+    while todo:
+        parent = todo.pop()
+        for row in c.execute("SELECT id FROM automation_mail_actions WHERE \"after\"=? AND state='queued'",
+                             (parent,)).fetchall():
+            c.execute("UPDATE automation_mail_actions SET state=? WHERE id=?", (state, row["id"]))
+            todo.append(row["id"])
 
 
 def _requeue(c, row):

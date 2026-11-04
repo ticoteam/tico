@@ -545,3 +545,28 @@ def test_a_chained_unsubscribe_that_never_reports_fails_the_run_and_skips_the_ar
     assert [a["detail"] for a in run["steps"][0]["outputs"]["actions"]] == [
         "no result after 3 tries", "skipped: an earlier action on this message failed"]
     assert unsubscriber == []
+
+
+def test_a_chain_longer_than_the_recursion_limit_settles_and_the_mailbox_still_claims(api, computer):
+    """1,100 actions chained on one message: a failed head skips all of them (the walk is a work list, not recursion),
+    and the mailbox's next claim is not held up by them."""
+    computer.sync()
+    with api.app.state.store.transaction() as c:
+        for i in range(1100):
+            c.execute('INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,'
+                      'created_at,attempts,step,"after") VALUES(?,?,?,?,?,?,?,?,?,0,?,?)',
+                      (f"chain_{i:04d}", "auto_x", "run_x", BOX, "m1", "archive", "{}", "queued",
+                       f"2026-10-28T00:00:00.{i:06d}Z", "gate", f"chain_{i - 1:04d}" if i else None))
+    head, = claim(api, computer.token)["actions"]
+    assert head["id"] == "chain_0000"
+    post(api, f"automations/mail-actions/{head['id']}/result", {"ok": False, "detail": "refused", "retry": False},
+         computer.token)
+    with api.app.state.store.read() as c:
+        states = {r[0]: r[1] for r in c.execute(
+            "SELECT state, COUNT(*) FROM automation_mail_actions WHERE automation_id='auto_x' GROUP BY state")}
+    assert states == {"failed": 1, "skipped": 1099}
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,"
+                  "created_at,attempts) VALUES('free','auto_y',NULL,?,'m1','archive','{}','queued',"
+                  "'2026-10-28T01:00:00.000000Z',0)", (BOX,))
+    assert [a["id"] for a in claim(api, computer.token)["actions"]] == ["free"]

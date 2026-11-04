@@ -18,7 +18,7 @@ automation named `to`.
 import base64
 from datetime import datetime
 
-from . import DEFAULT_TZ, INTERNAL_DOMAIN, Failure, Refused, access, compose, db, gmail as gm, labels as lb, zone
+from . import DEFAULT_TZ, Failure, Refused, access, compose, db, gmail as gm, labels as lb, zone
 from . import unsubscribe as unsub
 from .rules import in_domain
 
@@ -132,7 +132,7 @@ def _keep_reason(ctx, original):
     sender = original["from"]
     if "STARRED" in original["labels"]:
         return "the message is starred"
-    if original["is_internal"] or in_domain(sender, [INTERNAL_DOMAIN]) or sender == ctx.mailbox:
+    if in_domain(sender, ctx.policy["internal_domains"]) or sender == ctx.mailbox:
         return "the mail is internal"
     if sender in {a.lower() for a in access.roster_mailboxes()}:
         return "the sender is on the people roster"
@@ -142,9 +142,9 @@ def _keep_reason(ctx, original):
 
 
 def _known_sender(ctx, original):
-    """Whether the mailbox already writes to this sender: the send log has mail to them, or the message's thread has
-    something from the mailbox in it (a reply, or a message the mailbox started)."""
-    if db.last_send_to(ctx.conn, ctx.mailbox, original["from"]):
+    """Whether the mailbox already writes to this sender: its sends or its synced sent mail have them as a recipient,
+    in any thread (db.has_sent_to), or the message's thread has something from the mailbox in it."""
+    if db.has_sent_to(ctx.conn, ctx.mailbox, original["from"]):
         return True
     if not original["thread_id"]:
         return False

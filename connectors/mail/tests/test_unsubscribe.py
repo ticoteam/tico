@@ -1,4 +1,5 @@
 """Unsubscribe eligibility, network boundary and retry safety; no real mail or network."""
+import json
 import os
 import sqlite3
 import sys
@@ -39,18 +40,20 @@ class RulesPipeline(unittest.TestCase):
         self.assertFalse(plan['archive'])
 
 
-def news(sender="news@example.org", labels=("INBOX", "UNREAD")):
-    headers = {"From": f"Sender <{sender}>", "To": BOX, "Subject": "Weekly digest", "Message-ID": "<w-1@example.org>",
+def news(sender="news@example.org", labels=("INBOX", "UNREAD"), to=BOX):
+    headers = {"From": f"Sender <{sender}>", "To": to, "Subject": "Weekly digest", "Message-ID": "<w-1@example.org>",
                "Date": "Tue, 27 Oct 2026 09:00:00 -0700"}
     return fake.message("m1", "t1", headers, body="Weekly news.", labels=labels)
 
 
 class Ctx:
-    """The parts of the mail CLI's context that perform() uses, over a fake Gmail and a real mail.db."""
+    """The parts of the mail CLI's context that perform() uses, over a fake Gmail and a real mail.db. `policy` is the
+    install's mail policy (Ctx.policy in __main__.py), here with only the internal domains it reads."""
 
-    def __init__(self, gmail, conn, audits):
+    def __init__(self, gmail, conn, audits, mailbox=BOX, internal=("acme.example",)):
         self.gmail, self.conn, self.audits = gmail, conn, audits
-        self.mailbox, self.slug = BOX, "ana"
+        self.mailbox, self.slug = mailbox, "ana"
+        self.policy = {"internal_domains": list(internal)}
 
     def normalize(self, raw):
         return gm.normalize(raw, self.gmail.labels())
@@ -82,10 +85,17 @@ class UnsubscribeAction(unittest.TestCase):
             raise self.code
         return self.code
 
-    def perform(self, *messages, action_id="ma_1"):
-        gmail = gm.Gmail(fake.FakeGmailService(list(messages) or [news()]), BOX, sleep=lambda s: None)
-        return actions.perform(Ctx(gmail, self.conn, self.audits),
-                               {"id": action_id, "mailbox": BOX, "msg_id": "m1", "action": "unsubscribe", "args": {}})
+    def perform(self, *messages, action_id="ma_1", mailbox=BOX, internal=("acme.example",)):
+        gmail = gm.Gmail(fake.FakeGmailService(list(messages) or [news()]), mailbox, sleep=lambda s: None)
+        return actions.perform(Ctx(gmail, self.conn, self.audits, mailbox=mailbox, internal=internal),
+                               {"id": action_id, "mailbox": mailbox, "msg_id": "m1", "action": "unsubscribe", "args": {}})
+
+    def synced_send(self, to=(), cc=(), labels=("SENT",), deleted=None, sender=BOX):
+        """One synced message of the mailbox in another thread, as the sync writes it to mail.db's messages table."""
+        self.conn.execute("INSERT INTO messages (mailbox, msg_id, thread_id, from_addr, to_json, cc_json, labels_json, "
+                          "deleted_at) VALUES (?,?,?,?,?,?,?,?)",
+                          (BOX, "sent-1", "t-other", sender, json.dumps(list(to)), json.dumps(list(cc)),
+                           json.dumps(list(labels)), deleted))
 
     def test_an_accepted_request_is_ok_and_posted_once(self):
         self.assertEqual(self.perform(), {"ok": True, "detail": "unsubscribed"})
@@ -152,3 +162,47 @@ class UnsubscribeAction(unittest.TestCase):
         self.assertEqual(self.perform(news(), reply), {"ok": False, "retry": False,
                                                        "detail": "not unsubscribing: the mailbox already writes to the sender"})
         self.assertEqual(self.posts, [])
+
+    def test_internal_mail_from_a_domain_the_policy_names_is_kept_without_a_post(self):
+        self.assertEqual(self.perform(news(sender="ops@team.example", to="ana@team.example"),
+                                      mailbox="ana@team.example", internal=("team.example",)),
+                         {"ok": False, "retry": False, "detail": "not unsubscribing: the mail is internal"})
+        self.assertEqual(self.posts, [])
+
+    def test_a_sender_the_mailbox_wrote_to_in_another_thread_is_kept_without_a_post(self):
+        self.synced_send(to=["news@example.org"])
+        self.assertEqual(self.perform(), {"ok": False, "retry": False,
+                                          "detail": "not unsubscribing: the mailbox already writes to the sender"})
+        self.assertEqual(self.posts, [])
+
+    def test_a_sender_the_mailbox_copied_on_its_own_mail_is_kept_without_a_post(self):
+        self.synced_send(to=["someone@example.org"], cc=["news@example.org"])
+        self.assertEqual(self.perform(), {"ok": False, "retry": False,
+                                          "detail": "not unsubscribing: the mailbox already writes to the sender"})
+        self.assertEqual(self.posts, [])
+
+    def test_a_second_recipient_of_a_send_counts_as_known_without_a_post(self):
+        db.claim_send(self.conn, "send-1", "ana", BOX, "", ["first@x.example", "news@example.org"], "Weekly digest")
+        self.assertEqual(self.perform(), {"ok": False, "retry": False,
+                                          "detail": "not unsubscribing: the mailbox already writes to the sender"})
+        self.assertEqual(self.posts, [])
+
+    def test_a_draft_to_the_sender_does_not_count_as_known(self):
+        self.synced_send(to=["news@example.org"], labels=("DRAFT",))
+        self.assertEqual(self.perform(), {"ok": True, "detail": "unsubscribed"})
+        self.assertEqual(self.posts, [UNSUB_URL])
+
+    def test_inbound_mail_that_spoofs_the_owners_from_does_not_count_as_known(self):
+        self.synced_send(to=["news@example.org"], labels=("INBOX", "UNREAD"))
+        self.assertEqual(self.perform(), {"ok": True, "detail": "unsubscribed"})
+        self.assertEqual(self.posts, [UNSUB_URL])
+
+    def test_a_deleted_sent_message_does_not_count_as_known(self):
+        self.synced_send(to=["news@example.org"], deleted="2026-10-30T10:00:00Z")
+        self.assertEqual(self.perform(), {"ok": True, "detail": "unsubscribed"})
+        self.assertEqual(self.posts, [UNSUB_URL])
+
+    def test_a_longer_address_that_contains_the_sender_does_not_count_as_known(self):
+        self.synced_send(to=["xnews@example.org"])
+        self.assertEqual(self.perform(), {"ok": True, "detail": "unsubscribed"})
+        self.assertEqual(self.posts, [UNSUB_URL])
