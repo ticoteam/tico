@@ -426,7 +426,9 @@ def test_a_long_mailbox_keeps_each_message_distinct_and_each_runs_once(api):
     of the whole, so two messages from it are two runs, and a message offered again is still one."""
     box = "ana." + "x" * 177 + "@acme.example"
     assert len(box) == 194
-    aid = make(api, {"type": "message", "inbox": box}, [NOOP])
+    # The owner can read only her own inbox, so the automation sits on it; the offers carry the long mailbox, which is
+    # what the ref is built from, and the match takes them all.
+    aid = make(api, {"type": "message", "inbox": "ana@acme.example"}, [NOOP])
 
     def offer(msg_id):
         payload = {"message": {"source": "mail", "mailbox": box, "id": msg_id}}
