@@ -2496,3 +2496,47 @@ fn this_mac_after_a_save_failed_before_approval_still_removes_it_from_tico() {
     assert!(store.get(&failed.id).unwrap().deliveries.is_empty());
     assert!(store.context(&failed.id).unwrap().live_removed);
 }
+
+#[test]
+fn a_retry_names_the_audience_and_a_narrowing_tico_refuses_is_shown_as_said() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    // Approved for participants, retried for the Team.
+    let widened = transcript(&store, "Widened");
+    live_delivery(
+        &store,
+        &widened.id,
+        "failed",
+        json!({"source":"live","approved":true,"audience":"participants","tico_title":"Widened"}),
+    );
+    // Approved for the Team and already sent to a task; retried for participants.
+    let sent = transcript(&store, "Sent already");
+    live_delivery(
+        &store,
+        &sent.id,
+        "failed",
+        json!({"source":"live","approved":true,"audience":"team","tico_title":"Sent already"}),
+    );
+    let who = json!({"actor":"human:test"});
+    let refusal = "Already sent to #2417 for the team. Change who can see it there.";
+    let (tico, seen, worker) = server(vec![
+        Some(who.clone()),
+        Some(json!({"id":"filed","review_state":"live"})),
+        Some(who),
+        Some(json!({"status":409,"error":{"code":"already_sent","detail":refusal}})),
+    ]);
+    tico.send_to(&store, &widened.id, false, "team").unwrap();
+    let error = tico
+        .send_to(&store, &sent.id, false, "participants")
+        .unwrap_err()
+        .to_string();
+    worker.join().unwrap();
+    assert_eq!(error, refusal);
+    assert_eq!(store.get(&sent.id).unwrap().deliveries[0].error, refusal);
+    let calls = seen.lock().unwrap();
+    assert_eq!(
+        calls[1].1,
+        json!({"action":"approve","private":false,"audience":"team"})
+    );
+    assert!(calls[1].2.contains("refile"));
+}

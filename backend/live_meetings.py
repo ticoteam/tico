@@ -463,6 +463,38 @@ def _turn_conversation(c, rid, slug, title):
 DISCARDED = "Removed: this meeting was kept on the recorder's computer."
 
 
+# Words a run's result can carry; the rest of it (outcome, fallback, limits) stays.
+_RUN_TEXT = {"text", "final_text", "reply", "summary", "message", "body", "content", "output", "delta", "quote"}
+
+
+def _without_words(value):
+    if isinstance(value, dict):
+        return {k: DISCARDED if k in _RUN_TEXT and isinstance(v, str) else _without_words(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_without_words(v) for v in value]
+    return value
+
+
+def _discard_runs(c, conv):
+    """The runs a kept-local meeting's turns started, in its bot conversation: their rows stay, their words go."""
+    runs = [row[0] for row in c.execute(
+        "SELECT a.id FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
+        "WHERE m.conversation_id=? UNION SELECT a.id FROM attempts a JOIN messages m ON m.id=a.message_id "
+        "WHERE m.conversation_id=? UNION SELECT attempt_id FROM attempt_conversations WHERE conversation_id=?",
+        (conv, conv, conv))]
+    for run in runs:
+        row = c.execute("SELECT result,final_text,summary FROM attempts WHERE id=?", (run,)).fetchone()
+        try:
+            result = json.loads(row["result"]) if row["result"] else None
+        except ValueError:
+            result = None
+        c.execute("UPDATE attempts SET result=?,final_text=?,summary=? WHERE id=?",
+                  (None if result is None else json.dumps(_without_words(result)),
+                   DISCARDED if row["final_text"] else row["final_text"],
+                   DISCARDED if row["summary"] else row["summary"], run))
+        c.execute("UPDATE attempt_events SET payload=? WHERE attempt_id=?", (json.dumps({"discarded": True}), run))
+
+
 def _dispatch_turn(c, rid, turn_id, slug, retry=0):
     """Put one scoped reply request on the existing durable runner job queue, in this bot's meeting conversation. A
     request that arrives while the bot's reply in this meeting runs is a follow-up in that conversation: a runtime that
@@ -1659,8 +1691,8 @@ def install_live_meetings(app, store, auth, write):
     def discard(request: Request, rid: str, body: Join):
         """The connector kept the meeting on their own computer: it ends here and what was said leaves Tico.
 
-        Turns stay (they hold no words, and the privacy index reads them to keep the bots' replies private); the
-        messages in each bot's meeting conversation keep their place but lose their text.
+        Turns and the bots' runs stay (the privacy index reads them to keep the bots' replies private), but lose
+        their words: the messages in each bot's meeting conversation, and those runs' replies, results and events.
         """
         who = request.state.identity
         def work(c):
@@ -1677,6 +1709,7 @@ def install_live_meetings(app, store, auth, write):
             # Each bot's turns carried the transcript and chat into its meeting conversation: those copies go too.
             for (conv,) in c.execute("SELECT id FROM conversations WHERE room_key=?",
                                      ("live-meeting:" + rid,)).fetchall():
+                _discard_runs(c, conv)
                 c.execute("UPDATE messages SET body=? WHERE conversation_id=?", (DISCARDED, conv))
                 c.execute("UPDATE conversations SET closed_at=COALESCE(closed_at,?) WHERE id=?", (H.now(), conv))
             _event(c, rid, "meeting.state", {"state": "ended", "by": who.actor, "action": "discard"})

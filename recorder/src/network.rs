@@ -57,6 +57,14 @@ pub(crate) fn response(response: reqwest::blocking::Response) -> Result<Value> {
         if matches!(status.as_u16(), 404 | 405) && code == "request_failed" {
             anyhow::bail!("{OLD_TICO}");
         }
+        // Tico's own words, for a refusal the person acts on there.
+        if code == "already_sent"
+            && let Some(detail) = detail
+                .as_ref()
+                .and_then(|value| value["error"]["detail"].as_str())
+        {
+            anyhow::bail!("{detail}");
+        }
         if code == "meeting_router" {
             anyhow::bail!(
                 "The Tico meeting-question model profile is not configured on this server"
@@ -669,14 +677,31 @@ impl Tico {
                     || delivery.receipt["audience"] != audience)
             {
                 // The Recorder's own save skips the review queue, filed for who was chosen.
-                let (approve, key) = match audience {
-                    "team" => (json!({"action":"approve","private":false}), "approve:team"),
+                let (mut approve, mut key) = match audience {
+                    "team" => (
+                        json!({"action":"approve","private":false}),
+                        "approve:team".to_owned(),
+                    ),
                     "participants" => (
                         json!({"action":"approve","private":true,"audience":"participants"}),
-                        "approve:participants",
+                        "approve:participants".to_owned(),
                     ),
-                    _ => (json!({"action":"approve","private":true}), "approve"),
+                    _ => (
+                        json!({"action":"approve","private":true}),
+                        "approve".to_owned(),
+                    ),
                 };
+                // Approved before for another audience: name this one, so Tico re-files it (a first approval
+                // leaves it out for the Team, which an older Tico would refuse).
+                if delivery.receipt["approved"] == true {
+                    let refiles = delivery.receipt["refiles"].as_u64().unwrap_or(0) + 1;
+                    delivery.receipt["refiles"] = json!(refiles);
+                    approve["audience"] = json!(match audience {
+                        "team" | "participants" => audience,
+                        _ => "private",
+                    });
+                    key = format!("{key}:refile:{refiles}");
+                }
                 let reviewed = self
                     .call(
                         &format!("/api/v2/meetings/{}/review", delivery.meeting_id),
@@ -953,6 +978,14 @@ pub fn ready(record: &Recording) -> Result<()> {
 }
 /// A Tico that refuses `audience` (HTTP 422) is older than "Participants only": nothing was filed.
 fn refused_audience(error: anyhow::Error, audience: &str) -> anyhow::Error {
+    // Narrowing after the transcript went into a task: Tico says where to change it.
+    if let Some(sent) = error
+        .chain()
+        .map(|cause| cause.to_string())
+        .find(|cause| cause.starts_with("Already sent to "))
+    {
+        return anyhow::anyhow!(sent);
+    }
     if audience == "participants" && format!("{error:#}").contains("HTTP 422") {
         anyhow::anyhow!(
             "This Tico can't save for participants only yet, so nothing was shared. Update Tico or save it for the org."

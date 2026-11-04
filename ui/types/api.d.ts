@@ -3909,7 +3909,7 @@ export type RequesterInput = {
 
 export type Review = {
   action: "approve" | "dismiss" | "restore";
-  audience?: "team" | "participants" | null;
+  audience?: "team" | "participants" | "private" | null;
   private?: boolean | null;
   send_to?: string | null;
 };

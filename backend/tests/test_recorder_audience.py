@@ -118,3 +118,41 @@ def test_discard_ends_the_live_meeting_and_removes_what_was_said(api):
     assert not any("Synthetic" in payload for payload in events)
     # Discarding again is a no-op answer, not an error.
     assert post(api, f"live-meetings/{mid}/discard", {}, token="ben-test")["discarded"] is True
+
+
+def test_once_sent_to_a_task_it_cannot_be_narrowed_but_can_be_widened(api):
+    mid = live_meeting(api, visibility="team", joiner="cara")
+    post(api, f"live-meetings/{mid}/control", {"action": "end"}, token="ben-test")
+    rid = post(api, f"live-meetings/{mid}/finalize", {}, token="ben-test")["meeting_id"]
+    post(api, f"meetings/{rid}/review", {"action": "approve", "private": False, "audience": "team"},
+         token="ben-test")
+    # The transcript went into a task for the team (media.finish_delivery records it so).
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO meeting_deliveries(meeting_id,requested_by,sender_name,destination,instructions,"
+                  "status,task_id,requested_at) VALUES(?,?,?,?,?,?,?,?)",
+                  (rid, "ben@acme.example", "Ben", "ops", "", "delivered", "2417", "2026-11-04T00:00:00Z"))
+    for body in ({"action": "approve", "private": True, "audience": "participants"},
+                 {"action": "approve", "private": True}):
+        refused = api.post(f"/api/v2/meetings/{rid}/review", json=body, headers=headers("ben-test"))
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["error"]["code"] == "already_sent"
+        assert refused.json()["error"]["detail"] == ("Already sent to #2417 for the team. "
+                                                     "Change who can see it there.")
+    assert readable(api, rid, "fay-test")
+
+
+def test_a_participants_save_retried_for_the_team_widens(api):
+    mid = live_meeting(api, visibility="private", added="eve")
+    post(api, f"live-meetings/{mid}/control", {"action": "end"}, token="ben-test")
+    rid = post(api, f"live-meetings/{mid}/finalize", {}, token="ben-test")["meeting_id"]
+    post(api, f"meetings/{rid}/review", {"action": "approve", "private": True, "audience": "participants"},
+         token="ben-test")
+    assert not readable(api, rid, "fay-test")
+    post(api, f"meetings/{rid}/review", {"action": "approve", "private": False, "audience": "team"},
+         token="ben-test")
+    assert readable(api, rid, "fay-test")
+    # An older Recorder's retry names no audience; private:false alone still means the Team.
+    post(api, f"meetings/{rid}/review", {"action": "approve", "private": True, "audience": "participants"},
+         token="ben-test")
+    post(api, f"meetings/{rid}/review", {"action": "approve", "private": False}, token="ben-test")
+    assert readable(api, rid, "fay-test")

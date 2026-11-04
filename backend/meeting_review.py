@@ -16,7 +16,7 @@ class Review(M.Contract):
     send_to: str | None = Field(default=None, min_length=1, max_length=200)
     # Who may read it once shared: the Team, or only its participants (media.participants_only). Older Ticos refuse
     # the field, so a recorder asking for participants only never shares it wider by mistake.
-    audience: Literal['team', 'participants'] | None = None
+    audience: Literal['team', 'participants', 'private'] | None = None
 
 
 def participants_of(c, rid, record):
@@ -40,8 +40,24 @@ def restrict_source(c, who, rid):
         c.execute('UPDATE live_meetings SET visibility=?,updated_at=? WHERE id=?', ('private', H.now(), live))
 
 
+# Widest first: a meeting may move right along this once something was sent for it, never left.
+WIDTH = {'team': 2, 'participants': 1, 'private': 0}
+
+
+def sent_task(c, rid, meta):
+    """The task its transcript was already copied into, if any."""
+    row = c.execute('SELECT task_id FROM meeting_deliveries WHERE meeting_id=? AND task_id IS NOT NULL',
+                    (rid,)).fetchone()
+    return (row and row[0]) or (meta.get('sent') or {}).get('task')
+
+
 def set_audience(c, who, rid, record, meta, audience):
-    if audience == 'team':
+    if audience == 'private':
+        meta.update(private=True)
+        meta.pop('audience', None)
+        meta.pop('audience_emails', None)
+        restrict_source(c, who, rid)
+    elif audience == 'team':
         meta.update(private=False)
         meta.pop('audience', None)
         meta.pop('audience_emails', None)
@@ -87,7 +103,17 @@ def install_meeting_review(app, store, auth, mutate):
         if meta['review_state'] == target:
             # Approving again with another audience (the Recorder retrying a Save) re-files it for that audience.
             current = meta.get('audience') or ('private' if meta.get('private') else 'team')
-            if action == 'approve' and audience and audience != current:
+            # Without an audience (an older Recorder), private:false means the Team; private:true only narrows a
+            # Team meeting, so it never undoes Participants only.
+            wanted = audience or ('team' if private is False else 'private' if private and current == 'team' else None)
+            if action == 'approve' and wanted and wanted != current:
+                # The transcript already went into a task for the wider audience; narrowing here can't recall it.
+                task = sent_task(c, rid, meta)
+                if task and WIDTH[wanted] < WIDTH[current]:
+                    raise Problem('already_sent',
+                                  f'Already sent to #{task} for the {"team" if current == "team" else "participants"}. '
+                                  'Change who can see it there.', 409)
+                audience = wanted
                 set_audience(c, who, rid, record, meta, audience)
                 media.save(c, meta, readable=record['transcript_readable'])
                 c.execute('UPDATE media_control SET version=version+1 WHERE meeting_id=?', (rid,))

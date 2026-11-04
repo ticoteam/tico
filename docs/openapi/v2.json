@@ -61344,7 +61344,8 @@
                 "type": "string",
                 "enum": [
                   "team",
-                  "participants"
+                  "participants",
+                  "private"
                 ]
               },
               {
