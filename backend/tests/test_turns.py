@@ -104,3 +104,20 @@ def test_a_folded_step_carries_its_label_and_keeps_its_tool_name():
             ("tool", {"tool": "Bash", "status": "completed", "item_id": "b1"}, "t2")]
     [step] = turns.build_steps(rows)
     assert (step["tool"], step["label"], step["text"]) == ("Bash", "Ran npm", "")
+
+
+def test_a_hub_phrase_is_the_longest_command_it_starts_with():
+    assert turns.tool_label({"tool": "Bash", "summary": "hub approval read-back"}) == "Preparing approvals for your yes"
+    assert turns.tool_label({"tool": "mcp__hub__hub_approval_read_back"}) == "Preparing approvals for your yes"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub approval approve"}) == "Approving"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub needs-you list"}) == "Reading the Needs you list"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub finance report"}) == "Working in Finance"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub meeting search"}) == "Searching"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub settings set"}) == "Changing a setting"
+    assert turns.tool_label({"tool": "shell", "summary": "hub history"}) == "Reading the chat"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub ask"}) == "Asking a teammate"
+
+
+def test_an_unmapped_hub_command_reads_as_hub_and_its_words():
+    assert turns.tool_label({"tool": "Bash", "summary": "hub release now"}) == "Ran hub release now"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub webhook pause"}) == "Ran hub webhook pause"

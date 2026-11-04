@@ -374,13 +374,15 @@ fn run_words(run: &str) -> Option<Vec<String>> {
     Some(out)
 }
 
-/// `hub` and up to two of the CLI's own command words from the positional words before the first flag. Any other
-/// word is dropped, so a token or a note passed as an argument never reaches the summary.
+/// `hub` and up to two of the CLI's own command words, read in order from the positional words before the first flag.
+/// Reading stops at the first word that is not a command word, so free text after a command never reaches the summary
+/// (`hub ask botops please check` reads `hub ask`).
 fn hub_summary(words: &[String]) -> String {
-    let known = words[1..].iter().take_while(|w| !w.starts_with('-'))
-        .filter(|w| HUB_WORDS.split_whitespace().any(|word| word == w.as_str()))
-        .take(2);
-    std::iter::once("hub").chain(known.map(String::as_str)).collect::<Vec<_>>().join(" ")
+    let known = words[1..].iter()
+        .take_while(|w| !w.starts_with('-') && HUB_WORDS.split_whitespace().any(|word| word == w.as_str()))
+        .take(2)
+        .map(String::as_str);
+    std::iter::once("hub").chain(known).collect::<Vec<_>>().join(" ")
 }
 
 
@@ -998,6 +1000,7 @@ mod tests {
         assert_eq!(command_program("(cd web && npm test)"), "npm");
         assert_eq!(command_program("sh -c 'cd x && cargo test'"), "cargo");
         assert_eq!(command_program("hub task create --title \"a && hub task close\""), "hub task create");
+        assert_eq!(command_program("hub ask botops please check the release"), "hub ask");
         assert_eq!(command_program("FOO=1 && curl x"), "curl");
         assert_eq!(command_program("X=$(a && sk-live-1) hub task list"), "");
         assert_eq!(tool_summary(&json!({"command": "cd web && hub task list --token sk-live-1"})), "hub task list");

@@ -102,18 +102,72 @@ def build_steps(rows):
 # A shell call's events name the program it runs (the runner's summary: `npm`, or `hub task close`), never its
 # arguments. These tool names are shells.
 SHELL_TOOLS = {"bash", "shell"}
-# A hub command in a plain phrase, by its two command words (the CLI's own, after `hub`).
+# A hub command's plain phrase, by its CLI words, every one a real command of clients/hubcli.py (or one of its top-level
+# aliases, the RENAMED table). A word break is a space, so `read-back` is the two words `read back`. A phrase for a
+# command's first word alone covers the rest of its group; the longest key that starts the command wins.
 HUB_PHRASES = {
-    "task create": "Filing a task", "task close": "Closing a task", "task list": "Listing tasks",
-    "task show": "Reading a task", "task update": "Updating a task", "task comment": "Commenting on a task",
-    "goal show": "Reading a goal", "kpi update": "Updating a KPI", "message send": "Sending a message",
+    "task create": "Filing a task",
+    "task close": "Closing a task",
+    "task bulk": "Changing tasks",
+    "task list": "Listing tasks",
+    "task show": "Reading a task",
+    "task update": "Updating a task",
+    "task comment": "Commenting on a task",
+    "task ask": "Asking a teammate",
+    "needs you": "Reading the Needs you list",
+    "approval list": "Reading approvals",
+    "approval show": "Reading approvals",
+    "approval read back": "Preparing approvals for your yes",
+    "approval approve": "Approving",
+    "approval decline": "Declining approvals",
+    "message list": "Reading messages",
+    "message send": "Sending a message",
+    "conversation show": "Reading the chat",
+    "history": "Reading the chat",
+    "ask": "Asking a teammate",
+    "question ask": "Asking a teammate",
+    "human list": "Reading people",
+    "people": "Reading people",
+    "bot show": "Checking bots",
+    "bot status": "Checking bot status",
+    "bot pause": "Pausing a bot",
+    "bot resume": "Resuming a bot",
+    "bot model": "Changing a bot's model",
+    "bot owners": "Changing bot owners",
+    "group": "Working on groups",
+    "org": "Working on the org chart",
+    "automation list": "Reading automations",
+    "automation show": "Reading an automation",
+    "automation create": "Creating an automation",
+    "automation update": "Changing an automation",
+    "rules": "Working on rules",
+    "rule": "Working on rules",
+    "goal show": "Reading a goal",
+    "goal create": "Creating a goal",
+    "kpi update": "Updating a KPI",
+    "settings show": "Reading settings",
+    "settings set": "Changing a setting",
+    "finance": "Working in Finance",
+    "meeting": "Reading meetings",
+    "meetings": "Reading meetings",
+    "doc history": "Reading history",
+    "doc search": "Searching",
+    "context search": "Searching",
+    "file search": "Searching",
+    "finance search": "Searching",
+    "gateway search": "Searching",
+    "meeting search": "Searching",
+    "thread search": "Searching",
+    "market find": "Searching",
+    "settings find": "Searching",
+    "tool query search": "Searching",
 }
 
 
-def hub_command(text):
-    """A hub call's command words ("task close", at most two), read from a shell summary ("hub task close") or an
-    MCP tool name ("mcp__hub__hub_task_close"). None for anything else."""
-    words = re.sub(r"[^A-Za-z0-9]+", " ", str(text or "")).lower().split()
+def hub_words(text):
+    """A hub call's CLI words, lowercased and split on anything but letters and digits, from a shell summary
+    (`hub approval read-back`) or an MCP tool name (`mcp__hub__hub_approval_read_back`). None for any other tool."""
+    words = re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split()
     if words[:1] == ["mcp"]:
         words = words[1:]
     if words[:1] != ["hub"]:
@@ -121,19 +175,28 @@ def hub_command(text):
     words = words[1:]
     if words[:1] == ["hub"]:  # an MCP tool named hub_<command>
         words = words[1:]
-    return " ".join(words[:2])
+    return words
+
+
+def hub_phrase(words):
+    """The phrase for a hub command's words: the longest of its first three words that is a key, else None."""
+    for n in (3, 2, 1):
+        phrase = HUB_PHRASES.get(" ".join(words[:n]))
+        if phrase:
+            return phrase
+    return None
 
 
 def tool_label(payload):
-    """What a tool call does, in a few plain words: "Filing a task" for a hub command with a phrase, else "Ran" and
-    the program (a shell's summary: its first word, or `hub` and two words for a hub command) or the tool's own name.
-    The arguments and the output of a call are never read."""
+    """What a tool call does, in a few plain words: a hub command's phrase, else "Ran" and the program (a shell's
+    summary: its first word, or `hub` and two words for a hub command) or the tool's own name. The arguments and
+    the output of a call are never read."""
     name = str(payload.get("tool") or payload.get("name") or "")
     shell = re.sub(r"[^A-Za-z0-9]+", " ", name).strip().lower() in SHELL_TOOLS
     summary = " ".join(str(payload.get("summary") or "").split()) if shell else ""
-    command = hub_command(summary or name)
-    if command in HUB_PHRASES:
-        return HUB_PHRASES[command]
+    phrase = hub_phrase(hub_words(summary or name) or [])
+    if phrase:
+        return phrase
     head = summary.split()[:1]
     if head == ["hub"]:
         words = " ".join(summary.split()[:3])
