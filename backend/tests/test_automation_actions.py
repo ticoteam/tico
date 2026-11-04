@@ -225,10 +225,10 @@ def hub_mail(sender, msg_id):
 def test_the_hub_keeps_a_roster_persons_and_a_company_domains_mail_and_queues_nothing(api):
     """The hub judges the sender from its own roster and the company's domains, whatever the flow says: a refused
     unsubscribe is recorded as failed and nothing is queued for a computer to claim."""
-    from backend import access
+    from backend import access, views
     settings = api.app.state.store.settings
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO humans(id,name,email) VALUES('sam','Sam','sam@gmail.com')")
+    with api.app.state.store.transaction() as c:      # the saved roster the hub reads, as the app adds a person
+        access.add_person(c, "keeper", views.roster(c), name="Sam", email="sam@gmail.com")
         team = access.company_domains(c, settings)[0]
     with api.app.state.store.transaction() as c:
         roster = A.run(c, {**auto(), "settings": settings}, "run_1", "unsubscribe", {}, hub_mail("sam@gmail.com", "m1"))
@@ -243,9 +243,10 @@ def test_the_hub_keeps_a_roster_persons_and_a_company_domains_mail_and_queues_no
 
 
 def test_an_archive_chained_after_a_refused_unsubscribe_is_skipped_on_the_hub(api):
+    from backend import access, views
     settings = api.app.state.store.settings
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO humans(id,name,email) VALUES('sam','Sam','sam@gmail.com')")
+        access.add_person(c, "keeper", views.roster(c), name="Sam", email="sam@gmail.com")
     values = hub_mail("sam@gmail.com", "m3")
     with api.app.state.store.transaction() as c:
         first = A.run(c, {**auto(), "settings": settings}, "run_1", "unsubscribe", {}, values, step="gate")
