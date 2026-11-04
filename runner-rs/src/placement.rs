@@ -57,7 +57,7 @@ pub async fn fast_forward(path: &Path, turn: &Env) -> (&'static str, String) {
         if !git(path, &env, &["merge-base", "--is-ancestor", "HEAD", "@{u}"], 15).await?.0 {
             return Ok(("kept", "it has commits GitHub does not, and GitHub has commits it does not"));
         }
-        crate::repositories::repair_instruction_links(path, &env).await;
+        if let Some(note) = crate::repositories::repair_instruction_links(path, &env).await { return Err(note); }
         let (ok, status) = git(path, &env, &["status", "--porcelain", "--untracked-files=no"], 15).await?;
         if !ok { return Err("could not inspect local changes".to_string()); }
         if !status.trim().is_empty() {

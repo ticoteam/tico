@@ -6,6 +6,7 @@ that can put the old code back when the new code does not come up. Nothing here 
 a checkout with changes is left alone and the reason goes to Health.
 """
 import argparse
+import contextlib
 import fcntl
 import json
 import os
@@ -54,8 +55,12 @@ def git(root, *args, run=subprocess.run, timeout=60):
     kwargs = dict(capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
                   env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
     done = run(command, **kwargs)
-    if done.returncode and git_locks.recover(root, done.stderr or ""):
-        done = run(command, **kwargs)
+    if done.returncode:
+        try:
+            if git_locks.recover(root, done.stderr or ""):
+                done = run(command, **kwargs)
+        except git_locks.RecoveryConflict as error:
+            done.stderr = f"{error}; {done.stderr or ''}"
     return done
 
 
@@ -99,17 +104,58 @@ def repair_instruction_links(root, g):
                     continue
                 if content != original.stdout.encode() or content != target.read_bytes():
                     continue
-            # Preparation stays out of the working tree even if the runner is killed before replacement.
-            temp = git_dir / ("tico-instruction-link-" + uuid.uuid4().hex)
+            # Keep open writers attached to a named inode in metadata, even after the link is restored.
+            backup = git_dir / "tico-instruction-backups" / Path(name).parent / (Path(name).name + f".tico-backup-{int(time.time())}-{uuid.uuid4().hex}")
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            if backup.parent.resolve() != backup.parent:
+                continue
+            after = path.lstat()
+            if (before.st_dev, before.st_ino, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_mtime_ns) or path.read_bytes() != content:
+                continue
+            path.rename(backup)
+            saved = backup.lstat()
+            if (saved.st_dev, saved.st_ino) != (before.st_dev, before.st_ino):
+                # The replacement and the raced file both stay available for review.
+                with contextlib.suppress(OSError):
+                    os.link(backup, path, follow_symlinks=False)
+                continue
             try:
-                temp.symlink_to(link.stdout)
-                after = path.lstat()
-                if (before.st_ino, before.st_mtime_ns) == (after.st_ino, after.st_mtime_ns) and path.read_bytes() == content:
-                    temp.replace(path)
-            finally:
-                temp.unlink(missing_ok=True)
+                path.symlink_to(link.stdout)
+            except OSError:
+                # Never replace another writer's new path; the backup still holds the original.
+                with contextlib.suppress(OSError):
+                    os.link(backup, path, follow_symlinks=False)
         except (OSError, ValueError):
             continue
+    return instruction_backup_note(root, git_dir)
+
+
+def instruction_backup_note(root, git_dir):
+    """Recheck retained backups on every update so a late write is named in the next Health report."""
+    saved = git_dir / "tico-instruction-backups"
+    names = []
+    try:
+        for backup in saved.rglob("*.tico-backup-*"):
+            relative = backup.relative_to(saved)
+            name = relative.with_name(relative.name.rsplit(".tico-backup-", 1)[0])
+            try:
+                different = backup.is_symlink() or not backup.is_file() or backup.read_bytes() != (root / name).read_bytes()
+            except OSError:
+                different = True
+            if different:
+                names.append(str(backup.relative_to(root)))
+            else:
+                from . import git_locks
+                before = backup.lstat()
+                if stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and git_locks.unused(backup, before):
+                    backup.unlink()
+    except OSError:
+        names.append(str(saved.relative_to(root)))
+    if names:
+        note = "repository copy needs attention: bot instruction edit to review: " + ", ".join(names[:3])
+        print(note, file=sys.stderr)
+        return note
+    return ""
 
 
 def checkout_release(root=ROOT, run=subprocess.run):
@@ -418,7 +464,9 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
     branch = g("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
     if branch not in ("main", "HEAD"):        # HEAD: detached, which is where a release update leaves it
         return say("blocked", f"the checkout is on branch {branch}; switch it to main to follow releases")
-    repair_instruction_links(root, g)
+    instruction_note = repair_instruction_links(root, g)
+    if instruction_note:
+        return say("blocked", instruction_note)
     dirty = [line for line in g("status", "--porcelain", "--untracked-files=no").stdout.splitlines() if line]
     if dirty:
         # "XY path" lines: the status letters and the space come off; a rename keeps its "old -> new" as it is.
@@ -505,9 +553,12 @@ def main(argv=None):
     parser.add_argument("--root", default=str(ROOT))
     parser.add_argument("--version", required=True)
     parser.add_argument("--state-dir", required=True)
+    parser.add_argument("--owned-root", action="append", default=[])
     parser.add_argument("--pid", type=int, required=True)
     parser.add_argument("--started", default="")     # the commit the runner started on; "" from an older runner
     args = parser.parse_args(argv)
+    from . import git_locks
+    git_locks.OWNED_ROOTS = (Path(args.state_dir), *map(Path, args.owned_root))
     deadline = time.time() + 600
     while in_flight(args.state_dir) and time.time() < deadline:   # the runner waits for quiet first; this is the second look
         time.sleep(10)

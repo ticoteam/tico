@@ -146,7 +146,9 @@ async fn self_update(root: &Path, running: &str) -> (bool, String) {
     if branch != "main" {
         return (false, format!("checkout is on {}, not main", if branch.is_empty() { "an unknown branch" } else { &branch }));
     }
-    crate::repositories::repair_instruction_links(root, &crate::safegit::clean_environment(&crate::env::process_environment())).await;
+    if let Some(note) = crate::repositories::repair_instruction_links(root, &crate::safegit::clean_environment(&crate::env::process_environment())).await {
+        return (false, note);
+    }
     let status = match git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await {
         Some((0, status)) => status,
         _ => return (false, "could not inspect checkout changes".into()),
@@ -644,7 +646,10 @@ impl Follower {
         let pid = std::process::id().to_string();
         let dir = self.directory.to_string_lossy().to_string();
         let root = self.root.to_string_lossy().to_string();
-        let args = ["-m", "runner_support.release_update", "--root", &root, "--version", want, "--state-dir", &dir, "--pid", &pid, "--started", &self.started];
+        let mut args: Vec<String> = ["-m", "runner_support.release_update", "--root", &root, "--version", want, "--state-dir", &dir, "--pid", &pid, "--started", &self.started].iter().map(|s| s.to_string()).collect();
+        for owned in crate::gitlocks::owned_roots() {
+            args.extend(["--owned-root".into(), owned.to_string_lossy().into_owned()]);
+        }
         let log_path = self.directory.join("update.log");
         let unit = std::env::var("TICO_SYSTEMD_UNIT").unwrap_or_default();
         if unit.ends_with(".service") && !unit.contains('/') {
@@ -667,7 +672,7 @@ impl Follower {
         let out = std::fs::OpenOptions::new().create(true).append(true).open(&log_path).map_err(|e| e.to_string())?;
         let err = out.try_clone().map_err(|e| e.to_string())?;
         let mut cmd = Command::new(&python);
-        cmd.args(args).current_dir(&self.root).stdin(Stdio::null()).stdout(out).stderr(err);
+        cmd.args(&args).current_dir(&self.root).stdin(Stdio::null()).stdout(out).stderr(err);
         // SAFETY: setsid is async-signal-safe; the child gets its own session, as Popen(start_new_session=True).
         unsafe {
             cmd.pre_exec(|| {

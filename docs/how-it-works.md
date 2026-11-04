@@ -700,11 +700,35 @@ any error. A base clone failure does not change a bot's readiness. A clone that 
 from this computer's repository list for 30 days is removed from `repos/`. Older servers without
 the repository endpoint leave this feature idle.
 
-An interrupted Git command can leave a lock behind. The runner removes a reported lock only after
-five minutes and only when no Git process holds it open; fresh locks and locks that might belong
-to an inaccessible Git process stay in place. A broken private mirror is rebuilt from the remote. If a base clone's config
-cannot be written, the runner recreates that config from a fresh clone, keeping the old config as
-`.git/tico-config-backup-*`. Its files, index, branches, stash and task worktree registrations stay
-in place, including unpublished bot work. Git failure details are scrubbed before reaching Health.
+An interrupted Git command can leave a lock behind. Recovery is limited to the runner's registered
+work and data roots. **These repository copies must be private to one runner and its PID namespace**:
+do not share them with another container or the host. Filesystem checks cannot cheaply establish that
+no owner exists outside the namespace. User checkouts outside these roots are never recovered.
+
+The runner waits at least 30 minutes, checks open descriptors and live Git processes' working
+directories, arguments and environment against the worktree, Git admin and common directories,
+and refuses recovery when it cannot inspect a possible owner. On macOS it uses `lsof` and `ps`,
+refusing ambiguous output. Rust and Python serialize recovery with `flock` on the common Git
+directory's `tico-lock-recovery` sidecar. After rechecking the inode, they rename the abandoned lock
+to `<name>.stale-<timestamp>-*` and verify the moved inode. Raced replacements are restored only if
+the original pathname is free; otherwise both copies stay and the failed command names them in
+Health. Quarantined locks are retained; none are cleaned up within a day of quarantine.
+
+A broken mirror is renamed to `<mirror>.broken-<timestamp>-*` before a fresh copy is built, only
+when it has no registered worktrees, no runner repository uses its objects through an alternates
+file, and every local ref has the same SHA on the remote. Unknown refs or an unreachable remote
+stop repair. One broken copy is retained for review; another repair waits for that review instead
+of deleting it. Refusals say `repository copy needs attention: <reason>` in Health. Retiring a
+repository keeps its mirror too. If a base clone's config cannot be written, the runner recreates
+that config from a fresh clone, keeping the old config as `.git/tico-config-backup-*`. Its files,
+index, branches, stash and task worktree registrations stay in place, including unpublished bot work.
+
+Flattened instruction links are repaired only after checking the index and committed content.
+The regular file is first renamed into the Git admin directory's `tico-instruction-backups/`, with
+its relative path and a `.tico-backup-<timestamp>-*` suffix, before creating the symlink. An open
+writer continues writing to this named backup. Identical backups are removed only when no process
+has them open; differing or unreadable backups stay, block updates, and are named as a bot edit to
+review in Health and the update log. Each update rechecks retained backups to catch late writes.
+Git failure details are scrubbed before reaching Health.
 
 Outside source failures are isolated by computer, login profile and runtime. The provider's absolute reset time wins over a later status refresh, and a claim releases an expired reset hold even between scheduler ticks. Repeated observations update one durable source incident; only its start and recovery send quiet notices to Engineering and Health, with the since time, waiter count and expected return. Waiting automatic notices use the existing history/digest batching, while interrupted jobs retain their own checkpoint. Human bulk finish/close writes one count-only next-run note per recipient; task details remain on their original tasks, including for paused recipients.
