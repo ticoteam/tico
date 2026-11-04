@@ -10,7 +10,7 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 // Each of these lit the dot or filled the menu before Amendment v3. None may do so now.
-const NOISE_HEALTH = {audience: 'owner', stuck: [], attention: 3, computers: [{id: 'r1', label: 'Studio Mac', online: true}], checks: [
+const NOISE_HEALTH = {audience: 'owner', stuck: [], attention: 3, computers: [{id: 'r1', label: 'Studio Mac', online: true, runtimes: []}], failures: [], checks: [
   {id: 'version', label: 'Version', status: 'warn', summary: 'Tico 0.3.80 is available. You are on 0.3.79.', fixes: [{label: 'Update', href: '', tab: '', click: '#new-version'}]},
   {id: 'models', label: 'Models', status: 'bad', summary: "Builder's Claude login was rejected. Sign in again.", fixes: [{label: 'Open Credentials', href: '#/credentials'}]},
   {id: 'computers', label: 'Computers', status: 'ok', summary: '1 computer online.', fixes: []}]};
@@ -124,13 +124,13 @@ const NOISE_ISSUES = [
 
     // No computer online: red. One computer back clears it, since one online computer means bots can run.
     status = {cloud: true, keeper_alive: true, health_issues: NOISE_ISSUES};
-    health = {...NOISE_HEALTH, computers: [{id: 'r1', label: 'Studio Mac', online: false}, {id: 'r2', label: 'Acme laptop', online: false}]};
+    health = {...NOISE_HEALTH, computers: [{id: 'r1', label: 'Studio Mac', online: false, runtimes: []}, {id: 'r2', label: 'Acme laptop', online: false, runtimes: []}]};
     await settle();
     assert.equal(await dot.getAttribute('data-level'), 'bad');
     const offline = await menuLines();
     assert.deepEqual(await texts(offline), ["Bots aren't running: no computer is online"]);
     assert.equal(await offline.first().locator('a').getAttribute('href'), '#/settings');
-    health = {...NOISE_HEALTH, computers: [{id: 'r1', label: 'Studio Mac', online: false}, {id: 'r2', label: 'Acme laptop', online: true}]};
+    health = {...NOISE_HEALTH, computers: [{id: 'r1', label: 'Studio Mac', online: false, runtimes: []}, {id: 'r2', label: 'Acme laptop', online: true, runtimes: []}]};
     await settle();
     await page.locator('#heartbeat').waitFor({state: 'hidden'});
     // No computer set up at all is no computer online.

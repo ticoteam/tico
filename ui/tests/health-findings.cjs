@@ -33,7 +33,7 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/humans') return json({people: [{id: 'chris', name: 'Chris'}], org_groups: []});
       if (p === '/api/status') return json({cloud: true, keeper_alive: true, health_issues: []});
       if (p === '/api/issues') return json([]);
-      if (p === '/api/v2/health') return json({audience: 'owner', stuck: [], attention: 0, computers: [{id: 'r1', label: 'Studio Mac', online: true}],
+      if (p === '/api/v2/health') return json({audience: 'owner', stuck: [], attention: 0, computers: [{id: 'r1', label: 'Studio Mac', online: true, runtimes: []}], failures: [],
         checks: [{id: 'computers', label: 'Computers', status: 'ok', summary: '1 computer online.', fixes: []}]});
       if (p === '/api/v2/health/findings') return json(doc);
       if (p === '/api/v2/health/findings/disk_full%3Aserver/report' && route.request().method() === 'POST') {
