@@ -24,3 +24,14 @@ function taskMeetingsAdopt(d, task) {
   };
   load().catch(() => {});
 }
+
+// A link changes no task fields, so the task list's identical-row suppression cannot refresh this section.
+liveOn('tasks', event => {
+  for (const dialog of document.querySelectorAll('dialog[open][data-task]')) {
+    const id = dialog.dataset.task;
+    if (!event.bulk && String(event.id) !== id) continue;
+    liveSoon('task-meetings:' + id, () => {
+      if (dialog.open && dialog.dataset.task === id) taskMeetingsAdopt(dialog, {id});
+    }, 200);
+  }
+});
