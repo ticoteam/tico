@@ -221,10 +221,10 @@ function auActionFields(s) {
     assign: () => auFld('Assign to', auSel('step.args.owner', auWithCur(who, a.owner, auActorName(a.owner)), a.owner || '')),
     wake_bot: () => auFld('Bot', auSel('step.args.bot', auWithCur(auBots(), a.bot, auActorName(a.bot)), a.bot || '')),
     forward: () => auFld('To', auIn('step.args.to', a.to, 'name@acme.example')),
-    label: () => auFld('Label', auIn('step.args.name', a.name ?? a.label)),
-    note: () => auFld('Text', auTa('step.args.text', a.text, 4)),
-    post_update: () => auFld('Text', auTa('step.args.text', a.text, 4)),
-    call_webhook: () => auFld('Webhook', auIn('step.args.webhook', a.webhook ?? a.endpoint)),
+    label: () => auFld('Label', auIn('step.args.name', auArg('label', a))),
+    note: () => auFld('Text', auTa('step.args.text', auArg('note', a), 4)),
+    post_update: () => auFld('Text', auTa('step.args.text', auArg('post_update', a), 4)),
+    call_webhook: () => auFld('Webhook', auIn('step.args.webhook', auArg('call_webhook', a))),
   }[s.do];
   return auFld('Action', auSel('step.do', Object.entries(AU_ACTIONS), s.do, 'data-redraw')) + (args ? args() : '');
 }
@@ -275,6 +275,9 @@ function auEdWire(box) {
     if (b === 'set') { ed.custom = !v; if (v) { ed.step.set = v; delete ed.step.questions; auDecideQs(ed); } auDrawSide(); return; }
     if (b.startsWith('qs.')) ed.custom = true;
     auPathSet(ed, b, v);
+    // An action's text edited under its own name: the other names the hub reads first go, so the edit is what runs.
+    const argAt = /^(.*)\.args\.([a-z_]+)$/.exec(b), act = argAt && auPathGet(ed, argAt[1]), names = AU_ARG_NAMES[act?.do];
+    if (names?.key === argAt?.[2] && act.args) for (const k of [...names.keys, ...(names.drop || [])]) if (k !== names.key) delete act.args[k];
     // Stop here changes where a rule goes: a rule that names its next gets the new one (a rule that moved on, unstopped,
     // goes to the next step); a rule that doesn't goes by stop alone.
     const stopAt = /^step\.rules\.(\d+)\.stop$/.exec(b), sr = stopAt && ed.step?.rules?.[stopAt[1]];
@@ -577,14 +580,14 @@ function auArgRows(at, k, a) {
       + auSel(`${at}.owner`, [['', 'Owner'], ...auWithCur(who, a.owner, auActorName(a.owner))], a.owner || '', 'data-blank aria-label="Assign to"'),
     assign: () => auSel(`${at}.owner`, auWithCur(who, a.owner, auActorName(a.owner)), a.owner || '', 'aria-label="Assign to"'),
     wake_bot: () => auSel(`${at}.bot`, [['', 'Owner’s bot'], ...auWithCur(auBots(), a.bot, auActorName(a.bot))], a.bot || '', 'data-blank aria-label="Bot"')
-      + auIn(`${at}.text`, a.text, 'Message', 'aria-label="Message"'),
+      + auIn(`${at}.text`, auArg('wake_bot', a), 'Message', 'aria-label="Message"'),
     forward: () => auIn(`${at}.to`, a.to, 'name@acme.example', 'aria-label="Forward to"'),
-    label: () => auIn(`${at}.name`, a.name ?? a.tag, 'Label', 'aria-label="Label"'),
-    draft_reply: () => auBoardTa(`${at}.body`, a.body ?? a.text, 'Reply'),
-    send_reply: () => auBoardTa(`${at}.body`, a.body ?? a.text, 'Reply'),
-    note: () => auBoardTa(`${at}.text`, a.text, 'Note'),
-    post_update: () => auBoardTa(`${at}.text`, a.text, 'Update'),
-    call_webhook: () => auIn(`${at}.webhook`, a.webhook, 'Webhook id', 'aria-label="Webhook"'),
+    label: () => auIn(`${at}.name`, auArg('label', a), 'Label', 'aria-label="Label"'),
+    draft_reply: () => auBoardTa(`${at}.body`, auArg('draft_reply', a), 'Reply'),
+    send_reply: () => auBoardTa(`${at}.body`, auArg('send_reply', a), 'Reply'),
+    note: () => auBoardTa(`${at}.text`, auArg('note', a), 'Note'),
+    post_update: () => auBoardTa(`${at}.text`, auArg('post_update', a), 'Update'),
+    call_webhook: () => auIn(`${at}.webhook`, auArg('call_webhook', a), 'Webhook id', 'aria-label="Webhook"'),
   }[k];
   return f ? `<div class="au-act-a">${f()}</div>` : '';
 }
