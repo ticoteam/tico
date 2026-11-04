@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS cloud_machines(
  active_at REAL, heartbeat_at REAL, ttl_s INTEGER, next_try_at REAL, failures INTEGER NOT NULL DEFAULT 0,
  problem TEXT NOT NULL DEFAULT '', problem_at TEXT, wake_key TEXT, woke_at REAL,
  enroll_by REAL, enroll_fails INTEGER NOT NULL DEFAULT 0, changed_by TEXT, updated_at TEXT, stop_until REAL);
+CREATE INDEX IF NOT EXISTS cloud_machines_starting_runner ON cloud_machines(runner_id) WHERE state='starting';
 CREATE TABLE IF NOT EXISTS cloud_machine_codes(
  code_hash TEXT PRIMARY KEY, bot TEXT NOT NULL, created_at TEXT NOT NULL);
 """
@@ -311,17 +312,19 @@ def rows(c):
 
 
 def visible_rows(c):
-    """Live runner contact wins over HQ's last machine state in display payloads."""
+    """Live runner contact proves a boot finished, but cannot undo HQ's stop or deletion."""
     from .getting_started import ONLINE_SECONDS
     online = {r["id"] for r in c.execute(
         "SELECT id FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
         (H.shift(H.now(), seconds=-ONLINE_SECONDS),))}
-    return {key: {**current, **({"state": "running"} if current["runner_id"] in online else {})}
+    return {key: {**current, **({"state": "running"}
+                              if current["state"] == "starting" and current["runner_id"] in online else {})}
             for key, current in rows(c).items()}
 
 
 def checked_in(c, runner_id):
     """A boot reached this server. Repair old starting rows too, without undoing a stop reservation."""
+    # Every heartbeat reaches here; the partial index visits only pending boots, including none for a self-hosted runner.
     c.execute("UPDATE cloud_machines SET state='running',updated_at=? WHERE runner_id=? AND state='starting'",
               (H.now(), runner_id))
 

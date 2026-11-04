@@ -1,4 +1,4 @@
-"""Computer revocation and retirement of unused self-hosted computers."""
+"""Computer revocation and retirement of replaced self-hosted computers."""
 
 from .store import H
 
@@ -30,18 +30,33 @@ def disconnect(store, runner_id):
 
 
 def sweep(store, at):
-    """Retire only unassigned, offline self-hosted computers, under the heartbeat/assignment write lock."""
+    """Retire replaced computers under the heartbeat/assignment write lock; time offline alone proves nothing."""
     cutoff = H.shift(at, seconds=-UNASSIGNED_OFFLINE_RETIRE_SECONDS)
     with store.transaction() as c:
-        retired = [r["id"] for r in c.execute(
-            "SELECT r.id FROM runners_with_state r WHERE r.revoked_at IS NULL "
+        replaced = [r for r in c.execute(
+            "SELECT r.id,r.label,(SELECT n.id FROM runners_with_state n "
+            "WHERE n.revoked_at IS NULL AND n.owner_id=r.owner_id AND n.label=r.label AND n.platform=r.platform "
+            "AND n.created_at>r.created_at AND (n.created_at>coalesce(r.last_seen_at,r.created_at) "
+            "OR n.last_seen_at>coalesce(r.last_seen_at,r.created_at)) "
+            "ORDER BY n.created_at DESC,n.id DESC LIMIT 1) AS replacement_id "
+            "FROM runners_with_state r WHERE r.revoked_at IS NULL "
             "AND coalesce(r.last_seen_at,r.created_at)<? "
             "AND NOT EXISTS (SELECT 1 FROM assignments a WHERE a.runner_id=r.id) "
             "AND NOT EXISTS (SELECT 1 FROM cloud_machines m WHERE m.runner_id=r.id) "
+            "AND NOT EXISTS (SELECT 1 FROM browser_exits e WHERE e.runner_id=r.id AND e.sharing=1) "
+            "AND NOT EXISTS (SELECT 1 FROM computer_subscriptions s WHERE s.runner_id=r.id) "
+            "AND NOT EXISTS (SELECT 1 FROM computer_keys k WHERE k.runner_id=r.id) "
+            "AND NOT EXISTS (SELECT 1 FROM computer_profiles p WHERE p.runner_id=r.id) "
+            "AND NOT EXISTS (SELECT 1 FROM model_logins l WHERE l.runner_id=r.id) "
+            "AND NOT EXISTS (SELECT 1 FROM json_tree(r.readiness) j "
+            "WHERE j.key IN ('authenticated','sign_in') AND j.value='ready') "
             "AND NOT EXISTS (SELECT 1 FROM bot_settings b WHERE json_extract(b.app_delivery,'$.computer')=r.id)",
-            (cutoff,))]
-        for runner_id in retired:
-            revoke(c, H.KEEPER, runner_id, at=at, reason="No bots assigned and offline for over 24 hours")
+            (cutoff,)) if r["replacement_id"]]
+        for computer in replaced:
+            revoke(c, H.KEEPER, computer["id"], at=at,
+                   reason="No bots assigned and offline for over 24 hours; "
+                          f"replaced by {computer['label']} ({computer['replacement_id']})")
+    retired = [r["id"] for r in replaced]
     for runner_id in retired:
         disconnect(store, runner_id)
     return retired

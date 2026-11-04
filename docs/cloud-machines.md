@@ -4,8 +4,9 @@ On Tico Cloud a bot can run on a cloud machine: a boat sandbox that Tico HQ star
 server (`backend/cloud_machines.py` decides when; HQ talks to boat). This page is for whoever builds the machine
 image: how the base snapshot is made and refreshed, and how a new machine becomes a runner.
 
-Machine status follows live runner contact: a runner seen within the normal online window shows **Running** even if
-HQ's last machine record still says **Starting** or **Stopped**. Enrollment and subsequent heartbeats finish a
+Machine status follows live runner contact: a runner seen within the normal online window shows **Running** when
+HQ's last machine record still says **Starting**. **Stopping**, **Stopped**, **Deleted** and **Failed** stay as recorded,
+even while a runner still checks in. Enrollment and subsequent heartbeats finish a
 pending `starting` transition, so the next heartbeat repairs an old record too. A heartbeat does not cancel a stop
 already reserved by the scheduler.
 
