@@ -1,7 +1,7 @@
 // The flow board (ui/app/automations-flow.js auBoardHTML) against the fake hub: an inbox with destinations shows its
 // rules, questions, LLM and destinations, a flow without them keeps the step list; a rule's pop-up adds an action and
 // saves both (with the destinations unchanged), a rule moved on saves next "rule"; a proposal's diff shows destination,
-// `to` and move-on changes; a webhook board saves a mode switch;
+// `to` and move-on changes; a webhook board offers Sort only and no mail actions;
 // a phone stacks the board with no sideways scroll.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -136,22 +136,25 @@ async function save(page, writes, id, n) {
       await page.close();
     }
 
-    // A webhook board: its fields as code, Sort + note on; switching to Sort saves a decide and a routing filter.
+    // A webhook board: its fields as code, Sort only (a draft or reply needs a message), and no mail actions to pick.
     {
-      const {page, errors, writes} = await open(browser, DESKTOP, 'au_hook');
+      const {page, errors} = await open(browser, DESKTOP, 'au_hook');
       await page.waitForSelector('.au-board');
       assert.equal(await page.locator('[data-board="rule:0"] code').first().textContent(), 'type');
-      assert.equal(await page.locator('[data-bmode="draft"]').textContent(), 'Sort + note');
-      assert.equal(await page.locator('[data-bmode="draft"]').getAttribute('aria-pressed'), 'true');
+      assert.equal(await page.locator('[data-bmode], .au-bseg').count(), 0, 'no draft or reply modes off mail');
       assert.equal(await page.locator('.au-dest:not(.au-dest-add)').count(), 2);
       assert.equal(await page.locator('.au-branch path').count(), 3);
       await shot(page, 'desktop-board-webhook');
-      await page.locator('[data-bmode="sort"]').click();
-      await page.waitForFunction(() => document.querySelector('[data-bmode="sort"]')?.getAttribute('aria-pressed') === 'true');
-      const body = writes.at(-1).body;
-      assert.deepEqual(body.steps.map(s => s.type), ['filter', 'decide', 'filter']);
-      assert.deepEqual(body.steps[2].rules.map(r => r.to), ['ops', 'log', 'log']);
-      assert.deepEqual(body.destinations, FX.webhook.destinations);
+      await page.locator('[data-board="llm"]').click();
+      await page.waitForSelector('#au-root.ed-pop .au-ed:not([hidden])');
+      assert.equal(await page.locator('.au-ed [data-op="bmode"]').count(), 0, 'no mode switch in the pop-up either');
+      await page.locator('.au-ed [data-op="close"]').click();
+      await page.locator('[data-board="rule:0"]').click();
+      await page.locator('[data-op="add"][data-at="item.then"]').click();
+      const acts = await page.locator('[data-act="item.then.0"] option').evaluateAll(os => os.map(o => o.value));
+      assert.equal(acts[0], 'create_task', 'a new action off mail is a task');
+      for (const mail of ['archive', 'label', 'star', 'leave_for_you', 'forward', 'draft_reply', 'send_reply', 'unsubscribe'])
+        assert.equal(acts.includes(mail), false, mail + ' needs a message');
       assert.deepEqual(errors, []);
       await page.close();
     }
