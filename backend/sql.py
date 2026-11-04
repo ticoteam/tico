@@ -746,7 +746,7 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         columns = schema_columns(conn, path)
         unseen = TA.hidden(conn, who, "see", ("human", "group"), auth)
         tables = guarded(conn, auth, who, inner, function, columns, unseen=unseen)
-        source_tables = set(tables) | {"pages", "pins", "pin_places", "teammate_accesses", "task_trash_assets",
+        source_tables = set(tables) | {"pages", "pins", "pin_places", "teammate_accesses", "task_trash_assets", "home_merges", "home_merge_messages",
                                        "blob_media", "live_meetings", "live_meeting_access", "live_meeting_bots",
                                        "live_meeting_turns"}
         class Source:
@@ -790,12 +790,13 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                 finally:
                     trusted[0] = False
         index = ReadIndex(Source(), who, rooms=True)
-        from .files import file_visible, page_event_readable, page_blob_visible
+        from .files import page_audience_visible, page_event_readable, page_blob_visible
         from .pages import may_manage as page_manager
         source = index.c
         def visible_file(fid):
             row = source.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
-            return bool(row) and file_visible(source, auth, who, row, {})
+            # SQL already enforces inherited scope/provenance below; only add the common narrowing.
+            return bool(row) and page_audience_visible(source, auth, who, row, {})
         def manages_page(fid):
             row = source.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
             return bool(row) and page_manager(source, auth, who, row)

@@ -191,6 +191,8 @@ def test_audience_does_not_grant_inherited_access_or_constrain_managers(api):
     assert read(api, fid, 'cara-test').status_code == 404  # the chat is still private
     assert read(api, fid, 'ben-test').status_code == 200
     assert read(api, fid, attempt['token']).status_code == 200
+    assert sql(api, f"SELECT id FROM bot_files WHERE id='{fid}'", 'ben-test') == [[fid]]
+    assert len(sql(api, f"SELECT detail FROM events WHERE target='{fid}' AND action='page.access_changed'", 'ben-test')) == 1
     edit(api, fid, {'everyone': False})
     assert read(api, fid, 'ben-test').status_code == 200
     assert read(api, fid, attempt['token']).status_code == 200
