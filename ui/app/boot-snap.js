@@ -28,20 +28,18 @@ const SNAP_MAX_BYTES = 256 * 1024;
 const SNAP_SETTLE_MS = 1500, SNAP_SAVE_TRIES = 8;
 // The longest a kept screen stays up, from the moment it is shown.
 const SNAP_SHOW_MAX_MS = 12000;
-// `banned`: signed out since this page loaded, in this tab or any other of this org's (SNAP_OUT_KEY, and SNAP_CHANNEL
-// to tell the open ones at once). Nothing is kept again until a new load's /me names a person, whatever answer (a late
-// roster, a timer, pagehide) comes first. `loaded` is before this page's /me was asked: a sign-out after it means
-// that answer may be stale.
-const SNAP = {db: null, who: '', shown: '', done: false, copy: null, timer: 0, watch: 0, banned: false, loaded: Date.now()};
-const SNAP_OUT_KEY = 'tico-boot-signed-out', SNAP_CHANNEL = 'tico-boot';
+// The ban on keeping a screen after a sign-out is the store's own `epoch` row, not a clock: boot reads it with the
+// kept screen (SNAP.epoch), a sign-out bumps it and deletes the screen in one readwrite transaction, and a save is one
+// readwrite transaction that writes only while the row still holds what boot read. IndexedDB runs readwrite
+// transactions on a store one at a time, so a save queued in any tab behind a sign-out finds the new epoch and writes
+// nothing. Without IndexedDB (or when the read fails) SNAP.epoch stays null and nothing is kept or shown.
+// `banned` (this tab signed out, or SNAP_CHANNEL said another did) only stops saves early; it is never needed for
+// correctness.
+const SNAP_EPOCH = 'epoch', SNAP_CHANNEL = 'tico-boot';
+const SNAP = {db: null, who: '', shown: '', done: false, copy: null, timer: 0, watch: 0, banned: false, epoch: null};
 const snapChannel = (() => { try { return new BroadcastChannel(SNAP_CHANNEL); } catch { return null; } })();
-// Signed out anywhere since this page loaded: it is banned too, and drops whose screen it was.
+// Signed out here, or told so: it drops whose screen it was.
 function snapSignedOut() {
-  if (!SNAP.banned) {
-    let at = 0;
-    try { at = Number(localStorage.getItem(SNAP_OUT_KEY)) || 0; } catch { /* no storage: this tab's own ban only */ }
-    if (at >= SNAP.loaded) SNAP.banned = true;
-  }
   if (SNAP.banned) SNAP.who = '';
   return SNAP.banned;
 }
@@ -93,24 +91,62 @@ function snapTx(mode, work) {
     tx.onerror = tx.onabort = () => reject(tx.error);
   }));
 }
-const snapRead = () => snapOn() ? snapTx('readonly', s => s.get(location.origin)).catch(() => null) : Promise.resolve(null);
+// The kept screen and the epoch, read together once, as this page loads (before boot asks /me).
+function snapLoad() {
+  if (!snapOn()) return Promise.resolve(null);
+  return snapDb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(SNAP_STORE, 'readonly'), store = tx.objectStore(SNAP_STORE);
+    const kept = store.get(location.origin), epoch = store.get(SNAP_EPOCH);
+    tx.oncomplete = () => { SNAP.epoch = Number(epoch.result) || 0; resolve(kept.result || null); };
+    tx.onerror = tx.onabort = () => reject(tx.error);
+  })).catch(() => null);
+}
+const SNAP_LOADED = snapLoad();
 const snapForget = () => snapOn() ? snapTx('readwrite', s => s.delete(location.origin)).catch(() => {}) : Promise.resolve();
+// One readwrite transaction that reads the epoch first and runs `work` only while it is the one boot read; a newer
+// one (a sign-out in any tab) bans this tab instead.
+function snapGuarded(work) {
+  if (SNAP.epoch === null) return Promise.resolve(false);
+  const at = SNAP.epoch;
+  return snapDb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(SNAP_STORE, 'readwrite'), store = tx.objectStore(SNAP_STORE);
+    let wrote = false;
+    store.get(SNAP_EPOCH).onsuccess = e => {
+      if ((Number(e.target.result) || 0) !== at) { SNAP.banned = true; SNAP.who = ''; return; }
+      work(store); wrote = true;
+    };
+    tx.oncomplete = () => resolve(wrote);
+    tx.onerror = tx.onabort = () => reject(tx.error);
+  })).catch(() => false);
+}
+// Sign-out: the epoch moves on and the kept screen goes, in one transaction.
+function snapSignOut() {
+  if (!snapOn()) return Promise.resolve();
+  return snapDb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(SNAP_STORE, 'readwrite'), store = tx.objectStore(SNAP_STORE);
+    store.get(SNAP_EPOCH).onsuccess = e => {
+      store.put((Number(e.target.result) || 0) + 1, SNAP_EPOCH);
+      store.delete(location.origin);
+    };
+    tx.oncomplete = () => resolve();
+    tx.onerror = tx.onabort = () => reject(tx.error);
+  })).catch(() => {});
+}
 // Signed out, or someone else: nothing more is kept in this page, a copy on screen goes now, and what was kept goes.
 function bootSnapDrop() {
   SNAP.who = ''; SNAP.done = true; SNAP.banned = true;
   clearTimeout(SNAP.timer);
   bootSnapRelease();
-  try { localStorage.setItem(SNAP_OUT_KEY, String(Date.now())); } catch { /* the channel still tells the open tabs */ }
   try { snapChannel?.postMessage({signedOut: true}); } catch { /* closed */ }
-  return snapForget();
+  return snapSignOut();
 }
 
 // At boot, with the /me read already on its way: the kept screen, once /me says it is this person's.
 function bootSnapShow(meRead) {
   if (!snapOn()) return;
-  void Promise.all([snapRead(), meRead.catch(() => null)]).then(([kept, me]) => {
+  void Promise.all([SNAP_LOADED, meRead.catch(() => null)]).then(([kept, me]) => {
     // No answer (offline): shown later, or not at all. Signed out since this page loaded: never.
-    if (!kept || !me || SNAP.done || SESSION.out || snapSignedOut()) return;
+    if (!kept || !me || SNAP.done || SESSION.out || SNAP.epoch === null || snapSignedOut()) return;
     if (!authenticatedConfigPerson(me) || kept.who !== snapWho(me) || kept.version !== SNAP_VERSION) { void snapForget(); return; }
     const main = document.getElementById('main');
     if (kept.route !== location.hash || !snapRouteOk(kept.route) || !main || main.childElementCount || typeof kept.html !== 'string') return;
@@ -202,7 +238,7 @@ function snapScreen() {
 // few times; a page that is never kept leaves the older entry, which shows only on its own address.
 function bootSnapSave(tries = 0) {
   clearTimeout(SNAP.timer);
-  if (!snapOn() || snapSignedOut() || !SNAP.who || SESSION.out) return;
+  if (!snapOn() || SNAP.epoch === null || snapSignedOut() || !SNAP.who || SESSION.out) return;
   const screen = snapScreen();
   if (!screen) {
     if (tries && tries < SNAP_SAVE_TRIES) SNAP.timer = setTimeout(() => bootSnapSave(tries + 1), SNAP_SETTLE_MS);
@@ -212,7 +248,7 @@ function bootSnapSave(tries = 0) {
   // A screen too big to keep takes the older one with it: the next open must not show a page from before it.
   if (screen.html === null) { void snapForget(); return; }
   const entry = {who, version: SNAP_VERSION, route: location.hash, cls: screen.cls, html: screen.html, at: Date.now()};
-  void snapTx('readwrite', s => s.put(entry, location.origin)).catch(() => {});
+  void snapGuarded(s => s.put(entry, location.origin));
 }
 function bootSnapSaveSoon() {
   clearTimeout(SNAP.timer);
