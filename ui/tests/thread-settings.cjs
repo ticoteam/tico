@@ -158,7 +158,7 @@ async function fits(browser, engine, phone) {
   assert.ok(await shows(dlg.locator('footer [data-close]')), `${engine} ${where}: Done on screen`);
   if (phone) assert.ok(Math.abs(sizes.dialog - 844) <= 1 && Math.abs(sizes.form - 844) <= 1, `${engine} phone: full screen: ${JSON.stringify(sizes)}`);
   // A long body scrolls inside the panel; the panel stays within the screen and Done stays on it.
-  await dlg.evaluate(d => { const tall = document.createElement('div'); tall.style.height = '2000px'; tall.dataset.tall = ''; d.querySelector('.ths').append(tall); });
+  await dlg.evaluate(d => { const tall = document.createElement('div'); tall.style.cssText = 'flex:none;height:2000px'; tall.dataset.tall = ''; d.querySelector('.ths').append(tall); });
   const long = await measure();
   console.log(`${engine} ${where} long: ${JSON.stringify(long)}`);
   assert.ok(long.scroll > long.body && long.dialog <= long.viewport && long.foot <= long.viewport, `${engine} ${where}: a long body scrolls: ${JSON.stringify(long)}`);
