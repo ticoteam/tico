@@ -15,7 +15,7 @@ from backend import maintenance_limits as L
 from backend.maintenance_steps import collect
 from backend.tests.test_api import api, get, headers  # noqa: F401  (fixtures and helpers)
 
-mig = importlib.import_module("backend.migrations.0081_maintenance")
+mig = importlib.import_module("backend.migrations.0090_maintenance")
 
 
 def la(day, hour, minute=0):

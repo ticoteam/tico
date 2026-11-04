@@ -415,7 +415,7 @@ class BotSettingsRow(TypedDict):
 
 class MaintenanceStepRow(TypedDict):
     """One `maintenance_steps` row (SELECT *): a Maintenance step's switch, "How often", custom interval, "Most bots per
-    run" and cursors (migration 0081, backend/maintenance.py)."""
+    run" and cursors (migration 0090, backend/maintenance.py)."""
     key: str
     enabled: int
     frequency: str
@@ -430,7 +430,7 @@ class MaintenanceStepRow(TypedDict):
 
 
 class MaintenanceRunRow(TypedDict):
-    """One `maintenance_runs` row (SELECT *): one Maintenance run, claimed by its occurrence key (migration 0081)."""
+    """One `maintenance_runs` row (SELECT *): one Maintenance run, claimed by its occurrence key (migration 0090)."""
     id: str
     occurrence_key: str
     trigger: str
