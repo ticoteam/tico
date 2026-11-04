@@ -552,7 +552,9 @@ live shared-room rule as before.
   row, and a write that names it lands in the Home (`bot_home_merge.home_for`). The moved history is read for everyone
   who reads the Home: its messages are history for every reader (`refs.moved_home`, never unread), in the Home and in
   each moved sub-thread, so old unread state is discarded. A reader's mark moves up to what moved in, never past an
-  original Home message still unread for them. A task's history reads every Home its bot has had (`history_ids`). A person's chat with the bot that opens later is the Home too (`bot_home_merge.home_for_chat`). The
+  original Home message still unread for them. A task's history reads every Home its bot has had (`history_ids`). A person's chat with the bot that opens later is the Home too (`bot_home_merge.home_for_chat`). A file scoped to a moved room takes the
+  Home's scope, unless the Home already has a file of that identity or another moved room's file took it first; that
+  file keeps its room's scope and reads as the Home (`bot_home_merge.scope_home`, for file access and attachments). The
   Assistant's rooms stay.
 
 ## 8. Sessions (`clients/sessions.py`, `runner-rs/src/execute.rs`)

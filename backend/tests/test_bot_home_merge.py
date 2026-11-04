@@ -9,7 +9,10 @@ Fictional people only: ana (owner), ben and cara; the bots come from the api fix
 import pytest
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend import bot_home_merge, rooms, threads
+from backend import bot_home_merge, rooms, threads, visuals
+from backend.auth import Identity
+from backend.blobs import register
+from backend.files import series
 from backend.store import H, task_message_page
 from backend.tests.test_api import api, headers, post  # noqa: F401  (the fixture; post is a helper)
 from backend.tests.test_threads_private_execution import (  # noqa: F401  (the helper and the fixture it needs)
@@ -599,3 +602,75 @@ def test_a_question_asked_before_the_move_is_superseded_by_a_replacement_and_by_
         assert H.supersede_asks(c, first) == [newer]
     with store(api).read() as c:
         assert H.message(c, left)["superseded_at"] and H.message(c, newer)["superseded_at"]
+
+
+def run_once(api):
+    """The start-up step, run on the migrated database: its marker is cleared first, as on an install the move has not reached."""
+    with store(api).transaction() as c:
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (bot_home_merge.KEY,))
+        return bot_home_merge.run_once(c)
+
+
+def bot_file(api, conversation_id, name, text):
+    """A file the bot published in a chat. Its identity is the bot and the path (files.series), so one name in two rooms
+    is one identity: two scopes until the move puts both in the Home."""
+    data = text.encode("utf-8")
+    with store(api).transaction() as c:
+        digest = api.app.state.blobs.put(data, "text/plain")
+        item = register(c, Identity("bot:ops", "bot"), digest, len(data), name, "text/plain")
+        row, _, _ = api.app.state.files.add_version(
+            c, bot="ops", actor="bot:ops", scope="conversation:" + conversation_id, task=None,
+            conversation=conversation_id, attempt="", identity=series("ops", name), title=name, name=name,
+            mime="text/plain", blob_id=item["id"], digest=digest, size=len(data))
+    return row["id"]
+
+
+def readable(api, fid):
+    """The file as cara, who reads the Home and no old room: its content, else the status."""
+    r = api.get("/api/v2/files/" + fid, headers=headers("cara-test"))
+    return r.content if r.status_code == 200 else r.status_code
+
+
+def attachable(api, conversation_id, fid):
+    """The file ids a message in this conversation may attach (visuals.attach, as a Home reader posts)."""
+    with store(api).transaction() as c:
+        out, _ = visuals.attach(c, Identity("human:cara", "human", "cara@acme.example"), api.app.state.files,
+                                api.app.state.blobs, [fid + "@1"], conversation_id=conversation_id)
+    return [item["id"] for item in out]
+
+
+def test_a_file_from_an_old_room_reads_and_attaches_in_the_home_after_run_once(api, ops_rooms):
+    fid = bot_file(api, ops_rooms["ana"], "plan.md", "# Plan")
+    assert readable(api, fid) == 404                               # a file of a private room
+    assert run_once(api)["rooms"] == 2
+    with store(api).read() as c:
+        assert c.execute("SELECT scope FROM bot_files WHERE id=?", (fid,)).fetchone()[0] == "conversation:" + ops_rooms["home"]
+    assert readable(api, fid) == b"# Plan"
+    listed = api.get("/api/v2/bots/ops/files?limit=100", headers=headers("cara-test")).json()["files"]
+    assert fid in {f["id"] for f in listed}
+    assert attachable(api, ops_rooms["home"], fid) == [fid]
+
+
+def test_two_rooms_files_under_one_name_both_stay_readable_in_the_home(api, ops_rooms):
+    ana = bot_file(api, ops_rooms["ana"], "notes.md", "# Ana")
+    ben = bot_file(api, ops_rooms["ben"], "notes.md", "# Ben")     # one identity: only one can take the Home's scope
+    assert run_once(api)["rooms"] == 2
+    home = "conversation:" + ops_rooms["home"]
+    with store(api).read() as c:
+        scopes = dict(c.execute("SELECT id, scope FROM bot_files WHERE id IN (?,?)", (ana, ben)).fetchall())
+    taken = [fid for fid, scope in scopes.items() if scope == home]
+    assert len(taken) == 1, scopes
+    kept = ben if taken == [ana] else ana
+    assert scopes[kept] == "conversation:" + (ops_rooms["ben"] if kept == ben else ops_rooms["ana"]), scopes
+    assert readable(api, ana) == b"# Ana" and readable(api, ben) == b"# Ben"
+    assert attachable(api, ops_rooms["home"], ana) == [ana] and attachable(api, ops_rooms["home"], ben) == [ben]
+
+
+def test_a_file_the_home_already_has_under_its_name_keeps_its_room_scope_and_stays_readable(api, ops_rooms):
+    own = bot_file(api, ops_rooms["home"], "notes.md", "# Home")
+    moved = bot_file(api, ops_rooms["ana"], "notes.md", "# Ana")
+    assert run_once(api)["rooms"] == 2
+    with store(api).read() as c:
+        assert c.execute("SELECT scope FROM bot_files WHERE id=?", (moved,)).fetchone()[0] == "conversation:" + ops_rooms["ana"]
+    assert readable(api, moved) == b"# Ana" and readable(api, own) == b"# Home"
+    assert attachable(api, ops_rooms["home"], moved) == [moved]

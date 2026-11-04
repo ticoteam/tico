@@ -20,7 +20,9 @@ for one bot at a time):
    personal room; a 'shared:' mark is never added), so the Home's own read rule is the one that applies. What is keyed
    by the room moves with it: deliveries, sub-threads (root, parent, path), follow-ups, routings, feedback, bot files,
    credential requests, deferrals, calls; a run still going there is granted the Home too (attempt_conversations). The
-   keyed tables move in one statement each for the whole bot (`_move_keyed`), not one per room.
+   keyed tables move in one statement each for the whole bot (`_move_keyed`), not one per room. A file scoped to its room
+   takes the Home's scope too, unless the Home already has a file of that identity or another moved room's file took it
+   first; that file keeps its room's scope and reads as the Home (`scope_home`), so no file is lost or merged.
 3. Read marks. Nobody wakes to a flood: the moved messages are history (`refs.moved_home`, which the unread rule never
    counts), in the Home and in each moved sub-thread, for everyone who reads the Home; an old unread reply is not carried
    over (owner decision, Nov 3). A reader's mark moves up to what moved in, but never past an original Home message that
@@ -182,6 +184,20 @@ def home_missing(c, conversation_id):
     return _moved(c, conversation_id) is not None and home_for(c, conversation_id, create=False) is None
 
 
+def scope_home(c, conversation_id):
+    """The conversation a file scoped to `conversation_id` is read in: the Home its room went into when the move took it
+    (a file that kept its room's scope reads as the Home, `_home_file_moves`), else the conversation itself."""
+    row = _moved(c, conversation_id) if conversation_id else None
+    return row[0] if row else conversation_id
+
+
+def file_in_room(c, scope, conversation_id):
+    """Whether a file with this scope is in the conversation (visuals.attach): the scope names it, or names a room the
+    move took into the same Home."""
+    return (bool(conversation_id) and scope.startswith("conversation:")
+            and scope_home(c, scope[13:]) == scope_home(c, conversation_id))
+
+
 def history_ids(c, conversation_id):
     """The conversations a room's history is read from, oldest first: the room, then every Home its bot has had, archived
     ones included (an archived Home keeps the writes it took, and the one after it takes the next), and the Home a write to
@@ -322,7 +338,7 @@ def _merge_bot(c, bot_id, rooms, summary):
     row = threads.thread_row(c, home["id"])
     for room in moving:
         _move(c, room, row, bot, summary)
-    _move_keyed(c)
+    _move_keyed(c, bot["id"])
     return True
 
 
@@ -369,12 +385,37 @@ def _map_rooms(c, rooms, hid):
     c.executemany("INSERT INTO temp.home_moves(rid, hid) VALUES(?,?)", [(room["id"], hid) for room in rooms])
 
 
-def _move_keyed(c):
+def _home_file_moves(c, bot_id):
+    """The moved rooms' files that take their Home's scope (temp.home_file_moves: id, scope, was), and an activity row
+    for each that names the scope it had. An identity is unique within its scope (bot, scope, identity), so a file takes
+    the Home's scope only when the Home has no file of that identity and it is the first, by when it was first active, of
+    the moved files with that identity. Every other file keeps its room's scope; that scope still reads as the Home
+    (`scope_home`)."""
+    c.execute("CREATE TEMP TABLE IF NOT EXISTS home_file_moves(id TEXT PRIMARY KEY, scope TEXT NOT NULL, was TEXT NOT NULL)")
+    c.execute("DELETE FROM temp.home_file_moves")
+    c.execute("INSERT INTO temp.home_file_moves(id, scope, was) "
+              "SELECT id, scope, was FROM (SELECT f.id, 'conversation:' || m.hid AS scope, f.scope AS was, "
+              "ROW_NUMBER() OVER (PARTITION BY m.hid, f.identity ORDER BY f.first_activity_at, f.id) AS rn, "
+              "EXISTS (SELECT 1 FROM bot_files o WHERE o.bot_id=f.bot_id AND o.scope='conversation:' || m.hid "
+              "AND o.identity=f.identity) AS taken "
+              "FROM temp.home_moves m JOIN bot_files f ON f.bot_id=? AND f.scope='conversation:' || m.rid "
+              "AND f.conversation_id=m.rid) WHERE rn=1 AND NOT taken", (bot_id,))
+    c.execute("INSERT INTO bot_file_activity(file_id, actor, action, created_at, detail) "
+              "SELECT id, ?, 'moved_to_home', ?, json_object('from', was, 'to', scope) FROM temp.home_file_moves",
+              (H.KEEPER, H.now()))
+
+
+def _move_keyed(c, bot_id):
     """What is keyed by the moved rooms moves with them: one statement per table for the whole bot. Several of these
-    tables have no index on the room column, so a statement per room would read each of them once per room."""
+    tables have no index on the room column, so a statement per room would read each of them once per room. A file's
+    scope moves in the same statement as its room (`_home_file_moves`)."""
+    if _table(c, "bot_files"):
+        _home_file_moves(c, bot_id)
     for table, column in KEYED:
         if _table(c, table):
-            c.execute(f"UPDATE {table} SET {column}=(SELECT hid FROM temp.home_moves WHERE rid={table}.{column}) "
+            scope = (", scope=COALESCE((SELECT s.scope FROM temp.home_file_moves s WHERE s.id=bot_files.id), scope)"
+                     if table == "bot_files" else "")
+            c.execute(f"UPDATE {table} SET {column}=(SELECT hid FROM temp.home_moves WHERE rid={table}.{column}){scope} "
                       f"WHERE {column} IN (SELECT rid FROM temp.home_moves)")
     if _table(c, "attempts"):
         c.execute("INSERT OR IGNORE INTO attempt_conversations(attempt_id, conversation_id) "
