@@ -146,10 +146,9 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `tasks` | `id, title, body, requester_id, owner_id, status, due_at, goal_id, conversation_id, created_at, updated_at, done_at, closed_at, closed_by_id, note, version, acceptance, type_id, step_id, number, step_rank, waiting_on` | `status`: open, doing, waiting, review, ready, done, closed, declined; `waiting_on` the person a waiting task waits on; `number` is the team-wide ticket number a numbered type gives (NULL until one does), `step_rank` the task's place within its step, lower first ([Tasks](tasks.md)) |
 | `task_relations` | `from_task, to_task, kind, created_by, created_at` | every task-to-task relationship, read only when both tasks are; `kind`: `parent` (from is a subtask of to), `blocks` (from blocks to), `related` (stored once, lower id first), `duplicate_of`, `follow_up` (from was split off or followed up from to). It replaces the old `tasks.parent_id` and `tasks.blocked_by`: a task's parent is `SELECT to_task FROM task_relations WHERE from_task=:task AND kind='parent'`, its subtasks `SELECT from_task ... WHERE to_task=:task AND kind='parent'`, its blockers `SELECT from_task ... WHERE to_task=:task AND kind='blocks'` |
 | `task_types` | `id, name, numbered, created_at, updated_at` | types and, in `task_steps(id, type_id, name, position, status)`, their steps; `numbered` is 1 when the type numbers its tasks |
-| `task_events` | `task_id, created_at, actor, field, old, new, note` | every change to a task |
+| `history_events` | `subject_type, subject_id, created_at, actor_id, kind, old, new, note, action_id, via, data` | every change to a task, goal, the company profile, the strategy or the market graph, one row each: `subject_type` is `task`, `goal`, `company`, `strategy` or `market_entity`/`market_edge`/`market_evidence`/`market_document`; `subject_id` the task, goal or market row (`company` and `strategy` for those two); `kind` the field that changed. A goal's `status` row has `data` `{"status_by": ..., "status_source": ...}` (who set the colour and how); a market row may carry `{"insight_id": ...}`; a strategy row's `data` is the change. You see a task's rows when you can see the task, a goal's when you can see the goal, the strategy's when you own the install |
 | `task_roles` | `task_id, role, actor, added_by, created_at` | who is on a task, by role (a short name the team chooses: `developer`, `reviewer`, `qa` ...); one actor may hold several roles on a task |
 | `goals` | `id, title, owner_id, parent_id, body, status, status_note, status_by_id, status_at, status_source, suggest_status, suggest_note, suggest_at, rank, last_read_at, last_read_by_id, created_at, created_by_id, updated_at` | what every human and bot is for; `status`: red, yellow, green, gray (no data), done, dropped, or NULL while not yet scored; `status_source`: `auto` (the Strategy Bot's arithmetic) or `person` (set by hand, sticks until handed back); `suggest_*` is what the arithmetic says over a human's colour; `parent_id` is the goal it supports (optional); `owner` is `bot:x`, `human:x` or `company`; `tasks.goal_id` names the goal a task serves |
-| `goal_events` | `goal_id, created_at, actor, field, old, new, note, status_by, status_source` | every change to a goal; a `status` row says who set it and how |
 | `kpis` | `id, slug, name, definition, unit, direction, cadence, owner_id, source_note, definition_version, created_at, created_by_id, updated_at` (`target` is the one target a KPI had before goal links, kept as it was and read by nothing; a KPI's targets are on its goal links) | a measure that stands on its own; `direction`: up, down, range; `cadence`: daily, weekly, monthly |
 | `goal_kpis` | `goal_id, kpi_id, kind, baseline, baseline_at, target, deadline, min, max, created_at, created_by_id, updated_at, updated_by_id` | the link between a goal and a KPI, holding the target: `kind` is `improve` (baseline, target, deadline), `maintain` (min, max) or `none`; `kpi_id` may be `auto:<bot>:<metric>` |
 | `kpi_readings` | `kpi_id, measured_at, value, actor_id, source, note, created_at, period_start, period_end, collected_at, evidence, quality, definition_version, supersedes` | appended, never edited; `period_start` and `period_end` are the business time the value describes (`measured_at` equals `period_end`), `collected_at` when it was collected; `quality`: measured, estimate, partial; a correction is a new row whose `supersedes` names the old one |
@@ -274,7 +273,7 @@ Every run records what woke it (`turns.trigger_kind`), its tokens, and whether i
   `interrupted`, `fallback_side` (a fallback model keeps a session of its own), or `prompt_too_long_after_compact`
   (the run failed on a prompt too large to send even after compacting, so Tico cleared the session for the next
   run); `resumed` may carry `compacted`. NULL from an older runner. A new session for any reason but `none_saved` is
-  also a line in its task's history (`task_events.field = 'session'`). Unusual: `SELECT bot, count(*) FROM turns
+  also a line in its task's history (a `history_events` row of `kind = 'session'`). Unusual: `SELECT bot, count(*) FROM turns
   WHERE session_kind = 'new' AND session_why <> 'none_saved' AND started_at > date('now', '-1 day') GROUP BY bot`.
 
 `purpose` is a short label for what the run was for (`review PR`, `answer person message`): the place that wakes the bot may name it, otherwise it is the default for that bot and trigger, and runs from before it existed were filled the same way. A wake the map does not know reads `unknown`. Group by it: `SELECT purpose, sum(runs), sum(input_tokens) FROM run_weekly GROUP BY purpose`.
@@ -348,7 +347,8 @@ LEFT JOIN tasks t ON t.id=o.task_id ORDER BY o.occurrence DESC LIMIT 50
 A task's history in order:
 
 ```sql
-SELECT created_at, actor, field, old, new, note FROM task_events WHERE task_id=:task ORDER BY created_at
+SELECT created_at, actor_id, kind, old, new, note FROM history_events
+WHERE subject_type='task' AND subject_id=:task ORDER BY created_at
 ```
 
 What a run said (its streamed output, in order):

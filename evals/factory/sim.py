@@ -432,8 +432,8 @@ class Run:
                        + (f" blocked: {t['blocked_since']}" if t["blocked_since"] else ""))
             for c in self.w.checks(t["id"]):
                 out.append(f"  {c['title']}: {c['owner_id']} {c['status']} verdict={c['verdict']} head={str(c['verdict_head'])[:7]}")
-            for e in self.w.sql("SELECT e.created_at, e.actor, e.field, coalesce(s.name, e.new) new, e.note FROM task_events e "
-                                "LEFT JOIN task_steps s ON s.id=e.new WHERE e.task_id=? AND e.field IN ('step','verdict_move',"
+            for e in self.w.sql("SELECT e.created_at, e.actor_id AS actor, e.kind AS field, coalesce(s.name, e.new) new, e.note FROM history_events e "
+                                "LEFT JOIN task_steps s ON s.id=e.new WHERE e.subject_type='task' AND e.subject_id=? AND e.kind IN ('step','verdict_move',"
                                 "'round_skipped','step_skipped','allocated','merge_wake','verdict_wait') ORDER BY e.created_at, e.rowid",
                                 (t["id"],)):
                 out.append(f"  {e['created_at'][11:16]} {e['actor'][:14]:14} {e['field']:13} {str(e['new'])[:60]} {str(e['note'] or '')[:60]}")

@@ -387,7 +387,7 @@ class Builder(Bot):
     def waived(self, task):
         """Whether a person's waiver covers the PR's current head, as the task view says (`current`)."""
         w = self.world
-        if not w.sql("SELECT 1 FROM task_events WHERE task_id=? AND field='qa_waiver' LIMIT 1", (task["id"],)):
+        if not w.sql("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='qa_waiver' LIMIT 1", (task["id"],)):
             return False
         view = w.get("tasks/" + task["id"], token=self.token)["task"]
         return any(x.get("current") for x in view.get("qa_waivers") or [])
