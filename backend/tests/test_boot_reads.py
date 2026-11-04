@@ -7,6 +7,7 @@ LIVE = {"/api/status", "/api/v2/status"}
 
 
 def test_each_read_answers_as_it_does_alone_for_whoever_asks(api):
+    api.app.state.boot_part_budget = 10      # every part answers, however slow the runner
     for token in ("ana-test", "ben-test", "cara-test"):
         auth = {"Authorization": "Bearer " + token}
         r = api.get("/api/v2/boot", params={"limit": "50"}, headers=auth)
@@ -28,6 +29,7 @@ def test_each_read_answers_as_it_does_alone_for_whoever_asks(api):
 
 
 def test_the_parts_ignore_the_callers_caching_and_compression(api):
+    api.app.state.boot_part_budget = 10      # every part answers, however slow the runner
     auth = {"Authorization": "Bearer ana-test"}
     tag = api.get("/api/employees", headers=auth).headers["etag"]
     r = api.get("/api/v2/boot", headers={**auth, "If-None-Match": tag, "Accept-Encoding": "gzip"})
@@ -52,6 +54,8 @@ def test_a_part_past_its_budget_is_left_out_for_the_page_to_ask_alone(api):
         state.boot_part_budget = kept
     # Nothing is done in no time: every part is left out, and the answer still comes, at once.
     assert r.status_code == 200 and r.json() == {"reads": {}}
+    # With time for them (a generous budget, so a cold runner cannot leave one out), every part is there.
+    state.boot_part_budget = 10
     assert tuple(api.get("/api/v2/boot", headers=auth).json()["reads"]) == READS
 
 
@@ -62,9 +66,10 @@ def test_a_part_whose_thread_outlives_the_wait_is_left_out(api):
     real = route.dependant.call
 
     def slow(**values):
-        time.sleep(2)
+        time.sleep(6)
         return real(**values)
     route.dependant.call = slow
+    api.app.state.boot_part_budget = 2      # time for the other parts on a slow runner; far less than the held read
     try:
         r = api.get("/api/v2/boot", headers={"Authorization": "Bearer ana-test"})
     finally:
