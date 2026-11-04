@@ -74,13 +74,6 @@ def test_each_trigger_kind_is_stamped_where_the_wake_is_made(api):
                         {"due": H.shift(H.now(), seconds=-1), "items": ["Unit tests failed"]})
         assert G.flush_wakes(c) == [task["id"]]
         assert RT.of_message(newest(c, "ops", "Unit tests failed")) == ("pr_checks", None)
-        # stall_check: Tico's look at a task nothing will move.
-        quiet(c)
-        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), seconds=-600), task["id"]))
-        assert task["id"] in H.wake_stalled(c)["woke"] + H.wake_stalled(c)["checked"]
-        stall = c.execute("SELECT id FROM messages WHERE recipient_id='bot:ops' AND json_extract(refs,'$.wake') "
-                          "IN ('stalled','status_check') ORDER BY rowid DESC LIMIT 1").fetchone()
-        assert RT.of_message(H.message(c, stall[0]))[0] == "stall_check"
         # other: a keeper message nothing stamped (a Slack digest).
         conv = H.conversation(c, task["conversation_id"])
         H.feed(c, "bot:ops", "Three new posts in #general.", conv)

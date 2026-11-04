@@ -163,7 +163,9 @@ def test_archiving_the_original_closes_a_parked_branch_setup_reminder(api):
     branch(api, runner(api, 'cara'))
     branch_id = bot_id(api, 'cpo-cara')
     with api.app.state.store.transaction() as c:
-        reminder = H._setup_reminder(c, branch_id)
+        reminder = H.task_create(c, H.KEEPER, "Finish setting up cpo-cara", "Still onboarding.", "human:ben",
+                                 deduplicate=False, lint=False)
+        H.event(c, H.KEEPER, "bot.setup_reminder", branch_id, {"task": reminder["id"], "owner": "human:ben"})
     post(api, 'bots/cpo/archive', {'expected_revision': revision(api, 'cpo')})
     with api.app.state.store.read() as c:
         assert H.task(c, reminder['id'])['status'] == 'done'

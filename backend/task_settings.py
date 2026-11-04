@@ -8,7 +8,6 @@ JOBS = {
                        "nothing is listed on the task roundup after a day."),
     "due_reminders": ("open", "Tell a bot its task is due. People get no reminder."),
     "snooze_ends": ("open", "Bring snoozed tasks back on their date."),
-    "still_wanted": ("open", "Ask the task's person once whether a task idle for a week is still wanted."),
     "ask_deadlines": ("open", "When a bot question passes its deadline, go ahead on its default answer, or let it expire."),
     "approval_expiry": ("open", "Remove approvals and asks nobody will act on from Needs you."),
     "still_needed": ("open", "Weekday mornings, send questions unanswered for 2 business days back to their bots."),

@@ -257,16 +257,6 @@ def _fire(conn, H, bot, conversation_id, at, external):
                      (at, *part))
     if not live:
         return None
-    # A task's own due inspection already carries the assignment. Do not bind its deferred item to that job:
-    # a reschedule can obsolete the inspection, while the original delivery deadline still has to be honored.
-    from . import task_check_backs
-    if task_check_backs.enabled(conn) and all(r["kind"] == "task" and conn.execute(
-            "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
-            "AND j.state IN ('queued','leased','running') AND json_extract(m.refs,'$.wake')='check_back' "
-            f"AND {H.task_ref_sql('m.refs')} AND EXISTS (SELECT 1 FROM tasks t WHERE t.id=? "
-            "AND t.check_back_at=json_extract(m.refs,'$.check_back_at') AND t.owner_id=m.recipient_id) LIMIT 1",
-            (bot, r["item"], r["item"], r["item"])).fetchone() for r in live):
-        return None
     # A deadline run already queued in this session takes these too: one run, not one per deadline.
     pending = conn.execute("SELECT d.fired_job FROM deferrals d JOIN jobs j ON j.id=d.fired_job WHERE d.bot=? AND "
                            "d.conversation_id=? AND d.settled_at IS NULL AND j.state='queued' LIMIT 1",

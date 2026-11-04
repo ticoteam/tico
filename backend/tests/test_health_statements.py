@@ -1,4 +1,4 @@
-"""The Health page reads in set queries: its statements do not grow with the escalated waiting tasks, looping tasks or
+"""The Health page reads in set queries: its statements do not grow with the stalled waiting tasks, looping tasks or
 silent waits it summarises. On the Tico Team hub (Nov 3) a call took 384 statements and 1.2 s, rising as escalations
 and loops piled up: each escalated waiting task cost its own reads (measured here: 100 of them, +103 statements)."""
 import json
@@ -12,7 +12,6 @@ from backend.tests.test_claim_statements import seed, traced
 from backend.tests.test_getting_started import heartbeat
 
 OLD = H.shift(H.now(), hours=-5)
-LATER = H.shift(H.now(), hours=-4)
 PR_OLD = H.shift(H.now(), hours=-13)
 RUNTIMES = {"codex": {"installed": True, "authenticated": "ready"},
             "claude": {"installed": True, "authenticated": "ready"}}
@@ -26,14 +25,14 @@ def health(api):
 
 
 def stall(api, count, prefix, blocked=0):
-    """`count` waiting bot tasks the stall watcher escalated; the first `blocked` wait on a quiet subtask of their own."""
+    """`count` waiting bot tasks nothing moves; the first `blocked` wait on a quiet subtask of their own, open and as quiet
+    as they are. The bot's queued chats are finished first: a queued chat keeps a bot busy, and a busy bot is not stalled."""
     with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='few-00' AND state='queued'")
         for n in range(count):
             tid = f"{prefix}{n}"
             c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,created_at,updated_at,private) "
                       "VALUES(?,?,?,?,?,?,?,0)", (tid, "Stalled " + tid, "human:ana", "bot:few-00", "waiting", OLD, OLD))
-            c.execute("INSERT INTO events(id,created_at,actor,action,target,detail) VALUES(?,?,?,?,?,?)",
-                      (uuid.uuid4().hex, LATER, "x", "task.stall_escalated", tid, "{}"))
             if n < blocked:
                 kid = tid + "-child"
                 c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,created_at,updated_at,private) "
@@ -59,7 +58,7 @@ def check(body, key):
     return next((x for x in body["checks"] if x["id"] == key), None)
 
 
-def test_health_statements_do_not_grow_with_escalated_waiting_tasks(api):
+def test_health_statements_do_not_grow_with_stalled_waiting_tasks(api):
     seed(api, "few", 6)
     stall(api, 3, "a", blocked=1)
     health(api)                                   # first-time reads
@@ -67,10 +66,10 @@ def test_health_statements_do_not_grow_with_escalated_waiting_tasks(api):
     stall(api, 100, "b")
     body, large = health(api)
     assert large <= small + 4, (small, large)
-    # The task with a quiet subtask of its own is still reported, and only it: the others have no blocker.
+    # The blocked task and its quiet subtask are named, and only them: the other waiting tasks have no blocker.
     for found in (small_body, body):
         stalled = check(found, "stalled_tasks")
-        assert stalled and [i["task"] for i in stalled["items"]] == ["a0"], stalled
+        assert stalled and {i["task"] for i in stalled["items"]} == {"a0", "a0-child"}, stalled
 
 
 def test_health_statements_do_not_grow_with_looping_tasks(api):

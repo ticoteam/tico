@@ -4674,9 +4674,7 @@ export type Task = {
   check_back?: {
   at: string;
   by: string | null;
-  delivery: string;
   due: boolean;
-  enabled: boolean;
   note: string;
 } | null;
   check_back_at?: string | null;
