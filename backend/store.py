@@ -2069,8 +2069,12 @@ class Store:
                 from . import redesign_migration as Redesign
                 Redesign.repair_stale_review(c)
                 # Inboxes the cutover moved with the Inbox Manager's whole instructions go to the short routing
-                # prompt, once (backend/redesign_migration.py repair_inbox_prompts). Idempotent by its marker.
-                Redesign.repair_inbox_prompts(c)
+                # prompt, once (backend/redesign_migration.py repair_inbox_prompts). Idempotent by its marker. A
+                # failure here is logged, never raised: the repair is tried again at the next start.
+                try:
+                    Redesign.repair_inbox_prompts(c)
+                except Exception:  # noqa: BLE001 - startup goes on
+                    logging.getLogger(__name__).exception("inbox prompt repair failed; it is tried at the next start")
                 from . import releases as Releases
                 Releases.record_start(c, H.now())
                 from .credentials import FILE_MIGRATION, HUB_MIGRATION

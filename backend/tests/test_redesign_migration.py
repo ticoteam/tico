@@ -550,3 +550,31 @@ def test_the_repair_leaves_an_inbox_whose_bot_instructions_changed_since_alone(a
         c.execute("UPDATE mail_agent_instructions SET content=? WHERE bot='inbox'", ("Sort by sender only.",))
     assert prompt_repair(api) == [] and prompt_of(api, aid).startswith(OLD_INBOX)
 
+
+def test_an_inbox_whose_mailbox_no_longer_validates_stays_as_it_is_and_startup_goes_on(api):
+    aid = as_before_this_fix(api, inbox_of(api))
+    with db(api).transaction() as c:   # its mailbox was changed since the cutover: the automation no longer reads it
+        flow = json.loads(c.execute("SELECT flow FROM automations WHERE id=?", (aid,)).fetchone()[0])
+        flow["trigger"]["inbox"] = "gone@acme.example"
+        c.execute("UPDATE automations SET flow=? WHERE id=?", (json.dumps(flow, sort_keys=True), aid))
+    assert prompt_repair(api) == []                       # no refusal escapes: startup goes on
+    assert prompt_of(api, aid).startswith(OLD_INBOX)      # the flow is unchanged
+    with db(api).read() as c:
+        assert M._meta(c, M.PROMPT_REPAIR)                # every inbox was done or skipped: not tried again
+    assert "Not moved" in marks(api)[("inbox", "inbox:ana@acme.example")]["why"]
+
+
+def test_an_inbox_that_fails_for_another_reason_is_tried_again_at_the_next_start(api, monkeypatch):
+    aid = as_before_this_fix(api, inbox_of(api))
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr("backend.automations._save", broken)
+    assert prompt_repair(api) == []
+    with db(api).read() as c:
+        assert not M._meta(c, M.PROMPT_REPAIR)            # not marked: the next start tries it again
+    assert prompt_of(api, aid).startswith(OLD_INBOX)
+    monkeypatch.undo()
+    assert prompt_repair(api) == [aid]
+

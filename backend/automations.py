@@ -107,8 +107,9 @@ TURN_WAIT_DAYS = 1
 STALE_MINUTES = 15       # a claimed run not saved by then was cut off: queued again, to go on from its last save
 MAX_RESUMES = 3          # a run cut off this often is failed: it may be what stops the server
 MAX_CHAIN = 3            # automations started by automations: at most this deep, never the same one twice
-MAX_IN_FLIGHT = 10       # runs one automation has going at once (a turn it waits on counts); the rest queue
-MAIL_LOOKBACK_HOURS = 24  # a first sync acts on mail this recent; a sync after a gap this long starts over from now
+MAX_IN_FLIGHT = 10       # runs one automation has going at once, turns included; the rest queue
+TURN_SLOT_MINUTES = 30   # a turn holds its slot until it reports, up to this long: one that never reports frees it
+MAIL_LOOKBACK_HOURS = 24  # a mailbox's first sync acts on mail this recent; its watch then never moves
 RUN_GUARD_MINUTES = 10                  # the window a flood is counted in
 RUN_GUARD_BURST = 500                   # runs in RUN_GUARD_MINUTES, any refs: a flood, held; also the held runs kept
 RUN_GUARD_SPAN = 20                     # the minutes a sustained loop is watched over
@@ -1272,21 +1273,17 @@ def _calendar_invite(attachments):
     return False
 
 
-def mail_watch(c, mailbox, now, synced_at):
-    """Where a mailbox's watch starts, as an ISO time: its message automations act on the mail received from there on.
-    A first sync starts a day back (MAIL_LOOKBACK_HOURS), so the last day's mail is news when a mailbox is connected.
-    A sync after a gap longer than that starts from now, so the gap's mail, which the sync brings back, is not
-    replayed. Otherwise: the watch kept so far, or the last sync for a mailbox from before one was kept. `now` is the
-    hub's clock (received times are instants, so the two agree); the gap is measured on the runner's `synced_at`.
-    The caller stores the result on the mailbox's row (connectors `_refresh_mailbox`)."""
-    row = c.execute("SELECT synced_at, watching_since_at FROM mail_mailboxes WHERE address=?", (mailbox,)).fetchone()
-    last = H.parse_ts(row["synced_at"]) if row and row["synced_at"] else None
-    if last is None:
-        return H.shift(now, hours=-MAIL_LOOKBACK_HOURS)
-    gap_from = H.parse_ts(synced_at)
-    if gap_from and gap_from - last > timedelta(hours=MAIL_LOOKBACK_HOURS):
-        return now
-    return row["watching_since_at"] or row["synced_at"]
+def mail_watch(c, mailbox, synced_at):
+    """Where a mailbox's watch starts, as an ISO time: its message automations act on the mail received from there on,
+    once each. The first batch a mailbox sends sets it, a day before that sync (MAIL_LOOKBACK_HOURS), so the last day's
+    mail is news when a mailbox is connected. It never moves after that: a gap (an outage, a quiet weekend) leaves the
+    mail that arrived in it news, and the per-automation cap (MAX_IN_FLIGHT) paces the backlog. A mailbox from before
+    the watch was kept has none, so its first sync after the upgrade sets it the same way. The caller stores the result
+    on the mailbox's row (connectors `_refresh_mailbox`), which keeps the first one stored."""
+    row = c.execute("SELECT watching_since_at FROM mail_mailboxes WHERE address=?", (mailbox,)).fetchone()
+    if row and row["watching_since_at"]:
+        return row["watching_since_at"]
+    return H.shift(synced_at, hours=-MAIL_LOOKBACK_HOURS)
 
 
 def on_mail(c, mailbox, message, watch=None):
@@ -1385,6 +1382,7 @@ def turn_done(c, attempt, outcome, text):
         return
     state = json.loads(run["saved_state"]) if run["saved_state"] else None
     c.execute("DELETE FROM automation_holds WHERE ref=?", (ref,))
+    _ring(c)   # the slot the turn held is free: a queued run of its automation may start now
     if state is None:
         c.execute("UPDATE automation_runs SET cost=round(cost+?,6) WHERE id=?", (cost, rid))
         return
@@ -1964,13 +1962,19 @@ class Hub:
     def claim(self):
         # An automation's runs in flight (running, or waiting on a turn or a mail computer, not a batch time) are
         # capped: a backlog of triggers (a first mail sync) starts MAX_IN_FLIGHT at a time, and the rest wait queued
-        # until one of them finishes or takes its answer.
+        # until one of them finishes or its turns answer. A run that ended with a turn still going (its last step is
+        # an llm step, which does not wait) keeps its slot through that turn's hold, which lapses after
+        # TURN_SLOT_MINUTES so a turn that never reports cannot block the automation.
+        cutoff = H.shift(H.now(), minutes=-TURN_SLOT_MINUTES)
         with self.store.transaction() as c:
             row = c.execute(
                 "SELECT r.id FROM automation_runs r WHERE r.status='queued' AND "
-                "(SELECT count(*) FROM automation_runs f WHERE f.automation_id=r.automation_id "
-                "AND f.status IN ('running','waiting') AND f.wake_at IS NULL)<? "
-                "ORDER BY r.started_at LIMIT 1", (MAX_IN_FLIGHT,)).fetchone()
+                "((SELECT count(*) FROM automation_runs f WHERE f.automation_id=r.automation_id "
+                "AND f.status IN ('running','waiting') AND f.wake_at IS NULL) "
+                "+ (SELECT count(*) FROM automation_holds h WHERE h.automation_id=r.automation_id AND h.created_at>? "
+                "AND h.run_id NOT IN (SELECT f.id FROM automation_runs f WHERE f.automation_id=r.automation_id "
+                "AND f.status IN ('running','waiting') AND f.wake_at IS NULL)))<? "
+                "ORDER BY r.started_at LIMIT 1", (cutoff, MAX_IN_FLIGHT)).fetchone()
             if not row:
                 return None
             c.execute("UPDATE automation_runs SET status='running',claimed_at=? WHERE id=? AND status='queued'",

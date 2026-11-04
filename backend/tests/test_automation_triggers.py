@@ -8,7 +8,8 @@ import time_machine
 
 from backend import automations
 from backend import hubdb as H
-from backend.tests.test_api import api, get, headers, post, runner  # noqa: F401
+from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.test_automation_turns import finish
 from backend.tests.test_connectors import mail_message
 
 WAKE = {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "{{task.title}}"}}
@@ -304,19 +305,83 @@ def test_a_later_sync_acts_on_the_mail_that_arrives_after_the_first(api):
     assert ran(api, aid) == {"n1", "n2"}
 
 
-def test_a_sync_after_a_long_gap_does_not_replay_the_gap(api):
+def watch_of(api, mailbox="ana@acme.example"):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT watching_since_at FROM mail_mailboxes WHERE address=?", (mailbox,)).fetchone()[0]
+
+
+def test_a_sync_after_a_long_gap_runs_the_gap_once_and_the_watch_does_not_move(api):
+    """A reconnect after days offline brings back the mail that arrived meanwhile, and it is news: it runs once each,
+    and the mail from before the watch (set by the first sync) stays passed over."""
     aid = make(api, {"type": "message", "inbox": "ana@acme.example"}, [NOOP])
     machine = runner(api)
     with time_machine.travel(T0, tick=False):
-        sync(api, machine, [mail_message(msg_id="before", epoch=int((T0 - timedelta(hours=1)).timestamp()))], T0)
+        sync(api, machine, [mail_message(msg_id="before", epoch=int((T0 - timedelta(hours=1)).timestamp())),
+                            mail_message(msg_id="ancient", epoch=int((T0 - timedelta(days=3)).timestamp()))], T0)
     back = T0 + timedelta(days=3)
     gap = [mail_message(msg_id=f"gap{d}", epoch=int((T0 + timedelta(days=d, hours=6)).timestamp())) for d in (1, 2)]
     with time_machine.travel(back, tick=False):
         sync(api, machine, gap, back)                              # the reconnect: the gap's mail comes back now
     later = back + timedelta(minutes=10)
     with time_machine.travel(later, tick=False):
-        sync(api, machine, [mail_message(msg_id="after", epoch=int((back + timedelta(minutes=2)).timestamp()))], later)
-    assert ran(api, aid) == {"before", "after"}
+        sync(api, machine, gap[:1] + [mail_message(msg_id="after",
+                                                   epoch=int((back + timedelta(minutes=2)).timestamp()))], later)
+    assert ran(api, aid) == {"before", "gap1", "gap2", "after"}   # "gap1" again in the last batch is not news twice
+    refs = [r["trigger_ref"] for r in runs(api, aid)["runs"]]
+    assert len(refs) == len(set(refs))
+    assert watch_of(api) == "2026-10-27T12:00:00.000000Z"       # the first sync's day back, kept
+
+
+def test_a_mailbox_from_before_the_watch_was_kept_starts_its_watch_at_its_first_sync(api):
+    """Its last sync is no guide: a day back from the first sync after the upgrade, so mail older than that is passed
+    over even when the mailbox last synced long before."""
+    aid = make(api, {"type": "message", "inbox": "ana@acme.example"}, [NOOP])
+    machine = runner(api)
+    old = T0 - timedelta(days=10)
+    with time_machine.travel(old, tick=False):
+        sync(api, machine, [mail_message(msg_id="earlier", epoch=int((old - timedelta(hours=1)).timestamp()))], old)
+    with api.app.state.store.transaction() as c:                   # the row as the release before this one left it
+        c.execute("UPDATE mail_mailboxes SET watching_since_at=NULL WHERE address=?", ("ana@acme.example",))
+    with time_machine.travel(T0, tick=False):
+        sync(api, machine, [mail_message(msg_id="two_days", epoch=int((T0 - timedelta(days=2)).timestamp())),
+                            mail_message(msg_id="hour", epoch=int((T0 - timedelta(hours=1)).timestamp()))], T0)
+    assert ran(api, aid) == {"earlier", "hour"}
+    assert watch_of(api) == "2026-10-27T12:00:00.000000Z"
+
+
+DRAFT = {"id": "draft", "type": "llm", "as": "bot:ops", "prompt": "Sort this mail", "out": "reply"}
+
+
+def test_forty_five_mail_turns_run_ten_at_a_time_through_the_real_executor(api):
+    """The migrated inbox shape: one llm step, last. Its run ends while its turn is still going, so the turn holds the
+    automation's slot until it answers. A turn that never answers frees its slot after TURN_SLOT_MINUTES."""
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    aid = make(api, {"type": "message", "inbox": "ana@acme.example"}, [DRAFT])
+    store = api.app.state.store
+    messages = [mail_message(msg_id=f"m{i:02d}", subject="Invoice",
+                             epoch=int((T0 - timedelta(minutes=10 * (i + 1))).timestamp())) for i in range(45)]
+
+    def counts():
+        with store.read() as c:
+            queued = c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=? AND status='queued'",
+                               (aid,)).fetchone()[0]
+            holds = c.execute("SELECT count(*) FROM automation_holds WHERE automation_id=?", (aid,)).fetchone()[0]
+        return queued, holds
+
+    with time_machine.travel(T0, tick=False):
+        sync(api, r, messages, T0)
+        store.automations.drain()
+        assert counts() == (35, 10)                                 # ten turns out, the other 35 wait queued
+        finish(api, r)                                              # one turn answers: its slot is free
+        store.automations.drain()
+        assert counts() == (34, 10)                                 # the eleventh turn starts, and only one
+    with time_machine.travel(T0 + timedelta(minutes=automations.TURN_SLOT_MINUTES + 1), tick=False):
+        store.automations.drain()                                   # the turns that never answered: slots lapse
+        assert counts() == (24, 20)                                 # ten more start; the old holds wait for the sweep
+        with store.read() as c:
+            assert c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=?", (aid,)).fetchone()[0] == 45
 
 
 def test_an_automation_has_ten_runs_in_flight_and_the_rest_wait_queued(api):

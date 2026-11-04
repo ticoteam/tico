@@ -833,45 +833,73 @@ def repair_inbox_prompts(c):
     """Move the inbox automations the cutover made with the Inbox Manager's whole instructions onto the short routing
     prompt, once, at startup (backend/store.py). Only the ones nobody changed are moved: one version, one llm step,
     whose prompt is exactly what the cutover built from the bot's instructions as they stand now. An edited automation,
-    or one whose bot's instructions changed since, is left alone. Each moved mark's reason gets the flag a new
-    migration gives. Returns the automation ids it moved. Later starts find the marker and do nothing."""
-    from . import automations, people as P, views
+    or one whose bot's instructions changed since, is left alone. Each inbox is repaired in a savepoint of its own. One
+    whose owner or mailbox no longer validates stays as it is, and its mark's reason says why; one that fails for any
+    other reason is logged and left for the next start. The marker is set only when no inbox failed, so a failure is
+    tried again. Returns the automation ids it moved. Later starts find the marker and do nothing."""
+    from . import views
     if _meta(c, PROMPT_REPAIR):
         return []
-    moved = []
+    moved, skipped, failed = [], [], []
     # No marks on an install the cutover has not reached (its table is made there): nothing to move.
     marks = c.execute("SELECT * FROM redesign_migrated WHERE kind='inbox' AND automation IS NOT NULL").fetchall() \
         if _table(c, "redesign_migrated") else []
     roster = views.roster(c) if marks else {}
     for mark in marks:
-        row = c.execute("SELECT * FROM automations WHERE id=? AND deleted_at IS NULL", (mark["automation"],)).fetchone()
-        if not row or row["version"] != 1:
-            continue
-        flow = automations.flow_of(row)
-        steps = flow.get("steps") or []
-        bot = next((s.get("id") for s in flow.get("source") or [] if s.get("kind") == "bot"), None)
-        if len(steps) != 1 or steps[0].get("type") != "llm" or steps[0].get("choose") is not None or not bot:
-            continue
-        if c.execute("SELECT count(*) FROM automation_versions WHERE automation_id=?", (row["id"],)).fetchone()[0] != 1:
-            continue
-        found = c.execute("SELECT content FROM mail_agent_instructions WHERE bot=?", (bot,)).fetchone() \
-            if _table(c, "mail_agent_instructions") else None
-        if not found or not (found["content"] or "").strip():
-            continue   # no instructions were copied: the prompt it has is already the short one
-        if steps[0].get("prompt") != (found["content"].rstrip() + MESSAGE_PART)[:F.MAX_PROMPT]:
-            continue
-        person_id = str(flow.get("owner") or "").partition(":")[2]
-        name = (P.person(person_id, roster) or {}).get("name") or person_id
-        prompt = (DEFAULT_PROMPT.format(name=name) + MESSAGE_PART)[:F.MAX_PROMPT]
-        moved_flow = {**flow, "steps": [{**steps[0], "prompt": prompt}]}
-        automations._save(c, H.KEEPER, row["id"], automations._checked(c, moved_flow, wake_steps=False), flow,
-                          summary="Short routing prompt in place of the Inbox Manager's instructions",
-                          via="migration repair")
-        c.execute("UPDATE redesign_migrated SET why=? WHERE kind='inbox' AND id=?",
-                  (_instructions_text(len(found["content"].strip()), _bot_name(c, bot))[:1000], mark["id"]))
-        moved.append(row["id"])
-    _set_meta(c, PROMPT_REPAIR, json.dumps({"at": _now(), "moved": moved}, sort_keys=True))
+        c.execute("SAVEPOINT inbox_prompt")
+        try:
+            if _repair_inbox_prompt(c, mark, roster):
+                moved.append(mark["automation"])
+            c.execute("RELEASE inbox_prompt")
+        except Problem as exc:
+            c.execute("ROLLBACK TO inbox_prompt")
+            c.execute("RELEASE inbox_prompt")
+            log.warning("redesign prompt repair: %s keeps the Inbox Manager's instructions: %s",
+                        mark["automation"], exc)
+            why = f"Not moved to the short routing prompt, so it keeps the Inbox Manager's instructions: {exc}"
+            c.execute("UPDATE redesign_migrated SET why=? WHERE kind='inbox' AND id=?", (why[:1000], mark["id"]))
+            skipped.append(mark["automation"])
+        except Exception:  # noqa: BLE001 - startup goes on; the next start tries this inbox again
+            c.execute("ROLLBACK TO inbox_prompt")
+            c.execute("RELEASE inbox_prompt")
+            log.exception("redesign prompt repair failed for %s; it is tried again at the next start",
+                          mark["automation"])
+            failed.append(mark["automation"])
+    if not failed:
+        _set_meta(c, PROMPT_REPAIR, json.dumps({"at": _now(), "moved": moved, "skipped": skipped}, sort_keys=True))
     return moved
+
+
+def _repair_inbox_prompt(c, mark, roster):
+    """Moves one inbox's automation onto the short routing prompt if it is still the cutover's own. Returns whether it
+    moved. Raises Problem when its owner or mailbox no longer validates (`_checked`)."""
+    from . import automations, people as P
+    row = c.execute("SELECT * FROM automations WHERE id=? AND deleted_at IS NULL", (mark["automation"],)).fetchone()
+    if not row or row["version"] != 1:
+        return False
+    flow = automations.flow_of(row)
+    steps = flow.get("steps") or []
+    bot = next((s.get("id") for s in flow.get("source") or [] if s.get("kind") == "bot"), None)
+    if len(steps) != 1 or steps[0].get("type") != "llm" or steps[0].get("choose") is not None or not bot:
+        return False
+    if c.execute("SELECT count(*) FROM automation_versions WHERE automation_id=?", (row["id"],)).fetchone()[0] != 1:
+        return False
+    found = c.execute("SELECT content FROM mail_agent_instructions WHERE bot=?", (bot,)).fetchone() \
+        if _table(c, "mail_agent_instructions") else None
+    if not found or not (found["content"] or "").strip():
+        return False   # no instructions were copied: the prompt it has is already the short one
+    if steps[0].get("prompt") != (found["content"].rstrip() + MESSAGE_PART)[:F.MAX_PROMPT]:
+        return False
+    person_id = str(flow.get("owner") or "").partition(":")[2]
+    name = (P.person(person_id, roster) or {}).get("name") or person_id
+    prompt = (DEFAULT_PROMPT.format(name=name) + MESSAGE_PART)[:F.MAX_PROMPT]
+    moved_flow = {**flow, "steps": [{**steps[0], "prompt": prompt}]}
+    automations._save(c, H.KEEPER, row["id"], automations._checked(c, moved_flow, wake_steps=False), flow,
+                      summary="Short routing prompt in place of the Inbox Manager's instructions",
+                      via="migration repair")
+    c.execute("UPDATE redesign_migrated SET why=? WHERE kind='inbox' AND id=?",
+              (_instructions_text(len(found["content"].strip()), _bot_name(c, bot))[:1000], mark["id"]))
+    return True
 
 
 def _wakes_of(c, scope_kind, scope_id):

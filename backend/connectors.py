@@ -282,7 +282,8 @@ def _refresh_mailbox(c, address, person_id, runner_id, synced_at, watching_since
               "ON CONFLICT(address) DO UPDATE SET person_id=excluded.person_id,"
               "runner_id=excluded.runner_id,synced_at=excluded.synced_at,"
               "message_count=excluded.message_count,oldest_epoch=excluded.oldest_epoch,"
-              "newest_epoch=excluded.newest_epoch,error=NULL,watching_since_at=excluded.watching_since_at",
+              "newest_epoch=excluded.newest_epoch,error=NULL,"
+              "watching_since_at=COALESCE(mail_mailboxes.watching_since_at,excluded.watching_since_at)",
               (address, person_id, runner_id, synced_at, stats["n"], stats["oldest"], stats["newest"], watching_since))
 
 
@@ -598,8 +599,8 @@ def install_connectors(app, store, execution, mutate):
                               + store.settings.app_name + " roster", 404)
             now = H.now()
             from . import automations
-            # Read before this batch refreshes the mailbox's last sync: a gap since it starts the watch over.
-            watch = automations.mail_watch(c, body.mailbox, now, body.synced_at)
+            # The mailbox's first batch sets its watch and later batches keep it (automations.mail_watch).
+            watch = automations.mail_watch(c, body.mailbox, body.synced_at)
             for message in body.messages:
                 # A message seen for the first time is what a mail automation hears (backend/automations.py).
                 fresh = not c.execute("SELECT 1 FROM mail_messages WHERE mailbox=? AND msg_id=?",
