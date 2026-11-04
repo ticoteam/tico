@@ -388,6 +388,7 @@
   const mergeShared = (a, b) => ({...a, ...b, detail: {...a.detail, ...b.detail}});
   function sharedActions(a) {
     const data = a.shared;
+    if (data?.gone) return '';
     if (!data || !data.sections) return '<section class="section"><h2>Tasks</h2>' + (data?.gone ? '' : '<span>Loading…</span>') + '</section>';
     const here = (data.presence?.actors || []).filter(p => p.actor !== a.actor).map(p => p.name);
     return `<section class="section"><div class="section-head"><h2>Tasks</h2><span class="aside">${here.length ? esc(here.join(', ') + (here.length === 1 ? ' is here' : ' are here')) : ''}</span></div>` +
@@ -1086,7 +1087,7 @@
       if (regions[name] === content) continue;
       const element = document.getElementById(`r-${name}`);
       // Never replace text the person is editing; it renders once they leave it.
-      if (element.contains(active) && active.matches('[data-defer]')) {
+      if (element.contains(active) && active.matches('[data-defer]') && !(name === 'page' && S.meeting?.actions?.shared?.gone)) {
         S.deferred = true;
         continue;
       }

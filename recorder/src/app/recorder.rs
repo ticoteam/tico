@@ -798,8 +798,9 @@ impl Recorder {
         let initial = self.saved_items.is_null();
         self.job("items", move || {
             let tico = Tico::saved(&config, &destination)?;
-            tico.call("/api/v2/presence", Some(&json!({"place":format!("meeting:{remote}"),
-                "session_id":session})), &uuid::Uuid::new_v4().to_string())?;
+            // A refused heartbeat must not prevent the stream from delivering its access-loss event.
+            let _ = tico.call("/api/v2/presence", Some(&json!({"place":format!("meeting:{remote}"),
+                "session_id":session})), &uuid::Uuid::new_v4().to_string());
             let mut cursor = after;
             if !initial {
                 for (seq, kind, value) in tico.events_until_change(&format!(
@@ -1142,7 +1143,9 @@ impl Recorder {
                         "items" => {
                             self.items_cursor =
                                 value["cursor"].as_u64().unwrap_or(self.items_cursor);
-                            if value["generation"].as_u64() == Some(self.items_generation) {
+                            if value["gone"] == true
+                                || value["generation"].as_u64() == Some(self.items_generation)
+                            {
                                 self.saved_items = value;
                             }
                         }

@@ -68,6 +68,13 @@ const path = require('node:path');
     await page.waitForFunction(()=>window.pendingFixture.sent?.text==='Final words');
     assert.match(await page.evaluate(()=>window.pendingFixture.sent.detail.due),/^2026-12-01T.*Z$/);
     assert.equal(await page.evaluate(()=>window.pendingFixture.max),1);
+    await page.evaluate(() => {
+      const a=window.pendingFixture.a;
+      a.shared.sections.task[0].status='proposed';
+    });
+    await title.fill('Still editing');
+    await page.evaluate(()=>window.pendingFixture.a.shared={gone:true});
+    await page.locator('[data-shared-item]').waitFor({state:'detached'});
     assert.deepEqual(errors,[]);
     console.log('Recorder: in-flight draft, retry and final Send passed');
   } finally { await browser.close(); }
