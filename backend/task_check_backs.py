@@ -24,6 +24,10 @@ INFLIGHT_JOBS = ("queued", "held", "leased", "running", "uncertain")
 # Live receipts only, for the dedupe: a notice's job not yet handled, or a run still going that took its input.
 LIVE_JOBS = INFLIGHT_JOBS + ("input",)
 LIVE_RUNS = ("leased", "running", "input", "uncertain")
+# Job states that mean the bot got a check-back notice: its turn took it (input, running), ran it (uncertain) or finished
+# it (completed). Any other end never reached the bot: canceled, or failed once its pre-start retries ran out
+# (execution.PRE_START_TRIES). changed() only judges a wake _notice_in_flight found no live notice for.
+DELIVERED_JOBS = ("input", "running", "uncertain", "completed")
 ACTIVE =("open", "doing", "waiting", "review", "ready")
 RESULT = ("done", "declined")
 STATUSES = ACTIVE + RESULT
@@ -421,8 +425,11 @@ def explicit(c, row):
 
 def changed(c, row):
     """Whether anyone but the bot moved the task since its last delivered check-back wake. No recorded wake counts as
-    changed, and so does a notice a moved due time canceled before delivery: the bot never received it. A message on the
-    task counts too, even a comment: stand() skips the owner's messages, and a comment writes no task event."""
+    changed, and so does a notice that never reached the bot: one a moved due time canceled before delivery, or one whose
+    job failed once its pre-start retries ran out (only DELIVERED_JOBS count as delivered). A message on the task counts
+    too, even a comment: stand() skips the owner's messages, and a comment writes no task event. The sweep skips a task
+    whose notice is still in flight before it asks (_notice_in_flight), so a queued, held, leased or running wake is never
+    judged here and no second notice goes out while one waits."""
     H = _H()
     seen = c.execute("SELECT created_at,new FROM history_events WHERE subject_type='task' AND subject_id=? "
                      "AND kind='check_back_wake' ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
@@ -430,8 +437,8 @@ def changed(c, row):
         return True
     last = c.execute("SELECT j.state FROM task_check_back_wakes w JOIN jobs j ON j.message_id=w.message_id "
                      "WHERE w.task_id=? ORDER BY w.sent_at DESC LIMIT 1", (row["id"],)).fetchone()
-    if last and last["state"] == "canceled":
-        return True
+    if not last or last["state"] not in DELIVERED_JOBS:
+        return True  # never reached the bot: canceled, or failed on its pre-start retries
     if c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND created_at>=? AND deleted_at IS NULL "
                  "AND sender_id NOT IN (?,?) LIMIT 1", (row["conversation_id"], seen["created_at"], actor_for(row), H.KEEPER)).fetchone():
         return True

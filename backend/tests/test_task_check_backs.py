@@ -772,3 +772,20 @@ def test_unread_result_is_never_quieted_and_escalates_through_the_repair_path(fo
         assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
                          "AND kind='check_back_quiet'", (row["id"],)).fetchone()[0] == 0
         assert len(wakes(c, row["id"])) == H.STALL_WAKES_PER_DAY
+
+
+@pytest.mark.parametrize("state", ["failed", "canceled"])
+def test_wake_that_never_reached_the_bot_is_repeated_not_quieted(followups, state):
+    """A notice whose job ended without the bot getting it (failed once its pre-start retries ran out, or canceled) is no
+    quiet repeat: after the repair moves the due time, the next due pass wakes the bot again instead of backing off."""
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]  # the first wake is sent
+        c.execute("UPDATE jobs SET state=? WHERE message_id IN (SELECT message_id FROM task_check_back_wakes WHERE task_id=?)",
+                  (state, row["id"]))  # its job ends without the bot ever getting it
+        assert CB.sweep(c)["repaired"] == [row["id"]]  # the same due time, already sent: the keeper moves it on
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]  # the bot never received it, so the next pass wakes it again
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='check_back_quiet'", (row["id"],)).fetchone()[0] == 0
+        assert len(wakes(c, row["id"])) == 2
