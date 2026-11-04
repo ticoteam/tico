@@ -1,6 +1,6 @@
-// Offline browser regression: Settings > Tasks > Task types, Add action on a type's row. It makes a new automation of the
-// viewer's, off and with no steps, whose trigger is a task created of that type (its filter names the type), and opens it
-// in Automations. The type reads as its name, not its id, in the automation's trigger.
+// Offline browser regression: Add action in the Task settings card's Trigger section makes an off, viewer-owned
+// automation with that Trigger and type, then its saved Action appears in that section. It also checks type copy,
+// permissions, failure details and paused reasons on the card.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -46,14 +46,17 @@ const taskRules = [
       if (p === '/api/v2/roadmaps/settings') return json({labels: [], cors_origins: [], action_limit: 10, suggestion_limit: 20, bot_public_approval: true, suggestions_bot: null, suggestions_receiver: {bot: null, name: null, source: 'automatic'}});
       if (p === '/api/v2/automations' && req.method() === 'POST') {
         const body = req.postDataJSON(); posts.push(body);
-        made = {id: 'au_new', name: body.name, owner_id: body.owner, enabled: false, builtin: false, can_edit: true,
+        made = {id: posts.length === 1 ? 'au_new' : 'au_new_step', name: body.name, owner_id: body.owner, enabled: false, builtin: false, can_edit: true,
           version: 1, trigger: body.trigger, steps: []};
+        taskRules.push(made);
         return json(made, 201);
       }
-      if (p === '/api/v2/automations/au_new' && req.method() === 'PATCH') {
-        const body = req.postDataJSON(); patches.push(body); made = {...made, ...body, version: 2}; return json(made);
+      if (p === `/api/v2/automations/${made?.id}` && req.method() === 'PATCH') {
+        const body = req.postDataJSON(); patches.push(body); made = {...made, ...body, version: 2};
+        const i = taskRules.findIndex(rule => rule.id === made.id); if (i >= 0) taskRules[i] = made;
+        return json(made);
       }
-      if (p === '/api/v2/automations/au_new') return json(made);
+      if (p === `/api/v2/automations/${made?.id}`) return json(made);
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
@@ -61,12 +64,26 @@ const taskRules = [
     const row = page.locator('.task-type-row', {hasText: 'Dev tickets'});
     await row.locator('[data-add-action="dev"]').waitFor();
     assert.equal(await row.locator('.task-type-intro').innerText(), 'Trigger: a task of type Dev tickets is created.');
-    assert.equal(await page.locator('#set-task-automations [data-trigger="task.created"] .settings-cell-note').innerText(), 'Trigger: a task is created.');
-    await page.locator('[data-task-automation-type]').selectOption('dev');
     const card = page.locator('#set-task-automations');
     await card.locator('[data-trigger]').first().waitFor();
+    const triggers = [
+      ['task.created', 'a task is created'], ['task.step_changed', 'a task enters a step'],
+      ['task.done', 'a task is marked done'], ['task.declined', 'a task is declined'], ['task.closed', 'a task is closed'],
+    ];
     assert.equal(await card.locator('[data-trigger]').count(), 5, 'the card shows the five task Triggers');
-    assert.match(await card.locator('[data-trigger="task.created"]').innerText(), /Trigger: a task of type Dev tickets is created/);
+    for (const [trigger, words] of triggers)
+      assert.equal(await card.locator(`[data-trigger="${trigger}"] .settings-cell-note`).innerText(), `Trigger: ${words}.`,
+        `All tasks opening line for ${trigger}`);
+    await page.locator('[data-task-automation-type]').selectOption('dev');
+    await card.locator('[data-trigger]').first().waitFor();
+    const typed = [
+      ['task.created', 'a task of type Dev tickets is created'], ['task.step_changed', 'a task of type Dev tickets enters a step'],
+      ['task.done', 'a task of type Dev tickets is marked done'], ['task.declined', 'a task of type Dev tickets is declined'],
+      ['task.closed', 'a task of type Dev tickets is closed'],
+    ];
+    for (const [trigger, words] of typed)
+      assert.equal(await card.locator(`[data-trigger="${trigger}"] .settings-cell-note`).innerText(), `Trigger: ${words}.`,
+        `selected type opening line for ${trigger}`);
     assert.match(await card.innerText(), /Paused: too many runs/);
     assert.match(await card.innerText(), /Last Action failed.*2026.*The note could not be saved/);
     await card.locator('[data-task-add-action="task.created"]').click();
@@ -97,9 +114,15 @@ const taskRules = [
     assert.match(await page.locator('.au-card[data-open]').last().innerText(), /Create task[\s\S]*pr-reviewer/);
     assert.deepEqual(errors, [], 'no page errors');
     await page.goto('https://tico-ui.test/#/settings/tasks');
-    await page.locator('#set-task-automations [data-task-automation-type]').selectOption('dev');
+    const settingsCard = page.locator('#set-task-automations');
+    await settingsCard.locator('[data-task-automation-type]').waitFor();
+    await settingsCard.locator('[data-task-automation-type]').selectOption('dev');
+    const saved = settingsCard.locator('[data-trigger="task.created"] .task-automation-rule', {hasText: 'Dev tickets action'});
+    await saved.waitFor();
+    assert.equal(await saved.locator('a').first().getAttribute('href'), '#/automations/au_new',
+      'the saved Action stays in its Trigger section');
     await page.locator('#set-task-automations [data-task-add-action="task.step_changed"]').click();
-    await page.waitForFunction(() => location.hash === '#/automations/au_new', null, {timeout: 5000});
+    await page.waitForFunction(() => location.hash === '#/automations/au_new_step', null, {timeout: 5000});
     assert.deepEqual(posts[1].trigger, {type: 'event', name: 'task.step_changed',
       filters: [{field: 'event.data.type_id', op: 'is', value: 'dev'}]}, 'the card Add action pre-fills its Trigger and type');
     assert.match(await page.locator('.au-trig').innerText(), /Dev tickets/);
