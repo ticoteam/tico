@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#172221"/>
+  <defs><radialGradient id="tico-dot-shadow"><stop offset="0" stop-color="#000" stop-opacity=".45"/><stop offset="1" stop-color="#000" stop-opacity="0"/></radialGradient></defs>
+  <ellipse fill="url(#tico-dot-shadow)" cx="32.6" cy="48.4" rx="13" ry="3.4"/>
+  <path fill="#56a578" d="M29.9 15A17.1 13.2 0 0 1 47 28.2A16.5 16.8 0 0 1 30.5 45A13.5 18.6 0 0 1 17 26.4A12.9 11.4 0 0 1 29.9 15Z"/>
+  <g fill="none" stroke="#172221" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="28.4" y="20.5" width="6.4" height="11.6" rx="3.2" fill="#172221"/>
+    <path d="M25.3 27.6v.9a6.3 6.3 0 0 0 12.6 0v-.9"/>
+    <path d="M31.6 34.8v3.2"/>
+  </g>
+</svg>

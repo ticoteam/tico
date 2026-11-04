@@ -48,20 +48,17 @@ def release_times(api):
 
 def test_a_person_asks_their_assistant_for_a_direct_setting_and_it_changes(api):
     before = release_times(api)
+    assert before != ["09:30"], before
     r, attempt = assistant_turn(api, "ana-test", "Set the release to 09:30")
     token = attempt["token"]
     assert "hub_settings_set" in {t["name"] for t in hubtools.listing(kind="assistant")}
-    # Without citing the person's words it is a card, and nothing changes yet.
-    err, card = mcp(api, "hub_settings_set", {"key": "release.times", "value": "09:30"}, token)
-    assert not err and card["needs_confirm"] is True, card
-    assert release_times(api) == before
-    # On their words, it changes at once and the reply has the new value.
-    err, done = mcp(api, "hub_settings_set", {"key": "release.times", "value": "09:30", "on_behalf_of": "turn"}, token)
+    # On the person's own turn, the message that started it is the citation: it changes at once, no header needed.
+    err, done = mcp(api, "hub_settings_set", {"key": "release.times", "value": "09:30"}, token)
     assert not err and done["value"] == ["09:30"], done
     assert release_times(api) == ["09:30"]
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT actor,detail_json FROM events WHERE detail_json LIKE '%\"via\": \"assistant\"%' "
-                        "AND detail_json LIKE '%\"cited\"%' ORDER BY rowid DESC LIMIT 1").fetchone()
+        row = c.execute("SELECT actor,detail FROM events WHERE detail LIKE '%\"via\": \"assistant\"%' "
+                        "AND detail LIKE '%\"cited\"%' ORDER BY rowid DESC LIMIT 1").fetchone()
     assert row and row["actor"] == "human:ana", row
 
 
@@ -86,8 +83,8 @@ def test_a_confirm_setting_is_a_card_in_the_assistant_chat_and_the_tap_changes_i
     with api.app.state.store.read() as c:
         row = c.execute("SELECT proposer,conversation_id FROM assistant_actions WHERE id=?", (action["id"],)).fetchone()
         assert row["proposer"] == "assistant"
-        room = c.execute("SELECT owner_actor FROM conversations WHERE id=?", (row["conversation_id"],)).fetchone()
-        assert room["owner_actor"] == "human:ana"                # the person's own chat, not BotOps'
+        room = c.execute("SELECT owner_id FROM conversations WHERE id=?", (row["conversation_id"],)).fetchone()
+        assert room["owner_id"] == "human:ana"                # the person's own chat, not BotOps'
     # The Assistant can't tap it; the person's own tap runs it, as them.
     post(api, f"assistant/actions/{action['id']}/confirm", {}, token=attempt["token"], expected=403)
     done = post(api, f"assistant/actions/{action['id']}/confirm", {}, token="ana-test")["action"]
@@ -182,7 +179,7 @@ def test_the_assistant_cannot_turn_on_or_edit_an_automation_that_sends_outside_n
 def test_with_the_rule_off_a_repository_setting_is_a_card_the_tap_runs(api):
     # A repository's id is owner/name, two segments of its route: the card names the route the Settings page uses.
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO repositories(id,full_name,enabled,updated) VALUES(?,?,1,?)",
+        c.execute("INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?)",
                   ("repo-acme", "Acme/product", "2026-10-27T00:00:00Z"))
     put(api, "access/rules", {"assistant_direct": False})
     r, attempt = assistant_turn(api, "ana-test", "Switch off the product repository")
@@ -245,6 +242,10 @@ def outcome(c, auth, who, e, card_direct=False):
     return "run" if "run" in made else "card"
 
 
+# Direct entries that must still come back as a card when the owner's rule is off (botops_act.DO), never refused.
+CARDED = {"computer.label", "computer.turns_at_once"}
+
+
 @pytest.mark.parametrize("person,role", [("ana", "owner"), ("ben", "human"), ("cara", "human")])
 def test_botops_and_the_assistant_give_every_setting_the_same_class_and_who_may(api, person, role):
     as_member(api, "cara@acme.example")
@@ -261,15 +262,22 @@ def test_botops_and_the_assistant_give_every_setting_the_same_class_and_who_may(
             # Cards for a direct entry (the owner's rule off): a card wherever BotOps can make one, else the link.
             if got == "run" and settings_catalog.kind_for(e, {}) == "direct":
                 carded = outcome(c, auth, assistant, e, card_direct=True)
-                assert carded == "card" or carded[0] == "unavailable", (e.key, carded)
+                assert carded == "card" or (e.key not in CARDED and carded[0] in ("unavailable", "forbidden")), (e.key, carded)
     assert {"run", "card", "person_only"} <= seen or role == "human", seen
 
 
 def test_the_assistant_may_card_every_catalogue_route_botops_may():
     for e in ENTRIES:
-        path = "/api/v2/" + re.sub(r"\{\w+\}", "x", e.route)
+        path = settings_catalog.probe(e)
         if e.kind != "person":
             assert valid_operation(e.method, path, None, "assistant") == valid_operation(e.method, path, None, "botops"), e.key
+        if "/{" in e.route and e.route.split("/{")[0] + "/" in settings_catalog.ID_SHAPES:
+            # A repository (`owner/name`) or a pool (`groups/<id>`): probed as the two segments the route takes, so
+            # the equality above is about a path BotOps really cards, not one neither could.
+            assert path[len("/api/v2/"):].count("/") == e.route.count("/") + 1 and valid_operation(e.method, path, None, "botops"), e.key
+
+
+ASSISTANT_REFUSED = {"mail.intake"}
 
 
 @pytest.mark.parametrize("role", ["owner", "admin", "member"])
@@ -282,15 +290,26 @@ def test_every_setting_does_for_the_assistant_what_it_does_for_botops(api, role)
     objects = parity._objects(api, runner(api))
     r, attempt = assistant_turn(api, token, "Change my settings")
     wrong, unproven = [], {}
-    for e in ENTRIES:
+    # bot.archive goes last: it archives the bot the other entries act on.
+    for e in sorted(ENTRIES, key=lambda e: e.key == "bot.archive"):
         with api.app.state.store.read() as c:
             want = parity.KNOWN_GAPS.get((e.key, role)) or parity.expected(c, e, role, person)
         got = parity.ask(api, attempt, e, objects, person, token)
+        if e.key in ASSISTANT_REFUSED:
+            # Assistant-only divergence: postal intake is a NEVER route (it takes mail from outside, backend/assistant.py),
+            # so no card can carry it on a cited turn and the planner refuses it as forbidden (403). BotOps runs it
+            # directly as an admin.
+            assert got == "refused" and parity.LAST[e.key].startswith("403") and '"forbidden"' in parity.LAST[e.key], \
+                (e.key, got, parity.LAST.get(e.key))
+            continue
         if got in ("ran", "card", "refused", "card, then refused"):
-            if got != want:
-                wrong.append(f"{e.key}: BotOps {want} for the {role} ({e.kind}, {e.who}), the Assistant {got}")
+            # On the person's own cited turn the Assistant applies a confirm-class setting at once (the person's rights are
+            # the ceiling; BotOps still cards it): the one divergence the Assistant is meant to have.
+            if got != want and not (got == "ran" and want == "card" and e.kind == "confirm"):
+                wrong.append(f"{e.key}: BotOps {want} for the {role} ({e.kind}, {e.who}), the Assistant {got}"
+                             f" [{parity.LAST.get(e.key, '')}]")
         else:
             unproven[e.key] = got
     assert not wrong, "\n".join(wrong)
     new = {k: v for k, v in unproven.items() if k not in parity.NOT_PROVEN}
-    assert not new, new
+    assert not new, {k: f"{v} [{parity.LAST.get(k, '')}]" for k, v in new.items()}

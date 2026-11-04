@@ -1,11 +1,43 @@
 # Computers
 
-A computer runs your bots. Each one signs in to the AI tools its bots use (Codex, Claude Code and others), and
-**Settings → Computers** shows every computer, the logins and keys it runs on, and how much of each plan is left.
-To add a computer, see [Install](install.md#add-computers-to-run-your-bots). Below the computers, **Models** holds the
-team-wide model settings: the models choice, which providers are on, the default model, **Fall back when a plan runs
-out**, **Check model** and the [Tico AI Gateway](ai-gateway.md) key. The owner changes them; everyone else sees them.
-These used to be a separate AI providers tab, and Subscriptions before that; old links to either open Computers.
+A computer runs your bots. **Settings → Computers** lists every computer: its bots, which subscription Claude Code and
+Codex use there, the other AI tools' logins, and what it is doing now. To add a computer, click **Add computer** or see
+[Install](install.md#add-computers-to-run-your-bots).
+
+**Settings → Models** holds the company's model settings:
+
+- **Subscriptions**: the company's Claude and ChatGPT plans and API keys, each given to the computers that use it.
+- **Tico Gateway**: one switch, **Use when a computer has no subscription, or a plan runs out**. The
+  [Tico AI Gateway](ai-gateway.md) key, address and spend are under **Advanced**.
+- **Defaults**: **Default model**, **Decisions**, **Meeting model**, **Fall back when a plan runs out** and **Check model**.
+- **Limits**: the [company turn levels](#change-the-company-turn-levels).
+
+Owners and admins change subscriptions and limits; the owner changes the Gateway and defaults; everyone else sees them.
+Old links to AI providers, Subscriptions or the Models card on Computers open Models.
+
+## Subscriptions
+
+A subscription is a login or key the company saves once and gives to computers. A bot doesn't pick one: it runs on its
+computer, and a run uses, in order, that computer's subscription for the run's AI tool, the login signed in on the
+computer, then Tico Gateway when it is on. Otherwise the run waits.
+
+1. Open **Settings → Models** and click **Add subscription**.
+2. Pick the **Kind**: **Claude plan**, **ChatGPT plan**, or an Anthropic or OpenAI API key, and enter a **Name**, such as
+   *Claude Max*.
+3. For a plan, click **Connect**, open the link and sign in with the account that has the plan (paste back the code the
+   page shows, or enter the code Tico shows). Tico saves the result. Or paste it and click **Save**: the token from
+   `claude setup-token`, or Codex's `auth.json`. An API key is always pasted.
+4. Open **Settings → Computers** and pick the subscription in the computer's **Claude Code** or **Codex** column.
+
+Switching a computer's subscription stops that tool's running tasks on that computer and starts them again, and every
+session of that tool there starts fresh. When tasks are running, Tico asks first and says how many. Removing a
+subscription does the same on each computer that had it. A computer on an older Tico says **Needs update** instead of a
+picker until it updates.
+
+Each row shows how many computers use it and its usage: the share of the 5-hour or weekly window used, or an API key's
+cost this month. **Reconnect** means the saved login stopped working; connect again or paste a new one from the row's menu. A new value
+restarts the running tasks on each computer that has the subscription, as a switch does, so no run goes on with the
+old one. The page asks first and says how many.
 
 Tico model turns on the current Docker runner each use a separate temporary OS user. Other bots on the computer
 cannot read the turn's live environment, open file descriptors or private temporary files, or use its Gateway
@@ -28,10 +60,14 @@ For example, **3 running · 2 starting · 7 waiting for quota (oldest 2 h) · 5 
 The counts describe the computer's total load, including work belonging to other people. Wait reasons never name
 bots, tasks, people or accounts. The bot list still follows each viewer's access.
 
-On an upgraded runner, only running and starting turns occupy a place. A login, quota or other pre-start wait holds
-none, so unrelated work can start. Waiting for a lane or login releases the place; continuing requires a fresh atomic
-reservation. Two turns cannot take the last place together. Codex's shared ChatGPT login does not normally queue
-turns ([sharing a sign-in](#bots-sharing-one-chatgpt-sign-in-run-side-by-side)).
+On an upgraded runner, a turn holds its place from its claim until it ends. A computer runs up to its turn limit, and
+holds at most twice that in claimed work, waiting turns included; the rest stays queued on the server, unleased, until
+a claim ends. A turn claimed past the limit holds no place: its start is refused as "computer busy" until one frees. A
+login, quota or other pre-start wait is parked: the turn keeps its claim but takes no start place, so
+other work can start beside it. Waiting for
+a lane or login releases only the start reservation; continuing requires a fresh atomic reservation. Two turns cannot
+take the last start reservation together. Codex's shared ChatGPT login does not normally queue turns
+([sharing a sign-in](#bots-sharing-one-chatgpt-sign-in-run-side-by-side)).
 
 A starting turn reserves a place for up to **3 minutes (180 seconds)**, including active Git and runtime preparation.
 Keeping that preparation active does not extend the deadline. If the turn has not started, its place is released and
@@ -39,8 +75,13 @@ its work returns to the queue without changing the task. After 10 missed starts 
 started, Tico reports a pre-start failure instead of retrying forever. Check the computer named in the failure.
 
 CPU or memory strictly above **90% for 5 minutes** holds new starts on that computer with **waiting: computer busy**.
+Memory at **85% or more** holds them too, with **waiting: computer busy: memory N%**; they start again once memory is
+below **80%**, so the queue does not flap. A computer whose last sample is more than **2 minutes** old holds new starts
+with **waiting: computer not reporting**, because a computer that stops reporting may be frozen. A computer that has
+never reported is not held. The server also ends a run that has gone silent (no heartbeat or event for 5 minutes)
+once it is past its bot's max_run_minutes plus 5 minutes, without waiting for the computer.
 This includes turns with a reservation that have not started yet. Running turns continue. New starts resume when
-the sustained overload clears. A person's own message to a bot (a chat, a message in its task) still starts, ahead of
+the hold clears. A person's own message to a bot (a chat, a message in its task) still starts, ahead of
 the waiting turns, when the computer has a free turn; Tico's notices and messages between bots wait. This brake does
 not change your account, model or computer size.
 
@@ -95,23 +136,23 @@ The company-limit message does not confirm that an automatic repair has run.
 
 You must be the owner or an admin. The server rejects changes from anyone else.
 
-![Settings with Computers selected and Company turn levels showing warning 40, stop 100, four people, company thresholds 160 and 400, and Save turn levels](images/settings-company-turn-levels-desktop-light.png)
+![Settings, Models, Limits card with Warn at 40 and Stop at 100 runs per person, 3 people · 18 of 300 in use, and Save](images/settings-models-limits-desktop-light.png)
 
-Example owner/admin view of **Settings → Computers → Company turn levels**, using synthetic data: four people and no turns in use.
+Example owner/admin view of **Settings → Models → Limits**, using synthetic data.
 
-1. Open **Settings → Computers**.
-2. Find **Company turn levels**.
-3. Enter **Warning level per person**.
-4. Enter **Stop level per person**.
-5. Click **Save turn levels**.
+1. Open **Settings → Models**.
+2. Find **Limits**.
+3. Enter **Warn at** (runs per person).
+4. Enter **Stop at** (runs per person).
+5. Click **Save**.
 
 Both values must be whole numbers from **1** to **10,000**, and warning must not exceed stop.
-For example, enter **45** and **110** for four people. After saving, the confirmation shows warning at **180** and stop at **440** company turns.
-The card shows the current people count, company thresholds and turns in use.
+For example, enter **45** and **110** for four people. After saving, the card shows **Warn at 180 · stop at 440 company runs**.
+Before a save, it shows the people count and runs in use against the company stop level.
 
 Saved values apply to the current company count. Lowering stop to or below that count holds new turns; running turns continue.
 Raising stop above the count lets eligible waiting work resume. Raising warning above the count resolves an active warning incident.
-To restore the defaults, enter **40** and **100** and click **Save turn levels** again.
+To restore the defaults, enter **40** and **100** and click **Save** again.
 
 If saving fails, read the error beside the button and correct the values before trying again.
 If the card is missing, ask an owner or admin to change the levels.
@@ -158,10 +199,58 @@ listed computers** ([Shared keys](#api-keys-on-a-computer)).
 
 ### Which connection a bot runs on
 
-Every bot runs its tool on its computer's login for that tool (a key it is given counts as that login). Neither a bot
-nor a group chooses one. The bot editor shows it under the model as "Runs on *tool* · Computer's login on *computer*".
-To put a bot on a different account, move it to a computer signed in to that account. When a plan runs out, a bot can
-move to its fallback model; that is set in Models and per bot ([How it works](how-it-works.md)), not here.
+A bot runs its tool with its computer's subscription for that tool, if the computer was given one
+([Company subscriptions](#company-subscriptions)), else the computer's own login for that tool (a key it is given counts
+as that login), else the Tico AI Gateway when the company's models choice allows it; with none, the turn waits. To put
+a bot on a different account, give its computer another subscription or move the bot to another computer. When a plan
+runs out, a bot can move to its fallback model; that is set in Models and per bot ([How it works](how-it-works.md)),
+not here.
+
+### Company subscriptions
+
+A **subscription** is one of the company's model logins or keys, saved once in Tico rather than on a computer: a
+Claude setup-token (from `claude setup-token`), a ChatGPT login (the `auth.json` from a computer where `codex login` is
+signed in, usually `~/.codex/auth.json`), or an Anthropic or OpenAI API key.
+
+**Connect** signs a plan in without pasting. Tico picks an online computer on the latest release with that tool
+installed, the person's own first, and runs the sign-in there: `claude setup-token`, or `codex login` in a folder of its
+own. That computer's own login stays as it was. The page shows the link and any code, never the result, which the
+computer sends straight to Tico and keeps no copy of. If it has to run on someone else's computer, the page says so before
+the sign-in, since the result passes through that computer; cancel and paste to avoid that. With no such computer,
+**Connect** is off and pasting still works. A sign-in the command reports as failed saves nothing. If the sign-in cannot
+accept the code and asks to retry, Tico ends that attempt and offers **Try again**. Open the new link and use the code
+from that page; a code from the previous attempt does not carry over.
+The computer's runner log records the sign-in ID, stages, elapsed time, command exit code and a safe failure category
+(code rejected, OAuth network error, or another OAuth error). It never records the authorization link, code, token or
+raw command output. A generic code rejection cannot say whether that code expired, was reused or was incomplete.
+Connecting a saved subscription is **Reconnect**, and asks first as a pasted value does. It belongs to the company; the list says
+who added it. Owners and admins add, rename, reconnect and remove them in **Settings > Models**; anyone who sees that
+page sees the list (name, kind, status, computers, usage), never a value.
+
+Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many
+computers. Every bot on that computer then runs that tool on it. Automatic fallback can use it too when
+that tool is installed and the company allows automatic fallback. On an updated runner, an unused automatic
+candidate's login is fetched only when the bot is about to use it. Changing or removing that login leaves a turn
+still running on another tool alone. Once the fallback fetches the login, changing it stops that turn too. Older
+runners fetch fallback logins up front and restart those turns when a login changes.
+
+- Giving, switching or taking off a computer's subscription, reconnecting it, or removing one in use, restarts that tool there: its
+  running turns stop and go back in the queue (a turn that may already have acted outside Tico is held for review
+  instead), and every session of that tool on that computer starts fresh. The page asks first and says how many.
+- It works on any computer it is given to, a new cloud machine included: nobody signs in there. The turn reads it from
+  Tico with its own run token, next to its credentials; it is never written into the bot's repository. A Claude token
+  or Anthropic key is set in that turn's environment. A ChatGPT login or OpenAI key gets a Codex home of its own on
+  that computer; its `auth.json` is there only while a turn on it runs, and when Codex refreshes the login there, the
+  refreshed login is sent back to Tico. Each token in it is masked in what the turn leaves.
+- A usage limit met on a subscription holds it on every computer it is given to until the reset. Meanwhile it is
+  passed over: turns there run on the computer's own login, else the Gateway under the company's models choice,
+  else wait. A bot waiting on the old plan's limit resumes on the new plan at once when a computer is switched to it.
+- If the provider refuses it, it shows **Needs reconnect** and is passed over (the computer's own login, then the
+  Gateway) until someone saves a new value with **Reconnect**. The computer's own login is left alone.
+- A computer on an older runner does not take subscriptions; its bots run as before until it updates.
+
+One computer is one trust group ([SECURITY.md](../SECURITY.md#bots-on-one-computer-share-a-trust-boundary-on-purpose)):
+while a turn runs on a subscription, another bot's turn on the same computer could read it.
 
 ### Bots sharing one ChatGPT sign-in run side by side
 
@@ -178,31 +267,23 @@ fresh 100%. An API key has no plan, so it shows "No plan usage (API key)". Detai
 
 ## The computers list
 
-Each row shows only:
+One row per computer. On a phone the table scrolls sideways inside its card.
 
 | Column | What it shows |
 |---|---|
-| **Computer** | Its name. |
-| **Tico** | Its Tico version, with **Update** when an update is waiting. |
-| **Operator** | The person who runs it. |
-| **Bots** | How many bots run on it, and the first few names. |
-| **AI tools** | One chip per connection: the tool, a thin bar and "N%" left. Hover or tap for "N% left · resets *day time* · as of *age*". With no reading yet, the chip shows the tool name only. |
-| **Status** | Online, or offline · last seen *when*. |
+| **Computer** | A status dot (hover for online, or offline · last seen *when*) and its name, with **Update** when an update is waiting and **Waiting** while a connection it was given is not reported yet. |
+| **Bots** | How many bots run on it. |
+| **Claude Code**, **Codex** | A picker: the company's subscriptions for that tool, then **Signed in here** when the computer has its own login, else **Gateway** (or **None** with the Gateway off). Owners and admins change it. |
+| Other AI tools | One chip per connection the computer reports, under that tool's column: its state (**Signed in**, **Sign in**, **Signed out**, or a problem such as **Expired**), then a thin bar and "N%" left when there is a reading. A small **red dot** means bots depend on it and it needs attention. A click opens the computer's pop-up. |
+| **Now** | What it is doing: for example **1 running · 55 queued**, **idle**, **asleep** (a cloud computer stopped to save) or **offline**. The full queue line, with wait reasons, is in its pop-up. |
 
-A chip exists only for a connection that was added: Codex signed in gives one Codex chip, and nothing for Claude
-Code. A small **red dot** on a chip means bots depend on it and it needs attention (signed out, or its
-login or key was rejected); a healthy chip has no badge. Other states:
-
-- **No AI connection** with a red dot: the computer has no connection, and its bots can't run until one is added.
-- **Waiting for *computer***: a connection was added and the computer has not reported it yet.
-- An offline computer's chips keep their last reading; hover shows how old it is.
-
-**Show revoked computers (N)** above the list shows computers that were revoked. **No computers yet** means none is
+**Show revoked (N)** under the list shows computers that were revoked. **No computers yet** means none is
 registered: choose **Add computer**.
 
 ## A computer's pop-up
 
-Click a row to open its pop-up. Its sections, top to bottom:
+Click a row to open its pop-up. Owners and admins rename the computer with the pencil next to its name (1 to 100
+characters; a cloud machine made again keeps the name). Its sections, top to bottom:
 
 1. **Connections**: one line per AI tool, the computer's login for it: the tool, "Computer's login" (or "Shared key"),
    the signed-in account and plan, sign-in state, usage (weekly and, where the tool reports one, the 5-hour window) and
@@ -210,11 +291,14 @@ Click a row to open its pop-up. Its sections, top to bottom:
    **Add key**, **Replace key** and **Clear key** for a key. **Add connection** at the end opens its own pop-up to sign
    in an installed tool or add a key.
 2. **Screen**: an on/off switch, then **View** or **Control** when enabled (Beta). Enabling a screen that needs setup reveals the runner command, as described in [Install](install.md#screen).
-3. **Bots on this computer**: each bot with the connection it actually runs on, read-only. **Assign on the Bots page**
-   opens Settings → Bots, where a bot's computer is chosen.
-4. **Versions and updates**: Tico, the OS and runner, each AI tool's version with **Installed** and **Enabled**, and
+3. **Internet**: **Share internet with bots**, then the bots that may use it and the **Daily cap (GB)**, and today's
+   total, which opens to the sites that went through. Only on your own computer; an admin sees only the switch, to turn
+   it off. See [Share internet with bots](#share-internet-with-bots).
+4. **Bots on this computer**: each bot, read-only, with a red pill when its connection has a problem. **Assign on the
+   Bots page** opens Settings → Bots, where a bot's computer is chosen.
+5. **Versions and updates**: Tico, the OS and runner, each AI tool's version with **Installed** and **Enabled**, and
    **Installation and updates**.
-5. **Settings**: **Keep for inbox bots only**, **Accepts members' bots** (admins), **Turns at once** (owners and admins:
+6. **Settings**: **Keep for inbox bots only**, **Accepts members' bots** (admins), **Turns at once** (owners and admins:
    empty is the computer's own capacity, 1 to 256 otherwise), **Performance diagnostics** and
    **Performance**, and **Revoke computer** at the bottom.
 
@@ -230,6 +314,68 @@ computer's own login and key previews (others see which kind of key it is, not t
 gets the change controls: sign in and out, Add connection, screen, tools, performance,
 inbox-only and Revoke computer. The API refuses anyone else ([Permissions](permissions.md)). BotOps cannot sign a login
 out, because that stops bots.
+
+## Share internet with bots
+
+A bot's browser can reach the web from another computer's internet connection: your laptop's home IP instead of a
+cloud machine's. Sites that block data-center addresses then see an ordinary home connection. No proxy service is
+involved.
+
+1. On your own computer's pop-up, turn on **Share internet with bots**, tick the bots that may use it, and set the
+   **Daily cap (GB)** (5 GB by default). Only the computer's operator can turn it on or pick bots; it is off until they
+   do.
+2. In the bot's settings, set **Browse through** to that computer (owners, admins and the bot's managers). Only
+   computers that share with that bot are offered.
+
+The bot's browser then goes out through that computer for every site. Both runners connect out to Tico's relay, as for
+the computer screen; neither needs an open port. The browser's encrypted traffic passes through unread: Tico sees the
+site name and how many bytes, never the pages.
+
+What each side guards against: the sharing computer protects its owner from any bot, so its rules below (home
+network, router, its own addresses, ports, the cap, the owner's choice of bots) hold whatever the bot does. The bot's
+side (its proxy, the browser wrapper, failing closed) keeps a bot from browsing directly by accident. It is no wall
+against a bot set on going around it, which could only reach the web from its own computer's address anyway.
+
+What the sharing computer allows:
+
+- Ports 80 and 443 only.
+- Public internet addresses only. The sharing computer looks the name up itself and refuses its own addresses
+  (including its home's public address, as Tico's relay sees it), its home network (`10.*`, `172.16-31.*`,
+  `192.168.*`), loopback, link-local, `100.64.0.0/10`, multicast, private IPv6 and the other special-purpose ranges
+  IANA lists, and checks the address it actually connects to. It also refuses every device on the networks its
+  interfaces are on (on IPv4 a `/16` or narrower; on IPv6 the `/64` of each of its addresses, where home devices
+  have public addresses), the far end of a point-to-point link, and its router.
+  It asks the relay for its public address over IPv4 and over IPv6 when it connects and every 5 minutes; while the
+  IPv4 answer is missing, it refuses IPv4 sites, so an IPv6-only computer reaches no IPv4 site, NAT64 included.
+- Up to the daily cap. Crossing it closes that day's connections through it until midnight UTC. Bytes count on the UTC
+  day they pass, so a connection open across midnight counts on both days.
+
+When the computer is offline, stops sharing with the bot, was removed or reached its cap, the bot's browser connection
+fails, and the proxy's answer says why ("Ana's MacBook is offline"; also at the `TICO_BROWSER_PROXY` address in a
+browser). It never falls back to going out directly. On a computer whose runner is too old for this, the bot's work waits
+("Update Office server to use Browse through"). Changing a bot's
+**Browse through**, or turning sharing off, closes the connections already open.
+
+The day's total on the pop-up opens to a table of what went through: day, bot, site and bytes, kept 30 days. The
+computer's operator and admins see it.
+
+In turns of a bot with **Browse through** set, the runner sets `TICO_BROWSER_PROXY` (a proxy on `127.0.0.1` for that
+bot), adds `--proxy-server` to `CHROMIUM_FLAGS`, and puts `google-chrome`, `chromium` and their usual names first on
+`PATH` so a browser started by name goes through it. A browser started another way takes the proxy itself, for example
+Playwright's `chromium.launch({proxy: {server: process.env.TICO_BROWSER_PROXY}})`. A browser started by name gets
+the bot's own profile (`~/.tico/browser-exit/<bot>`; any other `--user-data-dir` is refused), and refuses to start
+when a browser it didn't start through the proxy is open on that profile, or when a flag would skip the proxy (with
+one dash or two, spaces around it, or a bare `--`). `localhost` stays local: the browser reaches the bot's own computer directly, never
+through the exit.
+
+The proxy asks for no password, because a browser can't send one for every connection. Under turn isolation (Linux
+runners with `TICO_RUNNER_BOT_UID`), it takes connections only from the OS users that bot's turns run as. Without
+isolation, as on a Mac or a cloud machine, bots on one computer share one OS user and are one trust group: any of them
+can use another's proxy.
+
+API: `GET/POST /api/v2/computers/{id}/browser-exit`, `GET /api/v2/computers/{id}/browser-exit/usage`,
+`GET/POST /api/v2/bots/{bot}/browser-exit` ([OpenAPI](openapi/v2.json)). Hub: `hub computer browser-exit` and
+`hub bot browser-exit`.
 
 ## Add a connection
 
@@ -247,7 +393,7 @@ Choose **Subscription** when you pay for a plan, such as ChatGPT or Claude:
 
 Choose **API key** when you pay the provider for each use:
 
-- There is no weekly allowance to run out. The chip shows only the tool's name, with no "% left"; its line in the
+- There is no weekly allowance to run out. The chip shows only its state, with no "% left"; its line in the
   pop-up reads "No plan usage (API key)". The provider bills each run.
 - Use it for a tool that has no subscription sign-in here (**Subscription** is greyed out), or when a plan's weekly
   limit is too small for your bots.
@@ -330,9 +476,9 @@ and on a current runner; an older one answers `Update <computer> to sign out fro
 - **Switch account** is a sign-in on the side. The Computer signs the new account in to a private folder inside the
   login's home (`.tico-switch-<id>`, 0700, with copies of the files the CLI keeps beside the login). Once the new
   account is signed in there, the dialog reads **Putting the new account in place**: the Computer asks Tico to go
-  ahead, and from Tico's yes the switch can no longer be cancelled (it gets two more minutes of its own to finish).
+  ahead, and from Tico's yes the switch can no longer be canceled (it gets two more minutes of its own to finish).
   Only then does it move the new login files in, keeping the old ones until it has checked the login again; if moving
-  a file or that check fails, the old files go back. Cancelling before that point, failing or running out of time leaves
+  a file or that check fails, the old files go back. Canceling before that point, failing or running out of time leaves
   the old account working, and the side folder is removed (kept, and named in the message, only if the old files could
   not be put back). Runs that start afterwards use the new account. The account and usage readings of the old account
   are cleared.
@@ -346,7 +492,7 @@ and on a current runner; an older one answers `Update <computer> to sign out fro
 - **Switch to subscription** sits on a Computer's own login that runs on an API key (the shared key, the Computer's
   own key or one set in its terminal): in place of **Switch account**, or next to **Replace key** and **Clear key**. It
   is the same sign-in on the side: until the subscription is signed in and in place the key stays in use, and
-  cancelling, failing or running out of time leaves it so. Once the subscription is in place the key is removed as
+  canceling, failing or running out of time leaves it so. Once the subscription is in place the key is removed as
   **Clear key** removes it (the Computer's copies, and its own key in the vault), and no key reaches that login again:
   not readiness, not the ten-minute key login and not a turn's environment, so the next turn runs on the subscription.
   The server stops handing it the **Every computer** key too. Unlike a sign-out, a later sign-in or Switch account does
@@ -400,7 +546,7 @@ login with none. The Computer must be online and on a current runner; an older o
   own connection (the sign-in queue never carries a key) and checks it (Codex signs in with it; the others read it on
   each turn). Until the check passes and Tico agrees the key goes in, the old key stays in use for runs and in the
   Computer's key files, and the Computer's regular key fetch leaves them alone. From Tico's yes the change can no longer
-  be cancelled: the key it replaces is deleted from the vault, and a key set on the computer is taken out of
+  be canceled: the key it replaces is deleted from the vault, and a key set on the computer is taken out of
   `secrets/_shared.env`. A key that does not work, a cancel, or a check that runs out of time deletes the new key and
   leaves the old one in use (for Codex, signed in again with it). Runs that start afterwards use the new key; for Claude
   Code, a key added here is used even when the computer also has a browser login.
@@ -528,7 +674,7 @@ only).
 
 A current runner retries a rejected heartbeat without only the unsupported report: subscriptions, worktrees or repository clones. Other reports stay intact, and unrelated errors retain their original message. Invalid local profile names are omitted from reports. Provider sign-in probes are cached for one minute and refreshed after sign-in or a rejection. Turns and watcher
 scripts use the cached sign-in state without probing at every start. A probe timeout leaves sign-in unknown and allows a
-turn to try. A rejection affects only that runtime on that Computer. Completion and usage records include the profile
+turn to try. A rejection affects only that runtime on that Computer; on a runtime that signs each bot in with its own key (pi, the Gemini CLI), only the bot whose key was refused stops until its key or grants change or the recheck passes. Completion and usage records include the profile
 a turn ran in when it is a named one; empty profile fields are omitted.
 
 Each run pins its selected local profile directory before preparing the provider environment. Changes to the local default or a profile directory affect later runs, not an in-progress primary or fallback attempt. Environment, host setup, session reuse, usage and rejection attribution use the same binding; fallback still checks its runtime eligibility and known sign-in state. A run started on the unnamed operator login does not acquire a newly configured profile midway through execution. Changing a profile directory starts a separate provider session. The first run after upgrading to directory-bound session keys also starts a fresh provider session for named profiles; the Tico conversation remains intact. This pins the login slot, not the provider account inside it: avoid replacing credentials in a slot while it has active runs.

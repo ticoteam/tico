@@ -62,11 +62,11 @@ On Docs, matching internal, indexed external, linked and manual docs appear at o
 from search; choose **All docs**, **Team docs** or **Tico manual** to narrow the matches.
 The Librarian's answer then streams in with clickable citations. `POST /api/v2/docs/ask {question,
 conversation_id?, new_conversation?}` returns `{conversation_id, message_id, results}` and the answer arrives on
-`GET /api/v2/events?topics=messages,runs&conversation={id}` (each change, then the conversation's snapshot). Each human has one private docs conversation with the Librarian
-(`scope: personal`, `room_key: docs`), like the [Assistant](assistant.md)'s room: only they can read it, and the owner and
-administrators cannot. **New chat** starts a fresh conversation, so the Librarian remembers only what is on screen.
-**Previous conversations** lists your saved Docs chats. Pick one to reopen it and continue where you left off;
-your current chat stays in the list. Only you can list or reopen them, including when an owner or administrator asks.
+`GET /api/v2/events?topics=messages,runs&conversation={id}` (each change, then the DM's snapshot). Each human has one private docs DM with the Librarian
+(`scope: personal`, `room_key: docs`), like the [Assistant](assistant.md)'s DM: only they can read it, and the owner and
+administrators cannot. **New chat** starts a fresh DM, so the Librarian remembers only what is on screen.
+**Previous conversations** lists your saved Docs DMs. Pick one to reopen it and continue where you left off;
+your current DM stays in the list. Only you can list or reopen them, including when an owner or administrator asks.
 `GET /api/v2/librarian/conversations` lists them (`limit`, `offset`, `next_offset`), and
 `POST /api/v2/librarian/conversations/{id}/reopen {}` makes one current. Reopening waits until the current turn finishes.
 
@@ -87,7 +87,7 @@ The server MCP returns after at most 20 seconds: if pending, it returns
 `{timeout: true, conversation_id, message_id}`. Use `hub_doc_ask_status` with those ids (or
 `hub doc ask-status <conversation_id> <message_id> [--wait 20]`) to collect the same answer. Polling
 uses short requests and sends no new question. Local CLI asks can wait for the full requested duration.
-The Assistant asking for a human puts the question in that human's own docs conversation.
+The Assistant asking for a human puts the question in that human's own docs DM.
 
 The Librarian acts as itself, not as the human who asked. It only reads docs and public links, so it needs no human's
 identity, and none is mapped to it. Docs are team-wide, so what it can read is the same for every asker.
@@ -169,7 +169,7 @@ On an empty Market page the owner answers the Librarian's four questions (First-
 address with `hub doc fetch` (about 40 fetches in all), uses web search when the harness has it (`web-search` is declared in its
 `bot.yaml`), and writes what it finds with `hub market`: the team itself (`company/self`), competitors and lookalikes with
 their tier, segments, channels, people and rules as entities and edges, each with an evidence row (`hub market report`, then
-`hub market apply`, which takes `--tier` and `--new-id`), and the eight market pages (`hub market page`) with a source on every
+`hub market apply`, which takes `--tier`, `--new-id` and `--last-verified-at`), and the eight market pages (`hub market page`) with a source on every
 claim. It never invents a number: a size, price or share appears only when a source states it. It aims at ten minutes and stops at
 thirty, then finishes the task with a short note saying what it found and what it could not read.
 
@@ -222,7 +222,9 @@ market reads it, and the tables are readable in hub SQL like the other market ta
   work it out again and scale the range by the same ratio; the stored row is not rewritten. If that puts the spend below
   zero or past the cap, the estimate reads with no spend and an `error`, and the total leaves it out. The owner changing a
   parameter of an estimate files a new accepted `owner` estimate. Each segment carries `rolled_usd`: its own size, else the
-  sum of its parts at any depth, else null. The total is the sum of the top-level segments' `rolled_usd`.
+  sum of its parts at any depth, else null. The total is the sum of the top-level segments' `rolled_usd`. It also carries
+  `self` (`company/self` operates in it, **Us**) and `next` (a segment the team means to enter, **Next**), which the
+  Strategy page's Where we play sets ([Strategy](strategy.md#the-page)).
 - **Figures.** A player's revenue, ARR, customers or seats in a segment, with `kind` (reported, estimated, claimed), `as_of`
   and evidence.
 - **Bets.** An accepted size, or a shared parameter changing an accepted size, is a market event on the segment, so a bet that

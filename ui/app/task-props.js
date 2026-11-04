@@ -15,7 +15,7 @@ const PROP_ICON = {
 // who may change what (the server holds the rules; this only hides controls that could never work)
 function taskPropRights(t) {
   const me = myActor(), mover = canMove();
-  const party = !!me && [t.owner, t.requester, taskRequester(t)].includes(me);
+  const party = !!me && [t.owner_id, t.requester_id, taskRequester(t)].includes(me);
   const live = !taskFinished(t);
   const onTask = !!me && Object.values(t.roles || {}).some(actors => actors.includes(me));
   return {mover, party, live, edit: (mover || party) && live, links: mover && live, reopen: mover || party,
@@ -53,7 +53,7 @@ function taskPropsHTML(t, opts = {}) {
   const statusName = STATUS_WORD[t.status] || String(t.status || '');
   rows.push(row('status', 'Status', txt(statusName), {edit: r.edit || (!r.live && r.reopen), words: statusName}));
   // Owner and who asked
-  rows.push(row('owner', 'Owner', actorFace(t.owner, 16) + txt(actorLabel(t.owner)), {edit: r.edit, words: actorLabel(t.owner),
+  rows.push(row('owner', 'Owner', actorFace(t.owner_id, 16) + txt(actorLabel(t.owner_id)), {edit: r.edit, words: actorLabel(t.owner_id),
     extra: t.private ? '<small>Reassigning grants the new assignee access and removes the previous assignee’s access unless they requested the task.</small>' : ''}));
   const asker = taskRequester(t);
   rows.push(row('asker', 'Asked by', asker ? actorFace(asker, 16) + txt(actorLabel(asker)) : txt('Unknown'), {words: actorLabel(asker) || 'Unknown', empty: !asker}));
@@ -61,22 +61,30 @@ function taskPropsHTML(t, opts = {}) {
   // Private: the label never changes; a few words beside the box say who sees it, the tooltip says it in full
   const seenBy = t.private ? (t.guest ? `Requester, owner, ${actorLabel(t.guest)}` : 'Requester and owner') : 'Everyone';
   const seenTip = t.private ? (t.guest ? `Only the requester, the assignee and ${actorLabel(t.guest)}, whom the assignee brought in, can see this task` : 'Only the requester and assignee can see a private task') : 'Visible to everyone in the company';
-  rows.push(`<div class="prop" data-prop-row="private" title="${esc(seenTip)}"><span class="prop-k">Private</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Private" data-task-private ${t.private ? 'checked' : ''} ${r.party && (!t.private || myActor() === t.requester) ? '' : 'disabled'}><span class="prop-txt">${esc(seenBy)}</span></label></span></div>`);
+  rows.push(`<div class="prop" data-prop-row="private" title="${esc(seenTip)}"><span class="prop-k">Private</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Private" data-task-private ${t.private ? 'checked' : ''} ${r.party && (!t.private || myActor() === t.requester_id) ? '' : 'disabled'}><span class="prop-txt">${esc(seenBy)}</span></label></span></div>`);
   if (roadmapTask(t)) {
     rows.push(`<div class="prop" data-prop-row="publication"><span class="prop-k">Public</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Public" data-task-public ${t.visibility === 'public' ? 'checked' : ''} ${r.reopen && !t.private ? '' : 'disabled'}><span class="prop-txt">${t.visibility === 'public' ? 'Shown on the public roadmap' : 'Team only'}</span></label></span></div>`);
     rows.push(`<div class="prop" data-prop-row="size"><span class="prop-k">Size</span><span class="prop-vwrap"><input class="roadmap-size" type="number" aria-label="Size" data-task-size min="0" step="any" value="${esc(t.size ?? '')}" ${r.reopen ? '' : 'disabled'}></span></div>`);
   }
-  // Due: a person's deadline (red once passed), or when a bot's parked task wakes (muted "Wakes Oct 2")
-  const dueAt = parseServerTime(t.due);
+  // Due: a deadline (red once passed; taskDueInfo), or when a bot's parked task wakes (muted "Wakes Oct 2")
+  const dueAt = parseServerTime(t.due_at);
   const info = taskDueInfo(t);
-  const dueDay = dueAt ? new Date(dueAt).toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}) : '';
+  const dueDayAt = occurrenceDay(t) || dueAt;   // an occurrence's calendar day is its routine's, not the viewer's zone
+  const dueDay = dueAt ? new Date(dueDayAt).toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}) : '';
   const dueWords = !dueAt ? '' : info?.kind === 'wake' ? `${info.words.split(' ')[0]} ${dueDay}` : dueDay;
   const dueLate = !!info?.late;
-  const dueISO = dueAt ? new Date(dueAt - new Date(dueAt).getTimezoneOffset() * 60000).toISOString().slice(0, 10) : '';
+  const dueISO = dueAt ? new Date(dueDayAt - new Date(dueDayAt).getTimezoneOffset() * 60000).toISOString().slice(0, 10) : '';
   rows.push(row('due', 'Due', `<span class="prop-ic${dueLate ? ' late' : ''}">${PROP_ICON.due}</span>` + (dueAt ? `<span class="prop-txt${dueLate ? ' late' : ''}${info?.kind === 'wake' ? ' wake' : ''}">${esc(dueWords)}</span>` : txt('Add due date')),
     {edit: r.edit, empty: !dueAt, popup: 'dialog', words: dueWords || 'none',
       extra: (r.edit ? `<input type="date" class="prop-date" data-prop-date tabindex="-1" aria-hidden="true" value="${esc(dueISO)}">` : '')
         + (r.edit && dueAt ? `<button type="button" class="prop-x" data-prop-clear="due" aria-label="Clear the due date" title="Clear">${TL_ICON.x}</button>` : '')}));
+  if (t.check_back_at && t.check_back?.enabled !== false) {
+    const when = fmt(t.check_back_at);
+    const edit = r.edit || (r.reopen && ['done', 'declined'].includes(t.status));
+    rows.push(row('check_back', 'Follow up by', txt(when), {edit, words: when,
+      extra: t.check_back ? `<small>${esc(actorLabel(t.check_back.by))}${t.check_back.due ? ' · Due' : ''}${t.check_back.delivery ? ' · ' + esc(t.check_back.delivery.replaceAll('_', ' ')) : ''}</small>` : ''}));
+    rows.push(row('check_back_note', 'Expected result', txt(t.check_back_note || 'Inspect progress'), {edit, words: t.check_back_note || 'Inspect progress'}));
+  }
   // Tags: chips (each opens its tag) and a small +
   const chips = tagChips(t.labels || [], t.tags || [], r.links, true);
   rows.push(`<div class="prop" data-prop-row="tags"><span class="prop-k" aria-hidden="true">Tags</span><span class="prop-vwrap"><span class="prop-tags tlabels" aria-label="Tags">${chips
@@ -107,7 +115,7 @@ function taskPropsHTML(t, opts = {}) {
   return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
 }
 // A refused save's reason stays under the properties until that property saves (several: one line each, named).
-const PROP_WORDS = {status: 'Status', owner: 'Owner', due: 'Due', tags: 'Tags', parent: 'Part of', type: 'Type', step: 'Step', people: 'People', publication: 'Public', size: 'Size'};
+const PROP_WORDS = {status: 'Status', owner: 'Owner', due: 'Due', check_back: 'Follow up by', check_back_note: 'Expected result', tags: 'Tags', parent: 'Part of', type: 'Type', step: 'Step', people: 'People', publication: 'Public', size: 'Size'};
 
 // Who is on a task by role (the server's `roles`): one chip per person and role, × takes one off, + adds one.
 // Roles are names the team chooses; what they mean downstream is the client's.
@@ -252,7 +260,7 @@ function taskPropsBind(d, task, change) {
         propMenu(d, b, {label: 'Status', items: stepItems(task, type).slice(1), onPick: async it => {
           if (it.value === task.step_id) return;
           const body = {step: it.value, ...(it.step?.status === 'done' ? {status: 'done'} : {})};
-          if (it.step?.name === 'Blocked') { const reason = await taskBlockedReason(task); if (reason === null) return; body.note = reason; }
+          if (it.step?.status === 'waiting') { const reason = await taskBlockedReason(task); if (reason === null) return; body.note = reason; }
           void save('status', body);
         }});
         return;
@@ -264,7 +272,7 @@ function taskPropsBind(d, task, change) {
       propMenu(d, b, {label: 'Step', items: stepItems(task, type), onPick: async it => {
         if (it.value === (task.step_id || '')) return;
         const body = {step: it.value, ...(it.step?.status === 'done' ? {status: 'done'} : {})};
-        if (it.step?.name === 'Blocked') { const reason = await taskBlockedReason(task); if (reason === null) return; body.note = reason; }
+        if (it.step?.status === 'waiting') { const reason = await taskBlockedReason(task); if (reason === null) return; body.note = reason; }
         void save('step', body);
       }});
     } else if (key === 'type') {
@@ -278,7 +286,7 @@ function taskPropsBind(d, task, change) {
           html: `<span class="tl-opt-face">${actorFace(o.value.includes(':') ? o.value : 'bot:' + o.value, 16)}</span><span>${esc(o.textContent)}</span>`}))
           .filter(it => !have.has(it.actor));
         propMenu(d, b, {label: 'Add as ' + roleWord(role), find: 'Find a person or bot', items, none: 'Everyone is on it',
-          onPick: it => void save('people', cur => ({roles: {[role]: [...((cur.roles || {})[role] || []), it.value]}}))});
+          onPick: it => void save('people', cur => ({roles: {[role]: [...((cur.roles || {})[role] || []), it.actor]}}))});
       };
       propMenu(d, b, {label: 'Role', entry: 'Role, like reviewer', none: 'Type a role, then Enter',
         items: Object.keys(task.roles || {}).map(k => ({value: k, text: k, html: `<span>${esc(roleWord(k))}</span>`})),
@@ -291,8 +299,16 @@ function taskPropsBind(d, task, change) {
       const opts = new DOMParser().parseFromString(`<select>${taskOwnerOptions('')}</select>`, 'text/html').querySelectorAll('option[value]:not([value=""])');
       propMenu(d, b, {label: 'Owner', find: 'Find a person or bot', items: [...opts].map(o => {
         const actor = o.value.includes(':') ? o.value : 'bot:' + o.value;
-        return {value: o.value, text: o.textContent, html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent)}</span>`, checked: task.owner === actor, actor};
-      }), onPick: it => { if (it.actor !== task.owner) void save('owner', {owner: it.value}); }});
+        return {value: o.value, text: o.textContent, html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent)}</span>`, checked: task.owner_id === actor, actor};
+      }), onPick: it => { if (it.actor !== task.owner_id) void save('owner', {owner: it.actor}); }});
+    } else if (key === 'check_back') {
+      propMenu(d, b, {label: 'Follow up by', items: [
+        {value: '30m', text: 'In 30 minutes'}, {value: '2h', text: 'In two hours'}, {value: '1d', text: 'Tomorrow'}
+      ], entry: 'ISO date-time with timezone or duration', onPick: it => void save('check_back', {check_back_at: it.value}),
+      onEntry: at => void save('check_back', {check_back_at: at})});
+    } else if (key === 'check_back_note') {
+      propMenu(d, b, {label: 'Expected result', entry: 'What should be ready to inspect?',
+        onEntry: note => void save('check_back_note', {check_back_note: note})});
     } else if (key === 'due') {
       const input = $('[data-prop-date]', d);
       d.focusProp = 'due';
@@ -307,8 +323,8 @@ function taskPropsBind(d, task, change) {
     } else if (key === 'parent') {
       const rows = await taskPropCandidates(task, key);
       if (!b.isConnected) return;
-      propMenu(d, b, {label: 'Part of', find: 'Find a task', none: 'No open tasks', items: rows.map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner)}`,
-        html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner))}</span>`,
+      propMenu(d, b, {label: 'Part of', find: 'Find a task', none: 'No open tasks', items: rows.map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner_id)}`,
+        html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner_id))}</span>`,
         checked: taskParentId(task) === String(x.id)})), onPick: it => {
           if (taskPropLoops(task, key, TASKS_ST?.tasks || PROP_TASKS?.rows || []).has(String(it.value))) { d.propsErrs = {id: String(task.id), map: new Map([[key, 'That would make a loop.']])}; taskPropsMsgPaint(d); return; }
           if (String(it.value) !== taskParentId(task)) { d.focusProp = key; void taskRelate(d, task, {task: it.value, kind: 'parent'}); }
@@ -347,7 +363,7 @@ function taskPropsBind(d, task, change) {
     }});
     // The owning bot's session id, for resuming or restoring that session by hand.
     const primary = ((d.liveTask || task).links || []).filter(l => l.kind === 'session').map(l => {
-      try { return JSON.parse(l.detail_json || '{}'); } catch { return {}; }
+      try { return JSON.parse(l.detail || '{}'); } catch { return {}; }
     }).find(s => s.primary && s.thread_id);
     if (primary) items.push({text: 'Copy session ID', run: async () => {
       try { await navigator.clipboard.writeText(primary.thread_id); toast('Session ID copied'); } catch { toast('Could not copy the session ID', true); }
@@ -358,7 +374,7 @@ function taskPropsBind(d, task, change) {
     if (!r.live && r.reopen && !stepsOnly) items.push({text: 'Reopen', run: () => save('status', {status: 'open'})});
     if (task.status !== 'closed' && (r.mover || r.party)) items.push({text: 'Close task', danger: true, run: () => save('status', {close: true})});
     // Closing counts as finished work; a task made by mistake is deleted into the trash instead.
-    if (r.mover || task.requester === myActor()) items.push({text: 'Delete task', danger: true, run: async () => {
+    if (r.mover || task.requester_id === myActor()) items.push({text: 'Delete task', danger: true, run: async () => {
       if (!window.confirm(`Delete "${task.title}"? It goes to the trash, from which it can be restored.`)) return;
       try { await post(`/v2/tasks/${encodeURIComponent(task.id)}/delete`, {}); } catch (e) { toast(e.body?.error?.code === 'has_work' ? "This task has work on it, such as a bot's turn, an approval, a bot's file or a subtask, so it can't be deleted. Close it instead." : e.message, true); return; }
       d.close(); toast('Deleted');

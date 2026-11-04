@@ -2,10 +2,18 @@
 server for every viewer, a new report goes last, and only someone who may put reports under that manager orders them."""
 from backend.tests.test_api import api, get, headers, post, put, setup_attempt  # noqa: F401
 from backend.tests.test_org_chart import revision, roster
+from backend import bot_settings as BS
+
+
+def slugs(api):
+    """Bot id to slug: the order holds ids, these tests compare the slugs people see."""
+    with api.app.state.store.read() as c:
+        return {r["id"]: r["slug"] for r in c.execute("SELECT id,slug FROM bots")}
 
 
 def order(api, manager, token="ana-test"):
-    return [r["id"] for r in get(api, "org/order/" + manager, token=token)["reports"]]
+    names = slugs(api)
+    return [names.get(r["id"], r["id"]) for r in get(api, "org/order/" + manager, token=token)["reports"]]
 
 
 def report_to(api, bot, boss, token="ana-test", expected=200):
@@ -65,7 +73,7 @@ def test_only_someone_who_may_put_reports_there_orders_them(api):
     from backend.tests.test_api import as_member
     as_member(api, "ben@acme.example")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='ben' WHERE bot='coo'")
+        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='coo'")
     put(api, "org/order/coo", {"reports": ["finance", "ops"]}, token="ben-test")
     put(api, "org/order/coo", {"reports": ["ops", "finance"]}, token="cara-test", expected=403)
     assert order(api, "coo") == ["finance", "ops", "doc-updater"]
@@ -98,7 +106,9 @@ def test_reports_that_join_go_last_in_the_order_they_came_whatever_their_names(a
     report_to(api, "zulu", "coo")
     assert order(api, "coo") == order(api, "coo", token="cara-test") == ["ops", "doc-updater", "finance", "alpha", "zulu"]
     coo = next(n for n in get(api, "updates/tree?scope=all")["roots"][0]["children"] if n["key"] == "b:coo")
-    assert [n["key"] for n in coo["children"]] == ["b:ops", "b:doc-updater", "b:finance", "b:alpha", "b:zulu"]
+    names = slugs(api)
+    assert [names.get(n["key"].removeprefix("b:"), n["key"]) for n in coo["children"]] == [
+        "ops", "doc-updater", "finance", "alpha", "zulu"]
     places = {e["name"]: e.get("report_position") for e in api.get("/api/employees", headers=headers("cara-test")).json()}
     assert sorted(("ops", "doc-updater", "finance", "alpha", "zulu"), key=places.get) == [
         "ops", "doc-updater", "finance", "alpha", "zulu"], "the chart reloads the same places"
@@ -124,8 +134,8 @@ def test_reports_nobody_placed_follow_one_rule_humans_then_a_bots_order_then_nam
         report_to(api, slug, "coo")
     with api.app.state.store.transaction() as c:          # a bot's own `order`, from its definition
         for slug, place in (("ops", 1), ("finance", 2)):
-            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode({**config, "order": place}), slug))
+            config = BS.read(c, slug)
+            BS.write(c, slug, {**config, 'order': place})
     assert order(api, "coo") == ["ops", "finance", "doc-updater"], "ordered bots first, lowest first, then names"
     assert [r for r in order(api, "human:ana") if r in ("zoe", "eli", "bea")] == ["bea", "eli", "zoe"], (
         "by name, accents and case aside, not as the roster lists them")

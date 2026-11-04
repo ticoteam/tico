@@ -1,13 +1,31 @@
-/* Shaped placeholders while a page's first read is in flight (skelRows in app/core.js): rows the size of the
-   list that replaces them, so nothing jumps when the data lands. */
+/* ui/styles/skeleton.css — The one loading placeholder: shaped blocks while a first read is in flight (skelRows in
+   app/core.js draws rows the size of the list that replaces them, so nothing jumps when the data lands), and the same
+   shimmer on a picture, a file or a card body still loading. One sweep, one colour pair (theme tokens, so light and dark
+   follow), one corner radius for bars and blocks; a placeholder standing in for a card keeps that card's corners.
+   Under reduced motion it holds still. */
+:root{--skel-a:var(--surface2);--skel-b:color-mix(in srgb,var(--line) 70%,var(--surface2));--skel-r:6px}
 .skel{display:flex;flex-direction:column}
 .skel-row{display:flex;align-items:center;gap:10px;min-height:32px;padding:0 12px;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent)}
 .skel-card .skel-row{border-bottom:0;min-height:28px;padding:0}
 .skel-dot{flex:none;width:16px;height:16px;border-radius:50%}
-.skel-bar{height:9px;border-radius:5px}
-.skel-dot,.skel-bar{background:linear-gradient(90deg,var(--surface2) 25%,color-mix(in srgb,var(--line) 70%,var(--surface2)) 50%,var(--surface2) 75%);background-size:200% 100%;animation:skel 1.2s linear infinite}
+.skel-bar{height:9px;border-radius:var(--skel-r)}
+.skel-block{border-radius:var(--skel-r)}
 .skel-end{margin-left:auto;width:48px}
+/* Every placeholder, in its own file's shape: the list rows above, a picture or video in a task (task-modal.css,
+   task-files.css, viewer.css), a visual card's body (visual-cards.css), the Updates feed (updates.css) and setup's
+   bots and chart (first-run.css). */
+.skel-dot,.skel-bar,.skel-block,
+.media-skel:not(.ready),.tf-skel:not(.ready):not(.failed),.tf-doc-skel,
+.inline-thumb:not(.ready),.md img:not(.ready),.vcard[data-state="ready"] .vcard-body:not(.ready),
+.ob-bot.sk .sk-i,.ob-bot.sk .sk-l i,.oc-ph .sk-i,.oc-ph .sk-l{
+  background:linear-gradient(90deg,var(--skel-a) 25%,var(--skel-b) 50%,var(--skel-a) 75%);background-size:200% 100%;
+  animation:skel 1.2s linear infinite}
 @keyframes skel{from{background-position:200% 0}to{background-position:-200% 0}}
-@media (prefers-reduced-motion:reduce){.skel-dot,.skel-bar{animation:none}}
+@media (prefers-reduced-motion:reduce){
+  .skel-dot,.skel-bar,.skel-block,
+  .media-skel:not(.ready),.tf-skel:not(.ready):not(.failed),.tf-doc-skel,
+  .inline-thumb:not(.ready),.md img:not(.ready),.vcard[data-state="ready"] .vcard-body:not(.ready),
+  .ob-bot.sk .sk-i,.ob-bot.sk .sk-l i,.oc-ph .sk-i,.oc-ph .sk-l{animation:none!important}
+}
 /* A button whose write is still in flight (pressPending in app/api.js). */
 .is-pending{cursor:progress;opacity:.6;transition:opacity var(--dur-fast) var(--ease)}

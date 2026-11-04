@@ -258,7 +258,7 @@ async function botReposMount(host, slug) {
     const pick = pickable();
     host.innerHTML = `<legend class="brepo-h">Repositories</legend><span class="muted brepo-status" data-brepo-status role="status"></span>
       <label class="repo-name"><input type="checkbox" data-brepo-create${state.create_repositories ? ' checked' : ''}${!admin || slug === 'botops' ? ' disabled' : ''}>Create bot repositories</label>
-      <p class="muted">Private bot repositories in the connected organization. GitHub App permission is also required. Otherwise, ask BotOps.</p>
+      <p class="muted">Private bot repositories in the connected organization. GitHub App permission is also required. Otherwise, ask your Assistant.</p>
       <label class="repo-name"><input type="checkbox" data-brepo-product${state.create_product_repositories ? ' checked' : ''}${owner || admin && state.create_product_repositories ? '' : ' disabled'}>Create product repositories</label>
       <p class="muted">Private repositories with any other name in the connected organization; the bot gets write to each one it makes and you are told. On for every bot unless switched off; only the Owner switches it back on.</p>
       ${repoSegHTML(`${id}-mode`, 'Repository access', BOT_REPO_MODES, state.mode, !admin, ' brepo-mode')}

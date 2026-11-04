@@ -26,7 +26,7 @@ def test_sampler_keeps_one_load_row_per_minute_and_prunes_at_48_hours(api):
     with api.app.state.store.read() as c:
         rows = c.execute("SELECT * FROM runner_load_samples WHERE runner_id=?", (rid,)).fetchall()
     assert len(rows) == 1
-    assert dict(rows[0]) == {"runner_id": rid, "ts": now, "sampled_at": now + 10,
+    assert dict(rows[0]) == {"runner_id": rid, "created_at": now, "sampled_at": now + 10,
                                 "cpu_pct": 97.5, "mem_used": 500, "mem_total": 1000,
                                 "swap_used": 20, "swap_total": 100, "running_turns": 3}
 
@@ -45,7 +45,7 @@ def test_attempt_stores_fresh_start_and_end_snapshots_visible_in_run_list(api):
     post(api, f"attempts/{a['id']}/complete", body, token=r["token"])
     run = next(x for x in get(api, "bots/ops/turns") if x["id"] == a["id"])
     assert run["load_start"] == start and run["load_end"] == end
-    summary = next(x for x in api.get("/api/runs", headers=headers()).json() if x["run"] == a["id"])
+    summary = next(x for x in api.get("/api/runs", headers=headers()).json() if x["id"] == a["id"])
     assert summary["load_start"] == start and summary["load_end"] == end
     assert summary["output_tokens"] == 20 and summary["cost_usd"] == run["est_cost_usd"] > 0
     assert run["end_reason"] == "Finished" and run["ended_at"]
@@ -87,7 +87,7 @@ def test_five_full_minutes_trip_overload_in_health_and_gaps_calm_stale_or_off_cl
     assert check["status"] == "warn" and "five minutes" in check["summary"]
     with api.app.state.store.transaction() as c:
         assert P.load_status(c, rid, now + 121)["overloaded"] is False
-        c.execute("DELETE FROM runner_load_samples WHERE runner_id=? AND ts=?", (rid, now - 120))
+        c.execute("DELETE FROM runner_load_samples WHERE runner_id=? AND created_at=?", (rid, now - 120))
         assert P.load_status(c, rid, now)["overloaded"] is False
         P.ingest(c, rid, [M.PerformanceSample(**point(now - 120, cpu=90, mem=.9))], now=now)
         assert P.load_status(c, rid, now)["overloaded"] is False  # strictly above 90
@@ -112,6 +112,7 @@ def test_high_load_average_with_cpu_to_spare_does_not_hold_starts(api):
 
 def test_new_bot_computer_visibility_keeps_hidden_bots_and_accounts_private(world):
     from backend.repositories import save_metadata
+    from backend.store import H
     from backend.tests.test_bot_access import set_access
     from backend.tests.test_mcp import call
     api, tokens, _ = world
@@ -119,17 +120,20 @@ def test_new_bot_computer_visibility_keeps_hidden_bots_and_accounts_private(worl
     rid = r["runner_id"]
     set_access(api, see={"teams": ["legal"]}, read={"teams": ["legal"]}, write={"teams": ["legal"]})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET accepts_member_bots=0,readiness_json=? WHERE id=?",
+        counsel_id = H.resolve_bot(c, "counsel")["id"]
+        c.execute("UPDATE runners SET accepts_member_bots=0 WHERE id=?", (rid,))
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?",
                   (json.dumps({"schema_version": 1, "recent_errors": ["private runner log"], "bots": {}}), rid))
         save_metadata(c, "computer-repositories:" + rid,
                       {"repositories": [{"full_name": "acme/private-repo", "error": "private clone error"}]})
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('counsel',?,1,?,'human:ana')", (rid, P._iso(time.time())))
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'human:ana')",
+                  (counsel_id, rid, P._iso(time.time())))
     failed, detail = call(api, "hub_computer_list", {"computer": rid}, token=tokens["stranger"])
     assert not failed, detail
-    assert "counsel" not in str(detail)
+    assert "counsel" not in str(detail) and counsel_id not in str(detail)
     assert detail["id"] == rid
     assert "repositories" not in detail and "recent_errors" not in detail.get("readiness", {})
-    assert "operator" not in detail
+    assert "owner_id" not in detail
     raw = next(x for x in get(api, "computers", token=tokens["stranger"])["computers"] if x["id"] == rid)
     assert set(raw) == {"id", "label", "online", "platform", "accepts_member_bots", "latest_sample", "overloaded", "turn_counts", "turn_summary"}
     for section in ("repositories", "recent_errors"):

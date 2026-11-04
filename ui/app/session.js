@@ -54,7 +54,11 @@ function sessionProbe() {
 // otherwise the banner says so and waits for the person.
 function signedOut(to) {
   if (typeof clearNativeVisualOrigin === 'function') void clearNativeVisualOrigin();
+  if (typeof bootSnapDrop === 'function') void bootSnapDrop();      // no screen of theirs is shown again here
   const login = loginPage(to);
+  // The demo has no sign-in to ask for: its first page visit is the sign-in, and its secret is new with every copy
+  // (deploy/demo/tico-demo). A tab left open across a new copy loads again, at most once a minute.
+  if (!login && typeof S !== 'undefined' && S.config?.demo && demoReloadOnce()) return;
   if (login && !SESSION.seen) {
     sessionKeep();
     location.assign(login + '?next=' + encodeURIComponent(sessionHere()));
@@ -74,6 +78,16 @@ function signedOut(to) {
     for (const m of records) if (m.type === 'attributes' && m.target.open) { SESSION_MODALS.delete(m.target); SESSION_MODALS.add(m.target); }
     sessionBarPlace();
   }).observe(document.documentElement, {subtree: true, childList: true, attributes: true, attributeFilter: ['open']});
+}
+function demoReloadOnce() {
+  const key = 'tico.demo.reloaded', now = Date.now();
+  try {
+    if (now - Number(sessionStorage.getItem(key) || 0) < 60000) return false;
+    sessionStorage.setItem(key, String(now));
+  } catch { return false; }
+  sessionKeep();
+  location.reload();
+  return true;
 }
 // A modal dialog (a task, a settings form, the phone's task sheet) sits above the page and leaves everything outside it
 // unclickable and out of Tab's reach, the banner too. So while one is open the banner goes inside the topmost one, first

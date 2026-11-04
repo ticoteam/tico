@@ -3,7 +3,9 @@
 // opens with its default cards and the Campus tab beside it; the first change saves the defaults, then the order goes
 // by pin ids (keys and a pointer drag); a card is added from its form, sized from its menu and removed; a page is
 // pinned from Add page; a team opens from its name in the sidebar while its arrow still folds it; a member sees the
-// cards and no way to arrange them; a phone has one column and no sideways scroll.
+// cards and no way to arrange them; a phone has one column and no sideways scroll. Arranging is in edit mode only: Edit
+// shows the grips, the menus and + Card / + Page, a redraw keeps it, and Done, Escape or leaving the page ends it. The app opens on My dashboard
+// (person:me, Overview › Mine) with its own defaults.
 // TICO_UI_SHOTS=<dir> saves screenshots.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -18,14 +20,21 @@ const OWNER = {id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'o
 const MEMBER = {id: 'cara', name: 'Cara Diaz', email: 'cara@acme.example', role: 'human', company_role: 'member', cloud: true};
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 const NAMES = {tasks_by_status: 'Tasks by status', done_per_week: 'Done per week', needs_you: 'Needs you', latest_pages: 'Latest pages',
-  spend: 'Spend', kpi: 'KPI', automation_runs: 'Automation runs'};
+  spend: 'Spend', kpi: 'KPI', automation_runs: 'Automation runs', needs_attention: 'Needs attention', unread_threads: 'Unread threads',
+  my_tasks: 'My tasks', updates: 'Updates'};
 const weeks = n => Array.from({length: n}, (_, i) => ({week: `2026-${String(8 + Math.floor(i / 4)).padStart(2, '0')}-${String(1 + i % 4 * 7).padStart(2, '0')}`, done: [3, 5, 2, 8, 6, 4, 9, 7][i % 8]}));
 const DATA = {
   tasks_by_status: () => ({counts: {open: 4, doing: 2, waiting: 1, done: 7}}),
   done_per_week: s => ({weeks: weeks(s.weeks || 8)}),
   needs_you: () => ({count: 2, items: [{id: 't1', kind: 'task', title: 'Approve the Acme launch plan', task_id: 't1'},
     {id: 'q1', kind: 'question', title: 'Pick a pricing page layout', task_id: 'q1'}]}),
-  latest_pages: () => ({pages: [{file_id: 'f1', title: 'Weekly numbers', bot: 'eng-lead', updated: ago(90), archived: false}]}),
+  latest_pages: () => ({pages: [{file_id: 'f1', title: 'Weekly numbers', bot: 'eng-lead', updated_at: ago(90), archived: false}]}),
+  needs_attention: () => DATA.needs_you(),
+  unread_threads: () => ({count: 0, threads: []}),
+  my_tasks: () => ({count: 2, tasks: [{id: 't7', title: 'Send the Acme renewal quote', status: 'open', due_at: '2026-11-03', updated_at: ago(40)},
+    {id: 't8', title: 'Review the onboarding checklist', status: 'doing', due_at: null, updated_at: ago(300)}]}),
+  updates: () => ({unread: 1, updates: [{id: 'u1', author: 'eng-lead', kind: 'daily', day: '2026-11-01', headline: 'Shipped the billing fix',
+    created_at: ago(60), read: false}]}),
 };
 const TEAMS = {eng: 'Engineering'};
 const card = (id, template, settings, title = '') => ({id, template, title, settings, name: NAMES[template], heading: title || NAMES[template],
@@ -34,7 +43,7 @@ const defaults = (templates, team = '') => templates.map((t, i) => ({id: null, i
   card: card(null, t, {team, ...(t === 'done_per_week' ? {weeks: 8} : {})})}));
 const CHOICES = {templates: Object.entries(NAMES).map(([id, name]) => ({id, name, fields: id === 'done_per_week' ? ['team', 'weeks'] : id === 'kpi' ? ['kpi'] : id === 'latest_pages' ? ['team', 'count'] : ['team']})),
   teams: [{id: 'eng', name: 'Engineering', parent: null}], kpis: [],
-  pages: [{file_id: 'f2', title: 'Acme launch plan', bot: 'eng-lead', updated: ago(30), archived: false}]};
+  pages: [{file_id: 'f2', title: 'Acme launch plan', bot: 'eng-lead', updated_at: ago(30), archived: false}]};
 
 function server(me) {
   let n = 0;
@@ -42,9 +51,11 @@ function server(me) {
     dashboard: {place: 'dashboard', kind: 'dashboard', saved: false, pins: defaults(['tasks_by_status', 'done_per_week', 'needs_you', 'latest_pages'])},
     'team:eng': {place: 'team:eng', kind: 'team', saved: false, group: 'eng', name: 'Engineering', audience: {everyone: true, people: [], teams: [], bots: []},
       pins: defaults(['tasks_by_status', 'done_per_week', 'needs_you'], 'eng')},
+    'person:me': {place: 'person:' + me.id, kind: 'person', saved: false,
+      pins: defaults(['needs_attention', 'unread_threads', 'my_tasks', 'updates', 'latest_pages'])},
   };
   const writes = [];
-  const view = p => ({...places[p], can_edit: me.company_role !== 'member'});
+  const view = p => ({...places[p], can_edit: places[p].kind === 'person' || me.company_role !== 'member'});
   const save = p => {
     const at = places[p];
     if (!at.saved) {
@@ -54,8 +65,18 @@ function server(me) {
   };
   const pinPlace = pid => Object.keys(places).find(p => places[p].pins.some(x => x.id === pid));
   return {writes, places, handle(method, p, body) {
-    if (method !== 'GET' && /^\/api\/v2\/(places|pins|cards)\b/.test(p)) writes.push([method, p, body]);
+    if (method !== 'GET' && /^\/api\/v2\/(places|pins|cards|groups)\b/.test(p)) writes.push([method, p, body]);
     let m;
+    // A team page's "Seen by" is its group's See and Read (backend/teammate_access.py).
+    if ((m = p.match(/^\/api\/v2\/groups\/([^/]+)\/access$/))) {
+      const at = places['team:' + decodeURIComponent(m[1])];
+      if (!at || me.company_role === 'member') return [403, {error: {code: 'forbidden', detail: 'Only its leads'}}];
+      if (method === 'PUT') { at.audience = body.read; at.revision = (at.revision || 0) + 1; }
+      const everyone = {everyone: true, people: [], teams: [], bots: []};
+      return [200, {target: 'group:' + m[1], see: at.audience, read: at.audience, write: {everyone: false, people: [], teams: [m[1]], bots: []},
+        default: {see: everyone, read: everyone, write: {everyone: false, people: [], teams: [m[1]], bots: []}}, revision: at.revision || 0,
+        you: {see: true, read: true, write: true, manage: true}, teams: [{id: 'eng', name: 'Engineering'}]}];
+    }
     if ((m = p.match(/^\/api\/v2\/places\/([^/]+)(\/order)?$/))) {
       const place = decodeURIComponent(m[1]);
       if (!places[place]) return [404, {error: {code: 'not_found', detail: 'No such place'}}];
@@ -120,6 +141,9 @@ async function open(browser, {viewport = DESKTOP, hash = '#/overview', me = OWNE
 }
 const sideways = page => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
 const headings = page => page.locator('#dash-grid .dash-pin-head h2').allInnerTexts();
+// How many of `sel` are on screen; the edit controls are in the page while viewing, just not shown.
+const shown = (page, sel) => page.locator(sel).evaluateAll(els => els.filter(el => el.checkVisibility()).length);
+const EDIT_CONTROLS = '[data-dash-grip], [data-dash-menu], [data-dash-add], [data-dash-mode="done"]';
 async function shot(page, name) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
@@ -133,13 +157,24 @@ async function shot(page, name) {
     {
       const {page, errors, fake} = await open(browser);
       await page.locator('#dash-grid .dash-pin').first().waitFor();
-      assert.deepEqual(await headings(page), ['TASKS BY STATUS', 'DONE PER WEEK', 'NEEDS YOU', 'LATEST PAGES'], 'the default cards');
-      assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Dashboard');
+      assert.deepEqual(await headings(page), ['Tasks by status', 'Done per week', 'Needs you', 'Latest pages'], 'the default cards');
+      assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Company');
       assert.equal(await page.locator('#side a[data-nav="overview"].cur').count(), 1, 'Overview is current');
       assert.equal(await page.locator('.dash-stat strong').first().innerText(), '4');
       assert.equal(await page.locator('#dash-grid a[href="#/task/t1"]').count(), 1, 'Needs you links its top items');
       assert.equal(await page.locator('#dash-grid a[href="#/page/f1"]').count(), 1, 'Latest pages links each page');
       await shot(page, 'desktop-dashboard');
+
+      // Viewing shows only Edit; Edit shows the grips, the menus, + Card, + Page and Done.
+      assert.equal(await shown(page, EDIT_CONTROLS), 0, 'nothing to arrange until Edit');
+      assert.equal(await shown(page, '[data-dash-mode="edit"]'), 1);
+      await page.locator('[data-dash-mode="edit"]').click();
+      assert.equal(await shown(page, '[data-dash-grip]'), 4);
+      assert.equal(await shown(page, '[data-dash-menu]'), 4);
+      assert.equal(await shown(page, '[data-dash-add]'), 2, '+ Card and + Page');
+      assert.equal(await shown(page, '[data-dash-mode="edit"]'), 0);
+      assert.equal(await page.evaluate(() => document.activeElement?.dataset.dashMode), 'done', 'focus goes to Done');
+      await shot(page, 'desktop-dashboard-editing');
 
       // The first change saves the defaults, then sends the order by pin ids.
       await page.locator('#dash-grid .dash-pin').nth(0).locator('[data-dash-grip]').focus();
@@ -193,6 +228,21 @@ async function shot(page, name) {
       assert.deepEqual(fake.writes.at(-1).slice(1), ['/api/v2/pins', {place: 'dashboard', item: 'page:f2', size: 'medium'}]);
       assert.match(await page.locator('#dash-grid .dash-pin').nth(4).innerText(), /Acme launch plan/);
       await shot(page, 'desktop-dashboard-edited');
+      // Every write drew the grid again and kept edit mode; Done ends it.
+      assert.equal(await shown(page, '[data-dash-grip]'), 5);
+      await page.locator('[data-dash-mode="done"]').click();
+      assert.equal(await shown(page, EDIT_CONTROLS), 0, 'Done hides them again');
+      assert.equal(await shown(page, '[data-dash-mode="edit"]'), 1);
+      // Escape leaves edit mode, but first closes an open menu.
+      await page.locator('[data-dash-mode="edit"]').click();
+      await page.locator('#dash-grid .dash-pin').nth(0).locator('[data-dash-menu]').click();
+      await page.keyboard.press('Escape');
+      assert.equal(await page.locator('.dash-menu').count(), 0, 'the menu closes');
+      assert.equal(await shown(page, '[data-dash-grip]'), 5, 'still editing');
+      await page.keyboard.press('Escape');
+      assert.equal(await shown(page, EDIT_CONTROLS), 0, 'Escape leaves edit mode');
+      // Leaving the page ends it too.
+      await page.locator('[data-dash-mode="edit"]').click();
 
       // Campus: the 3D view as it was, Overview still current.
       await page.locator('.dash-tabs a', {hasText: 'Campus'}).click();
@@ -207,22 +257,57 @@ async function shot(page, name) {
       await page.waitForFunction(() => location.hash === '#/team/eng');
       await page.locator('#dash-grid .dash-pin').first().waitFor();
       assert.equal(await page.locator('.dash-head h1').innerText(), 'Engineering');
-      assert.deepEqual(await headings(page), ['TASKS BY STATUS', 'DONE PER WEEK', 'NEEDS YOU'], 'its own team goes unsaid');
+      assert.deepEqual(await headings(page), ['Tasks by status', 'Done per week', 'Needs you'], 'its own team goes unsaid');
       assert.match(await page.locator('[data-dash-audience]').innerText(), /Seen by Everyone$/);
+      assert.equal(await shown(page, EDIT_CONTROLS), 0, 'a new page opens viewing');
+      assert.equal(await shown(page, '[data-dash-mode="edit"]'), 1, 'its leads arrange it with Edit');
       assert.equal(await page.locator('#tree a.dept-label.cur').count(), 1);
       const kids = page.locator('#tree li.org-group:has(> .noderow a.dept-label.cur) > ul');
       const wasOpen = await kids.isVisible();
       await page.locator('#tree li.org-group:has(> .noderow a.dept-label.cur) > .noderow .chev').click();
       assert.equal(await kids.isVisible(), !wasOpen, 'the arrow folds the group');
       assert.equal(await page.evaluate(() => location.hash), '#/team/eng', 'and does not open the page');
-      // Its audience: narrowed to chosen people.
+      // Its name unfolds a folded group.
+      if (!(await kids.isVisible())) { await label.click(); await kids.waitFor(); }
+      // Its audience is the group's See and Read: "Seen by" opens the group's Access editor, narrowed to chosen people.
       await page.locator('[data-dash-audience]').click();
-      await page.locator('#dash-dialog[open] [name="everyone"]').uncheck();
-      await page.locator('#dash-dialog[open] [name="people"][value="ana"]').check();
-      await page.locator('#dash-dialog[open] [type="submit"]').click();
+      await page.locator('#access-editor[open] [name="preset"][value="custom"]').check();
+      for (const level of ['see', 'read']) {
+        const box = page.locator(`#access-editor[open] [data-access-levels="${level}"]`);
+        await box.locator('[data-access-everyone]').uncheck();
+        await box.locator('[data-access-pick="people"][value="ana"]').check();
+      }
+      await page.locator('#access-editor[open] [type="submit"]').click();
       await page.waitForFunction(() => document.querySelector('[data-dash-audience]')?.textContent.includes('Seen by Ana Silva'));
-      assert.deepEqual(fake.writes.at(-1).slice(1), ['/api/v2/places/team%3Aeng', {audience: {everyone: false, teams: [], people: ['ana'], bots: []}}]);
+      const chosen = {everyone: false, people: ['ana'], teams: [], bots: []};
+      const [method, url, body] = fake.writes.at(-1);
+      assert.deepEqual([method, url, body.see, body.read, body.write.teams, body.revision],
+        ['PUT', '/api/v2/groups/eng/access', chosen, chosen, ['eng'], 0]);
       await shot(page, 'desktop-team');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    for (const viewport of [DESKTOP, PHONE]) {
+      // The app opens on My dashboard: the reader's own cards, Mine current, Company one tab away.
+      const {page, errors} = await open(browser, {viewport, hash: '', me: MEMBER});
+      await page.waitForFunction(() => location.hash === '#/home');
+      await page.locator('#dash-grid .dash-pin').nth(4).waitFor();
+      assert.deepEqual(await headings(page), ['Needs attention', 'Unread threads', 'My tasks', 'Updates', 'Latest pages']);
+      assert.equal(await page.locator('.dash-tabs a.cur').getAttribute('href'), '#/home');
+      assert.equal(await page.locator('.dash-actions').isVisible(), true, 'a member arranges their own');
+      assert.equal(await shown(page, EDIT_CONTROLS), 0);
+      await page.locator('[data-dash-mode="edit"]').click();
+      assert.equal(await shown(page, '[data-dash-grip]'), 5);
+      assert.equal(await sideways(page), false, 'edit mode fits');
+      await shot(page, (viewport === PHONE ? 'phone' : 'desktop') + '-my-dashboard-editing');
+      await page.locator('[data-dash-mode="done"]').click();
+      assert.equal(await page.locator('#dash-grid a[href="#/task/t7"]').count(), 1, 'My tasks links each task');
+      assert.equal(await page.locator('#dash-grid a[href="#/task/t1"]').count(), 1, 'Needs attention links its top items');
+      assert.equal(await sideways(page), false);
+      await shot(page, (viewport === PHONE ? 'phone' : 'desktop') + '-my-dashboard');
+      await page.locator('.dash-tabs a[href="#/overview"]').click();
+      await page.waitForFunction(() => location.hash === '#/overview');
+      await page.locator('#dash-grid .dash-pin').first().waitFor();
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -232,6 +317,7 @@ async function shot(page, name) {
       await page.locator('#dash-grid .dash-pin').first().waitFor();
       assert.equal(await page.locator('.dash-actions').isVisible(), false);
       assert.equal(await page.locator('[data-dash-grip], [data-dash-menu]').count(), 0);
+      assert.equal(await shown(page, '[data-dash-mode]'), 0, 'no Edit');
       assert.deepEqual(fake.writes, []);
       assert.deepEqual(errors, []);
       await page.close();
@@ -245,6 +331,7 @@ async function shot(page, name) {
       assert.ok(widths[0] >= 340, 'the full width');
       assert.equal(await sideways(page), false, 'no sideways scroll');
       await shot(page, 'phone-dashboard');
+      await page.locator('[data-dash-mode="edit"]').click();
       await page.locator('#dash-grid .dash-pin').nth(1).locator('[data-dash-menu]').click();
       assert.equal(await sideways(page), false, 'the menu stays on screen');
       await shot(page, 'phone-dashboard-menu');
@@ -259,6 +346,6 @@ async function shot(page, name) {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    console.log('Dashboard: defaults, Campus tab, order by keys and drag, add/edit/size/remove a card, pin a page, team page from the sidebar, audience, member, phone');
+    console.log('Dashboard: My dashboard landing, defaults, Campus tab, edit mode (Edit, Done, Escape), order by keys and drag, add/edit/size/remove a card, pin a page, team page from the sidebar, audience, member, phone');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

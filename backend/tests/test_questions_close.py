@@ -3,12 +3,14 @@ task above it, Dev 627), on a chat reply, on its fallback date, or back to its b
 
 from datetime import datetime, timezone
 
-from backend import approval_expiry, ask_deadlines, still_needed
+from backend import approval_expiry, ask_deadlines, still_needed, task_roundup
 from backend.scheduler import Scheduler
 from backend.store import H
 from backend.tests.test_tasks_board import api, get, post  # noqa: F401
 
 ANA, OPS, CPO = "human:ana", "bot:ops", "bot:cpo"
+NOON_WED = "2026-10-21T19:00:00.000000Z"       # Wed 12:00 Pacific: a task roundup run
+EVENING_WED = "2026-10-22T01:00:00.000000Z"    # Wed 18:00 Pacific: the next one
 
 
 def pick(c, task_id, text="Which month should the report use?", refs=None, default=None, by=OPS):
@@ -39,6 +41,17 @@ def cached_matches(c):
 
 def wakes(c, message_id):
     return c.execute("SELECT count(*) FROM jobs WHERE message_id=?", (message_id,)).fetchone()[0]
+
+
+def roundup_messages(c, bot):
+    """The task roundup lists sent to a bot, oldest first."""
+    return c.execute("SELECT id, body FROM messages WHERE recipient_id=? AND refs LIKE '%task_roundup%' "
+                     "ORDER BY created_at", (bot,)).fetchall()
+
+
+def gone_back_line(title):
+    """The roundup line for a question asked on a task titled `Pick a <what>`, asked as "Which <what>?"."""
+    return f'no answer in two business days to "Which {title[7:]}?"'
 
 
 def test_a_question_closes_with_its_own_task_and_outlives_a_task_above_it(api):
@@ -77,7 +90,7 @@ def test_a_chat_note_keeps_a_pick_question_open_and_wakes_its_bot_once(api):
         asked = pick(c, work["id"])
         reply = H.say(c, ANA, OPS, "Use August, it has the full close.", conversation_id=work["conversation_id"],
                       refs={"task": work["id"]})
-        assert H.message(c, asked["id"])["answered_by"] is None
+        assert H.message(c, asked["id"])["answered_by_id"] is None
         assert listed(c, work["id"]) and wakes(c, reply["id"]) == 1
 
 
@@ -89,7 +102,7 @@ def test_a_question_closes_on_its_fallback_date_even_when_its_fallback_waits(api
         assert ask_deadlines.sweep(c)["expired"] == []                          # not yet
         assert ask_deadlines.sweep(c, H.shift(H.now(), days=2))["expired"] == [asked["id"]]
         answer = c.execute("SELECT * FROM messages WHERE in_reply_to=? AND kind='answer'", (asked["id"],)).fetchall()
-        assert len(answer) == 1 and answer[0]["to_actor"] == OPS and "never goes ahead" in answer[0]["body"]
+        assert len(answer) == 1 and answer[0]["recipient_id"] == OPS and "never goes ahead" in answer[0]["body"]
         assert wakes(c, answer[0]["id"]) == 1 and not listed(c, work["id"])
 
 
@@ -98,7 +111,7 @@ def test_unanswered_questions_go_back_to_their_bot_in_one_weekday_morning_wake(a
     with api.app.state.store.transaction() as c:
         tasks = [H.task_create(c, ANA, f"Pick a {what}", "x", OPS) for what in ("venue", "caterer", "date")]
         asks = [pick(c, t["id"], f"Which {t['title'][7:]}?") for t in tasks]
-        c.executemany("UPDATE messages SET created=? WHERE id=?", [(friday, a["id"]) for a in asks])
+        c.executemany("UPDATE messages SET created_at=? WHERE id=?", [(friday, a["id"]) for a in asks])
         assert still_needed.crossed_at(friday).isoformat().startswith("2026-10-20T10:00")    # the weekend skipped
         monday, tuesday, wednesday = ("2026-10-19T17:00:00.000000Z", "2026-10-20T15:30:00.000000Z",
                                       "2026-10-21T15:30:00.000000Z")      # Mon 10:00, Tue 8:30, Wed 8:30 Pacific
@@ -107,10 +120,14 @@ def test_unanswered_questions_go_back_to_their_bot_in_one_weekday_morning_wake(a
         sent = still_needed.sweep(c, wednesday)
         assert list(sent) == [OPS] and set(sent[OPS]) == {a["id"] for a in asks}
         assert not any(listed(c, t["id"]) for t in tasks)
-        wake = c.execute("SELECT id, body FROM messages WHERE to_actor=? AND body LIKE 'Still needed?%'", (OPS,)).fetchall()
-        assert len(wake) == 1 and all(f"Which {t['title'][7:]}?" in wake[0]["body"] for t in tasks)
-        assert wakes(c, wake[0]["id"]) == 1
         assert still_needed.sweep(c, "2026-10-21T18:00:00.000000Z") == {}      # once a morning
+        # No wake of their own: the bot's noon roundup names each one, once, in its single list.
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")      # the creation wakes ran
+        assert "ops" in task_roundup.run(c, NOON_WED)["woke"]
+        found = roundup_messages(c, OPS)
+        assert len(found) == 1 and wakes(c, found[0]["id"]) == 1
+        assert all(found[0]["body"].count(gone_back_line(t["title"])) == 1 for t in tasks)
+        assert "ops" not in task_roundup.run(c, EVENING_WED)["woke"], "not listed again"
         again = pick(c, tasks[0]["id"], "Which venue? The Hall or the Barn.")     # re-asked; the other two dropped
         assert [t["id"] for t in tasks if listed(c, t["id"])] == [tasks[0]["id"]]
         assert H.open_task_asks(c, H.task(c, tasks[0]["id"]))[0]["id"] == again["id"]
@@ -124,7 +141,7 @@ def test_ending_a_task_above_keeps_the_question_and_wait_on_a_task_below_and_its
         late = H.task_create(c, OPS, "Pick the launch venue", "x", OPS, parent_id=now_["id"])
         pick(c, now_["id"])
         waiting_on_ana(c, now_["id"])
-        c.execute("INSERT INTO bot_status (bot, state, since, updated_at) VALUES ('ops', 'idle', ?, ?)", (H.now(), H.now()))
+        c.execute("INSERT INTO bot_status (bot, state, changed_at, updated_at) VALUES ('ops', 'idle', ?, ?)", (H.now(), H.now()))
         H._recount(c, OPS)
         assert H.status_counts(c, OPS)[1] and cached_matches(c)
     before, count = needs(api)
@@ -150,14 +167,15 @@ def test_a_dated_question_closes_on_its_date_after_a_clarify_without_going_ahead
         work = H.task_create(c, ANA, "Tidy the old drafts", "x", OPS)
         asked = pick(c, work["id"], "Archive the old drafts?",
                      default={"do": "July", "kind": "reversible", "by": H.shift(H.now(), days=10)})
-        c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), days=-4), asked["id"]))
+        # A full week clears two business days even across a weekend and a daylight-saving shift.
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), days=-7), asked["id"]))
     post(api, "needs-you/clarify", {"ask": asked["id"]})                       # Ana's word: no answer, no go-ahead
     with api.app.state.store.transaction() as c:
         assert ask_deadlines.sweep(c, H.shift(H.now(), days=11)) == {"went_ahead": [], "expired": [asked["id"]],
                                                                         "closed": []}
         answer = c.execute("SELECT * FROM messages WHERE in_reply_to=? AND kind='answer'", (asked["id"],)).fetchall()
         assert len(answer) == 1 and "does not happen on its own" in answer[0]["body"]
-        assert "answer" not in H._json(answer[0]["refs_json"], {})              # no option picked for her
+        assert "answer" not in H._json(answer[0]["refs"], {})              # no option picked for her
         assert wakes(c, answer[0]["id"]) == 1 and not listed(c, work["id"])
 
 
@@ -167,21 +185,23 @@ def test_old_undated_questions_go_back_only_in_the_weekday_batch_of_the_hourly_s
         tasks = [H.task_create(c, ANA, f"Pick a {what}", "x", OPS) for what in ("venue", "caterer", "date")]
         asks = [pick(c, t["id"], f"Which {t['title'][7:]}?") for t in tasks]
         old = "2026-09-24T17:00:00.000000Z"                                # weeks before, past the old 14-day expiry
-        c.executemany("UPDATE messages SET created=? WHERE id=?", [(old, a["id"]) for a in asks])
-        c.execute("UPDATE task_events SET ts=?", (old,))
+        c.executemany("UPDATE messages SET created_at=? WHERE id=?", [(old, a["id"]) for a in asks])
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task'", (old,))
 
     def tick(at):
         Scheduler(store, execution).tick(datetime.fromisoformat(at).replace(tzinfo=timezone.utc))
         with store.read() as c:
-            return [r[0] for r in c.execute("SELECT body FROM messages WHERE to_actor=? AND from_actor=? AND "
-                                            "(kind='answer' OR body LIKE 'Still needed?%')", (OPS, H.KEEPER))]
+            return [t["id"] for t, a in zip(tasks, asks) if H.message(c, a["id"])["superseded_at"]]
 
     assert tick("2026-10-17T17:00:00") == []           # Saturday: no batch, and no ask expires on its own
     assert tick("2026-10-19T14:00:00") == []           # Monday 7:00 Pacific: before the batch
-    sent = tick("2026-10-19T15:30:00")                 # Monday 8:30 Pacific: one wake with all three
-    assert len(sent) == 1 and all(f"Which {t['title'][7:]}?" in sent[0] for t in tasks)
-    with store.read() as c:
+    assert set(tick("2026-10-19T15:30:00")) == {t["id"] for t in tasks}   # Monday 8:30 Pacific: all three go back
+    with store.transaction() as c:
         assert not any(listed(c, t["id"]) for t in tasks)
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")  # the creation wakes ran
+        task_roundup.run(c, "2026-10-19T19:00:00.000000Z")                 # Monday 12:00 Pacific: the roundup
+        found = roundup_messages(c, OPS)
+        assert all(sum(body.count(gone_back_line(t["title"])) for body in [r["body"] for r in found]) == 1 for t in tasks)
 
 
 def asking(c):
@@ -229,13 +249,13 @@ def test_still_needed_keeps_the_wait_while_another_question_to_the_same_person_i
     with api.app.state.store.transaction() as c:
         work = H.task_create(c, ANA, "Pick a venue", "x", OPS)
         old = pick(c, work["id"], "Which venue?")
-        c.execute("UPDATE messages SET created=? WHERE id=?", (friday, old["id"]))
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (friday, old["id"]))
         waiting_on_ana(c, work["id"])
         # A second bot's newer question to Ana on the same task (one bot's newer question would replace its older one).
         fresh = H.task_comment(c, CPO, work["id"], "Which budget?", wake=False, ask={
             "questions": [{"id": "budget", "header": "Budget", "question": "Which budget?", "multi": False,
                            "other": True, "options": [{"label": "Low", "description": ""},
                                                       {"label": "High", "description": ""}]}], "who": ANA})
-        c.execute("UPDATE messages SET created=? WHERE id=?", ("2026-10-21T15:00:00.000000Z", fresh["id"]))
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", ("2026-10-21T15:00:00.000000Z", fresh["id"]))
         assert still_needed.sweep(c, "2026-10-21T15:30:00.000000Z") == {OPS: [old["id"]]}
         assert H.task(c, work["id"])["waiting_on"] == ANA and listed(c, work["id"])

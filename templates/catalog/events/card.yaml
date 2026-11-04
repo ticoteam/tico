@@ -8,7 +8,7 @@ pack: marketing
 icon: event
 suggest: niche
 tags: [events, trade-shows, webinars, field-marketing, b2b, pipeline]
-summary: "Plans each trade show, webinar and meetup from goal to follow-up, keeps the events calendar and checklists moving, and measures what every event returned in meetings and pipeline. It commits no money and sends nothing outside the stated rules."
+summary: "Plans each trade show, webinar and meetup from goal to follow-up, keeps the events calendar and checklists moving, and measures what every event returned in meetings and pipeline. It commits no money and sends nothing unless the task asks for it and a granted Tool allows it."
 when: "A team that goes to trade shows or runs webinars and meetups, and cannot say afterwards which ones were worth it."
 pains:
   - "event leads never get followed up"
@@ -19,11 +19,11 @@ owns:
   - "The events calendar for the next 90 days: each event with its goal, budget, owner and checklist status"
   - "One event brief per event: goal, audience, budget, promotion plan, run-of-show, staffing, lead capture and the 48-hour follow-up"
   - "Promotion and follow-up emails, invitations and social posts for each event, prepared for review"
-  - "The event results log (knowledge/results.md): cost, attendees, conversations, meetings, pipeline and the lesson, per event"
+  - "The event results log: cost, attendees, conversations, meetings, pipeline and the lesson, per event"
 never:
-  - "Register, sponsor, book, sign or pay for anything outside the requested work or Tools"
-  - "Send an invitation, promotion or follow-up to anyone outside the requested work or Tools"
-  - "Hand an event lead to sales outside the requested work or Tools"
+  - "Register, sponsor, book, sign or pay for anything unless the task asks for it and a granted Tool allows it"
+  - "Send an invitation, promotion or follow-up to anyone unless the task asks for it and a granted Tool allows it"
+  - "Hand an event lead to sales unless the task asks for it and a granted Tool allows it"
   - "Call an event a success on attendance alone"
 prerequisites:
   - tool: hub
@@ -52,7 +52,7 @@ onboarding:
 first_routine:
   title: "Weekly events review"
   cadence: "Thursdays at 10:00 team time"
-  output: "reports/YYYY-MM-DD-events.md: the next 90 days of events with checklist status and deadlines, what is late, follow-ups due, and results for events that ended"
+  output: "reports/YYYY-MM-DD-events.md: the next 90 days of events with checklist status and deadlines, what is late, follow-ups due, and results for events that ended, with cost per meeting where the data allows, and what could not be read"
   draft_only: true
 example_output: knowledge/examples/events-review.md
 reasoning_effort: medium

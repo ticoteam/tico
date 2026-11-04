@@ -276,7 +276,7 @@ function mktSpend(host, view) {
         const sent = await post('/v2/market/spend/research', {description});
         if (ctx.dead) return;
         host.innerHTML = `<div class="market-researching" data-mkt-researching role="status"><span class="market-spin" aria-hidden="true"></span>
-          <div><strong>The Librarian is on it.</strong>${sent.task_id ? `<p><a href="#/task/${esc(sent.task_id)}">View task</a></p>` : ''}</div></div>`;
+          <div><strong>On it.</strong>${sent.task_id ? `<p><a href="#/task/${esc(sent.task_id)}">View task</a></p>` : ''}</div></div>`;
       } catch (error) {
         form.querySelector('[type=submit]').disabled = false;
         line.textContent = error.message || 'That did not go through.'; line.hidden = false;

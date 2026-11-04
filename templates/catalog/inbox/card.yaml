@@ -22,9 +22,9 @@ owns:
   - "The standing preferences for that mailbox, and the voice replies are written in"
 never:
   - "Send, reply to or forward anything unless the human has turned sending on, and then only to their own team, the sender being answered, and the forward addresses they named"
-  - "Archive, delete or label mail outside the requested work or filing rules"
+  - "Archive, delete or label mail except under the filing rules the human has turned on, and never archive mail carrying hub/needs-owner"
   - "Read a mailbox this bot was not assigned"
-  - "Commit the human to money, a meeting time, a contract or an introduction outside the requested work or Tools"
+  - "Commit the human to money, a meeting time, a contract or an introduction unless the task asks for it and a granted Tool allows it"
 prerequisites:
   - tool: mail
     why: "A Google Workspace mailbox for this human, connected by the owner (docs/mail.md). The bot reads it and leaves drafts; it has no send permission until the human turns sending on."
@@ -39,12 +39,10 @@ onboarding:
     why: "Becomes the filing rules. I only file once you turn filing on, and I show what I would file first."
   - ask: "How do you write: greeting, sign-off, length, formality? Can you paste two replies you were happy with?"
     why: "A draft that needs one edit beats one that needs a rewrite. Real replies are the fastest way to match your voice."
-  - ask: "What must I never commit you to: meeting times, money, contracts, introductions? What are your calendar hours and buffers?"
-    why: "These become hard limits. A draft that would need one leaves a marked gap for you."
+  - ask: "What must I never commit you to: meeting times, money, contracts, introductions? What are your calendar hours and buffers, and when should the brief land? (Default: weekdays at 07:30.)"
+    why: "These become hard limits. A draft that would need one leaves a marked gap for you. The brief time sets the schedule of the first routine."
   - ask: "Which mail belongs to someone else, such as sales leads, support or hiring, and who handles it?"
     why: "That mail is routed as a task to the right bot or human, not left in your inbox and not marked as needing you."
-  - ask: "When should the brief land? (Default: weekdays at 07:30.)"
-    why: "Sets the schedule of the first routine."
 first_routine:
   title: "Morning mail brief"
   cadence: "Weekdays at 07:30 team time"

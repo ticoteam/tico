@@ -6,14 +6,14 @@ import pytest
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
 from backend.tests.test_gateway_connection import KEY, fake_gateway, finish, handed_to, put_bot_on, save, setup
+from backend import bot_settings as BS
 
 
 def set_fallback(api, bot, fallback):
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config = BS.read(c, bot)
         config = {k: v for k, v in config.items() if k != "fallback"}
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?",
-                  (json.dumps({**config, **({"fallback": fallback} if fallback else {})}), bot))
+        BS.write(c, bot, {**config, **({'fallback': fallback} if fallback else {})})
 
 
 TICO_CHECK = {"runtime": "pi", "model": "tico-mid-1.0", "harness": "pi", "effort": "", "role": "review"}
@@ -49,7 +49,7 @@ def test_the_key_follows_the_claims_fallback_and_check(api, monkeypatch, change)
         set_fallback(api, "ops", None)
     else:
         with api.app.state.store.transaction() as c:                         # the check is handed to another bot
-            c.execute("UPDATE tasks SET owner='bot:finance' WHERE id=?", (task_id,))
+            c.execute("UPDATE tasks SET owner_id='bot:finance' WHERE id=?", (task_id,))
             assert check_models.of(c, task_id, "ops") is None
     handed = handed_to(api, machine, attempt)
     assert ("TICOAI_GATEWAY_KEY" in handed) is on_tico, (change, list(handed))

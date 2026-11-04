@@ -36,5 +36,5 @@ gap list at the top: the gap, the human, the day it is needed by.
 
 ## 5. Hand over
 
-Write `reports/YYYY-MM-DD-<deal>-proposal.md` (or `-rfp.md`), `hub file publish` it and attach it. Fill gaps from the stated terms; send the requested final file to the recipient with your Tools when a person has turned mail sending on in Tico, otherwise keep the draft. Add each newly documented answer to `knowledge/library/` with its owner and date.
+Write `reports/YYYY-MM-DD-<deal>-proposal.md` (or `-rfp.md`), `hub file publish` it and attach it. Fill gaps from the stated terms. Send the final file to the recipient only when the task asks, mail sending is on in Tico, and a granted Tool allows it; otherwise keep it as a draft. Add each newly documented answer to `knowledge/library/` with its owner and date.
 `hub task update <id> --status done --note`: counts reused, adapted, new; open gaps and owners.

@@ -286,7 +286,7 @@ def test_without_the_plan_bucket_a_chart_over_the_env_limit_is_refused_before_an
 
 
 def test_a_301_seat_chart_gets_the_plain_300_error_even_by_the_plan_bucket(big, tmp_path):
-    extra = "  - id: one-too-many\n    template: bookkeeping\n    title: One Too Many\n"
+    extra = "  - id: one-too-many\n    template: revenue-accountant\n    title: One Too Many\n"
     over = tmp_path / "over.yaml"
     over.write_text(big.read_text().replace("employees:\n", "employees:\n" + extra, 1))
     with pytest.raises(MissingInput, match="more than 300 entries"):

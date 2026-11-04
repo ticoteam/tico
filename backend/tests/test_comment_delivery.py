@@ -1,5 +1,6 @@
-"""A task comment's delivery (docs/tasks.md, Conversation): steer reaches the bot now, queue waits for its next turn
-on the task, goal sets the task session's goal. The API, the hub CLI and the MCP tool share one rule, tested here."""
+"""A task comment's delivery (docs/tasks.md, Conversation; backend/delivery.py): steer reaches the bot's running turn
+now, queue runs right after it, defer waits for the bot's next turn on the task or its deadline, goal sets the task
+session's goal. The API, the hub CLI and the MCP tool share one rule, tested here."""
 
 import pytest
 
@@ -31,30 +32,59 @@ def goal_controls(api, cid):
     with api.app.state.store.read() as c:
         return [tuple(r) for r in c.execute(
             "SELECT m.id, j.state FROM messages m LEFT JOIN jobs j ON j.message_id=m.id "
-            "WHERE m.conversation_id=? AND json_extract(m.refs_json,'$.goal_action') IS NOT NULL ORDER BY m.created",
+            "WHERE m.conversation_id=? AND json_extract(m.refs,'$.goal_action') IS NOT NULL ORDER BY m.created_at",
             (cid,))]
 
 
-def test_queue_waits_for_the_next_turn_steer_joins_the_running_one_and_no_choice_is_as_before(api):
+def deferrals(api, item):
+    with api.app.state.store.read() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM deferrals WHERE item=?", (item,))]
+
+
+def inputs(api, machine, attempt):
+    return [m["id"] for m in post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"]]
+
+
+def test_steer_joins_the_running_turn_queue_follows_it_and_defer_rides_along(api):
     machine, tid = world(api)
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "plan"}, machine["token"])
 
-    # Queue is saved on the task without waking the bot, so it does not join the running turn either.
-    queued = post(api, f"tasks/{tid}/comments", {"text": "Billing first, then the docs.", "delivery": "queue"})
-    assert queued["woke"] is False and job_state(api, queued["comment"]["id"]) is None
-    running = [m["id"] for m in post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"]]
-    assert queued["comment"]["id"] not in running
-
     # Steer wakes the bot now: its job is queued in the task's room, and the running turn takes it in.
     steered = post(api, f"tasks/{tid}/comments", {"text": "Use the August numbers.", "delivery": "steer"})
     assert steered["woke"] is True and job_state(api, steered["comment"]["id"]) == "queued"
-    running = [m["id"] for m in post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"]]
-    assert steered["comment"]["id"] in running
+    assert steered["sent_as"] == {"delivery": "steer", "until": None}
+    assert steered["comment"]["id"] in inputs(api, machine, attempt)
 
-    # Omitted, the wake rule decides as it always has: a person's comment on a task its bot owns wakes the bot.
+    # Queue wakes the bot too, but after this turn: its job waits and the running turn does not take it in.
+    queued = post(api, f"tasks/{tid}/comments", {"text": "Billing first, then the docs.", "delivery": "queue"})
+    assert queued["woke"] is True and job_state(api, queued["comment"]["id"]) == "queued"
+    assert queued["sent_as"] == {"delivery": "queue", "until": None}
+    assert queued["comment"]["id"] not in inputs(api, machine, attempt)
+
+    # A defer sent while the bot works this task rides along: it goes right after the turn, as a queue.
+    rides = post(api, f"tasks/{tid}/comments", {"text": "And the FAQ.", "delivery": "defer"})
+    assert rides["sent_as"]["delivery"] == "queue" and job_state(api, rides["comment"]["id"]) == "queued"
+    assert rides["comment"]["id"] not in inputs(api, machine, attempt) and deferrals(api, rides["comment"]["id"]) == []
+
+    # Omitted, a person's comment on a task they gave a bot steers, as it always has.
     plain = post(api, f"tasks/{tid}/comments", {"text": "Also the API page."})
-    assert plain["woke"] is True and job_state(api, plain["comment"]["id"]) == "queued"
+    assert plain["sent_as"]["delivery"] == "steer" and plain["comment"]["id"] in inputs(api, machine, attempt)
+
+
+def test_defer_wakes_nobody_and_keeps_a_deadline(api):
+    machine, tid = world(api)
+    before = H.now()
+    held = post(api, f"tasks/{tid}/comments", {"text": "Billing first.", "delivery": "defer"})
+    assert held["woke"] is False and job_state(api, held["comment"]["id"]) is None
+    [row] = deferrals(api, held["comment"]["id"])
+    assert row["kind"] == "comment" and row["task_id"] == tid and row["due_at"] >= H.shift(before, hours=24)
+    assert held["sent_as"] == {"delivery": "defer", "until": row["due_at"]}
+
+    timed = post(api, f"tasks/{tid}/comments", {"text": "Then the docs.", "delivery": "defer", "defer_for": "30m"})
+    assert deferrals(api, timed["comment"]["id"])[0]["due_at"] < H.shift(before, hours=1)
+    never = post(api, f"tasks/{tid}/comments", {"text": "Some day.", "delivery": "defer", "defer_for": "never"})
+    assert deferrals(api, never["comment"]["id"])[0]["due_at"] is None and never["sent_as"]["until"] is None
 
 
 def forwarded(turn, after):
@@ -66,54 +96,71 @@ def forwarded(turn, after):
     return [m["body"] for m in newer]
 
 
-def test_a_comment_queued_mid_turn_reaches_the_bots_next_prompt_once(api):
+def test_a_comment_queued_mid_turn_runs_right_after_it(api):
     machine, tid = world(api)
     first = claim(api, machine)
     post(api, f"attempts/{first['id']}/started", {"thread_id": "plan"}, machine["token"])
     queued = post(api, f"tasks/{tid}/comments", {"text": "Billing first, then the docs.", "delivery": "queue"})
-    assert queued["woke"] is False
-    # The turn finishes with its reply after the queued comment.
     post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "Plan drafted.", "last_seq": 0},
          machine["token"])
+    second = claim(api, machine)
+    assert second["message"]["id"] == queued["comment"]["id"]
+
+
+def test_a_deferred_comment_reaches_the_bots_next_prompt_once(api):
+    machine, tid = world(api)
+    first = claim(api, machine)
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "plan"}, machine["token"])
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "Plan drafted.", "last_seq": 0},
+         machine["token"])
+    held = post(api, f"tasks/{tid}/comments", {"text": "Billing first, then the docs.", "delivery": "defer"})
+    assert held["woke"] is False
 
     later = post(api, f"tasks/{tid}/comments", {"text": "Also the API page."})
     second = claim(api, machine)
     assert second["message"]["id"] == later["comment"]["id"]
-    assert first["message"]["id"] in [m["id"] for m in second["history"]]
     assert "Billing first, then the docs." in forwarded(second, first["message"]["id"])
+    head, *body = second["deferred"].split("\n")
+    assert head == "Deferred since your last turn: 1 comment"
+    assert any(held["comment"]["id"] in line and "Billing first, then the docs." in line for line in body)
+    assert "Also the API page." not in second["deferred"], "the turn's own message is its Current message"
+    assert deferrals(api, held["comment"]["id"])[0]["how"] == "carried"
     post(api, f"attempts/{second['id']}/started", {"thread_id": "plan"}, machine["token"])
     post(api, f"attempts/{second['id']}/complete", {"outcome": "completed", "text": "API page noted.", "last_seq": 0},
          machine["token"])
 
-    # Delivered once: the next turn's prompt starts after the second turn's own trigger, so the queued comment is gone.
+    # Delivered once: the next turn's prompt starts after the second turn's own trigger, so the comment is gone.
     again = post(api, f"tasks/{tid}/comments", {"text": "Then the launch note."})
     third = claim(api, machine)
     assert third["message"]["id"] == again["comment"]["id"]
     assert "Billing first, then the docs." not in forwarded(third, second["message"]["id"])
+    assert third["deferred"] == ""
 
 
 def test_the_send_says_which_ways_a_reader_may_deliver(api):
     machine, tid = world(api)
     cd = get(api, f"tasks/{tid}")["comment_delivery"]
-    assert cd["default"] == "steer" and isinstance(cd["steers"], bool) and cd["goal"] is True
+    assert cd["default"] == "steer" and cd["default_for"] is None and cd["steer"] is True and cd["queue"] is True
+    assert isinstance(cd["steers"], bool) and cd["goal"] is True
 
     # A person's task with no bot on it: nothing to deliver to.
     person = post(api, "tasks", {"owner": "human:ana", "title": "Call the venue", "body": "Ask about Friday."})
     assert get(api, f"tasks/{person['id']}")["comment_delivery"] == {
-        "default": None, "steer": False, "steers": False, "goal": False}
+        "default": None, "default_for": None, "steer": False, "queue": False, "steers": False, "goal": False}
 
 
-def test_only_someone_on_the_task_may_steer_its_bot(api):
+@pytest.mark.parametrize("way", ["steer", "queue"])
+def test_only_someone_on_the_task_may_wake_its_bot(api, way):
     machine, tid = world(api)
-    # Ben is not on Ana's task: his comment waits for the bot's next turn, so the send offers no steer.
+    # Ben is not on Ana's task: his comment waits for the bot's next turn there, with no deadline.
     cd = get(api, f"tasks/{tid}", "ben-test")["comment_delivery"]
-    assert cd["default"] == "queue" and cd["steer"] is False
-    r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "Do mine first.", "delivery": "steer"},
+    assert cd["default"] == "defer" and cd["default_for"] == "never" and cd["steer"] is False and cd["queue"] is False
+    r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "Do mine first.", "delivery": way},
                  headers=headers("ben-test"))
     assert r.status_code == 403 and "delivery" in r.text, r.text
     assert all(c["body"] != "Do mine first." for c in get(api, f"tasks/{tid}")["comments"])
-    queued = post(api, f"tasks/{tid}/comments", {"text": "When you can.", "delivery": "queue"}, token="ben-test")
-    assert queued["woke"] is False
+    held = post(api, f"tasks/{tid}/comments", {"text": "When you can."}, token="ben-test")
+    assert held["woke"] is False and held["sent_as"] == {"delivery": "defer", "until": None}
 
 
 def test_only_someone_on_the_task_may_set_its_goal(api):
@@ -192,6 +239,9 @@ def test_a_goal_the_harness_cannot_take_saves_no_comment(api):
     {"text": "Pick the venue.", "delivery": "later"},                           # not a way
     {"text": "Pick the venue.", "delivery": "goal", "public": True},            # a goal is not public
     {"text": "Pick the venue.", "needs_action": True, "delivery": "queue"},     # needs_action is steer
+    {"text": "Pick the venue.", "delivery": "queue", "defer_for": "4h"},        # a deadline is for defer
+    {"text": "Pick the venue.", "delivery": "defer", "defer_for": "soon"},      # not a time
+    {"text": "Pick the venue.", "delivery": "defer", "defer_for": "800d"},      # over two years
 ])
 def test_a_delivery_that_cannot_apply_is_refused_and_nothing_is_saved(api, body):
     machine, tid = world(api)
@@ -203,10 +253,18 @@ def test_a_delivery_that_cannot_apply_is_refused_and_nothing_is_saved(api, body)
 
 def test_mcp_and_the_hub_cli_send_the_same_delivery(api):
     machine, tid = world(api)
-    is_error, payload = call(api, "hub_task_comment", {"id": tid, "text": "Pick the venue.", "delivery": "queue"})
-    assert is_error is False and payload["woke"] is False
-    # One of the three ways at most, on the command line too.
-    assert hubcli.parser().parse_args(["task", "comment", tid, "Pick the venue.", "--goal"]).delivery == "goal"
-    assert hubcli.parser().parse_args(["task", "comment", tid, "Pick the venue."]).delivery is None
+    is_error, payload = call(api, "hub_task_comment", {"id": tid, "text": "Pick the venue.", "delivery": "defer",
+                                                       "defer_for": "4h"})
+    assert is_error is False and payload["woke"] is False and payload["sent_as"]["delivery"] == "defer"
+    # One of the ways at most, on the command line too.
+    parse = hubcli.parser().parse_args
+    assert parse(["task", "comment", tid, "Pick the venue.", "--goal"]).delivery == "goal"
+    assert hubcli.delivery_of(parse(["task", "comment", tid, "Pick the venue."])) == {}
+    assert hubcli.delivery_of(parse(["task", "comment", tid, "x", "--queue"])) == {"delivery": "queue"}
+    assert hubcli.delivery_of(parse(["task", "comment", tid, "x", "--defer"])) == {"delivery": "defer"}
+    assert hubcli.delivery_of(parse(["task", "comment", tid, "x", "--defer", "2d"])) == {
+        "delivery": "defer", "defer_for": "2d"}
+    with pytest.raises(SystemExit):
+        parse(["task", "comment", tid, "x", "--defer", "soon"])
     with pytest.raises(SystemExit):
         hubcli.parser().parse_args(["task", "comment", tid, "Pick the venue.", "--steer", "--queue"])

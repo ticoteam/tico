@@ -14,7 +14,7 @@ owner can also confirm Suggests actions as their own choice, so a later change t
 
 | Level | Name | What the Strategy Bot does |
 |---|---|---|
-| 1 | **Passive** | Keeps the regular checks running (KPI readings and the automatic goal colours) and otherwise acts only when you talk to it. It proposes a strategy draft when you ask, writes the card when a bet's wrong-if trips, suggests KPIs, goals and Why lines when you ask, and changes nothing until you accept. |
+| 1 | **Passive** | Keeps the regular checks running (KPI readings and the automatic goal colours) and otherwise acts only when asked through your Assistant. It proposes a strategy draft when you ask, writes the card when a bet's wrong-if trips, suggests KPIs, goals and Why lines when you ask, and changes nothing until you accept. |
 | 2 | **Suggests actions** (default) | Also takes "Draft the strategy" tasks, asks you for the vision, proposes Why lines, sends a Monday note, asks a goal's owner what is happening, and suggests how your bots could recover a goal that falls behind, as items in **Needs you** that you approve one by one. |
 | 3 | **Acts on its own** | Also decides on its own: makes, reorders, reassigns and closes bot tasks itself to recover a goal, each decision with an Undo. |
 
@@ -61,12 +61,16 @@ Over the API, `GET /api/v2/strategy-bot` shows `name`, `regular_checks`, `level`
 The [Strategy](strategy.md) page is the Strategy Bot's first job. At every level it **proposes**; you write the draft and
 the bets, and you publish:
 
-- **Drafting.** A task "Draft the strategy", or you asking in your chat, runs its `draft-the-strategy` playbook. It reads
+- **Drafting.** A task "Draft the strategy", or you asking in your DM, runs its `draft-the-strategy` playbook. It reads
   the market pages, the setup answers, the goals and KPIs, and puts **claims** to you to keep, edit or strike ("Your
   site implies you compete on price; that rules out white-glove service"), at most eight. It proposes three to five
-  bets, each with why, what it rules out and what would prove it wrong, and the four sections, and never invents a
+  bets, each with why, what it rules out and what would prove it wrong, and the seven sections, and never invents a
   number. The result is one `strategy_draft` proposal in your **Needs you**; confirming writes it into your draft.
   This is the same at every level.
+- **Keeping proof current.** *How we know they want it* is evidence: Growth numbers and KPIs, what customers told
+  your support and sales bots, team meetings, Listening. Its `keep-proof-current` playbook gathers that, writes each
+  line with its source and period, and proposes it as one `strategy_draft`. It never invents a number. The Monday note
+  says so in one line when the section is empty or unchanged for more than 30 days.
 - **Publishing is yours.** The Strategy Bot ends a drafting run by asking you to confirm and publish from the Strategy page.
   It cannot publish, and it cannot write the draft: the server refuses every bot.
 - **When a bet may be wrong.** When a bet's wrong-if trips (a KPI crosses its threshold, a cited market entity
@@ -80,7 +84,7 @@ the bets, and you publish:
 
 - **Runs the regular checks.** It posts KPI readings and keeps each goal's automatic colour. Nothing else happens on its
   own.
-- **Answers when you talk to it.** Ask it for the strategy, a KPI, a goal or a Why line and it suggests one. It changes nothing until
+- **Answers when asked.** Ask your Assistant for the strategy, a KPI, a goal or a Why line and it suggests one. It changes nothing until
   you accept ([A goal's Why](goals-and-kpis.md#a-goals-why), [Strategy](#strategy)).
 - **Asks for nothing.** There is no vision ask, no Why bundle in **Needs you**, no ask to a goal's owner and no Monday
   note. Those start at **Suggests actions**. An ask filed earlier stays until it is settled. The one exception is a
@@ -99,8 +103,8 @@ chose a level, since it starts here, unless a person already started or paused t
   your Strategy Bot what this company is for". Writing the vision on the [Strategy](strategy.md) page closes it.
 - **Proposes a Why for each goal that has none and is not tied to a bet**, as one **Needs you** item for each person who decides them, never one
   per goal. You accept, edit or replace each on its goal.
-- **Sends a Monday note** in the owner's chat: a short weekly goals review with a line on the strategy (or that none is
-  published), how many goals still have no bet and no Why, and each active bet with no KPI-backed goal or gray health.
+- **Sends a Monday note** in the owner's DM: a short weekly goals review with a line on the strategy (or that none is
+  published, or that *How we know they want it* is empty or more than 30 days old), how many goals still have no bet and no Why, and each active bet with no KPI-backed goal or gray health.
   A person who pauses it stays paused.
 - **Asks a goal's owner what is happening** when a goal is red or stalled, as a **Needs you** item for that owner. The
   ask closes by itself when the cause clears.
@@ -125,47 +129,32 @@ At every level, the Strategy Bot puts at most 5 items a day in one person's **Ne
 count includes the asks Tico files in its name, recoveries and merged items. The most important come first, with the vision before everything else;
 the rest wait for the next day. The server refuses a sixth.
 
-## Your chat with it
+## Asking it through your Assistant
 
-The owner talks to the Strategy Bot in place of an Assistant. The menu tab reads **Strategy Bot** (or the name you gave it) and
-opens your chat with it (`#/assistant`, `GET /api/v2/assistant` answers `"strategy_bot": true`). It does everything an
-[Assistant](assistant.md) does, as you and with the same "via" rules (your cards, your cited requests, your daily update
-draft, labelled the Strategy Bot's), plus company-wide work within its level. Your chat is one conversation and one session
-of its own, whatever its session setting; its goals work (regular checks, goals, bots' messages to it) is another,
-and neither shares the other's context. Everything it does in your chat is recorded as you, via the Strategy Bot.
-Your chat takes pictures and files like any bot chat: attach them, drop them, or paste a screenshot
-(`POST /api/v2/uploads/assistant/messages`, multipart: `text`, optional `titles`, up to ten `files`). A message with
-files always goes to the Strategy Bot's turn, which can open them. An Assistant's room stays text only (`422 text_only`).
+Nobody messages the Strategy Bot directly, the owner included: everyone's one DM is their
+[Assistant](assistant.md#helpers-through-the-assistant). Ask it for strategy advice or a goal change and it files the
+Strategy Bot a task citing your words. The Strategy Bot works that task in its own turn with its own rights, so a change
+that stays yours (below) comes back to you as a proposal or a Confirm card. Bots still message it, in its goals
+session.
 
-Nobody else talks to it: everyone else, administrators included, keeps the Assistant, and the chat routes refuse them
-(`403`). Bots still message it, in its goals session, never in your chat. Your chats with your Assistant from before
-stay readable under **Earlier chats** on the same page, also while the Strategy Bot is paused.
-
-If you hand ownership to someone else (Settings > People), the Strategy Bot tab and its chat history go with the owner seat
-to the new owner. You get your Assistant back, with your own earlier Assistant chats; the new owner does not see those.
-Cards the Strategy Bot had waiting on you are withdrawn.
-
-## On the Updates page
-
-Your chat with it is also beside Updates, labelled with its name. It works as the [Assistant's](assistant.md#on-the-updates-page)
-does for everyone else: same conversation, show or hide, resize, full screen on a phone. It is handed only the updates
-you can read, leaving out any that link a task, chat or bot it can't open. When it picks the top update it follows what
-you taught it about you and about the company. A reply is a chat message, never a Needs you item, so it doesn't count
-toward the [5 a day](#at-most-5-items-a-day).
+Before this change the owner messaged the Strategy Bot itself. That DM stays yours as read-only history under
+**Earlier chats** on your Assistant page, and Confirm cards still waiting there moved to your Assistant DM once. If you
+hand ownership to someone else (Settings > People), that earlier DM goes with the owner seat to the new owner, and the
+cards waiting on you are withdrawn.
 
 ## What it has learned
 
-It keeps two layers, both on **What it has learned** at the top of your chat (`#/assistant/learned`):
+For the owner, your Assistant keeps two layers, both on **What it has learned** at the top of your DM (`#/assistant/learned`):
 
-- **About you**: how you like things ranked and summarised, the same private layer your [Assistant](assistant.md#what-it-has-learned)
-  used. It stays yours if you hand ownership on.
+- **About you**: how you like things ranked and summarised: your [Assistant's](assistant.md#what-it-has-learned)
+  private layer. It stays yours if you hand ownership on.
 - **About the company**: the vision (changed on Strategy) and the company goals (changed on Goals), and what you taught it about the
-  company ("launches matter more than hiring news for us"). Only you, the owner, read and change it, and only the
-  Strategy Bot uses it, in your chat: Assistants never see it, administrators cannot add to it, and its goals session is not
-  handed it. It stays with the owner seat: a new owner gets it, and you no longer see it.
+  company ("launches matter more than hiring news for us"). Only you, the owner, read and change it, and only your
+  own Assistant uses it, in your DM: other people's Assistants never see it, administrators cannot add to it, and the
+  Strategy Bot's goals session is not handed it. It stays with the owner seat: a new owner gets it, and you no longer see it.
 
-Teach it in your chat; it saves one short line in the right layer and says which. Edit or delete lines on the page
-(only your click does). Every turn in your chat reads both layers fresh, so a deleted line is not used from the next
+Teach it in your Assistant DM; it saves one short line in the right layer and says which. Edit or delete lines on the page
+(only your click does). Every turn in your DM reads both layers fresh, so a deleted line is not used from the next
 reply on.
 
 ## What stays yours

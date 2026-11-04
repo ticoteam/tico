@@ -1,9 +1,10 @@
-//! Keep the secrets a turn was granted out of what the runner writes down (`runner/redact.py`).
+//! Keep the secrets a turn was granted out of what the runner writes down (`runner_support/redact.py`).
 //!
 //! One redactor per turn holds its granted values and the common ways each turns up (URL-encoded, base64
 //! with and without padding, the password half of `user:password`) and replaces them with `••••`, longest
 //! match first, in one pass. A turn with nothing worth hiding has no redactor.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
@@ -132,10 +133,11 @@ impl Redactor {
         *inner = build(&all);
     }
 
-    pub fn scrub_text(&self, text: &str) -> String {
+    /// `text` with its secrets masked: borrowed, with nothing copied, when it holds none.
+    pub fn scrub_text<'a>(&self, text: &'a str) -> Cow<'a, str> {
         match &self.inner.read().unwrap().matcher {
-            Some(m) => m.replace_all(text, &vec![MASK; m.patterns_len()]),
-            None => text.to_string(),
+            Some(m) if m.is_match(text) => Cow::Owned(masked(m, text)),
+            _ => Cow::Borrowed(text),
         }
     }
 
@@ -147,14 +149,17 @@ impl Redactor {
         }
     }
 
-    /// The same structure with every string scrubbed; keys are left as they are.
-    pub fn scrub_json(&self, v: &Value) -> Value {
-        match v {
-            Value::String(s) => Value::String(self.scrub_text(s)),
-            Value::Array(items) => Value::Array(items.iter().map(|i| self.scrub_json(i)).collect()),
-            Value::Object(map) => Value::Object(map.iter().map(|(k, i)| (k.clone(), self.scrub_json(i))).collect()),
-            other => other.clone(),
+    /// The same structure with every string scrubbed; keys are left as they are. Borrowed, with nothing copied, when
+    /// no string in it holds a secret. Otherwise a copy in which only the strings holding one are masked.
+    pub fn scrub_json<'a>(&self, v: &'a Value) -> Cow<'a, Value> {
+        let inner = self.inner.read().unwrap();
+        let Some(m) = inner.matcher.as_ref() else { return Cow::Borrowed(v) };
+        if !json_holds(v, m) {
+            return Cow::Borrowed(v);
         }
+        let mut owned = v.clone();
+        mask_in_place(&mut owned, m);
+        Cow::Owned(owned)
     }
 
     /// Whether these bytes carry a secret in any of its forms (read as latin-1, like the Python check).
@@ -371,6 +376,35 @@ fn credential_shapes() -> &'static [(regex::Regex, &'static str)] {
     })
 }
 
+/// `text` with every secret `m` finds masked. Called only when it finds one.
+fn masked(m: &AhoCorasick, text: &str) -> String {
+    m.replace_all(text, &vec![MASK; m.patterns_len()])
+}
+
+/// Whether a string anywhere in `v` holds a secret.
+fn json_holds(v: &Value, m: &AhoCorasick) -> bool {
+    match v {
+        Value::String(s) => m.is_match(s),
+        Value::Array(items) => items.iter().any(|i| json_holds(i, m)),
+        Value::Object(map) => map.values().any(|i| json_holds(i, m)),
+        _ => false,
+    }
+}
+
+/// Masks, in place, the strings of `v` that hold a secret; every other value is left as it is.
+fn mask_in_place(v: &mut Value, m: &AhoCorasick) {
+    match v {
+        Value::String(s) => {
+            if m.is_match(s.as_str()) {
+                *s = masked(m, s);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|i| mask_in_place(i, m)),
+        Value::Object(map) => map.values_mut().for_each(|i| mask_in_place(i, m)),
+        _ => {}
+    }
+}
+
 /// `text` with `secrets`, every running turn's secrets and anything shaped like a credential masked
 /// (redact.py scrub_credentials). Always on the whole text: a token cut in half no longer looks like one.
 pub fn scrub_credentials(text: &str, secrets: &[String]) -> String {
@@ -421,7 +455,7 @@ pub fn git_failure(stderr: &str, secrets: &[String], limit: usize) -> String {
     }
 }
 
-/// git with the clean environment `runner/safe_git.py` uses: no global or system config.
+/// git with the clean environment `runner_support/safe_git.py` uses: no global or system config.
 pub fn git(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
     let mut argv: Vec<String> = vec!["git".into()];
     argv.extend(crate::safegit::args(root));
@@ -487,7 +521,7 @@ pub fn scrub_log(line: &str) -> String {
     let list: Vec<Arc<Redactor>> = active().lock().map(|l| l.iter().map(|(_, r)| r.clone()).collect()).unwrap_or_default();
     let mut out = line.to_string();
     for r in list {
-        out = r.scrub_text(&out);
+        out = r.scrub_text(&out).into_owned();
     }
     out
 }
@@ -538,7 +572,7 @@ mod tests {
         let secrets = ["granted-file-secret-fixture", "Zm9vYmFyYmF6cXV4", "a:b c+d/e=fghij"];
         let sample = "x granted-file-secret-fixture y Z3JhbnRlZC1maWxlLXNlY3JldC1maXh0dXJl z a%3Ab%20c%2Bd%2Fe%3Dfghij w b c+d/e=fghij";
         let r = Redactor::new(&secrets.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-        let script = "import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom runner.redact import Redactor\nprint(Redactor(json.loads(sys.argv[2])).scrub_text(sys.argv[3]))";
+        let script = "import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom runner_support.redact import Redactor\nprint(Redactor(json.loads(sys.argv[2])).scrub_text(sys.argv[3]))";
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let out = Command::new("python3")
             .args(["-c", script])
@@ -549,5 +583,42 @@ mod tests {
             .unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         assert_eq!(r.scrub_text(sample), String::from_utf8_lossy(&out.stdout).trim_end_matches('\n'));
+    }
+
+    #[test]
+    fn a_secret_inside_a_nested_string_is_masked_and_a_value_without_one_comes_back_as_it_was() {
+        use serde_json::json;
+        let r = Redactor::new(&["granted-secret-value".into()]);
+        let nested = json!({"kind": "tool", "input": {"argv": ["git", "clone", "https://x/granted-secret-value"], "env": {"NOTE": "fine"}}});
+        let clean = r.scrub_json(&nested);
+        assert_eq!(clean["input"]["argv"][2], "https://x/••••");
+        assert_eq!(clean["kind"], "tool");
+        assert_eq!(clean["input"]["argv"][1], "clone");
+        assert_eq!(clean["input"]["env"]["NOTE"], "fine");
+        let plain = json!({"kind": "delta", "text": "no secret here", "n": 3, "list": [null, true]});
+        let untouched = r.scrub_json(&plain);
+        assert!(matches!(untouched, Cow::Borrowed(_)), "a value with no secret is borrowed, not copied");
+        assert_eq!(*untouched, plain);
+        assert!(matches!(r.scrub_text("no secret here"), Cow::Borrowed(_)));
+    }
+
+    /// Bench, not run by CI: heap bytes requested by `scrub_json` over 10,000 deltas, with no secret in them and
+    /// with one in each.
+    #[test]
+    #[ignore]
+    fn bench_scrub_json_allocations_for_10k_deltas() {
+        use serde_json::json;
+        let r = Redactor::new(&["granted-secret-value".into()]);
+        let delta = |i: usize, text: &str| json!({"kind": "delta", "thread_id": "th-1", "turn_id": "turn-1", "text": format!("token {i} {text}")});
+        let plain: Vec<Value> = (0..10_000).map(|i| delta(i, "of the answer ")).collect();
+        let leaky: Vec<Value> = (0..10_000).map(|i| delta(i, "granted-secret-value ")).collect();
+        for (name, events) in [("no secret", &plain), ("secret in each", &leaky)] {
+            let asked = crate::util::alloc_probe::requested();
+            for e in events {
+                let v = r.scrub_json(e);
+                std::hint::black_box(&v);
+            }
+            eprintln!("scrub_json, 10,000 deltas, {name}: bytes requested {}", crate::util::alloc_probe::requested() - asked);
+        }
     }
 }

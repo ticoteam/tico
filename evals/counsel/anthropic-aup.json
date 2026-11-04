@@ -1,0 +1,35 @@
+{
+  "expected": [
+    {
+      "text": "Tell anyone who gets advice or a decision based on a high-risk AI recommendation that AI produced it.",
+      "quote": "An individual who receives advice or who is the subject of a decision based on a High-risk AI Recommendation must be clearly told that AI was used to produce it.",
+      "section": "Disclosure for advice and decisions",
+      "who_hint": "product"
+    },
+    {
+      "text": "Equipment that moves or applies energy must keep operating limits enforced by the equipment or an independent controller.",
+      "quote": "must be enforced by the equipment or a controller independent of model output",
+      "section": "Physical systems",
+      "who_hint": "engineering"
+    },
+    {
+      "text": "A qualified person must review a high-risk AI recommendation before anyone acts on it.",
+      "quote": "A qualified person must meaningfully review a High-risk AI Recommendation",
+      "section": "Qualified human-in-the-loop for advice and decisions",
+      "who_hint": "product"
+    },
+    {
+      "text": "Chatbots and AI agents that talk to outside users must say they are AI, not a human.",
+      "quote": "must disclose to users that they are interacting with AI rather than a human",
+      "section": "Additional Use Case Guidelines",
+      "who_hint": "support"
+    }
+  ],
+  "url": "https://www.anthropic.com/legal/aup",
+  "fetched_at": "2026-10-30T23:40:34Z",
+  "from": {
+    "name": "Anthropic Usage Policy",
+    "kind": "vendor"
+  },
+  "truncated": false
+}

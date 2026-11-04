@@ -25,13 +25,13 @@ def test_old_heartbeat_retains_legacy_missing_and_unknown_semantics(prepared, sa
     link = post(api, f"tasks/{tid}/worktrees", {"repo": "Acme/product"}).json()
     old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE task_links SET state=?,detail_json=? WHERE id=?", (
+        c.execute("UPDATE task_links SET state=?,detail=? WHERE id=?", (
             saved_state, json.dumps({"owner": "bot:cmo", "missing_since": old}), link["link_id"]))
     for _ in range(3):
         assert heartbeat(api, link, report_state) == []
         with api.app_state.store.read() as c:
-            row = c.execute("SELECT state,detail_json FROM task_links WHERE id=?", (link["link_id"],)).fetchone()
-            detail = json.loads(row["detail_json"])
+            row = c.execute("SELECT state,detail FROM task_links WHERE id=?", (link["link_id"],)).fetchone()
+            detail = json.loads(row["detail"])
             assert row["state"] == report_state
             assert not any(detail.get(k) for k in ("expected_head", "checkout_target", "expected_base"))
             assert detail.get("checkout_state") is None
@@ -52,14 +52,14 @@ def test_pre_marker_human_restore_receipt_keeps_no_state_semantics(
     link = post(api, f"tasks/{tid}/worktrees", {"repo": "Acme/product"}, "owner-test").json()
     old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE task_links SET state=?,detail_json=? WHERE id=?", (
+        c.execute("UPDATE task_links SET state=?,detail=? WHERE id=?", (
             saved_state, json.dumps({"owner": "bot:cmo", "setup_pending": True,
                                     "missing_since": old}), link["link_id"]))
     for _ in range(3):
         assert heartbeat(api, link, report_state) == []
         with api.app_state.store.read() as c:
-            row = c.execute("SELECT state,detail_json FROM task_links WHERE id=?", (link["link_id"],)).fetchone()
-            detail = json.loads(row["detail_json"])
+            row = c.execute("SELECT state,detail FROM task_links WHERE id=?", (link["link_id"],)).fetchone()
+            detail = json.loads(row["detail"])
             assert row["state"] == report_state
             assert detail["setup_pending"] is True
             assert detail.get("checkout_state") is None
@@ -77,7 +77,7 @@ def test_old_human_restore_and_new_request_accept_setup_report_without_repeating
     link = post(api, f"tasks/{tid}/worktrees", {"repo": "Acme/product"}).json()
     if not new_request:
         with api.app_state.store.transaction() as c:
-            c.execute("UPDATE task_links SET state='pending',detail_json=? WHERE id=?",
+            c.execute("UPDATE task_links SET state='pending',detail=? WHERE id=?",
                       (json.dumps({"owner": "bot:cmo"}), link["link_id"]))
     actions = heartbeat(api, link)
     assert len(actions) == 1 and actions[0]["action"] == "restore"
@@ -88,8 +88,8 @@ def test_old_human_restore_and_new_request_accept_setup_report_without_repeating
     for _ in range(3):
         assert heartbeat(api, link, "present") == []
         with api.app_state.store.read() as c:
-            row = c.execute("SELECT state,detail_json FROM task_links WHERE id=?", (link["link_id"],)).fetchone()
-            detail = json.loads(row["detail_json"])
+            row = c.execute("SELECT state,detail FROM task_links WHERE id=?", (link["link_id"],)).fetchone()
+            detail = json.loads(row["detail"])
             assert row["state"] == "present"
             assert detail["setup_pending"] is True
             assert detail.get("checkout_state") != "ready"

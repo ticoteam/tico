@@ -71,10 +71,10 @@ STOP = set("a an the and or of to for in on with our we us my i me is are be it 
            "some any get have has do does work your from at by as".split())
 # setup.js ALIASES: everyday words for a role, mapped to the template that does it.
 ALIASES = {
-    "bookkeeper": "bookkeeping", "accountant": "bookkeeping", "seo": "seo-visibility", "social": "listening",
+    "seo": "seo-visibility", "social": "listening",
     "social media": "listening", "blog": "content", "writer": "content", "copywriter": "content", "sdr": "sdr-research",
     "recruiter": "recruiting", "qa": "issue-triage", "tester": "issue-triage", "reviewer": "pr-reviewer",
-    "code reviewer": "pr-reviewer", "engineer": "pr-reviewer", "support": "support", "customer support": "support",
+    "code reviewer": "pr-reviewer", "engineer": "builder", "support": "support", "customer support": "support",
     "invoices": "billing", "invoicing": "billing", "payroll": "payroll", "legal": "general-counsel",
     "lawyer": "general-counsel", "contracts": "legal-review", "hr": "people-hr", "chief of staff": "chief-of-staff",
     "pr": "pr", "press": "pr", "ads": "paid-media", "release manager": "release-notes", "docs": "docs-writer",
@@ -838,11 +838,11 @@ class Turn:
     """One visitor turn over a draft.
 
         turn = Turn(draft_from_page, today=dt.date.today())    # D.DraftError when the draft breaks its shape
-        turn.apply("bot_add", {"template": "bookkeeping", "reason": "Invoices eat your Fridays."})
+        turn.apply("bot_add", {"template": "billing", "reason": "Invoices eat your Fridays."})
         turn.finish()                                          # the draft to send back
 
     `keys_removed` says a key-shaped string was cut from the draft or an action's input this turn; `seeded` says the
-    empty chart was started from a company model, and `started` is BotOps's one line on which model and what it added.
+    empty chart was started from a company model, and `started_at` is BotOps's one line on which model and what it added.
     `changed` lists the parts the turn's actions changed (`touched`), in order; `market_note` is what the visitor said
     when they asked for the market to be sized again (`resize_market`), else None.
     """

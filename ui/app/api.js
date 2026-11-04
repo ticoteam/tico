@@ -12,7 +12,7 @@
 /** @typedef {{r: Response, text: string, kept?: {tag: string, text: string}}} RawGet */
 /**
  * Per-write options: `timeout` caps the whole write in milliseconds; the callbacks hear each retry and each answer.
- * @typedef {{timeout?: number, onRetry?: (attempt: number, status: number) => void, onResponse?: (status: number) => void}} WriteOptions
+ * @typedef {{timeout?: number, keepalive?: boolean, onRetry?: (attempt: number, status: number) => void, onResponse?: (status: number) => void}} WriteOptions
  */
 
 /** @param {number} n @returns {string} */
@@ -30,9 +30,14 @@ const apiError = (j, r) => {
 // task a duplicate feature request already has (`backend/store.py`, Problem.extra).
 /** @param {FailureBody} j @param {Response} r @returns {Error & {body: FailureBody, status: number}} */
 const apiFailure = (j, r) => Object.assign(new Error(apiError(j, r)), {body: j, status: r.status});
-// Signed out, by any sign-in (session.js): the built-in login page, or the banner.
+// Signed out, by any sign-in (session.js): the built-in login page, or the banner. A locked Tico Cloud company's 402
+// `locked` shows Pay to continue at once (cloud-access.js).
 /** @param {Response} r @param {FailureBody} j */
-const signInRedirect = (r, j) => r.status === 401 && sessionCheck(r, j);
+const signInRedirect = (r, j) => {
+  const error = /** @type {any} */ (j?.error);
+  if (r.status === 402 && error?.code === 'locked') cloudAccessLocked(error.cloud);
+  return r.status === 401 && sessionCheck(r, j);
+};
 // A list the server tags (tasks, labels, routines) is asked for again with its tag: unchanged, the answer is a 304
 // with no body and the copy kept here is read again, so the server neither loads nor sends it. A few dozen at most.
 /** @type {Map<string, {tag: string, text: string}>} */
@@ -130,7 +135,7 @@ const writeRequestOnce = async (method, p, body={}, operationId, opts={}) => {
     const abort = new AbortController(), timer = left < Infinity ? setTimeout(() => abort.abort(), left) : 0;
     let status = 0;
     try {
-      const r = await fetch(API + p, {method, headers:{'Content-Type':'application/json', 'Idempotency-Key':key}, body:payload, signal:abort.signal});
+      const r = await fetch(API + p, {method, headers:{'Content-Type':'application/json', 'Idempotency-Key':key}, body:payload, signal:abort.signal, keepalive:!!opts.keepalive});
       status = r.status;
       opts.onResponse?.(status);
       window.TicoObservability?.response(r.status);

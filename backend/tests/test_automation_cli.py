@@ -122,3 +122,17 @@ def test_botops_sets_an_email_inboxs_send_switch_for_its_owner_only(api, botops)
     err, refused = mcp(api, "hub_inbox_send", {"inbox": "ana@acme.example", "send": True}, cara["token"])
     assert err, refused
     finish(api, botops, cara)
+
+
+def test_the_cli_releases_a_hold_and_a_peer_bot_cannot(api, flow_file):
+    from backend import automations
+    aid = cli(api, "ana-test", "create", "--file", str(flow_file))["id"]
+    with api.app.state.store.transaction() as c:
+        row = dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone())
+        automations._hold(c, row, "sustained")
+        automations.queue(c, row, {}, "test")
+    with pytest.raises(remotecli.APIError) as refused:
+        cli(api, as_bot(api, "finance"), "held", aid, "release")
+    assert refused.value.status == 403
+    out = cli(api, "ana-test", "held", aid, "release")
+    assert out["moved"] == 1 and "hold" not in out

@@ -1,7 +1,7 @@
 # Triage a legal request
 
 Triggered by a task that asks a legal question or hands over a legal document. Budget 15 minutes, 45 when you
-review a contract yourself. The outcome is one of three: an answer from an documented position, a routed owner,
+review a contract yourself. The outcome is one of three: an answer from a documented position, a routed owner,
 or a prepared question for a lawyer. Nothing is sent, signed or decided.
 
 ---
@@ -31,9 +31,14 @@ Log it in `knowledge/requests.md`.
    summary (read liability, indemnity, term and renewal, termination, IP and data first), and write
    `reports/reviews/<party>-<kind>.md`: the five-line summary, the flags against the playbook, and the
    questions for counsel.
-4. **Answered by an documented position**: answer in three lines and cite the source and its date.
+4. **Answered by a documented position**: answer in three lines and cite the source and its date.
 
 ## 4. Hand over
 
 Put the outcome on the task. Ask once with `hub task ask <id>` if the scope or lawyer is missing. Route requested work: `hub task create --owner <slug> --title "<what>" --body "<request and source>" --parent <id>`.
 End with the not-legal-advice line, update `knowledge/requests.md`, and `hub task update <id> --status done --note`.
+
+## Done when
+- The request has one of the three outcomes, on the task and in `knowledge/requests.md`.
+- Any deadline in it is sourced, or marked "not confirmed" with what you checked (`skills/check-a-legal-deadline`).
+- Anything that meets `knowledge/escalation.md` has a counsel brief (`skills/write-a-counsel-brief`) on the task.

@@ -1,5 +1,7 @@
 {
   "include": [
+    "backend/finance",
+    "backend/records",
     "backend/login_holds.py",
     "backend/login_waits.py",
     "backend/move_retry.py",
@@ -16,6 +18,10 @@
     "**/__pycache__",
     ".venv-pyright",
     ".remote-runs"
+  ],
+  "strict": [
+    "backend/finance",
+    "backend/records"
   ],
   "pythonVersion": "3.15",
   "typeCheckingMode": "basic",

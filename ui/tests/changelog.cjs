@@ -61,6 +61,7 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
     });
     await page.goto('https://tico-ui.test/#/tasks');
     await page.locator('#changelog-notice').waitFor();
+    assert.equal(await page.locator('#changelog-notice .changelog-notice-label').textContent(),'Updated to v0.3.23','the one version row says what is installed, with no count');
     await page.locator('#changelog-notice').click();
     await page.locator('.release-entry').first().waitFor();
     assert.equal(await page.locator('.release-entry').count(),2);
@@ -132,9 +133,11 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
     }
     // The reload drops the search and this visit's unconfirmed entries, which a later load would post again.
     read.clear(); pageSize = 1;
+    const acknowledged = page.waitForResponse(r => r.url().endsWith('/api/v2/changelog/read'));
     await page.reload();
     await page.locator('[data-more-changes]').waitFor();
-    await page.waitForFunction(() => document.querySelector('#changelog-notice').textContent.includes('1 update'));
+    await acknowledged;
+    assert.equal(await page.locator('#changelog-notice').isHidden(),false,'the older change is still unread');
     assert.equal(await page.locator('.release-entry').count(),1);
     await page.locator('[data-more-changes]').click();
     await page.waitForFunction(() => document.querySelectorAll('.release-entry').length === 2 && document.querySelector('#changelog-notice').hidden);

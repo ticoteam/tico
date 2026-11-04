@@ -41,7 +41,7 @@ reason attached, exit 0. Every write command takes --dry-run.
 Exit codes: 0 ok, 1 failure (missing key, network, Google said no), 2 policy refusal.
 """
 
-import argparse, fnmatch, hashlib, json, mimetypes, os, shlex, sys, weakref
+import argparse, contextvars, fnmatch, hashlib, json, mimetypes, os, shlex, sys, uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -67,6 +67,12 @@ def open_calendar(mailbox):
     return auth.calendar_service(mailbox)
 
 
+# The connections the command running on this thread opened (Ctx). main() closes them when the command ends, on the
+# thread that opened them: a finalizer would close one on whichever thread the garbage collector runs on, and sqlite
+# refuses to close a connection from another thread.
+_COMMAND_CONNECTIONS = contextvars.ContextVar("mail_command_connections", default=None)
+
+
 def open_db():
     return db.connect(DB_PATH)
 
@@ -90,19 +96,32 @@ class Ctx:
                 if not soft:                            # `lint` and `review` need no mailbox
                     raise
         self.conn = open_db()
-        self._close_conn = weakref.finalize(self, self.conn.close)
+        opened = _COMMAND_CONNECTIONS.get()
+        if opened is not None:
+            opened.append(self.conn)
         self._gmail, self._calendar, self._policy = None, None, None
+        self._company = ()                              # () not read yet; read at the first write (Ctx.company)
+        self.read_company = lambda: pl.company(self.slug)
+
+    def company(self):
+        """What the company lets Tico do here, from Tico, read once and only when a write asks. Every Gmail and
+        Calendar write checks it, whichever credential this run holds."""
+        if self._company == ():
+            self._company = self.read_company()
+        return self._company
 
     @property
     def gmail(self):
         if self._gmail is None:
             self._gmail = open_gmail(self.mailbox)
+            self._gmail.company = self.company
         return self._gmail
 
     @property
     def calendar(self):
         if self._calendar is None:
             self._calendar = cal.Calendar(open_calendar(self.mailbox), self.mailbox)
+            self._calendar.company = self.company
         return self._calendar
 
     @property
@@ -246,7 +265,7 @@ def cmd_e2e(args):
 
 def cmd_mint_token(args):
     """A short-lived access token for one mailbox, for the runner's supervisor to hand a turn
-    (runner/credential_socket.py). Prints the token and its expiry; the key itself never leaves."""
+    (runner_support/credential_socket.py). Prints the token and its expiry; the key itself never leaves."""
     try:
         token, expiry, granted = auth.mint_token(args.mailbox, args.service)
     except oauth.SignInFailed as e:
@@ -1607,10 +1626,15 @@ def lint_line(res):
     return "; ".join(f"{x['id']} {x['message']}" for x in res["errors"])
 
 
-def label_thread(ctx, name, msgs, fallback_ids=()):
+def label_thread(ctx, name, msgs, fallback_ids=(), part_of=None):
+    """`part_of` is the draft or send this marker records (Gmail.marking): the company's box for that write holds it."""
     ids = [m["id"] for m in msgs or []] or [i for i in fallback_ids if i]
     if ids:
-        modify(ctx, ids, add=[name], action="label-add", detail={"label": name})
+        if part_of and not ctx.dry:
+            with ctx.gmail.marking(part_of):
+                modify(ctx, ids, add=[name], action="label-add", detail={"label": name})
+        else:
+            modify(ctx, ids, add=[name], action="label-add", detail={"label": name})
     return ids
 
 
@@ -1707,9 +1731,9 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
         thread_id = (d.get("message") or {}).get("threadId") or thread_id
         db.put_draft(ctx.conn, key, ctx.slug, ctx.mailbox, ctx.issue, to, subject,
                      thread_id, draft_id, message_id, review_id)
-        label_thread(ctx, lb.DRAFTED, msgs, [message_id])
+        label_thread(ctx, lb.DRAFTED, msgs, [message_id], part_of="drafts")
         if review_no:
-            label_thread(ctx, lb.NEEDS_OWNER, msgs, [message_id])
+            label_thread(ctx, lb.NEEDS_OWNER, msgs, [message_id], part_of="drafts")
     ctx.audit("draft", draft_id or key[:12],
               {"to": to, "cc": cc, "subject": subject, "thread": thread_id, "key": key,
                "created": created, "reply": bool(reply_to), "chars": len(body),
@@ -1856,6 +1880,24 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
                   {"reason": review_note, "approval": appr["issue"], "to": to, "cc": cc})
         base["review_advisory"] = review_note
 
+    # The org rules that apply to this bot, checked by Tico before the send's own gates: held, it stays a draft and
+    # the bot is told the rule and whom to appeal to. A failed check lets it through, as every check failure does,
+    # logged and named in the answer.
+    check_id = str(uuid.uuid4())                        # the check's Idempotency-Key, and its miss's id if it fails
+    ruled = pl.rule_check(ctx.slug, to, cc, subject, body, key=check_id)
+    if ruled and not ruled.get("failed") and not ctx.dry:
+        # Tico answers again: the sends whose check it never answered are told to it now, forgotten once it took them.
+        db.drop_mail_check_misses(ctx.conn, pl.report_misses(ctx.slug, db.mail_check_misses(ctx.conn, ctx.slug)))
+    if ruled and ruled.get("failed"):
+        ctx.audit("rule-check-failed", draft_id or thread_id, {"reason": ruled["failed"], "to": to, "cc": cc})
+        base["rule_check"] = "unchecked: the org rule check failed (" + str(ruled["failed"]) + ")"
+    if ruled and ruled.get("outcome") == "held":
+        return downgrade((ruled.get("held") or {}).get("text") or "held by an org rule", "rules")
+    warning_line = ""
+    if ruled and ruled.get("outcome") == "warn":
+        base["rule_warning"] = (ruled.get("rule_warning") or {}).get("text") or ""
+        warning_line = str(ruled.get("warning_line") or "")
+
     decision = pl.check_send(ctx.policy, ctx.slug, ctx.mailbox, to, cc,
                              attachments=files, draft=draft_id, thread_id=thread_id,
                              approval=approval, verbs=None, conn=ctx.conn, body=body,
@@ -1866,6 +1908,11 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
         return dict(base, sent=False, would_send=True, checks=decision["checks"],
                     reason="", note="dry run: every gate passed, nothing was sent.")
 
+    if warning_line and draft_id:
+        # A Warn rule: the warning line goes on the recipient's copy, written onto the draft just before it is sent.
+        ctx.gmail.update_draft(draft_id, compose.with_warning(ctx.gmail.get_draft_raw(draft_id), warning_line),
+                               thread_id)
+        ctx.audit("rule-warning", draft_id, {"to": to, "cc": cc})
     key = compose.send_key(ctx.slug, ctx.issue, draft_id)
     day = datetime.now(zone(DEFAULT_TZ)).strftime("%Y-%m-%d")
     row, claimed = db.claim_send(ctx.conn, key, ctx.slug, ctx.mailbox, ctx.issue, to, subject,
@@ -1881,9 +1928,11 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
         raise
     message_id = res.get("id", "")
     thread_id = res.get("threadId") or thread_id
-    db.finish_send(ctx.conn, key, message_id, "sent")
+    # Out with no verdict: the check's id is kept with the finished send, for Tico to hear of once it answers again.
+    db.finish_send(ctx.conn, key, message_id, "sent",
+                   miss=(ctx.slug, check_id) if ruled and ruled.get("failed") else None)
     handled = lb.handled(ctx.slug)
-    label_thread(ctx, handled, msgs, [message_id])
+    label_thread(ctx, handled, msgs, [message_id], part_of="send")
     ctx.audit("send", message_id or draft_id,
               {"to": to, "cc": cc, "subject": subject, "thread": thread_id, "key": key,
                "draft": draft_id, "attachments": names, "review": verdict.get("backend")})
@@ -2004,8 +2053,9 @@ def cmd_discard(args):
         if thread_id and thread_id not in db.draft_thread_ids(ctx.conn, ctx.mailbox):
             try:                                        # no hub draft left on the thread
                 ids = [m["id"] for m in ctx.gmail.thread(thread_id) or []]
-                modify(ctx, ids, remove=[lb.DRAFTED], action="label-remove",
-                       detail={"label": lb.DRAFTED})
+                with ctx.gmail.marking("drafts"):
+                    modify(ctx, ids, remove=[lb.DRAFTED], action="label-remove",
+                           detail={"label": lb.DRAFTED})
             except (Failure, Refused):
                 pass
     ctx.audit("discard", did, {"key": row["key"], "to": row["recipients"].split(","),
@@ -2419,6 +2469,11 @@ def cmd_connector_event(args):
     if end <= start or (end - start) > timedelta(days=7):
         raise Refused("The connector calendar action has an invalid interval.")
     ctx = Ctx(args, "schedule", mailbox=mailbox)
+    # A claimed action is never retried, so What Tico may do unread refuses it here (exit 2: nothing was created)
+    # rather than as a failure the runner must report as unknown.
+    if ctx.company() == pl.UNREAD:
+        raise Refused("Tico couldn't check the company's mail settings; try again",
+                      "Nothing was sent to Google. Schedule it again once Tico answers.")
     event_id = hashlib.sha256(str(request["id"]).encode()).hexdigest()[:32]
     event = ctx.calendar.create_hub_event(
         start, end, str(request["title"]).strip(), attendees, event_id,
@@ -2448,6 +2503,8 @@ def cmd_mail_action(args):
         return 2
     try:
         ctx = Ctx(args, actions.verb(request["action"]), mailbox=str(request["mailbox"]).strip().lower())
+        # An automation is Tico too, so What Tico may do holds it, read from Tico (policy.company): whatever the action
+        # on stdin says of it (a `company` field included) is ignored, since anything that can run this command writes it.
         result = actions.perform(ctx, request)
     except Refused as e:
         print(json.dumps({"ok": False, "retry": False, "detail": e.msg[:900]}))
@@ -2599,6 +2656,7 @@ def cmd_sync_export(args):
         rows = db.unpushed(conn, mailbox=mailbox if mailbox else None,
                            mailboxes=None if mailbox or boxes is None else boxes,
                            limit=getattr(args, "limit", None) or SYNC_LIMIT)
+        db.annotate_known_senders(conn, rows)
     finally:
         conn.close()
     payload = {"ok": True, "count": len(rows), "messages": rows}
@@ -3040,6 +3098,8 @@ def main(argv=None):
         args._parser.error("--untriaged is label-based and cannot be combined with --new "
                            "or --since")
     pkg.JSON_ERRORS = bool(getattr(args, "json", False) or getattr(args, "format", "") == "json")
+    opened = []
+    scope = _COMMAND_CONNECTIONS.set(opened)
     try:
         return args.func(args) or 0
     except Refused as e:
@@ -3048,6 +3108,10 @@ def main(argv=None):
     except Failure as e:
         report(e, "failed")
         return 1
+    finally:
+        _COMMAND_CONNECTIONS.reset(scope)
+        for conn in opened:
+            conn.close()
 
 
 if __name__ == "__main__":

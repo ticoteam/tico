@@ -22,7 +22,6 @@ const lensRunId = () => {
   return rest.startsWith('/') ? decodeURIComponent(rest.slice(1)) : '';
 };
 const lensRunHref = id => LENSES_ROUTE + '/' + encodeURIComponent(id);
-const lensStrategy = () => { const n = typeof strategyBotName === 'function' ? strategyBotName() : 'Strategy Bot'; return n === 'Strategy Bot' ? 'the ' + n : n; };
 const lensErrorCode = error => error?.body?.error?.code || '';
 const lensFirstLine = text => String(text || '').split('\n').find(line => line.trim()) || '';
 
@@ -69,7 +68,7 @@ async function lensListPage(load) {
   const names = Object.fromEntries(list.map(l => [l.id, l.name]));
   const prior = r => `<li><a class="lens-past" href="${lensRunHref(r.id)}" data-lens-run-row="${esc(r.id)}">
       <span class="lens-past-top"><b class="lens-name">${esc(r.name || names[r.lens] || r.lens)}</b>${r.on_draft ? '<span class="pill">draft</span>' : ''}${lensStatusPill(r.status)}
-        <span class="muted lens-past-when">${lensWhen(r.created)}</span></span>
+        <span class="muted lens-past-when">${lensWhen(r.created_at)}</span></span>
       ${lensFirstLine(r.result?.summary) ? `<span class="lens-past-sum">${esc(lensFirstLine(r.result.summary))}</span>` : ''}</a></li>`;
   $('#lens-body').innerHTML = `<div class="lens-wrap">${groups || '<p class="muted strat-empty">No lenses</p>'}
     <section class="lens-group" data-lens-group="runs"><h2 class="strat-k">Past runs</h2>
@@ -184,7 +183,7 @@ function lensFlowRender() {
       <p class="lens-note" data-lens-error hidden></p>
       <div class="goal-actions lens-actions"><button class="ghost" type="button" data-lens-back${flow.i === 0 ? ' disabled' : ''}>Back</button><span class="spacer"></span>
         <button class="primary" type="submit" data-lens-next>${last ? 'Run' : 'Next'}</button></div>
-      ${step ? `<button class="linkish lens-skip" type="button" data-lens-skip>Skip, let ${esc(lensStrategy())} assume</button>` : ''}
+      ${step ? `<button class="linkish lens-skip" type="button" data-lens-skip>Skip, let the Assistant assume</button>` : ''}
     </form>`;
   lensFlowBind(dlg, flow, step, last);
   (dlg.querySelector('.lens-rows input, textarea, .lens-scores input, .lens-pill input') || dlg.querySelector('[data-lens-next]'))?.focus();
@@ -303,7 +302,7 @@ function lensRunRender(run) {
   if (!body || !LENS) return;
   LENS.watch?.disconnect(); LENS.watch = null;
   const owner = lensMayRun(), result = run.result || {};
-  const meta = [lensWhen(run.created), run.created_by ? esc(goalActorName(run.created_by)) : '', run.strategy_n ? `v${esc(run.strategy_n)}` : ''].filter(Boolean).join(' · ');
+  const meta = [lensWhen(run.created_at), run.created_by ? esc(goalActorName(run.created_by)) : '', run.strategy_n ? `v${esc(run.strategy_n)}` : ''].filter(Boolean).join(' · ');
   const head = `<div class="lens-head"><a class="ghost strat-back lens-back" href="${LENSES_ROUTE}">‹ Lenses</a>
       <h2 class="lens-title">${esc(run.name || run.lens)}</h2>
       <p class="lens-meta">${run.on_draft ? '<span class="pill">draft</span>' : ''}${run.status === 'done' ? '' : lensStatusPill(run.status)}<span>${meta}</span></p></div>`;
@@ -341,7 +340,7 @@ function lensResultHtml(run, result, owner) {
   const sharpen = (result.sharpen || []).map((s, i) => {
     const text = typeof s === 'string' ? s : s?.text || '', task = tasks[String(i)];
     return `<li class="lens-change" data-lens-sharpen-row="${i}"><span class="lens-ctext">${esc(text)}</span>${
-      task ? `<span class="lens-done muted">Asked · <a href="#/task/${encodeURIComponent(task)}">task</a></span>` : owner ? `<button class="ghost strat-mini" type="button" data-lens-sharpen="${i}">Ask the Librarian</button>` : ''}</li>`;
+      task ? `<span class="lens-done muted">Asked · <a href="#/task/${encodeURIComponent(task)}">task</a></span>` : owner ? `<button class="ghost strat-mini" type="button" data-lens-sharpen="${i}">Ask</button>` : ''}</li>`;
   }).join('');
   const proposal = run.proposal_id ? `<p class="lens-proposal muted" data-lens-proposal>${owner ? `Sent to you as a <a href="${NEEDS_YOU}">proposal</a>` : 'Sent to the owner as a proposal'}</p>` : '';
   return `${stratText(result.summary) ? `<p class="lens-summary">${esc(result.summary)}</p>` : ''}

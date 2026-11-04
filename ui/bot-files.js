@@ -12,8 +12,8 @@
   const css = `
 .bot-files .bf-row{display:block;padding:3px 0;min-height:24px;font-size:13px;line-height:18px}
 .bot-files .bf-name{min-width:0;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
-.bot-files a.bf-name{color:var(--accent-quiet)}
-.bot-files a.bf-name:hover{color:var(--accent);text-decoration:underline}
+.bot-files a.bf-name{color:var(--link-quiet)}
+.bot-files a.bf-name:hover{color:var(--link);text-decoration:underline}
 .bot-files .bf-foot{display:flex;gap:10px;align-items:center;padding-top:2px}
 .bot-files .bf-err{color:var(--fail);font-size:12.5px}`;
 

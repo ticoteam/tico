@@ -27,7 +27,7 @@ def held(api, machine, asks=True, **busy):
         assert post(api, "jobs/claim", busy, token=machine["token"])["attempt"] is None
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),))
         online = {r["id"] for r in health._online_runners(c)}
         rows = [r for r in health._waiting(c, online, store.settings)[2] if r["bot"] == "ops"]
         found = {f["check_id"] for f in health_monitor.findings(c, store.settings)}
@@ -83,7 +83,7 @@ def test_a_bot_limited_to_one_task_claims_only_it_and_its_subtasks_until_release
     control(action="unscope")
     assert claim(api, machine) is None                       # released while paused: eligible again, not started
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM attempts WHERE bot='ops' AND state IN ('leased','running')").fetchone()
+        assert not c.execute("SELECT 1 FROM attempts WHERE bot_id='ops' AND state IN ('leased','running')").fetchone()
         assert [r[0] for r in c.execute("SELECT action FROM events WHERE target='ops' AND action LIKE 'bot.%scope' "
                                         "ORDER BY rowid")] == ["bot.scope", "bot.unscope"]
     control(action="resume")
@@ -112,7 +112,7 @@ def test_a_turn_running_when_its_bot_is_limited_takes_in_only_work_inside_the_li
 def test_a_limited_bots_turn_carries_only_next_run_work_inside_the_limit_until_released(api, monkeypatch):
     from backend import bot_to_bot
     backlog = []
-    monkeypatch.setattr(bot_to_bot, "continue_backlog", lambda c, bot: backlog.append(bot))
+    monkeypatch.setattr(bot_to_bot, "continue_backlog", lambda c, bot, skip=(): backlog.append(bot))
     machine = task_bot(api, lanes=True)
     task = new_task(api, "the check")
     child = post(api, "tasks", {"owner": "ops", "title": "review", "body": "Review it.", "next_run": True,
@@ -177,11 +177,11 @@ def test_work_fenced_behind_an_interrupted_run_on_its_task(api):
     task = new_task(api, "first")
     attempt = claim(api, machine)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='lost',finished=? WHERE id=?", (H.now(), attempt["id"]))
+        c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (H.now(), attempt["id"]))
         c.execute("UPDATE jobs SET state='uncertain' WHERE id=(SELECT job_id FROM attempts WHERE id=?)", (attempt["id"],))
     post(api, "tasks/" + task["id"] + "/comments", {"text": "Is the first part done?"})
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='ops' AND state='queued'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops' AND state='queued'").fetchone()[0] == 1
     says(api, machine, "uncertain")
 
 
@@ -189,14 +189,28 @@ def test_a_bot_cooling_off_after_a_usage_limit(api):
     machine = task_bot(api, lanes=True)
     new_task(api, "first")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_status(bot,state,since,updated_at) VALUES('ops','limited',?,?) "
-                  "ON CONFLICT(bot) DO UPDATE SET state='limited',since=excluded.since", (H.now(), H.now()))
+        c.execute("INSERT INTO bot_status(bot,state,changed_at,updated_at) VALUES('ops','limited',?,?) "
+                  "ON CONFLICT(bot) DO UPDATE SET state='limited',changed_at=excluded.changed_at", (H.now(), H.now()))
     says(api, machine, "cooling_off")
+
+
+def test_operations_names_a_limited_bots_runtime_when_config_was_primed_slug_first(api):
+    """prime_claimables and the machines page prime bot_config rows whose first column is the slug, not the JSON;
+    the limit issue reads the configuration by name, so it does not parse the slug as JSON."""
+    machine = task_bot(api, lanes=True)
+    new_task(api, "first")
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bot_status(bot,state,changed_at,updated_at) VALUES('ops','limited',?,?) "
+                  "ON CONFLICT(bot) DO UPDATE SET state='limited',changed_at=excluded.changed_at", (H.now(), H.now()))
+    body = api.get("/api/v2/operations", headers=headers())
+    assert body.status_code == 200, body.text
+    [issue] = [i for i in body.json()["issues"] if i["kind"] == "bot" and i["bot"] == "ops"]
+    assert issue["detail"].startswith("fake; resumes")
 
 
 def readiness(api, machine, document):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness_json=? WHERE id=?", (json.dumps(document), machine["runner_id"]))
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?", (json.dumps(document), machine["runner_id"]))
 
 
 def test_a_computer_that_has_not_said_whether_it_can_run_the_bot(api):
@@ -216,6 +230,28 @@ def test_a_rejected_sign_in(api):
     says(api, machine, "sign_in_rejected")
 
 
+def test_a_sign_in_read_as_ready_for_a_plan_that_no_longer_covers_it(api):
+    # The runner counts a missing sign-in as ready while its assignments say a plan signs the runtime in; with no plan
+    # covering it now, the bot waits for a sign-in instead of starting a turn that fails on the missing login.
+    machine = task_bot(api, lanes=True)
+    new_task(api, "first")
+    readiness(api, machine, {"schema_version": 1, "runtimes": {"codex": {"installed": True, "authenticated": "missing"}},
+                             "bots": {"ops": {"ready": True, "runtime": "codex", "profile": "", "sign_in": "ready"}}})
+    says(api, machine, "sign_in_missing")
+
+
+def test_another_profile_signed_out_does_not_refuse_a_bot_on_its_own_ready_login(api):
+    # An older runner's runtime row is the worst of its profiles: one signed-out profile must not hold a bot whose own
+    # login (the unnamed profile) is signed in.
+    machine = task_bot(api, lanes=True)
+    new_task(api, "first")
+    readiness(api, machine, {"schema_version": 1, "runtimes": {"codex": {
+        "installed": True, "authenticated": "missing",
+        "profiles": {"": {"authenticated": "ready"}, "acme-team": {"authenticated": "missing"}}}},
+        "bots": {"ops": {"ready": True, "runtime": "codex", "profile": "", "sign_in": "ready"}}})
+    assert post(api, "jobs/claim", {}, token=machine["token"])["attempt"] is not None
+
+
 def test_the_report_names_the_bot_and_computer_by_their_bundle_labels(api):
     machine = task_bot(api, lanes=True)
     new_task(api, "first")
@@ -224,8 +260,8 @@ def test_the_report_names_the_bot_and_computer_by_their_bundle_labels(api):
     with store.transaction() as c:
         item = next(f for f in health_monitor.findings(c, store.settings) if f["check_id"] == "queue_idle")
         now = H.now()
-        row = {**item, "first_seen": now, "last_seen": now, "occurrences": 1}
-        c.execute("INSERT INTO health_findings(key,signature,check_id,kind,title,detail,fix,first_seen,last_seen) "
+        row = {**item, "first_seen_at": now, "last_seen_at": now, "occurrences": 1}
+        c.execute("INSERT INTO health_findings(key,signature,check_id,kind,title,detail,fix,first_seen_at,last_seen_at) "
                   "VALUES(?,?,?,?,?,?,?,?,?)", (item["key"], item["signature"], item["check_id"], item["kind"],
                                                 item["title"], item["detail"], item["fix"], now, now))
         message = health_monitor.report_message(c, row)
@@ -251,9 +287,9 @@ def ops_rows(api):
 
 def queued_at(api, task, minutes):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued' AND message_id IN "
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued' AND message_id IN "
                   "(SELECT id FROM messages WHERE body LIKE ?)", (H.shift(H.now(), minutes=-minutes), f"%{task['title']}%"))
-        return c.execute("SELECT created FROM jobs WHERE bot='ops' AND state='queued' AND message_id IN "
+        return c.execute("SELECT created_at FROM jobs WHERE bot_id='ops' AND state='queued' AND message_id IN "
                          "(SELECT id FROM messages WHERE body LIKE ?)", (f"%{task['title']}%",)).fetchone()[0]
 
 
@@ -281,7 +317,7 @@ def test_an_old_held_check_beside_a_young_free_job_is_neither_held_nor_slow(api)
     assert rows == [] and "queue_idle" not in found
     with api.app.state.store.transaction() as c:
         asked = H.shift(H.now(), minutes=-3)
-        c.execute("UPDATE jobs SET created=? WHERE message_id=?", (asked, chat["id"]))
+        c.execute("UPDATE jobs SET created_at=? WHERE message_id=?", (asked, chat["id"]))
     assert [(r["reason"], r["oldest"]) for r in ops_rows(api)[0]] == [("slow", asked)]
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM jobs WHERE message_id=?", (chat["id"],))
@@ -305,7 +341,7 @@ def test_a_computer_restarting_holds_its_work_and_is_a_finding_once_it_takes_too
                 if m["id"] == machine["runner_id"])["restarting"]
     # Past the runner's own drain and stop windows the restart is stuck: a setup finding, still no Tico bug.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET restart_since=? WHERE id=?", (H.shift(H.now(), minutes=-35), machine["runner_id"]))
+        c.execute("UPDATE runner_states SET restart_since=? WHERE runner_id=?", (H.shift(H.now(), minutes=-35), machine["runner_id"]))
     assert {"runner_restarting"} <= ops_rows(api)[1] and "queue_idle" not in ops_rows(api)[1]
     # The restarted runner's first heartbeat no longer says so.
     post(api, "runners/heartbeat", beat, token=machine["token"])

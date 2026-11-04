@@ -2,9 +2,10 @@
 older or newer than the reader's own snapshot."""
 from backend import read_cache
 from backend.store import H
-from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.test_api import api, post  # noqa: F401  (fixture)
+from backend import bot_settings as BS
 
-CONFIGS = "SELECT * FROM bot_config"
+CONFIGS = BS.ROW_SQL
 STEPS = "SELECT * FROM task_steps ORDER BY position,id"
 
 
@@ -115,3 +116,54 @@ def test_type_list_reads_task_steps_from_the_shared_rows(api):
         H.type_list(c)
         c.set_trace_callback(None)
     assert ran == []
+
+
+def test_entries_are_built_once_across_snapshots_and_rebuilt_after_a_bot_config_write(api, monkeypatch):
+    """The entries every bot list asks for are built from bot_config alone, so later snapshots share the built value."""
+    from backend import views
+    store = api.app.state.store
+    built, real = [], views._entries
+    monkeypatch.setattr(views, "_entries", lambda c, owner="": built.append(owner) or real(c, owner))
+
+    def read_entries():
+        with store.read() as c:
+            c.execute("BEGIN")
+            found = views.entries(c, shared=True)
+            c.commit()
+        return found
+    slug = snapshot_rows(store)[0][0]["bot"]
+    first = read_entries()
+    assert read_entries() is first and len(built) == 1
+    with store.read() as c:                     # a caller that changes its copy changes nothing shared
+        mine = views.entries(c)
+        mine[slug]["repo"] = "changed-by-a-caller"
+        assert views.entries(c)[slug]["repo"] != "changed-by-a-caller"
+    with store.transaction() as c:
+        c.execute("UPDATE bot_config SET repo=? WHERE bot=?", ("emp-renamed", slug))
+    third = read_entries()
+    assert len(built) == 2 and third[slug]["repo"] == "emp-renamed"
+    assert read_entries() is third and len(built) == 2
+
+
+def _counters(store):
+    with store.read() as c:
+        return (c.execute("SELECT value FROM roster_clock WHERE id=1").fetchone()[0],
+                [tuple(r) for r in c.execute("SELECT name,value FROM row_clock ORDER BY name")],
+                c.execute("SELECT value FROM provenance_clock WHERE id=1").fetchone()[0])
+
+
+def test_a_restart_that_changes_nothing_leaves_the_change_counters_where_they_were(api):
+    """Every start rewrites what it checks (task step positions, the shared rows' keys), and a rewrite that changes no
+    value must not move the roster, row or provenance counters: each move throws away what the caches built on it.
+    The first restart applies what the seeded rows still need; the second must change nothing."""
+    from fastapi.testclient import TestClient
+    from backend.app import create_app
+    post(api, "tasks", {"owner": "ops", "title": "Restart probe", "body": "Nothing changes on a restart."})
+    post(api, "tasks", {"owner": "cpo", "title": "Private restart probe", "body": "Nor does this.", "private": True})
+    settings = api.app.state.store.settings
+    with TestClient(create_app(settings)):
+        pass
+    before = _counters(api.app.state.store)
+    with TestClient(create_app(settings)):
+        pass
+    assert _counters(api.app.state.store) == before

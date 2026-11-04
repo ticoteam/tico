@@ -7,6 +7,7 @@ import pytest
 from backend import models_preset, providers
 from backend.tests.test_api import api, assign, claim, post, runner  # noqa: F401
 from backend.tests.test_gateway_connection import KEY, fake_gateway, handed_to, save, setup
+from backend import bot_settings as BS
 
 CLAUDE = {"runtime": "claude", "harness": "claude-code", "model": "claude-opus-5-5"}
 
@@ -20,9 +21,9 @@ def choose(api, preset, enabled=("anthropic", "openai")):
 
 def on_claude(api, bot):
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config = BS.read(c, bot)
         config = {k: v for k, v in config.items() if k != "fallback"}
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (json.dumps({**config, **CLAUDE}), bot))
+        BS.write(c, bot, {**config, **CLAUDE})
 
 
 def heartbeat(api, machine, bot, signed_in, isolated):
@@ -33,10 +34,18 @@ def heartbeat(api, machine, bot, signed_in, isolated):
                  "bots": {bot: {"ready": signed_in, "runtime": "claude", "model": CLAUDE["model"],
                                 "repository_present": True, "configuration_valid": True,
                                 "problems": [] if signed_in else ["claude is not signed in"]}}}
-    if isolated is not None:
-        readiness["isolated"] = isolated
+    says(readiness, isolated)
     post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": readiness},
          token=machine["token"])
+
+
+def says(readiness, isolated):
+    """`readiness` saying it isolates bots (True/False), nothing (None), or "cloud": a cloud machine, not isolated
+    but one company's trust group (runner-rs/src/cloud_machine.rs), which runs Tico models too."""
+    if isolated == "cloud":
+        readiness.update(isolated=False, trust="cloud_machine")
+    elif isolated is not None:
+        readiness["isolated"] = isolated
 
 
 def connected(api, monkeypatch):
@@ -60,7 +69,7 @@ def test_before_sign_in_a_bot_runs_on_the_gateway_only_where_bots_run_as_their_o
         # A Mac (or a runner that does not say): no Gateway turn is handed out; the work waits, it never fails.
         assert got is None
         with api.app.state.store.read() as c:
-            assert c.execute("SELECT state FROM jobs WHERE bot='ops'").fetchone()[0] == "queued"
+            assert c.execute("SELECT state FROM jobs WHERE bot_id='ops'").fetchone()[0] == "queued"
         return
     assert (got["config"]["model"], got["config"]["runtime"]) == ("tico-general-medium-1.0", "pi")
     assert got["config"]["waiting_for_sign_in"] == "claude" and got["gateway"] is True
@@ -69,7 +78,7 @@ def test_before_sign_in_a_bot_runs_on_the_gateway_only_where_bots_run_as_their_o
     heartbeat(api, machine, "ops", signed_in=True, isolated=True)
     post(api, "chat/ops", {"text": "Use only the synthetic fixture again"})
     with api.app.state.store.read() as c:
-        assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])["model"] \
+        assert BS.read(c, 'ops')["model"] \
             == CLAUDE["model"]
         record = providers.load(c, api.app.state.store.settings)
     ready = {"isolated": True, "runtimes": {"claude": {"authenticated": "ready"}}}
@@ -143,6 +152,15 @@ def test_a_bot_that_names_its_own_fallback_keeps_it(api, monkeypatch):
     own = {**CLAUDE, "fallback": {"harness": "codex", "model": "gpt-5.5"}}
     assert models_preset.with_gateway_fallback(record, {"isolated": True}, own) == own
     assert "gateway_fallback" not in models_preset.with_gateway_fallback(record, {"isolated": False}, CLAUDE)
+    cloud = {"isolated": False, "trust": "cloud_machine"}
+    assert "gateway_fallback" in models_preset.with_gateway_fallback(record, cloud, CLAUDE)
+
+
+def test_only_isolation_or_a_cloud_machines_trust_group_runs_gateway_work():
+    assert models_preset.runs_gateway({"isolated": True})
+    assert models_preset.runs_gateway({"isolated": False, "trust": "cloud_machine"})
+    for ready in ({"isolated": False}, {}, None, {"isolated": "true"}, {"isolated": False, "trust": "other"}):
+        assert not models_preset.runs_gateway(ready), ready
 
 
 def test_the_turn_carries_what_each_gateway_model_reads():
@@ -223,7 +241,7 @@ def test_no_sign_in_card_under_the_other_choices(api):
         assert needs(api) == []
 
 
-@pytest.mark.parametrize("isolated", [True, False, None])
+@pytest.mark.parametrize("isolated", [True, False, None, "cloud"])
 def test_a_computer_that_cannot_run_gateway_work_says_so_and_the_picker_marks_tico_models(api, monkeypatch, isolated):
     from backend import readiness
     from backend.tests.test_api import get
@@ -257,14 +275,13 @@ def on_tico(api, machine, isolated):
     readiness = {"schema_version": 1, "runtimes": {"pi": {"installed": True, "authenticated": "missing"}},
                  "bots": {"ops": {"ready": True, "runtime": "pi", "model": "tico-general-medium-1.0",
                                   "repository_present": True, "configuration_valid": True}}}
-    if isolated is not None:
-        readiness["isolated"] = isolated
+    says(readiness, isolated)
     post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": readiness},
          token=machine["token"])
 
 
 @pytest.mark.parametrize("preset", [models_preset.RECOMMENDED, ""])
-@pytest.mark.parametrize("isolated", [True, False, None])
+@pytest.mark.parametrize("isolated", [True, False, None, "cloud"])
 def test_a_bot_on_a_tico_model_waits_where_the_computer_does_not_say_it_runs_bots_as_their_own_user(
         api, monkeypatch, preset, isolated):
     """A Tico model the bot names itself, under any choice: no attempt is handed out that its runner must refuse
@@ -280,13 +297,17 @@ def test_a_bot_on_a_tico_model_waits_where_the_computer_does_not_say_it_runs_bot
     if isolated:
         attempt = claim(api, machine, "ops")
         assert attempt["config"]["model"] == "tico-general-medium-1.0" and attempt["gateway"] is True
+        if isolated == "cloud":
+            # The runner says `trust` only to a server whose config answer takes it (runner-rs/src/readiness.rs).
+            from backend.tests.test_api import get
+            assert get(api, "config", machine["token"])["readiness_trust"] is True
         return
     rows, found = held(api, machine)
     reason = "not_isolated" if isolated is False else "isolation_unknown"
     assert [r["reason"] for r in rows] == [reason] and "queue_idle" not in found
     with api.app.state.store.read() as c:
-        assert {r[0] for r in c.execute("SELECT state FROM jobs WHERE bot='ops'")} == {"queued"}
-        assert c.execute("SELECT count(*) FROM attempts WHERE bot='ops'").fetchone()[0] == 0
+        assert {r[0] for r in c.execute("SELECT state FROM jobs WHERE bot_id='ops'")} == {"queued"}
+        assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 0
         [row] = health._stuck(c, rows, set(), health_admin(api), True)
     assert "Tico Gateway work" in row["why"], row
     # Once the computer says it can, the same work starts.
@@ -332,7 +353,7 @@ def test_waiting_for_a_sign_in_lets_through_only_the_missing_sign_in(api, monkey
     assert [r["reason"] for r in rows] == ["readiness_unknown" if change == "no report" else "not_ready"], rows
     assert "queue_idle" not in found
     with api.app.state.store.read() as c:
-        assert {r[0] for r in c.execute("SELECT state FROM jobs WHERE bot='ops'")} == {"queued"}
+        assert {r[0] for r in c.execute("SELECT state FROM jobs WHERE bot_id='ops'")} == {"queued"}
 
 
 @pytest.mark.parametrize("preset", models_preset.PRESETS)
@@ -398,8 +419,8 @@ def test_a_gateway_segment_records_the_key_its_runner_was_handed_and_the_install
              {**claude, "input_tokens": 30, "output_tokens": 30}, {**tico, "input_tokens": 30, "output_tokens": 30}]}},
          machine["token"])
     with api.app.state.store.read() as c:
-        rows = {r["model"]: dict(r) for r in c.execute("SELECT * FROM turn_usage_segments")}
-        install = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='usage-count'").fetchone()[0])
+        rows = {r["model"]: dict(r) for r in c.execute("SELECT * FROM usage_facts")}
+        install = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='usage-count'").fetchone()[0])
     assert rows["tico-general-medium-1.0"]["gateway_key_id"] == paid
     assert rows["tico-general-medium-1.0"]["install_id"] == install["install_id"]
     assert rows[CLAUDE["model"]]["gateway_key_id"] is None and rows[CLAUDE["model"]]["install_id"] is None

@@ -1,0 +1,41 @@
+{
+  "expected": [
+    {
+      "text": "Use the Slack APIs only as the contract and the Slack API documentation allow.",
+      "quote": "You must use the APIs only in accordance with this Contract and the Slack API documentation",
+      "section": "API use",
+      "who_hint": "engineering"
+    },
+    {
+      "text": "An app offered to others outside our organization needs its own user agreement and privacy policy.",
+      "quote": "If you offer your Application for use by others outside your organization, you must maintain a user agreement and privacy policy for your Application",
+      "section": "Transparency & Reporting by Third Parties",
+      "who_hint": "product"
+    },
+    {
+      "text": "The app's privacy policy must describe how we collect, use, store and share data in clear terms.",
+      "quote": "Your privacy policy must meet applicable legal standards and describe the collection, use, storage and sharing of data in clear, understandable and accurate terms.",
+      "section": "Privacy",
+      "who_hint": "legal"
+    },
+    {
+      "text": "Report any security incident involving Slack data to Slack promptly by email.",
+      "quote": "You must promptly notify us in writing via email to security@slack.com of any security incident resulting in unauthorized access to or loss of Slack data",
+      "section": "Security",
+      "who_hint": "security"
+    },
+    {
+      "text": "Do not sell, rent, lease, sublicense or redistribute access to the Slack APIs.",
+      "quote": "however, you may not sell, rent, lease, sublicense, redistribute, or syndicate access to any of our APIs.",
+      "section": "API use",
+      "who_hint": "engineering"
+    }
+  ],
+  "url": "https://slack.com/terms-of-service/api",
+  "fetched_at": "2026-10-30T23:39:39Z",
+  "from": {
+    "name": "Slack API Terms",
+    "kind": "vendor"
+  },
+  "truncated": false
+}

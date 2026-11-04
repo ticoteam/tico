@@ -40,11 +40,6 @@ function chatDraftSave(P) {
   if (P.files.length) CHAT_FILES.set(P.slug, P.files.slice()); else CHAT_FILES.delete(P.slug);
   try { localStorage.setItem(CHAT_DRAFTS, JSON.stringify(all)); } catch {}
 }
-function botPill(slug) {
-  if (BOT_PILL?.slug === slug) return BOT_PILL;
-  if (BOT_PILL) { chatDraftSave(BOT_PILL); PILLS.delete(BOT_PILL); }
-  return BOT_PILL = pillRestore(makePill({mode: 'chat', slug}));
-}
 // The draft (and files) last left in this bot's box come back.
 function pillRestore(P) {
   const draft = chatDrafts()[P.slug], files = CHAT_FILES.get(P.slug);
@@ -58,9 +53,128 @@ function pillRestore(P) {
 const activeEmps = () => shownEmps().filter(e => e.status === 'active');
 function toastSent(r) {
   const t = document.createElement('div'); t.className = 'toast';
-  t.textContent = r.pending ? `Saved. Sending to ${S.emps.find(e => e.name === r.slug)?.display_name || r.slug} in the background—you can close this page.` : `Sent to ${S.emps.find(e => e.name === r.slug)?.display_name || r.slug}`;
+  t.textContent = r.pending ? `Saved. Sending to ${botDisplayName(r.bot || r.slug)} in the background—you can close this page.` : `Sent to ${botDisplayName(r.bot || r.slug)}`;
 
   document.body.appendChild(t); setTimeout(() => t.remove(), 9000);
+}
+
+// ----------------------------------------------------------------- how a message reaches its bot
+// One vocabulary for the bot chat and task comments (docs/tasks.md "Comments"): Steer goes into the bot's running turn
+// now, Queue right after its current turn (now when idle), Defer waits for its next turn there, at the latest after a
+// while. A way is kept as one string: 'steer', 'queue', 'goal' or 'defer:<for>'. Set as goal is an action, not a way.
+const DELIVERY_FOR = ['30m', '1h', '4h', '24h', '2d', '7d', 'never'];
+const deliveryWay = mode => String(mode || '').split(':')[0];
+const deliveryFor = mode => String(mode || '').split(':')[1] || '';
+const deliveryForWord = f => f === 'never' ? 'Never' : f;
+const deliveryWord = mode => {
+  const way = deliveryWay(mode), f = deliveryFor(mode);
+  if (way === 'defer') return f && f !== 'never' ? `Defer ${f}` : 'Defer';
+  return {steer: 'Steer', queue: 'Queue', goal: 'Set as goal'}[way] || 'Send';
+};
+// The request fields for a way: none for no pick; defer carries its duration.
+const deliveryBody = mode => {
+  const way = deliveryWay(mode);
+  if (!way) return {};
+  return way === 'defer' ? {delivery: way, defer_for: deliveryFor(mode) || 'never'} : {delivery: way};
+};
+// The menu: Steer now, Queue, Defer with its durations, then Set as goal apart. `current` is checked; `deferFor` is
+// the duration the Defer row itself picks. Without `deadlines` (a reader who may not wake the bot) Defer has none.
+function deliveryMenuHTML({steer = true, queue = true, goal = false, deadlines = true, current = 'queue', deferFor = '24h'}) {
+  const row = (val, label, on) => `<button type="button" role="menuitemradio" aria-checked="${on}" data-deliver="${esc(val)}"><span class="p-way-i">${SEND_WAY_ICONS[deliveryWay(val)] || ''}</span><span>${esc(label)}</span>${
+    on ? '<span class="tick" aria-hidden="true">✓</span>' : ''}</button>`;
+  const way = deliveryWay(current), f = way === 'defer' ? deliveryFor(current) : '';
+  const chips = DELIVERY_FOR.map(d => `<button type="button" role="menuitemradio" aria-checked="${f === d}" aria-label="Defer ${esc(deliveryForWord(d))}" data-deliver="defer:${d}">${esc(deliveryForWord(d))}</button>`).join('');
+  return (steer ? row('steer', 'Steer now', way === 'steer') : '') + (queue ? row('queue', 'Queue', way === 'queue') : '')
+    + row('defer:' + (deadlines ? f || deferFor : 'never'), 'Defer', way === 'defer')
+    + (deadlines ? `<div class="p-for" role="group" aria-label="Defer for">${chips}</div>` : '')
+    + (goal ? `<div class="sep" role="separator"></div>${row('goal', 'Set as goal', way === 'goal')}` : '');
+}
+// Arrows move through the menu's buttons; the menu's own handlers do the rest.
+function deliveryMenuKeys(menu, ev) {
+  if (!['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight'].includes(ev.key)) return;
+  const all = [...menu.querySelectorAll('button')], i = all.indexOf(document.activeElement);
+  if (i < 0) return;
+  ev.preventDefault();
+  all[(i + (ev.key === 'ArrowDown' || ev.key === 'ArrowRight' ? 1 : -1) + all.length) % all.length].focus();
+}
+
+// ----------------------------------------------------------------- the remembered way to send
+// One Send whose icon is the way it sends: Steer the arrow, Queue the arrow over stacked lines, Defer a clock with its
+// deadline, Set as goal the target. The way is the person's, kept on the server (preference compose.send_way: 'steer',
+// 'queue' or 'defer:<for>'), so every composer and device starts from it. Set as goal is one send and never kept.
+// The web sends the shown way every time; a caller that names none (API, CLI, MCP, Slack) gets the server's default.
+const SEND_WAY_PREF = 'compose.send_way';
+const sendWayOk = mode => mode === 'steer' || mode === 'queue'
+  || typeof mode === 'string' && /^defer:[^:]+$/.test(mode) && DELIVERY_FOR.includes(deliveryFor(mode));
+let SEND_WAY = 'steer', SEND_WAY_TIMER = null, SEND_WAY_PICKS = 0;     // picks made on this page, so a late read loses
+const SEND_WAY_PAINT = new Set();          // repaint hooks of the composers on screen that show the way
+const svgIcon = body => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+const SEND_WAY_ICONS = {
+  steer: ICON_SEND,
+  queue: svgIcon('<path d="M4 6h8M4 18h8M4 12h14M14 8l4 4-4 4"/>'),
+  defer: svgIcon('<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>'),
+  goal: svgIcon('<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".9" fill="currentColor"/>'),
+};
+// What Send says it will do, to a screen reader and on hover.
+function sendWayLabel(mode) {
+  const way = deliveryWay(mode), f = deliveryFor(mode);
+  if (way === 'defer') return f && f !== 'never' ? `Send, defer ${f}` : 'Send, defer';
+  return {queue: 'Send, queue', goal: 'Set as goal'}[way] || 'Send';
+}
+// Send's icon for `mode`, and a badge with Defer's deadline. The contents change only when the way does: a redraw
+// between press and release loses the click.
+function sendWayPaint(btn, mode) {
+  if (!btn) return;
+  const way = deliveryWay(mode) || 'steer', f = way === 'defer' ? deliveryFor(mode) : '';
+  const key = way + ':' + f;
+  if (btn.dataset.shows !== key) {
+    btn.innerHTML = (SEND_WAY_ICONS[way] || ICON_SEND) + (f && f !== 'never' ? `<span class="p-way-badge">${esc(f)}</span>` : '');
+    btn.dataset.shows = key;
+  }
+  const label = sendWayLabel(mode);
+  btn.dataset.word = label;
+  if (!btn.disabled) { btn.setAttribute('aria-label', label); btn.title = label; }      // a busy Send says why instead
+}
+// A pick from a menu: kept for every composer, written to the server a moment later (several picks in a row are one
+// write), and every composer on screen repaints.
+function sendWayPick(mode) {
+  if (!sendWayOk(mode)) return;
+  const changed = mode !== SEND_WAY;
+  SEND_WAY = mode; SEND_WAY_PICKS++;
+  if (changed) for (const paint of SEND_WAY_PAINT) paint();
+  if (typeof S === 'undefined' || !S.me?.cloud) return;
+  clearTimeout(SEND_WAY_TIMER);
+  SEND_WAY_TIMER = setTimeout(() => {
+    SEND_WAY_TIMER = null;
+    void post('/v2/preferences/' + SEND_WAY_PREF, {value: SEND_WAY}).catch(() => {});
+  }, 600);
+}
+// The kept way, read once the page knows who is signed in. A pick made while the read was out wins, written or not.
+async function sendWaySync() {
+  if (typeof S === 'undefined' || !S.me?.cloud) return;
+  const picks = SEND_WAY_PICKS;
+  const v = (await v2Get('/v2/preferences/' + SEND_WAY_PREF))?.value;
+  if (!sendWayOk(v) || SEND_WAY_PICKS !== picks || v === SEND_WAY) return;
+  SEND_WAY = v;
+  for (const paint of SEND_WAY_PAINT) paint();
+}
+// The menu also opens from Send itself: a right-click, or a long press on a touch screen. The click a long press ends
+// in does not send. `can` says whether this composer has ways right now.
+function sendWayHold(btn, open, can = () => true) {
+  let timer = 0, held = 0;
+  const cancel = () => { clearTimeout(timer); timer = 0; };
+  btn.addEventListener('contextmenu', ev => { if (!can()) return; ev.preventDefault(); cancel(); open(); });
+  btn.addEventListener('pointerdown', ev => {
+    if (ev.pointerType === 'mouse' || btn.disabled || !can()) return;
+    cancel();
+    timer = setTimeout(() => { timer = 0; held = Date.now(); open(); }, 450);
+  });
+  for (const type of ['pointerup', 'pointercancel', 'pointerleave']) btn.addEventListener(type, cancel);
+  btn.addEventListener('click', ev => {
+    if (!held || Date.now() - held > 1500) return;
+    held = 0;
+    ev.preventDefault(); ev.stopImmediatePropagation();
+  }, true);
 }
 
 // A phone or tablet typing on its screen keyboard: a coarse pointer, or touch on a narrow screen.
@@ -74,18 +188,14 @@ function makePill(cfg) {
     el: null, files: [], send: cfg.send || null,
   };
   const attach = cfg.files !== false;
-  // A bot's own chat (not the Assistant page) has the goal target and the "/" menu.
-  const goals = P.mode === 'chat' && !!P.slug && !cfg.send;
   const el = P.el = document.createElement('div');
   el.className = 'ask pill-' + P.mode;
   el.innerHTML = `<div class="p-hint muted" hidden></div>
     <div class="p-pill">
-      ${P.mode === 'chat' && P.slug ? `<button class="p-bot" type="button" aria-label="Switch bot" aria-haspopup="menu" aria-expanded="false" aria-controls="org-fan" title="Switch bot">${avatar(P.slug, 30)}</button>` : ''}
+      ${P.mode === 'chat' && P.slug ? pillBotHTML(P.slug) : ''}
       <textarea class="p-text" rows="1" autocorrect="on" autocapitalize="sentences" spellcheck="true" aria-label="${esc(cfg.label || 'Message this bot')}" placeholder="${esc(cfg.placeholder || 'Type a message…')}"></textarea>
-      ${goals ? '<button class="p-goal p-icon" type="button" title="Goal" aria-label="Goal" aria-pressed="false" hidden><span class="nav-icon" aria-hidden="true">target</span></button>' : ''}
       ${attach ? `<button class="p-attach p-icon" type="button" title="Attach files" aria-label="Attach files">${ICON_CLIP}</button>
       <input type="file" multiple hidden class="p-file">` : ''}
-      ${goals ? `<button class="p-stop p-send-icon" type="button" aria-label="Stop" title="Stop" hidden>${ICON_STOP}</button>` : ''}
       <button class="p-send p-send-icon" type="button" aria-label="Send" title="Send">${ICON_SEND}</button>
     </div>
     <div class="p-slow muted" role="status" hidden></div>
@@ -131,8 +241,7 @@ function makePill(cfg) {
   });
   box.addEventListener('pointerdown', () => { breaks = 0; });
   if (attach) q('.p-attach').onclick = () => q('.p-file').click();
-  if (goals) { q('.p-goal').onclick = () => chatGoalButton(); slashAttach(P); }
-  if (q('.p-bot')) q('.p-bot').onclick = ev => { ev.preventDefault(); $('#org-fan').hidden ? orgFanOpen({chat: P.slug, anchor: q('.p-bot')}) : orgFanClose(); };
+  if (q('.p-bot')) pillBotWire(q('.p-bot'), P.slug);
   if (attach) q('.p-file').onchange = ev => { P.files.push(...ev.target.files); pillChips(P); chatDraftSave(P); ev.target.value = ''; };
   box.addEventListener('paste', ev => {
     const clipboard = ev.clipboardData;
@@ -182,7 +291,6 @@ function makePill(cfg) {
     window.addEventListener('pointercancel', release);
     window.addEventListener('blur', release);
   }));
-  if (goals) q('.p-stop').onclick = () => pillStop(P);
   // Safari does not focus buttons on tap. Keep the composer in place until its
   // control click runs; restoring navigation on blur can swallow that tap.
   // Delegate so attachment-removal controls added after selection work too.
@@ -195,6 +303,13 @@ function makePill(cfg) {
   return P;
 }
 const pq = (P, sel) => P.el?.querySelector(sel);
+// The bot being talked to, left of the bar on a phone (ui/styles/chat.css): a tap opens the switcher over the bar
+// (ui/app/org-fan.js), which keeps this button's aria-expanded in step. Used by this pill and a bot's Home and DM
+// composer (ui/app/thread-view.js).
+const pillBotHTML = slug => `<button class="p-bot" type="button" aria-label="Switch bot" aria-haspopup="menu" aria-expanded="false" aria-controls="org-fan" title="Switch bot">${avatar(slug, 30)}</button>`;
+function pillBotWire(btn, slug) {
+  btn.onclick = ev => { ev.preventDefault(); $('#org-fan').hidden ? orgFanOpen({chat: slug, anchor: btn}) : orgFanClose(); };
+}
 // An empty box only dims Send: text that arrived without an input event (autofill, dictation, a tool) must still
 // send on a click, and pillSend puts the cursor back in an empty box.
 function pillButtons(P) {
@@ -213,12 +328,14 @@ function pillButtons(P) {
   }
   pillWhy(P);
 }
-// Ask the bot's running turn to stop; the button stays pressed until the run ends.
+// Ask the bot's running turn to stop; the button stays pressed until the run ends. `P` is this pill or a composer that
+// redraws its own buttons (P.buttons: a bot's Home or DM, ui/app/thread-view.js).
 async function pillStop(P) {
   if (!P.running || P.stopping) return;
-  P.stopping = true; pillButtons(P);
-  try { await post(`/v2/bots/${encodeURIComponent(P.slug)}/stop`, P.running.attempt_id ? {attempt_id: P.running.attempt_id} : {}); }
-  catch (e) { P.stopping = false; pillButtons(P); toast(`Not stopped: ${e.message}`, true); }
+  const redraw = () => P.buttons ? P.buttons() : pillButtons(P);
+  P.stopping = true; redraw();
+  try { await post(`/v2/bots/${encodeURIComponent(P.slug)}/stop`, P.running.run_id ? {run_id: P.running.run_id} : {}); }
+  catch (e) { P.stopping = false; redraw(); toast(`Not stopped: ${e.message}`, true); }
 }
 // "when i paste an image into a box, can we show a clickable preview of it?"
 // An image waiting to be sent shows as a small thumbnail; a tap opens it full size.
@@ -280,13 +397,13 @@ function pillLabel(P) {
   const goal = pillGoalMode(P);
   const word = goal ? 'Set goal' : P.action === 'task' ? 'Send as a task' : P.action === 'reply' ? `Reply on #${P.needsIssue}` : 'Send';
   // A redraw that replaces the arrow between press and release loses the click in every engine, so the
-  // contents change only when goal mode swaps the arrow for words (and ui/styles/chat.css makes the button
-  // itself the press target).
+  // contents change only when goal mode swaps the arrow for words (and ui/styles/chat.css makes the button itself
+  // the press target).
   const shows = goal ? word : 'icon';
-  if (btn.dataset.shows !== shows) { btn.innerHTML = goal ? word : ICON_SEND; btn.dataset.shows = shows; }
+  if (btn.dataset.shows !== shows) { btn.innerHTML = goal ? esc(word) : ICON_SEND; btn.dataset.shows = shows; }
   btn.dataset.word = word;
-  btn.setAttribute('aria-label', btn.disabled && btn.dataset.busy || word);
   btn.classList.toggle('p-send-goal', goal);
+  btn.setAttribute('aria-label', btn.disabled && btn.dataset.busy || word);
   pillWhy(P);
   const box = pq(P, '.p-text');
   if (box) {

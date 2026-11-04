@@ -42,6 +42,22 @@ Tico draws one line above every page, as a card and at full size. The page canno
 | Past 1.5× its cadence | `Not updated in 11 days · v4 · weekly` |
 | Replaced | `Replaced by <title>`, linked to the newer page |
 
+## Live blocks
+
+A page can carry three live tags. The server replaces each one, when the page is shown, with a short list made for
+the one person or bot viewing it. The page itself stays static: no script runs and nothing is fetched.
+
+- `<tico-tasks waiting-on="viewer" [bot="SLUG"] [parent="TASK"] [limit="N"]></tico-tasks>`: the tasks waiting on the
+  viewer, as links. Empty, it says "Nothing waiting on you".
+- `<tico-task id="TASK"></tico-task>`: one task's title, status and a link. Nothing when the viewer may not see it.
+- `<tico-files task="TASK" [kind="page|document|image|data|media|video|audio"] [limit="N"]></tico-files>`: the files on a task
+  the viewer may see. A page links to its page view, any other file to the task. `video` and `audio` mean `media`.
+
+`limit` defaults to 10 and is at most 50. Links open the task in the app in a new tab. A list uses the same rules as
+Needs you, the task page and the Library, so a viewer never sees a title, a count or a name they could not open.
+A page with live blocks is shown only through its visual address, never the shared hosted copy, since each viewer
+gets a different page.
+
 ## Where pages show
 
 - **A card** shows the top of the page at the card's width. Tap it to open the page full size at `#/page/<id>`, on a
@@ -69,7 +85,7 @@ Stable v2 (`docs/openapi/v2.json`, tag **Pages**):
 | Call | What it does |
 |---|---|
 | `POST /api/v2/pages` | Publish: raw HTML with the fields in the query, or JSON with `name` and `text` or `content_base64` |
-| `GET /api/v2/pages/{file_id}` | `page`: `file_id, title, bot, bot_name, version, updated, updated_by, cadence, as_of, stale_days, replaced_by, archived, task_id, src`; `pinned`: where it is pinned |
+| `GET /api/v2/pages/{file_id}` | `page`: `file_id, title, bot, bot_name, version, updated_at, updated_by, cadence, as_of, stale_days, replaced_by, archived, task_id, src`; `pinned`: where it is pinned |
 | `GET /api/v2/pages?ids=a,b` | Up to 50 pages in that order, leaving out any the caller may not read |
 | `GET /api/v2/pages?bot=&task=` | Pages newest first, paged with `limit` and `cursor` |
 | `PATCH /api/v2/pages/{file_id}` | `cadence`, `as_of`, `replaced_by`, `archived` |

@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {replay: recorderLiveSharing} = require('../../recorder/tests/live-sharing.cjs');
 
 const ago = hours => new Date(Date.now() - hours * 36e5).toISOString();
 const meeting = (id, title, source, hours, extra = {}) => ({id, title, source, kind: 'meeting', status: 'done', started: ago(hours),
@@ -22,14 +23,14 @@ const MEETINGS = [
 ];
 // An older server may still send the retired importer in its configuration and sources.
 const IMPORTERS = ['granola', 'fireflies', 'zoom', 'google-meet'].map(source => ({source, name: {granola: 'Granola', fireflies: 'Fireflies',
-  zoom: 'Zoom', 'google-meet': 'Google Meet'}[source], enabled: false, runner_id: '', status: 'off', last_success: null, last_import: null,
+  zoom: 'Zoom', 'google-meet': 'Google Meet'}[source], enabled: false, runner_id: '', status: 'off', last_succeeded_at: null, last_import: null,
   imported_total: 0, error: '', setup: {file: `secrets/${source}.env`, keys: ['API_KEY'], doc: 'docs/meetings.md'}}));
 const NONE = [{id: 'import', name: 'Import', status: 'available'}, {id: 'close', name: 'Close', status: 'needs_setup'}];
 const SOME = [{id: 'import', name: 'Import', status: 'available'},
-  {id: 'close', name: 'Close', status: 'syncing', last_success: ago(0.1), last_import: ago(3)},
-  {id: 'granola', name: 'Granola', status: 'syncing', last_success: ago(0.2), last_import: ago(26)},
+  {id: 'close', name: 'Close', status: 'syncing', last_succeeded_at: ago(0.1), last_import: ago(3)},
+  {id: 'granola', name: 'Granola', status: 'syncing', last_succeeded_at: ago(0.2), last_import: ago(26)},
   {id: 'fireflies', name: 'Fireflies', status: 'needs_setup'},
-  {id: 'zoom', name: 'Zoom', status: 'error', last_success: ago(9)}];
+  {id: 'zoom', name: 'Zoom', status: 'error', last_succeeded_at: ago(9)}];
 
 async function open(browser, viewport, world, options = {}) {
   const context = await browser.newContext({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760, isMobile: viewport.width < 760, ...options});
@@ -218,6 +219,8 @@ async function shot(page, name) {
         await context.close();
       }
     }
+    // The native window's shared-meeting entry point belongs to this hosted meeting flow too.
+    await recorderLiveSharing(browser);
     console.log('meetings ok: 4 browser scenarios, including permissions, historical data and mixed-version setup');
   } finally {
     await browser.close();

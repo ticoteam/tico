@@ -47,6 +47,11 @@ const {unrouted} = require('./support/routes.cjs');
   assert.match(await page.locator('#app-update-text').textContent(), /did not install \(could not read the update feed: 403\)/);
   assert.equal(await page.locator('#app-update-dl').getAttribute('href'), 'https://github.com/ticoteam/tico/releases/download/v0.3.46/Tico.dmg');
   assert.ok(await page.locator('#app-update-dl').isVisible());
+  // Links are ink and so is the bar: the Download link is the primary button, never ink on ink.
+  const [fg, bg, barBg] = await page.evaluate(() => [getComputedStyle(document.querySelector('#app-update-dl')).color,
+    getComputedStyle(document.querySelector('#app-update-dl')).backgroundColor, getComputedStyle(document.querySelector('#app-update')).backgroundColor]);
+  assert.notEqual(fg, bg === 'rgba(0, 0, 0, 0)' ? barBg : bg, 'Download text differs from what is behind it');
+  assert.notEqual(bg, barBg, 'Download is a button on the bar, not a link in it');
 
   await page.getByRole('heading',{name:'Settings',exact:true}).waitFor();
   assert.equal(await page.locator('#settings-version').textContent(), 'Version v0.3.46 · App v0.3.40');

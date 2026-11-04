@@ -3,7 +3,7 @@
 #main.lc-layout{max-width:none;padding:0;overflow:hidden;height:100%}
 .lc{display:flex;flex-direction:column;height:100%;min-height:0}
 /* The page header has no rule under it, as on Updates, Tasks, Docs and Meetings. */
-.lc-ph{display:flex;align-items:center;gap:6px;padding:12px 20px}
+.lc-ph{display:flex;align-items:center;gap:6px;padding:8px 28px;min-height:48px}
 .lc-ph h1{margin:0;font-size:var(--t-lg);font-weight:600}
 .lc-ph .spacer{flex:1}
 .lc-pad{padding:14px 6px}
@@ -12,11 +12,11 @@
 /* the list */
 .lc-list{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--line)}
 .lc-scroll{flex:1;min-height:0;overflow-y:auto;padding:4px 8px 16px}
-.lc-gh{display:flex;justify-content:space-between;padding:14px 6px 6px;color:var(--muted);font-size:var(--t-label);letter-spacing:var(--track-caps);text-transform:uppercase}
+.lc-gh{display:flex;justify-content:space-between;padding:14px 6px 6px;color:var(--muted);letter-spacing:var(--track-caps);text-transform:uppercase;font-size:var(--t-label);font-weight:600}
 .lc-row{display:flex;align-items:center;gap:8px;min-height:32px;padding:6px 8px;border:1px solid transparent;border-radius:7px;color:var(--ink);text-decoration:none}
-.lc-row:hover{background:var(--surface);text-decoration:none}
+.lc-row:hover{background:var(--surface2);text-decoration:none}
 .lc-row:hover *,a.lc-who-row:hover{text-decoration:none}
-.lc-row.sel{background:var(--surface2);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.lc-row.sel{background:var(--surface2);border-color:color-mix(in srgb,var(--ink) 45%,var(--line))}
 .lc-row .nav-icon{flex:none;font-size:17px;width:18px;height:18px;color:var(--muted)}
 .lc-nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lc-row .pill{flex:none}
@@ -34,7 +34,7 @@
 .lc-add{margin-left:auto}.lc-add button{padding:3px 10px;font-size:var(--t-sm)}
 
 /* the page: the tool's own page (integrations.js), its heading with a back link on a phone */
-.lc-pane{min-width:0;min-height:0;overflow-y:auto;padding:16px 20px 48px}
+.lc-pane{min-width:0;min-height:0;overflow-y:auto;padding:16px 28px 48px}
 .lc-pane #int-detail{max-width:860px}
 .lc .meeting-head{flex-direction:row;align-items:center;justify-content:flex-start;gap:6px}
 .lc .meeting-head h1{margin:0;overflow-wrap:anywhere}
@@ -96,4 +96,30 @@ a.lc-who-row:hover{background:var(--surface2)}
   .lc-who-row{min-height:40px}
   .lc-cred{grid-template-areas:"i n p" ". u u" ". a a"}
   .lc-acts{gap:16px;padding-top:2px}
+}
+
+/* Library › Connections (ui/app/connections.js): one dense row per connection; a phone stacks each row. */
+#main.cn-layout{max-width:none;padding:0}
+.cn-list{list-style:none;margin:0;padding:0 20px 24px}
+.cn-row{display:grid;grid-template-columns:18px minmax(0,2fr) 84px 72px minmax(0,1.3fr) minmax(0,1fr) 80px;align-items:center;gap:10px;
+  min-height:40px;padding:6px 8px;border-bottom:1px solid var(--line)}
+.cn-row .nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
+.cn-name{display:flex;flex-direction:column;min-width:0}
+.cn-name>*{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cn-name strong{font-weight:500}
+.cn-name .muted,.cn-scope{font-size:var(--t-sm)}
+.cn-status{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm)}
+.cn-dot{width:8px;height:8px;border-radius:50%;background:var(--idle)}
+.cn-ok .cn-dot{background:var(--ok)}.cn-wait .cn-dot{background:var(--wait)}.cn-fail .cn-dot{background:var(--fail)}
+.cn-readers{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-sm)}
+.cn-bots{display:flex;align-items:center;gap:3px;min-width:0;font-size:var(--t-sm)}
+.cn-go{text-align:right;font-size:var(--t-sm)}
+.cn-none{padding:14px 8px}
+.cn-more{padding:0 28px 24px}
+@media (max-width:760px){
+  .cn-list{padding:0 16px 24px}
+  .cn-row{grid-template-columns:18px minmax(0,1fr) auto;grid-template-areas:"i n s" ". r g" ". b b";row-gap:4px;padding:10px 0}
+  .cn-row .nav-icon{grid-area:i}.cn-name{grid-area:n}.cn-status{grid-area:s}.cn-readers{grid-area:r}.cn-go{grid-area:g}
+  .cn-bots{grid-area:b}.cn-bots:empty{display:none}.cn-scope{display:none}
+  .cn .lc-ph{padding:8px 16px}
 }

@@ -9,6 +9,10 @@ You act **as the human who wrote to you**. The server checks their rights, not y
 manage it (its owner, a co-owner, an admin, or someone it reports up to). If the server refuses, say so in one line
 and who can change it, and stop. Do not look for another way in.
 
+Inputs: the human's chat message asking for sending to go on, with the bot, the recipients and any forward address they named.
+
+Done when: the switch reads back on, or the refusal is reported in one line with who can change it; the bot's rules name only the recipients the human asked for.
+
 ## What "on" means, so you can say it in one message
 
 With sending on, the bot follows the rules the human gave it with no approval for each message. Three kinds of
@@ -68,3 +72,7 @@ The person turns the switch off, or changes the forward addresses, in the same p
   Never report "on" before it says so.
 - **The bot is not its person's message bot yet.** `hub health check` says so; link it as them
   (`playbooks/set-up-a-bot.md`, step 3).
+
+## Who turns it on
+Turning a bot on is the requester's to ask for. When they asked you to build it, take it live; when they only asked to look,
+report readiness. Sending stays off until they say.

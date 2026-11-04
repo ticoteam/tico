@@ -1,15 +1,17 @@
 """Share the roster's whole-table reads, every bot, every bot's settings and the task step definitions, between requests
 until one of them changes.
 
-Most requests read all of `bots` and `bot_config` once in their snapshot (backend/read_cache.py), and those rows change
+Most requests read all of `bots` and `bot_config` (with `bot_settings`) once in their snapshot (backend/read_cache.py), and those rows change
 a few times an hour at most: on a busy server the two reads were a tenth of all SQL time. SQLite triggers count every
 change from every connection, as provenance_clock does, so the rows read at one count are the rows at that count.
 These are neutral stored rows, never a permission result.
 """
 import sqlite3
 
-TABLES = ("bots", "bot_config", "task_steps")
-STATEMENTS = frozenset({"SELECT * FROM bot_config", "SELECT * FROM bots ORDER BY slug",
+from . import bot_settings as BS
+
+TABLES = ("bots", "bot_config", "bot_settings", "task_steps")
+STATEMENTS = frozenset({BS.ROW_SQL, "SELECT * FROM bots ORDER BY slug",
                         "SELECT * FROM task_steps ORDER BY position,id"})
 
 
@@ -57,3 +59,35 @@ def rows(c, statement):
     if not getattr(c, "write_transaction", False):
         shared[statement] = (clock, found)
     return found
+
+
+def shared(c, key, build):
+    """`build()`'s value for `key`, shared between snapshots while the roster tables (TABLES) are unchanged. `build`
+    may read only those tables, and what `key` names; the value is then the same as building it in this snapshot.
+    Mirrors rows(): the clock is read in the snapshot the build runs in, and a connection with writes of its own
+    shares nothing. Callers must not change the value, which every later snapshot gets as it is."""
+    store = getattr(c, "roster_rows", None)
+    if store is None or c.total_changes != getattr(c, "provenance_changes", None):
+        return build()
+    try:
+        clock = _clock(c)
+    except (sqlite3.OperationalError, TypeError):
+        return build()
+    hit = store.get(key)
+    if hit is not None and hit[0] == clock:
+        return hit[1]
+    if c.in_transaction:
+        found = build()
+    else:
+        c.execute("BEGIN")
+        try:
+            clock = _clock(c)
+            found = build()
+        except BaseException:
+            c.rollback()
+            raise
+        c.commit()
+    if not getattr(c, "write_transaction", False):
+        store[key] = (clock, found)
+    return found
+
