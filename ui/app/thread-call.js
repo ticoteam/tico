@@ -16,6 +16,8 @@ let CALL_LIB_LOAD = null;
 let CALL_GEN = 0;
 // Joins on their way (asked for, not yet in the call or given up).
 let CALL_JOINS = 0;
+// Call id -> joins of it still on their way, so a cancelled Start call never gives back a seat a Join has taken.
+const CALL_JOINING = new Map();
 // Named here so scripts/build-icon-font.py keeps them in the icon subset.
 const CALL_ICONS = {mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', bot: 'smart_toy', leave: 'call_end'};
 
@@ -67,8 +69,9 @@ async function callAction(view, kind) {
       call = call?.call || call;
     }
     if (gen !== CALL_GEN) {
-      // Hidden or overtaken while the call was being made: the server already counts this person in it, so the seat goes back.
-      if (kind === 'start' && call?.id) post(callPath(call.id) + '/leave', {}, undefined, {keepalive: true}).catch(() => {});
+      // Hidden or overtaken while the call was being made: the server already counts this person in it, so the seat goes
+      // back, unless a Join of the same call (from the header the call's start redrew) is in it or on its way.
+      if (kind === 'start' && call?.id && CALL?.id !== call.id && !CALL_JOINING.get(call.id)) post(callPath(call.id) + '/leave', {}, undefined, {keepalive: true}).catch(() => {});
       return;
     }
     if (call?.id) await callJoin(id, call, threadTitle(view.thread), gen);
@@ -94,7 +97,12 @@ function callLib() {
 // `gen` is the join's number: Start call takes it at the click, so the one number runs through the whole join.
 async function callJoin(threadId, call, title, gen = ++CALL_GEN) {
   CALL_JOINS++;
-  try { await callJoinNow(threadId, call, title, gen); } finally { CALL_JOINS--; }
+  CALL_JOINING.set(call.id, (CALL_JOINING.get(call.id) || 0) + 1);
+  try { await callJoinNow(threadId, call, title, gen); } finally {
+    CALL_JOINS--;
+    const left = CALL_JOINING.get(call.id) - 1;
+    if (left) CALL_JOINING.set(call.id, left); else CALL_JOINING.delete(call.id);
+  }
 }
 async function callJoinNow(threadId, call, title, gen) {
   if (CALL) await callLeave();

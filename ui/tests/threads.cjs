@@ -107,7 +107,7 @@ const homes = {'bot:ops': 'h-ops', 'human:bea': 'h-bea', 'human:cy': 'h-cy', 'hu
 // one without the rail (GET /v2/threads/rail answers 404).
 let dmRows = null, callsOff = false, railOff = false, threadsOff = false, threadsGate = null;
 // Start call as the server answers it: the call it makes (after a moment), or none.
-let callMade = null, joinRefused = false;
+let callMade = null, joinRefused = false, startWait = 150;
 async function open(browser, who, {phone = false, sse = null} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
@@ -220,7 +220,7 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
     if (one) { seen.reads.push(one[1]); seen.readSeqs.push(one[1] + ':' + JSON.parse(req.postData() || '{}').seq); return json({ok: true}); }
     if (callMade && method === 'POST' && /^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) {
       seen.calls.push('start:' + callMade.id);
-      await new Promise(r => setTimeout(r, 150));
+      await new Promise(r => setTimeout(r, startWait));
       return json({call: callMade});
     }
     if (/^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) return callsOff && method === 'POST' ? json({error: {code: 'meet_unavailable'}}, 503) : json({calls: [], next_before: null, available: !callsOff});
@@ -524,6 +524,23 @@ let browser = null;
     await page.locator('.thv-call-note', {hasText: 'Removed from call'}).waitFor();
     await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); CALL_THREADS.set('t-plan', {...CALL_THREADS.get('t-plan'), removed: false}); thvDraw(v); });
     callMade = null; joinRefused = false;
+    // Start call still on its way, the call's start redraws the header to Join, and Join gets in first: when Start
+    // answers, its cleanup leaves that seat alone and the call stays connected.
+    callMade = {id: 'c7', state: 'live', connector: 'human:ana'}; startWait = 800;
+    await page.evaluate(() => { window.__rooms.length = 0; window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'); });
+    for (let i = 0; i < 20 && !seen.calls.includes('start:c7'); i++) await page.waitForTimeout(25);
+    await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); CALL_THREADS.set('t-plan', {...CALL_THREADS.get('t-plan'), call: {id: 'c7', state: 'live'}}); thvDraw(v); });
+    await page.locator('.thv-call[data-call="join"]').first().click();
+    await page.waitForFunction(() => CALL?.id === 'c7' && window.__rooms.some(r => r.mic));
+    await page.evaluate(() => window.__starting);
+    await page.waitForTimeout(150);
+    assert.ok(!seen.calls.includes('leave:c7'), 'the Join that got in first keeps its seat: ' + seen.calls);
+    assert.equal(seen.calls.filter(c => c === 'join:c7').length, 1, 'Start call does not join again: ' + seen.calls);
+    assert.deepEqual(await page.evaluate(() => [CALL?.id, window.__rooms.filter(r => !r.gone).length]), ['c7', 1], 'the call stays connected');
+    assert.equal(await page.locator('#call-bar').count(), 1);
+    await page.locator('#call-bar [data-cb="leave"]').click();
+    await page.waitForFunction(() => !document.querySelector('#call-bar'));
+    callMade = null; startWait = 150;
 
     // An older sub-thread opened by its link keeps the way back, and reads flat too.
     await page.goto('https://tico-ui.test/#/thread/t-sub');
