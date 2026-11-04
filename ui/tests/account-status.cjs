@@ -32,6 +32,7 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
       {id: 'computers', label: 'Computers', status: 'ok', summary: '1 computer online.', fixes: []}]};
     const broken = health;
     let failStatus = false;
+    const restarts = [];
     page.on('pageerror', e => errors.push(e.message));
     const serve = async route => {
       const url = new URL(route.request().url()), p = url.pathname;
@@ -51,11 +52,10 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
       if (p === '/api/v2/health') return json(health);
       if (p === '/api/v2/health-monitor') return json({on: false, findings: []});
       if (p === '/api/v2/needs-you') return json({items: []});
+      if (p === '/api/v2/computers/r1/restart') { restarts.push(route.request().method()); return json({running: 0}); }
       return json(unrouted(p));
     };
     await page.route('**/*', serve);
-    // Snooze before startup so the automatic Needs you panel cannot cover account navigation.
-    await page.addInitScript(() => localStorage.setItem('tico.needsYou', JSON.stringify({snoozedUntil: Date.now() + 3600e3})));
     await page.goto('http://tico-ui.test/#/tasks');
     await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
     const settle = async () => { await page.evaluate(async () => { await refresh(false); await hlRefresh(); }); };
@@ -148,9 +148,16 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
     assert.equal(await dot.getAttribute('data-level'), 'warn');
     assert.equal(await dots(), 1);
 
-    const restart = page.locator('#account-status-pop [data-account-needs-you]');
-    assert.equal(await restart.innerText(), 'Open', 'the action opens the restart panel rather than restarting');
-    assert.equal(await restart.getAttribute('title'), 'Open Needs you to restart this computer');
+    // The line's own Restart button sends the restart: no panel in between.
+    await dot.hover();
+    await page.locator('#account-status-pop').waitFor();
+    const restart = page.locator('#account-status-pop [data-runner-restart="r1"]');
+    assert.equal(await restart.innerText(), 'Restart');
+    await restart.click();
+    await page.waitForFunction(() => document.querySelector('#account-status-pop [data-runner-restart="r1"]')?.textContent === 'Restarting');
+    assert.deepEqual(restarts, ['POST'], 'one restart request for the computer');
+    await page.mouse.move(700, 400);
+    await page.locator('#account-status-pop').waitFor({state: 'hidden'});
 
     // Lost connection clears by itself: amber, with Retry.
     failStatus = true;
@@ -208,7 +215,6 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
     }
     const phone = await browser.newPage({viewport: {width: 390, height: 844}, hasTouch: true, isMobile: true, serviceWorkers: 'block'});
     await phone.route('**/*', serve);
-    await phone.addInitScript(() => localStorage.setItem('tico.needsYou', JSON.stringify({snoozedUntil: Date.now() + 3600e3})));
     await phone.goto('http://tico-ui.test/#/tasks');
     await phone.evaluate(async () => { await refresh(false); await hlRefresh(); setDrawer(true); });
     await phone.locator('#account').tap();

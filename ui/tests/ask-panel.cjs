@@ -323,13 +323,8 @@ const words = text => text.trim().split(/\s+/).length;
     await page.locator('#ask-panel').waitFor({state: 'hidden'});
     await page.locator('#mobile-nav [data-nav="tasks"]').click();
     assert.equal(await page.locator('#ask-panel').isHidden(), true, 'a tab never opens Ask');
-    // A "things need you" sheet already open: the chat opens over it, not under it.
-    await page.evaluate(() => { const s = document.createElement('section'); s.className = 'needs-you'; s.style.height = '600px'; document.body.appendChild(s); });
     await tab.click();
     await page.locator('#ask-panel').waitFor();
-    await page.locator('#ask-panel').evaluate(el => Promise.all(el.getAnimations().map(a => a.finished)));
-    assert.equal(await page.evaluate(() => { const r = document.querySelector('#ask-panel').getBoundingClientRect();
-      return !!document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.closest('#ask-panel'); }), true, 'the chat is above the needs-you sheet');
     await tab.click();
     await page.locator('#ask-panel').waitFor({state: 'hidden'});
     assert.deepEqual(errors, []);

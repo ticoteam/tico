@@ -329,12 +329,7 @@ BotOps resumes or dismisses it after checking what already happened. Nothing is 
 While such a review is owed the bot's tasks and routines wait, but a human's own
 messages still run: nothing about them is uncertain.
 
-**Needs you.** Every issue Tico derives says whether a human has to act. Those that do (a
-review owed, a computer gone for more than ten minutes, a missing agent credential, a stale backup,
-a usage limit hit three times) open in a dialog in front of the human the first time they appear,
-wherever they are in the app. Each item is a title, at most one short line and at most two buttons: the title opens
-the details (the stopped runs, with *Open bot*, or the bot, the computer or Health). Closing it is remembered per issue and *Snooze* quiets it for an hour;
-the alert under the sidebar reopens it any time. Issues Tico resolves itself (a computer that
+**Needs you.** Every issue Tico derives says whether a human has to act. Those that do light the status dot left of your name: red when something is broken, amber for a warning. Its lines sit in the account menu and on a hover over the dot, one per problem, each with its fix (a computer with a Tico update waiting gets *Restart* on its line). The same issues are listed in **Settings → System checks**. Stopped runs and quarantined bots are BotOps's to review, so they stay off the dot; **Settings → Health** lists them as notes, with *Review stopped runs* for a bot's stopped runs. Issues Tico resolves itself (a computer that
 just dropped off, a usage limit that is retrying) stay out of the way as *resolves on its own* in
 **Settings → Health**, one row per computer rather than one per bot. A cloud deploy is different: hub.acme.example is
 unreachable for a few minutes, the runner keeps the run going and the server extends every

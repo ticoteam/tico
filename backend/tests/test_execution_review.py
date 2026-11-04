@@ -1511,7 +1511,7 @@ def stopped_issue(api, token='ana-test'):
     return next(i for i in get(api, 'operations', token=token)['issues'] if i['kind'] == 'uncertain_work')
 
 
-def test_a_stopped_run_that_holds_queued_work_needs_a_person_and_says_what_waits(api):
+def test_a_stopped_run_that_holds_queued_work_is_botops_and_says_what_waits(api):
     """Oct 19, launch: five unreviewed stopped runs fenced 14 queued Builder wakes, but each was 'review later' and the
     Review stopped runs button rendered nowhere. A run that holds nothing may still wait for a later look."""
     machine = runner(api, 'ana')
@@ -1532,7 +1532,7 @@ def test_a_stopped_run_that_holds_queued_work_needs_a_person_and_says_what_waits
     ready(api, machine, ['ops'])
     assert claim(api, machine) is None                     # the claim's fence holds both behind the stopped run
     issue = stopped_issue(api)
-    assert issue['needs_person'] is True and issue['action'] == 'review' and issue['severity'] == 'error'
+    assert issue['needs_person'] is False and issue['action'] == 'review' and issue['severity'] == 'error'
     assert issue['title'].endswith('has 1 stopped run holding up work')
     assert issue['held_back'] == 2 and issue['held_tasks'] == ['Archive the old bots']
     # A lapsed lease is the computer's, not a bug: the card says so once, and names the run on its own line.
@@ -1753,7 +1753,7 @@ def test_held_work_is_counted_and_named_only_for_who_may_read_it(api):
     ready(api, machine, ['ops'])
     assert claim(api, machine) is None
     ana = stopped_issue(api)
-    assert ana['needs_person'] is True and ana['held_back'] == 1 and ana['held_tasks'] == ['Ana only']
+    assert ana['needs_person'] is False and ana['held_back'] == 1 and ana['held_tasks'] == ['Ana only']
     ben = stopped_issue(api, 'ben-test')
     assert 'saved 1 stopped run for later' in ben['title'] and ben['needs_person'] is False
     assert not ben.get('held_back') and 'Ana only' not in ben['detail']
@@ -1780,9 +1780,9 @@ def test_held_work_is_counted_and_named_only_for_who_may_read_it(api):
     assert seen['ana-test'][:2] == (1, 1) and seen['ben-test'][:2] == (0, 0), seen
 
 
-def test_a_run_carried_on_a_stopped_run_the_keeper_settled_is_left_for_a_person(api):
+def test_a_run_carried_on_a_stopped_run_the_keeper_settled_is_left_for_botops(api):
     """The keeper dismissed only the request a stopped run was for ('stopped partway twice'); the message folded into
-    the same run stayed held with nobody asked. It is a person's now, whether or not anything waits behind it."""
+    the same run stayed held with nobody asked. BotOps reviews it, whether or not anything waits behind it."""
     from backend.store import H
     machine, message, first = setup_attempt(api)
     post(api, f"attempts/{first['id']}/started", {'thread_id': 'twice'}, machine['token'])
@@ -1810,7 +1810,7 @@ def test_a_run_carried_on_a_stopped_run_the_keeper_settled_is_left_for_a_person(
         carried = c.execute("SELECT state FROM jobs WHERE message_id=?", (follow['id'],)).fetchone()[0]
     assert carried == 'uncertain'                                       # the carried one: held, not safe to repeat
     issue = stopped_issue(api)
-    assert issue['needs_person'] is True and issue['action'] == 'review' and not issue['held_back']
+    assert issue['needs_person'] is False and issue['action'] == 'review' and not issue['held_back']
     assert issue['detail'].endswith("Tico can't safely decide it on its own.")
     assert [r['title'] for r in issue['runs']] == ['A chat request']           # a chat, not an unreadable task
     assert [j['id'] for j in get(api, 'bots/ops/execution-review')['jobs']]
