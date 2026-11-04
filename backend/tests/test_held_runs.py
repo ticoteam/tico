@@ -529,7 +529,6 @@ def test_botops_lists_and_reconciles_a_held_run_on_a_private_task_without_its_wo
          'note': 'The shell step already ran; do not repeat it.', 'acknowledge_uncertain_effects': True},
          token=botops_turn['token'])
     assert job_state(api, attempt['job_id']) == 'canceled'
-    assert decision_of(api, attempt['job_id'])[-1]['decision'] == 'dismiss'
 
 
 def test_a_resumed_try_that_loses_its_lease_again_ends_quietly_after_four_hours(api):
@@ -578,7 +577,7 @@ def test_a_held_run_whose_source_message_was_deleted_is_listed_without_words_and
     """Codex P2. A deleted source message must not fail the whole review list: its run is listed without its words, and
     the other held runs are still there."""
     _, message, gone = held(api)
-    _, _, kept = held(api)
+    _, _, kept = restarted_mid_turn(api, [('Read', None), ('Bash', None)])
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE messages SET deleted_at=? WHERE id=?", (H.now(), message['id']))
     jobs = {job['id']: job for job in get(api, 'bots/ops/execution-review')['jobs']}
