@@ -1,6 +1,8 @@
-"""Settings > Inbox > Connect Google: a person connects their own mailbox, read only, through Tico's own Google app.
+"""Settings > Inbox > Connect Google: a person connects their own mailbox through a Google app the server uses.
 
-The browser comes back to the server; the computer that syncs mail finishes the sign-in and keeps the grant.
+Tico's shared app (the server's environment) asks for read only. The company's own app (Settings > Google) also asks for
+the act scopes the mail CLI gates labels, drafts and calendar writes on. The browser comes back to the server; the
+computer that syncs mail finishes the sign-in and keeps the grant.
 No Workspace admin, no service account, no domain-wide delegation, and nobody connects anyone else's mailbox.
 """
 
@@ -32,6 +34,19 @@ def app(api):
                   "'human:ana')", (H.now(),))
     settings.test_identities["inbox-test"] = Identity("bot:inbox", "bot", agent="hermes")
     return api
+
+
+@pytest.fixture
+def own_app(app, monkeypatch):
+    """The company's own Google app, set in Settings > Google, signs people in: the environment's client is cleared so
+    that it is the one a connect uses now (oauth_client prefers the environment)."""
+    settings = app.app.state.store.settings
+    monkeypatch.setattr(settings, "google_oauth_client_id", None)
+    monkeypatch.setattr(settings, "google_oauth_client_secret", None)
+    r = app.put("/api/v2/google/oauth-client", json={"client_id": "own-client", "client_secret": "own-secret"},
+                headers=headers("ana-test"))
+    assert r.status_code == 200, r.text
+    return app
 
 
 def start(api, token="cara-test"):
@@ -196,12 +211,15 @@ def test_a_refused_exchange_names_google_s_reason_only(app, monkeypatch):
     assert "tico-secret" not in r.text and "c-1" not in r.text
 
 
-def exchanged(app, machine, refresh_token="1//grant", status="connected", kind=""):
-    """A connect claimed, exchanged at the server for a grant with `refresh_token`, and answered by `machine`."""
+def exchanged(app, machine, refresh_token="1//grant", status="connected", kind="", scope=None):
+    """A connect claimed, exchanged at the server for a grant with `refresh_token` (granted `scope`, when given), and
+    answered by `machine`."""
     claimed = claimed_connect(app, machine)
+    answer = {"access_token": "ya29.first", "expires_in": 3599, "refresh_token": refresh_token}
+    if scope is not None:
+        answer["scope"] = scope
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(google_connect, "post_token", FakeGoogle({"access_token": "ya29.first", "expires_in": 3599,
-                                                                "refresh_token": refresh_token}))
+        patch.setattr(google_connect, "post_token", FakeGoogle(answer))
         post(app, f"connectors/mail/google/{claimed['id']}/exchange", {}, machine["token"])
     post(app, f"connectors/mail/google/{claimed['id']}/result",
          {"status": status, "can": ["read"]} if status == "connected" else {"status": status, "kind": kind},
@@ -304,7 +322,8 @@ def test_an_older_google_connects_table_gets_the_fingerprint_columns():
               "holder TEXT, started_at REAL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
     google_connect.ensure_schema(c)
     google_connect.ensure_schema(c)
-    assert {"pending_hash", "grant_hash"} <= {r[1] for r in c.execute("PRAGMA table_info(google_connects)")}
+    assert {"pending_hash", "grant_hash", "pending_scopes", "grant_scopes"} <= \
+        {r[1] for r in c.execute("PRAGMA table_info(google_connects)")}
 
 
 @pytest.mark.parametrize("error,kind", [("invalid_grant", "signin"), ("admin_policy_enforced", "admin_policy"),
@@ -331,6 +350,97 @@ def test_an_answer_wider_than_asked_is_refused_not_passed_on(app, monkeypatch):
                                                        "scope": oauth.G + "gmail.readonly " + oauth.G + "gmail.modify"}))
     r = refresh(app, machine["token"])
     assert r.status_code == 409 and "ya29.wide" not in r.text
+
+
+def test_the_act_scopes_are_what_the_mail_cli_needs_for_labels_drafts_and_calendar_writes():
+    assert google_connect.ACT_SCOPES == [oauth.G + "gmail.modify", oauth.G + "calendar.events"]
+    assert set(google_connect.ACT_SCOPES) <= set().union(*oauth.CAPABILITIES.values())
+    assert not set(google_connect.ACT_SCOPES) & set(google_connect.READ_SCOPES)
+    for capability, needs in oauth.NEEDS.items():           # each capability passes with the act grant
+        assert needs & set(google_connect.ACT_SCOPES), capability
+
+
+def test_the_company_s_own_app_signs_in_for_the_act_scopes_too(own_app):
+    _, query = start(own_app)
+    assert query["client_id"] == "own-client"
+    assert query["scope"].split() == google_connect.READ_SCOPES + google_connect.ACT_SCOPES
+    seen = get(own_app, "mail/google", "cara-test")
+    assert seen["app"] == "own" and seen["scopes"] == google_connect.READ_SCOPES + google_connect.ACT_SCOPES
+
+
+def test_the_shared_app_asks_for_read_only(app):
+    _, query = start(app)
+    assert query["scope"].split() == google_connect.READ_SCOPES
+    seen = get(app, "mail/google", "cara-test")
+    assert seen["app"] == "shared" and seen["scopes"] == google_connect.READ_SCOPES
+
+
+def test_an_own_app_grant_keeps_the_scopes_google_gave_and_refreshes_only_those(own_app, monkeypatch):
+    scopes = google_connect.READ_SCOPES + google_connect.ACT_SCOPES
+    machine = runner(own_app)
+    exchanged(own_app, machine, scope=" ".join(scopes))
+    seen = get(own_app, "mail/google", "cara-test")
+    assert seen["acts"] is True and seen["message"] is None and set(seen["scopes"]) == set(scopes)
+    google = FakeGoogle({"access_token": "ya29.mail", "expires_in": 3599,
+                         "scope": oauth.G + "gmail.modify " + oauth.G + "gmail.readonly"})
+    monkeypatch.setattr(google_connect, "post_token", google)
+    r = refresh(own_app, machine["token"], scopes=[oauth.G + "gmail.modify", oauth.G + "gmail.readonly"])
+    assert r.status_code == 200 and r.json()["scopes"] == [oauth.G + "gmail.modify", oauth.G + "gmail.readonly"]
+    sent = google.calls[-1]
+    assert sent["scope"] == oauth.G + "gmail.modify " + oauth.G + "gmail.readonly"     # exactly what was asked
+    assert sent["client_id"] == "own-client" and sent["client_secret"] == "own-secret"
+    google.answer = {"access_token": "ya29.cal", "expires_in": 3599, "scope": oauth.G + "calendar.events"}
+    r = refresh(own_app, machine["token"], service="calendar", scopes=[oauth.G + "calendar.events"])
+    assert r.status_code == 200 and r.json()["scopes"] == [oauth.G + "calendar.events"]
+    count = len(google.calls)
+    assert refresh(own_app, machine["token"], scopes=[oauth.G + "gmail.compose"]).status_code == 422   # never granted
+    assert len(google.calls) == count
+
+
+def test_a_read_only_own_app_grant_or_a_legacy_one_never_refreshes_act_scopes(own_app, monkeypatch):
+    machine = runner(own_app)
+    exchanged(own_app, machine, scope=" ".join(google_connect.READ_SCOPES))     # the write boxes were not ticked
+    seen = get(own_app, "mail/google", "cara-test")
+    assert seen["status"] == "connected" and seen["app"] == "own" and seen["acts"] is False
+    assert seen["message"] and seen["hint"]                 # a reconnect would add them; nothing forces it
+    google = FakeGoogle()
+    monkeypatch.setattr(google_connect, "post_token", google)
+    assert refresh(own_app, machine["token"], scopes=[oauth.G + "gmail.modify"]).status_code == 422
+    assert refresh(own_app, machine["token"], service="calendar", scopes=[oauth.G + "calendar.events"]).status_code == 422
+    assert google.calls == []
+    with own_app.app.state.store.transaction() as c:        # a grant from before the scopes were recorded
+        c.execute("UPDATE google_connects SET grant_scopes=NULL WHERE person_id='cara'")
+    assert get(own_app, "mail/google", "cara-test")["acts"] is False
+    assert refresh(own_app, machine["token"], scopes=[oauth.G + "gmail.modify"]).status_code == 422
+    assert google.calls == []
+
+
+def test_the_shared_app_never_holds_the_act_scopes_even_if_google_says_so(app, monkeypatch):
+    machine = runner(app)
+    exchanged(app, machine, scope=" ".join(google_connect.READ_SCOPES + google_connect.ACT_SCOPES))
+    assert not set(json.loads(row(app)["grant_scopes"])) & set(google_connect.ACT_SCOPES)
+    seen = get(app, "mail/google", "cara-test")
+    assert seen["app"] == "shared" and seen["acts"] is False and seen["message"] is None
+    google = FakeGoogle()
+    monkeypatch.setattr(google_connect, "post_token", google)
+    assert refresh(app, machine["token"], scopes=[oauth.G + "gmail.modify"]).status_code == 422
+    assert google.calls == []
+
+
+def test_a_failed_own_app_reconnect_keeps_the_act_grant_and_a_read_only_one_replaces_it(own_app, monkeypatch):
+    machine = runner(own_app)
+    exchanged(own_app, machine, scope=" ".join(google_connect.READ_SCOPES + google_connect.ACT_SCOPES))
+    exchanged(own_app, machine, refresh_token="1//stray", status="failed", kind="identity_mismatch",
+              scope=" ".join(google_connect.READ_SCOPES))
+    google = FakeGoogle({"access_token": "ya29.kept", "expires_in": 3599, "scope": oauth.G + "gmail.modify"})
+    monkeypatch.setattr(google_connect, "post_token", google)
+    assert refresh(own_app, machine["token"], scopes=[oauth.G + "gmail.modify"]).status_code == 200
+    assert refresh(own_app, machine["token"], refresh_token="1//stray",
+                   scopes=[oauth.G + "gmail.modify"]).status_code == 403
+    exchanged(own_app, machine, refresh_token="1//second", scope=" ".join(google_connect.READ_SCOPES))
+    assert get(own_app, "mail/google", "cara-test")["acts"] is False
+    assert refresh(own_app, machine["token"], refresh_token="1//second",
+                   scopes=[oauth.G + "gmail.modify"]).status_code == 422
 
 
 def test_another_account_signing_in_is_shown_as_refused(app):

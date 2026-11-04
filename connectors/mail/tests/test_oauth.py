@@ -1,5 +1,6 @@
-"""One person's own Google account (connectors/mail/oauth.py): read-only at Google, bound to the account that
-signed in, never a door to anyone else's mailbox, and never a quiet fallback to the service account."""
+"""One person's own Google account (connectors/mail/oauth.py): read-only at Google unless the grant holds the write
+scopes Google gave it, bound to the account that signed in, never a door to anyone else's mailbox, and never a quiet
+fallback to the service account."""
 import contextlib
 import io
 import json
@@ -12,7 +13,8 @@ import unittest
 import urllib.parse
 from argparse import Namespace
 from pathlib import Path
-from unittest.mock import patch
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
 
 from connectors.mail import Failure, Refused, auth, oauth
 from connectors.mail import __main__ as cli
@@ -418,6 +420,70 @@ class ServerRefreshed(Base):
         with patch.object(oauth, "broker", side_effect=AssertionError("the server must not be asked")):
             auth.mint_token("ana@acme.example", "gmail")
         self.assertEqual(FakeCredentials.made[-1].refresh_token, "1//refresh-secret")
+
+
+ACT_SCOPES = [G + "gmail.modify", G + "calendar.events"]
+OWN_APP_GRANTED = READ_ONLY + ACT_SCOPES        # what Google reports for a grant the company's own app made with them
+
+
+class ActGrant(Base):
+    """A grant from the company's own Google app: the act scopes Google reports are kept, described, refreshed and gated
+    like any other scope. Tico's shared app never asks for them, so its grants stay read only (backend/tests)."""
+
+    def finish(self, scopes=OWN_APP_GRANTED):
+        server = Server()
+        with patch.object(oauth, "broker", return_value=server):
+            return oauth.finish(dict(SERVER_CONNECT), opener=FakeGoogle(scopes=scopes)), server
+
+    def test_the_grant_keeps_the_act_scopes_google_reports_and_describes_what_they_allow(self):
+        result, _ = self.finish()
+        self.assertEqual(result["status"], "connected")
+        self.assertEqual(set(result["can"]), {"read mail", "label and archive mail", "write drafts", "read calendar",
+                                              "add calendar events"})
+        stored = json.loads(self.grants.read_text())["grants"]["ana@acme.example"]
+        self.assertTrue(set(ACT_SCOPES) <= set(stored["scopes"]))
+        self.assertNotIn("refresh-secret", json.dumps(result))
+
+    def test_a_refresh_asks_the_server_for_the_act_scopes_the_grant_holds(self):
+        self.finish()
+        server = Server()
+        with patch.object(oauth, "broker", return_value=server):
+            _token, _expiry, granted = auth.mint_token("ana@acme.example", "gmail")
+            _token, _expiry, calendar_granted = auth.mint_token("ana@acme.example", "calendar")
+        self.assertEqual(server.calls[0][1]["scopes"], [G + "gmail.modify", G + "gmail.readonly"])
+        self.assertEqual(granted, [G + "gmail.modify", G + "gmail.readonly"])
+        self.assertIn(G + "calendar.events", calendar_granted)
+        self.assertEqual(server.calls[1][1]["scopes"][0], G + "calendar.events")
+
+    def test_labels_drafts_and_calendar_writes_pass_the_act_grant_and_are_refused_without_it(self):
+        self.finish()
+        granted = oauth.grant("ana@acme.example")["scopes"]
+        for capability in ("labels", "drafts", "calendar-write"):
+            oauth.require(granted, capability, "ana@acme.example", "do it")                 # no Refused
+            with self.assertRaises(Refused):
+                oauth.require(READ_ONLY, capability, "ana@acme.example", "do it")
+
+    def test_gmail_and_calendar_writes_reach_google_for_the_act_grant(self):
+        self.finish()
+        act = MagicMock()
+        act._tico_granted = oauth.grant("ana@acme.example")["scopes"]
+        now = datetime(2026, 10, 15, tzinfo=timezone.utc)
+        gm.Gmail(act, "ana@acme.example").modify("m1", add=["L1"])
+        gm.Gmail(act, "ana@acme.example").create_draft("cmF3")
+        cal.Calendar(act, "ana@acme.example").create_event(now, now, "x")
+        self.assertEqual(act.users.return_value.messages.return_value.modify.call_count, 1)
+        self.assertEqual(act.users.return_value.drafts.return_value.create.call_count, 1)
+        self.assertEqual(act.events.return_value.insert.call_count, 1)
+
+    def test_a_read_only_grant_refuses_the_writes_before_the_service_is_touched(self):
+        read_only = MagicMock()
+        read_only._tico_granted = READ_ONLY
+        now = datetime(2026, 10, 15, tzinfo=timezone.utc)
+        with self.assertRaises(Refused):
+            gm.Gmail(read_only, "ana@acme.example").modify("m1", add=["L1"])
+        with self.assertRaises(Refused):
+            cal.Calendar(read_only, "ana@acme.example").create_event(now, now, "x")
+        self.assertEqual(read_only.mock_calls, [])
 
 
 class AdminPolicy(Base):

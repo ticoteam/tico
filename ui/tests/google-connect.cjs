@@ -1,5 +1,6 @@
 // Offline browser regression: Settings > Inbox, Connect Google (ui/google-connect.js). A person connects their own
-// mailbox read only; a Workspace policy denial is shown as the admin's; only Google's own sign-in page is opened.
+// mailbox (read only with Tico's shared app); a Workspace policy denial is shown as the admin's; only Google's own
+// sign-in page is opened.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -68,6 +69,19 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('[data-settings-tab=inbox][aria-selected=true]').waitFor();
     await page.locator('#set-google [data-google-disconnect]').waitFor();
     assert.match(await page.locator('#set-google').innerText(), /Connected: Tico reads cara@acme\.example's mail and calendar, read only/);
+
+    // A read-only connection made with the company's own app is offered the write access on a reconnect, never forced.
+    const upgrade = 'Connect Google again to let Tico also label, archive and draft mail, and add calendar events.';
+    google = {...google, app: 'own', acts: false, message: 'This connection only reads your mail and calendar.', hint: upgrade};
+    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
+    await page.waitForFunction(hint => (document.querySelector('#set-google')?.textContent || '').includes(hint), upgrade);
+    assert.equal(await page.locator('#set-google [data-google-connect]').count(), 1);
+    assert.equal(await page.locator('#set-google [data-google-disconnect]').count(), 1);
+    // Once the grant holds the write access, the offer is gone.
+    google = {...google, acts: true, message: null, hint: null, can: ['read', 'label and archive mail']};
+    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
+    await page.locator('#set-google [data-google-disconnect]').waitFor();
+    assert.equal((await page.locator('#set-google').innerText()).includes(upgrade), false);
     await page.locator('#set-google [data-google-disconnect]').click();
     await page.waitForFunction(() => /Disconnecting/.test(document.querySelector('#set-google')?.textContent || ''));
     assert.deepEqual(writes, ['/api/v2/mail/google/connect', '/api/v2/mail/google/connect', '/api/v2/mail/google/disconnect']);
