@@ -58,7 +58,8 @@ def test_a_bot_reader_can_link_readable_pages_but_cannot_manage_the_task_or_link
     machine, attempt = turn(api)
     bot = attempt["token"]
     identities = api.app.state.store.settings.test_identities
-    identities["ops-via"] = Identity("bot:ops", "bot", runner_id=machine["id"], attempt_id=attempt["id"], via="botops")
+    identities["ops-via"] = Identity("bot:ops", "bot", runner_id=machine["runner_id"],
+                                     attempt_id=attempt["id"], via="botops")
     view = place(api, location, bot)
     assert view["can_link"] is True and view["can_edit"] is False
     linked = post(api, "pins", {"place": location, "item": "page:" + fid}, bot)
