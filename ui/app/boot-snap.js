@@ -28,9 +28,23 @@ const SNAP_MAX_BYTES = 256 * 1024;
 const SNAP_SETTLE_MS = 1500, SNAP_SAVE_TRIES = 8;
 // The longest a kept screen stays up, from the moment it is shown.
 const SNAP_SHOW_MAX_MS = 12000;
-// `banned`: signed out in this page. Nothing is kept again until a new load's /me names a person, whatever answer
-// (a late roster, a timer, pagehide) comes first.
-const SNAP = {db: null, who: '', shown: '', done: false, copy: null, timer: 0, watch: 0, banned: false};
+// `banned`: signed out since this page loaded, in this tab or any other of this org's (SNAP_OUT_KEY, and SNAP_CHANNEL
+// to tell the open ones at once). Nothing is kept again until a new load's /me names a person, whatever answer (a late
+// roster, a timer, pagehide) comes first. `loaded` is before this page's /me was asked: a sign-out after it means
+// that answer may be stale.
+const SNAP = {db: null, who: '', shown: '', done: false, copy: null, timer: 0, watch: 0, banned: false, loaded: Date.now()};
+const SNAP_OUT_KEY = 'tico-boot-signed-out', SNAP_CHANNEL = 'tico-boot';
+const snapChannel = (() => { try { return new BroadcastChannel(SNAP_CHANNEL); } catch { return null; } })();
+// Signed out anywhere since this page loaded: it is banned too, and drops whose screen it was.
+function snapSignedOut() {
+  if (!SNAP.banned) {
+    let at = 0;
+    try { at = Number(localStorage.getItem(SNAP_OUT_KEY)) || 0; } catch { /* no storage: this tab's own ban only */ }
+    if (at >= SNAP.loaded) SNAP.banned = true;
+  }
+  if (SNAP.banned) SNAP.who = '';
+  return SNAP.banned;
+}
 const snapOn = () => { try { return typeof indexedDB !== 'undefined' && (!navigator.webdriver || window.ticoBootSnap === true); } catch { return false; } };
 // The pages kept: Home, Overview, Tasks (its list, any view), Threads (the list) and a team's page.
 function snapRouteOk(hash) {
@@ -86,6 +100,8 @@ function bootSnapDrop() {
   SNAP.who = ''; SNAP.done = true; SNAP.banned = true;
   clearTimeout(SNAP.timer);
   bootSnapRelease();
+  try { localStorage.setItem(SNAP_OUT_KEY, String(Date.now())); } catch { /* the channel still tells the open tabs */ }
+  try { snapChannel?.postMessage({signedOut: true}); } catch { /* closed */ }
   return snapForget();
 }
 
@@ -93,7 +109,8 @@ function bootSnapDrop() {
 function bootSnapShow(meRead) {
   if (!snapOn()) return;
   void Promise.all([snapRead(), meRead.catch(() => null)]).then(([kept, me]) => {
-    if (!kept || !me || SNAP.done || SESSION.out) return;     // no answer (offline): shown later, or not at all
+    // No answer (offline): shown later, or not at all. Signed out since this page loaded: never.
+    if (!kept || !me || SNAP.done || SESSION.out || snapSignedOut()) return;
     if (!authenticatedConfigPerson(me) || kept.who !== snapWho(me) || kept.version !== SNAP_VERSION) { void snapForget(); return; }
     const main = document.getElementById('main');
     if (kept.route !== location.hash || !snapRouteOk(kept.route) || !main || main.childElementCount || typeof kept.html !== 'string') return;
@@ -161,7 +178,7 @@ function bootSnapRelease() {
 function bootSnapWho(me) {
   const who = authenticatedConfigPerson(me) ? snapWho(me) : '';
   if (!who) { void bootSnapDrop(); return; }
-  if (!SNAP.banned) SNAP.who = who;
+  if (!snapSignedOut()) SNAP.who = who;
 }
 // What a kept screen may never hold: anything that runs or loads on its own, and anything private.
 const SNAP_DROP = 'iframe,frame,object,embed,video,audio,canvas,script,noscript,dialog,template,img[src^="blob:"],'
@@ -185,7 +202,7 @@ function snapScreen() {
 // few times; a page that is never kept leaves the older entry, which shows only on its own address.
 function bootSnapSave(tries = 0) {
   clearTimeout(SNAP.timer);
-  if (!snapOn() || SNAP.banned || !SNAP.who || SESSION.out) return;
+  if (!snapOn() || snapSignedOut() || !SNAP.who || SESSION.out) return;
   const screen = snapScreen();
   if (!screen) {
     if (tries && tries < SNAP_SAVE_TRIES) SNAP.timer = setTimeout(() => bootSnapSave(tries + 1), SNAP_SETTLE_MS);
@@ -201,6 +218,12 @@ function bootSnapSaveSoon() {
   clearTimeout(SNAP.timer);
   SNAP.timer = setTimeout(() => bootSnapSave(1), SNAP_SETTLE_MS);
 }
+// Another tab signed out: this one keeps nothing more, and a copy on screen goes.
+if (snapChannel) snapChannel.onmessage = e => {
+  if (!e.data?.signedOut) return;
+  SNAP.banned = true; SNAP.who = ''; clearTimeout(SNAP.timer);
+  bootSnapRelease();
+};
 window.addEventListener('hashchange', bootSnapSaveSoon);
 document.addEventListener('visibilitychange', () => { if (document.hidden) bootSnapSave(); });
 window.addEventListener('pagehide', () => bootSnapSave());
