@@ -3,7 +3,7 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.middleware.gzip import GZipMiddleware
 
 from .json_response import accepts_gzip
-from .ui_bundle import PATHS
+from .ui_bundle import is_part
 
 
 class UiCompression:
@@ -13,7 +13,7 @@ class UiCompression:
 
     async def __call__(self, scope, receive, send):
         if (scope["type"] != "http" or scope["method"] != "GET"
-                or not scope["path"].startswith("/tico/ui/") or scope["path"] in PATHS):
+                or not scope["path"].startswith("/tico/ui/") or is_part(scope["path"])):
             return await self.app(scope, receive, send)
 
         async def encoded_send(message):

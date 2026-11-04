@@ -47,8 +47,7 @@ Ordinary internal docs under `_librarian/`, so humans can read and correct them:
 summary of every doc, and the version each was written from), `glossary.md` (the team's words), `where-things-live.md`
 (topic to place, and each linked source's structure), `missing.md` (what the docs could not answer, the docs that disagree,
 the sources it could not read: a to-do list for humans) and `faq-log.md`. It refreshes them every day: a routine, **Refresh
-the map of the docs**, at 03:30 Pacific by default (change it with `hub routine set` or in Settings; Tico's row is the
-routine). To refresh now, give the Librarian a task titled "Refresh the map".
+the map of the docs**, at 03:30 Pacific by default (change it on its automation in Automations, or with `hub automation update`). To refresh now, give the Librarian a task titled "Refresh the map".
 
 It writes only under `_librarian/` and `FAQ.md`. It never edits a human's doc unless that human asks it to research
 one (below). A doc or web page that tells it to do something is treated as text, not an instruction, and it fetches only
@@ -63,11 +62,11 @@ On Docs, matching internal, indexed external, linked and manual docs appear at o
 from search; choose **All docs**, **Team docs** or **Tico manual** to narrow the matches.
 The Librarian's answer then streams in with clickable citations. `POST /api/v2/docs/ask {question,
 conversation_id?, new_conversation?}` returns `{conversation_id, message_id, results}` and the answer arrives on
-`GET /api/v2/events?topics=messages,runs&conversation={id}` (each change, then the conversation's snapshot). Each human has one private docs conversation with the Librarian
-(`scope: personal`, `room_key: docs`), like the [Assistant](assistant.md)'s room: only they can read it, and the owner and
-administrators cannot. **New chat** starts a fresh conversation, so the Librarian remembers only what is on screen.
-**Previous conversations** lists your saved Docs chats. Pick one to reopen it and continue where you left off;
-your current chat stays in the list. Only you can list or reopen them, including when an owner or administrator asks.
+`GET /api/v2/events?topics=messages,runs&conversation={id}` (each change, then the DM's snapshot). Each human has one private docs DM with the Librarian
+(`scope: personal`, `room_key: docs`), like the [Assistant](assistant.md)'s DM: only they can read it, and the owner and
+administrators cannot. **New chat** starts a fresh DM, so the Librarian remembers only what is on screen.
+**Previous conversations** lists your saved Docs DMs. Pick one to reopen it and continue where you left off;
+your current DM stays in the list. Only you can list or reopen them, including when an owner or administrator asks.
 `GET /api/v2/librarian/conversations` lists them (`limit`, `offset`, `next_offset`), and
 `POST /api/v2/librarian/conversations/{id}/reopen {}` makes one current. Reopening waits until the current turn finishes.
 
@@ -88,7 +87,7 @@ The server MCP returns after at most 20 seconds: if pending, it returns
 `{timeout: true, conversation_id, message_id}`. Use `hub_doc_ask_status` with those ids (or
 `hub doc ask-status <conversation_id> <message_id> [--wait 20]`) to collect the same answer. Polling
 uses short requests and sends no new question. Local CLI asks can wait for the full requested duration.
-The Assistant asking for a human puts the question in that human's own docs conversation.
+The Assistant asking for a human puts the question in that human's own docs DM.
 
 The Librarian acts as itself, not as the human who asked. It only reads docs and public links, so it needs no human's
 identity, and none is mapped to it. Docs are team-wide, so what it can read is the same for every asker.
@@ -170,7 +169,7 @@ On an empty Market page the owner answers the Librarian's four questions (First-
 address with `hub doc fetch` (about 40 fetches in all), uses web search when the harness has it (`web-search` is declared in its
 `bot.yaml`), and writes what it finds with `hub market`: the team itself (`company/self`), competitors and lookalikes with
 their tier, segments, channels, people and rules as entities and edges, each with an evidence row (`hub market report`, then
-`hub market apply`, which takes `--tier` and `--new-id`), and the eight market pages (`hub market page`) with a source on every
+`hub market apply`, which takes `--tier`, `--new-id` and `--last-verified-at`), and the eight market pages (`hub market page`) with a source on every
 claim. It never invents a number: a size, price or share appears only when a source states it. It aims at ten minutes and stops at
 thirty, then finishes the task with a short note saying what it found and what it could not read.
 
@@ -178,7 +177,7 @@ The strategy and the market stay apart, and each reads the other. A task with no
 `hub strategy show`: if it names the team's website, that is the first address, and the summary and *What we sell* stand in for
 the owner's description (finishing setup with a website files "Set up the market map" from it). The other
 way round, when an insight contradicts an active bet, the daily curate routine says so in one line of its sweep report and
-sends the CEO Bot a note naming the bet and the entity, so it can propose the entity as one of the bet's `cites`; a change to a
+sends the Strategy Bot a note naming the bet and the entity, so it can propose the entity as one of the bet's `cites`; a change to a
 cited entity then trips the bet's wrong-if. The Librarian applies the insight on its own evidence, never writes the strategy,
 and never judges whether the bet should change ([Strategy](strategy.md#the-fit-check)).
 
@@ -196,9 +195,9 @@ asking for, complaining about and objecting to, each with a count, the date last
 routine runs on `meeting.ready`, so it reads only live team meetings; a private, pending or dismissed meeting never reaches it
 ([Meetings](meetings.md)). For each meeting it files a piece of evidence per theme (source kind `meeting`, a quote of 200
 characters or fewer, no personal or company names) and rewrites the page. A meeting counts once for a theme. A theme seen in
-three or more meetings is marked **Thesis**, which the CEO Bot can cite in a bet. It reads mail only if a mailbox is granted to
+three or more meetings is marked **Thesis**, which the Strategy Bot can cite in a bet. It reads mail only if a mailbox is granted to
 it. A new team gets the routine with the Librarian; an existing install gets it when the Librarian's template is next applied
-(or add it with `hub routine set customer-themes --on meeting.ready`, as in [Routines](routines.md)).
+(or add an automation on the event `meeting.ready` with a Librarian Bot turn, as in [Routines](routines.md)).
 
 **Sources a team brings.** Some sources do not allow resale, so Tico cannot supply them. A team can grant its own Crunchbase,
 Similarweb or similar credential to the Librarian, and the sources catalog marks those sources `team_key`.
@@ -223,7 +222,9 @@ market reads it, and the tables are readable in hub SQL like the other market ta
   work it out again and scale the range by the same ratio; the stored row is not rewritten. If that puts the spend below
   zero or past the cap, the estimate reads with no spend and an `error`, and the total leaves it out. The owner changing a
   parameter of an estimate files a new accepted `owner` estimate. Each segment carries `rolled_usd`: its own size, else the
-  sum of its parts at any depth, else null. The total is the sum of the top-level segments' `rolled_usd`.
+  sum of its parts at any depth, else null. The total is the sum of the top-level segments' `rolled_usd`. It also carries
+  `self` (`company/self` operates in it, **Us**) and `next` (a segment the team means to enter, **Next**), which the
+  Strategy page's Where we play sets ([Strategy](strategy.md#the-page)).
 - **Figures.** A player's revenue, ARR, customers or seats in a segment, with `kind` (reported, estimated, claimed), `as_of`
   and evidence.
 - **Bets.** An accepted size, or a shared parameter changing an accepted size, is a market event on the segment, so a bet that

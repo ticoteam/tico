@@ -1,0 +1,15 @@
+{
+  "id": "30-listening-card-layoffs",
+  "kind": "listening",
+  "questions": "listening-card",
+  "level": "low",
+  "state": {
+    "source": "news",
+    "about": "competitors in project tracking",
+    "title": "Northvale Tasks cuts a third of its staff after funding lapses",
+    "snippet": "The task-tracking startup will cut about 30 jobs and move its sales team to a partner model, it said on Monday.",
+    "date": "2026-10-26",
+    "url": "https://news.example/northvale-cuts"
+  },
+  "note": "A concrete competitor move: real move, high impact."
+}

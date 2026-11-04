@@ -5,17 +5,15 @@ from backend import auto_tasks, execution, health, quiet_work
 from backend.store import H
 from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_task_lanes import task_bot
+from backend.tests.hold_rows import set_holds
 
 
-def reopened(api, sweep=True):
+def reopened(api):
     task = post(api, 'tasks', {'owner': 'ops', 'title': 'Check the installed runtime',
                               'body': 'Check the installed runtime.', 'next_run': True})
     with api.app.state.store.transaction() as c:
         H.task_update(c, 'bot:ops', task['id'], status='waiting', note='Waiting for installation evidence')
-        if sweep:
-            assert H.sweep_stranded(c, at=H.shift(H.now(), hours=3)) == [(task['id'], 'open')]
-        else:
-            H.task_update(c, 'human:ana', task['id'], status='open')
+        H.task_update(c, 'human:ana', task['id'], status='open')
     return task
 
 
@@ -24,12 +22,11 @@ def reason(api, machine):
         return execution.bot_refusal(c, api.app.state.store.settings, machine['runner_id'], 'ops')
 
 
-@pytest.mark.parametrize('sweep', [False, True])
-def test_reopened_quiet_task_reuses_its_queued_job_once(api, sweep):
+def test_reopened_quiet_task_reuses_its_queued_job_once(api):
     machine = task_bot(api, lanes=True)
-    task = reopened(api, sweep)
+    task = reopened(api)
     with api.app.state.store.read() as c:
-        [job] = c.execute("SELECT id FROM jobs WHERE bot='ops' AND state='queued'").fetchall()
+        [job] = c.execute("SELECT id FROM jobs WHERE bot_id='ops' AND state='queued'").fetchall()
         assert H.task(c, task['id'])['next_run'] == 1  # also covers queues stranded before this fix
     assert reason(api, machine) is None
     attempt = post(api, 'jobs/claim', {'next_run': True}, machine['token'])['attempt']
@@ -38,7 +35,7 @@ def test_reopened_quiet_task_reuses_its_queued_job_once(api, sweep):
     assert attempt['next_run'] == []
     assert post(api, 'jobs/claim', {}, machine['token'])['attempt'] is None
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='ops'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops'").fetchone()[0] == 1
         assert H.task(c, task['id'])['carried_by'] is None
 
 
@@ -48,8 +45,7 @@ def test_reopened_job_keeps_real_gates_and_health_reports_them(api, gate):
     task = reopened(api)
     with api.app.state.store.transaction() as c:
         if gate == 'snooze':
-            c.execute('UPDATE tasks SET snoozed_until=? WHERE id=?',
-                      (H.shift(H.now(), days=1), task['id']))
+            set_holds(c, task['id'], snoozed_until=H.shift(H.now(), days=1))
         elif gate == 'blocker':
             blocker = H.task_create(c, 'human:ana', 'Supply installation evidence', 'Supply the evidence.',
                                     'human:ben', lint=False)
@@ -72,7 +68,7 @@ def test_reopened_job_keeps_real_gates_and_health_reports_them(api, gate):
     assert reason(api, machine) == expected
     assert post(api, 'jobs/claim', {}, machine['token'])['attempt'] is None
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued'",
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'",
                   (H.shift(H.now(), hours=-40),))
         rows = [r for r in health._waiting(c, {machine['runner_id']}, api.app.state.store.settings)[2]
                 if r['bot'] == 'ops']

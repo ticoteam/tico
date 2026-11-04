@@ -3,7 +3,7 @@ A sample of excellent output for a fictional team. Every name in it is a stand-i
 ```markdown
 # Acme close status, August 2026 (draft, not yet reviewed)
 
-**Headline: 6 of 9 checklist lines done; 14 transactions still need a category and 3 need your answer. Books are ready to close once those are settled.**
+**Headline: 5 of 9 checklist lines done; 14 uncategorised transactions: 11 proposed, 3 need your answer. The books can close once those are settled and the receipts are in.**
 
 Sample output for Acme, a fictional studio-software team. Nothing has been posted to the books.
 
@@ -16,7 +16,7 @@ Sample output for Acme, a fictional studio-software team. Nothing has been poste
 - [ ] Bank reconciliation: waiting on the bank statement, due 2026-09-03 (yours to do)
 - [x] Receivables reviewed: 2 invoices over 30 days, handed to the Accounts Receivable Specialist
 - [x] Payables reviewed: no unentered bills found in the mailbox
-- [ ] Period lock: requested close checks and posting complete
+- [ ] Period lock: not ours; waits for the accountant
 
 ## Proposed categories (11 of 14)
 | Date | Line | Amount | Proposed | Why |

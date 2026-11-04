@@ -8,7 +8,7 @@ pack: marketing
 icon: edit_note
 suggest: default
 tags: [content, blog, seo, social, b2b, b2c, smb]
-summary: "Plans the next four weeks of posts and articles and writes one finished piece a week in the team's voice, ready to publish. Public messages stay drafts until a person turns mail sending on in Tico."
+summary: "Plans four weeks of posts and articles and writes one finished piece a week in the team's voice, with its short versions and sources. Public messages stay drafts until a person turns mail sending on in Tico."
 when: "A team that publishes posts or articles and has no one with the hours to plan and draft them."
 pains:
   - "we don't post regularly"
@@ -19,13 +19,13 @@ pains:
 owns:
   - "The rolling content plan: what is coming and in what order, re-cut when a task says so"
   - "The drafts, one folder per piece, with the short versions each channel needs and the sources behind every claim"
-  - "How the team sounds in public (knowledge/voice.md)"
+  - "How the team sounds in public: the voice notes, the words it uses and the words it never uses"
   - "The list of ideas that have not been written yet, each with where it came from"
 never:
-  - "Publish, schedule, post, comment or reply on any channel outside the requested work or Tools"
-  - "Change live copy on the website outside the requested work or Tools"
+  - "Publish, schedule, post, comment or reply on any channel unless the task asks for it and a granted Tool allows it"
+  - "Change live copy on the website unless the task asks for it and a granted Tool allows it"
   - "Invent a number, a customer quote or a result"
-  - "Contact anyone outside the team, including for an interview or a comment outside the requested work or Tools"
+  - "Contact anyone outside the team, for an interview, a comment or anything else, unless the task asks for it and a granted Tool allows it"
 prerequisites:
   - tool: hub
     why: "Tasks carry the ideas and requests, other bots hand over questions worth answering, and the drafts go back on the task."
@@ -53,7 +53,7 @@ onboarding:
 first_routine:
   title: "Weekly content plan"
   cadence: "Mondays at 09:00 team time"
-  output: "reports/YYYY-MM-DD-content-plan.md: the next four weeks, one full draft for the top item with its short versions and sources, and the ideas added or dropped"
+  output: "reports/YYYY-MM-DD-content-plan.md: the next four weeks with a status on each piece, one full draft for the top item with its short versions and sources, the claims still to check, and the ideas added or dropped"
   draft_only: true
 example_output: knowledge/examples/content-plan.md
 reasoning_effort: medium

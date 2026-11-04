@@ -29,12 +29,36 @@ function visualSrc(f, field = 'src') {
   }
   return /^https?:$/.test(url.protocol) && /^\/visuals\/[A-Za-z0-9_.-]+$/.test(url.pathname) && !url.search ? url.href : null;
 }
-// An ACK can arrive after a live snapshot painted chips. Reuse only the open
-// threads' cached authorized data; no new read, draft reset or whole-page refresh.
+// A page held in Tico file hosting has a `src` on the app's own route, which sends its frame on to the company's files
+// address (backend/visuals.py serve). The desktop app follows a frame there only once it has acknowledged that address
+// from the signed-in config (NATIVE_VISUAL_FILES, app/src/visual_origin.rs); until then, and in a shell too old to
+// know it, the page is an Open card rather than a frame whose redirect would open the browser. Pictures and SVG are
+// <img>, never a navigation, so they need nothing.
+function visualFrameOk(kind, src) {
+  if (kind !== 'page' || !(window.ticoNative || /TicoHub/.test(navigator.userAgent))) return true;
+  let url; try { url = new URL(src, location.href); } catch { return false; }
+  return url.origin !== location.origin || !!NATIVE_VISUAL_FILES;
+}
+// The approved address a page's frame shows from, or null for an Open card (pages, ui/app/pages.js).
+const visualPageSrc = src => { const ok = visualSrc({src}); return ok && visualFrameOk('page', ok) ? ok : null; };
+// An ACK can arrive after a live snapshot painted chips. Every place that draws visuals draws again from the data it
+// already holds: no new read, draft reset or whole-page refresh.
 function nativeVisualRepaint() {
   if (typeof V2C !== 'undefined' && V2C) v2ChatRender(V2C);
   if (typeof TASK_CHAT !== 'undefined' && TASK_CHAT?.data && taskChatCurrent(TASK_CHAT))
     taskCommentsRender(TASK_CHAT, TASK_CHAT.data);
+  if (typeof THV_VIEWS !== 'undefined') for (const v of THV_VIEWS) if (!v.gone && v.state === 'ready') thvDraw(v);
+  // Pinned pages and the full page view: an Open card drawn before the ACK becomes its frame (pageCard keeps its page).
+  for (const el of document.querySelectorAll('.pg-card:not(.pg-framed)'))
+    if (el.pageData && typeof pageCard === 'function' && pageSrc(el.pageData)) el.replaceWith(pageCard(el.pageData, {size: el.pageSize}));
+  if (typeof PG !== 'undefined' && PG?.page && PG.shown === PG.page.version && pageSrc(PG.page) && !document.querySelector('#pg-view .pg-body iframe'))
+    void pageFullBody(PG);
+  // The Decide card's body (its note is left alone) and a task's question box (its ticks and note kept as a draft);
+  // neither while an answer from it is on its way, so its controls stay off.
+  if (typeof DEC !== 'undefined' && DEC && !DEC.busy) decidePaintBody(DEC);
+  if (typeof qcardRedraw === 'function')
+    for (const box of document.querySelectorAll('[data-qcard]:not([aria-busy="true"])'))
+      if (qcardShown(box)) { qcardDraft(box); qcardRedraw(box); }
 }
 const visualRef = f => `${f.file_id}@${Number(f.version)}`;
 // Without a separate visual address (Visuals always on, backend/visuals.py mode) a page or SVG is never served from
@@ -46,7 +70,7 @@ const VISUAL_OPEN_KINDS = new Set(['page', 'svg']);
 function visualState(f) {
   if (!f || typeof f !== 'object' || !f.file_id || !Number.isInteger(Number(f.version)) || !VISUAL_BODY[f.kind]) return null;
   if (f.removed) return 'removed';
-  if (visualSrc(f)) return 'ready';
+  if (visualSrc(f)) return visualFrameOk(f.kind, visualSrc(f)) ? 'ready' : 'open';
   return f.open === true && VISUAL_OPEN_KINDS.has(f.kind) ? 'open' : null;
 }
 function visualOpenBody(f) {

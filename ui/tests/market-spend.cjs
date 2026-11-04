@@ -1,9 +1,8 @@
 // The Market tab's views (ui/market-spend.js, ui/market-page.js) against a stand-in for GET /api/v2/market/spend and
-// /market/value-chain and their writes (fixtures only, the Acme example): a bare Market tab opens Spend once anything is
-// sized and the graph otherwise; treemap areas follow the sizes; the segment panel shows each estimate with its
+// /market/value-chain and their writes (fixtures only, the Acme example): treemap areas follow the sizes; the segment panel shows each estimate with its
 // params, and the owner's param edit posts and reads again while a member sees no edit, research or cite; the basis
 // switch asks for the other basis; the empty state files the research once; the value chain draws its five layers; the
-// growth chart draws a dot per segment; a phone never scrolls sideways; old #/strategy/market links still open the graph.
+// growth chart draws a dot per segment; a phone never scrolls sideways; note links and old #/market note links open the graph.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots (Spend on desktop in light, on a phone in dark).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -153,12 +152,12 @@ const noSideScroll = page => page.evaluate(() => ({page: document.documentElemen
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    // A bare Market tab opens Spend once anything is sized; boxes are drawn to scale, and the map marks what it should.
+    // Spend: boxes are drawn to scale, and the map marks what it should.
     {
-      const {page, errors} = await open(browser);
+      const {page, errors} = await open(browser, {route: '#/strategy/market/spend'});
       await page.locator('.mkt-map .mkt-box').first().waitFor();
       assert.equal(await page.locator('.mkt-views a[aria-current=page]').innerText(), 'Spend');
-      assert.deepEqual(await page.locator('.mkt-views a').allInnerTexts(), ['Players', 'Spend', 'Buyers', 'Value chain', 'Size vs growth']);
+      assert.deepEqual(await page.locator('.mkt-views a').allInnerTexts(), ['Briefing', 'Players', 'Spend', 'Buyers', 'Value chain', 'Size vs growth', 'Listening']);
       assert.equal(await page.locator('.mkt-total strong').innerText(), '$16.8B');
       within(await areaRatios(page.locator('.mkt-map > .mkt-box')), 'top level');
       within(await areaRatios(page.locator('.mkt-group:has([data-seg="segment/day"]) .mkt-tile')), 'Office parts');
@@ -183,7 +182,7 @@ const noSideScroll = page => page.evaluate(() => ({page: document.documentElemen
         seg('group', 'Equipment', null, null, {rolled_usd: {spend_usd: 4 * B, low_usd: 2 * B, high_usd: 6 * B}}),
         seg('mid', 'Rental', 'group', null, {depth: 2, rolled_usd: {spend_usd: 4 * B, low_usd: 2 * B, high_usd: 6 * B}})];
       const data = {definition, year: 2025, dimension: 'offering', basis: 'product', total: {spend_usd: 19 * B, low_usd: 11 * B, high_usd: 28 * B}, segments: parts};
-      const {page, errors} = await open(browser, {data: {offering: data}});
+      const {page, errors} = await open(browser, {route: '#/strategy/market/spend', data: {offering: data}});
       await page.locator('.mkt-map .mkt-box').first().waitFor();
       const group = page.locator('.mkt-group:has([data-seg="segment/p1"])');
       assert.equal(await group.locator('.mkt-rest').count(), 1);
@@ -198,9 +197,9 @@ const noSideScroll = page => page.evaluate(() => ({page: document.documentElemen
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Nothing sized: the bare tab opens the graph; the view routes still open the views; the graph links keep working.
+    // Nothing sized: Players is the graph, and the Spend tab opens its empty state.
     {
-      const {page, errors} = await open(browser, {empty: true});
+      const {page, errors} = await open(browser, {route: '#/strategy/market/players', empty: true});
       await page.locator('.market-shell').waitFor();
       assert.equal(await page.locator('.mkt-views a[aria-current=page]').innerText(), 'Players');
       assert.equal(await page.locator('.mkt-map').count(), 0);

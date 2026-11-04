@@ -17,7 +17,8 @@ Then `knowledge/versioning.md`, `knowledge/voice.md` and `knowledge/labels.md`.
     gh release list -R <repo> --limit 3
     gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD" --json number,title,labels,mergedAt,body,url
 
-The range is everything merged after the last release's date. If nothing has merged, say so on the task and
+The range is the commits from the last tag to the candidate commit: `gh api repos/<repo>/compare/<last tag>...<candidate commit>`,
+then the pull request behind each commit. A merge date can miss a change that ships or add one that does not. If nothing has merged, say so on the task and
 finish; do not invent a release.
 
 ## 3. Classify every change
@@ -36,16 +37,17 @@ semantic versioning, suggest a date-based name in its own style.
 
 `reports/YYYY-MM-DD-release-notes.md` in the shape of `knowledge/examples/release-notes.md`:
 1. **Suggested version and date range**, and the one change a user will notice most.
-2. **Changelog entry**, in the repository's own CHANGELOG format, each line ending with its pull request link.
+2. **Changelog entry**, in the repository's own CHANGELOG format, each line ending with its full pull request URL (`https://github.com/<repo>/pull/<n>`), since a bare number does not link outside the repository.
 3. **Customer-facing notes**, plain language, in the voice in `knowledge/voice.md`, no internal names.
 4. **Could not classify**: pull request, why, the question for a human.
 5. **Left out**: counts by reason.
+Record the draft's SHA-256 on the task (`shasum -a 256 <file>`). What gets published must match that hash; any edit needs a new approval.
 Then `hub file publish reports/YYYY-MM-DD-release-notes.md`.
 
 ## 6. Finish
 
 Commit, then `hub task update <id> --status done --note`: the suggested version and why, changes included,
-changes unclassified, and which repository you could not read. Publishing is a human's step.
+changes unclassified, and which repository you could not read. Publishing is a human's step, and the approved text is the text that goes out.
 
 ## When a source fails
 

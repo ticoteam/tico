@@ -1,5 +1,5 @@
 //! Task lanes (task_lanes_v2): a task-keyed turn runs in its own lane beside the bot's other work, one turn at
-//! a time per (bot, lane) on this computer (sessions::Lanes; runner/worktrees.py lane_lock). The claim names
+//! a time per (bot, lane) on this computer (sessions::Lanes; runner_support/worktrees.py lane_lock). The claim names
 //! the lanes busy here (`busy_lanes`); the heartbeat advertises the capabilities, each dropped for ten minutes
 //! by a server that refuses it.
 
@@ -11,7 +11,20 @@ use serde_json::Value;
 
 use crate::util::text_of;
 
-pub const CAPABILITIES: &[&str] = &["task_lanes_v2", "session_roots_v1", "task_goals_v1", "capacity_continue_v1", "source_continue_v1", crate::login::SIGN_OUT_CAPABILITY, crate::login::KEYS_CAPABILITY, crate::login::SWITCH_TYPE_CAPABILITY, crate::login::REMOVE_CAPABILITY, crate::login::SWITCH_TO_KEY_CAPABILITY];
+pub const CAPABILITIES: &[&str] = &[
+    "task_lanes_v2", "session_roots_v1", "task_goals_v1", "capacity_continue_v1", "source_continue_v1",
+    crate::login::SIGN_OUT_CAPABILITY, crate::login::KEYS_CAPABILITY, crate::login::SWITCH_TYPE_CAPABILITY,
+    crate::login::REMOVE_CAPABILITY, crate::login::SWITCH_TO_KEY_CAPABILITY, crate::login::CONNECT_CAPABILITY, "turns_at_once_v1",
+    // Private live meetings run in their own lane and checkout (sessions.rs); the server hands them to no other runner.
+    "private_lanes_v1",
+    "model_subscriptions_v1", "model_subscription_activation_v1",
+    // Turns of a bot with a browser exit go through it (browser_exit.rs); the server hands them to no other runner.
+    "browser_exit_v1",
+    "memory_tidy_packets_v1",
+    // Chats of a bot keep their own provider threads: a public thread never resumes a direct message's (execute.rs session_key).
+    "threads_v1",
+    "memory_tidy_keep_v1",
+];
 const DROP_FOR: Duration = Duration::from_secs(600);
 
 #[derive(Clone, Debug)]
@@ -110,7 +123,11 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
                 if CAPABILITIES.contains(&name.as_str()) { return Some(name.clone()); }
             }
         }
-        for name in ["capacity_continue_v1", "source_continue_v1", crate::login::SWITCH_TO_KEY_CAPABILITY, crate::login::REMOVE_CAPABILITY, crate::login::SWITCH_TYPE_CAPABILITY, crate::login::KEYS_CAPABILITY, crate::login::SIGN_OUT_CAPABILITY, crate::screen::CAPABILITY, "task_goals_v1", "session_roots_v1", "task_lanes_v2"] {
+        for name in ["memory_tidy_packets_v1", "model_subscription_activation_v1", "browser_exit_v1", "model_subscriptions_v1", "private_lanes_v1", "turns_at_once_v1", "capacity_continue_v1", "source_continue_v1",
+                     crate::login::CONNECT_CAPABILITY, crate::login::SWITCH_TO_KEY_CAPABILITY, crate::login::REMOVE_CAPABILITY,
+                     crate::login::SWITCH_TYPE_CAPABILITY, crate::login::KEYS_CAPABILITY,
+                     crate::login::SIGN_OUT_CAPABILITY, crate::screen::CAPABILITY, "task_goals_v1",
+                     "session_roots_v1", "task_lanes_v2"] {
             if caps.iter().any(|c| c == name) {
                 return Some(name.into());
             }
@@ -174,6 +191,15 @@ mod tests {
         forget("a1");
         forget("a2");
         assert_eq!(refused_field("body.capabilities: bad", &json!({"capabilities": ["task_lanes_v2", "task_goals_v1"]})).as_deref(), Some("task_goals_v1"));
+        // A server from before private lanes or turn limits refuses the newest capability first, even without naming
+        // its position.
+        let subscription = json!({"capabilities": ["model_subscriptions_v1", "model_subscription_activation_v1"]});
+        assert_eq!(refused_field("body.capabilities: bad", &subscription).as_deref(), Some("model_subscription_activation_v1"));
+        assert_eq!(refused_field("body.capabilities.1: Input should be 'model_subscriptions_v1'", &subscription).as_deref(), Some("model_subscription_activation_v1"));
+        let newest = json!({"capabilities": ["task_lanes_v2", "turns_at_once_v1", "private_lanes_v1"]});
+        assert_eq!(refused_field("body.capabilities: bad", &newest).as_deref(), Some("private_lanes_v1"));
+        let turns = json!({"capabilities": ["task_lanes_v2", "turns_at_once_v1"]});
+        assert_eq!(refused_field("body.capabilities: bad", &turns).as_deref(), Some("turns_at_once_v1"));
         // A server from before model keys refuses only that capability; the sign-out one stays.
         let both = json!({"capabilities": ["task_lanes_v2", crate::login::SIGN_OUT_CAPABILITY, crate::login::KEYS_CAPABILITY]});
         assert!(CAPABILITIES.contains(&crate::login::KEYS_CAPABILITY));
@@ -182,6 +208,17 @@ mod tests {
         let all = json!({"capabilities": CAPABILITIES});
         assert_eq!(refused_field("body.capabilities.3: Input should be 'task_lanes_v2'", &all).as_deref(), Some("capacity_continue_v1"));
         assert_eq!(refused_field("body.capabilities.4: Input should be 'capacity_continue_v1'", &all).as_deref(), Some("source_continue_v1"));
+    }
+
+    #[test]
+    fn an_older_server_refuses_packets_without_losing_ordinary_work() {
+        let mut body = json!({"capabilities": ["task_lanes_v2", "memory_tidy_packets_v1"]});
+        assert_eq!(refused_field("body.capabilities.1: Input should be 'task_lanes_v2'", &body).as_deref(), Some("memory_tidy_packets_v1"));
+        assert_eq!(refused_field("body.capabilities: bad", &body).as_deref(), Some("memory_tidy_packets_v1"));
+        hold_back("memory_tidy_packets_v1");
+        drop_held(&mut body);
+        release("memory_tidy_packets_v1");
+        assert_eq!(body["capabilities"], json!(["task_lanes_v2"]));
     }
 
     #[test]

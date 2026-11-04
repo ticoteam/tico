@@ -2,7 +2,7 @@
 fixes it when it is a known gap today, so a failing check reads as "not built yet", not as a broken simulation."""
 from collections import Counter
 
-from .board import design_board, dev_board
+from .board import design_board
 from .sim import Scenario, at, tickets
 from .world import START
 
@@ -28,7 +28,7 @@ def long_running(run):
     end = run.end.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     long = []
     for t in run.final:
-        hours = ((run.merged_at.get(t["id"]) or run.end) - run.w.H.parse_ts(t["created"])).total_seconds() / 3600
+        hours = ((run.merged_at.get(t["id"]) or run.end) - run.w.H.parse_ts(t["created_at"])).total_seconds() / 3600
         steps = [f"{name} {span:.0f}h" for name, span in run.w.step_spans(t["id"], until=end)
                  if span > LONG_STEP_HOURS and run.w.board.step(name) and not run.w.board.step(name).merged
                  and not run.w.board.finished(name)]
@@ -104,14 +104,76 @@ def peak_doing(cap):
 def no_uncertain_runs(run):
     """No run is left 'uncertain' (its computer stopped answering partway): such a job waits for a person, and its
     ticket waits with it."""
-    rows = run.w.sql("SELECT bot, count(*) n FROM jobs WHERE state='uncertain' GROUP BY bot")
-    return not rows, ", ".join(f"{r['bot']} {r['n']}" for r in rows)
+    rows = run.w.sql("SELECT bot_id, count(*) n FROM jobs WHERE state='uncertain' GROUP BY bot_id")
+    return not rows, ", ".join(f"{r['bot_id']} {r['n']}" for r in rows)
+
+
+def no_server_error(run):
+    """No call the sim makes gets a server error: a route that raises or answers 500 fails the run's checks, with the
+    first error and its traceback when the app raised. Each claim's status is counted in the detail."""
+    errors = run.w.server_errors
+    counts = ", ".join(f"{status} x{n}" for status, n in sorted(run.claims.items())) or "no claims"
+    if not errors:
+        return True, f"no call got a server error; claims: {counts}"
+    when, route, status, body = errors[0]
+    text = body if len(body) <= 500 else body[:200] + " ... " + body[-300:]
+    return False, (f"{len(errors)} calls got a server error; first {status} on {route} at {when:%H:%M}: {text}; "
+                   f"claims: {counts}")
+
+
+def board_keeps_moving(since, waits=(), fallback=False):
+    """From `since` on, each claim round that has a free slot and a ready bot starts as many turns as the smaller of its
+    free slots and its ready bots. A bot is ready when the records say it can run then (sim.Run.readiness): its computer
+    is awake, and a login it can run on is free, its own (no hold, no probe out, not cooling off) or a fallback that is
+    signed in and not held. The claim's own answer is not the judge: a round the server passes over while work is ready
+    is a stall whatever its reason, and that reason is printed with the round (sim.Run.reasons). `waits` are (from, to)
+    windows of the scenario's clock in which a team-wide or group-wide cap holds every login: a round inside one is not
+    judged. `fallback` also requires a judged round in which a bot started on a fallback login, for a scenario whose
+    point is that fallback. A run with no judged round fails, since nothing then shows the board moved."""
+    def check(run):
+        if not run.marks:
+            return False, "no runner claim rounds: this check needs runner-style claims"
+        start = START + since
+        windows = [(START + lo, START + hi) for lo, hi in waits]
+        judged, short, waived, on_fallback = 0, [], 0, 0
+        for m in run.marks:
+            if m["at"] < start or not m["free"] or not m["ready"]:
+                continue
+            if any(lo <= m["at"] < hi for lo, hi in windows):
+                waived += 1
+                continue
+            judged += 1
+            on_fallback += bool(m["fallback"])
+            if m["started_at"] < min(m["free"], len(m["ready"])):
+                short.append(m)
+        if not judged:
+            return False, ("no claim round had a free slot and a ready bot outside the waits: nothing shows the board "
+                           "moved")
+        if short:
+            return False, (f"{len(short)} of {judged} claim rounds started fewer turns than the smaller of free slots "
+                           "and ready bots: " + " || ".join(_round_line(m) for m in short[:5]))
+        if fallback and not on_fallback:
+            return False, (f"{judged} claim rounds judged, and no bot started on a fallback login: the fallback this "
+                           "scenario is about was never tested")
+        note = f"; {waived} rounds inside declared waits were not judged" if waived else ""
+        return True, (f"all {judged} claim rounds with a free slot and a ready bot started the smaller of the two; "
+                      f"{on_fallback} of them started a bot on a fallback login{note}")
+    return check
+
+
+def _round_line(m):
+    """One short round for a failing check: its time, its ready bots, its turns started, and the server's reasons."""
+    ready = ", ".join(m["ready"][:6]) + (f" (+{len(m['ready']) - 6})" if len(m["ready"]) > 6 else "")
+    text = f"{m['at']:%H:%M} free {m['free']}, ready {ready}, started {m['started_at']}"
+    if m.get("why"):
+        text += " [" + m["why"][:700] + "]"
+    return text
 
 
 def lead_heard_of(word):
     """Head of Engineering was told (a note or a wake) of something matching `word`."""
     def check(run):
-        rows = run.w.sql("SELECT body FROM messages WHERE to_actor='bot:engineering-lead' AND body LIKE ?",
+        rows = run.w.sql("SELECT body FROM messages WHERE recipient_id='bot:engineering-lead' AND body LIKE ?",
                          (f"%{word}%",))
         return bool(rows), f"{len(rows)} messages mention {word!r}"
     return check
@@ -122,8 +184,8 @@ def late_told(run):
     a working step, backend/step_age.LATE_HOURS) and one scheduler pass more. Sooner, a quiet ticket is its owner's
     to hear of (a status check), and a check that runs long is its timeout's."""
     from backend.step_age import LATE_HOURS
-    rows = run.w.sql("SELECT body, refs_json FROM messages WHERE to_actor='bot:engineering-lead'")
-    told = " ".join((r["body"] or "") + (r["refs_json"] or "") for r in rows)
+    rows = run.w.sql("SELECT body, refs FROM messages WHERE recipient_id='bot:engineering-lead'")
+    told = " ".join((r["body"] or "") + (r["refs"] or "") for r in rows)
     named = {tid for _, tid in run.w.stuck_told}
     slack = 2 * run.scenario.tick_minutes / 60
     late = []
@@ -141,8 +203,12 @@ def late_told(run):
 
 
 def lead_only_scheduled(run):
-    """Head of Engineering runs on its schedule (and when a person asks), never on routine notices."""
-    other = [r for r in run.t.bot("engineering-lead").turns if r["action"] is None and r["news"] != "update"]
+    """Head of Engineering runs on its schedule (and when a person asks), never on routine notices. Its task roundup is the
+    schedule's one grouped run (each profile's roundup row, rules.PROFILE_RULES), so a roundup wake is a scheduled one."""
+    from backend import rules
+    roundups = {r["id"] for found in rules.PROFILE_RULES.values() for r in found if r["event"] == "task_roundup"}
+    other = [r for r in run.t.bot("engineering-lead").turns
+             if r["action"] is None and r["news"] != "update" and r["news"] not in roundups]
     kinds = Counter(r["news"] for r in other)
     return not other, f"{len(other)} turns on routine notices: " + ", ".join(f"{k} {n}" for k, n in kinds.most_common(4))
 
@@ -168,40 +234,46 @@ def every_major_planned(run):
     return not bad, ", ".join(bad[:6])
 
 
-def hourly_spend_under(cap):
-    """The cap stops new turns, never running ones: no turn starts in a clock hour once the runs that started in that
-    hour and have finished cost the cap (what usage_limits counts). The hour's total may pass the cap by what was
+def window_spend_under(cap):
+    """The cap stops new turns, never running ones: no turn starts in a UTC half hour once the runs that started in that
+    half hour and have finished cost the cap (what usage_limits counts). The window's total may pass the cap by what was
     already running; that is reported, not judged."""
+    def window(stamp):
+        return stamp[:14] + ("00" if stamp[14:16] < "30" else "30")
+
     def check(run):
-        runs = [dict(r) for r in run.w.sql("SELECT started, finished, est_cost_usd FROM turns ORDER BY started")]
+        runs = [dict(r) for r in run.w.sql("SELECT created_at AS started_at, settled_at AS finished_at, est_cost_usd "
+                                            "FROM attempts WHERE (job_id IS NULL OR trigger IS NOT NULL) ORDER BY created_at")]
         per, late = Counter(), []
         for r in runs:
-            hour = r["started"][:13]
-            per[hour[11:13] + ":00"] += r["est_cost_usd"] or 0
+            here = window(r["started_at"])
+            per[here[11:16]] += r["est_cost_usd"] or 0
             # Finished strictly before: a run ending in the same tick as this claim may end after it.
-            spent = sum(x["est_cost_usd"] or 0 for x in runs if x["started"][:13] == hour and x["finished"]
-                        and x["finished"] < r["started"] and x is not r)
+            spent = sum(x["est_cost_usd"] or 0 for x in runs if window(x["started_at"]) == here and x["finished_at"]
+                        and x["finished_at"] < r["started_at"] and x is not r)
             if spent >= cap:
-                late.append(f"{r['started'][11:16]} (${spent:.2f} spent)")
-        return not late, (f"peak hour ${max(per.values() or [0]):.2f}; "
+                late.append(f"{r['started_at'][11:16]} (${spent:.2f} spent)")
+        return not late, (f"peak half hour ${max(per.values() or [0]):.2f}; "
                           + (f"{len(late)} turns started past the cap: {', '.join(late[:4])}" if late
                              else "no turn started past the cap"))
     return check
 
 
-def company_cap(hourly):
+def company_cap(per_30m):
     def setup(run, w, team):
         from backend import usage_limits
         with w.store.transaction() as c:
-            usage_limits.save_pool(c, usage_limits.COMPANY, {"hourly_usd": hourly, "daily_usd": None,
-                                                              "weekly_usd": None, "monthly_usd": None}, "human:ana")
+            usage_limits.save_pool(c, usage_limits.COMPANY, {"per_30m_usd": per_30m, "hourly_usd": None,
+                                                              "daily_usd": None, "weekly_usd": None,
+                                                              "monthly_usd": None}, "human:ana")
         tickets(run, w, 10)
     return setup
 
 
 BASE = [("tickets not merged by the end", REPORT, all_through),
         (f"tickets over {LONG_TICKET_HOURS} h, or a step over {LONG_STEP_HOURS} h", REPORT, long_running),
-        ("merged tickets never Blocked", HOLD, never_blocked_after_merge)]
+        ("merged tickets never Blocked", HOLD, never_blocked_after_merge),
+        ("no call got a server error", None, no_server_error)]
 
 
 # ---------------------------------------------------------------------------------------------- events
@@ -330,9 +402,9 @@ SCENARIOS = [
     Scenario("off_script", "Reviewers sometimes try to move the ticket themselves (refused).",
              setup=lambda run, w, team: tickets(run, w, 6), styles={"reviewer": {"off_script": 0.3}},
              checks=standard(*REVIEW_TIMEOUT)),
-    Scenario("engineering_budget", "An hourly budget of $10 for the team (below what it would spend): work slows to it, and still ships.",
-             setup=company_cap(10), hours=24,
-             checks=standard(("the $10 hourly cap holds", None, hourly_spend_under(10)))),
+    Scenario("engineering_budget", "A $5 half-hour budget for the team (below what it would spend): work slows to it, and still ships.",
+             setup=company_cap(5), hours=24,
+             checks=standard(("the $5 half-hour cap holds", None, window_spend_under(5)))),
     Scenario("forgetful_builder", "Builders often forget to hand a ticket on after fixes: the hourly sweep unsticks it.",
              setup=lambda run, w, team: tickets(run, w, 6), styles={"builder": {"forget_move": 0.4}},
              checks=standard(*HOE_CHECKS)),

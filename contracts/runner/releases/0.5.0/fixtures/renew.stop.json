@@ -1,0 +1,10 @@
+{
+ "answer": {
+  "lease_seconds": 89,
+  "lease_until": "2026-01-01T00:00:00.000000Z",
+  "stop": true
+ },
+ "endpoint": "renew",
+ "request": {},
+ "status": 200
+}

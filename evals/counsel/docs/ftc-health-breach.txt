@@ -1,0 +1,95 @@
+Health Breach Notification Rule | Federal Trade Commission
+
+Skip to main content
+
+ The .gov means it’s official.
+
+ Federal government websites often end in .gov or .mil. Before sharing sensitive information, make sure you’re on a federal government site.
+
+ The site is secure.
+
+ The https:// ensures that you are connecting to the official website and that any information you provide is encrypted and transmitted securely.
+
+Español
+
+Health Breach Notification Rule
+
+Tags:
+
+Consumer Protection
+
+Privacy and Security
+
+Consumer Privacy
+
+Data Security
+
+16 CFR Part 318
+
+Rule Summary
+
+The Rule requires vendors of personal health records and related entities to notify consumers following a breach involving unsecured information. In addition, if a service provider to one of these entities has a breach, it must notify the entity, which in turn must notify consumers. The Final Rule also specifies the timing, method, and content of notification, and in the case of certain breaches involving 500 or more people, requires notice to the media.
+
+Text of Rule
+
+16 CFR Part 318: Health Breach Notification Rule
+(May 30, 2024
+)
+
+16 CFR Part 318: Health Breach Notification Rule (NPRM)
+(June 9, 2023
+)
+
+16 CFR Part 318: Health Breach Notification Rule; Request for Public Comment
+(May 22, 2020
+)
+
+Agency Information Collection Activities; Submission for OMB Review; Comment Request; Extension (Health Breach Notification Rule)
+(August 24, 2012
+)
+
+Agency Information Collection Activities; Proposed Collection; Comment Request; Extension (Health Breach Notification Rule PRA)
+(May 29, 2012
+)
+
+Health Breach Notification Rule; Final Rule
+(August 29, 2009
+)
+
+16 CFR Part 318: Health Breach Notification Rule; Notice of Proposed Rulemaking
+(April 20, 2009
+)
+
+FTC Withdraws Obsolete Policy Statement
+(September 9, 2026)
+
+FTC Proposes Amendments to Strengthen and Modernize the Health Breach Notification Rule 
+(May 18, 2023)
+
+FTC Warns Health Apps and Connected Device Companies to Comply With Health Breach Notification Rule
+(September 15, 2021)
+
+FTC Seeks Comment as Part of Review of Health Breach Notification Rule
+(May 8, 2020)
+
+FTC Issues Final Breach Notification Rule for Electronic Health Information
+(August 17, 2009)
+
+FTC Publishes Proposed Breach Notification Rule for Electronic Health Information
+(April 16, 2009)
+
+File
+
+Statement Of The Commission On Breaches by Health Apps and Other Connected Devices
+ (160.35 KB)
+
+File
+
+Health Breach Notices Received by the FTC
+ (70.53 KB)
+
+Related Plain Language Guidance
+
+Complying with FTC’s Health Breach Notification Rule
+
+ Return to top

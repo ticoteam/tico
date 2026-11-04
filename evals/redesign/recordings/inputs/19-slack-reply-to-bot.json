@@ -1,0 +1,45 @@
+{
+  "id": "19-slack-reply-to-bot",
+  "kind": "slack",
+  "questions": "slack-route",
+  "level": "low",
+  "state": {
+    "message": {
+      "channel": "C-platform",
+      "is_dm": false,
+      "from": "dana",
+      "text": "Staging please. Production waits until Tuesday."
+    },
+    "thread": {
+      "thread_ts": "1730100000.000200",
+      "started_by": "engineering-lead"
+    },
+    "previous_routing": {
+      "bot": "engineering-lead",
+      "asked": "Staging or production for the migration check?"
+    },
+    "roster": [
+      {
+        "bot": "engineering-lead",
+        "role": "Engineering Lead: plans and reviews engineering work"
+      },
+      {
+        "bot": "release-manager",
+        "role": "Release Manager: cuts releases and their notes"
+      },
+      {
+        "bot": "legal",
+        "role": "Legal helper: contracts, terms and policies"
+      },
+      {
+        "bot": "support",
+        "role": "Support agent: customer tickets and setup help"
+      },
+      {
+        "bot": "sales-ops",
+        "role": "Sales ops: pipeline and outreach"
+      }
+    ]
+  },
+  "note": "A reply in the thread of the bot that asked: reply to last, and an answer."
+}

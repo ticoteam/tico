@@ -1,0 +1,24 @@
+{
+  "id": "05-mail-investor-update",
+  "kind": "mail",
+  "questions": "mail-triage",
+  "level": "low",
+  "state": {
+    "mailbox": "dana@acme.example",
+    "from": "elena.marsh@acme.example",
+    "from_name": "Elena Marsh, Foxglove Ventures",
+    "to": "dana@acme.example",
+    "date": "2026-10-27T10:05:00Z",
+    "subject": "Q4 update call and the metrics you promised",
+    "snippet": "Dana, the partners want the Q3 metrics before the 4 November investment committee. Could you send the ARR bridge and a 20-minute slot this week?",
+    "unsubscribe": false,
+    "list_id": null,
+    "attachments": [],
+    "is_internal": false,
+    "is_calendar_invite": false,
+    "labels": [
+      "INBOX"
+    ]
+  },
+  "note": "An investor note with a deadline: owner-only, needs the owner."
+}

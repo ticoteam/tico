@@ -71,6 +71,7 @@ COPY --from=dockercli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/
 COPY LICENSE NOTICE /usr/share/doc/tico/
 COPY licenses/Apache-2.0.txt /usr/share/doc/tico/licenses/
 COPY docker/updater.py /usr/local/bin/tico-updater
+COPY docker/runner-memory.sh /usr/local/bin/tico-runner-memory
 ARG TICO_VERSION=dev
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 LABEL org.opencontainers.image.version=${TICO_VERSION} \
@@ -109,20 +110,23 @@ PY
 RUN chmod -R go-w,go+rX /opt/tico
 # The venv is only mounted here, so this stage's /opt/tico holds the source alone.
 RUN --mount=type=bind,from=venv,source=/opt/tico/.venv,target=/opt/tico/.venv \
-    .venv/bin/python -c 'import backend.app, runner.connectors, runner.close_calls, runner.importers.service, clients.environments, yaml; yaml.CSafeLoader' \
-    && .venv/bin/python -m compileall -q backend runner clients
+    .venv/bin/python -c 'import backend.app, runner_support.connectors, runner_support.close_calls, runner_support.importers.service, runner.engine, clients.environments, yaml; yaml.CSafeLoader' \
+    && .venv/bin/python -m compileall -q backend runner_support runner clients
 
 # The Rust runner (runner-rs/), built on the same Debian release as the runner image so it
 # links against the same glibc. Only its sources are copied, so a change elsewhere reuses this layer.
 FROM rust:1.92.0-slim-trixie@sha256:bf3368a992915f128293ac76917ab6e561e4dda883273c8f5c9f6f8ea37a378e AS runner-bin-compiled
+# The release this binary reports (runner-rs/build.rs). A release build must say its own version: checked below.
+ARG TICO_VERSION=dev
 WORKDIR /src/runner-rs
 COPY runner-rs/Cargo.toml runner-rs/Cargo.lock runner-rs/build.rs ./
 COPY runner-rs/src ./src
-# The harness manifests are compiled in (harness_tools.rs BUILT_IN), from ../runner/harnesses, and are part of
-# the source fingerprint (build.rs, `tico-runner --build-id`).
-COPY runner/harnesses /src/runner/harnesses
+# The harness manifests are compiled in (harness_tools.rs BUILT_IN) and are part of the source fingerprint
+# (build.rs, `tico-runner --build-id`).
+COPY runner-rs/harnesses ./harnesses
 COPY LICENSE /src/LICENSE
-RUN cargo build --release --locked && install -D -m 0755 target/release/tico-runner /out/tico-runner
+RUN cargo build --release --locked && install -D -m 0755 target/release/tico-runner /out/tico-runner \
+    && { [ "$TICO_VERSION" = dev ] || [ "$(/out/tico-runner --release)" = "${TICO_VERSION#v}" ]; }
 
 FROM scratch AS runner-bin-prebuilt
 ARG TARGETARCH
@@ -136,6 +140,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64 libdbus-1-3 libdrm2 libgbm1 \
       libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 \
       libxfixes3 libxkbcommon0 libxrandr2 libfontconfig1 fonts-liberation \
+      ffmpeg fonts-noto-core fonts-noto-color-emoji \
       xvfb x11vnc matchbox-window-manager \
     && mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix \
     && rm -rf /var/lib/apt/lists/* \
@@ -159,7 +164,7 @@ RUN ln -s /opt/node/bin/node /opt/node/bin/npm /opt/node/bin/npx /usr/local/bin/
 COPY docker/runner-entrypoint.sh /usr/local/bin/tico-runner-entrypoint
 COPY docker/gitconfig /etc/gitconfig
 COPY docker/profile-turn.sh /etc/profile.d/tico-turn.sh
-# Two users share /home/runner (SECURITY.md, runner/isolation.py). The supervisor stays `ticorun` (10002,
+# Two users share /home/runner (SECURITY.md, runner_support/isolation.py). The supervisor stays `ticorun` (10002,
 # what every earlier image ran as, so runner.json, state-* and tools/ keep their owner and an older image
 # can still start on the volume). Every process that runs bot code is `bot` (10003), in the same group so
 # the workspace and model logins work for both, but with no access to the supervisor's 0600/0700 files.
@@ -224,6 +229,8 @@ ARG TICO_COMMIT
 WORKDIR /opt/tico
 ENV PATH=/opt/tico/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 TICO_VERSION=${TICO_VERSION} TICO_RELEASE=${TICO_VERSION}
+# Threaded Python on a small host: glibc's per-thread malloc arenas fragmented until a 3.8 GB host was OOM-killed.
+ENV MALLOC_ARENA_MAX=2
 LABEL org.opencontainers.image.version=${TICO_VERSION} \
       org.opencontainers.image.revision=${TICO_COMMIT} \
       org.opencontainers.image.source=https://github.com/ticoteam/tico \

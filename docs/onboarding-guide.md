@@ -19,7 +19,7 @@ Start from what your team does, not from what a bot could do.
    and retention. Switch it off to use local suggestions.
 3. **Edit before you create.** On the finished chart, click a bot to rename it, choose who it reports to (each group's bots report
    to its head, and the heads to you), or remove it. To have one human's mail sorted and replies drafted, switch on the message bot
-   and choose whose mailbox it reads. The four **Built-in** bots are Assistant, BotOps, Librarian and CEO Bot; Inbox Manager appears under **Message bots**; switched on, it is made as a bot linked to its mailbox, not a seat. Nothing exists until **Create my team**: then the four built-in bots exist and every other role you picked is a Recruiting seat.
+   and choose whose mailbox it reads. The four **Built-in** bots are Assistant, BotOps, Librarian and Strategy Bot; Inbox Manager appears under **Message bots**; switched on, it is made as a bot linked to its mailbox, not a seat. Nothing exists until **Create my team**: then the four built-in bots exist and every other role you picked is a Recruiting seat.
 4. **Connect tools when a bot asks.** Finish setup does not ask which tools you use and no bot is held back for a missing one. When you press
    **Set up** on a bot, it tells you what it needs (a mailbox, tickets, a repository, a CRM) and where to connect it.
 
@@ -33,8 +33,8 @@ its first routine on; ask it to change or turn off the routine and it does, and 
 
 - Answer briefly and concretely. "Fine, the default" is a valid answer; so is pasting two examples of something done well.
 - Name who reviews its first drafts and who covers when they are away. Ask for review of particular work when needed.
-- **Never type a password, API key or token into a chat with a bot.** Connect tools in Tico's own fields (Tools, or
-  Credentials). A credential pasted into a chat is treated as leaked: rotate it.
+- **Never type a password, API key or token into a thread with a bot.** Connect tools in Tico's own fields (Tools, or
+  Credentials). A credential pasted into a thread is treated as leaked: rotate it.
 
 ## Write good instructions
 

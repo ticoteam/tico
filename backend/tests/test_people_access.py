@@ -11,7 +11,7 @@ def person_headers(api, pid):
     """A personal API token: its role is decided by the person's email, as a browser's is."""
     secret = "tok-" + pid + "-" + uuid.uuid4().hex
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created,created_by) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by) VALUES(?,?,?,?,?,?)",
                   (uuid.uuid4().hex, pid, "test", digest(secret), H.now(), "test"))
     return {"Authorization": "Bearer " + secret, "Idempotency-Key": str(uuid.uuid4())}
 
@@ -74,9 +74,9 @@ def test_transfer_changes_who_is_owner_at_once_and_the_old_owner_loses_owner_rou
     auth = api.app.state.auth
     assert auth.bot_admin(Identity("human:morgan", "human", OWNER_EMAIL)) and auth.owner_email == "riley@acme.example"
     with api.app.state.store.read() as c:
-        events = c.execute("SELECT actor,target,detail_json FROM events WHERE action='owner.transferred'").fetchall()
+        events = c.execute("SELECT actor,target,detail FROM events WHERE action='owner.transferred'").fetchall()
     assert len(events) == 1 and events[0]["actor"] == "human:morgan" and events[0]["target"] == "riley"
-    assert "riley@acme.example" in events[0]["detail_json"]
+    assert "riley@acme.example" in events[0]["detail"]
 
 
 def test_a_person_who_left_loses_their_tokens_and_cannot_sign_in(environment):

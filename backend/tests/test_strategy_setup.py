@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from backend import strategy as S
 from backend import strategy_prompt as SP
 from backend import strategy_setup as SS
 from backend.store import H
@@ -28,6 +29,8 @@ PAGES = {"/": HOME, "/company/about-us": b"<html><body><p>Two founders, ex-landl
          "/customers": b"<html><body><p>Landlords with 1-20 units.</p></body></html>"}
 FOUND = {"serve": "Small landlords with 1-20 units, who use spreadsheets today.",
          "sell": "Bots that run rentals, at $29 a unit a month.",
+         "how": "Landlords find us through search and referrals, and start on a free trial.",
+         "proof": "The customers page names 40 landlords who run their units on Acme.",
          "bets": [{"statement": "Prices low enough to win landlords the incumbents ignore",
                    "why": "Small landlords will not pay enterprise prices.", "rules_out": "White-glove onboarding",
                    "wrong_if": "Fewer than 1 in 10 trials convert"},
@@ -101,8 +104,11 @@ def test_the_job_reads_the_site_and_writes_unconfirmed_sections_and_proposed_bet
     view = get(api, "strategy")
     sections = view["draft"]["sections"]
     assert sections["serve"].startswith("_Unconfirmed: drafted from acme.example._") and FOUND["serve"] in sections["serve"]
-    assert FOUND["sell"] in sections["sell"] and sections["not"] == ""
-    assert job["written"]["sections"] == ["sell", "serve"] and job["written"]["revision"] == view["draft"]["revision"]
+    assert FOUND["sell"] in sections["sell"] and FOUND["how"] in sections["how"] and sections["not"] == ""
+    # The site shows who uses it, so proof is drafted, marked unconfirmed like the rest; it says nothing of why now.
+    assert sections["proof"] == SS.unconfirmed(FOUND["proof"], "acme.example") and sections["now"] == ""
+    assert job["written"]["sections"] == ["how", "proof", "sell", "serve"]
+    assert job["written"]["revision"] == view["draft"]["revision"]
     bets = {b["id"]: b for b in view["bets"]}
     assert set(job["written"]["bets"]) == set(bets) and {b["status"] for b in bets.values()} == {"proposed"}
     first = next(b for b in bets.values() if b["rules_out"])
@@ -116,25 +122,34 @@ def test_the_job_reads_the_site_and_writes_unconfirmed_sections_and_proposed_bet
     assert get(api, "strategy")["draft"]["sections"]["serve"] == write["draft"]["sections"]["serve"] == "Mine."
 
 
+HOW = "Owners find Acme Build through search and the builders they already use, and start with a free pilot on one site."
+PROOF = "Twelve site owners schedule every crew on Acme Build each week."
+NOW = "Crews carry phones on every site now, so a schedule can reach them the moment it changes."
+
+
 def fixture_answer():
-    """The model's answer for the shared fixture company (fictional Acme Build): the strategy block's summary, vision,
-    four sections and bets, as the prompt asks for them."""
+    """The model's answer for the shared fixture company (fictional Acme Build): the strategy block's summary and four
+    sections, with How we sell, How we know they want it and Why now (the file has none of them), and bets, as the
+    prompt asks for them (it asks for no vision)."""
     block = json.loads((Path(__file__).parent / "fixtures" / "company_strategy" / "draft.json").read_text())["strategy"]
-    return {"summary": block["summary"], "vision": block["vision"], **block["sections"],
+    return {"summary": block["summary"], **block["sections"], "how": HOW, "proof": PROOF, "now": NOW,
             "bets": [{k: b[k] for k in SP.BET_FIELDS} for b in block["bets"]]}
 
 
-def test_the_shared_prompt_drafts_summary_vision_four_sections_and_three_bets(api, research):
+def test_the_shared_prompt_drafts_summary_seven_sections_and_three_bets_and_no_vision(api, research):
     answer = fixture_answer()
-    assert set(SP.SCHEMA["required"]) == set(answer) == set(SS.draft(lambda s, u: answer, {"text": "", "url": ""}, []))
+    found = SS.draft(lambda s, u: {**answer, "vision": "Ignored."}, {"text": "", "url": ""}, [])
+    assert set(SP.SCHEMA["required"]) == set(answer) == set(found) - {"vision"} and found["vision"] == ""
+    assert SP.FIELDS == ("summary", *S.FIXED_KEYS) and "how" in SP.INSTRUCTIONS
+    assert "vision" not in SP.FIELDS and "vision" not in SP.INSTRUCTIONS
     assert SS.INSTRUCTIONS == SP.INSTRUCTIONS and "Never invent a number" in SP.INSTRUCTIONS
     research.state["write"] = lambda system, user: answer if system == SP.INSTRUCTIONS else pytest.fail(system)
     job = get(api, "strategy/draft-from/" + post(api, "strategy/draft-from", {"text": "Schedules for field crews"})["id"])
-    assert job["state"] == "done" and job["written"]["fields"] == ["summary", "vision"], job
-    assert job["written"]["sections"] == ["know", "not", "sell", "serve"] and len(job["written"]["bets"]) == 3
+    assert job["state"] == "done" and job["written"]["fields"] == ["summary"], job
+    assert job["written"]["sections"] == sorted(S.FIXED_KEYS) and len(job["written"]["bets"]) == 3
     draft = get(api, "strategy")["draft"]
-    assert draft["summary"] == answer["summary"] and draft["vision"] == answer["vision"]
-    for key in ("serve", "sell", "know", "not"):
+    assert draft["summary"] == answer["summary"] and draft["vision"] == ""
+    for key in S.FIXED_KEYS:
         assert draft["sections"][key] == SS.unconfirmed(answer[key], "your description")
     assert {b["status"] for b in get(api, "strategy")["bets"]} == {"proposed"}
     assert get(api, "strategy/versions") == []
@@ -168,7 +183,7 @@ def test_no_model_answers_at_once_and_only_the_owner_starts_or_reads_a_job(api, 
 def test_hub_sql_keeps_the_research_job_to_the_owner(api, monkeypatch):
     monkeypatch.setattr(SS, "writer", lambda c, settings, store: None)
     post(api, "strategy/draft-from", {"text": "Unannounced: bots for landlords"})
-    query = {"sql": "SELECT key, value_json FROM registry_metadata WHERE key=?", "params": [SS.KEY]}
+    query = {"sql": "SELECT key, value FROM registry_metadata WHERE key=?", "params": [SS.KEY]}
     assert "Unannounced" in post(api, "sql", query)["rows"][0][1]
     assert post(api, "sql", query, token="ben-test")["rows"] == []                  # a bot administrator
 
@@ -178,7 +193,7 @@ def test_hub_sql_keeps_an_imported_company_files_unpublished_strategy_to_the_own
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO registry_metadata VALUES(?,?)",
                   (company_import.PLAN_KEY, json.dumps({"strategy": {"bets": [{"statement": "Unannounced bet"}]}})))
-    query = {"sql": "SELECT value_json FROM registry_metadata WHERE key=?", "params": [company_import.PLAN_KEY]}
+    query = {"sql": "SELECT value FROM registry_metadata WHERE key=?", "params": [company_import.PLAN_KEY]}
     assert "Unannounced bet" in post(api, "sql", query)["rows"][0][0]
     assert post(api, "sql", query, token="ben-test")["rows"] == []                  # a bot administrator
     keys = [r[0] for r in post(api, "sql", {"sql": "SELECT key FROM registry_metadata"}, token="ben-test")["rows"]]
@@ -277,7 +292,7 @@ def test_finishing_setup_with_a_website_files_the_librarians_market_task_once(en
     for _ in range(2):
         assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
     with api.app.state.store.read() as c:
-        tasks = [dict(r) for r in c.execute("SELECT title, body FROM tasks WHERE owner='bot:librarian'")]
+        tasks = [dict(r) for r in c.execute("SELECT title, body FROM tasks WHERE owner_id='bot:librarian'")]
     assert [t["title"] for t in tasks] == ["Set up the market map"]
     assert "https://acme.example" in tasks[0]["body"] and "Bots that run small rentals." in tasks[0]["body"]
     market = api.get("/api/v2/librarian/setup", headers=signed_in()).json()["market"]
@@ -289,7 +304,7 @@ def test_finishing_setup_without_a_website_files_no_market_task(environment):
     api.put("/api/v2/onboarding", headers=signed_in(), json={"answers": {"building": "A new idea"}, "selected": {}})
     assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM tasks WHERE owner='bot:librarian'").fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:librarian'").fetchone()
 
 
 def test_a_bot_administrator_recruits_from_the_published_bets_never_the_draft(api):

@@ -1,0 +1,281 @@
+"""What a save refuses (backend/automation_flow.py `check`): the flow's shape, 10 paths per fork, 3 levels, paths end
+their list (no rejoin), one find, and each step type's fields."""
+import copy
+
+import pytest
+
+from backend.automation_flow import Invalid, check
+
+QUESTIONS = {"bucket": {"type": "choice", "instructions": "Where does it go?",
+                        "criteria": {"reply": "needs an answer", "archive": "nothing to do"}}}
+
+
+def flow(*steps, **extra):
+    return {"name": "Inbox · ana", "owner": "person:ana", "trigger": {"type": "message", "inbox": "ana@acme.example"},
+            "steps": list(steps), **extra}
+
+
+def fork(sid, n=1, inner=None, otherwise=None):
+    """A fork of `n` paths; `inner` goes on the first path (ids are unique in a flow)."""
+    out = {"id": sid, "type": "paths", "enabled": True,
+           "paths": [{"name": f"p{i}", "when": [], "steps": list(inner or []) if i == 0 else []} for i in range(n)]}
+    if otherwise is not None:
+        out["otherwise"] = {"steps": otherwise}
+    return out
+
+
+def act(sid, do="note"):
+    return {"id": sid, "type": "action", "enabled": True, "do": do, "args": {"text": "hi"}}
+
+
+def refused(value, words):
+    with pytest.raises(Invalid) as caught:
+        check(value)
+    assert words in str(caught.value), str(caught.value)
+
+
+def test_every_step_type_saves_and_defaults_fill():
+    saved = check(flow(
+        {"id": "gate", "type": "filter", "rules": [{"when": [{"field": "message.from", "op": "contains", "value": "news"}],
+                                                    "match": "any", "then": [{"do": "archive", "args": {}}], "stop": True}]},
+        {"id": "d1", "type": "decide", "questions": QUESTIONS, "level": "medium", "out": "d1"},
+        {"id": "d2", "type": "decide", "set": "mail-triage", "out": "d2"},
+        {"id": "find", "type": "find", "source": "mail", "query": "is:unread", "since": "last_run", "limit": 5},
+        {"id": "draft", "type": "llm", "as": "assistant:ana", "prompt": "Draft a reply to {{message.subject}}", "out": "draft"},
+        {"id": "tell", "type": "bot_turn", "bot": "coo", "prompt": "Look"},
+        act("note"),
+        fork("route", 2, [act("inner")], otherwise=[act("other")]),
+        owner="human:ana", spend_cap={"per_30m": 2}, batch={"times": ["08:00", "17:30"], "tz": "Europe/Paris"}))
+    assert saved["owner"] == "person:ana" and saved["enabled"] is True and saved["builtin"] is False
+
+
+@pytest.mark.parametrize("trigger", [
+    {"type": "message", "inbox": "ana@acme.example", "send": False},
+    {"type": "task_received", "to": "bot:coo"},
+    {"type": "schedule", "cron": "0 9 * * 1-5", "tz": "America/New_York"},
+    {"type": "webhook", "id": "trg_1"},
+    {"type": "listening", "destination": "acme-mentions"},
+    {"type": "event", "name": "release.published", "filters": [{"field": "release.tag", "op": "matches", "value": "^v"}]},
+])
+def test_each_trigger_type_saves(trigger):
+    check({**flow(act("a")), "trigger": trigger})
+
+
+@pytest.mark.parametrize("trigger, words", [
+    ({"type": "carrier-pigeon"}, "type is one of"),
+    ({"type": "message"}, "inbox"),
+    ({"type": "schedule", "cron": "every day"}, "cron"),
+    ({"type": "schedule", "cron": "0 9 * * *", "tz": "Mars/Base"}, "time zone"),
+    ({"type": "event", "name": "x", "filters": [{"field": "a", "op": "near", "value": 1}]}, "op is one of"),
+    ({"type": "event", "name": "x", "filters": [{"field": "a", "op": "matches", "value": "("}]}, "pattern"),
+    ({"type": "event", "name": "x", "filters": [{"field": "a", "op": "is", "value": "b", "min": 2}]}, "min"),
+])
+def test_bad_triggers_are_refused(trigger, words):
+    refused({**flow(act("a")), "trigger": trigger}, words)
+
+
+def test_ten_paths_save_and_eleven_are_refused():
+    check(flow(fork("f", 10)))
+    refused(flow(fork("f", 11)), "1 to 10 paths")
+
+
+def test_three_levels_save_and_four_are_refused():
+    three = fork("a", 1, [fork("b", 1, [fork("c", 1, [act("x")])])])
+    check(flow(three))
+    four = copy.deepcopy(three)
+    four["paths"][0]["steps"][0]["paths"][0]["steps"][0]["paths"][0]["steps"] = [fork("d", 1, [act("y")])]
+    refused(flow(four), "at most 3 levels")
+    deep_otherwise = fork("a", 1, otherwise=[fork("b", 1, otherwise=[fork("c", 1, otherwise=[fork("d")])])])
+    refused(flow(deep_otherwise), "at most 3 levels")
+
+
+def test_paths_never_rejoin():
+    refused(flow(fork("f", 2), act("after")), "paths end their list")
+    refused(flow(fork("f", 1, [fork("g"), act("after")])), "paths end their list")
+
+
+def test_one_otherwise_a_map():
+    bad = fork("f", 1)
+    bad["otherwise"] = [{"steps": []}, {"steps": []}]
+    refused(flow(bad), "otherwise is a map")
+
+
+def test_ids_are_unique_across_the_flow():
+    refused(flow(act("a"), fork("f", 1, [act("a")])), "unique")
+    refused(flow({"type": "action", "do": "note"}), "every step has an id")
+
+
+def test_one_find_and_only_at_the_top():
+    find = {"id": "f1", "type": "find", "source": "tasks"}
+    refused(flow(find, {**find, "id": "f2"}), "one find")
+    refused(flow(fork("x", 1, [{**find, "id": "f3"}])), "top-level")
+    refused(flow({**find, "source": "fax"}), "source")
+    refused(flow({**find, "limit": 0}), "limit")
+
+
+@pytest.mark.parametrize("step, words", [
+    ({"id": "s", "type": "teleport"}, "type is one of"),
+    ({"id": "s", "type": "action", "do": "launch"}, "do is one of"),
+    ({"id": "s", "type": "action", "do": "note", "enabled": "yes"}, "enabled"),
+    ({"id": "s", "type": "decide", "out": "d"}, "not both"),
+    ({"id": "s", "type": "decide", "set": "mail-triage", "questions": QUESTIONS, "out": "d"}, "not both"),
+    ({"id": "s", "type": "decide", "set": "no-such-set", "out": "d"}, "no-such-set"),
+    ({"id": "s", "type": "decide", "set": "mail-triage@999", "out": "d"}, "version"),
+    ({"id": "s", "type": "decide", "questions": {"q": {"type": "choice"}}, "out": "d"}, "instructions"),
+    ({"id": "s", "type": "decide", "questions": QUESTIONS, "level": "max", "out": "d"}, "level"),
+    ({"id": "s", "type": "decide", "questions": QUESTIONS}, "out"),
+    ({"id": "s", "type": "llm", "as": "person:ana", "prompt": "x", "out": "o"}, "assistant:"),
+    ({"id": "s", "type": "llm", "as": "bot:coo", "out": "o"}, "prompt"),
+    ({"id": "s", "type": "bot_turn", "bot": "Not A Bot!", "prompt": "x"}, "bot names"),
+    ({"id": "s", "type": "filter", "rules": [{"when": [], "match": "most"}]}, "match"),
+    ({"id": "s", "type": "filter", "rules": [{"then": [{"do": "explode"}]}]}, "do is one of"),
+])
+def test_bad_steps_are_refused(step, words):
+    refused(flow(step), words)
+
+
+@pytest.mark.parametrize("extra, words", [
+    ({"owner": "team:x"}, "owner"),
+    ({"group": "engineering"}, "group"),
+    ({"spend_cap": {"per_30m": -1}}, "spend_cap"),
+    ({"spend_cap": {"per_hour": 1}}, "spend_cap"),
+    ({"batch": {"times": ["8am"]}}, "batch"),
+    ({"batch": {"times": []}}, "batch"),
+    ({"name": ""}, "name"),
+])
+def test_bad_automation_fields_are_refused(extra, words):
+    refused({**flow(act("a")), **extra}, words)
+
+
+@pytest.mark.parametrize("pattern", ["(a+)+$", "(a*)*", "(a|aa)+", "(x?)+b", "^(\\w+\\s?)+$", "a" * 201,
+                                     "a*a*a*a*a*b", "x+.*y+.*z+"])
+def test_patterns_that_backtrack_without_end_or_run_long_are_refused(pattern):
+    refused({**flow(act("a")), "trigger": {"type": "event", "name": "x", "filters": [
+        {"field": "a", "op": "matches", "value": pattern}]}}, "pattern")
+
+
+def test_ordinary_patterns_still_save():
+    for pattern in (r"invoice \d+", "^(re|fwd):", "(ab){2}", "[a-z]+@acme\\.example", "(foo)+bar", "a*b*c{0,20}d+"):
+        check({**flow(act("a")), "trigger": {"type": "event", "name": "x", "filters": [
+            {"field": "a", "op": "matches", "value": pattern}]}})
+
+
+LEGAL = [{"id": "legal", "name": "Legal", "color": "red", "then": [{"do": "create_task", "args": {"title": "Review"}}]}]
+
+
+def rule(**extra):
+    return {"when": [{"field": "message.subject", "op": "matches", "value": "subpoena"}],
+            "then": [{"do": "label", "args": {"name": "STARRED"}}], **extra}
+
+
+def gate(*rules):
+    return {"id": "gate", "type": "filter", "rules": list(rules)}
+
+
+def test_destinations_save_and_a_rule_may_name_one():
+    saved = check(flow(gate(rule(to="legal")), destinations=LEGAL))
+    assert saved["destinations"] == LEGAL
+    ignore = [{"id": "ignore", "name": "Ignore"}]                  # no then: the destination only ends the thread
+    assert check(flow(act("a"), destinations=ignore))["destinations"] == ignore
+
+
+def test_a_flow_without_destinations_saves_as_before():
+    assert "destinations" not in check(flow(act("a")))
+    assert "destinations" not in check(flow(act("a"), destinations=None))
+
+
+@pytest.mark.parametrize("move", [{"next": "rule"}, {"next": "step"}, {"next": "end"}, {"stop": True},
+                                  {"stop": True, "next": "end"}, {"to": "legal"}, {"to": "legal", "stop": True},
+                                  {"to": "legal", "next": "end"}])
+def test_next_and_to_save_in_the_combinations_the_refusals_allow(move):
+    check(flow(gate(rule(**move)), destinations=LEGAL))
+
+
+@pytest.mark.parametrize("move, words", [
+    ({"next": "later"}, "next is one of"),
+    ({"stop": True, "next": "rule"}, "stop ends the thread"),
+    ({"stop": True, "next": "step"}, "stop ends the thread"),
+    ({"to": "legal", "next": "rule"}, "to ends the thread"),
+    ({"to": "legal", "next": "step"}, "to ends the thread"),
+    ({"to": "legal", "stop": False}, "to ends the thread"),
+    ({"to": "nowhere"}, "names one of"),
+    ({"to": 3}, "names one of"),
+])
+def test_bad_next_and_to_are_refused(move, words):
+    refused(flow(gate(rule(**move)), destinations=LEGAL), words)
+
+
+def test_to_needs_a_destination_in_the_flow():
+    refused(flow(gate(rule(to="legal"))), "names one of")
+
+
+def test_a_rule_key_outside_the_list_is_still_refused():
+    refused(flow(gate({**rule(), "goto": "legal"})), "a rule has")
+
+
+@pytest.mark.parametrize("dests, words", [
+    ({"legal": LEGAL[0]}, "destinations are a list"),
+    ([{"id": f"d{n}", "name": "x", "then": []} for n in range(21)], "at most 20"),
+    ([{"id": "Legal Team", "name": "x", "then": []}], "every destination has an id"),
+    ([{"id": "legal", "name": "x", "then": []}, {"id": "legal", "name": "y", "then": []}], "unique"),
+    ([{"id": "legal", "name": "x" * 81, "then": []}], "name is text"),
+    ([{"id": "legal", "name": "x", "color": "purple", "then": []}], "color is one of"),
+    ([{"id": "legal", "name": "x", "then": [{"do": "note", "args": {"text": "x"}}] * 11}], "at most 10"),
+    ([{"id": "legal", "name": "x", "then": [{"do": "explode"}]}], "do is one of"),
+    ([{"id": "legal", "name": "x", "then": [], "steps": []}], "a destination has id"),
+])
+def test_bad_destinations_are_refused(dests, words):
+    refused(flow(act("a"), destinations=dests), words)
+
+
+# ---------------------------------------------------------------------------------------------- choose (an llm step)
+TWO = LEGAL + [{"id": "sales", "name": "Sales", "then": []}]
+
+
+def drafting(choose, **extra):
+    return {"id": "draft", "type": "llm", "enabled": True, "as": "assistant:ana", "prompt": "Reply to the sender.",
+            "out": "draft", "choose": choose, **extra}
+
+
+def choice(**extra):
+    return {"to": ["legal", "sales"], "default": "sales", "mode": "draft", **extra}
+
+
+def test_a_choose_step_saves_with_its_destinations():
+    assert check(flow(drafting(choice()), destinations=TWO))["steps"][0]["choose"] == choice()
+    check(flow(drafting(choice(mode="reply")), destinations=TWO))
+
+
+@pytest.mark.parametrize("step, words", [
+    (drafting(choice(to=["legal", "nope"])), "names destinations in this flow"),
+    (drafting(choice(default="legal", to=["sales"])), "default is one of choose.to"),
+    (drafting(choice(to=[])), "1 to 20 destination ids"),
+    (drafting(choice(to=["legal", "legal"])), "each once"),
+    (drafting(choice(to=["legal", 5])), "1 to 20 destination ids"),
+    (drafting(choice(to=[f"d{n}" for n in range(21)], default="d0")), "1 to 20 destination ids"),
+    (drafting(choice(mode="sort")), "draft or reply"),
+    (drafting({"to": ["legal"], "default": "legal"}), "draft or reply"),
+    (drafting(choice(confidence=0.5)), "a map with to, default and mode"),
+])
+def test_bad_choose_steps_are_refused(step, words):
+    refused(flow(step, destinations=TWO), words)
+
+
+def test_choose_needs_destinations_in_the_flow():
+    refused(flow(drafting(choice())), "names destinations in this flow")
+
+
+def test_choose_is_on_an_llm_step_only():
+    refused(flow({**act("a"), "choose": choice()}, destinations=TWO), "choose is on an llm step")
+
+
+def test_a_choose_step_is_the_last_in_its_list():
+    refused(flow(drafting(choice()), act("after"), destinations=TWO), "a choose step is the last step in its list")
+    check(flow(fork("f", 2, inner=[drafting(choice())]), destinations=TWO))
+
+
+def test_a_group_owns_no_choose_step_even_nested():
+    refused(flow(drafting(choice()), owner="group:sales", destinations=TWO), "a group's flow has no turn to choose with")
+    refused(flow(fork("f", 1, inner=[drafting(choice())]), owner="group:sales", destinations=TWO),
+            "a group's flow has no turn to choose with")
+    check(flow(drafting(choice()), owner="bot:support", destinations=TWO))

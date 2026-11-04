@@ -99,9 +99,9 @@ def test_the_slack_gateway_keeps_the_code_in_its_audit_reason_and_log_not_the_ec
     final = gateway.tick()["events"][-1]
     assert final["state"] == "failed" and final["reason"].startswith("decisions: unavailable (still failing")
 
-    audits = [json.loads(r["detail_json"]) for r in S.rows(hub, "SELECT detail_json FROM events WHERE action='judge.call'")]
+    audits = [json.loads(r["detail"]) for r in S.rows(hub, "SELECT detail FROM events WHERE action='judge.call'")]
     assert [a["error"] for a in audits] == ["invalid", "unavailable"] and all("detail" not in a for a in audits)
     kept = S.rows(hub, "SELECT reason FROM slack_events") + S.rows(
-        hub, "SELECT detail_json FROM events WHERE action IN ('judge.call', 'slack.event')")
+        hub, "SELECT detail FROM events WHERE action IN ('judge.call', 'slack.event')")
     assert kept and "7Q4X" not in json.dumps(kept)
     assert "7Q4X" not in caplog.text and "decisions: invalid" in caplog.text

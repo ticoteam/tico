@@ -17,13 +17,31 @@ FAILING_HOURS = 24
 ORDER = {HIGH: 0, MEDIUM: 1, LOW: 2}
 
 
+PAUSE_REASON_SQL = "SELECT reason FROM bot_status_history WHERE bot=? AND state='paused' ORDER BY started_at DESC, rowid DESC LIMIT 1"
+
+
+def prime_pause_reasons(c, bots):
+    """Each bot's latest pause reason, in one read for every bot (per 500). Outside a snapshot nothing is kept."""
+    from .read_cache import cache, prime
+    if cache(c) is None:
+        return
+    for part in H.chunks(sorted(set(bots))):
+        marks = ",".join("?" * len(part))
+        latest = {r["bot"]: r for r in c.execute(
+            "SELECT bot,reason FROM (SELECT bot,reason,row_number() OVER (PARTITION BY bot ORDER BY started_at DESC, rowid DESC) AS n "
+            f"FROM bot_status_history WHERE state='paused' AND bot IN ({marks})) WHERE n=1", part)}
+        prime(c, PAUSE_REASON_SQL, {(s,): latest.get(s) for s in part})
+
+
 def check(c, who, auth, settings):
     online = {r["id"] for r in _online_runners(c)}
+    from .cloud_machines import resting as resting_machines
+    resting = resting_machines(c)            # a cloud machine stopped when idle starts for work: not offline
     seen = auth.bot_accesses(c, who)
     since = H.shift(H.now(), hours=-FAILING_HOURS)
     stuck_before = H.shift(H.now(), hours=-STUCK_SETUP_HOURS)
-    failed = {r["bot"]: r["n"] for r in c.execute(
-        "SELECT bot, count(*) n FROM attempts WHERE state IN ('failed','expired') AND finished>? GROUP BY bot", (since,))}
+    failed = {r["bot_id"]: r["n"] for r in c.execute(
+        "SELECT bot_id, count(*) n FROM attempts WHERE state IN ('failed','expired') AND finished_at>? GROUP BY bot_id", (since,))}
     assigned = {r["bot"]: (r["runner_id"], r["label"]) for r in c.execute(
         "SELECT a.bot,a.runner_id,r.label FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE r.revoked_at IS NULL")}
     lacking = {bot: (label, why) for bot, label, why in missing_repositories(c, online)}
@@ -32,26 +50,39 @@ def check(c, who, auth, settings):
     limits = usage_limits.company(c)
 
     def add(bot, kind, severity, text, fix):
-        issues.append({"bot": bot["slug"], "name": bot["display_name"] or bot["slug"], "kind": kind, "severity": severity,
+        issues.append({"bot": bot["id"], "name": bot["display_name"] or bot["slug"], "kind": kind, "severity": severity,
                        "text": text, "fix": fix})
 
     from .agents import external_harness
-    for bot in c.execute("SELECT b.slug,b.display_name,b.state,b.created,bc.onboarding_state FROM bots b "
-                         "JOIN bot_config bc ON bc.bot=b.slug WHERE b.state<>'archived' ORDER BY b.slug"):
-        slug = bot["slug"]
-        if not (seen.get(slug) or {}).get("see"):
+    from .read_cache import one
+    from . import events, views
+    bots = c.execute("SELECT b.id,b.slug,b.display_name,b.state,b.created_at,bc.onboarding_state FROM bots b "
+                     "JOIN bot_config bc ON bc.bot=b.id WHERE b.state<>'archived' ORDER BY b.slug").fetchall()
+    # The rows each bot's check reads, read once for every bot (a snapshot keeps them; the loop finds them there).
+    ids = [bot["id"] for bot in bots]
+    views.prime_machines(c, ids)
+    events.prime_bot_rows(c, ids)
+    # The tool listing of every active or paused bot (bot_tools.listing) and each paused bot's last pause reason,
+    # read together rather than once per bot.
+    from .repositories import Reads
+    listed = [bot["id"] for bot in bots if bot["state"] in ("active", "paused")]
+    bot_tools.prime_state(c, listed)
+    reads = Reads(c, listed)
+    prime_pause_reasons(c, [bot["id"] for bot in bots if bot["state"] == "paused"])
+    for bot in bots:
+        slug, bid = bot["slug"], bot["id"]
+        if not (seen.get(bid) or {}).get("see"):
             continue
-        state, where = bot["state"], assigned.get(slug)
+        state, where = bot["state"], assigned.get(bid)
         name = bot["display_name"] or slug
-        external = external_harness(c, slug)
+        external = external_harness(c, bid)
         if state == "quarantined":
             add(bot, "quarantined", HIGH, f"{name} is stopped: it did something it may not.", f"hub api POST /api/v2/bots/{slug}/quarantine/clear")
         elif state == "planned":
-            if (bot["created"] or "") < stuck_before:
+            if (bot["created_at"] or "") < stuck_before:
                 add(bot, "stuck_setup", MEDIUM, f"{name} is still being set up.", f"hub bot go-live {slug}")
         elif state == "paused":
-            reason = (c.execute("SELECT reason FROM bot_status_history WHERE bot=? AND state='paused' ORDER BY since DESC LIMIT 1",
-                                (slug,)).fetchone() or {"reason": ""})["reason"] or ""
+            reason = (one(c, PAUSE_REASON_SQL, (bid,)) or {"reason": ""})["reason"] or ""
             if "limit" in reason.lower():
                 add(bot, "paused_over_limit", HIGH, f"{name} is paused: it went over a limit.", f"hub bot resume {slug}")
             else:
@@ -59,38 +90,41 @@ def check(c, who, auth, settings):
         elif state == "active":
             if not where and not external:
                 add(bot, "not_placed", HIGH, f"{name} is on, but no computer runs it.", f"hub bot place {slug}")
-            elif where and where[0] not in online:
+            elif where and where[0] not in online and where[0] not in resting:
                 add(bot, "computer_offline", HIGH, f"{name} cannot run: its computer, {where[1]}, is offline.", "hub computer list")
-            if slug in lacking:
-                label, why = lacking[slug]
+            if bid in lacking:
+                label, why = lacking[bid]
                 unpublished = "not on GitHub" in why or "does not exist" in why
                 from .shared_bots import declared, source_of
-                branch = bool(source_of(declared(c, slug)))
-                _, clone = repository_fix(c, slug, label, settings.github_owner)
+                branch = bool(source_of(declared(c, bid)))
+                _, clone = repository_fix(c, bid, label, settings.github_owner)
                 add(bot, "repository_missing", HIGH, f"{name} cannot run on {label}: {why}",
                     f"hub bot repo-create {slug} --empty (or `hub bot place {slug}` back on the computer that held its repository)"
                     if unpublished and not branch else clone)
-            if is_parked(bot["onboarding_state"]) and (bot["created"] or "") < H.shift(H.now(), hours=-24):
+            if is_parked(bot["onboarding_state"]) and (bot["created_at"] or "") < H.shift(H.now(), hours=-24):
                 add(bot, "needs_setup", MEDIUM, f"{name} is waiting for its first setup with its owner.", f"hub bot go-live {slug}")
         if state == "active":
             try:
-                met = usage_limits.over(c, slug, default=limits)
+                met = usage_limits.over(c, bid, default=limits)
             except Exception:
                 met = None
             if met and met["scope"] == "bot":
                 add(bot, "paused_over_limit", HIGH, f"{name} is paused: it reached its spending limit.",
                     f"hub api PUT usage/limits/{slug} (a card: raising a limit is their click)")
+            elif met and met["scope"] == "budget":
+                add(bot, "paused_over_limit", HIGH, f"{name} is paused: the {met['name']} budget is used up.",
+                    "a person raises the budget in Finance (a card: raising a budget is their click)")
             elif met:
                 where = "company" if met["scope"] == usage_limits.COMPANY else "groups/" + met["scope"].split(":", 1)[1]
                 add(bot, "paused_over_limit", HIGH, f"{name} is paused: {met['name']} reached its {met['period']} spending limit.",
                     f"hub api PUT usage/pools/{where} (a card: raising a limit is their click)")
-        if failed.get(slug):
-            n = failed[slug]
+        if failed.get(bid):
+            n = failed[bid]
             add(bot, "failing_runs", HIGH if n >= 3 else MEDIUM, f"{name} had {n} failed or expired attempt{'s' if n != 1 else ''} in the last 24 hours.",
                 f"hub run list {slug} --since 24h")
         if state in ("active", "paused"):
             try:
-                tools = bot_tools.listing(c, settings, slug)["tools"]
+                tools = bot_tools.listing(c, settings, bid, reads=reads)["tools"]
             except Exception:
                 tools = []
             for tool in tools:

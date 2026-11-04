@@ -35,11 +35,11 @@ KEY_PREFIX = "hq:"
 WAIT_HOURS = 1
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS watcher_pending(
- bot TEXT NOT NULL, key TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, created TEXT NOT NULL,
- later_json TEXT NOT NULL DEFAULT '[]', found_json TEXT, PRIMARY KEY(bot, key));
+ bot TEXT NOT NULL, key TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL,
+ later TEXT NOT NULL DEFAULT '[]', found TEXT, PRIMARY KEY(bot, key));
 CREATE TABLE IF NOT EXISTS watcher_triage(
- bot TEXT NOT NULL, key TEXT NOT NULL, label TEXT NOT NULL, held INTEGER NOT NULL, detail_json TEXT NOT NULL,
- created TEXT NOT NULL, PRIMARY KEY(bot, key));
+ bot TEXT NOT NULL, key TEXT NOT NULL, label TEXT NOT NULL, held INTEGER NOT NULL, detail TEXT NOT NULL,
+ created_at TEXT NOT NULL, PRIMARY KEY(bot, key));
 """
 
 def applies(name, event):
@@ -64,7 +64,7 @@ def engine_for(store, c, primary):
 
 def hold(c, bot, event):
     """Keep a new ticket's event until it is triaged. True when it waits (or already waits)."""
-    c.execute("INSERT INTO watcher_pending(bot,key,title,body,created) VALUES(?,?,?,?,?) ON CONFLICT(bot,key) DO NOTHING",
+    c.execute("INSERT INTO watcher_pending(bot,key,title,body,created_at) VALUES(?,?,?,?,?) ON CONFLICT(bot,key) DO NOTHING",
               (bot, event.key, event.title or event.key, event.body, H.now()))
     return True
 
@@ -78,14 +78,14 @@ def later(c, bot, event):
     text = event.text or event.note or ""
     if not text:
         return
-    row = c.execute("SELECT later_json FROM watcher_pending WHERE bot=? AND key=?", (bot, event.key)).fetchone()
-    kept = json.loads(row["later_json"] or "[]") + [text]
-    c.execute("UPDATE watcher_pending SET later_json=? WHERE bot=? AND key=?", (json.dumps(kept), bot, event.key))
+    row = c.execute("SELECT later FROM watcher_pending WHERE bot=? AND key=?", (bot, event.key)).fetchone()
+    kept = json.loads(row["later"] or "[]") + [text]
+    c.execute("UPDATE watcher_pending SET later=? WHERE bot=? AND key=?", (json.dumps(kept), bot, event.key))
 
 
 def held(c, bot, key, task):
     """Whether this key's task is a held ticket that has not been handed to the bot."""
-    if not task or task["owner"] == "bot:" + bot:
+    if not task or task["owner_id"] == "bot:" + bot:
         return False
     row = c.execute("SELECT held FROM watcher_triage WHERE bot=? AND key=?", (bot, key)).fetchone()
     return bool(row and row["held"])
@@ -93,9 +93,9 @@ def held(c, bot, key, task):
 
 def person_for(c, bot):
     """Who sees a held ticket: the bot's operator, else the default person."""
-    row = c.execute("SELECT operator FROM bot_config WHERE bot=?", (bot,)).fetchone() \
+    row = c.execute("SELECT owner_id FROM bot_config WHERE bot=?", (bot,)).fetchone() \
         if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bot_config'").fetchone() else None
-    for pid in ((row["operator"] if row else "") or "", H.default_human(c)):
+    for pid in ((row["owner_id"] if row else "") or "", H.default_human(c)):
         if pid and H.human(c, pid):
             return H.human_actor(pid)
     return None
@@ -146,7 +146,7 @@ def _audit(qset, result, error):
     if result is not None:
         try:
             detail.update(audit_detail(result))
-        except Exception:                                   # noqa: BLE001: the audit row is kept whatever came back
+        except Exception:                                   # noqa: BLE001 the audit row is kept whatever came back
             detail["usage"] = {}
         answers = result.get("answers") if isinstance(result.get("answers"), dict) else {}
         try:
@@ -163,8 +163,8 @@ def ask(store, primary, row):
     their own transaction straight after the call, so a later failure to open the task keeps both, and a ticket
     retried (its bot paused meanwhile) is not asked again."""
     from .judge import daily_cap, used_today
-    if row.get("found_json"):
-        kept = json.loads(row["found_json"])
+    if row.get("found"):
+        kept = json.loads(row["found"])
         return kept.get("found"), kept.get("why", "")
     with store.read() as c:
         engine = engine_for(store, c, primary)
@@ -180,12 +180,12 @@ def ask(store, primary, row):
         found = verdict(qset, result["answers"])
     except J.JudgeError as exc:
         error, why = exc, ("the month's spend cap" if exc.code == "spend_cap" else f"the decision model: {exc.code}")
-    except Exception as exc:                                # noqa: BLE001: an answer that cannot be read fails open
+    except Exception as exc:                                # noqa: BLE001 an answer that cannot be read fails open
         error, why = exc, "the answer could not be read"
         log.warning("Support triage answer could not be read: %s", type(exc).__name__)
     with store.transaction() as c:
         H.event(c, "bot:" + row["bot"], "judge.call", qset["label"], _audit(qset, result, error))
-        c.execute("UPDATE watcher_pending SET found_json=? WHERE bot=? AND key=?",
+        c.execute("UPDATE watcher_pending SET found=? WHERE bot=? AND key=?",
                   (json.dumps({"found": found, "why": why}), row["bot"], row["key"]))
     return found, why
 
@@ -196,28 +196,29 @@ def deliver_one(store, auth, row, found, why):
     from .watchers import _open, defang
     label = question_set()["label"] if found else SET
     with store.transaction() as c:
-        now = c.execute("SELECT later_json FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone()
+        now = c.execute("SELECT later FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone()
         if now is None:
             return                                         # another worker took it
         c.execute("DELETE FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"]))
         if c.execute("SELECT 1 FROM watcher_items WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone():
             return
-        name = (H.bot(c, row["bot"]) or {}).get("display_name") or row["bot"]
+        bot_row = H.bot(c, row["bot"]) or {}
+        name = bot_row.get("display_name") or bot_row.get("slug") or row["bot"]
         person = person_for(c, row["bot"]) if found and found["held"] else None
         if person:
             task = _open(c, auth, row["bot"], "Support (held: spam or injection): " + row["title"].removeprefix("Support: "),
-                         held_body(question_set(), found, row["bot"], name, row["body"]), owner=person)
+                         held_body(question_set(), found, bot_row.get("slug") or row["bot"], name, row["body"]), owner=person)
             H.event(c, H.KEEPER, "support.held", task["id"], {"bot": row["bot"], "key": row["key"], "label": label,
                                                               "spam": found["spam"], "to": person})
         else:
             first = (untriaged_line(why) if not found else triaged_line(question_set(), found) if not found["held"]
                      else untriaged_line(f"spam or injection {found['spam']:.0%}, but no person to hold it for"))
             task = _open(c, auth, row["bot"], row["title"], first + "\n\n" + row["body"])
-        for text in json.loads(now["later_json"] or "[]"):
+        for text in json.loads(now["later"] or "[]"):
             H.task_comment(c, H.KEEPER, task["id"], defang(text, c), wake=False)
         c.execute("INSERT INTO watcher_items VALUES(?,?,?,?) ON CONFLICT(bot,key) DO UPDATE SET task_id=excluded.task_id",
                   (row["bot"], row["key"], task["id"], H.now()))
-        c.execute("INSERT INTO watcher_triage(bot,key,label,held,detail_json,created) VALUES(?,?,?,?,?,?) "
+        c.execute("INSERT INTO watcher_triage(bot,key,label,held,detail,created_at) VALUES(?,?,?,?,?,?) "
                   "ON CONFLICT(bot,key) DO NOTHING",
                   (row["bot"], row["key"], label, int(bool(person)),
                    json.dumps(found or {"skipped": why}, sort_keys=True), H.now()))
@@ -236,7 +237,7 @@ def hand_over(store, row):
     no person to give it to, the copy is removed all the same (the ticket stays at HQ) and an event says so."""
     from .watchers import _open, defang
     with store.transaction() as c:
-        now = c.execute("SELECT later_json FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone()
+        now = c.execute("SELECT later FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone()
         if now is None:
             return None
         c.execute("DELETE FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"]))
@@ -247,15 +248,16 @@ def hand_over(store, row):
             H.event(c, H.KEEPER, "support.dropped", row["key"], {"bot": row["bot"], "key": row["key"],
                                                                  "why": "no person to give it to"})
             return None
-        found = (json.loads(row["found_json"]) if row.get("found_json") else {}).get("found")
-        name = (H.bot(c, row["bot"]) or {}).get("display_name") or row["bot"]
+        found = (json.loads(row["found"]) if row.get("found") else {}).get("found")
+        bot_row = H.bot(c, row["bot"]) or {}
+        name = bot_row.get("display_name") or bot_row.get("slug") or row["bot"]
         task = _open(c, None, row["bot"], f"Support (waiting: {name} is not active): " + row["title"].removeprefix("Support: "),
-                     waited_body(name, row["bot"], found, row["body"]), owner=person)
-        for text in json.loads(now["later_json"] or "[]"):
+                     waited_body(name, bot_row.get("slug") or row["bot"], found, row["body"]), owner=person)
+        for text in json.loads(now["later"] or "[]"):
             H.task_comment(c, H.KEEPER, task["id"], defang(text, c), wake=False)
         c.execute("INSERT INTO watcher_items VALUES(?,?,?,?) ON CONFLICT(bot,key) DO UPDATE SET task_id=excluded.task_id",
                   (row["bot"], row["key"], task["id"], H.now()))
-        c.execute("INSERT INTO watcher_triage(bot,key,label,held,detail_json,created) VALUES(?,?,?,?,?,?) "
+        c.execute("INSERT INTO watcher_triage(bot,key,label,held,detail,created_at) VALUES(?,?,?,?,?,?) "
                   "ON CONFLICT(bot,key) DO NOTHING", (row["bot"], row["key"], SET, 1,
                                                        json.dumps({"waited": True, **(found or {})}, sort_keys=True), H.now()))
         H.event(c, H.KEEPER, "support.handed", task["id"], {"bot": row["bot"], "key": row["key"], "to": person})
@@ -267,11 +269,11 @@ def sweep(store, at=None):
     to a person, so no copy of a customer's ticket is kept here indefinitely. Each on its own."""
     cutoff = H.shift(at or H.now(), hours=-WAIT_HOURS)
     with store.read() as c:
-        rows = [dict(r) for r in c.execute("SELECT * FROM watcher_pending WHERE created<? ORDER BY created", (cutoff,))]
+        rows = [dict(r) for r in c.execute("SELECT * FROM watcher_pending WHERE created_at<? ORDER BY created_at", (cutoff,))]
     for row in rows:
         try:
             hand_over(store, row)
-        except Exception as exc:                            # noqa: BLE001: the next sweep tries again
+        except Exception as exc:                            # noqa: BLE001 the next sweep tries again
             log.error("A waiting support ticket for %s could not be handed over: %s", row["bot"], type(exc).__name__)
 
 
@@ -279,8 +281,8 @@ def waiting(store, skip):
     """The oldest waiting ticket of an active bot not yet tried in this pass, or None. A paused bot's tickets wait for
     it: its watcher reports again only once it is active, and that report starts the next pass."""
     with store.read() as c:
-        for row in c.execute("SELECT p.* FROM watcher_pending p JOIN bots b ON b.slug=p.bot AND b.state='active' "
-                             "ORDER BY p.created, p.bot, p.key"):
+        for row in c.execute("SELECT p.* FROM watcher_pending p JOIN bots b ON b.id=p.bot AND b.state='active' "
+                             "ORDER BY p.created_at, p.bot, p.key"):
             if (row["bot"], row["key"]) not in skip:
                 return dict(row)
     return None
@@ -297,11 +299,11 @@ def drain(store, auth, primary):
             deliver_one(store, auth, row, found, why)
         except H.Refused as exc:                            # names only: a refusal's text can quote the ticket
             log.warning("Support ticket %s for %s waits: refused (%s)", row["key"], row["bot"], exc.rule)
-        except Exception as exc:                            # noqa: BLE001: never leave a ticket waiting on a bug here
+        except Exception as exc:                            # noqa: BLE001 never leave a ticket waiting on a bug here
             log.error("Support triage failed for %s (%s); opening it as before", row["key"], type(exc).__name__)
             try:
                 deliver_one(store, auth, row, None, "triage failed")
-            except Exception as again:                      # noqa: BLE001: `sweep` hands it to a person
+            except Exception as again:                      # noqa: BLE001 `sweep` hands it to a person
                 log.error("Support ticket %s for %s waits (%s)", row["key"], row["bot"], type(again).__name__)
 
 

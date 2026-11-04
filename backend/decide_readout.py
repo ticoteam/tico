@@ -33,9 +33,7 @@ RUN = {"learnings-route": "run"}     # backend/learnings.py audits a night's run
 def _inline_sets():
     """The sets the code asks without a questions/ file: {set id: {question id: fixed options or None}}."""
     from clients.hubtools import CLASSIFY_OPTIONS
-    from .assistant import INTENT_CHOICES
-    return {"support-text": {"verdict": tuple(CLASSIFY_OPTIONS)}, "assistant-intent": {"intent": tuple(INTENT_CHOICES)},
-            "live-meeting-route": {}}
+    return {"support-text": {"verdict": tuple(CLASSIFY_OPTIONS)}, "live-meeting-route": {}}
 
 
 def known_sets(registry_dir=None):
@@ -136,10 +134,10 @@ def readout(c, settings, days=7, at=None):
     days = max(1, min(MAX_DAYS, int(days)))
     end = at or datetime.now(timezone.utc)
     start = end - timedelta(days=days)
-    stamp = lambda t: t.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"     # noqa: E731: hubdb.now()'s format
+    stamp = lambda t: t.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"     # noqa: E731 hubdb.now()'s format
     sets, versions = known_sets(getattr(settings, "registry_dir", None))
     by = {}
-    rows = c.execute("SELECT action, target, detail_json FROM events WHERE ts>=? AND ts<? "
+    rows = c.execute("SELECT action, target, detail FROM events WHERE created_at>=? AND created_at<? "
                      "AND action IN ('judge.call','judge.spend')", (stamp(start), stamp(end))).fetchall()
     for action, target, raw in rows:
         try:
@@ -181,15 +179,18 @@ def readout(c, settings, days=7, at=None):
                     "answers": {q: dict(sorted(v.items())) for q, v in sorted(row["answers"].items())}})
     # Ask ingest's own outcomes (backend/ask_ingest.py): through, merged, FYI, hands needed, sent back, failed open,
     # and how many a person let through. Counts only; the items are the person's to read.
-    from .ask_ingest import QUESTION_SET, outcome_counts
+    # Each of the set's judge calls is reconciled to its item row, or a named reason, or counted as unexplained.
+    from .ask_ingest import QUESTION_SET, outcome_counts, reconcile
     gate = outcome_counts(c, stamp(start), stamp(end))
-    if gate["outcomes"] or gate["rehearsal"]:
+    recon = reconcile(c, stamp(start), stamp(end))
+    if gate["outcomes"] or recon["calls"] or recon["no_call"]:
         row = next((r for r in out if r["set"] == QUESTION_SET), None)
         if row is None:
             row = {"set": QUESTION_SET, "versions": [], "calls": 0, "jev": 0, "fallback": 0, "failed": {},
                    "jev_share": None, "cost_usd": 0.0, "ceiling_priced": 0, "answers": {}}
             out.append(row)
         row["gate"] = gate
+        row["reconcile"] = recon
     calls = sum(r["calls"] for r in out)
     jev = sum(r["jev"] for r in out)
     cap = float(settings.decisions_monthly_usd or 0)
@@ -236,8 +237,11 @@ def text(data):
             if gate["outcomes"]:
                 lines.append("  outcomes: " + ", ".join(f"{k} {n}" for k, n in gate["outcomes"].items())
                              + f"; let through {gate['let_through']}")
-            if gate["rehearsal"]:
-                lines.append("  rehearsal, would have: " + ", ".join(f"{k} {n}" for k, n in gate["rehearsal"].items()))
+        if row.get("reconcile"):
+            rec = row["reconcile"]
+            named = "".join(f", {k} {n}" for k, n in rec["reasons"].items())
+            lines.append(f"  calls reconciled: {rec['calls']} = {rec['landed']} with an item row{named}; "
+                         f"unexplained {rec['unexplained']}; rows with no call {rec['no_call']}")
     if total["calls"]:
         lines.append(f"All sets: {total['calls']} calls, {_usd(total['cost_usd'])}; Jev answered "
                      f"{_pct(total['jev_share'])} (target 90%), fallback {total['fallback']}, failed {total['failed']}")

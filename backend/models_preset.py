@@ -16,6 +16,7 @@ handed to it and the bot waits for a sign-in instead (it never fails for it).
 import json
 
 from . import gateway_tiers
+from . import bot_settings as BS
 
 RECOMMENDED = "subscriptions-gateway"
 PRESETS = (RECOMMENDED, "subscriptions", "gateway", "own-keys")
@@ -46,9 +47,11 @@ def spends_gateway(record):
     return of(record) in GATEWAY_PRESETS
 
 
-def isolated(ready):
-    """Whether the computer whose readiness document is `ready` runs bots as their own user. Only an explicit `true`."""
-    return isinstance(ready, dict) and ready.get("isolated") is True
+def runs_gateway(ready):
+    """Whether the computer whose readiness document is `ready` runs Tico models: it runs bots as their own user (only
+    an explicit `isolated: true`), or it is a Tico cloud machine, one company's trust group (`trust`,
+    runner-rs/src/cloud_machine.rs), whose turns reach the Gateway through the runner's relay as its one user."""
+    return isinstance(ready, dict) and (ready.get("isolated") is True or ready.get("trust") == "cloud_machine")
 
 
 def signed_in(ready, runtime):
@@ -68,7 +71,7 @@ def waiting(record, ready, config):
     from .gateway_connection import is_tico
     config = config if isinstance(config, dict) else {}
     runtime = str(config.get("runtime") or "")
-    return (of(record) == RECOMMENDED and gateway_on(record) and isolated(ready)
+    return (of(record) == RECOMMENDED and gateway_on(record) and runs_gateway(ready)
             and runtime in SUBSCRIPTION_RUNTIMES and not is_tico(config.get("model"))
             and not signed_in(ready, runtime))
 
@@ -106,7 +109,7 @@ def with_gateway_fallback(record, ready, config, model=None):
     from .gateway_connection import is_tico
     fallback = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
     if (not spends_gateway(record) or not record.get("auto_fallback") or not gateway_on(record)
-            or not isolated(ready) or fallback or is_tico(config.get("model"))):
+            or not runs_gateway(ready) or fallback or is_tico(config.get("model"))):
         return config
     return {**config, "gateway_fallback": pick(model)}
 
@@ -147,7 +150,7 @@ def gateway_line(c, bot, ready, settings=None, config=None):
         return ""
     record = load(c, settings)
     if config is None:
-        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
         config = fill(record, json.loads(row[0] or "{}") if row else {})
     if not waiting(record, ready, config):
         return ""
@@ -170,7 +173,7 @@ def as_served(c, bot, ready, check, settings=None):
 def computer_of(c, bot):
     """The readiness document of the computer `bot` is on, or {}."""
     from .store import readiness_document
-    row = c.execute("SELECT r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                     "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
     return readiness_document(row[0]) if row else {}
 
@@ -178,7 +181,7 @@ def computer_of(c, bot):
 def runnable_fallbacks(record, ready, rows):
     """The company's fallback rows a bot on the computer `ready` can use: the Gateway row only where it can run it."""
     return [row for row in rows if not gateway_tiers.resolve(row.get("model")) or row.get("runtime") != GATEWAY_RUNTIME
-            or isolated(ready)]
+            or runs_gateway(ready)]
 
 
 SIGN_IN_TITLE = "Sign in to Claude and ChatGPT, or add API keys"
@@ -198,10 +201,10 @@ def card(c, settings=None):
     if of(record) != RECOMMENDED:
         return None
     documents = [readiness_document(row[0]) for row in
-                 c.execute("SELECT readiness_json FROM runners WHERE revoked_at IS NULL ORDER BY id").fetchall()]
+                 c.execute("SELECT readiness FROM runners_with_state WHERE revoked_at IS NULL ORDER BY id").fetchall()]
     if all(any(signed_in(d, runtime) for d in documents) for runtime in SUBSCRIPTION_RUNTIMES):
         return None
-    lines = [SIGN_IN_LINE] + ([] if any(isolated(d) for d in documents) else [NOT_ISOLATED_LINE])
+    lines = [SIGN_IN_LINE] + ([] if any(runs_gateway(d) for d in documents) else [NOT_ISOLATED_LINE])
     return {"kind": "setup", "id": "setup:sign-in", "title": SIGN_IN_TITLE, "first_line": " ".join(lines),
-            "created": record.get("updated") or "", "requester": None, "origin_actor": None, "from_person": None,
+            "created_at": record.get("updated_at") or "", "requester_id": None, "origin_actor": None, "from_person": None,
             "link": "#/settings", "link_label": "Open Settings > Computers"}

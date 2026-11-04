@@ -22,7 +22,7 @@ owns:
   - "The paid honest review program on the software review sites the platforms run themselves, every customer at the milestone, platform-labelled"
   - "What each review surface allows: who may be invited, who may be paid, who may reply, what may be flagged and on what grounds"
 never:
-  - "Act on a review surface outside the requested batch scope"
+  - "Act on a review surface unless the requested batch names it"
   - "Write, buy by rating or steer a review, or invite only the customers who seem happy"
   - "Pay for a review anywhere but the platforms' own labelled programs, or invite anyone to a surface that forbids it"
   - "Write sales, marketing or website copy, or ask anyone else to"

@@ -1,0 +1,45 @@
+{
+  "id": "24-slack-support-follow-up",
+  "kind": "slack",
+  "questions": "slack-route",
+  "level": "low",
+  "state": {
+    "message": {
+      "channel": "D-priya",
+      "is_dm": true,
+      "from": "priya",
+      "text": "The Team one. The account is acme-team-2291."
+    },
+    "thread": {
+      "thread_ts": "1730200555.000900",
+      "started_by": "support"
+    },
+    "previous_routing": {
+      "bot": "support",
+      "asked": "Which account is the ticket for, the Team plan or the Personal plan?"
+    },
+    "roster": [
+      {
+        "bot": "engineering-lead",
+        "role": "Engineering Lead: plans and reviews engineering work"
+      },
+      {
+        "bot": "release-manager",
+        "role": "Release Manager: cuts releases and their notes"
+      },
+      {
+        "bot": "legal",
+        "role": "Legal helper: contracts, terms and policies"
+      },
+      {
+        "bot": "support",
+        "role": "Support agent: customer tickets and setup help"
+      },
+      {
+        "bot": "sales-ops",
+        "role": "Sales ops: pipeline and outreach"
+      }
+    ]
+  },
+  "note": "An answer in the DM thread of the bot that asked: reply to last, and an answer."
+}

@@ -165,7 +165,10 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   await taskMenuSettled(d);                 // never pull a menu out from under the pointer
   if (!d.open || String(d.dataset.task) !== String(task.id) || d.drawSeq !== seq) return;
   if (d.liveTask && Number(detail.task.version) < Number(d.liveTask.version)) return;   // a save landed since this was asked for
-  const full = {...detail.task, children: detail.children || []};
+  // The task's own model sits beside the task in the detail (GET /v2/tasks/{id} `run_model`), as its children do, with
+  // whether this reader may set it (`can_set_run_model`).
+  const full = {...detail.task, children: detail.children || [], ...('run_model' in detail
+    ? {run_model: detail.run_model, can_set_run_model: detail.can_set_run_model} : {})};
   // the redraw keeps the focus where it was (a header button, the title, a property)
   const a = d.contains(document.activeElement) ? document.activeElement : null;
   const keep = !a ? '' : a.matches('[data-modal-close]') ? '[data-modal-close]' : a.matches('[data-task-more]') ? '[data-task-more]' : a.matches('.tmodal-title') ? '.tmodal-title'
@@ -200,7 +203,10 @@ function taskPropFocus(d) {
 }
 // `full`: the task as GET /v2/tasks/{id} answers it (list rows leave out what the rail's Code section needs).
 function taskModalBind(d, task, full = false) {
+  fbSync();                     // the task's own 👍 / 👎 in the header, when a bot asked for it
   tfAdopt(d, task);
+  taskPagesAdopt(d, task);      // the task's pages, as cards at its top (ui/app/pages.js)
+  ruleHoldsAdopt(d, task);      // a rule review's held outputs and their actions (ui/app/org-rule-holds.js)
   d.dataset.version = String(task.version ?? '');
   if (!d.liveTask || String(d.liveTask.id) !== String(task.id) || Number(task.version) >= Number(d.liveTask.version)) d.liveTask = task;
   if (d.taskRail?.id !== String(task.id)) d.taskRail = {id: String(task.id), open: new Set()};
@@ -262,6 +268,7 @@ function taskModalBind(d, task, full = false) {
       } catch (e) { toast(e.message, true); }
     };
   }
+  taskRunModelBind(d, task);
   d.querySelectorAll('[data-copy-session]').forEach(b => b.onclick = () =>
     void copyText(b.dataset.copySession).then(() => toast('Copied'), () => toast('Could not copy', true)));
   d.querySelectorAll('[data-drop-link]').forEach(b => b.onclick = async () => {
@@ -278,8 +285,8 @@ function taskModalBind(d, task, full = false) {
       const have = new Set(Object.values(task.relations || {}).flat().map(r => String(r.id)));
       const rows = (await taskPropCandidates(task, kind.value)).filter(x => !have.has(String(x.id)));
       if (!addRelated.isConnected) return;
-      propMenu(d, addRelated, {label: kind.text, find: 'Find a task', none: 'No open tasks', items: rows.map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner)}`,
-        html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner))}</span>`})),
+      propMenu(d, addRelated, {label: kind.text, find: 'Find a task', none: 'No open tasks', items: rows.map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner_id)}`,
+        html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner_id))}</span>`})),
         onPick: it => taskRelate(d, task, {task: it.value, kind: kind.value})});
     }, 0)});
   d.querySelectorAll('[data-drop-rel]').forEach(b => b.onclick = () => {
@@ -296,7 +303,7 @@ function taskModalBind(d, task, full = false) {
 const SESSION_COPY = '<svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true" focusable="false"><rect x="4" y="4" width="6.5" height="6.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M8 4V2.5a1 1 0 0 0-1-1H2.5a1 1 0 0 0-1 1V7a1 1 0 0 0 1 1H4" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
 function taskSessions(t) {
   return (t.links || []).filter(l => l.kind === 'session').map(l => {
-    let d = {}; try { d = JSON.parse(l.detail_json || '{}'); } catch {}
+    let d = {}; try { d = JSON.parse(l.detail || '{}'); } catch {}
     return {...l, d, value: String(l.url || '').replace(/^session:/, '')};
   }).sort((a, b) => (b.d.primary ? 1 : 0) - (a.d.primary ? 1 : 0));
 }
@@ -320,6 +327,87 @@ function taskSessionsHTML(t) {
     <form class="inline task-link-add" data-modal-session hidden><input type="text" autocomplete="off" spellcheck="false" placeholder="URL or resume command" aria-label="Add a session"></form></section>`;
 }
 
+// Runs on (POST /v2/tasks/{id}/model, backend/task_run_models.py): the model this task's runs use, or the bot's task model
+// until one is set on it. The model list is GET /v2/models, read once here and by the automation step editor, which offers
+// the same models. Gateway tier picks (tico-*) are made in the bot's settings, so they stay out of both.
+let TASK_RUN_ROWS = null, TASK_RUN_LOADING = null;
+function taskRunCatalog() {
+  TASK_RUN_LOADING ||= get('/v2/models').then(d => {
+    TASK_RUN_ROWS = (d.models || []).filter(m => !m.deprecated && !m.meeting && !/^tico-/.test(m.id || ''));
+    return TASK_RUN_ROWS;
+  }, () => { TASK_RUN_LOADING = null; return []; });
+  return TASK_RUN_LOADING;
+}
+const taskRunOpts = (list, val) => list.map(([k, label]) => `<option value="${esc(k)}"${k === val ? ' selected' : ''}>${esc(label)}</option>`).join('');
+// The choice a form starts on: the task's own model, harness and effort, or none (the bot's task model).
+const taskRunPick = run => ({model: run?.model || '', harness: run?.harness || '', effort: run?.reasoning_effort || ''});
+function taskRunWords(run, rows) {
+  if (!run?.model) return "The bot's task model";
+  const row = (rows || []).find(m => m.id === run.model);
+  return [row?.label || run.model, (row?.harnesses || []).length > 1 ? harnessWords(run.harness) : '', run.reasoning_effort,
+    modelContextWords(row?.context_tokens)].filter(Boolean).join(' · ');
+}
+// Only whoever the server says may set the task's model gets the form (`can_set_run_model`, the answer POST
+// /v2/tasks/{id}/model gives); anyone else reads what it runs on.
+const taskRunMay = t => t.can_set_run_model === true;
+function taskRunModelBody(run, rows, pick, may = true) {
+  const head = '<h3 class="rail-h">Runs on</h3>', now = `<p class="task-run-now">${esc(taskRunWords(run, rows))}</p>`;
+  if (!may) return head + now;
+  if (!rows) return `${head}${now}<p class="muted">Loading the models…</p>`;
+  const row = rows.find(m => m.id === pick.model), harnesses = (row?.harnesses || []).length > 1 ? row.harnesses : [];
+  return `${head}${now}<form class="task-run-form" data-run-model-form>
+    <label><span>Model</span><select data-run-model>${taskRunOpts([['', "The bot's task model"], ...rows.map(m => [m.id, [m.label || m.id, modelContextWords(m.context_tokens)].filter(Boolean).join(' · ')])], pick.model)}</select></label>
+    ${harnesses.length ? `<label><span>Harness</span><select data-run-harness>${taskRunOpts(harnesses.map(h => [h, harnessWords(h) || h]), pick.harness)}</select></label>` : ''}
+    ${row?.efforts?.length ? `<label><span>Effort</span><select data-run-effort>${taskRunOpts(row.efforts.map(e => [e, e]), pick.effort)}</select></label>` : ''}
+    <button type="submit" class="ghost" data-run-model-apply disabled>Apply</button></form>`;
+}
+// Shown on a bot's task once GET /v2/tasks/{id} has answered (list rows leave out run_model).
+function taskRunModelHTML(t) {
+  if (!String(t.owner_id || '').startsWith('bot:') || t.run_model === undefined) return '';
+  return `<section class="tsec task-run-model" data-task-run-model aria-label="Runs on">${taskRunModelBody(t.run_model, TASK_RUN_ROWS, taskRunPick(t.run_model), taskRunMay(t))}</section>`;
+}
+// A model change redraws the harness and effort it offers, starting on that model's own (or the task's saved ones when
+// it is the model already saved). Apply saves what is picked; a blank model clears the task's own choice.
+function taskRunModelBind(d, task) {
+  const sec = $('[data-task-run-model]', d);
+  if (!sec) return;
+  const id = String(task.id), run = task.run_model || null, state = {pick: taskRunPick(run)}, may = taskRunMay(task);
+  const same = () => state.pick.model === (run?.model || '') && (!state.pick.model || (state.pick.harness === (run.harness || '')
+    && state.pick.effort === (run.reasoning_effort || '')));
+  const paint = () => {
+    sec.innerHTML = taskRunModelBody(run, TASK_RUN_ROWS, state.pick, may);
+    const apply = sec.querySelector('[data-run-model-apply]'); if (apply) apply.disabled = same();
+  };
+  if (!TASK_RUN_ROWS) void taskRunCatalog().then(() => { if (sec.isConnected && TASK_RUN_ROWS) paint(); });
+  sec.onchange = ev => {
+    const t = ev.target;
+    if (t.matches('[data-run-model]')) {
+      const row = (TASK_RUN_ROWS || []).find(m => m.id === t.value);
+      state.pick = !row ? taskRunPick(null) : row.id === run?.model ? taskRunPick(run)
+        : {model: row.id, harness: row.harnesses?.[0] || '', effort: row.default_effort || row.efforts?.[0] || ''};
+      paint(); sec.querySelector('[data-run-model]')?.focus();
+      return;
+    }
+    if (t.matches('[data-run-harness]')) state.pick.harness = t.value;
+    if (t.matches('[data-run-effort]')) state.pick.effort = t.value;
+    sec.querySelector('[data-run-model-apply]').disabled = same();
+  };
+  sec.onsubmit = async ev => {
+    ev.preventDefault();
+    const apply = sec.querySelector('[data-run-model-apply]');
+    if (!apply || apply.disabled) return;
+    apply.disabled = true;
+    const {model, harness, effort} = state.pick;
+    const body = model ? Object.fromEntries(Object.entries({model, harness, effort}).filter(([, v]) => v)) : {model: null};
+    try {
+      const saved = await post(`/v2/tasks/${encodeURIComponent(id)}/model`, body);
+      if (saved.warning) toast(saved.warning);
+      const data = await get(`/v2/tasks/${encodeURIComponent(id)}`);
+      if (TASKS_ST) void tasksLoad(TASKS_ST);
+      if (d.open && String(d.dataset.task) === id && data.task) void taskModalShow(data.task, d);
+    } catch (e) { toast(e.message, true); apply.disabled = same(); }
+  };
+}
 const TASK_REL_ADD = [['related', 'Related'], ['blocked_by', 'Blocked by'], ['blocks', 'Blocks'], ['duplicate_of', 'Duplicate of'], ['follow_up', 'Follow-up of']];
 const TASK_REL_GROUPS = [['blocks', 'in', 'Blocked by'], ['blocks', 'out', 'Blocks'], ['related', 'both', 'Related'], ['duplicate_of', 'out', 'Duplicate of'],
   ['duplicate_of', 'in', 'Duplicated by'], ['follow_up', 'out', 'Follow-up of'], ['follow_up', 'in', 'Follow-ups']];
@@ -333,6 +421,10 @@ async function taskRelate(d, task, body, on = task.id) {
     if (d.open && String(d.dataset.task) === String(task.id) && data.task) taskModalShow(data.task, d);
   } catch (e) { toast(e.message, true); }
 }
+// A snooze's or a wait's note after the chip's own text, clipped by CSS; the chip's title carries it in full.
+function chipNoteHTML(note) {
+  return note ? ` · <span class="tchip-note">${esc(note)}</span>` : '';
+}
 // A milestone the task waits for besides tasks (backend/milestone_waits.py): "PR #943 to merge", then "merged".
 function taskMilestoneHTML(t) {
   const waits = Array.isArray(t.milestone_waits) ? t.milestone_waits : [];
@@ -340,8 +432,8 @@ function taskMilestoneHTML(t) {
   const done = w => w.kind === 'pr_merged' ? 'merged' : 'published';
   return `<div class="trel task-milestones"><span class="trel-k">Waits for</span><div class="tlinks">${waits.map(w => {
     const text = `${w.label} ${w.met ? done(w) : w.kind === 'pr_merged' ? 'to merge' : 'to be published'}`;
-    return `<span class="tlink milestone${w.met ? ' met' : ''}" title="${esc(w.sentence)}">${w.url
-      ? `<a href="${esc(w.url)}" target="_blank" rel="noopener">${esc(text)}</a>` : esc(text)}</span>`;
+    return `<span class="tlink milestone${w.met ? ' met' : ''}" title="${esc(w.sentence + (w.note ? ` · ${w.note}` : ''))}">${w.url
+      ? `<a href="${esc(w.url)}" target="_blank" rel="noopener">${esc(text)}</a>` : esc(text)}${chipNoteHTML(w.note)}</span>`;
   }).join('')}</div></div>`;
 }
 function taskRelHTML(t) {
@@ -386,7 +478,6 @@ async function taskSave(d, id, body, then, field) {
     if (here() && then !== false && data.task) void taskModalShow(data.task, d);       // the server's answer, at once
     if (BOT) {
       if (isKeeper(BOT.slug)) void loadBotTasksV2(BOT.slug);
-      void loadBotChatTasks(BOT.slug);
     }
     void personTasksReload();
     // The list reloads behind it. If the task left the view (done, closed, handed on, declined), the list and the
@@ -463,6 +554,9 @@ const TASK_EVENT_WORDS = {step: id => id ? `moved it to ${pipelineStepName(id)}`
 function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
   if (x.kind === 'event') {
     if (x.field === 'status' && x.old == null) return '';           // created: the header says so
+    // The type and first step a task is filed with are part of its creation too, not moves.
+    if ((x.field === 'type' || x.field === 'step') && x.old == null
+      && all?.some(y => y.kind === 'event' && y.field === 'status' && y.old == null && Math.abs(Date.parse(y.ts) - Date.parse(x.ts)) < 2000)) return '';
     if (x.field === 'comment' && x.new) return '';                  // an edit: the comment itself says edited
     // A step move already names where the task went; its status change would say it twice.
     if (x.field === 'status' && all?.some(y => y.kind === 'event' && y.field === 'step' && y.new && y.ts === x.ts)) return '';
@@ -475,7 +569,7 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
     }
     const say = TASK_EVENT_WORDS[x.field] ? TASK_EVENT_WORDS[x.field](x.new, x) : `changed ${x.field}`;
     // A result mirrored into a comment keeps its full text there; the event still records the status move.
-    const mirrored = x.note && all?.some(y => y.kind === 'comment' && y.message?.from_actor === x.actor
+    const mirrored = x.note && all?.some(y => y.kind === 'comment' && y.message?.sender_id === x.actor
       && String(y.message.body || '').trim() === String(x.note).trim() && Math.abs(Date.parse(y.ts) - Date.parse(x.ts)) < 5000);
     // A QA waiver is a person's decision, never a verdict: it keeps its own mark and its full reason.
     const waived = x.field === 'qa_waiver' ? ' <span class="verdict-chip waived" data-qa-waiver>QA waived</span>' : '';
@@ -483,18 +577,53 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
       <time class="muted tnum" title="${esc(fmt(x.ts))}">${esc(ago(x.ts))}</time></div>`;
   }
   const m = x.message, ask = askOf(m);
+  if (m.refs?.reconnect && typeof m.refs.reconnect === 'object') return reconnectCardHTML(m);
   // a question's text is in its block; a body that only repeats it is left out
   const body = ask && ask.questions.some(q => String(q.question || '').trim() === String(m.body || '').trim()) ? '' : m.body || '';
   const kind = m.kind === 'ask' ? '<span class="pill needs">question</span>' : m.kind === 'answer' ? '<span class="pill">answer</span>' : '';
   // As in a bot's chat with several people: a person's line is a bubble on the right under their name (yours needs
   // none), the bot's reads as page text under its own.
-  const person = !!actorPerson(m.from_actor), me = m.from_actor === myActor();
-  return `<div class="tcomment tmsg${person ? ' you' : ''}${me ? ' from-me' : ''}${String(m.from_actor || '').startsWith('bot:') ? ' bot' : ''}" data-message="${esc(m.id || '')}"><div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.from_actor, m.refs?.via)}</span>${kind}${roadmapCommentMark(m, taskId)}
+  const person = !!actorPerson(m.sender_id), me = m.sender_id === myActor();
+  // A bot's comment takes a row of Copy, 👍 and 👎 under it, as in a chat (ui/app/feedback.js).
+  const fb = m.id && String(m.sender_id || '').startsWith('bot:') ? fbKey('message', m.id) : '';
+  return `<div class="tcomment tmsg${person ? ' you' : ''}${me ? ' from-me' : ''}${String(m.sender_id || '').startsWith('bot:') ? ' bot' : ''}" data-message="${esc(m.id || '')}"><div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.sender_id, m.refs?.via)}</span>${kind}${roadmapCommentMark(m, taskId)}
       ${m.refs?.quiet ? '<span class="muted" title="Saved for the bot\'s next run on this task">saved</span>' : ''}
-      <span class="spacer"></span>${m.edited_at ? `<span class="muted" title="Edited ${esc(fmt(m.edited_at))}">edited</span>` : ''}<time class="muted tnum" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time></div>
-    <div class="bubble ${person ? 'you' : 'bot'}">${body ? `<div class="md">${safeMd(body)}</div>` : ''}
-    ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, askTargetOf(m), m.from_actor, taskId, files, canAnswer) : ''}</div>${taskStepsHTML(m)}</div>`;
+      <span class="spacer"></span>${m.edited_at ? `<span class="muted" title="Edited ${esc(fmt(m.edited_at))}">edited</span>` : ''}<time class="muted tnum" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div>
+    <div class="bubble ${person ? 'you' : 'bot'}"${fb ? ` data-fb-press="${esc(fb)}"` : ''}>${body ? `<div class="md">${safeMd(body)}</div>` : ''}
+    ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, askTargetOf(m), m.sender_id, taskId, files, canAnswer) : ''}${fbRowHTML(fb, m.body || '')}</div>${taskStepsHTML(m)}</div>`;
 }
+// A bot's work on this task stopped on an account (backend/reconnects.py): its one line, the fix for the person who
+// can make it, and Reconnected once it works. A missing secret's fix is its credential card (ui/credential-card.js).
+function reconnectCardHTML(m) {
+  const r = m.refs.reconnect, fix = r.fix || {}, status = r.status || 'open', fixed = status === 'fixed', mine = r.person === myActor();
+  const head = `<div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.sender_id)}</span><span class="spacer"></span><time class="muted tnum" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div>`;
+  const wrap = inner => `<div class="tcomment tmsg bot" data-message="${esc(m.id || '')}">${head}${inner}</div>`;
+  // A retired card asks nothing: its request is canceled, so it shows Not needed, never a card to save.
+  if (r.service === 'secret' && mine && m.refs.credential_request && status !== 'retired') {
+    return wrap(`<div data-credential-host="${esc(m.refs.credential_request)}"><div class="cc-done">Loading the card…</div></div>`);
+  }
+  let act = '';
+  if (fixed) act = `<span class="rc-done">${r.service === 'secret' ? 'Saved' : 'Reconnected'}</span>`;
+  else if (status !== 'open') act = `<span class="muted">${status === 'canceled' ? 'Canceled' : 'Not needed'}</span>`;
+  else if (!mine) act = `<span class="muted">Waiting on ${esc(actorLabel(r.person) || 'a person')}</span>`;
+  else if (r.service === 'google') act = '<button type="button" class="primary" data-reconnect-google>Reconnect Google</button>';
+  else if (r.service === 'login' && typeof harnessCaps === 'function' && harnessCaps(fix.runtime).browser_sign_in) {
+    act = `<button type="button" class="primary" data-model-login data-runner="${esc(fix.runner || '')}" data-runtime="${esc(fix.runtime || '')}" data-machine="${esc(fix.machine || '')}">Sign in</button>`;
+  } else act = `<a class="button primary" href="#/settings/computers">${r.service === 'login' ? 'Sign in' : 'Open settings'}</a>`;
+  return wrap(`<div class="rc-card" data-reconnect="${esc(r.key || '')}" data-status="${esc(status)}"><span class="rc-line">${esc(m.body || '')}</span>${act}</div>`);
+}
+// Reconnect Google: the person's own Connect, as Settings > Inbox starts it (ui/google-connect.js).
+document.addEventListener('click', async ev => {
+  const button = ev.target.closest('[data-reconnect-google]');
+  if (!button) return;
+  button.disabled = true;
+  try {
+    const started = await post('/v2/mail/google/connect', {});
+    // Only Google's own sign-in page, never an address from anywhere else.
+    if (!/^https:\/\/accounts\.google\.com\//.test(started.auth_url || '')) throw new Error('Unexpected sign-in address');
+    location.href = started.auth_url;
+  } catch (e) { toast(e.message, true); button.disabled = false; }
+});
 // A reply's run, folded to one line ("6 steps · 4 tool calls · 2m"); opening it reads the steps once (GET
 // /v2/turns/{id}/steps) and they stay open across redraws. `TASK_STEPS` holds what was read, per turn.
 const TASK_STEPS = {html: new Map(), live: new Map(), open: new Set(), reading: new Set()};
@@ -547,31 +676,103 @@ function taskLiveHTML(x, stopping = '', sent = '') {
   const step = part ? clipLine(part.text.replace(/\s+/g, ' ').trim(), 120) : '';
   const label = `<span class="typing ${t.mode}" aria-hidden="true"><i></i><i></i><i></i></span><span class="thinking-word">${esc(word)}${
     working ? '…' : ''}</span>${step ? `<span class="task-live-step">${esc(step)}</span>` : ''}`;
-  const stop = working && x.attempt_id && settingsCanManageBot(S.emps.find(e => e.name === x.bot))
-    ? `<button type="button" class="ghost task-live-stop" data-task-stop="${esc(x.attempt_id)}" data-bot="${esc(x.bot)}" ${
-      stopping === x.attempt_id ? 'title="Stopping…" disabled>Stopping…' : 'title="Stop this run">Stop'}</button>` : '';
+  const stop = working && x.run_id && settingsCanManageBot(botRow(x.bot))
+    ? `<button type="button" class="ghost task-live-stop" data-task-stop="${esc(x.run_id)}" data-bot="${esc(x.bot)}" ${
+      stopping === x.run_id ? 'title="Stopping…" disabled>Stopping…' : 'title="Stop this run">Stop'}</button>` : '';
   return `<div class="thinking task-live" role="status" aria-label="${esc(t.tip)}${step ? ': ' + esc(step) : ''}">${
-    working && x.attempt_id ? taskStepsFold(x.attempt_id, label, true) : label}${pendingHintHTML(run)}${stop}</div>`;
+    working && x.run_id ? taskStepsFold(x.run_id, label, true) : label}${pendingHintHTML(run)}${stop}</div>`;
 }
+// Whether the draft @mentions one of `names`, as the server reads an @mention (backend/hubdb.py _at): the name, not
+// inside a word or another @name.
+const taskNamed = (names, draft) => (names || []).some(n =>
+  new RegExp('(?<![\\w@])@' + n.replace(/[.*+?^$()|[\]\\{}]/g, '\\$&') + '(?![\\w-])', 'i').test(draft || ''));
 // Who the comment being written will reach (GET /v2/tasks/{id} `comment_to`), said before it is sent: no bot at all,
 // or a bot that reads it on its next run on the task unless the draft @mentions it.
 function taskComposerTo(to, draft) {
   if (!to) return '';
   if (!to.bot) return 'No bot gets this message: it is saved on the task for the people on it.';
-  // As the server reads an @mention (backend/hubdb.py _at): the name, not inside a word or another @name.
-  const at = n => new RegExp('(?<![\\w@])@' + n.replace(/[.*+?^$()|[\]\\{}]/g, '\\$&') + '(?![\\w-])', 'i');
-  const named = (to.mention || []).some(n => at(n).test(draft || ''));
-  if (to.wakes || named) return '';
+  if (to.wakes || taskNamed(to.mention, draft)) return '';
   return `Saved for ${botDisplayName(to.bot)}'s next run on this task.${to.mention?.length ? ` Write @${to.mention[0]} to ask now.` : ''}`;
+}
+// How a comment reaches its bot (docs/tasks.md "Comments"), in the bot chat's words (deliveryMenuHTML, ui/app/pill.js):
+// Steer into its running turn, Queue after its current turn, Defer until its next turn on this task (at the latest
+// after a while), or Set as goal of its task session. Send shows the person's kept way (sendWayPick, ui/app/pill.js)
+// and the comment always names it; Set as goal is for the next comment only.
+let TASK_MENU_CLOSE = null;                 // closes the open delivery menu; a press elsewhere closes it
+document.addEventListener('pointerdown', ev => {
+  if (TASK_MENU_CLOSE && !ev.target.closest?.('.task-send')) TASK_MENU_CLOSE();
+});
+try { localStorage.removeItem('hub.task.delivery.v2'); } catch {}     // the per-task picks the kept way replaced
+SEND_WAY_PAINT.add(() => { if (TASK_CHAT?.data && taskChatCurrent(TASK_CHAT)) taskComposerToPaint(TASK_CHAT); });
+// The send has ways only where a bot would get the comment (GET /v2/tasks/{id} `comment_delivery`, null without one).
+const taskDeliverySplit = state => state.data?.comment_delivery?.default != null && !!state.data?.comment_to?.bot;
+// The ways this reader may send: steer only for someone who may steer, queue only for someone who may wake the bot,
+// goal only where the session can take one; anyone who may comment may defer.
+function taskDeliveryWays(state) {
+  const cd = state.data?.comment_delivery || {};
+  return ['steer', 'queue', 'defer', 'goal'].filter(w => w === 'defer' || (w === 'queue' ? cd.queue !== false : !!cd[w]));
+}
+const taskDeferDefault = state => {
+  const f = state.data?.comment_delivery?.default_for;
+  return DELIVERY_FOR.includes(f) ? f : '24h';
+};
+// Whether this reader may wake the task's bot. A deadline wakes it as a steer would, so a reader who may not defers
+// with none (the server refuses any other defer_for with a 403).
+const taskDeliveryWakes = state => taskDeliveryWays(state).some(w => w === 'steer' || w === 'queue');
+// The way the next comment goes: Set as goal when picked for it, else the kept way, or the nearest one this reader may
+// use (Steer becomes Queue; without either, Defer with no deadline).
+function taskDeliveryMode(state) {
+  const ways = taskDeliveryWays(state);
+  if (state.goalOnce && ways.includes('goal')) return 'goal';
+  if (!taskDeliveryWakes(state)) return 'defer:never';
+  const kept = SEND_WAY, way = deliveryWay(kept);
+  if (ways.includes(way)) return kept;
+  if (way === 'steer' && ways.includes('queue')) return 'queue';
+  return 'defer:' + taskDeferDefault(state);
+}
+// What the chosen way does, said before sending.
+function taskDeliveryHint(state) {
+  const who = botDisplayName(state.data.comment_to.bot), mode = taskDeliveryMode(state), way = deliveryWay(mode);
+  const cd = state.data.comment_delivery;
+  if (way === 'queue') return `Queue: ${who} gets it after its current turn, or now.`;
+  if (way === 'goal') return `Set as goal: ${who} works toward this text in the task's session.`;
+  if (way === 'steer') return `Steer: into ${who}'s running turn now${cd.steers ? '' : ", or after it if it can't steer"}.`;
+  const f = deliveryFor(mode);
+  return `Defer: ${who} gets it with its next turn on this task${f === 'never' ? '' : `, at the latest in ${f}`}.`;
+}
+// Send's icon says the way the comment is sent; without a bot it is the plain arrow, with no caret.
+function taskDeliveryPaint(state) {
+  const main = $('[data-task-main]', state.host), caret = $('[data-task-caret]', state.host);
+  if (!main || !caret) return;
+  const split = taskDeliverySplit(state);
+  caret.hidden = !split;
+  if (!split) taskDeliveryMenu(state, false);
+  sendWayPaint(main, split ? taskDeliveryMode(state) : 'steer');
+}
+// The ways to send, opening upward from the caret; choosing one keeps the draft and only sets the way.
+function taskDeliveryMenu(state, open) {
+  const menu = $('[data-task-menu]', state.host), caret = $('[data-task-caret]', state.host);
+  if (!menu || !caret) return;
+  if (!open && menu.hidden) return;
+  if (open && !taskDeliverySplit(state)) return;
+  const ways = taskDeliveryWays(state), mode = open ? taskDeliveryMode(state) : '';
+  menu.innerHTML = open ? deliveryMenuHTML({steer: ways.includes('steer'), queue: ways.includes('queue'), goal: ways.includes('goal'),
+    deadlines: taskDeliveryWakes(state), current: mode, deferFor: deliveryWay(mode) === 'defer' ? deliveryFor(mode) : taskDeferDefault(state)}) : '';
+  menu.hidden = !open;
+  caret.setAttribute('aria-expanded', String(open));
+  TASK_MENU_CLOSE = open ? () => taskDeliveryMenu(state, false) : null;
+  if (open) (menu.querySelector('[aria-checked="true"]') || menu.querySelector('button'))?.focus();
 }
 function taskComposerToPaint(state) {
   const hint = $('[data-task-chat-to]', state.host), box = $('textarea', state.host);
-  if (hint) hint.textContent = taskComposerTo(state.data?.comment_to, box?.value);
+  if (hint) hint.textContent = taskDeliverySplit(state) ? taskDeliveryHint(state)
+    : taskComposerTo(state.data?.comment_to, box?.value);
+  taskDeliveryPaint(state);
 }
 async function taskRunStop(state, button) {
   button.disabled = true; button.title = 'Stopping…';
   try {
-    await post(`/v2/bots/${encodeURIComponent(button.dataset.bot)}/stop`, {attempt_id: button.dataset.taskStop});
+    await post(`/v2/bots/${encodeURIComponent(button.dataset.bot)}/stop`, {run_id: button.dataset.taskStop});
     state.stopping = button.dataset.taskStop;      // the redraws keep "Stopping…" until the run has ended
     button.textContent = 'Stopping…';
     taskChatLive(state);
@@ -580,17 +781,35 @@ async function taskRunStop(state, button) {
 function taskCommentsRender(state, data, sent = '') {
   const host = state.host;
   const lines = [
-    ...(data.comments || data.messages || []).filter(m => ['say', 'ask', 'answer'].includes(m.kind)).map(m => ({kind: 'comment', ts: m.created, message: m})),
-    ...(data.events || []).map(e => ({kind: 'event', ts: e.ts, ...e})),
+    ...(data.comments || data.messages || []).filter(m => ['say', 'ask', 'answer'].includes(m.kind)).map(m => ({kind: 'comment', ts: m.created_at, message: m})),
+    ...(data.events || []).map(e => ({kind: 'event', ts: e.created_at, ...e})),
   ].sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
   if (!$('form', host)) {
     // The box is the main chat's composer: a pill, one line that grows, the send arrow, Return sends.
     host.innerHTML = `<h3>Conversation</h3>
       <div class="task-comments" role="log" aria-live="polite"></div>
       <form class="task-pill"><span class="muted" data-task-chat-to role="note"></span><div class="p-pill"><textarea class="p-text" rows="1" maxlength="4000" required aria-label="Message" placeholder="Message…"></textarea>
-          <button class="p-send p-send-icon" type="submit" aria-label="Send" title="Send">${ICON_SEND}</button></div>
+          <span class="task-send" data-task-send><button class="task-send-caret p-way" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Ways to send" title="Ways to send" data-task-caret hidden><span class="nav-icon" aria-hidden="true">expand_more</span></button><button class="p-send p-send-icon" type="submit" aria-label="Send" title="Send" data-task-main>${ICON_SEND}</button><div class="p-menu p-ways" role="menu" aria-label="Ways to send" data-task-menu hidden></div></span></div>
           <span class="muted" data-task-chat-status role="status"></span></form>`;
     $('form', host).onsubmit = ev => { ev.preventDefault(); void taskCommentSend(state); };
+    const caret = $('[data-task-caret]', host), menu = $('[data-task-menu]', host);
+    caret.onclick = () => taskDeliveryMenu(state, menu.hidden);
+    sendWayHold($('[data-task-main]', host), () => taskDeliveryMenu(state, true), () => taskDeliverySplit(state));
+    menu.onclick = ev => {
+      const pick = ev.target.closest?.('[data-deliver]')?.dataset.deliver;
+      if (!pick) return;
+      // Set as goal is for the next comment; any other pick is the person's kept way, in every composer.
+      state.goalOnce = pick === 'goal';
+      if (pick !== 'goal') sendWayPick(pick);
+      taskDeliveryMenu(state, false); taskComposerToPaint(state); $('textarea', host).focus();
+    };
+    menu.addEventListener('keydown', ev => deliveryMenuKeys(menu, ev));
+    // Escape anywhere in the form (Safari leaves focus in the box) closes an open menu, not the task.
+    $('form', host).addEventListener('keydown', ev => {
+      if (ev.key !== 'Escape' || menu.hidden) return;
+      ev.preventDefault(); ev.stopPropagation();      // closes the menu, not the task
+      taskDeliveryMenu(state, false); caret.focus();
+    });
     const box = $('textarea', host);
     box.value = TASK_DRAFTS.get(String(state.id)) || '';
     const grow = () => { box.style.height = 'auto'; box.style.height = box.scrollHeight + 'px'; };
@@ -638,6 +857,9 @@ function taskCommentsRender(state, data, sent = '') {
     const liveSteps = $('details.run-steps[data-live][open]', thread);
     if (liveSteps) void taskStepsOpen(liveSteps);
     roadmapCommentsBind(state);
+    fbSync();
+    if (thread.querySelector('[data-credential-host]')) void window.credentialCards?.mount(thread, {get, post, esc, toast,
+      reload: () => taskChatRead(state)});
     state.rendered = html;
   }
 }
@@ -708,11 +930,23 @@ async function taskCommentSend(state) {
   const box = $('textarea', form), text = box.value.trim();
   if (!text) { box.focus(); return; }
   state.sending = true;
-  const button = $('button[type=submit]', form), status = $('[data-task-chat-status]', form);
+  const button = $('button[type=submit]', form), caret = $('[data-task-caret]', form);
+  const status = $('[data-task-chat-status]', form);
+  // The way Send shows is the way it goes; a task with no bot names none.
+  const split = taskDeliverySplit(state), mode = split ? taskDeliveryMode(state) : '', shown = deliveryWay(mode);
   // A disabled Send says why on hover; with an aria-label, the title is its screen-reader description too.
-  button.disabled = box.disabled = true; button.title = 'Sending…'; status.textContent = '';
+  taskDeliveryMenu(state, false);
+  button.disabled = box.disabled = true; caret.disabled = true; button.title = 'Sending…'; status.textContent = '';
   try {
-    const data = await post(`/v2/tasks/${encodeURIComponent(state.id)}/comments`, {text, public: !!$('[data-comment-public]', form)?.checked});
+    const body = {text, public: !!$('[data-comment-public]', form)?.checked, ...deliveryBody(mode)};
+    const data = await post(`/v2/tasks/${encodeURIComponent(state.id)}/comments`, body);
+    if (data.held) {
+      // Held by an org rule: nothing was written, so the text stays in the box and the hold shows here with its actions.
+      if (taskChatCurrent(state)) ruleTaskHeld(state, data.held);
+      status.textContent = '';
+      return;
+    }
+    if (shown === 'goal') state.goalOnce = false;      // Set as goal was for this comment: back to the kept way
     if (!taskChatCurrent(state)) return;
     box.value = ''; box.style.height = ''; TASK_DRAFTS.delete(String(state.id)); state.sending = false;
     const thread = $('.task-comments', state.host);
@@ -720,22 +954,28 @@ async function taskCommentSend(state) {
     // Your comment and "Sent" at once, as in the bot's chat; the read that follows has its run.
     if (data.comments && state.data) taskCommentsRender(state, {...state.data, comments: data.comments}, data.woke ? data.comment?.id : '');
     await taskChatRead(state);
-    // The composer said so before sending when no bot would get it; the server has the last word.
-    status.textContent = data.woke || data.delivered || taskComposerTo(state.data?.comment_to, text) ? '' : 'Saved. The bot reads it on its next run on this task.';
+    // The composer said so before sending; the server has the last word, so a different way it took is said (a defer
+    // while the bot works on this task goes in queued).
+    const as = data.sent_as?.delivery;
+    if (as) status.textContent = shown && shown !== 'goal' && as !== shown ? `Sent as ${deliveryWord(as)}.` : '';
+    else status.textContent = data.woke || data.delivered || taskComposerTo(state.data?.comment_to, text) ? '' : 'Saved. The bot reads it on its next run on this task.';
   } catch (e) {
     if (taskChatCurrent(state)) status.textContent = `Not saved: ${e.message}`;
   } finally {
     state.sending = false;
-    if (taskChatCurrent(state)) { button.disabled = box.disabled = false; button.title = 'Send'; box.focus(); }
+    if (taskChatCurrent(state)) {
+      button.disabled = box.disabled = caret.disabled = false;
+      taskDeliveryPaint(state); box.focus();
+    }
   }
 }
 async function taskChatSend(state) { return taskCommentSend(state); }
 function issueModalHTML(i) {
   const running = new Set((S.status?.active || []).map(a => a.issue));
   const tag = boardTag(i, running);
-  return `<div class="tmodal-head">${avatar(i.owner, 22, stateOf(i.owner))}<span class="who">${empName(i.owner)}</span>
+  return `<div class="tmodal-head">${avatar(i.owner_id, 22, stateOf(i.owner_id))}<span class="who">${empName(i.owner_id)}</span>
       <span class="mono muted">#${esc(i.number)}</span>${statusPill(i)}${i.priority && i.priority !== 'p2' ? prioPill(i) : ''}
-      ${tag ? `<span class="tag">${esc(tag)}</span>` : ''}${isRecurringIssue(i) ? '<span class="gl" title="a routine">⟳</span>' : ''}
+      ${tag ? `<span class="tag">${esc(tag)}</span>` : ''}${isRecurringIssue(i) ? '<span class="gl" title="Scheduled">⟳</span>' : ''}
       <span class="spacer"></span><span class="muted tnum">${esc(ago(i.state === 'CLOSED' ? i.closedAt : i.updatedAt))}</span>
       <button class="ghost tmodal-x" type="button" data-modal-close aria-label="Close">✕</button></div>
     <h2 class="tmodal-title">${esc(i.title)}</h2>
@@ -753,20 +993,25 @@ function taskPeekPos(id) {
   const keys = tasksVisibleKeys(), i = keys.indexOf('t' + id);
   return i < 0 ? '' : `${i + 1} / ${keys.length}`;
 }
-// Quiet work (a next-run task, backend/quiet_work.py): delivered into a run (deferred until something), eligible for the
-// bot's next run, or queued with a run of its own; which run, and when it was handed over.
-function taskQuietHTML(t) {
-  const q = t.quiet;
+// A deferred task (backend/quiet_work.py): delivered into a run (held until something), eligible for the bot's next
+// run, or queued with a run of its own; which run, and when it was handed over. `quiet` is the field's older name.
+function taskDeferredHTML(t) {
+  const q = t.deferred || t.quiet;
   if (!q || taskFinished(t)) return '';
-  const label = {queued: 'Queued', eligible: 'Eligible', delivered: q.resume ? 'Deferred' : 'Delivered'}[q.state] || q.state;
+  const state = q.state === 'delivered' && q.resume ? 'held' : q.state;
+  const label = {queued: 'Queued', eligible: 'Eligible', delivered: 'Delivered', held: 'Held'}[state] || state;
   const more = [q.run ? `run ${String(q.run).slice(0, 8)}` : '', q.at ? `handed over ${ago(q.at)}` : ''].filter(Boolean).join(', ');
-  return `<p class="task-wait task-quiet" data-task-quiet="${esc(q.resume ? 'deferred' : q.state)}"><span class="lbl">Quiet work: ${esc(label)}</span> ${esc(q.words || '')}${more ? ` <span class="muted">(${esc(more)})</span>` : ''}</p>`;
+  return `<p class="task-wait task-deferred" data-task-deferred="${esc(state)}"><span class="lbl">Deferred: ${esc(label)}</span> ${esc(q.words || '')}${more ? ` <span class="muted">(${esc(more)})</span>` : ''}</p>`;
 }
 // A question to you on a task past the Needs you pages held: its item is read alone, and its question box takes the
 // plain ask's place once it lands.
 function taskQcardWait(t) {
-  if (needsAll() || needsOneHeld(t.id)) return '';
-  void v2NeedsOne(t.id).then(() => {
+  // Before the first Needs you read lands, nothing is known past it: wait for it, then read the item alone if needed.
+  const landed = needsFirstIn();
+  if (landed && (needsAll() || needsOneHeld(t.id))) return '';
+  const read = landed ? v2NeedsOne(t.id)
+    : NEEDS_FIRST.then(() => qcardItem(t) || needsAll() || needsOneHeld(t.id) ? null : v2NeedsOne(t.id));
+  void read.then(() => {
     const el = qcardItem(t) && document.querySelector(`[data-qcard-wait="${CSS.escape(String(t.id))}"]`);
     if (el) el.outerHTML = qcardBoxHTML(t);
   });
@@ -783,7 +1028,7 @@ function hubModalHTML(t, it, opts = {}) {
   // Waiting on a bot's prerequisite work reads "Waiting on <bot>: <reason>" (taskBotWait).
   const blockers = taskBlockers(t), botWait = !askToYou && !finished ? taskBotWait(t) : null;
   const waitText = clipLine(botWait ? `${botWait.name}${botWait.reason ? `: ${botWait.reason}` : ''}${botWait.since}`
-    : blockers.length && !askToYou && !t.blocked_since ? '' : taskWaitLine(t), 400);
+    : blockers.length && !askToYou && !taskBlockedHold(t) ? '' : taskWaitLine(t), 400);
   const waitLabel = askToYou ? needsWho(t) : botWait || t.status === 'waiting' ? 'Waiting on' : '';
   const original = taskBody(t).trim() === String(t.title || '').trim() ? '' : taskBody(t);   // a quick subtask's details are its title
   const note = String(t.note || '');
@@ -793,17 +1038,19 @@ function hubModalHTML(t, it, opts = {}) {
   const pos = opts.peek ? taskPeekPos(t.id) : '';
   // Done for the owner; Close as the "…" menu allows it (who may move tasks, or the task's parties)
   const rights = taskPropRights(t);
-  const canDone = !finished && t.status !== 'done' && !!myActor() && myActor() === t.owner && !pipelineStepsOnly(t);
+  const canDone = !finished && t.status !== 'done' && !!myActor() && myActor() === t.owner_id && !pipelineStepsOnly(t);
+  const snooze = taskHold(t, 'snoozed') || {};
   const canClose = t.status !== 'closed' && (rights.mover || rights.party) && !pipelineStepsOnly(t);
   // The thread view's own header pieces: back, the title in the bar, and Details (task-modal.css hides the rest).
   const thread = !!opts.thread;
   return `<div class="tmodal-head">${thread ? `<button class="ghost peek-btn tthread-only tthread-back" type="button" data-thread-back aria-label="Back to chat" title="Back to chat"><svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true" focusable="false"><path d="M7.5 3l-3 3 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <span class="tthread-only tthread-title" tabindex="-1">${esc(t.title)}</span>` : ''}<span class="pill tstatus">${esc(statusWord)}</span>${statusWord === 'Waiting' || finished ? '' : taskWaitTag(t)}${blockers.length && !finished
       ? `<span class="tchip-blocked" title="Blocked by ${esc(blockers.map(b => b.title).join(', '))}">blocked</span>` : ''}${taskSnoozed(t)
-      ? `<button type="button" class="tl-due wake tchip-snoozed" data-task-unsnooze title="Snoozed until ${esc(fmt(t.snoozed_until))} by ${esc(actorLabel(t.snoozed_by))}${rights.snooze ? '. Click to bring it back now' : ''}"${rights.snooze ? '' : ' disabled'}>Snoozed to ${esc(snoozeDay(t))}</button>` : ''}
-      ${finished ? '' : taskScreenLinkHTML(t.owner)}
+      ? `<button type="button" class="tl-due wake tchip-snoozed" data-task-unsnooze title="Snoozed until ${esc(fmt(snooze.until))} by ${esc(actorLabel(snooze.by))}${snooze.reason ? ` · ${esc(snooze.reason)}` : ''}${rights.snooze ? '. Click to bring it back now' : ''}"${rights.snooze ? '' : ' disabled'}>Snoozed to ${esc(snoozeDay(t))}${chipNoteHTML(snooze.reason)}</button>` : ''}
+      ${finished ? '' : taskScreenLinkHTML(t.owner_id)}
       <span class="spacer"></span>${pos ? `<span class="peek-pos tnum" title="J / K or ↑ / ↓ move to the next or previous task">${esc(pos)}</span>` : ''}
-      <span class="muted tnum tmodal-age" title="${esc(`${taskSourceLine(t)}${t.created ? ' ' + fmt(t.created) : ''} · Updated ${fmt(it.updated)}`)}">${esc(ago(it.updated))}</span>
+      ${fbButtonsHTML(fbTaskKey(t))}
+      <span class="muted tnum tmodal-age" title="${esc(`${taskSourceLine(t)}${t.created_at ? ' ' + fmt(t.created_at) : ''} · Updated ${fmt(it.updated_at)}`)}">${esc(ago(it.updated_at))}</span>
       ${canDone ? `<button class="ghost tmodal-act" type="button" data-task-finish="done" title="Mark this task done">${PROP_ICON.check}<span>Done</span></button>` : ''}
       ${canClose ? `<button class="ghost tmodal-act" type="button" data-task-finish="close" title="Close this task">Close task</button>` : ''}
       <button class="ghost peek-btn" type="button" data-task-more aria-haspopup="menu" aria-label="More actions" title="More actions">${PROP_ICON.more}</button>
@@ -814,9 +1061,11 @@ function hubModalHTML(t, it, opts = {}) {
     ${t.goal_id ? `<div class="muted tmeta"><a href="#/goals/${encodeURIComponent(t.goal_id)}" class="task-goal" data-goal-title="${esc(t.goal_id)}">serves a goal</a></div>` : ''}
     <div class="tmodal-body task-layout">
       <div class="tmodal-main">
+      <section class="task-pages" data-task-pages aria-label="Pages" hidden></section>
+      <section class="rule-holds" data-rule-holds aria-label="Held by a rule" hidden></section>
       ${askToYou && qcardItem(t) ? qcardBoxHTML(t) : waitLabel && waitText ? (askToYou ? `<div class="task-ask"${taskQcardWait(t)}><div class="lbl">${esc(waitLabel)}</div><div class="task-ask-body">${esc(waitText)}</div></div>`
         : `<p class="task-wait"><span class="lbl">${esc(waitLabel)}</span> ${esc(waitText)}</p>`) : ''}
-      ${taskQuietHTML(t)}
+      ${taskDeferredHTML(t)}
       ${original ? (waitText ? `<details class="task-orig"><summary>Original request</summary><div class="tdesc md">${safeMd(original)}</div></details>`
         : `<div class="tdesc md">${safeMd(original)}</div>`) : (waitText ? '' : '<p class="muted tdesc">No details.</p>')}
       ${note && ![waitText, botWait && clipLine(botWait.reason, 400)].includes(note.replace(/\s+/g, ' ').trim()) ? `<details class="task-orig"><summary>Progress</summary><div class="tdesc md">${safeMd(note)}</div></details>` : ''}
@@ -826,6 +1075,7 @@ function hubModalHTML(t, it, opts = {}) {
         ${links.length ? `<div class="tlinks">${links.map(l => `<span class="tlink ${esc(l.kind)} ${esc(l.state || '')}"><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a>${l.state && l.state !== 'open' ? ` · ${esc(l.state)}` : ''}${mover ? `<button type="button" class="x" data-drop-link="${esc(l.id)}" aria-label="Remove link">×</button>` : ''}</span>`).join('')}</div>` : ''}
         <form class="inline task-link-add" data-modal-link hidden><input type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://…" aria-label="Add a link"></form></section>
       ${roadmapTaskHTML(t)}
+      ${taskRunModelHTML(t)}
       ${taskSessionsHTML(t)}
       <section class="tsec task-runs" data-task-runs aria-label="Runs" hidden></section>
       ${t.relations ? taskRelHTML(t) : ''}

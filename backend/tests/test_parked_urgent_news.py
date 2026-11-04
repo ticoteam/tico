@@ -9,6 +9,7 @@ from backend.tests.test_profiles import put
 from backend.tests.test_task_lanes import task_bot
 from backend.tests.test_urgent_news import sent_job
 from backend.tests.test_wake_rules import as_cause
+from backend import bot_settings as BS
 
 
 def parked(c, profile='lead', party='owned', incident=False):
@@ -56,7 +57,7 @@ def test_parked_party_blocker_delivers_a_usable_notice_job(api, profile, party):
                                                   'text': 'Read the blocker notice.'}, token=r['token'])
     with api.app.state.store.read() as c:
         assert H.message(c, msg['id'])['delivered_at']
-        assert c.execute('SELECT task_id FROM turns WHERE id=?', (attempt['id'],)).fetchone()[0] is None
+        assert c.execute('SELECT task_id FROM attempts WHERE id=?', (attempt['id'],)).fetchone()[0] is None
         assert H.task(c, task['id'])['status'] == task['status']
         assert H.task(c, task['id'])['checkpoint_at'] is None
         still_blocked(c, task, blocker)
@@ -140,7 +141,7 @@ def test_parked_incident_keeps_silence_and_duplicate_controls(api, control):
         task, blocker = parked(c, incident=True)
         refs = {'news': 'step_entered', **({'quiet': True} if control == 'quiet' else {})}
         if control == 'ignore':
-            c.execute("INSERT INTO rules(id,scope_kind,event,then_outcome,created_by,created,updated) "
+            c.execute("INSERT INTO rules(id,scope_kind,event,then_outcome,created_by,created_at,updated_at) "
                       "VALUES('ignore-all','team','step_entered','ignore','human:ana',?,?)", (H.now(), H.now()))
         if control == 'snooze':
             H.TS.snooze(c, 'human:ana', task['id'], H.shift(H.now(), days=1))
@@ -152,8 +153,8 @@ def test_parked_incident_keeps_silence_and_duplicate_controls(api, control):
         with as_cause('bot:cpo' if control == 'own_write' else 'bot:ops'):
             msg, job = sent_job(c, task, 'bot:cpo', 'Step moved: On Deck -> In Progress', refs)
         if control == 'duplicate':
-            assert job and job['state'] == 'cancelled' and job['wake_class'] == 'duplicate'
-            assert c.execute("SELECT count(*) FROM jobs WHERE bot='cpo' AND state='queued'").fetchone()[0] == 1
+            assert job and job['state'] == 'canceled' and job['wake_class'] == 'duplicate'
+            assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='cpo' AND state='queued'").fetchone()[0] == 1
         else:
             assert job is None and msg['refs']['quiet']
         still_blocked(c, task, blocker)
@@ -164,7 +165,7 @@ def test_notice_does_not_release_the_task_start_gate(api):
         task, blocker = parked(c, incident=True)
         _, job = sent_job(c, task, 'bot:cpo', 'Step moved: On Deck -> In Progress', {'news': 'step_entered'})
         assert job and job['held'] == 0
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='cpo'").fetchone()[0])
+        config = BS.read(c, 'cpo')
         assert auto_tasks.refusal(c, H.task(c, task['id']), config, woken=True) == 'task_wait'
         assert wake_rules.parked(c, H.task(c, task['id'])) == 'blocked_by'
         still_blocked(c, task, blocker)
@@ -174,10 +175,10 @@ def test_real_step_notice_writer_keeps_the_hold(api):
     with api.app.state.store.transaction() as c:
         task, blocker = parked(c, incident=True)
         R.step_entered(c, H.KEEPER, task)
-        found = c.execute("SELECT j.held,m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id "
-                          "WHERE j.bot='cpo'").fetchone()
+        found = c.execute("SELECT j.held,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
+                          "WHERE j.bot_id='cpo'").fetchone()
         assert found and found['held'] == 0
-        assert json.loads(found['refs_json'])['rule'] == 'incident_news'
+        assert json.loads(found['refs'])['rule'] == 'incident_news'
         still_blocked(c, task, blocker)
 
 
@@ -205,7 +206,7 @@ def test_new_urgent_override_does_not_release_a_pull_request_notice_hold(api):
     with api.app.state.store.transaction() as c:
         task, _ = parked(c, incident=True)
         c.execute("DELETE FROM task_relations WHERE to_task=? AND kind='blocks'", (task['id'],))
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,detail_json) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,detail) "
                   "VALUES('pr-hold',?,'pr','https://github.com/acme/app/pull/1','PR','open','human:ana',?,?)",
                   (task['id'], H.now(), json.dumps({'wake_once': True})))
         assert wake_rules.parked(c, H.task(c, task['id'])) == 'wake_once'

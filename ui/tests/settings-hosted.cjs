@@ -146,6 +146,15 @@ const shots = process.env.TICO_SHOTS || '';
     await page.waitForTimeout(300);
     assert.equal(asked.length, kept);
 
+    // A Tico Cloud cell (managed): Tico staff set its idle time, so the owner sees no card.
+    sleep = {...sleep, managed: true};
+    await page.goto('about:blank');
+    await page.goto('https://tico-ui.test/#/settings/devices');
+    await page.locator('#set-machines').waitFor();
+    await page.waitForTimeout(300);
+    assert.equal(await nap.isHidden(), true, 'no Sleep when idle on a Tico Cloud cell');
+    sleep = {...sleep, managed: false};
+
     // Nothing hosted (a self-hosted install, or no account at HQ): no section.
     servers = {state: 'none'};
     sleep = {...sleep, hosted: false};

@@ -1,0 +1,39 @@
+{
+  "id": "17-slack-thanks-only",
+  "kind": "slack",
+  "questions": "slack-route",
+  "level": "low",
+  "state": {
+    "message": {
+      "channel": "D-dana",
+      "is_dm": true,
+      "from": "dana",
+      "text": "Thanks, that worked. Good catch on the timezone bug."
+    },
+    "thread": null,
+    "previous_routing": null,
+    "roster": [
+      {
+        "bot": "engineering-lead",
+        "role": "Engineering Lead: plans and reviews engineering work"
+      },
+      {
+        "bot": "release-manager",
+        "role": "Release Manager: cuts releases and their notes"
+      },
+      {
+        "bot": "legal",
+        "role": "Legal helper: contracts, terms and policies"
+      },
+      {
+        "bot": "support",
+        "role": "Support agent: customer tickets and setup help"
+      },
+      {
+        "bot": "sales-ops",
+        "role": "Sales ops: pipeline and outreach"
+      }
+    ]
+  },
+  "note": "Thanks with no ask: no bot should be woken."
+}

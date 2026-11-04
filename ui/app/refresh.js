@@ -18,6 +18,7 @@ async function refresh(force) {
       seatsDue ? get('/v2/seats') : null]);
     S.status = st.status === 'fulfilled' ? st.value : null;
     S.statusPending = false;
+    cloudAccessFromStatus();
     if (emps.status === 'fulfilled' && people.status === 'fulfilled' && people.value?.people) {
       S.emps = namedRoster(emps.value);
       setPeople(people.value);
@@ -31,12 +32,11 @@ async function refresh(force) {
   renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster();
   tipRefresh();
   taskBuilderNoticesRefresh();
-  if (BOT?.tab === 'chat' && !BOT.split) void loadBotChatTasks(BOT.slug);
   botAlertDraw();
   if (BOT) botScreenRefresh(BOT.slug);   // the Screen row and header button follow the computer (online, screen offered)
-  if (BOT && $('#bot-onboard-host') && ($('#bot-onboard') ? '1' : '') !== (frNeedsSetup(S.emps.find(x => x.name === BOT.slug)) ? '1' : '')) frBotRefresh(BOT.slug);   // the mark clears when the bot says it is set up
-  // Poll data without destroying an expanded document or a comment being typed. A question's answer form sits in its
-  // folded card all the time (needs-you.js looseAskRow): only one outside a closed card is being written in.
+  if (BOT && $('#bot-onboard-host') && ($('#bot-onboard') ? '1' : '') !== (frNeedsSetup(botRow(BOT.slug)) ? '1' : '')) frBotRefresh(BOT.slug);   // the mark clears when the bot says it is set up
+  // Poll data without destroying an expanded document or a comment being typed (one inside a closed card is not being
+  // written in).
   const reviewing = $('#main .req[open]') || [...document.querySelectorAll('#main .issue-compose:not([hidden])')].some(form => !form.closest('details:not([open])'));
   if (force || !reviewing) {
     // Only what changed since the list's cursor (not Done's pages); only changed rows redraw. A full read on its way
@@ -63,7 +63,7 @@ function sameData(a, b) {
 }
 // What a list shows of a task: a link's own write time is not on any row, and a computer's heartbeat on a worktree
 // changes only that, once a minute per tree.
-const taskListCopy = t => Array.isArray(t?.links) ? {...t, links: t.links.map(({updated, ...link}) => link)} : t;
+const taskListCopy = t => Array.isArray(t?.links) ? {...t, links: t.links.map(({updated_at: updated, ...link}) => link)} : t;
 function liveTasksApply(events) {
   const state = TASKS_ST;
   // One change to many tasks (a type or tag edit) comes as one `bulk` event: the open list reads in full once (its
@@ -71,41 +71,44 @@ function liveTasksApply(events) {
   const bulk = events.some(d => d.bulk);
   const unchanged = new Set();
   if (bulk && state && isTasksRoute(S.route)) liveThrottle('tasks-bulk', () => { if (TASKS_ST === state) void tasksLoad(state); }, 5000);
-  if (state && isTasksRoute(S.route) && state.tasks) {
-    const known = new Map(state.tasks.map((t, i) => [String(t.id), i]));
+  // The open list, or away from it the list kept for the next visit (S.lastRead.tasks): kept current the same way, so a
+  // return paints what is true now. A bulk change drops the kept list; the next visit reads it.
+  if (bulk && !state) S.lastRead.tasks = null;
+  const list = state && isTasksRoute(S.route) && state.tasks ? state : !state ? S.lastRead.tasks : null;
+  if (list) {
+    const known = new Map(list.tasks.map((t, i) => [String(t.id), i]));
     let changed = false;
     for (const d of events) {
       const i = known.get(String(d.id));
-      if (d.gone) { if (i != null) { state.tasks = state.tasks.filter(t => String(t.id) !== String(d.id)); known.clear(); state.tasks.forEach((t, j) => known.set(String(t.id), j)); changed = true; } continue; }
+      if (d.gone) { if (i != null) { list.tasks = list.tasks.filter(t => String(t.id) !== String(d.id)); known.clear(); list.tasks.forEach((t, j) => known.set(String(t.id), j)); changed = true; } continue; }
       if (!d.task) continue;
-      if ((d.task.lane || 'company') !== 'company') { if (i != null) { state.tasks = state.tasks.filter(t => String(t.id) !== String(d.id)); known.clear(); state.tasks.forEach((t, j) => known.set(String(t.id), j)); changed = true; } continue; }
+      if ((d.task.lane || 'company') !== 'company') { if (i != null) { list.tasks = list.tasks.filter(t => String(t.id) !== String(d.id)); known.clear(); list.tasks.forEach((t, j) => known.set(String(t.id), j)); changed = true; } continue; }
       // A write that shows nothing new on the list: no redraw. The open task follows any change (a worktree's
       // progress shows there), so only an identical copy is left out of that.
-      if (i != null && sameData(taskListCopy(state.tasks[i]), taskListCopy(d.task))) {
-        if (sameData(state.tasks[i], d.task)) unchanged.add(String(d.id));
-        else state.tasks = state.tasks.map((t, j) => j === i ? d.task : t);
+      if (i != null && sameData(taskListCopy(list.tasks[i]), taskListCopy(d.task))) {
+        if (sameData(list.tasks[i], d.task)) unchanged.add(String(d.id));
+        else list.tasks = list.tasks.map((t, j) => j === i ? d.task : t);
         continue;
       }
-      if (i != null) state.tasks = state.tasks.map((t, j) => j === i ? d.task : t);
-      else { state.tasks = [...state.tasks, d.task]; known.set(String(d.id), state.tasks.length - 1); }   // a new task arrives whole
+      if (i != null) list.tasks = list.tasks.map((t, j) => j === i ? d.task : t);
+      else { list.tasks = [...list.tasks, d.task]; known.set(String(d.id), list.tasks.length - 1); }   // a new task arrives whole
       changed = true;
     }
     // Never the whole list again: every open tab gets every change, and a busy team's bots change tasks every few
     // seconds. The 2-minute refresh catches up from the list's cursor.
-    if (changed) { tasksTools(state); tasksRender(state); }
+    if (changed && list === state) { tasksTools(state); tasksRender(state); }
   }
   // These read whole lists, so at most every 15 s and not in a hidden tab (liveThrottle).
   if (BOT && isKeeper(BOT.slug)) {
     const me = 'bot:' + BOT.slug;
-    if (events.some(d => d.bulk || d.gone || d.task?.owner === me || d.task?.requester === me)) liveThrottle('bot-tasks', () => {
+    if (events.some(d => d.bulk || d.gone || d.task?.owner_id === me || d.task?.requester_id === me)) liveThrottle('bot-tasks', () => {
       if (!BOT || BOT.slug !== me.slice(4)) return;
       if (BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
-      if (BOT.tab === 'chat' && !BOT.split) void loadBotChatTasks(BOT.slug);
     });
   }
   if (typeof PERSON_TASKS !== 'undefined' && PERSON_TASKS) {
     const me = 'human:' + PERSON_TASKS;
-    if (events.some(d => d.bulk || d.gone || d.task?.owner === me)) liveThrottle('person-tasks', personTasksReload);
+    if (events.some(d => d.bulk || d.gone || d.task?.owner_id === me)) liveThrottle('person-tasks', personTasksReload);
   }
   if (TASK_CHAT && events.some(d => d.bulk || String(d.id) === String(TASK_CHAT.id) && !unchanged.has(String(d.id)))) taskChatLive(TASK_CHAT);
 }
@@ -126,18 +129,21 @@ function liveWire() {
   });
   // Needs you comes as the ids that changed; the list is mended from them (v2NeedsChanged), then `needs-list` says so.
   liveOn('needs', d => void v2NeedsChanged(d).then(moved => {
+    // A live change reaches the browser notifications too, not only the refresh (hub-v2.js); one memory serves both.
+    if (typeof notifyNewThreadNeeds === 'function') notifyNewThreadNeeds(S.v2.needs || []);
     if (!moved) return;
     liveEmit('needs-list', S.v2.needs || []);
     liveSoon('needs', () => {
       renderTree();
       if (OVERVIEW_PAGE) overviewNeedsDraw();
       if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
-      if (BOT && isKeeper(BOT.slug) && BOT.tab === 'chat' && !BOT.split) void loadBotChatTasks(BOT.slug);
       if (BOT && isKeeper(BOT.slug)) botNeedsChanged(BOT.slug);
     }, 200);
   }).catch(() => {}));
+  // My dashboard reads itself again when what its cards show may have moved (ui/app/dashboard.js dashFollow).
+  for (const topic of ['tasks', 'needs-list', 'threads']) liveOn(topic, dashFollow);
   // Away longer than the server keeps: read everything once.
-  liveOn('reset', () => { if (TASKS_ST) TASKS_ST.since = null; liveSoon('refresh', () => refresh(true), 100); });
+  liveOn('reset', () => { if (TASKS_ST) TASKS_ST.since = null; if (S.lastRead.tasks) S.lastRead.tasks.since = null; liveSoon('refresh', () => refresh(true), 100); });
   liveStart();
 }
 // A tab back from sleep or from a dropped network catches its task list up at once: a delta read from the list's

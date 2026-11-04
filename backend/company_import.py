@@ -8,6 +8,10 @@ the strategy draft (sections marked unconfirmed, bets `proposed`), the market by
 their sizes `proposed`, each size on its evidence), its players as market entities with their sites watched, the
 listening requests as a "Watching" section and the posts filed as market insights for the Librarian's next pass.
 Each goal names the bet it came from. A file without the block imports exactly as before.
+
+A seat with a `team` goes in the group of that name: one group per name, made in file order, or the group that already
+has it. A seat without one goes in its template's group. A built-in is the only bot a file makes, and it stays outside
+groups whatever its team says (backend/groups.py).
 """
 import hashlib
 import json
@@ -119,7 +123,7 @@ def plan(onboarding, c, who, text):
             reports_to, waits = line(bot)
             seats[key] = {"title": M.SeatCreate(title=bot["title"]).title, "template": bot["template"],
                           "description": O.job_description(card or {}, display, bot["reason"]),
-                          "reports_to": reports_to, "waits_on": waits}
+                          "reports_to": reports_to, "waits_on": waits, "team": bot.get("team", "")}
     except ValidationError:
         raise Problem("company_file", "A company name, title or instruction is too long for this Tico setup", 422) from None
     titles = {}
@@ -206,7 +210,7 @@ def strategy_preview(strategy):
     """What the strategy block will add, for the preview."""
     market, listening = strategy["market"], strategy["listening"]
     return {"summary": bool(strategy["summary"]), "vision": bool(strategy["vision"]),
-            "sections": [k for k in S.FIXED_KEYS if strategy["sections"][k]] + (["watching"] if listening["requests"]
+            "sections": [k for k in S.FIXED_KEYS if strategy["sections"].get(k)] + (["watching"] if listening["requests"]
                                                                                  else []),
             "bets": [{"id": b["id"], "statement": b["statement"]} for b in strategy["bets"] if b["statement"]],
             "market": {"root": market["definition"]["root"], "segments": len(market["segments"]),
@@ -252,11 +256,11 @@ def _best_effort(c, name, work, skipped):
 
 
 def _strategy_draft(c, actor, strategy):
-    """Summary, vision and the four sections where the draft's are empty, and the listening requests as the Watching
-    section. Never published."""
+    """Summary, vision and the company file's sections where the draft's are empty (How we sell is not in the file, so
+    it stays as the draft has it), and the listening requests as the Watching section. Never published."""
     row = S.draft(c)
-    sections = {k: SS.unconfirmed(strategy["sections"][k], SOURCE) for k in S.FIXED_KEYS
-                if strategy["sections"][k] and not row["sections"][k].strip()}
+    sections = {k: SS.unconfirmed(strategy["sections"].get(k), SOURCE) for k in S.FIXED_KEYS
+                if strategy["sections"].get(k) and not row["sections"][k].strip()}
     requests = strategy["listening"]["requests"]
     if requests and WATCHING not in row["sections"]["extra"]:
         sections["extra"] = {WATCHING: {"title": WATCHING_TITLE, "body": "\n".join("- " + r for r in requests)}}
@@ -422,7 +426,7 @@ def apply(onboarding, c, who, text, fingerprint):
         clear_failure(c)        # this file is the one already applied, so nothing from setup is left unimported
         return onboarding.view(c, who)
     builtins = set(summary["builtins"])
-    existing = [r[0] for r in c.execute("SELECT slug FROM bots") if r[0] not in builtins]
+    existing = [r[0] for r in c.execute("SELECT id FROM bots") if r[0] not in builtins]
     laid = c.execute("SELECT 1 FROM seats WHERE closed_at IS NULL LIMIT 1").fetchone()
     if record["completed"] or existing or laid:
         raise Problem("company_already_setup", "This company is already set up; import cannot replace its team", 409)
@@ -450,11 +454,16 @@ def apply(onboarding, c, who, text, fingerprint):
         parent = body.selected[slug].reports_to
         if row["reports_to"] != parent:
             onboarding.admin.update_bot(c, who, slug, M.BotDefinitionUpdate(reports_to=parent, expected_revision=row["revision"]))
-    # Every other role on the chart is a Recruiting seat: no bot, repository, computer slot or BotOps task.
-    teams = Groups.seat_teams(c, onboarding.settings, sorted({seat["template"] for seat in seats.values()}))
-    made = lifecycle.lay_out(c, who.actor, {key: {**seat, "team": teams.get(seat["template"], ""),
-                                                  "description_by": "chart"}
-                                            for key, seat in seats.items()})
+    # Every other role on the chart is a Recruiting seat: no bot, repository, computer slot or BotOps task. A seat with a
+    # team goes in the group of that name; one without goes in its template's group, as it always has.
+    teams = Groups.seat_teams(c, onboarding.settings,
+                              sorted({seat["template"] for seat in seats.values() if not seat["team"]}))
+    named = Groups.team_groups(c, [seat["team"] for seat in seats.values() if seat["team"]])
+    chart = {}
+    for key, seat in seats.items():
+        team = named.get(seat["team"]) or teams.get(seat["template"], "")
+        chart[key] = {**seat, "team": team, "description_by": "chart"}
+    made = lifecycle.lay_out(c, who.actor, chart)
     owners = {goal["id"]: goal["owner"] for goal in summary["goals"]}
     import_goals(c, who.actor, [(goal, owners[goal["id"]]) for goal in saved["goals"]], bets)
     record = O.load(c)
@@ -467,7 +476,7 @@ def apply(onboarding, c, who, text, fingerprint):
                                 "deferred": summary["deferred"], "seats": len(made), "people": people,
                                 **({"strategy": strategy} if strategy else {})}
     onboarding._store(c, record, who.actor)
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (PLAN_KEY, encode(saved)))
     clear_failure(c)
     H.event(c, who.actor, "onboarding.company_imported", "", {"fingerprint": fingerprint,
@@ -501,7 +510,7 @@ def add_invitee(onboarding, c, who, key, email):
     for seat_id in entry.get("seats") or []:          # a seat someone has moved since stays where they put it
         seat = c.execute("SELECT reports_to FROM seats WHERE id=? AND closed_at IS NULL", (seat_id,)).fetchone()
         if seat and seat["reports_to"] == home:
-            c.execute("UPDATE seats SET reports_to=?,updated=?,updated_by=? WHERE id=?",
+            c.execute("UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE id=?",
                       ("human:" + row["id"], H.now(), who.actor, seat_id))
             H.event(c, who.actor, "seat.updated", seat_id, {"fields": ["reports_to"]})
     people[at] = {**entry, "person": row["id"]}
@@ -547,7 +556,7 @@ def start(onboarding, store, telemetry=None):
                 telemetry.capture("company_import", exc)
         failure = {"at": H.now(), "reason": reason[:500]}
         with store.transaction() as c:
-            c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+            c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                       (FAILED_KEY, encode(failure)))
             H.event(c, "system", "onboarding.company_import_failed", "", {"reason": failure["reason"]})
         return failure
@@ -578,7 +587,7 @@ def dismiss(onboarding, c, who):
 
 def failure(c):
     """Why the setup's company file wasn't imported on server start, or None (`start`)."""
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (FAILED_KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (FAILED_KEY,)).fetchone()
     try:
         value = json.loads(row[0]) if row else None
     except ValueError:

@@ -10,7 +10,7 @@ with a tier and a suggested angle.
 
     hub task show <id>
 
-Look in `knowledge/leads/` for an existing file and update it rather than starting a second. Read
+Look in `knowledge/leads/` for an existing file and update it rather than starting a second. Check `knowledge/do-not-contact.md` first: a stop is not research. Read
 `knowledge/icp.md` and `knowledge/scoring.md` before you decide anything is interesting.
 
 ## 2. Read the public sources, in order

@@ -48,7 +48,7 @@ def test_a_bot_over_its_limit_takes_no_new_job_a_running_turn_finishes_and_raisi
     assert claim(api, r) is None                                                  # over the limit: nothing new starts
     assert paused(api)["state"] == "paused" and paused(api)["focus"] == "Paused: over its daily limit"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='ops' AND state='queued'").fetchone()[0] == 1   # parked, not lost
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops' AND state='queued'").fetchone()[0] == 1   # parked, not lost
     put(api, "usage/limits/ops", {"daily_usd": 50})
     assert claim(api, r) is not None                                              # raising the limit resumes it
     assert paused(api)["state"] != "paused"
@@ -80,7 +80,9 @@ def test_who_may_set_a_limit(api):
     put(api, "usage/limits/ops", {"daily_usd": 1}, "ben-test", expected=403)        # not his bot
     put(api, "usage/limits/cpo", {"daily_usd": 5}, "ben-test", expected=403)        # above the company default
     put(api, "usage/limits/cpo", {"daily_usd": 2, "monthly_usd": 40}, "ben-test")   # below it; no default for monthly
-    put(api, "usage/limits/cpo", {}, "ben-test")                                    # empty follows the default
+    put(api, "usage/limits/cpo", {}, "ben-test")                                    # empty changes nothing
+    assert get(api, "usage/limits", "ben-test")["bots"]["cpo"]["daily_usd"] == 2
+    put(api, "usage/limits/cpo", {"daily_usd": None}, "ben-test")                   # cleared, it follows the default
     assert get(api, "usage/limits", "ben-test")["bots"]["cpo"]["daily_usd"] == 3
     put(api, "usage/limits/cpo", {"daily_usd": 2}, "cara-test", expected=403)       # she sees it, does not run it
     put(api, "usage/limits/inbox", {"daily_usd": 2}, "cara-test", expected=404)     # Ana's private bot is not even there
@@ -116,13 +118,13 @@ def groups(api, ops_team):
     """Engineering with Product nested under it; ops in `ops_team`."""
     import json
     with api.app.state.store.transaction() as c:
-        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         people["org_groups"] = {"eng": {"name": "Engineering"}, "product": {"name": "Product", "parent": "eng"}}
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(people),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(people),))
         c.execute("UPDATE bot_config SET team=? WHERE bot='ops'", (ops_team,))
 
 
-def test_a_group_or_team_limit_holds_every_bot_it_covers_and_an_hourly_limit_counts_the_hour(api):
+def test_a_group_or_team_limit_holds_every_bot_it_covers_and_an_hourly_limit_set_before_counts_the_hour(api):
     from datetime import datetime
     from backend import usage_limits
     from backend.tests.test_mcp import call
@@ -138,15 +140,18 @@ def test_a_group_or_team_limit_holds_every_bot_it_covers_and_an_hourly_limit_cou
     assert not err and "the Engineering group is over its daily limit" in sent["warning"]
     pools = get(api, "usage/limits")["pools"]
     assert pools["groups"]["eng"]["day_spent"] == 5 and pools["groups"]["eng"]["blocked"] == "daily"
-    put(api, "usage/pools/groups/eng", {})                                        # empty removes it
+    put(api, "usage/pools/groups/eng", {"daily_usd": None})                       # nothing left removes it
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM budget_nodes WHERE team_id='eng'").fetchone()[0] == 0
     put(api, "usage/pools/company", {"weekly_usd": 4})
     assert claim(api, r) is None                                                  # the whole team's week is spent too
     assert paused(api)["focus"] == "Paused: the team is over its weekly limit"
     put(api, "usage/pools/company", {"weekly_usd": 400})
     assert claim(api, r) is not None
-    put(api, "usage/limits/ops", {"hourly_usd": 1})
+    with api.app.state.store.transaction() as c:                                  # an hour limit set before the half hour
+        usage_limits.save_own(c, "ops", {**usage_limits.own(c, "ops"), "hourly_usd": 1}, None)
     with api.app.state.store.read() as c:
-        started = c.execute("SELECT min(started) FROM turns WHERE bot='ops'").fetchone()[0]
+        started = c.execute("SELECT min(created_at) FROM attempts WHERE bot_id='ops'").fetchone()[0]
         at = datetime.fromisoformat(started[:19]).replace(tzinfo=usage_limits.timezone.utc)
         assert usage_limits.blocked(c, "ops", at=at) == "hourly"                  # the run's own hour
         assert usage_limits.blocked(c, "ops", at=at + usage_limits.timedelta(hours=1)) is None
@@ -154,17 +159,43 @@ def test_a_group_or_team_limit_holds_every_bot_it_covers_and_an_hourly_limit_cou
 
 def test_only_the_owner_and_administrators_set_team_and_group_limits(api):
     groups(api, "eng")
-    put(api, "usage/pools/company", {"hourly_usd": 10}, "ben-test")               # Ben is an administrator
-    put(api, "usage/pools/groups/nope", {"hourly_usd": 10}, expected=404)
+    put(api, "usage/pools/company", {"per_30m_usd": 10}, "ben-test")              # Ben is an administrator
+    put(api, "usage/pools/groups/nope", {"per_30m_usd": 10}, expected=404)
     as_member(api, "ben@acme.example")
-    put(api, "usage/pools/company", {"hourly_usd": 100}, "ben-test", expected=403)
-    put(api, "usage/pools/groups/eng", {"hourly_usd": 1}, "ben-test", expected=403)
+    put(api, "usage/pools/company", {"per_30m_usd": 100}, "ben-test", expected=403)
+    put(api, "usage/pools/groups/eng", {"per_30m_usd": 1}, "ben-test", expected=403)
     assert get(api, "usage/limits", "ben-test")["pools"] is None
-    assert get(api, "usage/limits")["pools"]["company"]["hourly_usd"] == 10
+    assert get(api, "usage/limits")["pools"]["company"]["per_30m_usd"] == 10
 
 
 def test_subscription_runs_count_unless_the_team_turns_that_off(api):
     assert get(api, "usage/limits")["default"]["count_subscription"] is True       # never chosen
     assert put(api, "usage/limits", {"daily_usd": 20, "count_subscription": False})["default"]["count_subscription"] is False
     assert get(api, "usage/limits")["default"]["count_subscription"] is False      # a saved choice stays
-    assert put(api, "usage/limits", {"daily_usd": 20})["default"]["count_subscription"] is True
+    assert put(api, "usage/limits", {"daily_usd": 20})["default"]["count_subscription"] is False   # left out keeps it
+    assert put(api, "usage/limits", {"count_subscription": True})["default"]["count_subscription"] is True
+
+
+def test_a_hold_counts_live_runs_once_even_when_claims_repeat(api, monkeypatch, caplog):
+    from backend import usage_limits
+
+    r = fleet(api)
+    finish(api, r, start(api, r), 500_000)
+    put(api, "usage/limits/ops", {"daily_usd": 1})
+    monkeypatch.setattr(usage_limits, "LOGGED", set())
+    caplog.clear()
+    with api.app.state.store.transaction() as c:
+        c.executemany("INSERT INTO attempts(id, bot_id, created_at, state) VALUES(?, 'cpo', ?, ?)",
+                      [("live-lease", "2026-10-15T12:00:00Z", "leased"),
+                       ("live-run", "2026-10-15T12:00:00Z", "running")])
+        mine = usage_limits.own(c, "ops")
+        queries = []
+        c.set_trace_callback(queries.append)
+        try:
+            assert usage_limits.blocked(c, "ops", mine=mine) == "daily"
+            assert usage_limits.blocked(c, "ops", mine=mine) == "daily"
+        finally:
+            c.set_trace_callback(None)
+    logs = [r for r in caplog.records if r.name == "backend.usage_limits"]
+    assert len(logs) == 1 and logs[0].args[-3:] == (5, 1, 2)
+    assert len([q for q in queries if "SELECT count(*) FROM attempts WHERE state" in q]) == 1

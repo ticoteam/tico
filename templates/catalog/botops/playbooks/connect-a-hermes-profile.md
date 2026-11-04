@@ -8,6 +8,10 @@ connection script's commands, `--model openclaw` when you register the bot, and 
 default profile in `~/.openclaw`). No MCP entry is added to OpenClaw; its skill calls Tico through the connection script, and
 that is already set up by `pair`.
 
+Inputs: the profile's name, how often it should check Tico, and whether it is Hermes or OpenClaw: the answers to the questions in step 1.
+
+Done when: the profile is paired and its bot reports a heartbeat, and the human knows how often it checks; if it is not reporting yet, the one fix still missing is in the message to them.
+
 ## 1. Ask three things
 
 - **Which profile?** Its name, as Hermes calls it (`hermes profile list` on their computer; `openclaw --profile <name>`
@@ -53,7 +57,7 @@ The connection script installs itself when the code is approved and posts a hear
 
     hub api GET bots/<slug>
 
-`agent.last_seen` is recent and `online` is true. Then send one small message and tell the human to expect the answer
+`agent.last_seen_at` is recent and `online` is true. Then send one small message and tell the human to expect the answer
 on the profile's own schedule, not at once: `hub message send <slug> "Hello from <human>: reply with one line so we know you read this."`
 In Tico the message waits until the agent reads it. Say what you saw in one line: connected, last heard from a minute ago.
 If it is not online after five minutes, use the troubleshooting below.
@@ -87,3 +91,7 @@ the profile will stop, and keep the default that revokes its credential.
 ## Close
 
 Close any task you filed about this bot once its heartbeat is recent (`hub task close <id> --note "Connected: last heard from a minute ago."`).
+
+## Checks and the Gateway
+For a Hermes or OpenClaw profile's questions: it checks Tico hourly by default (`--sync 15m` for faster checks), and its
+profile's Gateway must be running for scheduled checks.

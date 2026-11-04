@@ -171,34 +171,53 @@ function renderFeedbackAsk() {
 }
 // "Finish setup" tops the nav while the owner has not finished setup, and disappears the
 // moment the server stops asking for one. Everyone else never sees it. On the wizard itself the rest of the app's
-// pages and What's new are not shown until setup is done: a new install has nothing there yet (ui/styles/sidebar.css).
+// pages and What's new are not shown until setup is done: a new install has nothing there yet (html.in-setup,
+// ui/styles/sidebar.css). Until the config is read, both stay as ui/theme.js marked them from this browser's last
+// answer; the in-setup mark waits for the first route() too, since a new install's boot sends it to the wizard after
+// its config is read. route() marks it before Ask's button syncs, so a tap made before /me never opens Ask over the
+// wizard, and a change here syncs Ask (ask-panel.js askAway).
+function setupMark() {
+  if (!CONFIG_READ || !LAST_ROUTE) return;
+  const setup = !!S.config.onboarding_needed && S.route === WELCOME, root = document.documentElement;
+  if (root.classList.contains('in-setup') === setup) return;
+  root.classList.toggle('in-setup', setup);
+  askSync();
+}
 function renderOnboardingNav() {
-  const link = $('#nav-welcome');
-  if (link) link.hidden = !S.config.onboarding_needed;
-  document.body.classList.toggle('in-setup', !!S.config.onboarding_needed && S.route === WELCOME);
+  if (!CONFIG_READ) return;
+  rdNavShow('welcome', !!S.config.onboarding_needed);
+  setupMark();
   renderUsageNotice();
 }
-// "New version" in the sidebar: quiet, only when the server says a newer release exists. Anyone
-// may read the changelog; only the owner may start an update. Dismissal is per person and version.
+// The sidebar's one version row, shared with "Updated to v…" (ui/changelog.js): "Update to v…" while the server
+// offers a newer release, "Updating…" while an update runs, and a click opens the pop-up, which links What's new.
+// Only the owner may start an update, unless Tico runs this server's updates (`managed`, a cloud company:
+// backend/releases.py). Dismissal is per person and version.
 const NV_KEY = 'tico.new-version.dismissed';
 const nvDismissedKey = () => NV_KEY + ':' + (S.me?.id || S.me?.email || '');
 const nvDismissed = v => { try { return localStorage.getItem(nvDismissedKey()) === v; } catch { return false; } };
 let nvBusy = false;
 function nvVersion(v) { return /^\d/.test(v) ? 'v' + v : v; }
+function nvUpdateShown() {
+  const u = S.config.update;
+  // `scheduled`: the release Tico support set for this hosted server (backend/hosted_updates.py), shown until it is on it.
+  return !!(u && u.available && u.latest && !nvDismissed(u.latest)) || !!u?.scheduled || nvBusy;
+}
 function renderNewVersion() {
   const wrap = $('#new-version-wrap');
   if (!wrap) return;
-  const u = S.config.update;
-  // `scheduled`: the release Tico support set for this hosted server (backend/hosted_updates.py), shown until it is on it.
-  const show = !!(u && u.available && u.latest && !nvDismissed(u.latest)) || !!u?.scheduled || nvBusy;
+  const u = S.config.update, show = nvUpdateShown();
   wrap.hidden = !show;
+  window.renderChangelogNotice?.();   // the "Updated to" row keeps out of the way while this one shows
   if (!show) { setNewVersionPop(false); return; }
-  $('#new-version-label').textContent = 'New version ' + nvVersion(u.scheduled || u.latest);
+  $('#new-version-label').textContent = nvBusy ? 'Updating…' : 'Update to ' + nvVersion(u.scheduled || u.latest);
   if (!nvBusy) nvRenderPop();
 }
+// The row follows the start and the end of an update at once: the config poll skips while one runs.
+function nvSetBusy(busy) { nvBusy = busy; renderNewVersion(); }
 function setNewVersionPop(open) {
   const pop = $('#new-version-pop'), btn = $('#new-version');
-  if (!pop) return;
+  if (!pop || pop.hidden !== open) return;       // every click elsewhere lands here: no `hidden` write unless it changes
   pop.hidden = !open;
   btn.setAttribute('aria-expanded', String(open));
 }
@@ -207,8 +226,9 @@ function nvRenderPop() {
   const owner = S.me?.role === 'owner';
   const safeUrl = /^https:\/\//.test(u.url || '') ? u.url : '';
   pop.innerHTML = `${u.available ? `<p><strong>Update available.</strong> ${esc(appName())} ${esc(nvVersion(u.latest))} is out. You are on ${esc(nvVersion(u.current))}.</p>` : ''}${u.scheduled ? `
-    <p class="nv-status" id="nv-scheduled">Tico will update this server to ${esc(nvVersion(u.scheduled))} when idle.</p>` : ''}
-    <div class="nv-actions">${safeUrl ? `<a class="ghost btnlike" id="nv-changelog" href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">View changelog</a>` : ''}${owner ? '<button class="primary" id="nv-update" type="button">Update now</button>' : ''}</div>
+    <p class="nv-status" id="nv-scheduled">Tico will update this server to ${esc(nvVersion(u.scheduled))} when idle.</p>` : ''}${u.managed ? `
+    <p class="nv-status" id="nv-managed">Tico updates this server.</p>` : ''}
+    <div class="nv-actions"><a class="ghost btnlike" id="nv-whatsnew" href="#/changelog">What's new</a>${safeUrl ? `<a class="ghost btnlike" id="nv-changelog" href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">View changelog</a>` : ''}${owner && !u.managed ? '<button class="primary" id="nv-update" type="button">Update now</button>' : ''}</div>
     <div id="nv-out"></div>
     <button class="nv-dismiss" id="nv-dismiss" type="button">Dismiss for this version</button>`;
 }
@@ -221,12 +241,12 @@ function nvOut(html) {
 }
 async function nvStart() {
   const u = S.config.update, from = u.current;
-  nvBusy = true;
+  nvSetBusy(true);
   nvOut('<p class="nv-status" role="status">Updating…</p>');
   try {
     await post('/v2/system/update', {version: u.latest});
   } catch (e) {
-    nvBusy = false;
+    nvSetBusy(false);
     const command = e.body?.error?.command;
     if (e.status === 409 && command) {
       nvOut(`<p class="nv-status">Update from the server:</p><div class="nv-cmd"><code>${esc(command)}</code><button class="ghost" id="nv-copy" type="button" data-command="${esc(command)}">Copy</button></div>`);
@@ -244,16 +264,17 @@ async function nvStart() {
       if (cfg && cfg.version && cfg.version !== from) { nvOut('<p class="nv-status" role="status">Updated, reloading</p>'); setTimeout(() => location.reload(), 600); return; }
       continue;
     }
-    if (st.state === 'rolled_back') { nvBusy = false; nvOut(`<p class="nv-status err">Rolled back — still on ${esc(nvVersion(st.from || from))}</p>`); return; }
-    if (st.state === 'failed') { nvBusy = false; nvOut(`<p class="nv-status err">Update failed${st.message ? ': ' + esc(st.message) : ''}</p>`); return; }
+    if (st.state === 'rolled_back') { nvSetBusy(false); nvOut(`<p class="nv-status err">Rolled back — still on ${esc(nvVersion(st.from || from))}</p>`); return; }
+    if (st.state === 'failed') { nvSetBusy(false); nvOut(`<p class="nv-status err">Update failed${st.message ? ': ' + esc(st.message) : ''}</p>`); return; }
     nvOut('<p class="nv-status" role="status">Updating…</p>');
   }
-  nvBusy = false;
+  nvSetBusy(false);
   nvOut('<p class="nv-status err">The update is taking longer than expected. Check the server.</p>');
 }
 document.addEventListener('click', ev => {
   const t = ev.target;
   if (t.closest('#new-version')) { setNewVersionPop($('#new-version-pop').hidden); return; }
+  if (t.closest('#nv-whatsnew')) { setNewVersionPop(false); return; }   // the link goes to What's new; the pop-up is done
   if (t.closest('#nv-update')) { if (!nvBusy) void nvStart(); return; }
   const copy = t.closest('#nv-copy');
   if (copy) { navigator.clipboard?.writeText(copy.dataset.command).then(() => { copy.textContent = 'Copied'; }, () => {}); return; }
@@ -285,9 +306,14 @@ document.addEventListener('visibilitychange', () => {
 // The main assistant is shown under the environment's assistant name, never its slug.
 // The built-in assistant reads as what it is (assistantName, ui/app/state.js).
 const assistantShownName = () => assistantName();
-// The CEO Bot's old name never shows (state.js `ceoBotName`), wherever the roster is read.
-const namedRoster = rows => rows.map(e => e.name === assistantBot() ? {...e, display_name: assistantShownName()}
-  : e.name === 'goal-manager' && ['', 'Goal Manager'].includes(String(e.display_name || '').trim()) ? {...e, display_name: 'CEO Bot'} : e);
+// The Strategy Bot's old name never shows (state.js `strategyBotName`), wherever the roster is read.
+// Each row carries its bot's `id` (the key every route, API call and comparison uses) and its `slug` (the label people
+// type and read). A row without an id comes from before bots had one, when its name was both.
+const namedRoster = rows => rows.map(row => {
+  const e = row.id ? row : {...row, id: row.name, slug: row.slug || row.name};
+  return e.id === assistantBot() ? {...e, display_name: assistantShownName()}
+    : e.id === 'goal-manager' && strategyDefaultish(String(e.display_name || '').trim()) ? {...e, display_name: strategyDefaultName()} : e;
+});
 // Small compatibility hook for separately loaded UI modules. It exposes only deployment mode,
 // never identity or credentials.
 window.ticoIsCloud = () => !!S.me?.cloud;

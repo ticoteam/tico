@@ -18,7 +18,9 @@ pytestmark = pytest.mark.slow
 def test_same_origin_gateway_preserves_http_streams_socket_paths_and_hides_control(service):
     with httpx.Client(base_url=service.public_origin, timeout=5) as client:
         for path in ("/control/v1/hello", "/_tico/screen/v1/authorize"):
-            assert client.post(path, json={}).status_code == 403
+            refused = client.post(path, json={})
+            # The refusal never reads the body, so the gateway must not leave the connection open for a next request.
+            assert (refused.status_code, refused.headers.get("connection")) == (403, "close")
         assert client.get("/healthz").status_code == 200
         assert client.get("/api/v2/tasks").status_code == 401
         assert client.get("/api/v2/tasks", headers=headers()).status_code == 200
@@ -64,6 +66,18 @@ def test_standard_startup_owns_rust_and_shutdown_releases_the_public_port(tmp_pa
                 return False
             Service.eventually(healthy, seconds=20)
             assert httpx.get(origin + "/control/v1/hello").status_code == 403
+            # On a stop, the public port answers 200 until it refuses connects, never the relay's 502 for a server
+            # that no longer listens: Caddy holds a refused connect, but passes a 502 through to the visitor.
+            process.terminate()
+            gone = time.monotonic() + 1.5
+            while True:
+                try:
+                    answer = httpx.get(origin + "/healthz", timeout=.5).status_code
+                except httpx.ConnectError:
+                    break
+                assert answer == 200, f"the public port answered {answer} while the server stopped"
+                assert time.monotonic() < gone, "the public port still accepts connects"
+                time.sleep(.02)
         finally:
             if process.poll() is None:
                 process.terminate()

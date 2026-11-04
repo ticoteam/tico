@@ -20,14 +20,14 @@ def test_stop_settles_a_login_wait_without_starting_or_retrying(api, outcome):
     post(api, f"attempts/{attempt['id']}/events", {"events": [{"seq": 1, "kind": "status", "payload": {
         "waiting": "Waiting for this computer's ChatGPT login to be free", "login": "ChatGPT", "position": 1}}]},
         machine["token"])
-    post(api, "bots/ops/stop", {"attempt_id": attempt["id"]})
+    post(api, "bots/ops/stop", {"run_id": attempt["id"]})
     assert post(api, f"attempts/{attempt['id']}/renew", {}, machine["token"])["stop"] is True
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": outcome, "last_seq": 1}, machine["token"])
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT state,started,finished FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
-        assert row["state"] == outcome and row["started"] is None and row["finished"]
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "cancelled"
-        assert c.execute("SELECT exit FROM turns WHERE id=?", (attempt["id"],)).fetchone()[0] == outcome
+        row = c.execute("SELECT state,started_at,finished_at FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
+        assert row["state"] == outcome and row["started_at"] is None and row["finished_at"]
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "canceled"
+        assert c.execute("SELECT exit FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] == outcome
         assert H.status(c, "ops")["state"] == "idle"
     # Even after the old lease would have elapsed, no fresh reservation is possible.
     expire(api, attempt["id"])
@@ -39,8 +39,8 @@ def test_unstopped_failed_completion_still_requires_start(api):
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "last_seq": 0},
          machine["token"], expected=409)
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT state,finished FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
-        assert row["state"] == "leased" and row["finished"] is None
+        row = c.execute("SELECT state,finished_at FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
+        assert row["state"] == "leased" and row["finished_at"] is None
         assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "leased"
 
 
@@ -55,7 +55,7 @@ def test_expiry_cancels_stopped_or_finished_work_and_preserves_normal_retry(api,
     if started:
         post(api, f"attempts/{attempt['id']}/started", {"thread_id": "thread"}, machine["token"])
     if cause == "stop":
-        post(api, "bots/ops/stop", {"attempt_id": attempt["id"]})
+        post(api, "bots/ops/stop", {"run_id": attempt["id"]})
     elif cause != "open":
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE tasks SET status=? WHERE id=?", (cause, task["id"]))
@@ -63,7 +63,7 @@ def test_expiry_cancels_stopped_or_finished_work_and_preserves_normal_retry(api,
     # Inspect expiry before claim can hide a mistaken requeue by suppressing the notice.
     with api.app.state.store.transaction() as c:
         api.app.state.execution.expire(c)
-        expected = ("uncertain" if started else "queued") if cause == "open" else "cancelled"
+        expected = ("uncertain" if started else "queued") if cause == "open" else "canceled"
         assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == expected
         assert c.execute("SELECT state FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] == "expired"
     again = claim(api, machine)
@@ -83,7 +83,7 @@ def test_all_keeper_notices_are_obsolete_only_on_finished_tasks(api, status, bod
     machine, task, original = task_attempt(api)
     with api.app.state.store.transaction() as c:
         # Retire the initial reservation so only the particular notice is eligible.
-        c.execute("UPDATE attempts SET state='completed',finished=? WHERE id=?", (H.now(), original["id"]))
+        c.execute("UPDATE attempts SET state='completed',finished_at=? WHERE id=?", (H.now(), original["id"]))
         c.execute("UPDATE jobs SET state='completed' WHERE id=?", (original["job_id"],))
         c.execute("UPDATE tasks SET status=? WHERE id=?", (status, task["id"]))
         notice = H.say(c, H.KEEPER, "bot:ops", body, kind="notice", conversation_id=task["conversation_id"],
@@ -94,7 +94,7 @@ def test_all_keeper_notices_are_obsolete_only_on_finished_tasks(api, status, bod
     assert (attempt is not None) == (status == "open")
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (notice["id"],)).fetchone()[0] == (
-            "leased" if status == "open" else "cancelled")
+            "leased" if status == "open" else "canceled")
         if status != "open":
             assert H.message(c, notice["id"])["delivered_at"]
 
@@ -104,7 +104,7 @@ def test_all_keeper_notices_are_obsolete_only_on_finished_tasks(api, status, bod
 def test_a_persons_own_message_on_a_finished_task_is_never_suppressed(api, status, kind):
     machine, task, original = task_attempt(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='completed',finished=? WHERE id=?", (H.now(), original["id"]))
+        c.execute("UPDATE attempts SET state='completed',finished_at=? WHERE id=?", (H.now(), original["id"]))
         c.execute("UPDATE jobs SET state='completed' WHERE id=?", (original["job_id"],))
         c.execute("UPDATE tasks SET status=? WHERE id=?", (status, task["id"]))
         message = H.say(c, "human:ana", "bot:ops", "Subtask result returned: please explain it", kind=kind,
@@ -113,10 +113,10 @@ def test_a_persons_own_message_on_a_finished_task_is_never_suppressed(api, statu
     assert attempt and attempt["message"]["id"] == message["id"]
 
 
-def test_obsolete_notice_is_cancelled_even_when_idle_claim_finds_no_candidate(api, monkeypatch):
+def test_obsolete_notice_is_canceled_even_when_idle_claim_finds_no_candidate(api, monkeypatch):
     machine, task, original = task_attempt(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='completed',finished=? WHERE id=?", (H.now(), original["id"]))
+        c.execute("UPDATE attempts SET state='completed',finished_at=? WHERE id=?", (H.now(), original["id"]))
         c.execute("UPDATE jobs SET state='completed' WHERE id=?", (original["job_id"],))
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
         notice = H.say(c, H.KEEPER, "bot:ops", "PR #7 checks passed", kind="notice",
@@ -124,7 +124,7 @@ def test_obsolete_notice_is_cancelled_even_when_idle_claim_finds_no_candidate(ap
     monkeypatch.setattr(api.app.state.execution, "candidate", lambda *a, **kw: None)
     assert claim(api, machine) is None
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (notice["id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (notice["id"],)).fetchone()[0] == "canceled"
 
 
 def test_a_notice_a_person_caused_on_a_finished_task_leaves_idle_claims_read_only(api, monkeypatch):
@@ -132,7 +132,7 @@ def test_a_notice_a_person_caused_on_a_finished_task_leaves_idle_claims_read_onl
     and every claim from that computer took the write lock while the bot waited out a usage limit."""
     machine, task, original = task_attempt(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='completed',finished=? WHERE id=?", (H.now(), original["id"]))
+        c.execute("UPDATE attempts SET state='completed',finished_at=? WHERE id=?", (H.now(), original["id"]))
         c.execute("UPDATE jobs SET state='completed' WHERE id=?", (original["job_id"],))
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
         notice = H.say(c, H.KEEPER, "bot:ops", "Task closed by human:ana", kind="notice",
@@ -159,34 +159,34 @@ def test_expiry_judges_folded_inputs_by_their_own_task(api, cause):
                        conversation_id=task["conversation_id"], refs={"task": other["id"]})
     assert follow["id"] in [m["id"] for m in post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"]]
     if cause == "stop":
-        post(api, "bots/ops/stop", {"attempt_id": attempt["id"]})
+        post(api, "bots/ops/stop", {"run_id": attempt["id"]})
     else:
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE tasks SET status=? WHERE id=?", (cause, task["id"]))
     expire(api, attempt["id"])
     with api.app.state.store.transaction() as c:
         api.app.state.execution.expire(c)
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "canceled"
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (follow["id"],)).fetchone()[0] == "uncertain"
 
 
 def test_finished_task_notices_to_a_requester_are_also_obsolete(api):
     machine, task, original = task_attempt(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='completed',finished=? WHERE id=?", (H.now(), original["id"]))
+        c.execute("UPDATE attempts SET state='completed',finished_at=? WHERE id=?", (H.now(), original["id"]))
         c.execute("UPDATE jobs SET state='completed' WHERE id=?", (original["job_id"],))
-        c.execute("UPDATE tasks SET owner='bot:finance',requester='bot:ops',status='done' WHERE id=?", (task["id"],))
+        c.execute("UPDATE tasks SET owner_id='bot:finance',requester_id='bot:ops',status='done' WHERE id=?", (task["id"],))
         notice = H.say(c, H.KEEPER, "bot:ops", "Subtask result returned: Finished", kind="notice",
                        conversation_id=task["conversation_id"], refs={"task": task["id"], "trigger": "other", "wake": "update"})
     assert claim(api, machine) is None
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (notice["id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (notice["id"],)).fetchone()[0] == "canceled"
 
 
 def test_an_explicitly_resumed_job_is_not_an_obsolete_automatic_notice(api):
     machine, task, attempt = task_attempt(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='expired',finished=? WHERE id=?", (H.now(), attempt["id"]))
+        c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (H.now(), attempt["id"]))
         c.execute("UPDATE jobs SET state='queued' WHERE id=?", (attempt["job_id"],))
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
         c.execute("INSERT INTO job_recovery VALUES(?,?,?,?,?,?)", (attempt["job_id"], attempt["id"], "resume",

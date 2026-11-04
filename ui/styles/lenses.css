@@ -16,7 +16,7 @@
 .lens-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:4px 14px;padding:10px 0;border-top:1px solid var(--line)}
 .lens-list>.lens-row:first-child{border-top:0}
 .lens-main{display:grid;gap:2px;min-width:0}
-.lens-name{font-size:var(--t-md);font-weight:600;line-height:1.4;overflow-wrap:anywhere}
+.lens-name{font-size:var(--t-md);font-weight:600;line-height:var(--lh);overflow-wrap:anywhere;letter-spacing:var(--track-snug)}
 .lens-desc{color:var(--g7);font-size:var(--t-base);line-height:var(--lh)}
 .lens-min{font-size:var(--t-sm);white-space:nowrap}
 .lens-pastlist li+li{border-top:1px solid var(--line)}
@@ -29,7 +29,7 @@
 /* A run */
 .lens-head{margin:0 0 14px}
 .lens-back{display:inline-block;margin:0 0 6px;text-decoration:none}
-.lens-title{margin:0 0 4px;font-size:var(--t-lg);line-height:1.3}
+.lens-title{margin:0 0 4px;font-size:var(--t-lg);line-height:var(--lh-tight)}
 .lens-meta{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;margin:0;color:var(--muted);font-size:var(--t-sm)}
 .lens-running{margin:8px 0;font-size:var(--t-md)}
 .lens-note{margin:0;color:var(--g7);font-size:var(--t-base);line-height:var(--lh)}
@@ -67,7 +67,7 @@
 .lens-marks{fill:var(--c);stroke:var(--bg);stroke-width:1}
 .lens-marks .lens-cross{fill:none;stroke:var(--c);stroke-width:1.8}
 .lens-name-t{fill:var(--c);font-size:var(--t-xs)}
-.lens-name-t.us{font-weight:700}
+.lens-name-t.us{font-weight:600}
 .lens-legend{display:flex;flex-wrap:wrap;gap:6px 16px;list-style:none;margin:8px 0 0;padding:0}
 .lens-lg{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm);color:var(--g7);min-width:0}
 .lens-lg span{overflow-wrap:anywhere}
@@ -80,11 +80,11 @@
 /* Two by two: x across, y up; the ends sit on the axes */
 .lens-matrix{display:grid;grid-template-columns:76px minmax(0,1fr);gap:0 10px;margin:0 0 18px}
 .lens-yaxis{display:flex;flex-direction:column;justify-content:space-between;align-items:flex-end;gap:8px;min-width:0;padding:6px 8px 6px 0;border-right:2px solid var(--line);text-align:right}
-.lens-end{color:var(--muted);font-size:var(--t-xs);line-height:1.3;overflow-wrap:anywhere}
-.lens-axis{color:var(--ink);font-size:var(--t-sm);line-height:1.3;overflow-wrap:anywhere}
+.lens-end{color:var(--muted);font-size:var(--t-xs);line-height:var(--lh-tight);overflow-wrap:anywhere}
+.lens-axis{color:var(--ink);font-size:var(--t-sm);line-height:var(--lh-tight);overflow-wrap:anywhere}
 .lens-quads{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
 .lens-quad{min-width:0;min-height:96px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
-.lens-quad b{display:block;font-size:var(--t-base);line-height:1.35;overflow-wrap:anywhere}
+.lens-quad b{display:block;font-size:var(--t-base);line-height:var(--lh);overflow-wrap:anywhere}
 .lens-quad p{margin:4px 0 0;color:var(--g7);font-size:var(--t-sm);line-height:var(--lh);overflow-wrap:anywhere}
 .lens-xaxis{grid-column:2;display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-top:6px;padding-top:6px;border-top:2px solid var(--line)}
 .lens-xaxis .lens-axis{flex:1 1 auto;text-align:center}
@@ -100,8 +100,8 @@
 .lens-cascade{list-style:none;margin:0 0 18px;padding:0;display:grid;gap:8px}
 .lens-step-card{display:grid;grid-template-columns:22px minmax(0,1fr);gap:8px;padding:10px 12px;border:1px solid var(--line);border-left-width:3px;border-radius:8px;background:var(--surface)}
 .lens-step-card.weak{border-color:var(--wait);background:var(--wait-bg)}
-.lens-step-n{color:var(--muted);font-size:var(--t-sm);line-height:1.6}
-.lens-step-top{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;font-size:var(--t-md);line-height:1.4}
+.lens-step-n{color:var(--muted);font-size:var(--t-sm);line-height:var(--lh-read)}
+.lens-step-top{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;font-size:var(--t-md);line-height:var(--lh)}
 .lens-step-card p{margin:3px 0 0;color:var(--g7);font-size:var(--t-base);line-height:var(--lh);overflow-wrap:anywhere}
 
 /* The run panel */
@@ -109,7 +109,7 @@
 .lens-n{font-size:var(--t-sm);margin-left:4px}
 .lens-flow .lens-step{display:flex;flex-direction:column;gap:12px;padding-top:14px}
 .lens-cell{min-width:0}
-.lens-ask{margin:0;font-size:var(--t-md);font-weight:600;line-height:1.45}
+.lens-ask{margin:0;font-size:var(--t-md);font-weight:600;line-height:var(--lh);letter-spacing:var(--track-snug)}
 .lens-hint{margin:-6px 0 0;font-size:var(--t-base);line-height:var(--lh)}
 .lens-step textarea{min-height:140px;font-size:var(--t-md)}
 .lens-rows{list-style:none;margin:0;padding:0;display:grid;gap:6px}
@@ -119,10 +119,10 @@
 .lens-step>.strat-mini{align-self:flex-start}
 .lens-scroll{overflow-x:auto}
 .lens-scores{width:100%;border-collapse:collapse;table-layout:fixed}
-.lens-scores th{text-transform:none;letter-spacing:0;white-space:normal;text-overflow:clip;overflow:hidden}
-.lens-scores thead th{padding:0 2px 6px;color:var(--muted);font-size:var(--t-xs);font-weight:600;line-height:1.25;text-align:center;overflow-wrap:anywhere;vertical-align:bottom}
+.lens-scores th{text-transform:none;letter-spacing:var(--track-normal);white-space:normal;text-overflow:clip;overflow:hidden}
+.lens-scores thead th{padding:0 2px 6px;color:var(--muted);font-size:var(--t-xs);font-weight:600;line-height:var(--lh-tight);text-align:center;overflow-wrap:anywhere;vertical-align:bottom}
 .lens-scores thead th:first-child{width:30%}
-.lens-scores tbody th{padding:3px 6px 3px 0;font-size:var(--t-base);font-weight:500;line-height:1.3;text-align:left;overflow-wrap:anywhere}
+.lens-scores tbody th{padding:3px 6px 3px 0;font-size:var(--t-base);font-weight:500;line-height:var(--lh-tight);text-align:left;overflow-wrap:anywhere}
 .lens-scores td{padding:3px 2px}
 .lens-scores input{height:36px;padding:0;text-align:center;font-size:var(--t-md)}
 .lens-scores input.bad{border-color:var(--fail)}
@@ -130,23 +130,23 @@
 .lens-choices{display:flex;flex-wrap:wrap;gap:8px}
 .lens-pill{position:relative;display:inline-flex;margin:0;cursor:pointer}
 .lens-pill input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
-.lens-pill span{padding:6px 14px;border:1px solid var(--line);border-radius:999px;color:var(--g7);font-size:var(--t-base);line-height:1.3}
+.lens-pill span{padding:6px 14px;border:1px solid var(--line);border-radius:999px;color:var(--g7);font-size:var(--t-base);line-height:var(--lh-tight)}
 .lens-pill:hover span{color:var(--ink);border-color:var(--muted)}
 .lens-pill input:checked+span{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--ink);font-weight:600}
-.lens-pill input:focus-visible+span{outline:2px solid var(--accent);outline-offset:2px}
+.lens-pill input:focus-visible+span{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .lens-on{display:flex;align-items:center;gap:10px;font-size:var(--t-base)}
 .lens-seg{display:inline-flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--surface2)}
-.lens-seg button{height:26px;padding:0 12px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-base)/1 var(--sans);cursor:pointer}
+.lens-seg button{height:26px;padding:0 12px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-base)/var(--lh-none) var(--sans);cursor:pointer}
 .lens-seg button[aria-pressed=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.22)}
-.lens-seg button:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
+.lens-seg button:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .lens-skip{align-self:flex-start;font-size:var(--t-base)}
 
 @media (max-width:760px){
   .lens-row{grid-template-columns:minmax(0,1fr) auto}
   .lens-min{grid-column:1;grid-row:2}
-  .lens-row .ghost{grid-column:2;grid-row:1/3;min-height:36px}
+  .lens-row .ghost{grid-column:2;grid-row:1/3;min-height:40px}
   .lens-change{flex-wrap:wrap}
-  .lens-change .strat-mini{min-height:36px}
+  .lens-change .strat-mini{min-height:40px}
   .lens-matrix{grid-template-columns:62px minmax(0,1fr);gap:0 8px}
   .lens-quads{gap:5px}
   .lens-quad{padding:8px;min-height:84px}
@@ -155,8 +155,8 @@
   .lens-step textarea,.lens-rows input,.lens-scores input{font-size:16px}
   .lens-rows input,.lens-x,.lens-scores input{height:44px}
   .lens-x{width:44px}
-  .lens-seg button{height:36px}
-  .lens-skip{min-height:36px}
+  .lens-seg button{height:40px}
+  .lens-skip{min-height:40px}
 }
 @media (max-width:560px){
   .lens-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}

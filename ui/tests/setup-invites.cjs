@@ -27,8 +27,8 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
     let record = {names: {company_name: 'Initech'}, completed: '2026-10-20T10:00:00Z', needed: false, bots: [],
       company_import_failed: null, company_import: {seats: 1, deferred: [], people: setupPeople}};
     const access = () => ({
-      owner: {email: 'ana@acme.example', revision: 1, person: 'ana'},
-      people: people.map(p => ({...p, left: false, owner: p.id === 'ana', role: p.id === 'ana' ? 'owner' : 'member',
+      owner_id: {email: 'ana@acme.example', revision: 1, person: 'ana'},
+      people: people.map(p => ({...p, left: false, owner_id: p.id === 'ana', role: p.id === 'ana' ? 'owner' : 'member',
         bot_admin: false, create_bots: true, add_people: true, add_people_default: true, sign_in: true, can_sign_in: true})),
       allowed: people.map(p => p.email), allowed_domains: [], admins: [], bot_admins: [], member_bot_limit: 25, rules: {},
       company_domains: ['acme.example'], company_domain_source: 'owner', revision: 3, proxy: 'oidc', home_domain: 'acme.example',

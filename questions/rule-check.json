@@ -1,0 +1,20 @@
+{
+  "id": "rule-check",
+  "version": 1,
+  "owner": "botops",
+  "summary": "One bot output (a message, comment, task change, completion reply, note, automation write or mail) against the org rules that apply to it: does it break each one. The server asks it before the write (`backend/org_rule_check.py`), one call per output, one noul per matched rule built from `rule`; at or over `broken` the rule's If broken applies (Block, Escalate or Warn). Any failure lets the output through, marked unchecked; an output too large to send is held.",
+  "state": ["rules", "operation", "output", "from", "to", "context"],
+  "questions": {
+    "rule": {
+      "type": "noul",
+      "instructions": {
+        "question": "The output in `output` breaks this rule: {rule}",
+        "focus": "`output` is what the bot named in `from` is about to send to `to` as `operation`. Judge the whole output, however short: one sentence can break a rule. Read the rule literally, as the team that wrote it meant it. A rule about a topic is broken when the output says, shares or does the thing the rule forbids, even in other words, a paraphrase, a hint or a code word.",
+        "not_for": "Not broken: an output that only mentions the rule's topic without doing what it forbids, quotes or discusses the rule itself, refuses or reports a request to break it, or is about something else. A rule that applies only with certain recipients was already matched to `to` before this question was asked."
+      }
+    }
+  },
+  "thresholds": {
+    "broken": 0.5
+  }
+}

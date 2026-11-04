@@ -43,7 +43,7 @@ function taskBlockedStrip(it) {
   const t = it.task;
   // A Blocked hold that is a bot's prerequisite is the bot's wait line, not a second line above it.
   const bot = taskBotWait(t);
-  const hold = t.blocked_since && !bot ? `<div class="bcard-blocked">${esc(taskBlockedLine(t))}</div>` : '';
+  const hold = taskBlockedHold(t) && !bot ? `<div class="bcard-blocked">${esc(taskBlockedLine(t))}</div>` : '';
   const open = taskOpenBlockers(t); if (!open.length) return hold;
   const first = open[0], name = first.title ? clipLine(first.title, 48) : '#' + (first.number ?? first.id);
   const all = open.map(r => r.title || '#' + (r.number ?? r.id)).join(', ');
@@ -302,11 +302,14 @@ function taskBoardDrop(state, d) {
     ...(moving && step.status === 'done' && t.status !== 'done' ? {status: 'done'} : {})};
   const fields = {...(moving ? {step_id: stepId, step, status: t.status === 'waiting' && !BOARD_HIDDEN.has(step.status) ? 'waiting' : step.status} : {}),
     ...(rank != null ? {step_rank: rank} : {})};
-  if (moving && step.name === 'Blocked') {
+  if (moving && step.status === 'waiting') {
     void taskBlockedReason(t, d.card.querySelector('[data-open-task]')).then(reason => {
       if (reason !== null && TASKS_ST === state) taskBoardSave(state, t, {...body, note: reason}, fields, 'Not moved');
     });
-  } else taskBoardSave(state, t, body, fields, 'Not moved');
+  } else {
+    taskBoardSave(state, t, body, fields, 'Not moved');
+    if (body.status === 'done') taskDoneMotion(d.key);   // the card, now in its done column, draws its check
+  }
   return true;
 }
 // A card's change (a move, a new owner) drawn at once, before the server answers; a refusal puts it back and says why.
@@ -342,11 +345,11 @@ function taskBoardOwnerMenu(state, button) {
   const opts = new DOMParser().parseFromString(`<select>${taskOwnerOptions('')}</select>`, 'text/html').querySelectorAll('option[value]:not([value=""])');
   propMenu($('#task-card-pops'), button, {label: 'Owner', find: 'Find a person or bot', items: [...opts].map(o => {
     const actor = o.value.includes(':') ? o.value : 'bot:' + o.value;
-    return {value: o.value, text: o.textContent, html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent)}</span>`, checked: t.owner === actor, actor};
+    return {value: o.value, text: o.textContent, html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent)}</span>`, checked: t.owner_id === actor, actor};
   }), onPick: it => {
     const cur = tasksById(state).get(String(t.id));
-    if (!cur || it.actor === cur.owner) return;
-    taskBoardSave(state, cur, {version: cur.version, owner: it.value}, {owner: it.actor}, 'Not changed');
+    if (!cur || it.actor === cur.owner_id) return;
+    taskBoardSave(state, cur, {version: cur.version, owner: it.actor}, {owner_id: it.actor}, 'Not changed');
   }});
 }
 // A card as the board draws it: with its move while the server has not said otherwise (a copy no newer than the one
@@ -358,5 +361,5 @@ function taskBoardLive(state, item) {
     if (!move.pending) state.boardMoves.delete(id);
     return item;
   }
-  return {...item, task: {...item.task, ...move.fields}, ...(move.fields.owner ? {actor: move.fields.owner} : {})};
+  return {...item, task: {...item.task, ...move.fields}, ...(move.fields.owner_id ? {actor: move.fields.owner_id} : {})};
 }
