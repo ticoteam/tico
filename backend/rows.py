@@ -91,7 +91,7 @@ class TaskHoldRow(TypedDict):
 
 
 class QuarantineHoldRow(TypedDict):
-    """One bot's refusal-count hold on a task or chat (migration 0082)."""
+    """One bot's refusal-count hold on a task or chat (migration 0091)."""
     id: int
     bot_id: str
     task_id: str | None
