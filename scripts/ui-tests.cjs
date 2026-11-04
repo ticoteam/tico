@@ -221,8 +221,8 @@ function stoppedReport({pending, calls, stopped}) {
 // Named groups of scripts: a group is every ui/tests script whose name starts with its prefix.
 const GROUPS = {e2e: 'e2e-'};
 
-// Frame budgets need spare CPU throughout the measurement, after the other browsers have finished.
-const ALONE = ['dot-perf.cjs'];
+// Frame and time budgets need spare CPU throughout the measurement, after the other browsers have finished.
+const ALONE = ['dot-perf.cjs', 'strategy-budget.cjs'];
 async function runScripts(files, jobs, run) {
   const queue = files.filter(file => !ALONE.includes(file));
   await Promise.all(Array.from({length: Math.min(jobs, queue.length)}, async () => {
