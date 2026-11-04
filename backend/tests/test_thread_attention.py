@@ -28,6 +28,51 @@ def ana_viewer(api):
     return threads.viewer(api.app.state.auth, Identity("human:ana", "owner", "ana@acme.example"))
 
 
+def test_attention_variants_share_one_snapshot_but_keep_their_filters_and_own_copies(api):
+    from backend import thread_attention as TA
+    tid = members_thread(api)
+    mention = say(api, tid, "@ana please check.")
+    ask = say(api, tid, "Which lease?", kind="ask", to_actor="human:ana")
+    paused = members_thread(api, title="Paused")
+    with api.app.state.store.transaction() as c:
+        now = H.now()
+        c.execute("INSERT INTO message_deliveries(id,message_id,recipient,thread_id,root_id,mode,reason,cause,"
+                  "state,created_at,updated_at) VALUES(?,?,?,?,?,'queue','mention','bot','capped',?,?)",
+                  (H.new_id(), H.new_id(), "bot:finance", paused, paused, now, now))
+    seen = []
+    with api.app.state.store.read_transaction() as c:
+        c.set_trace_callback(seen.append)
+        try:
+            first = TA.items(c, None, ana_viewer(api), skip=[ask["id"]])
+            original = next(it["title"] for it in first if it["id"] == mention["id"])
+            next(it for it in first if it["id"] == mention["id"])["title"] = "Changed by a caller"
+            second = TA.items(c, api.app.state.auth, ana_viewer(api), with_capped=False)
+            third = TA.items(c, None, ana_viewer(api), skip=[mention["id"]])
+        finally:
+            c.set_trace_callback(None)
+    assert {it["id"] for it in first} == {mention["id"], paused}
+    assert {it["id"] for it in second} == {mention["id"], ask["id"]}
+    assert next(it["title"] for it in second if it["id"] == mention["id"]) == original
+    assert {it["id"] for it in third} == {ask["id"], paused}
+    addressed = [q for q in seen if "SELECT m.id, m.conversation_id, m.sender_id" in q]
+    assert len(addressed) == 1, addressed
+    # A returned connection must not lend its attention list to the next request.
+    with api.app.state.store.read_transaction() as c:
+        assert {it["id"] for it in TA.items(c, None, ana_viewer(api))} == {mention["id"], ask["id"], paused}
+
+
+def test_attention_rechecks_after_a_write_and_for_another_identity_in_the_same_snapshot(api):
+    from backend import thread_attention as TA
+    tid = members_thread(api)
+    mention = say(api, tid, "@ana please check.")
+    with api.app.state.store.transaction() as c:
+        assert [it["id"] for it in TA.items(c, None, ana_viewer(api))] == [mention["id"]]
+        ben = Identity("human:ben", "human", "ben@acme.example")
+        assert TA.items(c, api.app.state.auth, ben) == []
+        threads.post(c, "human:ana", tid, "Checked.")
+        assert TA.items(c, None, ana_viewer(api)) == []
+
+
 def test_a_message_to_the_person_is_listed_until_they_reply(api):
     tid = members_thread(api)
     say(api, tid, "Can you look at the lease?", to_actor="human:ana")
