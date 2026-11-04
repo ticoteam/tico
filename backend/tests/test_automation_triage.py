@@ -177,8 +177,9 @@ def test_new_default_and_existing_explicit_modes_survive_save(api):
         made = post(api, "automations", flow(mode))
         changed = patch(api, made["id"], {"name": "Renamed"})
         assert changed["steps"][0]["choose"]["mode"] == mode
-    bad = flow(model="not-a-model")
-    post(api, "automations", bad, expected=422)
+    from backend import gateway_tiers
+    for model in ("not-a-model", gateway_tiers.default_model()):
+        post(api, "automations", flow(model=model), expected=422)
 
 
 def test_hub_model_override_one_call_no_tasks_and_cached_result(api, monkeypatch):

@@ -15,7 +15,7 @@ def model_transport(model):
     """Only catalog models whose provider has a direct server API can be selected."""
     from .judge import transport
     row = providers.MODEL_BY_ID.get(model) if isinstance(model, str) else None
-    return transport(row.get("provider")) if row else None
+    return transport(row.get("provider")) if row and row.get("provider") != "tico" else None
 
 
 def writer(model):
