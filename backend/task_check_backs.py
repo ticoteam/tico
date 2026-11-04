@@ -530,7 +530,7 @@ def stale(c, message, bot):
     refs = message.get("refs") or {}
     if message.get("sender_id") != H.KEEPER or refs.get("wake") != "check_back":
         return False
-    row = H.task(c, refs.get("task") or "")
+    row = H.task(c, H._task_ref(refs.get("task")) or "")
     return (not row or not enabled(c) or row.get("check_back_at") != refs.get("check_back_at")
             or actor_for(row) != "bot:" + bot or bool(human_snooze(row, H.now())))
 

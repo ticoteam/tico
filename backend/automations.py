@@ -1139,7 +1139,7 @@ def turn_source(c):
                     (refs.get("automation_run"),)).fetchone() if refs.get("automation_run") else None
     if not run:
         return None
-    out = {"turn": {"attempt": attempt, "bot": found["bot_id"], "task": refs.get("task")},
+    out = {"turn": {"attempt": attempt, "bot": found["bot_id"], "task": H._task_ref(refs.get("task"))},
            "automation": run["automation_id"], "run": refs["automation_run"]}
     try:
         heard = (json.loads(run["saved_state"] or "{}").get("payload") or {}).get("listening")
@@ -1286,7 +1286,7 @@ def turn_done(c, attempt, outcome, text):
     if not run:
         return
     # A turn the run started is its task's; a notice (wake_bot, note) is its message.
-    ref = refs.get("task") if refs.get("automation_step") else msg["id"]
+    ref = H._task_ref(refs.get("task")) if refs.get("automation_step") else msg["id"]
     priced = c.execute("SELECT est_cost_usd FROM turns WHERE id=?", (attempt["id"],)).fetchone()
     cost, ok = float((priced and priced[0]) or 0), outcome == "completed"
     if run["status"] == "running" or (run["status"] == "skipped" and run["claimed_at"]):
