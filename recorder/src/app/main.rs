@@ -61,20 +61,36 @@ fn view(
 
 // Network writes run outside the Recorder mutex, so typing and redraws keep working while a save waits.
 #[tauri::command(async)]
-fn shared_item(state: State<'_, Shared>, id: Option<String>, action: Option<String>, body: Option<Value>) -> Result<Value, String> {
+fn shared_item(
+    state: State<'_, Shared>,
+    id: Option<String>,
+    action: Option<String>,
+    body: Option<Value>,
+) -> Result<Value, String> {
     let (config, destination, meeting) = {
         let app = lock(&state);
         let (destination, meeting) = app.saved_target().ok_or("Save the meeting first")?;
         (app.config.clone(), destination, meeting)
     };
-    let tico = tico_recorder_native::network::Tico::saved(&config, &destination).map_err(|e| e.to_string())?;
+    let tico = tico_recorder_native::network::Tico::saved(&config, &destination)
+        .map_err(|e| e.to_string())?;
     let mut path = format!("/api/v2/meetings/{meeting}/items");
-    if let Some(id) = &id { path.push_str(&format!("/{id}")); }
-    if action.as_deref() == Some("send") { path.push_str("/push"); }
-    let reply = tico.call(&path, body.as_ref(), &uuid::Uuid::new_v4().to_string()).map_err(|e| e.to_string())?;
-    let data = tico.call(&format!("/api/v2/meetings/{meeting}/items"), None, "").map_err(|e| e.to_string())?;
+    if let Some(id) = &id {
+        path.push_str(&format!("/{id}"));
+    }
+    if action.as_deref() == Some("send") {
+        path.push_str("/push");
+    }
+    let reply = tico
+        .call(&path, body.as_ref(), &uuid::Uuid::new_v4().to_string())
+        .map_err(|e| e.to_string())?;
+    let data = tico
+        .call(&format!("/api/v2/meetings/{meeting}/items"), None, "")
+        .map_err(|e| e.to_string())?;
     let mut app = lock(&state);
-    if app.saved_target() == Some((destination, meeting)) { app.shared_items_reply(data); }
+    if app.saved_target() == Some((destination, meeting)) {
+        app.shared_items_reply(data);
+    }
     Ok(reply)
 }
 

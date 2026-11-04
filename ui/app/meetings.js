@@ -819,7 +819,7 @@ const meetItemLine = it => {
 // Where a pushed item ended up: the task it became, or a link.
 const meetResultLink = it => {
   const ref = it.result_ref || '';
-  if (!ref) return '<span class="muted">pushed</span>';
+  if (!ref) return '<span class="muted">Sent</span>';
   if (/^https?:\/\//.test(ref)) return `<a href="${esc(ref)}" target="_blank" rel="noopener">the link</a>`;
   return `<a href="#/task/${encodeURIComponent(ref)}">the task</a>`;   // a hub task id opens it in full
 };
@@ -858,8 +858,8 @@ function meetItemHTML(state, it, canPush) {
         <div class="row"><button class="primary" type="submit">Save</button>
           <button class="ghost" type="button" data-cancel>Cancel</button></div></form></div>`;
   }
-  const pill = it.status === 'pushed' ? `<span class="pill ok">pushed</span> <span class="muted">→ ${meetResultLink(it)}</span>`
-    : it.status === 'dismissed' ? '<span class="pill">deleted</span>'
+  const pill = it.status === 'pushed' ? `<span class="pill ok">Sent</span> <span class="muted">→ ${meetResultLink(it)}</span>`
+    : it.status === 'dismissed' ? '<span class="pill">Dismissed</span>'
     : '<span class="pill">proposed</span>';
   const line = meetItemLine(it);
   const buttons = it.status === 'proposed' ? [
@@ -887,7 +887,6 @@ function meetItemsRender(state, rec) {
     const proposed = (data.sections?.[key] || []).filter(it => it.status === 'proposed').length;
     return `<section class="meet-sec" data-sec="${key}"><header><h4>${esc(title)}</h4>
         ${proposed ? `<span class="count">${proposed}</span>` : ''}
-        ${canPush && proposed > 1 ? `<button class="linkish" type="button" data-all="${key}">Push all</button>` : ''}
         <button class="linkish" type="button" data-add="${key}">Add</button></header>
       ${rows.map(it => meetItemHTML(state, it, canPush)).join('') || '<div class="meet-empty">Nothing yet.</div>'}
       ${state.itemAdd === key ? `<div class="meet-item"><form data-new="${key}">
@@ -1101,6 +1100,7 @@ function meetPendingRender(state, rec, data) {
         ${item.section === 'task' ? '<div class="row"><label>Owner<select data-pending-field="owner" aria-label="Owner"></select></label><label>Due<input data-pending-field="due" type="date" aria-label="Due"></label></div><label>Details<textarea data-pending-field="body" aria-label="Details"></textarea></label>'
           : MEET_SECTIONS.find(s => s.key === item.section).fields.map(([key]) => `<label>${esc(key)}<input data-pending-field="${key}" aria-label="${key}"></label>`).join('')}
         <div class="row"><span class="muted" data-edited></span><span data-save-error hidden>Not saved · <button type="button" class="linkish" data-retry>Retry</button></span></div>
+        <div data-pending-duplicate hidden></div>
         <div class="row"><button type="button" class="ghost" data-dismiss>Dismiss</button><button type="button" class="primary" data-send>Send</button></div>`;
       list.append(node);
       for (const field of node.querySelectorAll('[data-pending-field]')) {
@@ -1116,7 +1116,7 @@ function meetPendingRender(state, rec, data) {
         field.onblur = () => { if (!draft.error) meetPendingSave(state, rec.id, item.id); };
       }
       node.querySelector('[data-retry]').onclick = () => meetPendingSave(state, rec.id, item.id);
-      const finish = async send => {
+      const finish = async (send, force = false) => {
         if (draft.sending) return;
         draft.sending = true; clearTimeout(draft.timer);
         node.querySelectorAll('button').forEach(button => button.disabled = true);
@@ -1130,10 +1130,19 @@ function meetPendingRender(state, rec, data) {
             else final.detail[key] = key === 'due' && field.value ? new Date(field.value + 'T12:00:00').toISOString() : field.value;
           }
           await post(`/meetings/${encodeURIComponent(rec.id)}/items/${encodeURIComponent(item.id)}${send ? '/push' : ''}`,
-                     send ? final : {status: 'dismissed'});
+                     send ? {...final, force} : {status: 'dismissed'});
           draft.patch = {}; draft.error = '';
           await meetItemsLoad(state, rec.id);
-        } catch (e) { draft.error = e.message; toast(e.message, true); }
+        } catch (e) {
+          draft.error = e.message;
+          const duplicate = e.body?.error?.duplicate;
+          if (duplicate) {
+            const box = node.querySelector('[data-pending-duplicate]');
+            box.hidden = false;
+            box.innerHTML = `<a href="#/task/${encodeURIComponent(duplicate.id)}">${esc(duplicate.name)}</a> <button type="button" class="linkish">Send anyway</button>`;
+            box.querySelector('button').onclick = () => finish(true, true);
+          } else toast(e.message, true);
+        }
         finally { draft.sending = false; node.querySelectorAll('button').forEach(button => button.disabled = false); }
         node.querySelector('[data-save-error]').hidden = !draft.error;
       };

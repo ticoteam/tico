@@ -740,9 +740,15 @@ impl Recorder {
             .unwrap_or_default()
     }
     pub fn saved_target(&self) -> Option<(String, String)> {
-        self.current.as_ref()?.deliveries.iter()
-            .find(|entry| entry.destination_id == self.router() && entry.status == "sent"
-                  && !entry.meeting_id.is_empty())
+        self.current
+            .as_ref()?
+            .deliveries
+            .iter()
+            .find(|entry| {
+                entry.destination_id == self.router()
+                    && entry.status == "sent"
+                    && !entry.meeting_id.is_empty()
+            })
             .map(|entry| (entry.destination_id.clone(), entry.meeting_id.clone()))
     }
     pub fn shared_items_reply(&mut self, data: Value) {
@@ -756,21 +762,33 @@ impl Recorder {
             let session = self.presence_session.clone();
             std::thread::spawn(move || {
                 if let Ok(tico) = Tico::saved(&config, &destination) {
-                    let _ = tico.call("/api/v2/presence", Some(&json!({"place":format!("meeting:{id}"),
-                        "session_id":session,"gone":true})), &uuid::Uuid::new_v4().to_string());
+                    let _ = tico.call(
+                        "/api/v2/presence",
+                        Some(&json!({"place":format!("meeting:{id}"),
+                        "session_id":session,"gone":true})),
+                        &uuid::Uuid::new_v4().to_string(),
+                    );
                 }
             });
         }
     }
     pub fn set_visible(&mut self, visible: bool) {
         self.visible = visible;
-        if !visible { self.leave_saved(); }
+        if !visible {
+            self.leave_saved();
+        }
     }
     fn sync_saved(&mut self) {
-        if !self.visible || self.saved_items["gone"] == true || self.background.contains("items") || self.items_at.elapsed() < Duration::from_secs(1) {
+        if !self.visible
+            || self.saved_items["gone"] == true
+            || self.background.contains("items")
+            || self.items_at.elapsed() < Duration::from_secs(1)
+        {
             return;
         }
-        let Some((destination, remote)) = self.saved_target() else { return; };
+        let Some((destination, remote)) = self.saved_target() else {
+            return;
+        };
         self.presence_target = Some((destination.clone(), remote.clone()));
         self.items_at = Instant::now();
         let session = self.presence_session.clone();
@@ -1122,7 +1140,8 @@ impl Recorder {
                             self.calendar = value;
                         }
                         "items" => {
-                            self.items_cursor = value["cursor"].as_u64().unwrap_or(self.items_cursor);
+                            self.items_cursor =
+                                value["cursor"].as_u64().unwrap_or(self.items_cursor);
                             if value["generation"].as_u64() == Some(self.items_generation) {
                                 self.saved_items = value;
                             }
@@ -2657,11 +2676,18 @@ impl Recorder {
         let mut owners = self.roster.clone();
         owners.sort_by_key(|row| !row.0.starts_with("bot:"));
         if !self.context.live_id.is_empty() && self.live["visibility"] == "private" {
-            owners.retain(|row| self.live["owner_actor"] == row.0
-                || self.live["access"].as_array().into_iter().flatten().any(|a| a["actor"] == row.0)
-                || self.live["bots"].as_array().into_iter().flatten().any(|b|
-                    row.0 == format!("bot:{}", b["bot"].as_str().unwrap_or_default())
-                    && b["joined_by"] == self.live["owner_actor"]));
+            owners.retain(|row| {
+                self.live["owner_actor"] == row.0
+                    || self.live["access"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|a| a["actor"] == row.0)
+                    || self.live["bots"].as_array().into_iter().flatten().any(|b| {
+                        row.0 == format!("bot:{}", b["bot"].as_str().unwrap_or_default())
+                            && b["joined_by"] == self.live["owner_actor"]
+                    })
+            });
         }
         let send_blocked = tico_recorder_native::live::item_send_blocked(&self.context);
         let can_send = mode == "ready" && self.sending.is_none() && send_blocked.is_none();

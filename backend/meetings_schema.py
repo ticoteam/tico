@@ -274,12 +274,3 @@ CREATE TABLE IF NOT EXISTS live_meeting_access (
 LIVE_MEETINGS_CLIENT_SCHEMA = """
 ALTER TABLE live_meetings ADD COLUMN client TEXT CHECK (client IS NULL OR client = 'tico-recorder');
 """
-
-# Each open window has its own expiring presence; leaving one never removes another.
-PRESENCES_SCHEMA = """
-CREATE TABLE IF NOT EXISTS presences (
- id TEXT PRIMARY KEY, place TEXT NOT NULL, actor TEXT NOT NULL, session_id TEXT NOT NULL,
- seen_at TEXT NOT NULL, UNIQUE(place, session_id)
-);
-CREATE INDEX IF NOT EXISTS presences_place_seen ON presences(place, seen_at);
-"""

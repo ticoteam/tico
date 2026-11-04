@@ -841,17 +841,25 @@ impl Tico {
             body["live_meeting_id"] = json!(context.live_id);
         }
         let reply = if let Some(entry) = filed.filter(|entry| entry.status == "sent") {
-            let server_item = entry.receipt["items"][item_id]["id"].as_str()
+            let server_item = entry.receipt["items"][item_id]["id"]
+                .as_str()
                 .context("This item is not saved on the meeting")?;
-            let result = self.call(&format!("/api/v2/meetings/{}/items/{server_item}/push", entry.meeting_id),
+            let result = self.call(
+                &format!(
+                    "/api/v2/meetings/{}/items/{server_item}/push",
+                    entry.meeting_id
+                ),
                 Some(&json!({"text":item.title,"detail":{"owner":owner}})),
-                &format!("recorder:{id}:push:{server_item}:{}", hash(&body)))?;
+                &format!("recorder:{id}:push:{server_item}:{}", hash(&body)),
+            )?;
             json!({"task":{"id":result["item"]["result_ref"]}})
-        } else { self.call(
-            "/api/v2/tasks",
-            Some(&body),
-            &format!("recorder:{id}:task:{item_id}:{}", hash(&body)),
-        )? };
+        } else {
+            self.call(
+                "/api/v2/tasks",
+                Some(&body),
+                &format!("recorder:{id}:task:{item_id}:{}", hash(&body)),
+            )?
+        };
         let task = reply["task"]["id"]
             .as_str()
             .context("Tico did not return the new task")?

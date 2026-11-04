@@ -1,5 +1,12 @@
 """Session presence and the live source of a task sent before Save."""
-from backend.meetings_schema import PRESENCES_SCHEMA
+# Each open window has its own expiring presence; leaving one never removes another.
+PRESENCES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS presences (
+ id TEXT PRIMARY KEY, place TEXT NOT NULL, actor TEXT NOT NULL, session_id TEXT NOT NULL,
+ seen_at TEXT NOT NULL, UNIQUE(place, session_id)
+);
+CREATE INDEX IF NOT EXISTS presences_place_seen ON presences(place, seen_at);
+"""
 
 
 def up(conn):
