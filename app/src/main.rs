@@ -111,6 +111,18 @@ fn autostart_plugin(identifier: String) -> tauri::plugin::TauriPlugin<tauri::Wry
     builder.build()
 }
 
+fn opener_plugin<R: tauri::Runtime>() -> impl tauri::plugin::Plugin<R> {
+    // Native navigation/new-window handlers enforce which page may open a link and keep hub files signed in.
+    // The plugin's click interceptor cancels anchors before those handlers and calls IPC org pages cannot use.
+    tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build::<R>()
+}
+
+#[test]
+fn the_opener_leaves_anchor_clicks_to_the_native_window_policy() {
+    use tauri::plugin::Plugin;
+    assert!(opener_plugin::<tauri::test::MockRuntime>().initialization_script().is_none());
+}
+
 fn main() {
     applog::init();
     // Read before the builder: the autostart plugin needs the identifier, which only the context carries.
@@ -118,7 +130,7 @@ fn main() {
     let identifier = context.config().identifier.clone();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(opener_plugin())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build());
