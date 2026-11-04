@@ -24,6 +24,14 @@ from connectors.mail import Failure, auth, oauth
 from connectors.mail import __main__ as cli
 from runner_support import credential_socket
 
+# Imported before any test runs: unittest's patch.dict(sys.modules) drops modules first imported during a test, and
+# importing cryptography's native module a second time in one process breaks its key serialization.
+try:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+except ImportError:             # the mail suite runs without it: the key file then holds a placeholder, read by path only
+    serialization = rsa = None
+
 GMAIL = auth.SERVICE_SCOPES["gmail"]
 CALENDAR = auth.SERVICE_SCOPES["calendar"]
 GRANTED = oauth.SERVICE_SCOPES["gmail"] + oauth.SERVICE_SCOPES["calendar"]
@@ -126,11 +134,11 @@ class Base(unittest.TestCase):
         self.addCleanup(stub.stop)
 
     def write_key(self):
-        """A key file in the shape Google gives, with a generated RSA key; it is read by path, never sent anywhere."""
-        from cryptography.hazmat.primitives import serialization          # noqa: PLC0415
-        from cryptography.hazmat.primitives.asymmetric import rsa         # noqa: PLC0415
-        pem = rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
-            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode()
+        """A key file in the shape Google gives, with a throwaway generated RSA key; it is read by path, never sent anywhere."""
+        pem = "-----BEGIN PRIVATE KEY-----\ntest-only placeholder\n-----END PRIVATE KEY-----\n"
+        if rsa is not None:
+            pem = rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
+                serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode()
         self.key.write_text(json.dumps({
             "type": "service_account", "project_id": "acme-hub", "private_key_id": "k1",
             "private_key": pem, "client_email": "tico-mail@acme-hub.example.iam.gserviceaccount.com",
@@ -154,7 +162,7 @@ class CredentialOrder(Base):
         self.write_key()
         creds = self.credentials()
         self.assertEqual(creds.token, "ya29.refreshed")
-        self.assertEqual(creds._tico_granted, [oauth.SERVICE_SCOPES["gmail"][0]])
+        self.assertEqual(creds._tico_granted, oauth.SERVICE_SCOPES["gmail"])   # the Gmail scopes only, not calendar
         self.assertEqual(self.server.calls, [])
         self.assertEqual(ServiceAccount.loaded, [])
 
