@@ -1,6 +1,6 @@
 # Starter bots
 
-There are 98 role templates: 96 in nine groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
+There are 99 role templates: 97 in nine groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
 Product and Engineering) and a two-template Leadership extra, enough to staff a team of ten to two hundred humans. **Every
 template is a real role that does the work within its granted Tools.** Each is a job title a team would
 hire and put on its team chart (Sales Development Representative, Bookkeeper, Recruiter, Site Reliability Engineer), never a
@@ -28,7 +28,7 @@ Chief of Staff is no longer a default.
 | Group | Icon | Head | Templates | Goal |
 |---|---|---|---|---|
 | Sales | `handshake` | Sales Manager (`sales-lead`) | 8 | Turn interest into revenue |
-| Marketing | `campaign` | Head of Marketing (`marketing-lead`) | 13 | Be known by the customers you want |
+| Marketing | `campaign` | Head of Marketing (`marketing-lead`) | 14 | Be known by the customers you want |
 | Customer Support | `support_agent` | Head of Customer Support (`support-lead`) | 10 | Every customer helped and kept |
 | Finance | `account_balance` | Head of Finance (`finance-lead`) | 14 | Know where the money is |
 | Operations | `settings_suggest` | Operations Manager (`ops-manager`) | 13 | Run smoothly, nothing dropped |
@@ -44,13 +44,13 @@ covered, it proposes a specific worker template from its `team_templates` with t
 and only after the owner confirms asks BotOps to set it up (`hub task create --owner botops`). Heads never create bots
 themselves and never do their team's work.
 
-Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, CEO Bot) and message bots (Inbox Manager) have plain
+Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, Strategy Bot) and message bots (Inbox Manager) have plain
 function names and live outside it.
 
 The built-ins are not in any group and no template duplicates them: the Librarian owns the docs, the FAQ and the answers
 built from them (Support Agent asks it with `hub doc ask` and reports a missing or wrong doc to it as a task; HR Generalist and
 Benefits Administrator do the same for policy and plan questions; Technical Writer covers only READMEs and API docs in the
-product repositories); BotOps creates and maintains bots; the Assistant is each human's own; and the CEO Bot keeps the
+product repositories); BotOps creates and maintains bots; the Assistant is each human's own; and the Strategy Bot keeps the
 KPIs, so no template owns a KPI (Product Analyst and FP&A Analyst answer questions and explain numbers, they do not keep them).
 
 ## The templates
@@ -76,7 +76,7 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 
 | Icon | Template | Role | What it does | Suggest | Needs |
 |---|---|---|---|---|---|
-| `campaign` | `marketing-lead` | Head of Marketing (head) | A weekly marketing summary (red/amber/green per workstream, blockers, a six-week calendar, proposed priorities), routing proposals, and a hiring proposal when repeated work has no owner | default | Tico only; calendar, meetings and docs optional |
+| `campaign` | `marketing-lead` | Head of Marketing (head) | A weekly marketing summary (red/amber/green per workstream, blockers, a six-week calendar, proposed priorities), routing proposals, and a hiring proposal when repeated work has no owner. As the Growth Lead it files marketing ideas as Marketing tasks, runs the weekly growth meeting and keeps the weekly numbers current ([Growth](growth.md)) | default | Tico only; calendar, meetings and docs optional |
 | `edit_note` | `content` | Content Marketer | A four-week content plan and one finished piece a week with short versions, drafted until outbound sending is on | default | Tico only |
 | `travel_explore` | `seo-visibility` | SEO Specialist | A weekly report on search and AI-answer visibility with three page fixes written ready to apply | common | Public web; search and AI-visibility exports optional |
 | `tag` | `listening` | Social Media Manager | Two weeks of draft social posts per account, and a weekday digest of public mentions, questions and competitor moves | common | Public web; social accounts named at setup |
@@ -88,6 +88,7 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 | `newspaper` | `pr` | PR Manager | A media list and coverage log, a weekly PR review, and per announcement a release, targeted pitches and a draft spokesperson briefing | niche | Public web |
 | `diversity_3` | `community` | Community Manager | A weekly community digest (response time, unanswered questions, champions, guideline flags, feedback routed) and draft sourced replies | niche | Public forum or community channels (read) |
 | `palette` | `brand` | Brand Manager | The brand book (voice, words, naming, visual rules), reviews of copy and assets against it, and a monthly consistency audit with three fixes | niche | Public web; an existing brand guide optional |
+| `play_arrow` | `video-producer` | Video Producer | One video at a time from an approved brief: script, storyboard, shots, cut and final, each stage approved in Tico before the next; nothing published without the owner's yes on the exact file | common | Tico only; brand guide and product docs optional; voice and avatar tools need their own grants |
 | `filter_alt` | `marketing-ops` | Marketing Operations Manager | A tracking convention, tagged links for every campaign, lead handoff rules, and a weekly check of tagging, lead sources and handoff delay with fixes and owners | niche | Tico only; CRM (read) and analytics exports optional |
 
 ### Customer Support
@@ -100,17 +101,19 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 | `sentiment_satisfied` | `customer-success` | Customer Success Manager | A weekly health and renewal brief (renewals by 120, 90, 60 and 30 day stage, accounts at risk, the next touch drafted) and business review packs; price and terms go to the Account Manager | common | Tico only; a CRM, support email and meetings optional |
 | `waving_hand` | `onboarding-specialist` | Customer Onboarding Specialist | A plan per new customer (goals in their words, four to six milestones, owners on both sides), the kickoff agenda, and a weekly onboarding board of who is on track, behind or stuck, with draft messages | common | Tico only; a CRM, meetings and calendar optional |
 | `crisis_alert` | `escalations` | Escalations Manager | A daily escalation digest: open cases by severity with one named owner, draft customer updates due on the severity's cadence, engineering-ready bug reports, and a lesson per closed case | niche | Tico only; support email, GitHub and chat optional |
-| `loyalty` | `retention` | Retention Specialist | Each cancellation or downgrade coded by reason with the one save offer written policy allows, a draft reply, and a weekly retention report with the at-risk watch list; cancelling is never blocked | common | Cancellation requests routed as tasks; support email and CRM optional |
+| `loyalty` | `retention` | Retention Specialist | Each cancellation or downgrade coded by reason with the one save offer written policy allows, a draft reply, and a weekly retention report with the at-risk watch list; canceling is never blocked | common | Cancellation requests routed as tasks; support email and CRM optional |
 | `alt_route` | `support-ops` | Support Operations Specialist | A monthly help desk audit (misroutes by the rule that caused them, SLA policies against promised times, duplicate tags, stale macros) with one exact change request per fix for a human to apply | niche | Tico only; a help desk configuration export or read-only access |
 | `troubleshoot` | `technical-support` | Technical Support Engineer | Tier 2 investigations with a verdict (bug, setup, doc gap, could not reproduce), tested workarounds, engineering-ready bug reports for a human to file, and a weekly tier 2 queue report | niche | Tico only; GitHub and product docs optional |
 | `assignment_return` | `returns` | Returns and Refunds Specialist | Each return checked against the written policy and the order, with a draft reply and refund or label request, and a weekly returns report: overdue refunds, reasons by product and variant, flagged patterns | niche | Return requests routed as tasks; support email, an order export and the written policy |
 
 ### Finance
 
+The books themselves are kept by the built-in [Bookkeeper](bookkeeper.md), which every install has once Finance is set
+up. The `bookkeeping` template is retired: it is no longer offered, and bots already built from it keep running.
+
 | Icon | Template | Role | What it does | Suggest | Needs |
 |---|---|---|---|---|---|
 | `account_balance_wallet` | `finance-lead` | Head of Finance (head) | A weekly finance summary: cash today and the 13-week outlook against the minimum, close status, what is due in and out, the next 14 days of the finance calendar, decisions needed; routes finance work and proposes finance hires | default | Tico only; bank and accounting exports on a task; docs, email and calendar optional |
-| `menu_book` | `bookkeeping` | Bookkeeper | A category for every unsorted transaction, the missing-receipt list and the month-end close checklist run to done; read-only to the books | default | An exported transaction file on a task |
 | `request_quote` | `ar-followup` | Accounts Receivable Specialist | A weekly aging summary and a reminder ready for each overdue invoice, friendly first and firmer later, each drafted until outbound sending is on | common | An invoice aging export on a task |
 | `receipt_long` | `accounts-payable` | Accounts Payable Specialist | A bills register with each bill matched and checked for duplicates and changed bank details, and a proposed weekly payment run | common | Bills on a task; a bills mailbox optional |
 | `credit_card` | `expense-auditor` | Expense Auditor | A monthly audit of every expense report and card charge against the written policy (receipts, limits, duplicates, late claims), one section per approver | niche | A card or expense export on a task |
@@ -191,6 +194,7 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 | `developer_board` | `engineering-lead` | Head of Engineering (head) | A weekly engineering summary (shipped, stuck pull requests, incidents, blocked work), routing proposals, and a hiring proposal when repeated work has no owner | default | GitHub connected |
 | `bug_report` | `issue-triage` | QA Engineer | Label and duplicate proposals, repro-step requests, a weekly issue digest, and a risk-ranked test plan and regression checklist per release | default | GitHub connected; offer it only then |
 | `code_blocks` | `pr-reviewer` | Senior Software Engineer | A weekday review queue with a finished review per pull request (blocking issues first) for a human to post | common | GitHub connected |
+| `code_blocks` | `builder` | Builder | Takes each Dev ticket on its step, builds it on a branch with a test that proves the change, and carries the ticket through review and QA fixes; merges only under the team's merge rules | common | GitHub connected |
 | `new_releases` | `release-notes` | Release Manager | A readiness checklist with a go or no-go call, the changelog entry, plain-language release notes and a suggested version | common | GitHub connected |
 | `monitor_heart` | `incident-scribe` | Site Reliability Engineer | An incident timeline, a blameless postmortem, action items followed to done, an on-call handoff and a weekly incident review | common | Tico only; an incident channel or error-tracker exports optional |
 | `description` | `docs-writer` | Technical Writer | A weekly drift report on READMEs and API docs in the product repositories, with the fixes written for an engineer to commit; internal docs stay with the Librarian | niche | GitHub connected |
@@ -425,7 +429,7 @@ routine, and ask BotOps to set it up only after the owner says yes.
 - Customer Success Manager: a renewal motion that starts 90 to 120 days out (health check, value review, objections, commercial terms), health from usage, support and relationship signals, and health owned by customer success while price and contract stay with sales, from [June on the renewal playbook](https://www.june.so/blog/customer-success-renewal-playbook) and [Planhat on B2B renewals](https://www.planhat.com/customer-success/renewals).
 - Customer Onboarding Specialist: a seamless sales-to-onboarding handoff, a kickoff built around the customer's own goals rather than the implementation checklist, four to six milestones (fewer is vague, more is a checklist nobody reads), and first value reached within the first 30 days because most early churn happens in the first 90, from [ClientSuccess's 30-day time-to-value plan](https://www.clientsuccess.com/resources/blog-the-30-day-time-to-value-plan), [Custify's SaaS onboarding guide](https://www.custify.com/blog/saas-customer-onboarding-guide/) and [GainTrace's onboarding playbook](https://gaintrace.com/blog/customer-onboarding-best-practices).
 - Escalations Manager: escalation criteria written as triggers rather than judgment calls, a named owner rather than a queue, one customer clock that never resets on an internal handoff, and updates on a fixed cadence by severity even when there is no news, from [Supportbench's customer escalation management playbook](https://www.supportbench.com/customer-escalation-management/) and [Supportbench on update cadence during long investigations](https://www.supportbench.com/customer-communication-cadence-long-investigations-update-rules/); bug reports in the shape under Technical Support Engineer.
-- Retention Specialist: one question on why the customer is leaving, one save offer matched to that reason (a pause for "not using it", a cheaper plan for price), cancelling kept at least as easy as signing up, and no second save attempt, from [ProsperStack on cancellation flows](https://prosperstack.com/blog/cancellation-flow/) and [Chargebee on click-to-cancel compliance](https://www.chargebee.com/blog/comply-ftc-click-to-cancel-rule-retain-subscribers/) (state automatic-renewal laws such as California's limit retention to a single offer).
+- Retention Specialist: one question on why the customer is leaving, one save offer matched to that reason (a pause for "not using it", a cheaper plan for price), canceling kept at least as easy as signing up, and no second save attempt, from [ProsperStack on cancellation flows](https://prosperstack.com/blog/cancellation-flow/) and [Chargebee on click-to-cancel compliance](https://www.chargebee.com/blog/comply-ftc-click-to-cancel-rule-retain-subscribers/) (state automatic-renewal laws such as California's limit retention to a single offer).
 - Support Operations Specialist: start SLA measurement with first reply time and pick one resolution measure, use tags with a consistent naming convention, and audit triggers and automations because overlapping rules cause unintended routing, from Zendesk's help centre on [defining SLA policies](https://support.zendesk.com/hc/en-us/articles/4408829459866-Defining-SLA-policies) and [routing and automation options for incoming tickets](https://support.zendesk.com/hc/en-us/articles/4408831658650-Routing-and-automation-options-for-incoming-tickets).
 - Technical Support Engineer: one bug per report with a concise title, numbered steps from a known state, expected against actual result, the environment and evidence, and a search for an existing report before filing, from [BrowserStack on writing a bug report](https://www.browserstack.com/guide/how-to-write-a-bug-report) and [Marker.io's bug report guide](https://marker.io/blog/how-to-write-bug-report).
 - Returns and Refunds Specialist: separate the return decision (the goods) from the refund decision (the money), measure and age the time from receipt to refund against the time the shop publishes, fast-track low-risk returns and route suspicious ones to a human, from [Claimlane on refund policy best practices](https://www.claimlane.com/resources/blog/refund-policy-best-practices) and [Signifyd on ecommerce return policies](https://www.signifyd.com/blog/ecommerce-return-policy/); the refund deadlines when an order cannot ship come from the [FTC Email, Internet, or Telephone Order Merchandise Rule](https://www.ftc.gov/legal-library/browse/rules/mail-internet-or-telephone-order-merchandise-rule).

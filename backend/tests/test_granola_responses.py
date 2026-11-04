@@ -97,15 +97,15 @@ def test_documented_free_and_paid_sync_with_broken_meeting(api, paid):
     provider.service.transport = httpx.MockTransport(handle)
     provider.sync()
     status = api.get(BASE, headers=headers("ana-test")).json()
-    assert status["last_sync"] and status["imported_count"] == 2 and status["skipped"] == 1
+    assert status["last_synced_at"] and status["imported_count"] == 2 and status["skipped"] == 1
     assert status["plan_hint"] == ("paid" if paid else "free")
     assert status["last_error"] == "bad_response: list_meetings"
     assert len(transcript_calls) == (2 if paid else 1)
     assert provider.service.load("human:ana")[1]["transcripts_unavailable"] is (not paid)
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT m.notes,m.metadata_json FROM meetings m JOIN recording_source_refs r ON r.meeting_id=m.id "
+        row = c.execute("SELECT m.notes,m.metadata FROM meetings m JOIN recording_source_refs r ON r.meeting_id=m.id "
                         "WHERE r.source='granola' AND r.external_id='human:ana:0dba4400-...'").fetchone()
-        meeting = json.loads(row["metadata_json"])
+        meeting = json.loads(row["metadata"])
         assert row["notes"] == SUMMARY and meeting["started"].startswith("2026-02-04T19:30:00")
         assert [(p["name"], p["email"]) for p in meeting["participants"]] == [
             ("John Doe", "john@acme.com"), ("Jane Smith", "jane@acme.com")]

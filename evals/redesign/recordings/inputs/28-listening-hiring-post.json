@@ -1,0 +1,14 @@
+{
+  "id": "28-listening-hiring-post",
+  "kind": "listening",
+  "questions": "listening-item",
+  "level": "low",
+  "state": {
+    "source": "job board",
+    "url": "https://jobs.example/listing/44812",
+    "author": "Brightpath Health talent team",
+    "published_at": "2026-10-25T08:00:00Z",
+    "content": "We are hiring a project manager to run delivery for our clinic software team. Three years with project tracking tools. Apply by 15 November."
+  },
+  "note": "A job ad: every category no."
+}

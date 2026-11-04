@@ -19,6 +19,7 @@ from backend import docs
 from backend.store import H
 from backend.tests.test_api import api, headers, post  # noqa: F401
 from backend.tests.test_files import turn
+from backend import bot_settings as BS
 
 CORPUS = Path(__file__).parent / "fixtures" / "golden_corpus"
 KEPT = sorted((CORPUS / "kept").iterdir())
@@ -65,9 +66,10 @@ def _cases():
 
 
 def _librarian(c):
-    c.execute("INSERT OR IGNORE INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-              "VALUES('librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-    c.execute("INSERT OR IGNORE INTO bot_config(bot,config_json,operator) VALUES('librarian','{}','ana')")
+    c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,effort,state,created_at) "
+              "VALUES('librarian','librarian','Librarian','','active',?)", (H.now(),))
+    if c.execute("INSERT OR IGNORE INTO bot_config(bot,owner_id) VALUES('librarian','ana')").rowcount:
+        BS.write(c, 'librarian', {"runtime": "fake", "host": "keeper"})
 
 
 @pytest.fixture
@@ -133,7 +135,7 @@ def test_librarian_docs_and_messages_change_only_ticos_terms_through_writes_upgr
     for path, _, want in cases:
         message = shown[made[path.name]["message"]]
         assert message["body"] == want, path.name
-        assert message["from_actor_name"] == "Librarian" and message["to_actor_name"] == "Ana Example", path.name
+        assert message["sender_name"] == "Librarian" and message["recipient_name"] == "Ana Example", path.name
 
 
 def _repair_markers(api):
@@ -154,17 +156,17 @@ def test_upgrade_repairs_fix_legacy_librarian_text_once_and_leave_a_persons_text
         for path, original, want in cases:
             # An older Librarian cache, written before its words were repaired (librarian_fix33).
             doc_id = legacy(path.stem, original, "_librarian/old-" + path.name)
-            c.execute("UPDATE docs SET created_by='bot:librarian',updated_by='bot:librarian' WHERE id=?", (doc_id,))
+            c.execute("UPDATE docs SET created_by_id='bot:librarian',updated_by_id='bot:librarian' WHERE id=?", (doc_id,))
             rows[doc_id] = (path.name, "unrepaired", want, 1 if want == original else 2)
             # The same, last touched by Tico's keeper (a title fix): only librarian_wording35 picks it up.
             doc_id = legacy(path.stem, original, "_librarian/kept-by-keeper-" + path.name)
-            c.execute("UPDATE docs SET created_by='bot:librarian',updated_by='keeper' WHERE id=?", (doc_id,))
+            c.execute("UPDATE docs SET created_by_id='bot:librarian',updated_by_id='keeper' WHERE id=?", (doc_id,))
             rows[doc_id] = (path.name, "unrepaired, keeper", want, 1 if want == original else 2)
             # A doc the 0.2.35 repair broke (company -> team, machine -> Computer): redone from version 1
             # (librarian_wording36).
             doc_id = legacy(path.stem, original, "_librarian/broken-" + path.name)
             broken = original.replace("company", "team").replace("machine", "Computer") + "\nteam Computer"
-            c.execute("UPDATE docs SET body=?,version=2,created_by='bot:librarian',updated_by='keeper' WHERE id=?",
+            c.execute("UPDATE docs SET body=?,version=2,created_by_id='bot:librarian',updated_by_id='keeper' WHERE id=?",
                       (broken, doc_id))
             store.snapshot(c, store.get_row(c, doc_id), H.KEEPER, "Updated generated Tico wording")
             rows[doc_id] = (path.name, "broken", want, 3)
@@ -201,7 +203,7 @@ def test_upgrade_repairs_fix_legacy_librarian_text_once_and_leave_a_persons_text
         store = docs.Docs(None, None, None, None)
         for path, original, want in cases:
             doc_id = store.insert(c, "human:ana", path.stem, original, "_librarian/fix33-" + path.name)["id"]
-            c.execute("UPDATE docs SET created_by='bot:librarian',updated_by='bot:librarian' WHERE id=?", (doc_id,))
+            c.execute("UPDATE docs SET created_by_id='bot:librarian',updated_by_id='bot:librarian' WHERE id=?", (doc_id,))
             rows[doc_id] = (path.name, "fix33 only", want, 1 if want == original else 2)
         c.execute("DELETE FROM registry_metadata WHERE key='librarian_fix33'")
     api.app.state.store.initialize(seed_market=False)
@@ -247,6 +249,18 @@ def test_display_names_add_names_beside_ids_and_keep_every_body_as_written(named
         notice = H.notice(c, "bot:ops", "human:ana", "New task from bot:ops: Brightwater handover")
     doc = post(api, "docs", {"title": "Brightwater export", "body": _text(CORPUS / "kept" / "customer-export.json")})["doc"]
 
+    # A bot's post in a task's thread reaches a person only by an @mention (hubdb.counts_for_person), and H.say, a legacy
+    # write, takes none: these are on the task, in no one's Inbox. Ana reads them in the task's thread.
+    thread = api.get("/api/v2/conversations/" + task["conversation_id"] + "/messages", headers=headers())
+    assert thread.status_code == 200, thread.text
+    mine = [m for m in thread.json()["messages"] if m["id"] in sent]
+    assert len(mine) == len(sent)
+    for message in mine:
+        assert message["body"] == sent[message["id"]]
+        assert "body_raw" not in message
+        assert message["sender_name"] == "Operations"
+        assert message["recipient_name"] == "Ana Example"
+
     # The inbox through the door route_renames.py adds (v0.3.10 lost its names), and the old door, which is not a
     # stable route: no names there, and the same words.
     for url in ("/api/v2/messages", "/api/v2/messages?unread=1", "/api/v2/inbox"):
@@ -254,14 +268,6 @@ def test_display_names_add_names_beside_ids_and_keep_every_body_as_written(named
         result = api.get(url, headers=headers())
         assert result.status_code == 200, (url, result.text)
         inbox = result.json()
-        mine = [m for m in inbox["messages"] if m["id"] in sent]
-        assert len(mine) == len(sent), url
-        for message in mine:
-            assert message["body"] == sent[message["id"]], url
-            assert "body_raw" not in message, url
-            if named_door:
-                assert message["from_actor_name"] == "Operations", url
-                assert message["to_actor_name"] == "Ana Example", url
         shown = next(m for m in inbox["notices"] if m["id"] == notice["id"])
         if named_door:
             assert inbox["actors"] == {"bot:ops": "Operations", "human:ana": "Ana Example"}, url

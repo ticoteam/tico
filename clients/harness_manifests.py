@@ -1,4 +1,4 @@
-"""The harness manifests (runner/harnesses/*.toml) as the server and the clients read them: one row per harness,
+"""The harness manifests (runner-rs/harnesses/*.toml) as the server and the clients read them: one row per harness,
 keyed by the id bot configs use (`harness`, which is also the server's id), with its capabilities filled in.
 
 The runner installs from the same files (runner-rs/src/harness_tools.rs); this module only reads what Tico does
@@ -10,7 +10,7 @@ import tomllib
 from functools import lru_cache
 from pathlib import Path
 
-DIRECTORY = Path(__file__).resolve().parents[1] / "runner" / "harnesses"
+DIRECTORY = Path(__file__).resolve().parents[1] / "runner-rs" / "harnesses"
 
 # Every key `[capabilities]` may hold, with its type and the value an absent key means.
 FIELDS = {
@@ -38,12 +38,14 @@ FIELDS = {
     "one_turn_per_login": (bool, False),
     "isolated_user": (bool, False),
     "compaction": (bool, False),
+    "compaction_events": (bool, False),
     "resume_command": (str, ""),
     "model_list": (str, ""),
     "model_list_args": (list, []),
     "readiness": (bool, True),
     "repo_permission_lint": (bool, False),
     "repo_commands": (bool, False),
+    "packet_only": (bool, False),
     "sign_in_status": (dict, {}),
 }
 CHOICES = {"api_keys": ("", "computer", "bot"), "weekly_usage": ("", "refresh", "turns", "manual"),
@@ -90,6 +92,8 @@ def _row(harness, runtime, data, where, auth=None, login=None):
               "browser_sign_in": bool(relay), "paste_code": bool((login or {}).get("paste_code")),
               # Sign out and Switch account from the app (backend/model_login.py): the CLI's own logout command.
               "sign_out": bool(relay and (login or {}).get("logout")),
+              # Connect in Settings > Models: a command that signs a plan in for a company subscription.
+              "subscription_connect": bool(relay and (login or {}).get("connect")),
               # Platforms where the login is in the system keychain, so Switch account cannot sign in on the side.
               "switch_unavailable_on": list((login or {}).get("keychain") or []) if relay and (login or {}).get("logout") else [],
               "terminal_login": " ".join([executable, *caps["terminal_login"]]) if caps["terminal_login"] else "",

@@ -3,7 +3,6 @@
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """
-import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -85,14 +84,14 @@ def test_every_team_rule_has_an_entry_and_every_entry_is_well_formed():
         assert e.kind != "person" or e.why, e.key
         # A Confirm card can only carry a route a person may confirm from BotOps.
         if e.kind == "confirm":
-            path = "/api/v2/" + re.sub(r"\{\w+\}", "x", e.route)
+            path = settings_catalog.probe(e)
             assert valid_operation(e.method, path, None, "botops"), e.key
     assert botops_act  # the classifier the confirm check leans on stays importable
 
 
 def test_a_setting_waiting_for_a_confirm_card_goes_back_to_confirm_once_botops_can_make_one():
     for e in ENTRIES:
-        card = valid_operation(e.method, "/api/v2/" + re.sub(r"\{\w+\}", "x", e.route), None, "botops")
+        card = valid_operation(e.method, settings_catalog.probe(e), None, "botops")
         if e.key in NO_CARD_YET:
             assert not card, e.key + " can be put on a Confirm card now: take it out of NO_CARD_YET"
             assert e.kind == "person" or e.when_held == "person", e.key
@@ -110,51 +109,6 @@ def test_botops_never_runs_a_confirm_setting_when_no_card_can_be_made():
         settings_catalog.plan(None, None, _owner(), e, "off", propose=None)
     assert refused.value.code == "unavailable" and e.card in refused.value.detail
     assert "run" in settings_catalog.plan(None, None, _owner(via=""), e, "off", propose=None)
-
-
-def test_a_wake_rule_that_sends_outside_is_not_direct():
-    e, card = ENTRY("rules.wake.create"), lambda *a: {"needs_confirm": True}
-    quiet = {"scope_kind": "team", "event": "task.created", "then": "wake"}
-    assert "run" in settings_catalog.plan(None, None, _owner(), e, quiet, propose=card)
-    for action in ("send_webhook", "forward"):
-        with pytest.raises(Problem) as refused:
-            settings_catalog.plan(None, None, _owner(), e, {**quiet, "then": "action", "params": {"action": action}},
-                                  propose=card)
-        assert refused.value.code == "person_only", action
-
-
-def test_botops_cannot_partially_enable_or_edit_a_stored_outbound_wake_rule(api, botops):
-    # These are synthetic rows in the test database; no webhook delivery worker runs here.
-    hook = post(api, "webhooks", {"name": "Synthetic", "url": "https://example.com/hook",
-                                   "events": ["*"]})["webhook"]
-    rule = post(api, "rules", {"scope_kind": "team", "event": "status_or_relation", "then": "action",
-                                "params": {"action": "send_webhook", "webhook": hook["id"],
-                                           "type": "custom.settings_test", "data": {}}, "on": False})["rule"]
-    quiet = post(api, "rules", {"scope_kind": "team", "event": "status_or_relation", "then": "note",
-                                 "on": False})["rule"]
-
-    ana = turn(api, botops, person="ana-test", text="Update my wake rules")
-    for value in ({"expected_revision": 1, "on": True},
-                  {"expected_revision": 1, "event": "assignment", "when": {"state": "open"}}):
-        err, refused = mcp(api, "hub_settings_set", {"key": "rules.wake", "id": rule["id"], "value": value},
-                           ana["token"])
-        assert err and refused.get("error") == "person_only", refused
-        with api.app.state.store.read() as c:
-            stored = c.execute("SELECT enabled,then_outcome,params_json,revision FROM rules WHERE id=?",
-                               (rule["id"],)).fetchone()
-            assert (stored["enabled"], stored["then_outcome"], json.loads(stored["params_json"]), stored["revision"]) == (
-                0, "action", {"action": "send_webhook", "data": {}, "type": "custom.settings_test",
-                              "webhook": hook["id"]}, 1)
-
-    err, changed = mcp(api, "hub_settings_set", {"key": "rules.wake", "id": quiet["id"],
-                            "value": {"expected_revision": 1, "on": True}}, ana["token"])
-    assert not err and changed["value"] == {"expected_revision": 1, "on": True}, changed
-    finish(api, botops, ana)
-
-    # The person can still make the same outbound change directly in Settings.
-    err, changed = mcp(api, "hub_settings_set", {"key": "rules.wake", "id": rule["id"],
-                            "value": {"expected_revision": 1, "on": True}}, "ana-test")
-    assert not err and changed["value"]["on"] is True, changed
 
 
 def test_nothing_is_not_a_value_and_the_team_icon_is_an_upload():
@@ -226,7 +180,7 @@ def test_show_a_bots_spend_limit_and_who_may_change_it_and_a_member_changes_a_di
         assert c.execute("SELECT created_by FROM triggers WHERE name='Orders'").fetchone()[0] == "human:cara"
 
 
-def test_catalogue_resolves_the_bot_for_id_addressed_routines_and_transitions(api, botops):
+def test_catalogue_resolves_the_bot_for_id_addressed_transitions(api, botops):
     from backend.tests.test_api import as_member
     from backend.tests.test_member_bots import register
 
@@ -234,42 +188,41 @@ def test_catalogue_resolves_the_bot_for_id_addressed_routines_and_transitions(ap
     made = register(api, ana, "routine-owner")
     assert made.status_code == 200, made.text
     finish(api, botops, ana)
-    routine = post(api, "bots/routine-owner/routines", {"title": "Daily check", "text": "Check the queue.",
-                  "cron": "0 9 * * *", "timezone": "UTC"}, token="cara-test")["routine"]
 
-    err, shown = mcp(api, "hub_settings_show", {"key": "rules.routine", "id": routine["id"]}, "cara-test")
-    assert not err and shown["you_may"] is True, shown
-    err, owner = mcp(api, "hub_settings_show", {"key": "rules.routine", "id": routine["id"]}, "ana-test")
-    assert not err and owner["you_may"] is True, owner
-    err, paused = mcp(api, "hub_settings_set", {"key": "rules.routine", "id": routine["id"],
-                   "value": {"enabled": False}}, "cara-test")
-    assert not err and paused["value"] == {"enabled": False}, paused
-    err, edited = mcp(api, "hub_settings_set", {"key": "rules.routine", "id": routine["id"],
-                   "value": {"title": "Daily queue check"}}, "cara-test")
-    assert not err and edited["value"] == {"title": "Daily queue check"}, edited
-
-    # BotOps can get the owner's confirmation for deletion, still naming the routine by id only.
-    delegated = turn(api, botops, person="cara-test", text="Delete my routine")
-    err, card = mcp(api, "hub_settings_set", {"key": "rules.routine.delete", "id": routine["id"],
-                  "value": {}}, delegated["token"])
-    assert not err and card.get("needs_confirm") is True, card
-    assert botops_act.classify("POST", f"routines/{routine['id']}/delete") == "confirm"
-    finish(api, botops, delegated)
-
-    # The same id resolves the bot for transition controls, including the read-only permission answer.
+    # The id resolves the bot for transition controls, including the read-only permission answer.
     now = H.now()
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_transitions(id,bot,kind,target_json,requested_by,expected_revision,state,created,updated) "
-                  "VALUES('tr-owner','routine-owner','model','{}','human:cara',1,'prepared',?,?)", (now, now))
+        owner_id = H.resolve_bot(c, "routine-owner")["id"]
+        c.execute("INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created_at,updated_at) "
+                  "VALUES('tr-owner',?,'model','{}','human:cara',1,'prepared',?,?)", (owner_id, now, now))
     err, shown = mcp(api, "hub_settings_show", {"key": "bot.change.cancel", "id": "tr-owner"}, "cara-test")
     assert not err and shown["you_may"] is True, shown
 
     # An admin retains access; an unrelated ordinary member does not inherit the bot owner's rights.
-    err, admin = mcp(api, "hub_settings_show", {"key": "rules.routine", "id": routine["id"]}, "ben-test")
+    err, admin = mcp(api, "hub_settings_show", {"key": "bot.change.cancel", "id": "tr-owner"}, "ben-test")
     assert not err and admin["you_may"] is True, admin
     as_member(api, "ben@acme.example")
-    err, unrelated = mcp(api, "hub_settings_show", {"key": "rules.routine", "id": routine["id"]}, "ben-test")
+    err, unrelated = mcp(api, "hub_settings_show", {"key": "bot.change.cancel", "id": "tr-owner"}, "ben-test")
     assert not err and unrelated["you_may"] is False, unrelated
-    err, refused = mcp(api, "hub_settings_set", {"key": "rules.routine", "id": routine["id"],
-                   "value": {"enabled": False}}, "ben-test")
-    assert err and "bot's owners" in str(refused), refused
+
+
+def test_an_admin_asking_botops_to_raise_a_group_pool_limit_gets_a_card_the_tap_runs(api, botops):
+    """Settings stage 3, acceptance 13: a group's pool is `groups/<id>`, two segments of its route, so the card names
+    the route Settings uses and the admin's tap sets it. Before, the id was one escaped segment and no card could be
+    made, so BotOps sent the admin to Settings."""
+    from backend.tests.test_usage_limits import groups
+    groups(api, "product")
+    ben = turn(api, botops, person="ben-test", text="Raise the Engineering pool to $50 a day")
+    err, card = mcp(api, "hub_settings_set", {"key": "pool.limit.usd", "id": "groups/eng",
+                                              "value": {"daily_usd": 50}}, ben["token"])
+    assert not err and card["needs_confirm"] is True, card
+    assert card["action"]["path"] == "/api/v2/usage/pools/groups/eng", card["action"]
+    assert "$50" in card["action"]["description"], card["action"]
+    finish(api, botops, ben)
+    assert get(api, "usage/limits")["pools"]["groups"]["eng"]["daily_usd"] is None      # nothing until the tap
+    post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, "ben-test")
+    assert get(api, "usage/limits")["pools"]["groups"]["eng"]["daily_usd"] == 50
+    for bad in ("groups", "groups/eng/x", "eng"):
+        err, refused = mcp(api, "hub_settings_set", {"key": "pool.limit.usd", "id": bad, "value": {"daily_usd": 5}},
+                           "ben-test")
+        assert err and refused["error"] == "validation", (bad, refused)

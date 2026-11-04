@@ -91,6 +91,25 @@ def build(to, subject, body, from_addr="", cc=(), in_reply_to="", references="",
     return base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=")
 
 
+def with_warning(raw, line):
+    """The same message with `line` above its text (each text/plain part, and as a paragraph above each text/html
+    part), headers and attachments untouched: an org rule's Warn on the recipient's copy."""
+    import email
+    import html
+    from email import policy
+    s = str(raw or "").replace("-", "+").replace("_", "/")
+    msg = email.message_from_bytes(base64.b64decode(s + "=" * (-len(s) % 4)), policy=policy.default)
+    for part in msg.walk():
+        if part.is_multipart() or part.get_content_disposition() == "attachment":
+            continue
+        kind = part.get_content_type()
+        if kind == "text/plain":
+            part.set_content(line + "\n\n" + part.get_content())
+        elif kind == "text/html":
+            part.set_content("<p>" + html.escape(line) + "</p>\n" + part.get_content(), subtype="html")
+    return base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=")
+
+
 def decode(raw):
     """The other direction, for tests and for `doctor --e2e`."""
     s = str(raw or "").replace("-", "+").replace("_", "/")

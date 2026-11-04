@@ -1,0 +1,30 @@
+{
+  "_source": "QuickBooks Online Accounting API entity shapes (Account, Vendor, and a change-data-capture row for a deleted Vendor), the fields backend/finance/core/qbo.py reads. Shaped from Intuit's public API reference, not a live capture.",
+  "account": {
+    "Id": "35",
+    "SyncToken": "0",
+    "Name": "Checking",
+    "AccountType": "Bank",
+    "AccountSubType": "Checking",
+    "AcctNum": "1100",
+    "Active": true,
+    "Classification": "Asset",
+    "FullyQualifiedName": "Checking",
+    "CurrencyRef": {"value": "USD", "name": "United States Dollar"},
+    "MetaData": {"CreateTime": "2026-01-01T10:00:00-08:00", "LastUpdatedTime": "2026-10-01T10:00:00-08:00"}
+  },
+  "vendor": {
+    "Id": "56",
+    "SyncToken": "1",
+    "DisplayName": "Acme Supplies",
+    "Active": true,
+    "PrimaryEmailAddr": {"Address": "billing@acme.example"},
+    "Balance": 0,
+    "MetaData": {"CreateTime": "2026-01-02T10:00:00-08:00", "LastUpdatedTime": "2026-10-02T10:00:00-08:00"}
+  },
+  "deleted_vendor": {
+    "Id": "57",
+    "SyncToken": "2",
+    "status": "Deleted"
+  }
+}

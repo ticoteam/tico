@@ -20,6 +20,8 @@ there is one. A campaign with no conversion tracked is marked "unmeasured" and j
 
 ## 3. Find the waste
 
+Read `skills/read-search-terms-for-waste/SKILL.md` first.
+
 - Campaigns over their target cost per result for two weeks running.
 - In the search-terms report, sorted by cost: terms that spent more than one target cost per result
   with no conversion, and terms plainly unrelated to what the team sells. Propose each as an
@@ -44,6 +46,9 @@ the result into `knowledge/changes.md`. A change that did not work is a line, no
 Write `reports/YYYY-MM-DD-paid-media.md` in the shape of `knowledge/examples/paid-media-review.md`,
 then `hub file publish reports/YYYY-MM-DD-paid-media.md`. Commit, and `hub task update <id> --status
 done --note`: the headline, the path, what you could not read.
+
+Done when: the report is published with the spend and cost per result by campaign, the exclusions with their spend,
+three changes each with its evidence, and last fortnight's changes checked.
 
 ## When the export is missing
 

@@ -9,18 +9,18 @@ INCIDENT = 'company-turn-incident'
 REASON = "Your company is at its limit; Tico is fixing what's stuck."
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS org_turn_waits(
- job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE, created TEXT NOT NULL
+ job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE, created_at TEXT NOT NULL
 );
 """
 
 
 def saved(c, key):
-    row = c.execute('SELECT value_json FROM registry_metadata WHERE key=?', (key,)).fetchone()
+    row = c.execute('SELECT value FROM registry_metadata WHERE key=?', (key,)).fetchone()
     return json.loads(row[0]) if row else {}
 
 
 def save(c, key, value):
-    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
+    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
               (key, json.dumps(value)))
 
 
@@ -45,12 +45,16 @@ def in_use(c):
 
     Queued jobs blocked on quota, a spending limit, readiness or a paused bot never became turns, and an attempt
     parked by the stop itself is not counted either: counting them kept the company at its stop with nothing running.
+
+    The first `state IN` term lets SQLite read only the partial index of live attempts (attempts_live_lease):
+    without it the OR scanned every attempt ever made, ~90 ms a call on a live install, on every claim.
     """
     now = H.now()
     return c.execute(
         "SELECT count(*) FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
-        "WHERE a.state='running' OR (a.state='leased' AND ((coalesce(p.wait_reason,'')!='' AND p.wait_reason!=?) "
-        "OR (coalesce(p.wait_reason,'')='' AND a.lease_until>? AND (NOT coalesce(p.managed,0) OR coalesce(p.start_until,'')>?))))",
+        "WHERE a.state IN ('leased','running') AND (a.state='running' OR (a.state='leased' AND "
+        "((coalesce(p.wait_reason,'')!='' AND p.wait_reason!=?) OR (coalesce(p.wait_reason,'')='' AND a.lease_until>? "
+        "AND (NOT coalesce(p.managed,0) OR coalesce(p.start_until,'')>?)))))",
         (REASON, now, now)).fetchone()[0]
 
 
@@ -105,7 +109,7 @@ def observe(c, settings, value=None, *, detailed=True):
         save(c, INCIDENT, incident)
     if value['at_stop']:
         # These jobs have not become turns yet: they remain queued and hold no place.
-        c.execute("INSERT OR IGNORE INTO org_turn_waits SELECT id,created FROM jobs WHERE state='queued'")
+        c.execute("INSERT OR IGNORE INTO org_turn_waits SELECT id,created_at FROM jobs WHERE state='queued'")
     if value['at_warning']:
         # Just below the stop the waiters keep their first claim on each freed place, across computers.
         c.execute("DELETE FROM org_turn_waits WHERE NOT EXISTS "

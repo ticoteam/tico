@@ -1,0 +1,47 @@
+{
+  "expected": [
+    {
+      "text": "Respect every request to block or opt out of our messages, including removing the person from our contacts.",
+      "quote": "You must respect all requests (either on or off WhatsApp) by a person to block, discontinue, or otherwise opt out of communications from you via WhatsApp, including removing that person from your contacts list.",
+      "section": "Opt-outs",
+      "who_hint": "messaging"
+    },
+    {
+      "text": "Do not impersonate another business or mislead customers about what our business is.",
+      "quote": "You must not impersonate another business or otherwise mislead customers as to the nature of your business.",
+      "section": "Impersonation",
+      "who_hint": "marketing"
+    },
+    {
+      "text": "Use each message template only for its designated purpose and within our terms.",
+      "quote": "Any Message Template must comply with our terms and these policies, and only be used for its designated purpose.",
+      "section": "Message Templates",
+      "who_hint": "messaging"
+    },
+    {
+      "text": "Offer a prompt human escalation path when automation answers in the 24-hour window.",
+      "quote": "You may use automation when responding during the 24-hour window, but must also have available prompt, clear, and direct escalation paths.",
+      "section": "Automation",
+      "who_hint": "support"
+    },
+    {
+      "text": "Keep a published privacy policy and the notices and consents needed to use people's content.",
+      "quote": "You are responsible for and must secure all necessary notices, permissions, and consents to collect, use, and share people’s content and information, including maintaining a published privacy policy",
+      "section": "Protect Data and Comply with Law",
+      "who_hint": "legal"
+    },
+    {
+      "text": "Do not use WhatsApp for telemedicine or to send health information where that is prohibited.",
+      "quote": "Don’t use WhatsApp for telemedicine or to send or request any health related information, if applicable regulations prohibit distribution of such information",
+      "section": "Health",
+      "who_hint": "legal"
+    }
+  ],
+  "url": "https://www.whatsapp.com/legal/business-policy",
+  "fetched_at": "2026-10-30T23:39:35Z",
+  "from": {
+    "name": "WhatsApp Business Policy",
+    "kind": "vendor"
+  },
+  "truncated": false
+}

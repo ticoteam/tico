@@ -26,8 +26,8 @@ PAUSED = "Paused so another turn could use the ChatGPT login; continues right af
 
 
 def _payload(c, aid, kind, field):
-    row = c.execute("SELECT payload_json FROM attempt_events WHERE attempt_id=? AND kind=? "
-                    f"AND json_extract(payload_json,'$.{field}') IS NOT NULL ORDER BY seq DESC LIMIT 1",
+    row = c.execute("SELECT payload FROM attempt_events WHERE attempt_id=? AND kind=? "
+                    f"AND json_extract(payload,'$.{field}') IS NOT NULL ORDER BY seq DESC LIMIT 1",
                     (aid, kind)).fetchone()
     try:
         payload = json.loads(row[0]) if row else {}
@@ -119,10 +119,10 @@ def unknown_holder(c, aid):
     if not payload or not payload.get("position"):
         return False
     run = payload.get("holder_attempt")
-    row = c.execute("SELECT state,finished FROM attempts WHERE id=?", (run,)).fetchone() if isinstance(run, str) and run else None
+    row = c.execute("SELECT state,finished_at FROM attempts WHERE id=?", (run,)).fetchone() if isinstance(run, str) and run else None
     if row and row["state"] in ("leased", "running"):
         return False
-    return not row or not row["finished"] or row["finished"] < H.shift(H.now(), seconds=-HOLDER_GONE_S)
+    return not row or not row["finished_at"] or row["finished_at"] < H.shift(H.now(), seconds=-HOLDER_GONE_S)
 
 
 def paused(c, aid, state, result_json):
@@ -147,7 +147,8 @@ def moved(c, aid, bot, who=None, auth=None):
     fallback = _named(payload.get("fallback"))
     if not fallback:
         return None
-    busy = payload.get("busy") if isinstance(payload.get("busy"), dict) else {}
+    busy = payload.get("busy")
+    busy = busy if isinstance(busy, dict) else {}
     login, holder = _named(busy.get("login")), _named(busy.get("holder"))
     if login and holder:
         login = login.removeprefix("this computer's ")

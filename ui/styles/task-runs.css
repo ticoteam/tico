@@ -1,6 +1,6 @@
 /* ui/styles/task-runs.css — A task's Runs section: the checkpoint, background work still running, and each attempt
    with its subagent tree. The cascade runs in the order index.html links these files; keep rules in order. */
-.task-runs .lbl{font-size:var(--t-xs);font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.task-runs .lbl{color:var(--muted);text-transform:uppercase;letter-spacing:var(--track-caps);font-size:var(--t-label);font-weight:600}
 .truns-cp,.truns-live{margin:0 0 8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface2)}
 .truns-cp-text{margin:2px 0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:12em;overflow:auto}
 .truns-live{border-color:var(--wait)}

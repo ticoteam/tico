@@ -41,7 +41,7 @@ At exactly $0, the company is paused. A balance below $0 is paused too.
 |---|---|
 | Tico models | The Gateway refuses calls within five minutes, normally on the next call. |
 | Tico server and bot computer | Both stop within five minutes, with no Hosting grace. Your Tico goes dark. |
-| Your account page | [app.tico.dev](https://app.tico.dev/) stays available to check credit and ask for more. |
+| Your account page | [app.tico.dev](https://app.tico.dev/) stays available to check credit and to contact support for more credit. |
 | Your data | Kept for at least 30 days. Running out of credit does not delete it. |
 
 The Gateway uses a balance cached for at most five minutes and subtracts each process’s own call costs between refreshes.
@@ -84,7 +84,7 @@ If spending takes you straight to paused before a warning is sent, you get only 
 At the minimum, **Paused: out of credit** shows the reported stop times for the Gateway key and both servers.
 **Not reported yet** means that service’s stop time is not available yet.
 For zero-grace companies, the owner gets one run-out email for that pause, saying the bots and server are paused and the data is safe.
-It includes an **Ask for more credit** link.
+It includes a **Contact support for more credit** link.
 Companies with positive Hosting grace use the [grace emails below](#hosting-grace-and-retained-data).
 Waitlist credit notices do not create a card inside your Tico.
 A Gateway recovery alone does not clear **Paused: out of credit** while billing-stopped servers remain stopped.
@@ -163,7 +163,7 @@ For example, changing a 72-hour grace to 48 hours after 50 hours schedules that 
 The change email names that next 00:05 UTC run, not the already-passed deadline.
 
 During grace, the company owner sees one **Needs you: add credit** card on this account page.
-It shows the stop time in UTC, says **Your data is kept**, and directs you to **Ask for more credit** below.
+It shows the stop time in UTC, says **Your data is kept**, and links to **Contact support for more credit**.
 The card appears only for the owner, not other company members, and stays on the account page outside your Tico.
 Refreshing the page does not create another card.
 
@@ -172,17 +172,17 @@ This applies to earlier and later moves, before or after a reminder has been sen
 An edit that leaves the effective stop time unchanged sends nothing.
 The card disappears when your balance rises above the minimum or the stop completes.
 Credit or a lower minimum that ends grace sends no stop-time change email.
-Use [Ask for more credit](ask-for-credit.md) to request credit from staff. The card does not take a card payment.
+To ask for more credit, use [Contact support for more credit](ask-for-credit.md). The card does not take a card payment.
 
 The grace emails go to the current company owner, using the account page’s company membership and profile email.
 They do not rely on the original sign-up email.
 
 | Email | When it is sent | What it tells you |
 |---|---|---|
-| Grace started | When grace starts. | Your servers keep running until the UTC stop time unless credit is added. Your data is kept. |
-| Stop time changed | After a real stop-time move during grace. | The new UTC stop time and how to sign in to request credit. |
-| Reminder | 24 hours before the current stop, if it was more than 24 hours away when scheduled. | The stop time and how to sign in to request credit. |
-| Servers stopped | After the stop completes. | The actual successful stop time and confirmation that your data is kept. |
+| Grace started | When grace starts. | Your servers keep running until the UTC stop time unless credit is added. Your data is kept. How to contact support for more credit. |
+| Stop time changed | After a real stop-time move during grace. | The new UTC stop time and how to contact support for more credit. |
+| Reminder | 24 hours before the current stop, if it was more than 24 hours away when scheduled. | The stop time and how to contact support for more credit. |
+| Servers stopped | After the stop completes. | The actual successful stop time, confirmation that your data is kept, and how to contact support for more credit. |
 
 After a change, a stop more than 24 hours away gets one reminder at the new stop time minus 24 hours.
 If the new stop is 24 hours away or less, the change email replaces the reminder.
@@ -206,8 +206,7 @@ Your account page stays available while your Tico server and bot computer are st
 
 ## More credit and restarting
 
-[Ask for more credit](ask-for-credit.md) sends a request to Tico staff from this account page.
-You can use it while your servers are stopped.
+To ask for more credit, contact support through [Contact support for more credit](ask-for-credit.md), linked from this account page.
 
 After staff add enough credit to cover model usage and bring the balance above the minimum, Tico models resume within five minutes.
 Server restart follows a separate check.

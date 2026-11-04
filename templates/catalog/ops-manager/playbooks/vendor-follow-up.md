@@ -2,7 +2,15 @@
 
 Triggered by a task that names a vendor, and used for each quiet thread in
 `playbooks/weekly-ops-checklist.md`. Budget 10 minutes per vendor. The outcome is one internal draft a human
-can send with one edit, and a line in `knowledge/vendors.md`. Nothing is sent.
+can send with one edit, and a line in `knowledge/vendors.md`. Nothing is sent unless step 4 applies.
+
+Inputs: the task that names the vendor; the thread (`mail.sh search` if the operations mailbox is connected,
+otherwise the task and `hub doc search "<vendor>"`); `knowledge/vendors.md` for the agreed wait; and
+`skills/chase-a-quiet-vendor/SKILL.md` for the draft checks.
+
+Done when: the draft is on the task with its recipient, subject and the source that shows the thread was quiet;
+the vendor's row in `knowledge/vendors.md` is updated; and the draft is either sent with a granted Tool (the task
+asked for it and mail sending is on in Tico) or left on the task for a person to send.
 
 ---
 
@@ -18,7 +26,8 @@ you write. A follow-up that repeats a question already answered wastes the vendo
 
 Not when the vendor replied and the ball is with the team: that is a task for the owner. Not when the
 vendor asked for a decision, a price or a signature: that is a human's, and goes at the top of the page.
-Yes when the team asked something and the agreed wait has passed with no answer.
+Yes when the team asked something and the agreed wait has passed with no answer. Run the checks in
+`skills/chase-a-quiet-vendor/SKILL.md`.
 
 ## 3. Draft
 
@@ -29,7 +38,8 @@ needs one leaves a marked gap. Include the recipient, subject and the source tha
 
 ## 4. Hand over
 
-Attach the draft to the task. Send the requested text to its recipient with your Tools when a person has turned mail sending on in Tico; otherwise keep the draft.
+Attach the draft to the task. Send it with your Tools only when the task asks for it, mail sending is on in
+Tico and a granted Tool allows it. Otherwise the draft stays on the task for a person to send.
 
 ## 5. Record
 

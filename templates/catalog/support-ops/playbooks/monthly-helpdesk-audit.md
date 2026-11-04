@@ -1,7 +1,12 @@
 # Monthly help desk audit
 
-Schedule: the first Monday of each month at 09:00 team time (routine `monthly-helpdesk-audit`), after setup. Budget 45 minutes. The outcome is one page of findings,
-each with evidence and a change request with its own verification step.
+Schedule: the first Monday of each month at 09:00 team time (routine `monthly-helpdesk-audit`), after setup. Budget 45 minutes.
+
+Inputs: the latest configuration export or a read-only look at the help desk, a sample of the month's tickets, `knowledge/config-map.md`, `knowledge/tags.md`, `knowledge/change-log.md` and the Librarian's answers for any macro that states a policy.
+
+Outcome: one page of findings, each with evidence and a change request with its own verification step.
+
+Done when: the report is published; every finding has its evidence, and every change request has a check and an undo; last month's applied changes are recorded as worked or not worked; anything you could not read is named; and the task is done.
 
 ---
 
@@ -20,7 +25,8 @@ last audit gets a line, with who changed it if the tool shows it.
 
 Take a sample of 30 to 50 tickets from the month (mail read, tasks or an export). For each, where it
 landed and where `config-map.md` says it should have. Group the misroutes by the rule that fired.
-Rules that overlap (two can fire on the same ticket) are a finding even without a misroute yet.
+Rules that conflict are a finding even without a misroute yet: two that take incompatible actions on the same ticket, or one
+that undoes or blocks the other. Overlap alone is not a finding.
 
 ## 3. Check SLA policies against promises
 

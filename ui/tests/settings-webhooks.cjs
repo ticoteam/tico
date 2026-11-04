@@ -1,11 +1,10 @@
 // Settings > Webhooks (ui/app/settings-webhooks.js) against a fake server. Guards: #/triggers and the old Triggers tab
 // land on Webhooks; a new incoming webhook (name, preset, keep days) is made in its three calls and its address and
-// signing secret show once, gone after Back; a webhook's detail lists its routine and rules and warns when a rule
-// wakes a bot a routine already gives a task; its call log opens a payload (redacted headers, body) and runs one
+// signing secret show once, gone after Back; a webhook's detail links to its Automations; its call log opens a payload (redacted headers, body) and runs one
 // again, while a refused call is recovered instead; Tico Team's built-in webhook is read-only but for Edit; an outgoing endpoint is made with the catalog's
 // event picker (a whole group is `group.*`) and shows its secret once; its sends retry, and failed or missed sends
 // since a day go again; its edit sets filters and custom headers, and a secret header's value never comes back; the
-// picker leaves out events only rules see (outbound: false); the Gateway tab asks for the Gateway first, then makes an
+// picker leaves out events only automations see (outbound: false); the Gateway tab asks for the Gateway first, then makes an
 // address shown once; Wake this server shows only on a hosted server. The wake address (owner, self-run server only) is
 // set in place, its signing secret stays until Done, a refusal shows under the input, and Turn off clears it. No
 // sideways scroll on a phone.
@@ -26,28 +25,24 @@ const AGO = m => new Date(Date.now() - m * 60000).toISOString();
 function trigger(id, name, more = {}) {
   return {id, name, kind: 'webhook', event: 'webhook.' + id, url: `${BASE}/${id}`, builtin: false, created_by: 'human:ana', created_at: AGO(900),
     last_received: null, received_24h: 0, refused_24h: 0, signed: false, preset: 'none', type_from: '', hourly: 60, keep_days: 7, unheard: 'log',
-    routines: [], relay: null, ...more};
+    relay: null, ...more};
 }
 function server() {
   return {
     triggers: [
-      trigger('shop', 'Shop', {last_received: AGO(4), received_24h: 12, refused_24h: 2, signed: true, preset: 'github', type_from: 'X-GitHub-Event',
-        routines: [{id: 'r1', bot: 'eng', title: 'Handle new orders'}]}),
+      trigger('shop', 'Shop', {last_received: AGO(4), received_24h: 12, refused_24h: 2, signed: true, preset: 'github', type_from: 'X-GitHub-Event'}),
       trigger('_tico', 'Tico Team', {builtin: true, url: '', created_by: 'keeper', type_from: '/kind', keep_days: 30}),
     ],
     deliveries: {shop: [
       {delivery: 'd2', sent_id: 'gh-2', received_at: AGO(4), bytes: 2300, tasks: 1, outcome: 'accepted', reason: '', type: 'push', via: 'direct', rules: 1, stored: true},
       {delivery: 'd1', sent_id: '', received_at: AGO(70), bytes: 120, tasks: 0, outcome: 'refused', reason: 'bad signature', type: '', via: 'gateway', rules: 0, stored: true}],
     _tico: [], orders: []},
-    rules: [{id: 'rw', scope_kind: 'team', scope_id: '', event: 'webhook.received', when: {trigger: 'shop', type: 'push'}, then: 'wake',
-      params: {bot: 'eng', text: 'Look'}, enabled: true, built_in: false},
-    {id: 'rx', scope_kind: 'team', scope_id: '', event: 'webhook.received', when: {trigger: 'other'}, then: 'wake', params: {bot: 'ops'}, enabled: true}],
     hooks: [{id: 'wh1', name: 'Zapier', url: 'https://hooks.zapier.com/a/b', host: 'hooks.zapier.com', events: ['task.*', 'approval.decided'], enabled: false,
       paused_reason: 'Failing for 3 days', rate_per_hour: 600, allow_http: false, created_by: 'human:ana', revision: 2, can_change: true, old_secret_until: null,
       last_7_days: {delivered: 40, failed: 3, pending: 0}, filter: {departments: ['engineering'], bots: ['bot:eng'], task_types: []},
       headers: [{name: 'x-api-key', secret: true, set: true}, {name: 'x-team', secret: false, value: 'acme'}]}],
-    sends: {wh1: [{id: 's2', webhook_id: 'wh1', type: 'task.done', subject: 't-9', state: 'failed', attempts: 5, last_status: 500, last_error: 'HTTP 500', created: AGO(30)},
-      {id: 's1', webhook_id: 'wh1', type: 'approval.decided', subject: 'a-1', state: 'delivered', attempts: 1, last_status: 200, last_error: '', created: AGO(90)}]},
+    sends: {wh1: [{id: 's2', webhook_id: 'wh1', type: 'task.done', subject: 't-9', state: 'failed', attempts: 5, last_status: 500, last_error: 'HTTP 500', created_at: AGO(30)},
+      {id: 's1', webhook_id: 'wh1', type: 'approval.decided', subject: 'a-1', state: 'delivered', attempts: 1, last_status: 200, last_error: '', created_at: AGO(90)}]},
     relay: {key: 'none', relays: 0, cursor: 0, last_pull: null, last_error: '', pending: 0, oldest: null, deleting: 0, active: false},
     hosted: false,
     role: 'owner',
@@ -91,7 +86,6 @@ async function open(browser, hash, viewport = {width: 1280, height: 860}, state 
     if (p === '/api/v2/sleep') return json({sleep: {hosted: state.hosted, hours: 0, runners: false}});
     if (p === '/api/v2/system-routines') return json({jobs: [], departments: [], task_rule_departments: [{id: 'engineering', name: 'Engineering'}, {id: 'sales', name: 'Sales'}]});
     if (p === '/api/v2/task-types') return json({types: [{id: 'general', name: 'General', steps: []}, {id: 'bug', name: 'Bug', steps: []}]});
-    if (p === '/api/v2/rules') return json({rules: state.rules, events: ['comment'], sourceless_events: ['webhook.received'], more: false});
     if (p === '/api/v2/triggers' && !post) return json({triggers: state.triggers});
     if (p === '/api/v2/triggers') {
       const id = post.name.toLowerCase();
@@ -106,7 +100,7 @@ async function open(browser, hash, viewport = {width: 1280, height: 860}, state 
       if (rest === 'deliveries') return json({deliveries: state.deliveries[t.id] || []});
       if (rest === 'recover') return json({recover: {trigger: t.id, since_hours: post.since_hours, found: 1, recovered: 1, duplicate: 0, still_refused: 0, more: false}});
       if (rest === 'relay/wake') { t.relay.wake = post.wake; return json({relay: {trigger: t.id, relay_id: 'rl_1', wake: post.wake}}); }
-      if (rest === 'relay') { t.relay = {address_prefix: 'https://gw.tico.dev/v1/hooks/rl_1', created: AGO(0), wake: null}; return json({relay: {trigger: t.id, relay_id: 'rl_1', address_prefix: t.relay.address_prefix, address: t.relay.address_prefix + '/gw-secret', replayed: false}}); }
+      if (rest === 'relay') { t.relay = {address_prefix: 'https://gw.tico.dev/v1/hooks/rl_1', created_at: AGO(0), wake: null}; return json({relay: {trigger: t.id, relay_id: 'rl_1', address_prefix: t.relay.address_prefix, address: t.relay.address_prefix + '/gw-secret', replayed: false}}); }
       const d = rest.match(/^deliveries\/([^/]+)(\/replay)?$/);
       if (d && d[2]) return json({replay: {delivery: d[1] + ':replay:1', of: d[1], tasks: 1, rules: 1}});
       if (d) return json({delivery: {id: d[1], received_at: AGO(4), type: 'push', via: 'direct', outcome: 'accepted', tasks: 1, rules: 1, reason: '', bytes: 2300,
@@ -190,12 +184,10 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       assert.match(await pane.locator('.wh-facts').innerText(), /Type from\s+\/type/);
       await pane.locator('[data-wh-back]').click();
 
-      // Shop: listeners, the double-wake warning, the call log, View payload and Run again.
+      // Shop: its Automations link, the call log, View payload and Run again.
       await pane.locator('[data-wh-open="shop"]').click();
       await pane.locator('[data-wh-calls]').waitFor();
-      assert.match(await pane.locator('[data-wh-listeners]').innerText(), /Handle new orders[\s\S]*WHEN type push THEN wake Engineer/);
-      assert.doesNotMatch(await pane.locator('[data-wh-listeners]').innerText(), /Ops/, 'a rule on another webhook is not listed');
-      assert.match(await pane.locator('[data-wh-twice]').innerText(), /^Engineer:/);
+      assert.equal(await pane.locator('[data-wh-automations]').getAttribute('href'), '#/automations?q=Shop', 'listeners are Automations');
       assert.equal(await pane.locator('[data-wh-call]').count(), 2);
       assert.equal(await pane.locator('[data-wh-call="d1"] [data-wh-payload]').count(), 1, 'a refused call is kept to look at');
       assert.equal(await pane.locator('[data-wh-call="d1"] [data-wh-replay]').count(), 0, 'a refused call is recovered, not run again');
@@ -242,7 +234,7 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       const make = page.locator('.wh-dialog');
       await make.locator('[name=name]').fill('Make.com');
       await make.locator('[name=url]').fill('https://hook.make.com/abc');
-      for (const e of CATALOG.filter(x => x.outbound === false)) assert.equal(await make.locator(`[data-ev-name="${e.name}"]`).count(), 0, e.name + ' is for rules only');
+      for (const e of CATALOG.filter(x => x.outbound === false)) assert.equal(await make.locator(`[data-ev-name="${e.name}"]`).count(), 0, e.name + ' is for automations only');
       assert.equal(await make.locator('[data-ev-name="release.published"]').count(), 1);
       await make.locator('[data-ev-all]').uncheck();
       assert.equal(await make.locator('.wh-ev-groups input:checked').count(), 0, 'unchecking All clears the boxes');
@@ -432,7 +424,7 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       // Phone: the row with its secret, and the edit form, fit.
       const state = server();
       state.relay = {...state.relay, key: 'connected', last_pull: AGO(1), pending: 0};
-      state.triggers[0].relay = {address_prefix: 'https://gw.tico.dev/v1/hooks/rl_1', created: AGO(60), wake: null};
+      state.triggers[0].relay = {address_prefix: 'https://gw.tico.dev/v1/hooks/rl_1', created_at: AGO(60), wake: null};
       const {page, errors} = await open(browser, '#/settings/webhooks', {width: 390, height: 844}, state);
       const pane = page.locator('#settings-webhooks');
       await pane.locator('[data-wh-open="shop"]').waitFor();
@@ -468,7 +460,7 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       // Phone: list, detail, outgoing and Gateway with nothing sideways.
       const state = server();
       state.relay = {...state.relay, key: 'connected', last_pull: AGO(1), pending: 0};
-      state.triggers[0].relay = {address_prefix: 'https://gw.tico.dev/v1/hooks/rl_1', created: AGO(60), wake: true};
+      state.triggers[0].relay = {address_prefix: 'https://gw.tico.dev/v1/hooks/rl_1', created_at: AGO(60), wake: true};
       state.hosted = true;
       const {page, errors} = await open(browser, '#/settings/webhooks', {width: 390, height: 844}, state);
       const pane = page.locator('#settings-webhooks');

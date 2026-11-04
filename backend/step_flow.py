@@ -10,9 +10,7 @@ A step's `flow` (all keys optional):
   recorded on the ticket.
 - `timeout_hours`: a check open this long is closed unanswered and the round is skipped (the ticket goes on as if it
   had passed with no comments).
-- `status_hours`, `late_hours`: at a working step, a ticket quiet this long gets its bot owner one status check, and
-  one this long at the step gets its manager one notice (backend/step_age.py). An engineering type's working steps
-  have 2 and 4 without a setting.
+- `late_hours`: at a working step, a ticket this long at the step gets its manager one notice (backend/step_age.py). An engineering type's working steps have 4 without a setting. `status_hours` is still accepted and wakes no one.
 - `backlog`: {over, per, notify, every_hours}: when more than `over` tickets wait at the step (or for one owner there),
   who to tell (backend/step_backlog.py).
 - `can_hold`: false on steps a ticket is never put on hold from (a merged change is reverted or fixed forward).
@@ -22,6 +20,9 @@ A step's `flow` (all keys optional):
 - `check`: the kind of check the step asks for: `review`, `qa` or `release_qa` (after the release). Every rule about
   reviews, QA, waivers and check pools finds its steps by this, never by their names (`check_kind`, `titled`). A saved
   flow that leaves `check` out keeps the step's kind; `"check": null` clears it.
+- `other_company`: on a check step only, `prefer` (the default) or `require`: whether the check goes to a bot of another
+  model company than the builder's before one of the builder's company (`prefer`), or only ever to another company's
+  bot, waiting when none is free (`require`) (backend/check_pools.py, `ranked`).
 
 Step references are stored by step id, so renaming a step keeps its flow; the API takes names or ids."""
 import json
@@ -31,27 +32,28 @@ from . import hubdb as H
 
 MERGE = "merge"
 KEYS = ("on_pass", "on_fail", "after_green", "on_merge", "skip_tag", "timeout_hours", "status_hours", "late_hours",
-        "can_hold", "gate", "assign", "backlog", "check")
+        "can_hold", "gate", "assign", "backlog", "check", "other_company")
 HOURS = ("timeout_hours", "status_hours", "late_hours")
 STEP_KEYS = ("on_pass", "on_fail", "after_green")
 SEEDED = "step_flow.seeded"
 CHECKS_SEEDED = "step_flow.checks_seeded"
 CHECK_KINDS = ("review", "qa", "release_qa")
+OTHER_COMPANY = ("prefer", "require")
 MAX_TIMEOUT_HOURS = 24 * 14
 
 
 def ensure(c):
-    H.add_column(c, "task_steps", "flow_json", "TEXT")
+    H.add_column(c, "task_steps", "flow", "TEXT")
 
 
 def _ready(c):
-    return "flow_json" in {r[1] for r in c.execute("PRAGMA table_info(task_steps)")}
+    return "flow" in {r[1] for r in c.execute("PRAGMA table_info(task_steps)")}
 
 
 # ----------------------------------------------------------------------------------------------- the setting
 def of(step):
     """A step row's flow as a dict (empty when it has none)."""
-    raw = (step or {}).get("flow_json")
+    raw = (step or {}).get("flow")
     value = H._json(raw, {}) if isinstance(raw, str) else (raw or {})
     return value if isinstance(value, dict) else {}
 
@@ -92,6 +94,12 @@ def clean(c, actor, raw, existing):
         # A flow sent without `check` (a steps file written before steps had kinds) keeps the step's kind: losing it
         # quietly makes its QA request an open child that holds the ticket. Send `"check": null` to clear it.
         out["check"] = check_kind(existing)
+    if flow.get("other_company") not in (None, ""):
+        if not out.get("check"):
+            H.refuse(c, actor, "kind", "A step's other_company is set on a check step (review, qa or release_qa) only")
+        if flow["other_company"] not in OTHER_COMPANY:
+            H.refuse(c, actor, "kind", "A step's other_company is " + " or ".join(OTHER_COMPANY))
+        out["other_company"] = flow["other_company"]
     for key in ("on_merge", "can_hold", "gate"):
         if flow.get(key) is not None:
             if not isinstance(flow[key], bool):
@@ -130,7 +138,7 @@ def view(c, steps):
         for key in STEP_KEYS:
             if flow.get(key) and flow[key] != MERGE:
                 shown[key] = names.get(flow[key], flow[key])
-        row = {k: v for k, v in s.items() if k != "flow_json"}
+        row = {k: v for k, v in s.items() if k != "flow"}
         out.append({**row, "flow": shown})
     return out
 
@@ -158,7 +166,7 @@ def merge_step(c, type_id):
 def has_flow(c, type_id):
     """Whether any step of the type has a flow: only then does Tico move its tickets."""
     return bool(type_id) and _ready(c) and bool(c.execute(
-        "SELECT 1 FROM task_steps WHERE type_id=? AND flow_json IS NOT NULL AND flow_json NOT IN ('','{}') LIMIT 1",
+        "SELECT 1 FROM task_steps WHERE type_id=? AND flow IS NOT NULL AND flow NOT IN ('','{}') LIMIT 1",
         (type_id,)).fetchone())
 
 
@@ -182,6 +190,13 @@ def check_kind(s):
     """The kind of check step `s` asks for (`review`, `qa`, `release_qa`), or None for a step that is no check."""
     value = of(s).get("check")
     return value if value in CHECK_KINDS else None
+
+
+def other_company(s):
+    """How a check step treats the builder's model company: `require` when only another company's bot may take its
+    check, else `prefer` (the default, and every step that is no check)."""
+    value = of(s).get("other_company")
+    return value if value in OTHER_COMPANY else "prefer"
 
 
 def checks(c, type_id, kind=None):
@@ -225,7 +240,7 @@ def titled(c, type_id, title):
     # The board has no step of that kind (or no flow at all): the Dev board's own titles, Review 1 and 2, QA and
     # Post Release QA, still name a kind of check, of no step.
     return {"id": f"{kind}:{order}", "type_id": type_id, "name": " ".join(m[0].split()), "position": -1,
-            "status": "review", "flow_json": json.dumps({"check": kind}), "generic": True}
+            "status": "review", "flow": json.dumps({"check": kind}), "generic": True}
 
 
 def child_check(c, child, ticket=None):
@@ -268,8 +283,8 @@ def check_step(c, check, ticket=None):
     ticket_id = (ticket or {}).get("id") or TR.parent_of(c, check["id"])
     if not ticket_id:
         return None
-    found = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='step' AND ts<=? "
-                      "ORDER BY ts DESC, rowid DESC LIMIT 1", (ticket_id, check.get("created") or "")).fetchone()
+    found = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' AND created_at<=? "
+                      "ORDER BY created_at DESC, rowid DESC LIMIT 1", (ticket_id, check.get("created_at") or "")).fetchone()
     s = step(c, found[0]) if found else None
     if s is None:
         parent = H.task(c, ticket_id)
@@ -279,7 +294,8 @@ def check_step(c, check, ticket=None):
     # Ordinary subtasks made during a check are independent work, never checks to expire or consume.
     from .check_pools import is_security
     title = str(check.get("title") or "").strip()
-    filed = c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='check_filed' AND new=? LIMIT 1",
+    filed = c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_filed' "
+                      "AND new=? LIMIT 1",
                       (ticket_id, check["id"])).fetchone()
     return s if (filed or titled(c, s["type_id"], title) or is_security(title)
                  or title.lower() == label(s).lower() or title.lower().startswith(label(s).lower() + ":")) else None
@@ -362,7 +378,7 @@ def seed_checks(c):
             kind = (DEV.get(s["name"]) or {}).get("check") or _inferred(s, merged["position"] if merged else None)
             if not kind:
                 continue
-            c.execute("UPDATE task_steps SET flow_json=? WHERE id=?",
+            c.execute("UPDATE task_steps SET flow=? WHERE id=?",
                       (json.dumps({**flow, "check": kind}, sort_keys=True), s["id"]))
             given[s["name"]] = kind
         H.event(c, H.KEEPER, CHECKS_SEEDED, ident, {"checks": given})
@@ -384,4 +400,4 @@ def apply(c, type_id, flows):
                     out.pop(key)
                     continue
                 out[key] = target["id"]
-        c.execute("UPDATE task_steps SET flow_json=? WHERE id=?", (json.dumps(out, sort_keys=True), s["id"]))
+        c.execute("UPDATE task_steps SET flow=? WHERE id=?", (json.dumps(out, sort_keys=True), s["id"]))

@@ -250,3 +250,78 @@ def test_pictures_still_redirect_and_other_files_are_unchanged(api, tico):
     assert tico_storage.visual_kind("text/plain", 10) is None and tico_storage.visual_kind("image/png", 10) is None
     assert tico_storage.visual_kind("text/html", V.LIMITS["page"] + 1) is None
 
+
+
+def config(api, who="ben-test"):
+    found = api.get("/api/v2/config", headers=headers(who))
+    assert found.status_code == 200, found.text
+    return found.json()
+
+
+def test_config_says_pages_show_from_file_hosting_and_names_its_address_for_the_desktop_app(api, tico, monkeypatch):
+    """The desktop app follows a frame only to the address the signed-in config names (app/src/visual_origin.rs), and
+    Settings says whether pages show inline: hosted while Tico's bucket takes new files; off or a visual address of
+    its own, nothing about file hosting."""
+    made, hq, sync = tico
+    settings = api.app.state.store.settings
+    seen = config(api)
+    assert (seen["visuals"], seen["visual_files"]) == ("media", "")
+    sync(on())
+    seen = config(api)
+    assert (seen["visuals"], seen["visual_files"]) == ("hosted", "https://" + ADDRESS)
+    assert SIGNING not in api.get("/api/v2/config", headers=headers()).text
+    outside = api.get("/api/v2/config")
+    assert outside.status_code == 401 and ADDRESS not in outside.text
+    sync(on("credits_out"))
+    seen = config(api)
+    assert (seen["visuals"], seen["visual_files"]) == ("media", "https://" + ADDRESS), \
+        "pages with a copy still show from there, so the app keeps following frames to it"
+    sync(on())
+    monkeypatch.setattr(settings, "visual_origin", "https://visuals.acme.example")
+    seen = config(api)
+    assert (seen["visuals"], seen["visual_files"]) == ("full", "")
+
+
+def test_src_for_one_file_version_follows_the_same_rules_as_a_message(api, tico):
+    """Pages (backend/pages.py) ask for one version's `src` here: a reader who may read it gets the app's own route
+    on to the company's address; one who may not, a file on disk, or a type that never shows inline gets None."""
+    made, hq, sync = tico
+    _, disk_page, _ = task_with_file(api, private=False, name="old.html", text="<p>on this server's disk</p>")
+    sync(on())
+    tid, files, _ = page_and_svg(api, private=True)
+    app, settings = api.app, api.app.state.store.settings
+    with app.state.store.read() as c:
+        ben, cara = (app.state.auth.identity_for_actor(c, a) for a in ("human:ben", "human:cara"))
+        src = V.src_for(app, settings, c, ben, files["page"], 1)
+        assert V.src_for(app, settings, c, cara, files["page"], 1) is None
+        assert V.src_for(app, settings, c, ben, disk_page, 1) is None, "not in Tico's bucket: an Open card"
+        assert V.src_for(app, settings, c, ben, files["page"], 99) is None
+    assert src.startswith("/visuals/")
+    follow(api, src)
+    notes = api.post(f"/api/v2/tasks/{tid}/files", files={"file": ("notes.txt", b"plain")}, headers=headers("ben-test"))
+    with app.state.store.read() as c:
+        assert V.src_for(app, settings, c, ben, notes.json()["file_id"], 1) is None
+
+
+def test_a_local_install_may_frame_pages_from_either_loopback_spelling(api):
+    """A local install's address is http://127.0.0.1:8765, and the same app opens at localhost:8765 (or the desktop
+    app is pointed there): the copy's ancestors slot names both, and the edge accepts both (docs/files.md)."""
+    from dataclasses import replace
+    settings = api.app.state.store.settings
+    for own, twin in (("http://127.0.0.1:8765", "http://localhost:8765"), ("http://localhost:8877", "http://127.0.0.1:8877")):
+        found = V.ancestors(replace(settings, public_url=own, cors_origins=()))
+        assert found == ["'self'", own, twin] and all(tico_storage.ANCESTOR.match(x) for x in found)
+    assert V.ancestors(replace(settings, public_url="https://tico.acme.example", cors_origins=())) == \
+        ["'self'", "https://tico.acme.example"]
+
+
+def test_an_edge_link_is_accepted_by_an_edge_whose_clock_is_a_little_behind(api, tico):
+    """The edge refuses an expiry more than 300 seconds ahead of its own clock (infra/files-edge/request.js): a link
+    from a server whose clock runs a minute ahead must still open."""
+    made, hq, sync = tico
+    sync(on())
+    found = api.app.state.blobs.edge
+    now = int(time.time())
+    link = tico_storage._signed(found, "/visuals/ab/ab" + "0" * 62, now=now + 59)
+    expiry = int(dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(link).query))["e"])
+    assert now < expiry <= now + 300

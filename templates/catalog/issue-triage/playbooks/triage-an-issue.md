@@ -29,20 +29,21 @@ digest as a proposal.
 
 ## 3. Check the bug against the repro checklist
 
-Compare with `knowledge/repro-checklist.md`. List exactly what is missing (version, steps, expected
+Follow `skills/check-a-bug-report-for-repro/SKILL.md`, comparing with `knowledge/repro-checklist.md`. List exactly what is missing (version, steps, expected
 versus actual, logs). If something is missing, draft the request:
 
     Thanks for the report. To look into this we need: <the missing items only>. Could you add them
     here? Once we can reproduce it we will pick it up.
 
 Two to four lines, polite, no blame, no promise of a fix or a date, no request for credentials. Put it on
-the task; the label proposal is `needs-info` (the repository's own name for it).
+the task. The label proposal is the repository's waiting-for-reporter label from `knowledge/labels.md`; if the repository
+has none, propose one in the digest and do not invent it.
 
 ## 4. Find duplicates and related issues
 
-    gh search issues "<distinctive words>" -R <repo> --state all
+    gh search issues "<distinctive words>" -R <repo>
 
-Put the candidate and the existing issues to the decision model:
+Follow `skills/find-a-duplicate-issue/SKILL.md`: distinctive terms first, then the decision call with the candidate and the existing issues:
 
     hub decision ask --set covered --state-file cand.json --option covered=existing.json
 

@@ -384,7 +384,7 @@ pub fn remove_profile(config: &Config, name: &str) -> Result<bool, String> {
     }
 }
 
-/// The `profile` subcommand: add, list (runner/__main__.py profile_command). Writes runner.json the
+/// The `profile` subcommand: add, list (runner_support/__main__.py profile_command). Writes runner.json the
 /// way Python does: every key kept, two-space indent.
 pub fn command(config: &mut Config, action: &str, name: Option<&str>, share_operator: bool) -> Result<String, String> {
     match action {
@@ -463,14 +463,49 @@ pub fn remember_weekly(profile: &str, runtime: &str, event: &Value) {
         reset = crate::util::iso(&json!(at));
     }
     let status = event["status"].as_str().filter(|s| ["allowed", "allowed_warning", "rejected"].contains(s)).map_or(Value::Null, |s| json!(s));
+    // Whose login the reading is, as the turn or the read named it (backend/model_subscriptions.py `provenance`): a company
+    // subscription with its id, or the computer's own login. Anything else is kept as neither, so it counts for no plan.
+    let (origin, subscription) = match event["origin"].as_str() {
+        Some("subscription") => match event["subscription_id"].as_str().filter(|id| !id.is_empty() && id.len() <= 80) {
+            Some(id) => (json!("subscription"), json!(id)),
+            None => (Value::Null, Value::Null),
+        },
+        Some("login") => (json!("login"), Value::Null),
+        _ => (Value::Null, Value::Null),
+    };
     let now = crate::util::iso(&json!(crate::util::epoch_s()));
-    weekly().lock().unwrap().insert((profile.into(), runtime.into(), window), json!({"used_percent": percent, "resets_at": reset, "reported_at": now, "status": status}));
+    weekly().lock().unwrap().insert((profile.into(), runtime.into(), window), json!({"used_percent": percent, "resets_at": reset, "reported_at": now, "status": status, "origin": origin, "subscription_id": subscription}));
 }
 
 /// The usage windows kept for `profile`'s `runtime` login, as `weekly` / `five_hour` fields.
 pub fn windows(profile: &str, runtime: &str) -> Map<String, Value> {
     let weekly = weekly().lock().unwrap();
     ["weekly", "five_hour"].into_iter().filter_map(|w| weekly.get(&(profile.to_string(), runtime.to_string(), w)).map(|v| (w.to_string(), v.clone()))).collect()
+}
+
+/// Whether the server reads a usage window's `origin` and `subscription_id` (the heartbeat answer's
+/// `subscription_usage_sources`): an older server refuses those fields, and with them the whole window.
+static SERVER_USAGE_SOURCES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_server_takes_usage_sources(on: bool) {
+    SERVER_USAGE_SOURCES.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// `windows` as the server takes them: each window's origin and subscription id only where the server reads them.
+pub fn windows_for_server(profile: &str, runtime: &str) -> Map<String, Value> {
+    let takes = SERVER_USAGE_SOURCES.load(std::sync::atomic::Ordering::Relaxed);
+    windows(profile, runtime).into_iter().map(|(w, v)| (w, for_server(v, takes))).collect()
+}
+
+/// A usage window without its origin and subscription id unless `takes` (the server reads them).
+pub fn for_server(mut window: Value, takes: bool) -> Value {
+    if !takes {
+        if let Some(fields) = window.as_object_mut() {
+            fields.remove("origin");
+            fields.remove("subscription_id");
+        }
+    }
+    window
 }
 
 /// When `profile`'s `runtime` login can work again after a usage limit: the latest reset of a kept window the
@@ -546,6 +581,9 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
                 }
                 for runtime in crate::harness_tools::profile_runtimes() {
                     let runtime = runtime.as_str();
+                    // A sign-in or sign-out while this reads (accounts::forget) makes its answer stale: the account it read
+                    // is not kept, and a signed-out answer does not clear the new account.
+                    let since = crate::accounts::read_started(&name, runtime);
                     let status = crate::harness_tools::caps(runtime, "").sign_in_status;
                     let mut signed = Value::Null;
                     let budget = deadline.saturating_duration_since(Instant::now());
@@ -565,8 +603,12 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
                                         serde_json::from_slice::<Value>(&out.stdout).ok().filter(|v| v.is_object()).map_or(Value::Null, |v| {
                                             if crate::harness_tools::caps(runtime, "").account == "status-json" {
                                                 match crate::accounts::from_status_json(&v) {
-                                                    Some(account) => crate::accounts::remember(&name, runtime, account),
-                                                    None => crate::accounts::forget(&name, runtime),
+                                                    Some(account) => {
+                                                        crate::accounts::keep_if_current(&name, runtime, since, || crate::accounts::remember(&name, runtime, account));
+                                                    }
+                                                    None => {
+                                                        crate::accounts::forget_if_current(&name, runtime, since);
+                                                    }
                                                 }
                                             }
                                             json!(v[&status.field] == true)
@@ -591,7 +633,7 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
                     }
                     // A signed-out login has no account: the next sign-in, maybe as someone else, reads it afresh.
                     if signed == false {
-                        crate::accounts::forget(&name, runtime);
+                        crate::accounts::forget_if_current(&name, runtime, since);
                     }
                     runtimes.insert(runtime.into(), json!({"signed_in": signed}));
                 }
@@ -610,6 +652,7 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
         }
     };
     let weekly = weekly().lock().unwrap();
+    let takes = SERVER_USAGE_SOURCES.load(std::sync::atomic::Ordering::Relaxed);
     rows.into_iter()
         .map(|mut p| {
             let name = text_of(&p["name"]);
@@ -617,7 +660,7 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
                 for (runtime, state) in rts.iter_mut() {
                     for window in ["weekly", "five_hour"] {
                         if let Some(w) = weekly.get(&(name.clone(), runtime.clone(), window)) {
-                            state[window] = w.clone();
+                            state[window] = for_server(w.clone(), takes);
                         }
                     }
                     // The account only beside a login that is not known to be signed out.
@@ -781,6 +824,32 @@ pub(crate) mod tests {
         assert_eq!(crate::accounts::account("win-test", "codex").unwrap()["plan"], "pro");
         weekly().lock().unwrap().retain(|k, _| k.0 != "win-test");
         crate::accounts::forget("win-test", "codex");
+    }
+
+    #[test]
+    fn a_window_names_whose_login_it_is_only_as_the_turn_or_the_read_did() {
+        let reading = |origin: Value, id: Value| json!({"used_percent": 40, "window_minutes": 10080, "origin": origin, "subscription_id": id});
+        let kept = || {
+            let weekly = windows("origin-test", "claude")["weekly"].clone();
+            (weekly["origin"].clone(), weekly["subscription_id"].clone())
+        };
+        remember_weekly("origin-test", "claude", &reading(json!("subscription"), json!("sub-a")));
+        assert_eq!(kept(), (json!("subscription"), json!("sub-a")));
+        // A subscription turn without its id, a login that names one, and a reading with no origin count for no plan.
+        remember_weekly("origin-test", "claude", &reading(json!("subscription"), json!("")));
+        assert_eq!(kept(), (Value::Null, Value::Null));
+        remember_weekly("origin-test", "claude", &reading(json!("login"), json!("sub-a")));
+        assert_eq!(kept(), (json!("login"), Value::Null));
+        remember_weekly("origin-test", "claude", &json!({"used_percent": 40, "window_minutes": 10080}));
+        assert_eq!(kept(), (Value::Null, Value::Null));
+        forget_windows("origin-test", "claude");
+    }
+
+    #[test]
+    fn a_window_is_sent_with_its_origin_only_to_a_server_that_reads_it() {
+        let window = json!({"used_percent": 40, "origin": "login", "subscription_id": null});
+        assert_eq!(for_server(window.clone(), true), window);
+        assert_eq!(for_server(window, false), json!({"used_percent": 40}));
     }
 
     #[test]

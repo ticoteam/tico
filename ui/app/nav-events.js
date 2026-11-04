@@ -5,14 +5,14 @@
 $('#search-close').onclick = () => $('#search-modal').close();
 $('#search-modal').addEventListener('click', ev => {
   if (ev.target === $('#search-modal')) return $('#search-modal').close();
-  const li = ev.target.closest('li[data-href]'); if (li) searchGo(li.dataset.href, li.dataset.ask);
+  const li = ev.target.closest('li[data-href]'); if (li) searchGo(li.dataset.href);
 });
 $('#search-input').oninput = () => { SEARCH_SEL = 0; searchRender(); };
 $('#search-input').onkeydown = ev => {
   const n = $('#search-results').querySelectorAll('li[data-href]').length;
   if (ev.key === 'ArrowDown') { ev.preventDefault(); SEARCH_SEL = Math.min(SEARCH_SEL + 1, n - 1); searchRender(); }
   else if (ev.key === 'ArrowUp') { ev.preventDefault(); SEARCH_SEL = Math.max(SEARCH_SEL - 1, 0); searchRender(); }
-  else if (ev.key === 'Enter') { ev.preventDefault(); const li = $('#search-results [aria-selected=true]'); searchGo(li?.dataset.href, li?.dataset.ask); }
+  else if (ev.key === 'Enter') { ev.preventDefault(); const li = $('#search-results [aria-selected=true]'); searchGo(li?.dataset.href); }
 };
 document.addEventListener('keydown', ev => {
   if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'k') { ev.preventDefault(); searchOpen(); }

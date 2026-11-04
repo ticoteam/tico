@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000' + '1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex');
 const A = (id, name, content_type, kind, title) => ({id, file_id: id, version: 1, ref: id + '@1', title, kind, name, size: 1000, content_type,
@@ -15,18 +16,18 @@ const A = (id, name, content_type, kind, title) => ({id, file_id: id, version: 1
   const browser = process.env.TICO_BROWSER === 'webkit' ? await webkit.launch({headless: true})
     : await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined, headless: true});
   const now = new Date().toISOString();
-  const messages = [{id: 'm1', from_actor: 'bot:designer', body: 'This week.', created: now, refs: {attachments: [
+  const messages = [{id: 'm1', sender_id: 'bot:designer', body: 'This week.', created_at: now, refs: {attachments: [
     A('f-chart', 'chart.png', 'image/png', 'image', 'Weekly signups'), A('f-page', 'local.html', 'text/html', 'page', 'Embedded pair'),
     A('f-csv', 'data.csv', 'text/csv', 'file', 'data.csv')]}}];
-  const task = {id: 't1', title: 'Metrics', owner: 'bot:designer', requester: 'human:ana', status: 'review', lane: 'company', rank: 1, labels: [], links: [],
-    parts: {total: 0, done: 0}, version: 1, created: now, updated: now, body: 'Metrics.', attachments: []};
-  const tver = (id, mime) => ({n: 1, size: 1000, mime, sha256: 'x', created: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
+  const task = {id: 't1', title: 'Metrics', owner_id: 'bot:designer', requester_id: 'human:ana', status: 'review', lane: 'company', rank: 1, labels: [], links: [],
+    parts: {total: 0, done: 0}, version: 1, created_at: now, updated_at: now, body: 'Metrics.', attachments: []};
+  const tver = (id, mime) => ({n: 1, size: 1000, mime, sha256: 'x', created_at: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
     width: null, height: null, duration_ms: null, media_state: 'none', url: `/api/v2/files/${id}?v=1`, poster_url: null, thumb_url: null});
   const taskFiles = [{id: 'f-metrics', name: 'metrics.png', mime: 'image/png', current_version: 1, archived: false, versions: [tver('f-metrics', 'image/png')]},
     {id: 'f-remote', name: 'remote.html', mime: 'text/html', current_version: 1, archived: false, versions: [tver('f-remote', 'text/html')]},
     {id: 'f-notes', name: 'notes.csv', mime: 'text/csv', current_version: 1, archived: false, versions: [tver('f-notes', 'text/csv')]},
     {id: 'f-plain', name: 'untitled.png', mime: 'image/png', current_version: 1, archived: false, versions: [tver('f-plain', 'image/png')]}];
-  const taskComments = [{id: 'c1', kind: 'say', from_actor: 'bot:designer', body: 'Metrics attached.', created: now, answers: [], refs: {task: 't1', comment: true,
+  const taskComments = [{id: 'c1', kind: 'say', sender_id: 'bot:designer', body: 'Metrics attached.', created_at: now, answers: [], refs: {task: 't1', comment: true,
     attachments: [A('f-metrics', 'metrics.png', 'image/png', 'image', 'Private metrics'), A('f-remote', 'remote.html', 'text/html', 'page', 'Remote reference'),
       A('f-gone', 'old.html', 'text/html', 'page', 'Earlier draft'),
       // sent without a title: the server stores the file's name as its title (backend/visuals.py)
@@ -37,6 +38,7 @@ const A = (id, name, content_type, kind, title) => ({id, file_id: id, version: 1
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
+  const threads = threadsFake({bot: 'designer', messages: () => messages});
   await context.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -49,8 +51,8 @@ const A = (id, name, content_type, kind, title) => ({id, file_id: id, version: 1
     if (p === '/api/issues') return json([]);
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     if (p === '/api/v2/events') return;                                 // live events, held open
-    if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c-designer', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:designer']}] : []});
-    if (p === '/api/v2/conversations/c-designer/snapshot') return json({messages, execution: null});
+    const answer = threads(p, url, req.method());
+    if (answer !== undefined) return json(answer);
     if (p === '/api/v2/tasks' && req.method() === 'GET') return json({tasks: [task], next_offset: null});
     if (p === '/api/v2/tasks/t1/files') return json({files: taskFiles});
     if (p === '/api/v2/tasks/t1') return json({task, comments: taskComments, events: [], children: [], parent: null, mover: true, messages: [], can_comment: true});
@@ -58,7 +60,7 @@ const A = (id, name, content_type, kind, title) => ({id, file_id: id, version: 1
   });
 
   // ---- chat: a titled picture is a thumbnail captioned and named by its title; a titled page is a chip with the title
-  await page.goto('https://tico-ui.test/#/bot/designer/chat');
+  await page.goto('https://tico-ui.test/#/bot/designer/dm');
   const m1 = page.locator('[data-message="m1"]');
   await m1.locator('.chat-files .chat-thumb.ready').waitFor();
   assert.equal(await m1.locator('figure.vcard').count(), 0, 'no visual address: no cards');

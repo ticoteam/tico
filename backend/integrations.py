@@ -213,19 +213,37 @@ class Catalog:
                 for page in pages.values()]
 
 
-def inventory(c, settings, auth, who):
+# Verbs that change nothing outside: a bot whose entry may do only these is read only, whatever the page allows.
+# `use` is the model a bot runs on.
+READ_VERBS = ("read", "list", "search", "query", "use")
+
+
+def write_level(can, writes):
+    """What one bot may change through a tool: `never` (read only), `approval` or `allowed`, the page's `writes`
+    narrowed by the verbs the bot's own entry declares."""
+    return "never" if writes == "never" or all(verb in READ_VERBS for verb in can or ()) else writes
+
+
+def inventory(c, settings, auth, who, aliases=None):
+    """{service: {service, title, bots, connections}} for the tools the bots `who` may read declare. A bot may name a
+    page by one of its `aliases` (`close` for close-crm), so each is filed under the page's own name."""
     from . import bot_tools
     found = {}
     for bot in H.bots(c):
         slug = bot["slug"]
-        if bot["state"] == "archived" or not auth.bot_access(c, who, slug)["read"]:
+        if bot["state"] == "archived" or not auth.bot_access(c, who, bot["id"])["read"]:
             continue
-        for tool in bot_tools.listing(c, settings, slug)["tools"]:
+        for tool in bot_tools.listing(c, settings, bot["id"])["tools"]:
             service = tool["service"]
+            service = (aliases or {}).get(str(service).lower(), service)
             item = found.setdefault(service, {"service": service, "title": tool["name"], "bots": [], "connections": []})
-            if slug not in item["bots"]:
-                item["bots"].append(slug)
-            item["connections"].append({"bot": slug, "status": tool["status"], "identity": tool["identity"], "can": tool["can"],
+            if bot["id"] not in item["bots"]:
+                item["bots"].append(bot["id"])
+            # The problem a computer or the hub found (a missing credential, an MCP server that refused it) and the
+            # variable it is read from: Library › Tools lists them as the tool's issues. Names only, never a value.
+            item["connections"].append({"bot": bot["id"], "slug": slug, "status": tool["status"], "identity": tool["identity"], "can": tool["can"],
+                                        **({"problem": tool["problem"]} if tool.get("problem") else {}),
+                                        **({"env": tool["env"]} if tool.get("env") else {}),
                                         **({"mcp": tool["mcp"]} if tool.get("mcp") else {})})
     for item in found.values():
         statuses = {connection["status"] for connection in item["connections"]}
@@ -236,16 +254,16 @@ def inventory(c, settings, auth, who):
 def custom_page(item):
     return {"service": item["service"], "title": item["title"], "kind": "mcp" if any(connection.get("mcp") for connection in item["connections"]) else "api",
             "summary": "Configured by a bot",
-            "access": "See the bot's Tools for scope and connection status", "credentials": [], "declared_as": "",
-            "writes": "allowed" if any(verb not in ("read", "list", "search", "query")
-                                       for connection in item["connections"] for verb in connection["can"]) else "never", "owner": "owner", "aliases": [], "queries": [], "query_count": 0,
-            "body": "## Bots\n\n" + "\n".join("- " + bot for bot in item["bots"]), **item}
+            "access": "", "credentials": [], "declared_as": "",
+            "writes": "allowed" if any(verb not in READ_VERBS
+                                       for connection in item["connections"] for verb in connection["can"]) else "never", "owner_id": "owner", "aliases": [], "queries": [], "query_count": 0,
+            "body": "", **item}   # who has it is Library › Tools' Access card
 
 
 def learnings(c, service):
     return [dict(row) for row in c.execute(
-        "SELECT id, integration, actor, text, created FROM learnings "
-        "WHERE integration=? AND deleted_at IS NULL ORDER BY created DESC, id", (service,))]
+        "SELECT id, integration, actor, text, created_at FROM learnings "
+        "WHERE integration=? AND deleted_at IS NULL ORDER BY created_at DESC, id", (service,))]
 
 
 def learning_counts(c):
@@ -257,13 +275,13 @@ def add_learning(c, who, service, text):
     if privacy.private_execution(c, who):
         raise Problem("privacy", "Private task work cannot be published as a company learning", 403)
     day = H.now()[:10]
-    n = c.execute("SELECT count(*) FROM learnings WHERE actor=? AND substr(created,1,10)=?",
+    n = c.execute("SELECT count(*) FROM learnings WHERE actor=? AND substr(created_at,1,10)=?",
                   (who.actor, day)).fetchone()[0]
     if n >= LEARNINGS_PER_DAY:
         raise Problem("cap", f"{n} learnings today; the cap is {LEARNINGS_PER_DAY} a day. "
                              "Fold what you know into the page instead.", 429)
-    row = {"id": H.new_id(), "integration": service, "actor": who.actor, "text": text.strip(), "created": H.now()}
-    c.execute("INSERT INTO learnings(id, integration, actor, text, created) VALUES(:id, :integration, :actor, :text, :created)", row)
+    row = {"id": H.new_id(), "integration": service, "actor": who.actor, "text": text.strip(), "created_at": H.now()}
+    c.execute("INSERT INTO learnings(id, integration, actor, text, created_at) VALUES(:id, :integration, :actor, :text, :created_at)", row)
     H.event(c, who.actor, "learning.add", service, {"id": row["id"], "chars": len(row["text"])})
     return row
 
@@ -293,7 +311,7 @@ def install_integrations(app, store, auth, mutate):
         if str(page.get("owner", "")).strip().lower() != "owner":
             return page
         row = c.execute("SELECT name FROM humans WHERE id=?", (auth.owner_id(c),)).fetchone() if auth.owner_id(c) else None
-        return page | {"owner": (row and row["name"]) or store.settings.owner_email or "owner"}
+        return page | {"owner_id": (row and row["name"]) or store.settings.owner_email or "owner"}
 
     def retained(service):
         return {**custom_page({"service": service, "title": service, "connections": [], "bots": []}),
@@ -307,7 +325,7 @@ def install_integrations(app, store, auth, mutate):
             if exc.code != "not_found":
                 raise
             with store.read() as c:
-                item = inventory(c, store.settings, auth, who).get(service)
+                item = inventory(c, store.settings, auth, who, catalog.loaded[1]).get(service)
                 if not item and c.execute("SELECT 1 FROM learnings WHERE integration=? AND deleted_at IS NULL LIMIT 1",
                                           (service,)).fetchone():
                     return retained(service)
@@ -331,13 +349,18 @@ def install_integrations(app, store, auth, mutate):
     def integrations(request: Request):
         with store.read() as c:
             counts = learning_counts(c)
-            connected = inventory(c, store.settings, auth, request.state.identity)
-            items = [named(c, item) | connected.get(item["service"], {"status": "not_configured", "bots": [], "connections": []})
+            connected = inventory(c, store.settings, auth, request.state.identity, catalog.loaded[1])
+            # A page keeps its own title; the bots' entries add who uses it and how that is going.
+            items = [named(c, item) | {key: value for key, value in connected.get(
+                         item["service"], {"status": "not_configured", "bots": [], "connections": []}).items() if key != "title"}
                      for item in catalog.listing()]
             known = {item["service"] for item in items}
             items += [named(c, custom_page(item)) for service, item in connected.items() if service not in known]
             present = {item["service"] for item in items}
             items += [named(c, retained(service)) for service in counts if service not in present]
+        for item in items:
+            for connection in item["connections"]:
+                connection["write"] = write_level(connection["can"], item["writes"])
         return {"label": "Available tools", "integrations": [item | {"learning_count": counts.get(item["service"], 0)} for item in items]}
 
     @app.get("/api/v2/integrations/{service}")

@@ -10,9 +10,10 @@ from backend import lenses as L
 from backend import strategy as S
 from backend.store import H
 from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_company import bot, with_ceo_bot
+from backend.tests.test_company import bot, with_strategy_bot
 from backend.tests.test_goal_asks import asks, sync
 from backend.tests.test_strategy import draft, publish, ready, write
+from backend import bot_settings as BS
 
 ANSWERS = {"rivals": ["Globex", "Doing it by hand"], "factors": ["Price", "Setup time"],
            "scores": {"columns": ["Us", "Globex", "Doing it by hand"],
@@ -64,9 +65,10 @@ def run_row(api, run_id):
 
 def librarian(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                  "VALUES('librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('librarian','{}',NULL,'ana')")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('librarian','librarian','Librarian','','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('librarian',NULL,'ana')")
+        BS.write(c, 'librarian', {"runtime": "fake", "host": "keeper"})
     return bot(api, "librarian")
 
 
@@ -76,7 +78,7 @@ def test_every_shipped_lens_loads_and_the_list_puts_strategy_first_and_hides_the
     for token in ("cara-test", bot(api, "ops")):          # a member and a bot read the list
         listed = get(api, "lenses", token=token)["lenses"]
         assert [x["id"] for x in listed] == ["playing-to-win", "blue-ocean", "scenarios", "seven-powers", "good-strategy",
-                                             "pre-mortem", "positioning", "where-to-play", "five-forces"]
+                                             "startup-idea", "pre-mortem", "positioning", "where-to-play", "five-forces"]
     assert [x["id"] for x in get(api, "lenses?applies_to=market")["lenses"]] == ["where-to-play", "five-forces"]
     assert get(api, "lenses?applies_to=nope", expected=422)["error"]["code"] == "validation"
 
@@ -84,12 +86,12 @@ def test_every_shipped_lens_loads_and_the_list_puts_strategy_first_and_hides_the
 def test_a_draft_run_is_invisible_to_everyone_but_the_owner_in_the_api_and_hub_sql(api, model):
     first, _ = two_bets(api)
     model["result"] = result(first["id"])
-    ceo = with_ceo_bot(api)
+    strategy_token = with_strategy_bot(api)
     published = start(api)
     mine = start(api, on="draft")
     assert mine["on_draft"] is True and published["on_draft"] is False
     assert {r["id"] for r in get(api, "lenses/runs")["runs"]} == {published["id"], mine["id"]}
-    for token in ("ben-test", "cara-test", ceo):
+    for token in ("ben-test", "cara-test", strategy_token):
         assert [r["id"] for r in get(api, "lenses/runs", token=token)["runs"]] == [published["id"]]
         get(api, f"lenses/runs/{mine['id']}", token=token, expected=404)
         assert get(api, f"lenses/runs/{published['id']}", token=token)["status"] == "done"
@@ -98,17 +100,18 @@ def test_a_draft_run_is_invisible_to_everyone_but_the_owner_in_the_api_and_hub_s
     assert set(sql("ana-test")) == {published["id"], mine["id"]} and sql("ben-test") == [published["id"]]
 
 
-def test_only_the_owner_the_ceo_bot_and_for_market_lenses_the_librarian_start_a_run(api, model):
+def test_only_the_owner_the_strategy_bot_and_for_market_lenses_the_librarian_start_a_run(api, model):
     first, _ = two_bets(api)
     model["result"] = result(first["id"])
-    ceo, lib, other = with_ceo_bot(api), librarian(api), bot(api, "ops")
+    strategy_token, lib, other = with_strategy_bot(api), librarian(api), bot(api, "ops")
     for token in ("ben-test", "cara-test", other):
         start(api, token=token, expected=403)
         start(api, "where-to-play", {"segments": ["Landlords"]}, token=token, expected=403)
     start(api, token=lib, expected=403)                                 # the Librarian runs market lenses only
     assert start(api, "where-to-play", {"segments": ["Landlords"]}, token=lib)["created_by"] == "bot:librarian"
-    assert start(api, token=ceo)["created_by"] == "bot:goal-manager"
-    start(api, on="draft", token=ceo, expected=403)                     # a draft run is the owner's own click
+    assert start(api, token=strategy_token)["created_by"] == "bot:goal-manager"
+    # a draft run is the owner's own click
+    start(api, on="draft", token=strategy_token, expected=403)
     start(api, "where-to-play", {}, on="draft", token=lib)             # market lenses ignore `on`
     assert get(api, "lenses/runs?lens=where-to-play")["runs"][0]["on_draft"] is False
     assert start(api, "nope", {}, expected=404)["error"]["code"] == "not_found"
@@ -138,7 +141,7 @@ def test_with_no_model_the_answers_are_saved_and_nothing_runs(api, model):
     two_bets(api)
     model["writer"] = False
     run = start(api)
-    assert run["status"] == "no_model" and run["result"] is None and run["finished"] and run["answers"] == ANSWERS
+    assert run["status"] == "no_model" and run["result"] is None and run["finished_at"] and run["answers"] == ANSWERS
     assert get(api, f"lenses/runs/{run['id']}") == run and not model["sent"]
 
 
@@ -177,8 +180,10 @@ def test_the_models_result_is_checked_part_by_part_and_what_fails_is_dropped(api
     assert len(out["sections"]) == L.SECTIONS_MAX and len(out["sections"][0]["body"]) <= L.BODY_MAX
     assert [f["text"] for f in out["findings"]] == ["Real bet.", "About the strategy as a whole."]
     assert len(out["assumptions"]) == L.ASSUMPTIONS_MAX and len(out["sharpen"]) == L.SHARPEN_MAX
-    assert [c["label"] for c in out["changes"]] == ["Add to what we won't do", "Source is the server's"]
-    assert out["changes"][1]["payload"] == good                                          # source and lens are never the model's
+    # Rules out and Wrong if are optional, so a bare active bet is a change like any other.
+    assert [c["label"] for c in out["changes"]] == ["Add to what we won't do", "Active with nothing behind it",
+                                                     "Source is the server's"]
+    assert out["changes"][2]["payload"] == good                                          # source and lens are never the model's
     model["result"] = {"summary": "", "sections": [], "chart": None, "findings": [], "changes": []}
     empty = start(api)
     assert empty["status"] == "failed" and empty["error"]["code"] == "empty"
@@ -189,15 +194,16 @@ def test_the_models_result_is_checked_part_by_part_and_what_fails_is_dropped(api
     assert start(api, "seven-powers", {})["result"]["chart"]["rows"][0]["bet_id"] is None
 
 
-def test_a_ceo_bot_run_files_exactly_one_strategy_draft_proposal_and_never_writes_the_draft(api, model):
+def test_a_strategy_bot_run_files_exactly_one_strategy_draft_proposal_and_never_writes_the_draft(api, model):
     first, second = two_bets(api)
-    ceo = with_ceo_bot(api, level=2)                                                 # above Passive, so the owner is asked
+    # above Passive, so the owner is asked
+    strategy_token = with_strategy_bot(api, level=2)
     before = draft(api)
     model["result"] = result(first["id"], changes=[
         {"label": "Retire Bet 2", "payload": {"bets": [{"id": second["id"], "status": "retired"}]}},
         {"label": "Sharper summary", "payload": {"summary": "Acme runs rentals with bots for small landlords."}},
         {"label": "Won't do", "payload": {"sections": {"not": "No per-seat pricing."}}}])
-    run = start(api, token=ceo)
+    run = start(api, token=strategy_token)
     assert run["status"] == "done" and run["proposal_id"]
     pending = [p for p in get(api, "goal-proposals")["proposals"] if p["kind"] == "strategy_draft"]
     assert [p["id"] for p in pending] == [run["proposal_id"]] and pending[0]["proposed_by"] == "bot:goal-manager"
@@ -212,7 +218,7 @@ def test_a_ceo_bot_run_files_exactly_one_strategy_draft_proposal_and_never_write
     assert "because" not in ask["body"] and "Add to draft writes it to your draft" in ask["body"]
     # No change, no proposal; an owner's run never files one.
     model["result"] = result(first["id"])
-    assert start(api, token=ceo)["proposal_id"] is None
+    assert start(api, token=strategy_token)["proposal_id"] is None
     model["result"] = result(first["id"], changes=[{"label": "Sharper summary", "payload": {"summary": "Owner's run."}}])
     assert start(api)["proposal_id"] is None
     assert len([p for p in get(api, "goal-proposals")["proposals"] if p["kind"] == "strategy_draft"]) == 1
@@ -220,10 +226,10 @@ def test_a_ceo_bot_run_files_exactly_one_strategy_draft_proposal_and_never_write
 
 def test_a_run_sent_as_a_proposal_cannot_also_be_added_to_the_draft(api, model):
     first, second = two_bets(api)
-    ceo = with_ceo_bot(api, level=2)
+    strategy_token = with_strategy_bot(api, level=2)
     model["result"] = result(first["id"], changes=[
         {"label": "Retire Bet 2", "payload": {"bets": [{"id": second["id"], "status": "retired"}]}}])
-    run = start(api, token=ceo)
+    run = start(api, token=strategy_token)
     assert run["proposal_id"]
     before = draft(api)
     out = post(api, f"lenses/runs/{run['id']}/apply", {"index": 0, "revision": before["revision"]}, expected=409)
@@ -264,7 +270,7 @@ def test_asking_the_librarian_to_sharpen_files_one_task_per_ask(api, model):
     assert second["task_id"] != filed["task_id"] and second["run"]["sharpen_tasks"].keys() == {"0", "1"}
     post(api, f"lenses/runs/{run['id']}/sharpen/2", {}, expected=422)
     with api.app.state.store.read() as c:
-        tasks = [dict(r) for r in c.execute("SELECT title, body FROM tasks WHERE owner='bot:librarian'")]
+        tasks = [dict(r) for r in c.execute("SELECT title, body FROM tasks WHERE owner_id='bot:librarian'")]
     assert len(tasks) == 2 and "Globex pricing and plan limits" in tasks[0]["body"] and "Blue Ocean" in tasks[0]["body"]
     assert "market/open-questions" in tasks[0]["body"]
 
@@ -276,7 +282,7 @@ def test_a_run_cut_off_reads_failed_and_start_up_fails_the_running_ones_and_a_la
     run = start(api)
     assert run["status"] == "running" and get(api, f"lenses/runs/{run['id']}")["error"] is None
     with api.app.state.store.transaction() as c:                                # older than the stale limit
-        c.execute("UPDATE lens_runs SET created=? WHERE id=?", (H.shift(H.now(), seconds=-L.STALE_S - 1), run["id"]))
+        c.execute("UPDATE lens_runs SET created_at=? WHERE id=?", (H.shift(H.now(), seconds=-L.STALE_S - 1), run["id"]))
     stale = get(api, f"lenses/runs/{run['id']}")
     assert stale["status"] == "failed" and stale["error"]["code"] == "interrupted"
     with api.app.state.store.transaction() as c:
@@ -287,7 +293,7 @@ def test_a_run_cut_off_reads_failed_and_start_up_fails_the_running_ones_and_a_la
         L.stop_running(c)
     for found in (fresh, other):
         gone = get(api, f"lenses/runs/{found['id']}")
-        assert gone["status"] == "failed" and gone["error"]["code"] == "interrupted" and gone["finished"]
+        assert gone["status"] == "failed" and gone["error"]["code"] == "interrupted" and gone["finished_at"]
 
 
 def test_a_retried_start_runs_the_model_once_and_a_failing_model_leaves_a_failed_run(api, monkeypatch):
@@ -327,7 +333,7 @@ def test_a_draft_whose_guide_file_moved_falls_back_to_the_default_guide(api):
     assert S.guide("rumelt")["id"] == "default" and [g["id"] for g in get(api, "strategy/guides")] == ["default"]
 
 
-def test_a_market_lens_reads_the_market_definition_and_sizes_and_a_strategy_lens_does_not(api, model):
+def test_a_market_lens_and_the_startup_idea_check_read_the_market_sizes_and_other_strategy_lenses_do_not(api, model):
     from backend.tests.test_market_spend import B, defined, size
     first, second, _ = defined(api)
     size(api, first, 4 * B, accept=True)
@@ -340,3 +346,20 @@ def test_a_market_lens_reads_the_market_definition_and_sizes_and_a_strategy_lens
     two_bets(api)
     start(api)
     assert model["sent"][-1]["market_spend"] is None
+    # "How big could it get" is weighed against the sizes the Librarian keeps, not a number the model makes up.
+    idea = start(api, "startup-idea", {"want": "Yes", "tarpit": "Many tried listing sites; none ran the units."})
+    assert idea["status"] == "done" and model["sent"][-1]["market_spend"]["segments"][0]["id"] in sized
+    steps = {x["key"]: x for x in model["sent"][-1]["lens"]["steps"]}
+    assert steps["tarpit"]["answer"].startswith("Many tried") and steps["now"]["answer"].startswith("not answered")
+    start(api, "startup-idea", {"want": "Maybe"}, expected=422)                 # a choice is one of its options
+
+
+def test_a_lens_choice_of_a_bare_yes_or_no_is_refused_at_load(tmp_path):
+    """YAML reads a bare Yes or No as true or false, which would make the step's only valid answers "True" and "False"."""
+    path = tmp_path / "idea.yaml"
+    path.write_text("id: idea\nname: Idea\napplies_to: strategy\nminutes: 5\nsteps:\n"
+                    "  - {key: want, ask: 'Do you want it', input: choice, options: [Yes, No]}\n")
+    with pytest.raises(ValueError, match="quote a Yes or a No"):
+        L._load(path)
+    path.write_text(path.read_text().replace("[Yes, No]", "['Yes', 'No']"))
+    assert L._load(path)["steps"][0]["options"] == ["Yes", "No"]

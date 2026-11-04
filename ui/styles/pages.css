@@ -1,0 +1,87 @@
+/* Pages (ui/app/pages.js): a page's card and status line, its full view at #/page/<id>, a task's pages and
+   Library › Files. The frame is white whatever the theme: a page brings its own colours. */
+.pg-card{display:flex;flex-direction:column;gap:6px;min-width:0}
+.pg-status{color:var(--muted);font-size:var(--t-sm);line-height:var(--lh-tight);overflow-wrap:anywhere}
+.pg-status.pg-stale{color:var(--wait-ink)}
+.pg-status a{color:var(--link-quiet)}
+.pg-box{position:relative;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}
+.page-frame{display:block;width:100%;border:0;background:#fff}
+.pg-tap{position:absolute;inset:0;border-radius:inherit}
+.pg-tap:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.pg-small .pg-box{max-height:180px}.pg-medium .pg-box{max-height:320px}.pg-large .pg-box{max-height:520px}
+.pg-open{display:flex;align-items:center;gap:10px;min-height:48px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);text-decoration:none}
+a.pg-open:hover{background:var(--hover);text-decoration:none}
+.pg-open .nav-icon{flex:none;color:var(--muted)}
+.pg-open-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.pg-open-title{min-width:0;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* A card's status line is part of the card: a bar across a framed page's top, or under an Open card's title. */
+.pg-framed:not(.pg-full){gap:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
+.pg-framed:not(.pg-full)>.pg-status{padding:6px 10px;border-bottom:1px solid var(--line)}
+.pg-framed:not(.pg-full) .pg-box{border:0;border-radius:0}
+.pg-open-btn{flex:none;color:var(--link-quiet);font-size:var(--t-sm)}
+
+/* the full view */
+.pg-view{max-width:1100px;margin:0 auto;padding:12px 20px 48px}
+.pg-head{display:flex;align-items:center;gap:6px;min-height:44px}
+.pg-head .spacer{flex:1}
+.pg-title{margin:0;min-width:0;font-size:var(--t-lg);font-weight:600;overflow-wrap:anywhere;letter-spacing:var(--track-tight)}
+.pg-back{flex:none;width:36px;height:36px;margin-left:-8px;padding:0;display:inline-flex;align-items:center;justify-content:center}
+.pg-back .nav-icon{font-size:22px;width:22px;height:22px}
+.pg-archived{flex:none}
+.pg-ver{flex:none;max-width:150px;font-size:var(--t-sm)}
+.pg-menu{position:relative;flex:none}
+.pg-menu>summary{list-style:none;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:7px;color:var(--muted);cursor:pointer}
+.pg-menu>summary::-webkit-details-marker{display:none}
+.pg-menu>summary:hover{background:var(--hover);color:var(--ink)}
+.pg-menu-list{position:absolute;right:0;top:100%;z-index:20;display:flex;flex-direction:column;min-width:170px;padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--raised);box-shadow:0 8px 24px rgba(0,0,0,.18)}
+.pg-menu-list>*{display:block;padding:7px 10px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;text-decoration:none;cursor:pointer}
+.pg-menu-list>*:hover{background:var(--hover);text-decoration:none}
+.pg-menu-list .danger{color:var(--fail)}
+.pg-body{margin-top:6px}
+.pg-full .page-frame{min-height:240px}
+.pg-preview{min-height:240px}
+.pg-preview .html-view{display:block;width:100%;height:calc(100dvh - 160px);min-height:320px;border:0;background:#fff}
+.pg-pad{padding:14px 6px}
+
+/* a task's pages, at its top */
+.task-pages{display:flex;flex-direction:column;gap:12px;margin-bottom:14px}
+.task-pages[hidden]{display:none}
+
+/* Library › Files */
+.lf{max-width:960px;padding:0 0 48px}
+.lf-head{display:flex;align-items:center;gap:6px;min-height:32px}
+.lf-head h1{margin:0;font-size:var(--t-lg);font-weight:600}
+.lf-head .spacer{flex:1}
+.lf-filters{display:flex;flex-direction:column;gap:8px;padding:6px 0 10px}
+.lf-q{width:100%}
+.lf-frow{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.lf-frow select{max-width:180px;font-size:var(--t-sm)}
+.lf-frow select[hidden]{display:none}
+.lf-toggle{flex:none;height:var(--ctl);padding:0 10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:transparent;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
+.lf-toggle[aria-pressed="true"]{color:var(--ink);background:var(--surface2);border-color:color-mix(in srgb,var(--ink) 45%,var(--line))}
+.lf-task{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border:1px solid var(--line);border-radius:var(--r-ctl);font-size:var(--t-sm)}
+.lf-task[hidden]{display:none}
+.lf-row{display:flex;align-items:flex-start;gap:10px;padding:9px 8px;border-radius:7px;color:var(--ink);text-decoration:none}
+.lf-row:hover{background:var(--surface2);text-decoration:none}
+.lf-row:hover *{text-decoration:none}
+.lf-row .nav-icon{flex:none;margin-top:1px;font-size:18px;width:18px;height:18px;color:var(--muted)}
+.lf-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.lf-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.lf-meta{color:var(--muted);font-size:var(--t-sm)}
+.lf-excerpt{color:var(--muted);font-size:var(--t-sm);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.lf-pins{flex:none;color:var(--muted);font-size:var(--t-xs);padding:2px 6px;border:1px solid var(--line);border-radius:999px}
+.lf-more{display:block;margin:10px auto 0}
+.lf-pad{padding:14px 6px}
+
+@media (max-width:760px){
+  .pg-view{padding:8px 16px 40px}
+  .lf{padding:0 0 40px}   /* #main already keeps the 12px gutter */
+  .lf-frow{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;margin:0 -12px;padding:0 12px}
+  .lf-toggle{height:40px}
+  .lf-frow::-webkit-scrollbar{display:none}
+  .lf-frow.more{-webkit-mask-image:linear-gradient(to left,transparent,#000 28px);mask-image:linear-gradient(to left,transparent,#000 28px)}
+  .lf-frow select{flex:none;max-width:150px}
+  .pg-ver{max-width:110px}
+}
+.pg-pinned{margin:10px 0 0;color:var(--muted);font-size:var(--t-sm)}
+.pg-pinned a{color:var(--link-quiet)}

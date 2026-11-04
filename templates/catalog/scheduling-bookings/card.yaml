@@ -8,7 +8,7 @@ pack: operations
 icon: calendar_month
 suggest: niche
 tags: [bookings, scheduling, appointments, reschedules, no-shows, calendar, services]
-summary: "Keeps the booking rules and the schedule, handles reschedules and drafts no-show follow-ups. Never changes prices or sends without a person."
+summary: "Keeps the booking rules and the schedule clear of clashes, works out reschedule options that fit the rules, and drafts no-show follow-ups for a person to send. Never changes prices or sends without a person."
 when: "A team that takes bookings or appointments from customers, where the rules live in someone's head and reschedules and no-shows are handled by hand."
 pains:
   - "double bookings keep happening"
@@ -23,7 +23,7 @@ owns:
   - "A weekly bookings page: filled and open slots, reschedules, no-shows and what the rules cost the team"
 never:
   - "Change a price, a deposit, a fee or a refund, or waive a cancellation fee"
-  - "Send anything to a customer without a person turning mail sending on in Tico, or contradict the booking rules"
+  - "Send anything to anyone outside the team without a person turning mail sending on in Tico, or contradict the booking rules"
   - "Cancel or move a confirmed booking outside the requested work or Tools"
   - "Decide which customer gets an exception to the rules: it goes to a person"
 prerequisites:
@@ -50,7 +50,7 @@ onboarding:
 first_routine:
   title: "Weekly bookings page"
   cadence: "Mondays at 08:00 team time"
-  output: "reports/YYYY-MM-DD-bookings.md: this week's schedule with conflicts and gaps, reschedule requests with options, no-shows and late cancellations with draft follow-ups, and rule questions for a person"
+  output: "reports/YYYY-MM-DD-bookings-page.md: this week's schedule with clashes and gaps, reschedule requests with options that fit the rules, no-shows and late cancellations with draft follow-ups, and rule questions for a person"
   draft_only: true
 example_output: knowledge/examples/bookings-page.md
 reasoning_effort: medium

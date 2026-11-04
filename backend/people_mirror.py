@@ -1,0 +1,142 @@
+"""The install's sign-in list, mirrored to the Tico account (docs/people.md, "Tico account").
+
+Only an install signed in with a Tico account sends it, and only to the issuer that advertises
+`tico_people_endpoint`. The account uses it to show a person their companies and Tico servers after they sign in
+at tico.dev. It never grants access: this install's roster alone decides who signs in here.
+
+A change to the roster or the access lists asks for one push ten seconds later, off the request path; so does
+startup (a minute on) and then every 24 hours. A failure is logged without any address and tried at the next
+trigger. A 429 waits for the time the account names.
+"""
+
+import logging
+import threading
+import time
+
+log = logging.getLogger("tico.people_mirror")
+
+DEBOUNCE_SECONDS = 10
+STARTUP_SECONDS = 60
+EVERY_SECONDS = 24 * 3600
+RETRY_MIN, RETRY_MAX = 60, 3600
+MAX_PEOPLE = 5000               # the account refuses more (PEOPLE-CONTRACT.md)
+
+_lock = threading.Lock()        # guards the state below
+_send_lock = threading.Lock()   # one build-and-send at a time, so an older list never lands after a newer one
+_auth = None                    # the process's Auth, once start() found a Tico account sign-in
+_timer = None                   # the one pending send
+_next_allowed = 0.0             # monotonic time before which the account asked us not to send
+_looping = False
+
+
+def start(auth):
+    """Called at startup: with a Tico account sign-in, one push a minute on and then one a day."""
+    global _auth, _looping
+    from .oidc import Oidc
+    if not isinstance(getattr(auth, "proxy", None), Oidc):
+        return
+    with _lock:
+        _auth = auth
+        if _looping:
+            return
+        _looping = True
+    threading.Thread(target=_loop, name="tico-people-mirror", daemon=True).start()
+
+
+def _loop():
+    time.sleep(STARTUP_SECONDS)
+    while True:
+        send()
+        time.sleep(EVERY_SECONDS)
+
+
+def _arm(delay):
+    """Replace the one pending send with one `delay` seconds from now. Call with _lock held."""
+    global _timer
+    if _timer is not None:
+        _timer.cancel()
+    _timer = threading.Timer(delay, send)
+    _timer.daemon = True
+    _timer.start()
+
+
+def changed():
+    """A roster or access change was saved: send the list again, ten seconds after the last one. During a 429 wait the
+    send waits for the account's time instead, and it sends whatever the list is by then."""
+    with _lock:
+        if _auth is None:
+            return
+        _arm(max(DEBOUNCE_SECONDS, _next_allowed - time.monotonic()))
+
+
+def payload(c, settings):
+    """The people who may sign in to this install, with their role: no bots, nobody left or with sign-in off."""
+    from . import access
+    from .views import roster as load_roster
+    roster = load_roster(c)
+    owner = access.load_owner(c, settings)
+    lists = access.load_access(c, settings)
+    rows, seen, skipped = [], set(), 0
+    for person in roster["people"]:
+        email = str(person.get("email") or "").strip().lower()
+        if (not email or email in seen or person.get("bot") or person.get("hidden")
+                or person.get("directory_left") or not person.get("sign_in", True)):
+            continue
+        # The account refuses the whole list over one bad address, so an address it would refuse is left out and counted.
+        if not access._EMAIL.match(email):
+            skipped += 1
+            continue
+        seen.add(email)
+        rows.append({"email": email, "role": access.role_of(lists, owner["email"], email)})
+    if skipped:
+        log.warning("%d roster row(s) with no valid email address were left out of the sign-in list", skipped)
+    rows.sort(key=lambda row: row["email"])
+    if len(rows) > MAX_PEOPLE:
+        log.warning("the sign-in list has %d people; the Tico account takes %d", len(rows), MAX_PEOPLE)
+        rows = rows[:MAX_PEOPLE]
+    return rows
+
+
+def push_now(auth=None):
+    """Send the list now. (status, answer) from the account, or None when nothing is sent (no Tico account sign-in,
+    no endpoint, or a rehearsal). Errors are raised for the caller."""
+    auth = auth or _auth
+    if auth is None:
+        return None
+    from .oidc import Oidc
+    if not isinstance(auth.proxy, Oidc):
+        return None
+    with _send_lock:                # the list is built inside the lock: whatever is sent is the newest roster
+        with auth.store.read() as c:
+            rows = payload(c, auth.settings)
+        return auth.proxy.push_people(rows)
+
+
+def send():
+    """The background push: logs the outcome. A 429 sets the time before which nothing is sent and schedules the one
+    retry at that time; a send that comes early (the daily loop, a change) waits for it instead."""
+    global _next_allowed
+    with _lock:
+        wait = _next_allowed - time.monotonic()
+        if wait > 0:
+            _arm(wait)
+            return
+    try:
+        reply = push_now()
+    except Exception as exc:  # noqa: BLE001 - the push loop logs and waits for the next change, never dies
+        log.warning("the sign-in list was not sent to the Tico account: %s", getattr(exc, "reason", type(exc).__name__))
+        return
+    if reply is None:
+        return
+    status, answer = reply
+    if status == 200:
+        log.info("the sign-in list was sent to the Tico account: %s stored", answer.get("stored"))
+        return
+    if status == 429:
+        wait = max(RETRY_MIN, min(RETRY_MAX, int(answer.get("retry_after", 300))))
+        log.warning("the Tico account is limiting the sign-in list; it will be sent again in %d s", wait)
+        with _lock:
+            _next_allowed = time.monotonic() + wait
+            _arm(wait)
+        return
+    log.warning("the Tico account refused the sign-in list: HTTP %s", status)

@@ -2,10 +2,12 @@
 
 import hashlib
 import json
+from copy import deepcopy
 import os
 import re
 from datetime import timezone
 from typing import Literal
+from urllib.parse import quote
 
 import yaml
 from fastapi import Query, Request
@@ -14,28 +16,31 @@ from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from clients import gateway, sessions
 
 from . import access as Access
+from . import cloud_access, start_places
 from . import lifecycle
 from . import bot_access as A
 from . import models as M
 from . import changelog as CL
 from . import visuals
-from . import app_delivery, login_holds, providers, runner_versions
+from . import app_delivery, login_holds, providers, runner_versions, runs
 from .harnesses import resolve_harness
 from . import personal_tokens, profiles, rooms, team_rules, turns, wake_presets
 from . import auto_tasks, bot_stops, pipeline_stats, run_triggers
-from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, bump_bot_session_epoch, turns_here
+from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, bump_bot_session_epoch
 from pathlib import Path
 
-from . import read_cache
+from . import read_cache, roster_clock
 from .store import H, P, SNAPSHOT_BACKUP_ROWS, Problem, bot_readiness, encode, message_page, readiness_document, repo_url
 from . import task_privacy as privacy
 from .usage_records import ran_on
 from . import task_relations as TR
+from . import bot_settings as BS
 
 
 MIN_RUNNER_VERSION = (0, 2, 0)
 DOC_BOT = "doc-updater"         # the documentation agent: docs questions and doc PR reviews
-CEO_BOT = "goal-manager"       # the CEO Bot (backend/ceo_bot.py SLUG): of people, only the owner chats with it
+# the Strategy Bot (backend/strategy_bot.py SLUG): of people, only the owner chats with it
+STRATEGY_BOT = "goal-manager"
 
 
 def runner_version_supported(value):
@@ -56,7 +61,7 @@ def since_time(value):
     return (at if at.tzinfo else at.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
-ATTEMPT_DETAIL_SQL = "SELECT state,result_json,finished FROM attempts WHERE id=?"
+ATTEMPT_DETAIL_SQL = "SELECT state,result,finished_at FROM attempts WHERE id=?"
 
 
 def prime_attempt_details(c, ids):
@@ -68,7 +73,7 @@ def prime_attempt_details(c, ids):
         chunk = wanted[start:start + 250]
         marks = ",".join("?" * len(chunk))
         attempts = {row["id"]: row for row in c.execute(
-            f"SELECT id,state,result_json,finished FROM attempts WHERE id IN ({marks})", chunk)}
+            f"SELECT id,state,result,finished_at FROM attempts WHERE id IN ({marks})", chunk)}
         read_cache.prime(c, ATTEMPT_DETAIL_SQL, {(aid,): attempts.get(aid) for aid in chunk})
         diags = {row["attempt_id"]: row for row in c.execute(
             "SELECT attempt_id,end_reason,ended_at,last_event,last_event_at,heartbeat_at,stalled_at "
@@ -77,26 +82,29 @@ def prime_attempt_details(c, ids):
                          "FROM attempt_diagnostics WHERE attempt_id=?",
                          {(aid,): diags.get(aid) for aid in chunk})
         snaps = {row["attempt_id"]: row for row in c.execute(
-            f"SELECT attempt_id,start_json,end_json FROM attempt_load_snapshots WHERE attempt_id IN ({marks})",
+            f"SELECT attempt_id,at_start,at_end FROM attempt_load_snapshots WHERE attempt_id IN ({marks})",
             chunk)}
-        read_cache.prime(c, "SELECT start_json,end_json FROM attempt_load_snapshots WHERE attempt_id=?",
+        read_cache.prime(c, "SELECT at_start,at_end FROM attempt_load_snapshots WHERE attempt_id=?",
                          {(aid,): snaps.get(aid) for aid in chunk})
 
 
 def attempt_details(c, turn):
+    """What a run's attempt row adds to its turn: `state` (run.state, backend/runs.py; None for a turn with no attempt
+    row), its diagnostics and load, and why it failed."""
     attempt = read_cache.one(c, ATTEMPT_DETAIL_SQL, (turn["id"],))
     failed = bool(attempt and attempt["state"] in ("failed", "expired"))
     from .run_diagnostics import metadata
     from .performance import attempt_snapshots
-    details = {"record_kind": "attempt" if failed else "run", "attempt_id": turn["id"], **metadata(c, turn["id"]), **attempt_snapshots(c, turn["id"])}
+    details = {"state": runs.state(attempt["state"]) if attempt else None, **metadata(c, turn["id"]),
+               **attempt_snapshots(c, turn["id"])}
     if failed:
         try:
-            result = json.loads(attempt["result_json"] or "{}")
+            result = json.loads(attempt["result"] or "{}")
         except (ValueError, TypeError):
             result = {}
         reason = login_holds.failure_line(result) or result.get("error") or result.get("reason") or result.get("message") or (
             "Lease expired before completion" if attempt["state"] == "expired" else "Attempt failed before completion")
-        details.update(exit=attempt["state"], finished=attempt["finished"] or turn.get("finished"),
+        details.update(exit=attempt["state"], finished_at=attempt["finished_at"] or turn.get("finished_at"),
                        failure_reason=login_holds.failure_line(result) or details["end_reason"] or str(reason))
     return details
 
@@ -106,44 +114,45 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
     rows = []
     # One bot's runs as their own query text: `? IS NULL OR a.bot=?` would hide attempts_bot_state.
     found = list(c.execute(
-            "SELECT a.id,a.bot,a.started,a.created,a.finished,a.state,a.result_json,j.message_id FROM attempts a "
-            "JOIN jobs j ON j.id=a.job_id WHERE a.state IN ('failed','expired') " + ("AND a.bot=? " if bot is not None else "") +
-            "AND (? IS NULL OR coalesce(a.finished,a.created)>=?) AND NOT EXISTS "
-            "(SELECT 1 FROM turns t WHERE t.id=a.id) ORDER BY coalesce(a.finished,a.created) DESC LIMIT ?",
+            "SELECT a.id,a.bot_id,a.started_at,a.created_at,a.finished_at,a.state,a.result,j.message_id FROM attempts a "
+            "JOIN jobs j ON j.id=a.job_id WHERE a.state IN ('failed','expired') " + ("AND a.bot_id=? " if bot is not None else "") +
+            "AND (? IS NULL OR coalesce(a.finished_at,a.created_at)>=?) AND a.trigger IS NULL "
+            "ORDER BY coalesce(a.finished_at,a.created_at) DESC LIMIT ?",
             ((bot,) if bot is not None else ()) + (since, since, limit)))
     stored = H.prime_messages(c, [row["message_id"] for row in found])
     privacy.prime_messages(c, list(stored.values()))
+    from . import threads
+    threads.prime_members(c, who, [row["conversation_id"] for row in stored.values()])
     privacy.prime_attempts(c, [row["id"] for row in found])
     prime_attempt_details(c, [row["id"] for row in found])
     for row in found:
-        if not (readable.get(row["bot"]) or {}).get("read"):
+        if not (readable.get(row["bot_id"]) or {}).get("read"):
             continue
         message = H.message(c, row["message_id"])
         if not message:
             continue
         try:
-            auth.run_conversation(c, who, row["bot"], message)
+            auth.run_conversation(c, who, row["bot_id"], message)
             privacy.require_message(c, who, message)
             privacy.require_attempt(c, who, row["id"])
         except Problem:
             continue
         try:
-            result = json.loads(row["result_json"] or "{}")
+            result = json.loads(row["result"] or "{}")
         except (ValueError, TypeError):
             result = {}
         reason = (login_holds.failure_line(result) or result.get("error") or result.get("reason") or result.get("message")
                   or ("Lease expired before completion" if row["state"] == "expired" else "Attempt failed before completion"))
-        rows.append({"id": row["id"], "attempt_id": row["id"], "bot": row["bot"],
-                     "started": row["started"] or row["created"], "finished": row["finished"],
-                     "exit": row["state"], "message_id": row["message_id"],
-                     "record_kind": "attempt", "failure_reason": str(reason),
-                     **attempt_details(c, {"id": row["id"], "finished": row["finished"]})})
+        rows.append({"id": row["id"], "bot": row["bot_id"],
+                     "started_at": row["started_at"] or row["created_at"], "finished_at": row["finished_at"],
+                     "exit": row["state"], "message_id": row["message_id"], "failure_reason": str(reason),
+                     **attempt_details(c, {"id": row["id"], "finished_at": row["finished_at"]})})
     return rows
 
 
 def computer_details(c, row, who, auth):
     value = dict(row)
-    readiness = readiness_document(value.get("readiness_json"))
+    readiness = readiness_document(value.get("readiness"))
     access = auth.bot_accesses(c, who)
     assigned = assignments_by_runner(c)[1].get(row["id"]) or set()
     shared = shared_logins(c, row["id"], readiness, assigned, access)
@@ -157,7 +166,7 @@ def computer_details(c, row, who, auth):
     update["wanted_release"] = runner_versions.desired()["version"]
     from .repositories import computer_repositories
     return {"repositories": computer_repositories(c).get(row["id"], "unknown"),
-            "version": value.get("version") or "", "release": update.get("release") or "", "last_seen": value.get("last_seen"),
+            "version": value.get("version") or "", "release": update.get("release") or "", "last_seen_at": value.get("last_seen_at"),
             "readiness": readiness, "update": update, "fix": "Open Settings > Computers to retry the update" if update.get("error") else "Open Settings > Computers",
             "services": [], "services_scope": "team", "shared_logins": shared}
 
@@ -183,7 +192,7 @@ def assignments_by_runner(c):
     if values is not None and "views.assignments_by_runner" in values:
         return values["views.assignments_by_runner"]
     ordered, active = {}, {}
-    for row in c.execute("SELECT a.runner_id, a.bot, b.state FROM assignments a JOIN bots b ON b.slug=a.bot "
+    for row in c.execute("SELECT a.runner_id, a.bot, b.state FROM assignments a JOIN bots b ON b.id=a.bot "
                          "ORDER BY a.bot"):
         ordered.setdefault(row["runner_id"], []).append(row["bot"])
         if row["state"] != "archived":
@@ -242,11 +251,11 @@ def team_services(c, who, auth):
     return [{**dict(r), "scope": "team", "name": SERVICE_NAMES.get(r["service"], r["service"]),
              "text": f"{SERVICE_NAMES.get(r['service'], r['service'])}: {r['last_error'] or 'No reported error'}",
              "fix": "Open Health for " + SERVICE_NAMES.get(r["service"], r["service"])} for r in c.execute(
-                 "SELECT service,last_success,last_error FROM service_health ORDER BY service")]
+                 "SELECT service,last_succeeded_at,last_error FROM service_health ORDER BY service")]
 
 
-def roster(c):
-    return read_cache.value(c, ("roster",), lambda: _roster(c))
+def roster(c, shared=False):
+    return read_cache.value(c, ("roster",), lambda: _roster(c), shared)
 
 
 def _roster(c):
@@ -256,18 +265,23 @@ def _roster(c):
     return P.load({"people": H.humans(c)})
 
 
-def entries(c, github_owner=""):
-    return read_cache.value(c, ("view_entries", github_owner), lambda: _entries(c, github_owner))
+def entries(c, github_owner="", shared=False):
+    # Built from bot_config alone (follow reads the branch's original's row there too), so it is shared between
+    # snapshots until that table changes (backend/roster_clock.py), keyed on the GitHub owner it names repositories by.
+    key = ("view_entries", github_owner)
+    found = read_cache.value(c, key, lambda: roster_clock.shared(c, key, lambda: _entries(c, github_owner)), shared=True)
+    # A caller that enriches its copy gets its own: read_cache hands out the shared object outside a snapshot too.
+    return found if shared else deepcopy(found)
 
 
 def seat_parents(c, settings, auth, who):
     """{open seat id: where it hangs on the team chart for this caller}, as GET /api/people draws it
     (backend/lifecycle.py `chart_seats`): GET /api/v2/seats carries the same, so a client that refreshes the seats from
     there still hangs a seat under a closed seat where that seat answered to."""
-    from . import ceo_bot
+    from . import strategy_bot
     r, configs = roster(c), entries(c)
-    archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
-    chart = ceo_bot.chart_entries(c, settings, r, configs, archived)
+    archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
+    chart = strategy_bot.chart_entries(c, settings, r, configs, archived, hidden=strategy_bot.hidden_for(c, who))
     access = auth.bot_accesses(c, who)
     return {seat["id"]: seat["org_parent"] for seat in lifecycle.chart_seats(
         c, r, chart, archived, lambda slug: access.get(slug, auth.FULL)["see"])}
@@ -277,16 +291,16 @@ def _entries(c, github_owner=""):
     result = {}
     for row in read_cache.configs(c):
         from .shared_bots import follow
-        config = follow(c, row["bot"], json.loads(row["config_json"]))
+        config = follow(c, row["bot"], json.loads(row["config"]))
         if row["onboarding_state"]:
             config["onboarding_state"] = row["onboarding_state"]
-        repo = config.get("repo") or row["repo"] or ("emp-" + row["bot"])
+        repo = config.get("repo") or row["repo"] or ("emp-" + (config.get("name") or row["bot"]))
         config.update({"description": row["description"] or "", "reports_to": row["reports_to"],
                        "repo": repo, "repo_url": repo_url(repo, github_owner)})
         if row["thread_mode"]:
             config["thread_mode"] = row["thread_mode"]
-        if row["owner_ids_json"] is not None:
-            config["owner_ids"] = json.loads(row["owner_ids_json"])
+        if row["owner_ids"] is not None:
+            config["owner_ids"] = json.loads(row["owner_ids"])
         result[row["bot"]] = config
     return result
 
@@ -305,21 +319,21 @@ def may_chat(c, auth, who, bot):
         return True
     # The assistant is chatted with in one place only: each person's own Assistant room, through
     # /api/v2/assistant (backend/assistant.py). It has no chat with anyone else and no shared or
-    # per-bot chat, so every other route that asks "may I chat with it" says no. The CEO Bot the
-    # same: of people, only the owner talks to it, in the CEO Bot chat /api/v2/assistant gives them;
-    # an earlier chat with it anyone had stays readable, read-only.
-    return bot not in (auth.settings.assistant_bot, CEO_BOT)
+    # per-bot chat, so every other route that asks "may I chat with it" says no. The Strategy Bot the
+    # same: no person chats with it, their Assistant hands it work; an earlier chat with it anyone had
+    # stays readable, read-only.
+    return bot not in (auth.settings.assistant_bot, STRATEGY_BOT)
 
 
 def require_chat(c, auth, who, bot):
     """Write on the bot, and a bot that has a chat of its own (the Assistant has only the room
-    /api/v2/assistant gives each person, the CEO Bot only the owner's CEO Bot chat)."""
+    /api/v2/assistant gives each person, and no person chats with the Strategy Bot)."""
     auth.require_write(c, who, bot)
     if not may_chat(c, auth, who, bot):
-        if bot == CEO_BOT:
-            from . import ceo_bot
-            raise Problem("forbidden", "Of people, only the company's owner talks to the " + ceo_bot.name(c)
-                          + ", in their own chat with it (/api/v2/assistant); talk to your Assistant", 403)
+        if bot == STRATEGY_BOT:
+            from . import strategy_bot
+            raise Problem("forbidden", "Nobody chats with the " + strategy_bot.name(c) + " directly; ask your "
+                          + auth.settings.assistant_name + " (/api/v2/assistant), which hands it the work", 403)
         raise Problem("forbidden", auth.settings.assistant_name + " chats only in your own Assistant "
                       "(/api/v2/assistant); message one of your bots here", 403)
 
@@ -341,12 +355,11 @@ def chat_running(c, conversation_id):
 def clear_chat_session(c, settings, actor, bot, conversation_id, detail=None):
     """Clear a direct chat's session: a person's Clear (POST /api/employees/{bot}/session/clear) and a topic change
     (backend/topic_change.py) alike. The conversation's epoch moves, so its history starts after the clear; the next
-    turn starts a fresh provider thread and loads the recovery pack. The caller checks no turn is running."""
+    turn starts a fresh provider thread. The caller checks no turn is running."""
     c.execute("INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
-              "epoch=epoch+1,updated=excluded.updated", (conversation_id, H.now()))
-    # Drop the provider pointer so the next turn tries a fresh thread and loads the
-    # recovery pack from Hub history instead of resuming the cleared session.
-    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+              "epoch=epoch+1,updated_at=excluded.updated_at", (conversation_id, H.now()))
+    # Drop the provider pointer so the next turn tries a fresh thread instead of resuming the cleared session.
+    config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     cfg = json.loads(config[0] or "{}") if config else {}
     if config:
         c.execute("DELETE FROM bot_sessions WHERE bot=? AND runtime=? AND model=?",
@@ -354,7 +367,11 @@ def clear_chat_session(c, settings, actor, bot, conversation_id, detail=None):
     # This chat's turns continue the bot's thread every direct chat shares: the next turn of any of them
     # starts a new one, while each other chat keeps its own history.
     from .shared_bots import follow
-    if sessions.session_key(follow(c, bot, cfg), bot, None, conversation_id) == sessions.BOT_THREAD:
+    from . import threads
+    room = threads.thread_row(c, conversation_id) or {}
+    key = sessions.session_key(follow(c, bot, cfg), bot, None, conversation_id, room.get("root_id") or conversation_id,
+                               "private" if threads.private_task_thread(c, room) else threads.audience_class(room))
+    if key in (sessions.BOT_THREAD, sessions.PUBLIC_THREAD):
         bump_bot_session_epoch(c, bot)
     H.event(c, actor, "session.clear", conversation_id, detail)
     # A new session is said in the task's history: a task room's own, or the task of the run that failed (run_triggers).
@@ -380,7 +397,7 @@ def default_bot(c, settings, botops="botops"):
 def docs_room(conv, who):
     """A person's own "Ask the Librarian" room. Its follow-ups reach the documentation agent
     whether or not the person is one of that bot's assigned users, as the first question did."""
-    return (conv.get("scope") == rooms.PERSONAL and conv.get("owner_actor") == who.actor
+    return (conv.get("scope") == rooms.PERSONAL and conv.get("owner_id") == who.actor
             and str(conv.get("room_key") or "").startswith("docs:")
             and "bot:" + DOC_BOT in conv["participants"])
 
@@ -388,29 +405,31 @@ def docs_room(conv, who):
 def bot_owner_rows(c, registry, slug, people, configs, archived):
     """The people listed as a bot's owners: the creator and co-owners, and its operator. Whoever it reports
     up to and the Admins own it too, without being listed."""
-    ids = list(dict.fromkeys([*A.owner_ids(registry["bot_owners_json"] if registry else None),
-                              *([registry["operator"]] if registry and registry["operator"] else [])]))
+    ids = list(dict.fromkeys([*A.owner_ids(registry["bot_owners"] if registry else None),
+                              *([registry["owner_id"]] if registry and registry["owner_id"] else [])]))
     return [{"id": i, "name": (P.person(i, people) or {}).get("name") or i} for i in ids]
 
 
 # A bot's computer, as machine() reads it; prime_machines reads it for many bots at once.
-ASSIGNED_COLUMNS = ("SELECT a.runner_id,a.generation,r.label,r.operator,r.last_seen,r.revoked_at,r.readiness_json,"
-                    "r.platform,r.version,r.awake_since,r.screen,r.capabilities_json")
-ASSIGNED_SQL = ASSIGNED_COLUMNS + " FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?"
+ASSIGNED_COLUMNS = ("SELECT a.runner_id,a.generation,r.label,r.owner_id,r.last_seen_at,r.revoked_at,r.readiness,"
+                    "r.platform,r.version,r.awake_since,r.screen,r.capabilities")
+ASSIGNED_SQL = ASSIGNED_COLUMNS + " FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?"
 
 
 def prime_machines(c, slugs):
     """Read what machine() and H.status read for each of these bots one table at a time (one query per 500 bots
     each), so Health's pass over every bot reads none of them again per bot. Outside a snapshot nothing is kept."""
     from .agents import CONFIG_SQL, ROW_SQL
+    from .auth import OPERATOR_SQL
     if read_cache.cache(c) is None:
         return
     for part in H.chunks(sorted(set(slugs))):
         marks = ",".join("?" * len(part))
-        for statement, query in ((CONFIG_SQL, f"SELECT config_json,bot FROM bot_config WHERE bot IN ({marks})"),
+        for statement, query in ((CONFIG_SQL, f"SELECT {BS.CONFIG} AS config,bot FROM bot_config bc {BS.JOIN} WHERE bot IN ({marks})"),
+                                 (OPERATOR_SQL, f"SELECT bot,owner_id FROM bot_config WHERE bot IN ({marks})"),
                                  (ROW_SQL, f"SELECT * FROM agents WHERE bot IN ({marks})"),
                                  (ASSIGNED_SQL, ASSIGNED_COLUMNS + ",a.bot FROM assignments a "
-                                                f"JOIN runners r ON r.id=a.runner_id WHERE a.bot IN ({marks})"),
+                                                f"JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot IN ({marks})"),
                                  ("SELECT * FROM bot_status WHERE bot=?", f"SELECT * FROM bot_status WHERE bot IN ({marks})")):
             found = {row["bot"]: row for row in c.execute(query, part)}
             read_cache.prime(c, statement, {(s,): found.get(s) for s in part})
@@ -426,7 +445,7 @@ def machine(c, bot):
     if not row:
         return {"online": False, "awake": False, "ready": False, "machine": None}
     now = H.now()
-    online = bool(not row["revoked_at"] and row["last_seen"] and row["last_seen"] > H.shift(now, seconds=-AWAKE_GAP))
+    online = bool(not row["revoked_at"] and row["last_seen_at"] and row["last_seen_at"] > H.shift(now, seconds=-AWAKE_GAP))
     # Online is contact; awake is contact that has lasted. A machine waking for a few seconds
     # is online and takes no work, so say which of the two a queued request is waiting for.
     awake = online and Execution.awake(row["awake_since"], now)
@@ -434,23 +453,43 @@ def machine(c, bot):
     # subscription sign-in the Gateway covers meanwhile is no problem (backend/models_preset.py as_served).
     from .models_preset import as_served
     # One parse of the computer's report: /api/employees and Health call this once per bot.
-    document = readiness_document(row["readiness_json"])
+    document = readiness_document(row["readiness"])
     detail = {k: v for k, v in bot_readiness(document, bot).items() if k != "tools"}
-    detail = as_served(c, bot, document, detail)
+    detail = as_served(c, bot, document, _lapsed_plan(c, bot, row["runner_id"], document, detail))
     return {"online": online, "awake": awake, "ready": online and detail.get("ready") is True,
             "readiness": detail,
-            "machine": {**{k: row[k] for k in ("runner_id", "generation", "label", "operator", "last_seen",
+            "machine": {**{k: row[k] for k in ("runner_id", "generation", "label", "owner_id", "last_seen_at",
                                                          "platform", "version")}, **screen_listing(row)}}
+
+
+def _lapsed_plan(c, bot, runner_id, document, detail):
+    """The bot's readiness row, not ready when its computer read a plan's sign-in as ready and no plan signs it in
+    now (execution.signed_in_by_lapsed_plan, which the claim refuses on): the cheap check first, so the plans are
+    read only for a row that looks that way."""
+    from .execution import signed_in_by_lapsed_plan
+    if detail.get("ready") is not True or not signed_in_by_lapsed_plan(document, detail, {}):
+        return detail
+    from . import model_subscriptions, providers
+    runner = c.execute("SELECT id, capabilities FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
+    filled = providers.fill(providers.load(c), BS.read(c, bot))
+    if not runner or not signed_in_by_lapsed_plan(document, detail,
+                                                  model_subscriptions.covered_runtimes(c, dict(runner), filled)):
+        return detail
+    from .models_preset import LOGIN_NAMES
+    runtime = str(detail.get("runtime") or "")
+    name = LOGIN_NAMES.get(runtime) or runtime.title()
+    return {**detail, "ready": False, "sign_in": "missing",
+            "problems": [*(detail.get("problems") or []), f"{name} sign-in needed"]}
 
 
 def deploy_draining(c, bot):
     """When the deploy drained this bot (its latest drain was the deploy's, within the hour a
     deploy may hold it), else None. A drain a person set is theirs, not an update."""
-    row = c.execute("SELECT actor, ts FROM events WHERE action IN ('bot.drain','bot.pause','bot.resume') "
-                    "AND target=? ORDER BY ts DESC LIMIT 1", (bot,)).fetchone()
-    if not row or row["actor"] != "system:deploy" or row["ts"] < H.shift(H.now(), seconds=-3600):
+    row = c.execute("SELECT actor, created_at FROM events WHERE action IN ('bot.drain','bot.pause','bot.resume') "
+                    "AND target=? ORDER BY created_at DESC LIMIT 1", (bot,)).fetchone()
+    if not row or row["actor"] != "system:deploy" or row["created_at"] < H.shift(H.now(), seconds=-3600):
         return None
-    return row["ts"]
+    return row["created_at"]
 
 
 def updating(c):
@@ -463,8 +502,8 @@ def updating(c):
 def operation_issues(c, who, auth):
     """Human-facing failures derived from durable state; no external alarm service.
 
-    Every issue says whether a person has to act (`needs_person`). The UI opens those in front of
-    the person wherever they are; the rest stay in Settings for quieter diagnosis or review.
+    Every issue says whether a person has to act (`needs_person`); only those light the account's status dot.
+    Stopped runs and quarantined bots are BotOps's to review, so they say no, and Settings > Health lists them.
     """
     from .agents import still_reporting
     issues, seen = [], set()
@@ -480,14 +519,17 @@ def operation_issues(c, who, auth):
     offline = {}    # runner_id -> {label, since, bots: [display names], queued}
     readable = auth.bot_accesses(c, who)
     bots = H.bots(c)
-    shown = [b["slug"] for b in bots if readable.get(b["slug"], auth.FULL)["read"]]
+    shown = [b["id"] for b in bots if readable.get(b["id"], auth.FULL)["read"]]
     status_inputs = privacy.status_inputs(c, shown)
     # Each bot's computer, status and queue read together, not a few queries per bot.
     prime_machines(c, shown)
-    queues = pipeline_stats.job_queues(c, who, [b["slug"] for b in bots if b["slug"] in status_inputs
+    queues = pipeline_stats.job_queues(c, who, [b["id"] for b in bots if b["id"] in status_inputs
                                                 and b["state"] != "archived"])
+    # Every stopped run of every bot that has one, read together: its checks below read each bot's runs from here.
+    from .execution import prime_readable_held
+    prime_readable_held(c, who, auth, [slug for slug, found in queues.items() if found["uncertain"]])
     for bot in bots:
-        slug = bot["slug"]
+        slug = bot["id"]
         if not readable.get(slug, auth.FULL)["read"]:
             continue
         if bot["state"] == "archived":
@@ -504,10 +546,11 @@ def operation_issues(c, who, auth):
         location = machine(c, slug)
         mac_offline = bool(location.get("machine") and not location.get("online") and not location.get("agent"))
         status = privacy.status(c, who, H.status(c, slug), **status_inputs[slug]) or {}
+        # A quarantine is repeated refusals (backend/hubdb.py rule 8); BotOps gets the refused-writes review for it.
         if bot["state"] == "quarantined" or status.get("state") == "quarantined":
             add("bot", bot["display_name"] + " needs attention",
                 status.get("focus") or "The bot is " + (status.get("state") or bot["state"]),
-                bot=slug, needs_person=True,
+                bot=slug, needs_person=False,
                 action="Review the refused action and interrupted work, then resume the bot on its page.")
         elif status.get("state") == "crashed" and not mac_offline:
             add("bot", bot["display_name"] + " needs attention",
@@ -519,12 +562,13 @@ def operation_issues(c, who, auth):
             # An API key's quota or billing refusal is not a subscription window; the person checks billing.
             from .execution import (LIMIT_COOLDOWN_LONG, LIMIT_STRIKES, billing_limit, last_limit, limit_cooldown,
                                     limit_streak, provider_reset)
-            since = H.parse_ts(status.get("since"))
+            since = H.parse_ts(status.get("changed_at"))
             cooldown = limit_cooldown(c, slug)
             if since and since > H.parse_ts(H.shift(H.now(), seconds=-max(3600, cooldown))):
                 from .agents import CONFIG_SQL
                 config = read_cache.one(c, CONFIG_SQL, (slug,))        # prime_machines read it with every bot's
-                runtime = providers.bot_choice(c, auth.settings, json.loads(config[0]) if config else {})[0] or "your"
+                runtime = providers.bot_choice(c, auth.settings,
+                                               H._json(config["config"], {}) or {} if config else {})[0] or "your"
                 # The login the limit held (backend/login_holds.py) says whose limit it was: a fallback's quota text
                 # is not the bot's own provider's billing.
                 from . import login_holds
@@ -538,39 +582,39 @@ def operation_issues(c, who, auth):
                 if last:
                     # Named from what the turn kept when it finished, not the bot's runtime or the login's hold now:
                     # a fallback's quota must not read as the primary's, nor a past limit as a newly chosen provider's.
-                    result = json.loads((c.execute("SELECT result_json FROM attempts WHERE id=?", (last["id"],))
+                    result = json.loads((c.execute("SELECT result FROM attempts WHERE id=?", (last["id"],))
                                          .fetchone() or ["{}"])[0] or "{}")
                     src = login_holds.recorded(c, last["id"], result, own)
                     runtime, billing = login_holds.label(src), src["billing"]
                 streak = hold.get("streak", 0) if hold else limit_streak(c, slug)
-                reset = hold.get("reset") if hold else bool(last and provider_reset(last, H.parse_ts(last["finished"])))
+                reset = hold.get("reset") if hold else bool(last and provider_reset(last, H.parse_ts(last["finished_at"])))
                 resume = login_holds.fallback_resume_reason(c, last['id']) if last else None
                 if resume:
                     add("bot", bot["display_name"] + " needs attention", f"{runtime}; {resume}",
                         bot=slug, severity="warning", needs_person=False)
                 elif billing:
-                    retry = H.shift(status["since"], seconds=cooldown)
+                    retry = H.shift(status["changed_at"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
                         f"{runtime}; queued work waits until {retry[:10]} {retry[11:16]} UTC, "
                         "check the API key's plan and billing", bot=slug, needs_person=False,
                         **({} if streak >= LIMIT_STRIKES else {"severity": "warning"}),
                         action="Check the API key's plan and billing, or set a fallback harness in Settings → Bots.")
                 elif cooldown > LIMIT_COOLDOWN_LONG:
-                    retry = H.shift(status["since"], seconds=cooldown)
+                    retry = H.shift(status["changed_at"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
                         f"{runtime}: subscription quota exhausted; queued work waits until {retry[:10]} "
                         f"{retry[11:16]} UTC", bot=slug, severity="warning", needs_person=False,
                         action="Wait for the subscription reset, or set a fallback harness in Settings → Bots.")
                 # A reported reset says when the limit lifts, so a streak is no reason to check the subscription.
                 elif streak >= LIMIT_STRIKES and not reset:
-                    retry = H.shift(status["since"], seconds=cooldown)
+                    retry = H.shift(status["changed_at"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
                         f"{runtime}, three times in a row; queued work waits until {retry[11:16]} UTC, "
                         "check the subscription or the API-key fallback on its Mac", bot=slug,
                         needs_person=False,
                         action="Check the subscription or set a fallback harness in Settings → Bots.")
                 else:
-                    retry = H.shift(status["since"], seconds=cooldown)
+                    retry = H.shift(status["changed_at"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
                         f"{runtime}; resumes at {retry[11:16]} UTC", bot=slug,
                         severity="warning", needs_person=False)
@@ -582,10 +626,13 @@ def operation_issues(c, who, auth):
             # message and scaled with the agent's unread inbox on every /status and /operations poll.
             unread = "delivered_at IS NULL" if location["agent"].get("synced") else "read_at IS NULL"
             waiting = [{"id": row["id"]} for row in c.execute(
-                "SELECT id FROM messages WHERE to_actor=? AND " + unread + " "
+                "SELECT id FROM messages WHERE recipient_id=? AND " + unread + " "
                 "AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL", ("bot:" + slug, H.now()))]
             queued = len(privacy.readable_messages(c, privacy.actor(who), waiting))
         uncertain = jobs["uncertain"]
+        if uncertain:
+            from .execution import tico_chosen
+            uncertain -= tico_chosen(c, who, slug)
         if uncertain and not mac_offline:
             noun = "run" if uncertain == 1 else "runs"
             queued_note = (f" {queued} other request{' is' if queued == 1 else 's are'} still queued."
@@ -607,9 +654,9 @@ def operation_issues(c, who, auth):
                     "Tico's Docker runner, then review its stopped run.")
             elif waiting or left:
                 # Work is stuck behind it (the claim's own fence), or the keeper settled the rest of its run and left
-                # it: only a review lets it go, so this one is a person's now, not a later look (Dev 280).
-                # One short line per run, with its own Try again / Don't retry, instead of a paragraph of quoted
-                # titles (Chris, Oct 26): the detail says only why they stopped and what waits; the rows name them.
+                # it: only a review lets it go. BotOps holds that review (its held-run task), so the person's status
+                # dot stays out of it and Health lists it. One short line per run, with its own Try again / Don't
+                # retry: the detail says only why they stopped and what waits; the rows name them.
                 rows, run_count = stopped_rows(c, who, auth, slug)
                 count = run_count or uncertain
                 can_review = who.actor == "bot:botops" or auth.operator(c, who, slug)
@@ -629,28 +676,33 @@ def operation_issues(c, who, auth):
                     at = (stamps[0].strftime("%H:%M") if stamps and len(stamps) == len(rows)
                           and (stamps[-1] - stamps[0]).total_seconds() <= 600 else None)
                     when = f" at {at} UTC" if at else ""
-                    why = {"interrupted": f"Its computer interrupted {these}{when}, usually for a restart or update",
+                    why = {"update": f"{these.capitalize()} stopped during Tico's update{when}",
+                           "interrupted": f"Its computer interrupted {these}{when}, usually for a restart",
                            "quota": f"{these.capitalize()} stopped at a usage limit",
                            "capacity": f"{these.capitalize()} stopped because the AI service was busy",
                            "timeout": f"Its computer stopped answering during {these}"}[cause]
                     why += ", not a bug. "
                 add("uncertain_work", f"{bot['display_name']} has {count} stopped {noun} holding up work",
-                    why + behind, bot=slug, action="review", held_back=waiting, held_tasks=waiting_on,
+                    why + behind, bot=slug, needs_person=False, action="review", held_back=waiting, held_tasks=waiting_on,
                     runs=rows, more_runs=max(0, count - len(rows)), can_review=can_review)
             elif (late := unreviewed(c, who, slug))[0]:
-                # Two hours with no decision: a person's now, on Health and in its operator's Needs you, whoever else
-                # was asked (Dev 543). Others who read the bot still see it on Health, not in their Needs you.
+                # Two hours with no decision: Health lists it for whoever may read the bot, and BotOps's held-run review
+                # decides it. Nobody is interrupted for it, so only the operator's severity differs.
                 count, hours = late
                 them = "it" if count == 1 else "them"
                 newer = uncertain - count
                 more = f" {newer} more stopped since." if newer > 0 else ""
                 operator = auth.operator(c, who, slug)
+                # The same rows as the card above, so Try again / Don't retry act on each run here too.
+                rows, run_count = stopped_rows(c, who, auth, slug)
+                can_review = who.actor == "bot:botops" or operator
+                if not can_review:
+                    rows = [{k: v for k, v in row.items() if k != "jobs"} for row in rows]
                 add("uncertain_work", f"{bot['display_name']} has {count} stopped run{'' if count == 1 else 's'} "
                     f"waiting {hours} h",
-                    f"Nobody has decided {them} yet. Tico paused only that request so it will not repeat a possible "
-                    f"outside action.{held_note}{more}{queued_note} Choose Try again or Don't retry.",
-                    bot=slug, severity="error" if operator else "warning", needs_person=operator, action="review",
-                    waiting_hours=hours)
+                    f"Nobody has decided {them} yet.{more}{queued_note} Choose Try again or Don't retry.",
+                    bot=slug, severity="error" if operator else "warning", needs_person=False, action="review",
+                    waiting_hours=hours, runs=rows, more_runs=max(0, run_count - len(rows)), can_review=can_review)
             else:
                 add("uncertain_work", f"{bot['display_name']} saved {uncertain} stopped {noun} for later",
                     "The bot stopped before returning an answer. Tico paused only that request so it "
@@ -662,20 +714,20 @@ def operation_issues(c, who, auth):
                 "Create one in Settings → Bots and install it in the " + agent["harness"] + " profile.",
                 bot=slug, needs_person=False)
         elif agent and bot["state"] == "active" and not location["online"] and agent.get("synced"):
-            detail = ("Last sync " + agent["last_seen"] + "." if agent["last_seen"] else "No history has synced yet.")
+            detail = ("Last sync " + agent["last_seen_at"] + "." if agent["last_seen_at"] else "No history has synced yet.")
             if queued:
                 detail += (f" {queued} message{'s' if queued != 1 else ''} wait{'s' if queued == 1 else ''} "
                            "for the next sync.")
             add("agent", bot["display_name"] + "'s history has not synced lately", detail,
-                bot=slug, since=agent["last_seen"], severity="warning", needs_person=False,
+                bot=slug, since=agent["last_seen_at"], severity="warning", needs_person=False,
                 action="Run the Tico sync in " + (agent.get("label") or "the agent") + " to refresh this copy.")
         elif agent and bot["state"] == "active" and not location["online"]:
-            detail = ("Last heartbeat " + agent["last_seen"] + "." if agent["last_seen"]
+            detail = ("Last heartbeat " + agent["last_seen_at"] + "." if agent["last_seen_at"]
                       else "No heartbeat yet: install the credential and the heartbeat timer on its box.")
             if queued:
                 detail += f" {queued} unread message{'s' if queued != 1 else ''} waiting in its inbox."
             add("agent", bot["display_name"] + "'s " + agent["harness"] + " agent has not reported in",
-                detail, bot=slug, since=agent["last_seen"], needs_person=False)
+                detail, bot=slug, since=agent["last_seen_at"], needs_person=False)
         elif agent:
             pass    # an external agent that reported in lately: no computer to check
         elif bot["state"] == "active" and not location["machine"]:
@@ -687,8 +739,8 @@ def operation_issues(c, who, auth):
         elif bot["state"] == "active" and location["machine"] and not location["online"]:
             # One issue per machine, not one per bot: the person can only do one thing about it.
             entry = offline.setdefault(location["machine"]["runner_id"], {
-                "label": location["machine"]["label"], "since": location["machine"]["last_seen"],
-                "operator": location["machine"]["operator"], "bots": [], "slugs": [], "queued": 0})
+                "label": location["machine"]["label"], "since": location["machine"]["last_seen_at"],
+                "owner_id": location["machine"]["owner_id"], "bots": [], "slugs": [], "queued": 0})
             entry["bots"].append(bot["display_name"])
             entry["slugs"].append(slug)
             entry["queued"] += queued
@@ -709,7 +761,7 @@ def operation_issues(c, who, auth):
             # Work piling up behind a computer that stopped checking in is an outage, not a blip. Its owner is the one
             # who can bring it back (the company owner when no current person enrolled it), so after a while it is
             # theirs to handle; the title stays the same as the minutes pass, so it opens for them once.
-            operator = entry["operator"] or ""
+            operator = entry["owner_id"] or ""
             person = P.person(operator, roster(c)) if operator else None
             mine = who.actor == "human:" + operator or (who.role == "owner" and (not person or bool(person.get("hidden"))))
             add("machine", entry["label"] + " stopped checking in",
@@ -725,19 +777,21 @@ def operation_issues(c, who, auth):
     if who.role == "owner":
         # Container backups report through replication; imported VM timer history stays historical.
         managed_backups = bool(os.environ.get("TICO_BACKUP_MODE"))
-        for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,version,checkout_json,restart_requested "
-                             "FROM runners WHERE revoked_at IS NULL"):
-            online = row["last_seen"] and row["last_seen"] > H.shift(H.now(), seconds=-60)
+        runners = c.execute("SELECT id,label,owner_id,last_seen_at,revoked_at,version,checkout,restart_requested_at "
+                            "FROM runners_with_state WHERE revoked_at IS NULL").fetchall()
+        busy = runner_busy_many(c, [row["id"] for row in runners])     # every computer's running turns in one read
+        for row in runners:
+            online = row["last_seen_at"] and row["last_seen_at"] > H.shift(H.now(), seconds=-60)
             if online and not runner_version_supported(row["version"]):
                 add("runner_version", row["label"] + " needs a runner update",
                     "Install the current " + auth.settings.app_name + " runner before assigning new work.",
                     machine=row["id"], action="Update this runner in Settings → Computers.")
             if online:
-                checkout_issue(add, row, runner_busy(c, row["id"]))
-        for row in c.execute("SELECT service,last_error,detail_json FROM service_health WHERE last_error IS NOT NULL"):
+                checkout_issue(add, row, busy[row["id"]])
+        for row in c.execute("SELECT service,last_error,detail FROM service_health WHERE last_error IS NOT NULL"):
             if managed_backups and row["service"] in SNAPSHOT_BACKUP_ROWS:
                 continue
-            detail = json.loads(row["detail_json"] or "{}")
+            detail = json.loads(row["detail"] or "{}")
             if row["service"] == "github:token":
                 # Only the App itself failing is a system problem, and only while it is recent and unrecovered.
                 from . import health
@@ -748,14 +802,34 @@ def operation_issues(c, who, auth):
                 continue
             add("service", row["service"] + " needs attention", row["last_error"] or "The last check failed.",
                 needs_person=bool(detail.get("needs_person")), action=detail.get("action"))
+        # Google connections: the Workspace key that stopped working, and a person's grant held on a computer other
+        # than their message bot's (backend/google_connect.py, google_workspace.py).
+        from . import google_rights, google_workspace
+        key = google_workspace.active(c)
+        if key and key["status"] == "failing":
+            add("google_workspace", "The Google Workspace key is failing",
+                key["last_error"] or "Google has refused the Workspace key for too long.",
+                needs_person=True, action="Check the key in Settings > Google.")
+        labels = {row["id"]: row["label"] for row in c.execute("SELECT id,label FROM runners_with_state")}
+        hosts = google_rights.inbox_hosts(c)
+        for grant in c.execute("SELECT person_id,mailbox,holder FROM google_connects WHERE status='connected' "
+                               "AND holder IS NOT NULL AND grant_hash IS NOT NULL").fetchall():
+            host = (hosts.get(grant["person_id"]) or {}).get("runner")
+            if host and host != grant["holder"]:
+                holder = labels.get(grant["holder"]) or "another computer"
+                bot_computer = labels.get(host) or "the computer that runs their message bot"
+                add("google_grant", grant["mailbox"] + "'s Google grant is on " + holder,
+                    grant["mailbox"] + "'s Google grant is on " + holder + ". Reconnect in Settings > Google to move it "
+                    "to " + bot_computer + ", where their message bot runs.", machine=grant["holder"], needs_person=True,
+                    action="Open Settings > Google")
         # A connector that stopped refreshing (the Mac lost the network, or the sync hung) writes no
         # error, so its age is checked while a Mac is online: calendar refreshes every 45 s, mail
         # reports every 10 minutes.
-        if c.execute("SELECT 1 FROM runners WHERE revoked_at IS NULL AND last_seen>?",
+        if c.execute("SELECT 1 FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
                      (H.shift(H.now(), seconds=-60),)).fetchone():
             for service, label, limit in (("connector:calendar", "Calendar", 15), ("connector:mail", "Mail", 90)):
-                row = c.execute("SELECT last_success,last_error FROM service_health WHERE service=?", (service,)).fetchone()
-                last = H.parse_ts(row["last_success"]) if row and row["last_success"] else None
+                row = c.execute("SELECT last_succeeded_at,last_error FROM service_health WHERE service=?", (service,)).fetchone()
+                last = H.parse_ts(row["last_succeeded_at"]) if row and row["last_succeeded_at"] else None
                 if last and not row["last_error"] and last < H.parse_ts(H.shift(H.now(), minutes=-limit)):
                     minutes = int((H.parse_ts(H.now()) - last).total_seconds() // 60)
                     add("service", SERVICE_NAMES[service] + " needs attention",
@@ -774,8 +848,8 @@ def operation_issues(c, who, auth):
                     action="Review Backups in Settings → Health.")
         for service, label, limit in (() if managed_backups else
                 (("backup", "verified backup", 36), ("restore-check", "isolated restore check", 36))):
-            row = c.execute("SELECT last_success FROM service_health WHERE service=?", (service,)).fetchone()
-            last = H.parse_ts(row["last_success"]) if row and row["last_success"] else None
+            row = c.execute("SELECT last_succeeded_at FROM service_health WHERE service=?", (service,)).fetchone()
+            last = H.parse_ts(row["last_succeeded_at"]) if row and row["last_succeeded_at"] else None
             if last and last < H.parse_ts(H.shift(H.now(), hours=-limit)):
                 hours = int((H.parse_ts(H.now()) - last).total_seconds() // 3600)
                 add("service", service + " needs attention",
@@ -794,26 +868,35 @@ def own_sign_in(c, bot, settings=None):
     """Why this bot's model is not signed in on its own computer (backend/readiness.py, the rule Health's stuck
     check and the model picker use), or '' when its computer is signed in or it waits on something else."""
     from .readiness import can_run, own_harness
-    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     runtime = providers.bot_choice(c, settings, json.loads(config[0] or "{}") if config else {})[0]
     verdict = can_run(c, bot, runtime, harness=own_harness(c, bot, runtime)) if runtime else {}
     return (verdict.get("problem") or "its model is not signed in") if verdict.get("sign_in") else ""
 
 
 def free_turn(c, bot, location, human=False):
-    """The computer whose running work and short starts occupy all its places, or ''."""
+    """The computer where no turn can start now, or '': its start places are all taken by running and starting turns
+    (start_places.held), or it already holds as many claimed turns as it may lease (start_places.live_limit)."""
     machine = location.get("machine") or {}
-    row = c.execute("SELECT capacity FROM runners WHERE id=?", (machine.get("runner_id"),)).fetchone()
+    row = c.execute("SELECT * FROM runners_with_state WHERE id=?", (machine.get("runner_id"),)).fetchone()
     if not row:
         return ""
-    held = turns_here(c, machine["runner_id"])
-    return (machine.get("label") or "its computer") if sum(held.values()) >= (row["capacity"] or 1) else ""
+    from .start_places import held, live, live_limit, turn_limit
+    rid = machine["runner_id"]
+    full = sum(held(c, rid).values()) >= turn_limit(row) or sum(live(c, rid).values()) >= live_limit(row)
+    return (machine.get("label") or "its computer") if full else ""
 
 
-def queued_label(c, bot, location, settings=None, human=False, behind=False):
+def cloud_machine_wait(c, bot):
+    from .cloud_machines import waiting
+    return waiting(c, bot)
+
+
+def queued_label(c, bot, location, settings=None, human=False, behind=False, queued=False):
     """(label, readiness_reason) for a bot's queued work: what it is waiting for, in a person's words. `human`: a
-    person's message; `behind`: the bot is still answering earlier work in this same conversation."""
-    from .performance import load_status
+    person's message; `behind`: the bot is still answering earlier work in this same conversation; `queued`: it was
+    sent with queue, so it waits for that turn to end rather than steering into it (backend/delivery.py)."""
+    from .start_places import computer_hold
     from . import org_turns
     bot_state = H.bot(c, bot)["state"]
     label, readiness_reason = "Saved — queued", ""
@@ -829,6 +912,9 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False):
     elif (stop := bot_stops.queued_reason(c, bot, human)):
         # Tico stopped the bot (failed runs, run budget) or it waits out a failed run: the words say why.
         label = "Saved — " + stop
+    elif not location["online"] and (cloud := cloud_machine_wait(c, bot)):
+        # Its own cloud machine is stopped or starting (backend/cloud_machines.py): the words say which, or why not.
+        label = "Saved — " + cloud
     elif not location["online"]:
         label = "Saved — waiting for " + ((location["machine"] or {}).get("label") or "a registered computer")
     elif not location["awake"]:
@@ -837,10 +923,10 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False):
     elif settings and org_turns.admission(c)['at_stop']:
         # Admission only: queued labels must not classify every bot's readiness and spend on each chat/status poll.
         label = 'Saved — ' + org_turns.REASON
-    elif not human and (location.get("machine") or {}).get("runner_id") and load_status(
-            c, location["machine"]["runner_id"])["overloaded"]:
+    elif not human and (location.get("machine") or {}).get("runner_id") and (
+            hold := computer_hold(c, location["machine"]["runner_id"])):
         # A person's own message still starts on a busy computer (start_places.from_person); it may wait for a turn.
-        label = "Saved — waiting: computer busy"
+        label = "Saved — waiting: " + hold[1]
     elif not location["ready"]:
         problems = (location.get("readiness") or {}).get("problems") or []
         if any(str(p).startswith("No AI provider is chosen") for p in problems):
@@ -855,27 +941,35 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False):
     elif behind:
         # Whether the running turn takes it (`steer`) or it waits for the next one; chat offers Stop and redirect.
         from .harnesses import steers
-        config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
         config = json.loads(config[0]) if config else {}
-        label = ("Saved — steering this turn" if steers(config, config.get("runtime"))
+        label = ("Saved — steering this turn" if not queued and steers(config, config.get("runtime"))
                  else "Saved — queued for the next turn")
     elif runner_versions.holding_since(c, (location.get("machine") or {}).get("runner_id")):
         # Its computer takes no new work until its running turns end and it updates (docs/updates.md).
         progress = runner_versions.drain_progress(c, (location.get("machine") or {}).get("runner_id"))
         label = "Saved — waiting for the computer to update" + (f": {progress}" if progress else "")
+    elif start_places.at_turn_limit(c, bot):
+        label = "Saved — at its turn limit"
     elif (computer := free_turn(c, bot, location, human)):
         label = "Saved — waiting for a free turn on " + computer
     return label, readiness_reason
 
 
+# The queued job of a task. INDEXED BY jobs_queued: the expression on the message cannot use an index, and with the
+# stale sqlite_stat1 row for messages the planner scanned all of them (40-44 ms a call on TIDY v0.5.1, 545 an hour).
+TASK_WAIT_SQL = (f"SELECT j.bot_id,{H.person_sent_sql()} AS person_sent FROM jobs j INDEXED BY jobs_queued "
+                 "JOIN messages m ON m.id=j.message_id "
+                 "JOIN conversations cv ON cv.id=m.conversation_id "
+                 f"WHERE j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at LIMIT 1")
+
+
 def task_wait(c, task_id, settings=None):
     """What this task's queued run waits for ("Waiting for a free turn on Studio Mac"), or '' when none is queued."""
-    job = c.execute("SELECT j.bot FROM jobs j JOIN messages m ON m.id=j.message_id "
-                    "JOIN conversations cv ON cv.id=m.conversation_id "
-                    f"WHERE j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created LIMIT 1", (task_id,)).fetchone()
+    job = c.execute(TASK_WAIT_SQL, (task_id,)).fetchone()
     if not job:
         return ""
-    label = queued_label(c, job["bot"], machine(c, job["bot"]), settings)[0]
+    label = queued_label(c, job["bot_id"], machine(c, job["bot_id"]), settings, human=bool(job["person_sent"]))[0]
     reason = label.removeprefix("Saved — ")
     return "Queued" if reason == "queued" else reason[:1].upper() + reason[1:]
 
@@ -915,13 +1009,17 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     run for a message a person sent, whichever bot it went to (a person's task answered by the bot that asked it).
     A run waiting for its ChatGPT login (backend/login_waits.py) says so in `waiting` and its label; `auth` lets it
     name the bot holding it."""
-    person = "m.from_actor LIKE 'human:%'"
-    which = (f"AND (j.bot=? OR {person}) " if bot and people else "AND j.bot=? " if bot
+    person = H.person_sent_sql()
+    which = (f"AND (j.bot_id=? OR {person}) " if bot and people else "AND j.bot_id=? " if bot
              else f"AND {person} " if people else "")
-    job = c.execute("SELECT j.*,m.from_actor AS sender,a.state AS attempt_state,a.lease_until,a.stop_requested "
+    # A send the duplicate trigger dismissed (wake_presets.HOLD_TRIGGER) repeats a run still going: the chat shows that run.
+    # person_sent: the message is a person's, or the keeper carrier of one (the sender alone is the keeper).
+    job = c.execute(f"SELECT j.*,m.sender_id AS sender,{person} AS person_sent,a.state AS attempt_state,a.lease_until,"
+                    "a.stop_requested_at,a.started_at AS attempt_started_at "
                     "FROM jobs j JOIN messages m ON m.id=j.message_id "
                     "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
-                    "AND coalesce(json_extract(m.refs_json,'$.maintenance'),'')!='checkpoint' "
+                    "AND coalesce(json_extract(m.refs,'$.maintenance'),'')!='checkpoint' "
+                    "AND NOT (j.state='canceled' AND coalesce(j.wake_class,'')='duplicate') "
                     + which + "ORDER BY m.rowid DESC LIMIT 1", (cid, bot) if bot else (cid,)).fetchone()
     execution = None
     if job and who and (not privacy.message_readable(c, privacy.actor(who), H.message(c, job["message_id"]))
@@ -934,10 +1032,10 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
             state = "uncertain" if state in ("running", "input") else "queued"
         elif state == "input":
             state = "running"
-        location = machine(c, job["bot"])
+        location = machine(c, job["bot_id"])
         label = {"queued": "Saved — queued", "leased": "Starting", "running": "Working",
-                 "completed": "Complete", "cancelled": "Delivery dismissed", "uncertain": "Stopped — saved for later"}.get(state, state)
-        if state == "cancelled" and job["stop_requested"]:
+                 "completed": "Complete", "canceled": "Delivery dismissed", "uncertain": "Stopped — saved for later"}.get(state, state)
+        if state == "canceled" and job["stop_requested_at"]:
             label = "Stopped"
         if input_added and state == "running":
             label = "Working — follow-up added"
@@ -947,34 +1045,43 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
         if state in ("leased", "running") and job["attempt_id"]:
             # Before it starts, or after: a fallback hop takes its own login once the turn has started.
             from .login_waits import waiting as login_wait
-            waiting = login_wait(c, job["attempt_id"], job["bot"], who, auth)
+            waiting = login_wait(c, job["attempt_id"], job["bot_id"], who, auth)
             label = waiting or label
         readiness_reason = ""
         if state == "queued":
             message = H.message(c, job["message_id"]) or {}
             behind = c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id JOIN attempts a ON a.id=j.attempt_id "
-                               "WHERE m.conversation_id=? AND j.bot=? AND a.state IN ('leased','running') LIMIT 1",
-                               (cid, job["bot"])).fetchone()
-            label, readiness_reason = queued_label(c, job["bot"], location, settings,
-                                                   human=H.is_human(message.get("from_actor") or ""), behind=bool(behind))
-            if ((H.status(c, job['bot']) or {}).get('state') == 'limited'
+                               "WHERE m.conversation_id=? AND j.bot_id=? AND a.state IN ('leased','running') LIMIT 1",
+                               (cid, job["bot_id"])).fetchone()
+            label, readiness_reason = queued_label(c, job["bot_id"], location, settings,
+                                                   human=bool(job["person_sent"]), behind=bool(behind),
+                                                   queued=(message.get("refs") or {}).get("delivery") == "queue")
+            if ((H.status(c, job['bot_id']) or {}).get('state') == 'limited'
                     and (reason := login_holds.fallback_resume_reason(c, job['attempt_id']))):
                 label = 'Saved — ' + reason
         parts = []
         if state in ("leased", "running"):
-            parts = turns.reply_parts([(e["kind"], json.loads(e["payload_json"]), e["created"]) for e in c.execute(
-                "SELECT kind,payload_json,created FROM attempt_events WHERE attempt_id=? ORDER BY seq", (job["attempt_id"],))])
+            parts = turns.reply_parts([(e["kind"], json.loads(e["payload"]), e["created_at"]) for e in c.execute(
+                "SELECT kind,payload,created_at FROM attempt_events WHERE attempt_id=? ORDER BY seq", (job["attempt_id"],))])
+        if parts:
+            # A bot that org rules apply to shows that it works and its tool steps, never its reply before the reply
+            # is checked and delivered (backend/org_rule_check.py).
+            from .org_rule_check import watched
+            if watched(c, job["bot_id"]):
+                parts = [p for p in parts if p["kind"] == "tool"]
         parts, omitted = live_parts(parts)
-        execution = {"job_id": job["id"], "message_id": job["message_id"], "bot": job["bot"],
+        execution = {"job_id": job["id"], "message_id": job["message_id"], "bot_id": job["bot_id"],
                      "attempt_id": job["attempt_id"], "state": state, "label": label,
                      "text": "\n\n".join(p["text"] for p in parts if p["kind"] != "tool"), "parts": parts,
-                     "from_person": H.is_human(job["sender"]), **location}
+                     "from_person": bool(job["person_sent"]), **location}
         if omitted:
             execution["parts_omitted"] = omitted
         if waiting:
             execution["waiting"] = waiting
         if readiness_reason:
             execution["readiness_reason"] = readiness_reason
+        if state in ("leased", "running") and job["attempt_started_at"]:
+            execution["started_at"] = job["attempt_started_at"]   # the chat counts the turn's time from it
     return execution
 
 
@@ -985,23 +1092,38 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
 PRESSING_DAYS = 3
 DECISIVE_DAYS = 1
 # A bot's task set waiting on the person blocks that bot just as its question does.
-KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "setup": 1, "declined": 2, "stale": 3, "task": 3, "report": 4}
+KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "setup": 1, "declined": 2, "stale": 3, "task": 3, "report": 4,
+             # Thread items (backend/thread_attention.py): an ask, a held message or a paused thread blocks a bot; a
+             # mention or an unread DM is a person's to read.
+             "thread_ask": 1, "thread_held": 1, "thread_capped": 1, "thread_mention": 2, "thread_dm": 2}
 # A card whose bot has not yet said plainly what it needs (`ask_missing`) waits at the very bottom: there is nothing
-# for the person to do on it until the bot restates it (backend/restate_asks.py asks it to).
+# for the person to do on it until the bot restates it (its bot's task roundup lists the restate, backend/task_roundup.py).
 
 
-_VISIBLE_TASK_SQL = "SELECT * FROM tasks WHERE id=? AND (%s)"
+_VISIBLE_TASK_SQL = f"SELECT * FROM {H.TASKS} tasks WHERE id=? AND (%s)"
 
 
 def _prime_person_origins(c, visible_sql, ids):
-    """The rows person_origin reads, each task as `visible_sql` lets this reader see it or None, read in one query
-    per 500 with that same rule rather than one query per card and ancestor."""
-    if read_cache.cache(c) is None:
-        return
+    """The rows person_origin reads, each task as `visible_sql` lets this reader see it or None, checked in one query
+    per 500 with that same rule rather than one query per card and ancestor. Returns the ids the rule lets this
+    reader see, so the caller needs no second check of them.
+
+    The check answers one row, the readable ids as JSON, and the rows are the snapshot's task rows (H.prime_tasks; Needs
+    you has read them all just before). Reading `SELECT *, (rule)` here stepped every row again, each step the GIL given
+    up and taken back: on a busy server that waits up to the 5 ms switch interval a row, and a 2 ms read took 50 ms to
+    1.4 s on Tico Team."""
+    readable = set()
     for part in H.chunks(sorted({tid for tid in ids if tid})):
-        found = {row["id"]: row for row in c.execute(
-            "SELECT * FROM tasks WHERE id IN (%s) AND (%s)" % (",".join("?" * len(part)), visible_sql), part)}
-        read_cache.prime(c, _VISIBLE_TASK_SQL % visible_sql, {(tid,): found.get(tid) for tid in part})
+        found = json.loads(c.execute("SELECT json_group_array(id) FROM tasks WHERE id IN (%s) AND (%s)"
+                                     % (",".join("?" * len(part)), visible_sql), part).fetchone()[0])
+        readable.update(found)
+        if read_cache.cache(c) is not None:
+            H.prime_tasks(c, found, with_tags=False)
+            # The row `SELECT * FROM tasks WHERE id=? AND (rule)` answers: the task's row as stored, or None.
+            rows = {tid: read_cache.one(c, H.TASK_SQL, (tid,)) for tid in found}
+            read_cache.prime(c, _VISIBLE_TASK_SQL % visible_sql,
+                             {(tid,): dict(rows[tid]) if rows.get(tid) else None for tid in part})
+    return readable
 
 
 def prime_list_origins(c, visible_sql, rows):
@@ -1013,7 +1135,7 @@ def prime_list_origins(c, visible_sql, rows):
     read_cache.prime(c, _VISIBLE_TASK_SQL % visible_sql, {(row["id"],): row for row in rows})
     TR.prime_ancestry(c, [row["id"] for row in rows])
     # Only rows whose requester is not a person walk their ancestors (person_origin).
-    chain = {tid for row in rows if not H.is_human(row.get("requester")) for tid in TR.ancestors(c, row["id"])}
+    chain = {tid for row in rows if not H.is_human(row.get("requester_id")) for tid in TR.ancestors(c, row["id"])}
     _prime_person_origins(c, visible_sql, chain - {row["id"] for row in rows})
 
 
@@ -1026,28 +1148,28 @@ def person_origin(c, row, visible_sql, me=None):
         return read_cache.one(c, _VISIBLE_TASK_SQL % visible_sql, (tid,))
     if not row or not readable(row["id"]):
         return None
-    if me and row.get("requester") == row.get("owner") == me:
+    if me and row.get("requester_id") == row.get("owner_id") == me:
         return None
-    if H.is_human(row.get("requester")):
-        return row["requester"]
+    if H.is_human(row.get("requester_id")):
+        return row["requester_id"]
     from .task_relations import ancestors
     for tid in ancestors(c, row["id"]):
         parent = readable(tid)
         if not parent:
             return None
-        if H.is_human(parent["requester"]):
-            return parent["requester"]
+        if H.is_human(parent["requester_id"]):
+            return parent["requester_id"]
     return None
 
 
 def pressing(it, now=None):
     """A bot's item that may go ahead of a person's: due within a day or overdue, or waiting long enough."""
     now = now or H.now()
-    due = it.get("due")
+    due = it.get("due_at")
     if due and str(due) <= H.shift(now, days=1):
         return True
     days = DECISIVE_DAYS if KIND_RANK.get(it.get("kind"), 9) <= 1 else PRESSING_DAYS
-    return bool(it.get("created")) and str(it["created"]) <= H.shift(now, days=-days)
+    return bool(it.get("created_at")) and str(it["created_at"]) <= H.shift(now, days=-days)
 
 
 CHECKOUT_BEHIND_HOURS = 1
@@ -1059,9 +1181,20 @@ def runner_busy(c, runner_id):
                      "AND lease_until>?", (runner_id, H.now())).fetchone()[0]
 
 
+def runner_busy_many(c, runner_ids):
+    """runner_busy for many computers, {runner: turns}, in one read per 500 computers."""
+    now, found = H.now(), {}
+    ids = sorted(set(runner_ids))
+    for part in H.chunks(ids):
+        found.update(c.execute("SELECT runner_id,count(*) FROM attempts WHERE runner_id IN (%s) "
+                               "AND state IN ('leased','running') AND lease_until>? GROUP BY runner_id"
+                               % ",".join("?" * len(part)), (*part, now)).fetchall())
+    return {rid: found.get(rid, 0) for rid in runner_ids}
+
+
 def restart_issue(add, row, busy, since=None):
     """Behind main, or pulled but not restarted: one plain line and a Restart button The runner also does this by itself; the button is for now."""
-    if row["restart_requested"]:
+    if row["restart_requested_at"]:
         detail = "Restarting" + (f" after {busy} running turn{'s' if busy != 1 else ''} finish{'es' if busy == 1 else ''}."
                                  if busy else " now. Nothing is running, so nothing will be interrupted.")
     elif busy:
@@ -1069,7 +1202,7 @@ def restart_issue(add, row, busy, since=None):
     else:
         detail = "Nothing is running, so nothing will be interrupted."
     add("runner_checkout", row["label"] + " has a Tico update", detail, machine=row["id"], since=since,
-        severity="warning", restart=not row["restart_requested"])
+        severity="warning", restart=not row["restart_requested_at"])
     return True
 
 
@@ -1077,7 +1210,7 @@ def checkout_issue(add, row, busy=0):
     """A runner whose checkout is not what main says (#492): the production runner ran 28 commits
     behind for a day because a bot committed in it. Local commits never fast-forward, so they are
     said at once; being behind is said once it has lasted an hour (a pull is on its way before)."""
-    checkout = H._json(row["checkout_json"], {}) or {}
+    checkout = H._json(row["checkout"], {}) or {}
     if not checkout:
         return
     ahead, behind = int(checkout.get("ahead") or 0), int(checkout.get("behind") or 0)
@@ -1139,7 +1272,7 @@ _YES_NO = frozenset("approve can could should shall may do does did is are was w
 def deadline(item):
     """When the card is due: a person's task's due date. A bot's own task's due is when it looks again, not a date
     anyone owes it by."""
-    return item.get("due") if item.get("kind") != "approval" and not H.is_bot(item.get("owner")) else None
+    return item.get("due_at") if item.get("kind") != "approval" and not H.is_bot(item.get("owner_id")) else None
 
 
 def yes_no_ask(text):
@@ -1153,10 +1286,18 @@ def yes_no_ask(text):
 def need_of(item):
     """The group a Needs you card goes in (NEED_GROUPS)."""
     kind = item.get("kind")
-    if kind == "stale":
+    if kind in ("stale", "memory_tidy"):
         return "decide"         # Accept or Skip, row by row
     if kind == "setup":
         return "connect"        # sign in to a provider (backend/models_preset.py)
+    if kind == "thread_ask":
+        return "decide"         # a thread's question to the person, answered in the thread
+    if kind == "thread_held":
+        return "review"         # a message held for review (backend/org_rule_check.py)
+    if kind in ("thread_mention", "thread_dm", "thread_capped"):
+        return "do"             # read or answer in the thread
+    if item.get("reconnect"):
+        return "connect"        # an account or credential a bot's task stopped on (backend/reconnects.py)
     if kind == "approval":
         return {"spend": "pay", "send": "review", "publish": "review", "support": "review", "merge": "review"}.get(
             item.get("what"), "decide")
@@ -1179,7 +1320,7 @@ def recommendation(ask, me):
     """What the bot that asked `me` recommends ({"do", "ask", "option"}), from what it said it would do if nobody
     answered (`if_no_answer`), or None. `option` is the label of the one question's option it names, so taking it
     answers that question exactly as picking it would."""
-    if not ask or ask.get("to_actor") != me or not H.is_bot(ask.get("from_actor")):
+    if not ask or ask.get("recipient_id") != me or not H.is_bot(ask.get("sender_id")):
         return None
     default = (ask.get("refs") or {}).get("if_no_answer") or {}
     do = str(default.get("do") or "").strip()
@@ -1196,9 +1337,9 @@ def recommendation(ask, me):
 def _whole_card(c, task, asked, me):
     """Whether `task`, which `me` owns, exists only to put this one ask to them: the bot that asked filed it, nothing
     else on it asks them, and it is the card the bot filed for its ask (H.ask_card) or says just that question."""
-    if task["requester"] != asked["from_actor"]:
+    if task["requester_id"] != asked["sender_id"]:
         return False
-    if any(a["id"] != asked["id"] and a["to_actor"] == me for a in H.open_task_asks(c, task)):
+    if any(a["id"] != asked["id"] and a["recipient_id"] == me for a in H.open_task_asks(c, task)):
         return False
     said = lambda text: " ".join(str(text or "").split()).casefold()  # noqa: E731
     return H.ask_card(c, task) == me or said(asked.get("body")) in {
@@ -1211,7 +1352,7 @@ def _another_card_under(c, row, answered, me):
     for t in H.descendants(c, row["id"]):
         if t["id"] == answered or t["status"] not in H.ACTIVE_STATUSES:
             continue
-        if t["owner"] == me or any(a["to_actor"] == me for a in H.open_task_asks(c, t)):
+        if t["owner_id"] == me or any(a["recipient_id"] == me for a in H.open_task_asks(c, t)):
             return True
     return False
 
@@ -1225,7 +1366,7 @@ def take_recommendation(c, auth, who, asked, version=None):
     wakes on the answer as on any other."""
     from . import models as M
     from .task_review import answer_task
-    if asked["to_actor"] != who.actor:
+    if asked["recipient_id"] != who.actor:
         raise Problem("forbidden", "Only the person it asked takes its recommendation", 403)
     rec = recommendation(asked, who.actor)
     if not rec:
@@ -1237,7 +1378,7 @@ def take_recommendation(c, auth, who, asked, version=None):
     task = H.task(c, task_id) if task_id else None
     if task and version is not None and task["version"] != version:
         raise Problem("version_conflict", "Task changed; fetch it and retry", 409)
-    finish = bool(task and task["owner"] == who.actor and _whole_card(c, task, asked, who.actor))
+    finish = bool(task and task["owner_id"] == who.actor and _whole_card(c, task, asked, who.actor))
     if rec["option"] and task_id:
         question = asked["refs"]["questions"][0]
         # A question on a file version is answered through its file and version.
@@ -1252,9 +1393,9 @@ def take_recommendation(c, auth, who, asked, version=None):
             H.task_update(c, who.actor, task_id, status="done", note=text)
         waits = [t for t in [task, *(H.task(c, a) for a in TR.ancestors(c, task_id))]
                  if t and t["status"] == "waiting" and t.get("waiting_on") == who.actor
-                 and (t is task or t["owner"] == asked["from_actor"] and not _another_card_under(c, t, task_id, who.actor))]
+                 and (t is task or t["owner_id"] == asked["sender_id"] and not _another_card_under(c, t, task_id, who.actor))]
         for t in waits:
-            c.execute("UPDATE tasks SET waiting_on=NULL, updated=? WHERE id=?", (H.now(), t["id"]))
+            c.execute("UPDATE tasks SET waiting_on=NULL, updated_at=? WHERE id=?", (H.now(), t["id"]))
             H._task_event(c, t["id"], who.actor, "waiting_on", who.actor, None, text)
         if waits:
             H._recount(c, who.actor)
@@ -1296,13 +1437,30 @@ def approval_title(kind, payload, task_title=""):
     return "Approve this " + kind
 
 
+def fold_reconnects(items):
+    """One card per account to fix: the tasks waiting on the same reconnect (backend/reconnects.py) fold into the
+    first one's `folded` list, so reconnecting once is one item, however many tasks it holds up."""
+    first, gone = {}, set()
+    for it in items:
+        key = (it.get("reconnect") or {}).get("key") if it.get("kind") == "waiting" else None
+        if not key:
+            continue
+        if key not in first:
+            first[key] = it
+            continue
+        first[key].setdefault("folded", []).append({k: it.get(k) for k in (
+            "id", "title", "owner_id", "kind", "person_ask", "note", "status", "due_at")})
+        gone.add(str(it["id"]))
+    return [it for it in items if str(it["id"]) not in gone] if gone else items
+
+
 def fold_related(items, c, me):
     """One card per blocker. A bot's task that only waits on the person for what one of their cards already asks
     folds into that card (its `folded` list, shown with it), so the queue counts it once: a waiting task above the
     card (its parent, grandparent, ...), one the card blocks, and a waiting subtask of such a folded parent. A card is
     the person's own task or one with an ask to them. A wait with no card above or beside it this way, or one that
     would fold into two cards, keeps its own card: siblings under one project are not one blocker."""
-    mine = lambda it: it.get("owner") == me or (it.get("ask") or {}).get("to_actor") == me  # noqa: E731
+    mine = lambda it: it.get("owner_id") == me or (it.get("ask") or {}).get("recipient_id") == me  # noqa: E731
     waits = {str(it["id"]): it for it in items if it["kind"] == "waiting" and not mine(it)}
     anchors = [it for it in items if it["kind"] in ("task", "question", "waiting") and mine(it)]
     if not waits or not anchors:
@@ -1319,9 +1477,18 @@ def fold_related(items, c, me):
     for tid, it in waits.items():
         if len(claims.get(tid, ())) == 1:
             claims[tid][0].setdefault("folded", []).append({k: it.get(k) for k in (
-                "id", "title", "owner", "kind", "person_ask", "note", "status", "due")})
+                "id", "title", "owner_id", "kind", "person_ask", "note", "status", "due_at")})
             gone.add(tid)
     return [it for it in items if str(it["id"]) not in gone]
+
+
+# Plans on messages_superseded_asks_to: on messages_to_delivered it walked every message to the person (31k on Tico
+# Team, 43 ms warm) to find a few hundred replaced asks.
+WITHDRAWN_ASKS_SQL = (
+    "SELECT count(*) FROM messages s WHERE s.recipient_id=? AND s.kind='ask' AND s.superseded_at>=? "
+    "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.kind='ask' AND m.recipient_id=s.recipient_id "
+    "AND m.sender_id=s.sender_id AND m.conversation_id=s.conversation_id AND m.rowid>s.rowid "
+    f"AND {H.OPEN_ASK_SQL})")
 
 
 def went_away(c, me, days=7):
@@ -1329,20 +1496,17 @@ def went_away(c, me, days=7):
     default, an ask or approval withdrawn (superseded by a newer one, or no longer needed), and what their Assistant
     answered for them."""
     since = H.shift(H.now(), days=-days)
-    expired = c.execute("SELECT count(*) FROM events WHERE ts>=? AND action IN ('ask.expired','ask.went_ahead') "
-                        "AND json_extract(detail_json,'$.to')=?", (since, me)).fetchone()[0]
+    expired = c.execute("SELECT count(*) FROM events WHERE created_at>=? AND action IN ('ask.expired','ask.went_ahead') "
+                        "AND json_extract(detail,'$.to')=?", (since, me)).fetchone()[0]
     # A question a newer one from the same bot replaced, still open in the same thread, did not go away: it is asked
     # again, so only one with no open successor counts.
-    withdrawn = (c.execute("SELECT count(*) FROM messages s WHERE s.to_actor=? AND s.kind='ask' AND s.superseded_at>=? "
-                           "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.kind='ask' AND m.to_actor=s.to_actor "
-                           "AND m.from_actor=s.from_actor AND m.conversation_id=s.conversation_id AND m.rowid>s.rowid "
-                           f"AND {H.OPEN_ASK_SQL})", (me, since)).fetchone()[0]
-                 + c.execute("SELECT count(*) FROM approvals a JOIN messages m ON m.id=a.message_id WHERE m.to_actor=? "
+    withdrawn = (c.execute(WITHDRAWN_ASKS_SQL, (me, since)).fetchone()[0]
+                 + c.execute("SELECT count(*) FROM approvals a JOIN messages m ON m.id=a.message_id WHERE m.recipient_id=? "
                              "AND a.decision='withdrawn' AND a.decided_at>=?", (me, since)).fetchone()[0])
-    assistant = (c.execute("SELECT count(*) FROM approvals a JOIN messages m ON m.id=a.message_id WHERE m.to_actor=? "
+    assistant = (c.execute("SELECT count(*) FROM approvals a JOIN messages m ON m.id=a.message_id WHERE m.recipient_id=? "
                            "AND a.decided_via='assistant' AND a.decided_at>=?", (me, since)).fetchone()[0]
-                 + c.execute("SELECT count(*) FROM messages WHERE from_actor=? AND kind='answer' AND created>=? "
-                             "AND json_extract(refs_json,'$.via')='assistant'", (me, since)).fetchone()[0])
+                 + c.execute("SELECT count(*) FROM messages WHERE sender_id=? AND kind='answer' AND created_at>=? "
+                             "AND json_extract(refs,'$.via')='assistant'", (me, since)).fetchone()[0])
     return {"expired": expired, "withdrawn": withdrawn, "assistant": assistant,
             "total": expired + withdrawn + assistant, "days": days}
 
@@ -1352,12 +1516,12 @@ def person_ask(row, kind, me, ask):
     and to sort by. A task a bot set waiting on me asks in its waiting note, one given to me by a bot in its body's
     first paragraph, each when it passes H.lint_person_ask. A waiting card has its ask missing when neither that
     nor an open question to me asks; a task a person asked for, or a question card, never does."""
-    if kind == "waiting" and H.is_bot(row.get("owner")):
+    if kind == "waiting" and H.is_bot(row.get("owner_id")):
         text = str(row.get("note") or "").strip()
         if H.lint_person_ask(text):
-            return "", not (ask and ask.get("to_actor") == me)
+            return "", not (ask and ask.get("recipient_id") == me)
         return text, False
-    if row.get("owner") == me and H.is_bot(row.get("requester")):
+    if row.get("owner_id") == me and H.is_bot(row.get("requester_id")):
         text = H.person_ask_of_body(row.get("body"), row.get("title"))
         return ("" if H.lint_person_ask(text) else text), False
     return "", False
@@ -1378,22 +1542,22 @@ def recent_bots(c, auth, who, since, limit, needs):
             seen[slug] = ts
     # Discovery window: one readable_messages prime (not message_readable per row), then task_sql for tasks.
     recent_msgs = [dict(r) for r in c.execute(
-        "SELECT id, from_actor, to_actor, created FROM messages WHERE created>=? AND "
-        "((from_actor=? AND to_actor LIKE 'bot:%') OR (to_actor=? AND from_actor LIKE 'bot:%'))",
+        "SELECT id, sender_id, recipient_id, created_at FROM messages WHERE created_at>=? AND "
+        "((sender_id=? AND recipient_id LIKE 'bot:%') OR (recipient_id=? AND sender_id LIKE 'bot:%'))",
         (since, me, me))]
     for row in privacy.readable_messages(c, privacy.actor(who), recent_msgs):
-        touch(H.actor_id(row["to_actor"] if row["from_actor"] == me else row["from_actor"]), row["created"])
+        touch(H.actor_id(row["recipient_id"] if row["sender_id"] == me else row["sender_id"]), row["created_at"])
     visible = auth.task_sql(c, who)
     for row in c.execute(
-            "SELECT id, owner, requester, updated FROM tasks WHERE updated>=? AND "
-            f"((requester=? AND owner LIKE 'bot:%') OR (owner=? AND requester LIKE 'bot:%')) AND ({visible})",
+            "SELECT id, owner_id, requester_id, updated_at FROM tasks WHERE updated_at>=? AND "
+            f"((requester_id=? AND owner_id LIKE 'bot:%') OR (owner_id=? AND requester_id LIKE 'bot:%')) AND ({visible})",
             (since, me, me)):
-        touch(H.actor_id(row["owner"] if row["requester"] == me else row["requester"]), row["updated"])
+        touch(H.actor_id(row["owner_id"] if row["requester_id"] == me else row["requester_id"]), row["updated_at"])
     waiting = {}
     for item in needs:
         # A task waiting on the person waits with the bot that owns it, whoever asked for it.
-        actors = ((item.get("owner"),) if item.get("kind") == "waiting" else
-                  (item.get("origin_actor"), (item.get("ask") or {}).get("from_actor"), item.get("requester"), item.get("owner")))
+        actors = ((item.get("owner_id"),) if item.get("kind") == "waiting" else
+                  (item.get("origin_actor"), (item.get("ask") or {}).get("sender_id"), item.get("requester_id"), item.get("owner_id")))
         for actor in actors:
             if str(actor or "").startswith("bot:"):
                 waiting.setdefault(H.actor_id(actor), []).append(item.get("title") or item.get("first_line") or "")
@@ -1409,27 +1573,27 @@ def recent_bots(c, auth, who, since, limit, needs):
         actor = H.bot_actor(slug)
         # Newest readable line each way. Lazy, not a fixed window: deleted or unreadable newest rows must not
         # hide an older readable one, and the first row is readable almost always.
-        mine = next((m for m in c.execute("SELECT * FROM messages WHERE from_actor=? AND to_actor=? "
-                    "ORDER BY created DESC", (me, actor)) if privacy.message_readable(c, privacy.actor(who), m)), None)
-        theirs = next((m for m in c.execute("SELECT * FROM messages WHERE from_actor=? AND to_actor=? AND deleted_at IS NULL "
-                      "ORDER BY created DESC", (actor, me)) if privacy.message_readable(c, privacy.actor(who), m)), None)
+        mine = next((m for m in c.execute("SELECT * FROM messages WHERE sender_id=? AND recipient_id=? "
+                    "ORDER BY created_at DESC", (me, actor)) if privacy.message_readable(c, privacy.actor(who), m)), None)
+        theirs = next((m for m in c.execute("SELECT * FROM messages WHERE sender_id=? AND recipient_id=? AND deleted_at IS NULL "
+                      "ORDER BY created_at DESC", (actor, me)) if privacy.message_readable(c, privacy.actor(who), m)), None)
 
         conversation = next((m["conversation_id"] for m in sorted(filter(None, (mine, theirs)),
-                             key=lambda m: m["created"], reverse=True) if m["conversation_id"]), None)
-        tasks = c.execute("SELECT id, title, status, owner, updated FROM tasks WHERE status IN "
-                          "('open','doing','waiting','review','ready') AND ((owner=? AND requester=?) OR (owner=? AND requester=?)) "
-                          "ORDER BY updated DESC LIMIT 5", (actor, me, me, actor)).fetchall()
+                             key=lambda m: m["created_at"], reverse=True) if m["conversation_id"]), None)
+        tasks = c.execute("SELECT id, title, status, owner_id, updated_at FROM tasks WHERE status IN "
+                          "('open','doing','waiting','review','ready') AND ((owner_id=? AND requester_id=?) OR (owner_id=? AND requester_id=?)) "
+                          "ORDER BY updated_at DESC LIMIT 5", (actor, me, me, actor)).fetchall()
         current = H.task(c, status["task_id"]) if status.get("task_id") else None
         out.append({
-            "bot": slug, "name": bot.get("display_name") or slug, "last_interaction": last,
+            "bot": slug, "name": bot.get("display_name") or bot.get("slug") or slug, "last_interaction": last,
             "status": {"state": status.get("state") or bot.get("state"), "focus": status.get("focus") or "",
-                       "since": status.get("since"), "working_on": (current or {}).get("title"),
+                       "changed_at": status.get("changed_at"), "working_on": (current or {}).get("title"),
                        "last_turn_at": status.get("last_turn_at")},
             "conversation_id": conversation,
-            "you_said": {"text": _clip(mine["body"]), "at": mine["created"]} if mine else None,
-            "it_said": {"text": _clip(theirs["body"]), "at": theirs["created"]} if theirs else None,
+            "you_said": {"text": _clip(mine["body"]), "at": mine["created_at"]} if mine else None,
+            "it_said": {"text": _clip(theirs["body"]), "at": theirs["created_at"]} if theirs else None,
             "open_tasks": [{"id": t["id"], "title": t["title"], "status": t["status"],
-                            "owner": t["owner"], "updated": t["updated"]} for t in tasks],
+                            "owner_id": t["owner_id"], "updated_at": t["updated_at"]} for t in tasks],
             "needs_you": waiting.get(slug, []),
         })
     return out
@@ -1492,7 +1656,7 @@ def roadmap_entry(c, t):
         return None
     step = c.execute("SELECT name FROM task_steps WHERE id=?", (t.get("step_id"),)).fetchone()
     return {"id": t["id"], "title": t["title"], "kind": "roadmap", "step": step[0] if step else None,
-            "due": t.get("due")}
+            "due_at": t.get("due_at")}
 
 
 def holds_up(c, row, readable):
@@ -1511,14 +1675,14 @@ def holds_up(c, row, readable):
         t = H.task(c, tid) if tid != row["id"] else row
         if not t or t["status"] in ("closed", "declined", "done") or not readable(tid):
             continue
-        if when_of(t.get("due")):
-            dues.append(t["due"])
+        if when_of(t.get("due_at")):
+            dues.append(t["due_at"])
         if roadmap is None and tid != row["id"]:
             roadmap = roadmap_entry(c, t)
     held = roadmap
     parent = H.task(c, chain[1]) if len(chain) > 1 else None
     if held is None and parent and readable(parent["id"]):
-        held = {"id": parent["id"], "title": parent["title"], "kind": "task", "step": None, "due": parent.get("due")}
+        held = {"id": parent["id"], "title": parent["title"], "kind": "task", "step": None, "due_at": parent.get("due_at")}
     if held is not None:
         held["soonest"] = min(dues, key=when_of) if dues else None
     return held
@@ -1531,8 +1695,8 @@ def decide_tier(item, now=None, own=None):
     it, but it counts here like the item it holds up. How old a card is never moves it up."""
     soon = when_of(business_days_ahead(now or H.now(), SOON_BUSINESS_DAYS))
     ask, held, own = item.get("ask") or {}, item.get("holds_up") or {}, own or {}
-    dates = [ask.get("goes_ahead_at"), ((ask.get("refs") or {}).get("if_no_answer") or {}).get("by"), held.get("due"),
-             held.get("soonest"), own.get("due"), deadline(item)]
+    dates = [ask.get("goes_ahead_at"), ((ask.get("refs") or {}).get("if_no_answer") or {}).get("by"), held.get("due_at"),
+             held.get("soonest"), own.get("due_at"), deadline(item)]
     if any(when_of(d) and when_of(d) <= soon for d in dates):
         return 0
     return 1 if any(r.get("kind") == "roadmap" and r.get("step") in ROADMAP_LIVE_STEPS for r in (held, own)) else 2
@@ -1546,9 +1710,10 @@ def card_why(item):
     if str(q.get("why") or "").strip():
         return str(q["why"]).strip()
     line = H.person_ask_of_body(item.get("body"), item.get("title"))
-    said = " ".join(line.split()).casefold()
+    said, plain = " ".join(line.split()).casefold(), lambda x: " ".join(str(x or "").split()).casefold()
+    # A line the question already says (all of it, or the org rule warning it leads with) is not said twice.
     if (not line or "\n" in line or len(line) > 200 or H.lint_plain(line)
-            or said in {" ".join(str(x or "").split()).casefold() for x in (q.get("question"), item.get("title"))}):
+            or said == plain(item.get("title")) or said in plain(q.get("question"))):
         return ""
     return line
 
@@ -1589,8 +1754,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     H.hydrate_task_tags(c, raw["tasks"] + raw["waiting"] + raw["declined"])
     from . import ask_deadlines, team_rules
     rules = team_rules.load(c)
-    from . import ceo_merge
-    merged = ceo_merge.hidden_by_item(c, who.actor)
+    from . import strategy_merge
+    merged = strategy_merge.hidden_by_item(c, who.actor)
     # Each card reads its task, its open asks, its origin and the chain of tasks above it. Those rows are read here
     # for every card together, in this snapshot; readability of the cards themselves is one task_sql pass.
     cards = raw["tasks"] + raw["waiting"] + raw["declined"]
@@ -1599,65 +1764,75 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     H.prime_tasks(c, chain)
     # H.needs_you already read every pending approval's message for this snapshot.
     privacy.prime_messages(c, [m for row in raw["approvals"]
-                               if (m := H.message(c, row["message_id"])) and m["to_actor"] == who.actor])
+                               if (m := H.message(c, row["message_id"])) and m["recipient_id"] == who.actor])
     H.prime_task_origins(c, [row["id"] for row in cards])
-    _prime_person_origins(c, visible, chain)
+    chain_seen = _prime_person_origins(c, visible, chain)     # the chain's visibility, read once with its rows
     pipelines = H.type_list(c)
     asks_of = H.open_tasks_asks(c, cards, actor=privacy.actor(who))
-    can_see = _readable_task_ids(
-        c, visible,
-        [row["id"] for row in cards]
-        + [tid for originals in merged.values() for tid in originals]
-        + [row["task_id"] for row in raw["approvals"] if row.get("task_id")])
+    wanted = ([row["id"] for row in cards]
+              + [tid for originals in merged.values() for tid in originals]
+              + [row["task_id"] for row in raw["approvals"] if row.get("task_id")])
+    elsewhere = _readable_task_ids(c, visible, [tid for tid in wanted if tid not in chain])
+    can_see = {tid for tid in wanted if (tid in chain and tid in chain_seen) or tid in elsewhere}
+    from . import reconnects
+    reconnect_cards = reconnects.for_tasks(c, [r["id"] for r in raw["waiting"]], who.actor)
     items = []
+    from . import task_holds
+    hold_marks = task_holds.marks(c, [row for kind in ("tasks", "waiting", "declined") for row in raw[kind]])
     for kind in ("tasks", "waiting", "declined"):
         for row in raw[kind]:
             if row["id"] not in can_see:
                 continue
             open_asks = asks_of[row["id"]]
-            ask = next((a for a in open_asks if a["to_actor"] == who.actor), None) or next(iter(open_asks), None)
+            ask = next((a for a in open_asks if a["recipient_id"] == who.actor), None) or next(iter(open_asks), None)
             if ask and (ask.get("refs") or {}).get("if_no_answer"):
                 ask["goes_ahead_at"] = ask_deadlines.deadline(ask, rules)     # when the bot's default goes ahead
             typ = next((t for t in pipelines if t["id"] == (row.get("type_id") or H.GENERAL_TYPE)), None) or {}
-            item = {**task_view(row, pipelines=pipelines),
+            item = {**task_view(row, pipelines=pipelines, hold_marks=hold_marks),
                     "kind": kind if kind in ("declined", "waiting") else "question" if ask else "task",
                     # Finished and reopened only by a step move (the Product roadmap): no Done, Reopen or Close on it.
                     "steps_only": bool(typ.get("steps_only")),
                     "origin_actor": H.task_origin(c, row), "ask": ask, "open_asks": len(open_asks),
                     "first_line": (row.get("body") or "").split("\n")[0],
-                    "from_person": (ask["from_actor"] if ask and H.is_human(ask["from_actor"])
+                    "from_person": (ask["sender_id"] if ask and H.is_human(ask["sender_id"])
                                     else person_origin(c, row, visible, who.actor))}
             item["person_ask"], item["ask_missing"] = person_ask(row, item["kind"], who.actor, ask)
+            if row["id"] in reconnect_cards:
+                # A reconnect card (backend/reconnects.py): its one line is the ask, its fix is on the card.
+                card = reconnect_cards[row["id"]]
+                item["reconnect"] = card
+                item["person_ask"], item["ask_missing"] = reconnects.line(c, card["bot"], card["service"], card["label"]), False
             if row.get('assigned_not_started'):
                 item.update(assigned_not_started=True, note=row['note'])
             item["recommend"] = next((r for a in open_asks if (r := recommendation(a, who.actor))), None)
             if row["id"] in merged:
-                # The CEO Bot's merged item: the originals it stands for, which the Tasks page leaves out of Needs you.
+                # The Strategy Bot's merged item: the originals it stands for, which the Tasks page leaves out of Needs
+                # you.
                 item["merged"] = [t for t in merged[row["id"]] if t in can_see]
-            if ask and ask.get("to_actor") == who.actor and H.ask_older(ask):
+            if ask and ask.get("recipient_id") == who.actor and H.ask_older(ask):
                 ask["stale"] = True      # its one-click Clarify (backend/clarify_asks.py) shows on the card
             items.append(item)
     for msg in privacy.readable_messages(c, privacy.actor(who), H.loose_asks_to(c, who.actor)):
-        msg["refs"] = H._json(msg.get("refs_json"), {}) or {}
-        ask = {k: msg[k] for k in ("id", "from_actor", "to_actor", "body", "created", "conversation_id", "refs")}
+        msg["refs"] = H._json(msg.get("refs"), {}) or {}
+        ask = {k: msg[k] for k in ("id", "sender_id", "recipient_id", "body", "created_at", "conversation_id", "refs")}
         item = {"kind": "ask", "id": msg["id"], "message_id": msg["id"], "title": _clip(msg["body"], 160),
-                "first_line": (msg["body"] or "").split("\n")[0], "body": msg["body"], "requester": msg["from_actor"],
-                "origin_actor": msg["from_actor"], "conversation_id": msg["conversation_id"],
-                "created": msg["created"], "ask": ask,
-                "from_person": msg["from_actor"] if H.is_human(msg["from_actor"]) else None,
+                "first_line": (msg["body"] or "").split("\n")[0], "body": msg["body"], "requester_id": msg["sender_id"],
+                "origin_actor": msg["sender_id"], "conversation_id": msg["conversation_id"],
+                "created_at": msg["created_at"], "ask": ask,
+                "from_person": msg["sender_id"] if H.is_human(msg["sender_id"]) else None,
                 "recommend": recommendation(ask, who.actor)}
         if H.ask_older(msg):
             ask["stale"] = True
         items.append(item)
     for row in raw["approvals"]:
         msg = H.message(c, row["message_id"])
-        if msg and msg["to_actor"] == who.actor and privacy.message_readable(c, privacy.actor(who), msg):
+        if msg and msg["recipient_id"] == who.actor and privacy.message_readable(c, privacy.actor(who), msg):
             # Its task's title only when the person may read that task.
             task = (H.task(c, row["task_id"])
                     if row.get("task_id") and row["task_id"] in can_see else None)
             item = {**row, "kind": "approval", "what": row["kind"],
                     "title": approval_title(row["kind"], row.get("payload"), (task or {}).get("title")),
-                    "requester": row["requested_by"], "conversation_id": msg["conversation_id"],
+                    "requester_id": row["requested_by_id"], "conversation_id": msg["conversation_id"],
                     "from_person": person_origin(c, task, visible)}
             if row["kind"] == "send":
                 item["attachment_files"] = approval_files(c, auth, who, row.get("payload"))
@@ -1667,6 +1842,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                 item["title"] = "Send this to Tico support?"
                 item["support"] = {"to": hq_url().split("://", 1)[-1].split("/", 1)[0]}
             items.append(item)
+    from . import memory_tidy_cards
+    items.extend(memory_tidy_cards.cards_for(c, who.actor))
     from . import stale_review
     stale = stale_review.card(c, who.actor) if H.is_human(who.actor) else None
     if stale:
@@ -1681,9 +1858,22 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         setup = models_preset.card(c)
         if setup:
             items.append(setup)
-    items = fold_related(items, c, who.actor)
+    if H.is_human(who.actor):
+        # The thread items (backend/thread_attention.py); an ask Needs you already lists as a loose ask is not listed twice.
+        from . import thread_attention
+        listed = {it["message_id"] for it in items if it.get("message_id")}
+        items.extend(thread_attention.items(c, auth, who, skip=listed))
+    items = fold_reconnects(fold_related(items, c, who.actor))
     if count_only:
         return items
+    from . import needs_shape
+    items = [needs_shape.needs_item(x, who.actor) for x in items]      # one shape whatever the kind (NeedsYouItem)
+    readable_memo = {}      # a blocker or ancestor shared by many cards is checked once in this snapshot
+
+    def readable(tid):
+        if tid not in readable_memo:
+            readable_memo[tid] = _readable(auth, c, who, tid)
+        return readable_memo[tid]
     rows = {r["id"]: r for kind in ("tasks", "waiting", "declined") for r in raw[kind]}
     at = H.now()
     from . import ask_ingest
@@ -1695,7 +1885,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         own = None
         if item["kind"] in ("question", "waiting", "task", "declined"):
             row = rows.get(item["id"]) or H.task(c, item["id"]) or item
-            item["holds_up"] = holds_up(c, row, lambda tid: _readable(auth, c, who, tid))
+            item["holds_up"] = holds_up(c, row, readable)
             if row.get("id") and row.get("status") not in ("closed", "declined", "done"):
                 own = roadmap_entry(c, row)
         if item["kind"] in ("question", "ask"):
@@ -1714,7 +1904,7 @@ def _readable(auth, c, who, task_id):
 
 def needs_key(x):
     """An item's place in the queue (needs_order), from the item as needs_items builds it."""
-    return needs_order(x["kind"], x["created"], x.get("rank") if x["kind"] == "task" else None,
+    return needs_order(x["kind"], x["created_at"], x.get("rank") if x["kind"] == "task" else None,
                        x.get("from_person"), x["pressing"], bool(x.get("ask_missing")), deadline(x))
 
 
@@ -1736,7 +1926,6 @@ def needs_marks(items):
     return marks, version
 
 
-FLEET_CACHE_S = 15
 NEEDS_IDS_MAX = 100     # the most a live `needs` event names; more changed than that reads the list whole
 NEEDS_PAGE = 50         # a page of Needs you when `cursor` comes without `limit`
 NEEDS_PAGE_MAX = 200
@@ -1769,30 +1958,71 @@ def needs_bots(items, me):
     the sidebar's numbers do not wait for every page."""
     counts = {}
     for it in items:
-        actor = None
-        if it.get("kind") == "approval":
-            actor = it.get("requested_by") or it.get("requester")
-        elif it.get("kind") == "ask":
-            actor = it.get("requester")
-        elif it.get("kind") in ("task", "question", "waiting"):
-            ask = it.get("ask") or {}
-            on = it.get("waiting_on") if it.get("status") == "waiting" and H.is_human(it.get("waiting_on")) else None
-            if it.get("owner") == me or ask.get("to_actor") == me or on == me:
-                asked = (it.get("origin_actor") or "keeper") if it.get("requester") == "keeper" else it.get("requester")
-                options = [it.get("owner")] if on == me else [ask.get("from_actor"), asked, it.get("owner")]
-                actor = (next((a for a in options if H.is_bot(a) and a != me), None)
-                         or next((a for a in options if a and a != me), None))
+        actor = needs_actor(it, me)
         if H.is_bot(actor):
             counts[actor] = counts.get(actor, 0) + 1
     return counts
-_FLEET_CACHE = {}
 
 
-def fleet_snapshot_cached(c, auth, identity, task_view, ttl=FLEET_CACHE_S):
-    """Build a fresh snapshot so participant changes revoke every read immediately."""
-    # Participant changes revoke reads immediately, including already warmed snapshots.
-    return fleet_snapshot(c, auth, identity, task_view)
+def needs_actor(it, me):
+    """The teammate one Needs-you item goes with (needs_bots), or None."""
+    actor = None
+    if it.get("kind") == "approval":
+        actor = it.get("requested_by_id") or it.get("requester_id")
+    elif it.get("kind") == "ask":
+        actor = it.get("requester_id")
+    elif it.get("kind") in ("task", "question", "waiting"):
+        ask = it.get("ask") or {}
+        on = it.get("waiting_on") if it.get("status") == "waiting" and H.is_human(it.get("waiting_on")) else None
+        on = on or (it.get("reconnect") or {}).get("person")
+        if it.get("owner_id") == me or ask.get("recipient_id") == me or on == me:
+            asked = (it.get("origin_actor") or "keeper") if it.get("requester_id") == "keeper" else it.get("requester_id")
+            options = [it.get("owner_id")] if on == me else [ask.get("sender_id"), asked, it.get("owner_id")]
+            actor = (next((a for a in options if H.is_bot(a) and a != me), None)
+                     or next((a for a in options if a and a != me), None))
+    return actor
 
+
+NEEDS_SUMMARY_ITEMS = 10     # the newest items listed under each bot (at most)
+NEEDS_SUMMARY_BOTS = 25      # the bots listed, most waiting first; the rest are counted in `bots_left`
+
+
+def needs_summary(c, auth, who, task_view, limit):
+    """What the caller's Needs you holds, counted the way the list counts it (`count=1`): the total, the number per kind,
+    and per bot (`by_bot`): its count, the ones made this week and the ones older than three days, and its newest
+    `limit` items. A finished task that still holds an open ask is `done_but_open`. Items no bot put there are grouped
+    under `other`. Ages are days from each item's `created_at`."""
+    items = needs_items(c, auth, who, task_view, count_only=True)
+    now = H.now()
+    week, older = H.shift(now, days=-7), H.shift(now, days=-3)
+    groups, kinds, this_week = {}, {}, 0
+    for it in items:
+        key = needs_actor(it, who.actor) or "other"
+        created = it.get("created_at") or now
+        kinds[it["kind"]] = kinds.get(it["kind"], 0) + 1
+        this_week += created >= week
+        group = groups.setdefault(key, {"count": 0, "this_week": 0, "older_than_3_days": 0, "items": []})
+        group["count"] += 1
+        group["this_week"] += created >= week
+        group["older_than_3_days"] += created < older
+        group["items"].append({"id": str(it["id"]), "short_id": str(it["id"])[:8], "kind": it["kind"],
+                               "title": _clip(it.get("title"), 80), "created_at": created,
+                               "age_days": round(age_days(created, now), 1),
+                               "done_but_open": it.get("status") in ("done", "closed") and bool(it.get("open_asks"))})
+    ordered = sorted(groups.items(), key=lambda kv: (-kv[1]["count"], kv[0]))
+    by_bot = []
+    for key, group in ordered[:NEEDS_SUMMARY_BOTS]:
+        group["items"].sort(key=lambda x: x["created_at"], reverse=True)
+        by_bot.append({"bot": key, "name": H.actor_name(c, key) if key != "other" else "Other",
+                       **{k: v for k, v in group.items() if k != "items"}, "items": group["items"][:limit]})
+    return {"actor": who.actor, "total": len(items), "this_week": this_week, "by_kind": kinds, "by_bot": by_bot,
+            "bots_left": max(0, len(ordered) - len(by_bot))}
+
+
+def age_days(created, now):
+    """Whole-day age in days (fractions kept) from an ISO time to `now`; 0 when it does not parse."""
+    start, end = H.parse_ts(created), H.parse_ts(now)
+    return max(0.0, (end - start).total_seconds() / 86400) if start and end else 0.0
 
 def fleet_snapshot(c, auth, identity, task_view):
     """One live, actor-scoped control-plane snapshot for Tico's private room."""
@@ -1800,43 +2030,43 @@ def fleet_snapshot(c, auth, identity, task_view):
     principal = auth.tico_principal(c, identity)
     access = auth.bot_accesses(c, principal)
     bot_rows = H.bots(c)
-    allowed = {row["slug"] for row in bot_rows if access.get(row["slug"], auth.FULL)["write"]}
+    allowed = {row["id"] for row in bot_rows if access.get(row["id"], auth.FULL)["write"]}
     task_rows = [dict(t) for t in c.execute(f"SELECT {privacy.STATUS_TASK_COLUMNS} FROM tasks WHERE {privacy.STATUS_TASKS_SQL}")]
     bot_tasks = {}
     for task in task_rows:
-        for actor in {task["owner"], task["requester"]}:
+        for actor in {task["owner_id"], task["requester_id"]}:
             if H.is_bot(actor):
                 bot_tasks.setdefault(H.actor_id(actor), []).append(task)
     statuses = {s["bot"]: dict(s) for s in c.execute("SELECT * FROM bot_status")}
     queued = {}
     from .privacy_index import ReadIndex
     index = ReadIndex(c, principal)
-    for m in c.execute("SELECT m.*,j.bot,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'"):
+    for m in c.execute("SELECT m.*,j.bot_id,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'"):
         if (not dict(m).get("deleted_at") and not dict(m).get("deleted") and
-                index.message(m["id"], m["conversation_id"], m["refs_json"], m["in_reply_to"]) and
+                index.message(m["id"], m["conversation_id"], m["refs"], m["in_reply_to"]) and
                 (not m["attempt_id"] or index.attempt(m["attempt_id"]))):
-            queued[m["bot"]] = queued.get(m["bot"], 0) + 1
+            queued[m["bot_id"]] = queued.get(m["bot_id"], 0) + 1
     # One pass for every live attempt: the per-bot SELECT below used to pay once per writable bot.
     now = H.now()
     live_by_bot = {}
     for row in c.execute(
-            "SELECT id,bot,state,started,lease_until,created FROM attempts "
-            "WHERE state IN ('leased','running') AND lease_until>? ORDER BY created DESC", (now,)):
-        live_by_bot.setdefault(row["bot"], []).append(row)
+            "SELECT id,bot_id,state,started_at,lease_until,created_at FROM attempts "
+            "WHERE state IN ('leased','running') AND lease_until>? ORDER BY created_at DESC", (now,)):
+        live_by_bot.setdefault(row["bot_id"], []).append(row)
     # machine() / presence used to re-SELECT assignment+agent rows once per readable bot; Health already primes.
-    shown = [row["slug"] for row in bot_rows
-             if row["slug"] in allowed and access.get(row["slug"], auth.FULL)["read"]]
+    shown = [row["id"] for row in bot_rows
+             if row["id"] in allowed and access.get(row["id"], auth.FULL)["read"]]
     prime_machines(c, shown)
     bots = []
     for row in bot_rows:
-        slug = row["slug"]
+        slug = row["id"]
         if slug not in allowed:
             continue
         if not access.get(slug, auth.FULL)["read"]:
             # A bot the person may only send requests to: its name and that it exists, not its work.
-            bots.append({"slug": slug, "name": row["display_name"], "state": row["state"], "focus": "",
+            bots.append({"id": slug, "slug": row["slug"], "name": row["display_name"], "state": row["state"], "focus": "",
                          "task_id": None, "online": None, "ready": None, "queued": None,
-                         "active_attempt": None, "active_attempts": 0})
+                         "active_run": None, "active_runs": 0})
             continue
         # Fleet only exposes focus/task identity, so counters/approval scans are unnecessary.
         source = {k: v for k, v in statuses.get(slug, {}).items() if k not in ("open_tasks", "needs_human")}
@@ -1845,27 +2075,135 @@ def fleet_snapshot(c, auth, identity, task_view):
         # A bot with task lanes can have several turns out; the newest is the one shown, beside the count.
         active = [a for a in live_by_bot.get(slug, ()) if index.attempt(a["id"])]
         attempt = active[0] if active else None
-        bots.append({"slug": slug, "name": row["display_name"],
+        bots.append({"id": slug, "slug": row["slug"], "name": row["display_name"],
                      "state": status.get("state") or row["state"],
                      "focus": status.get("focus") or "", "task_id": status.get("task_id"),
                      "online": location["online"], "ready": location["ready"],
                      "queued": queued.get(slug, 0),
-                     "active_attempt": {k: attempt[k] for k in ("id", "state", "started", "lease_until")} if attempt else None,
-                     "active_attempts": len(active)})
+                     "active_run": {"id": attempt["id"], "state": runs.state(attempt["state"]), "started_at": attempt["started_at"],
+                                    "lease_until": attempt["lease_until"]} if attempt else None,
+                     "active_runs": len(active)})
     tasks = []
     for row in H.tasks(c, status=H.ACTIVE_STATUSES + ("declined",), visible=auth.task_sql(c, principal)):
-        actors = (row["owner"], row["requester"])
+        actors = (row["owner_id"], row["requester_id"])
         relevant = principal.actor in actors or any(
             str(actor).startswith("bot:") and H.actor_id(actor) in allowed for actor in actors)
         if not relevant:
             continue
         tasks.append({k: row.get(k) for k in
-                      ("id", "title", "owner", "requester", "status", "due", "note", "updated")})
+                      ("id", "title", "owner_id", "requester_id", "status", "due_at", "note", "updated_at")})
     items = needs_items(c, auth, principal, task_view)
     return {"actor": principal.actor, "as_of": H.now(), "bots": bots, "tasks": tasks,
             "needs_you": items,
             "approvals": [row for row in items if row.get("kind") == "approval"]}
 
+
+APPROVAL_STATUSES = ("pending", "approved", "declined")
+APPROVALS_PAGE = 20
+APPROVALS_PAGE_MAX = 100
+APPROVAL_SUMMARY = 200      # one line of a row's summary at most
+APPROVAL_LIST_BYTES = 64 * 1024   # a page stops here, as the other lists do (automations.page); `next` picks it up
+
+
+def _list_row(aid, status, from_actor, kind, payload, task_id, task_title, readable, message_id, conversation_id, created):
+    """One list row. Its link is the task it came with when the caller may see that task, else the thread of the message
+    it came in, else null. `task_title` is passed only for a readable task."""
+    if readable and task_id:
+        link = "#/task/" + quote(task_id, safe="")
+    elif conversation_id:
+        link = "#/thread/%s?m=%s" % (quote(conversation_id, safe=""), quote(message_id, safe=""))
+    else:
+        link = None
+    return {"id": aid, "status": status, "from_actor": from_actor,
+            "summary": approval_title(kind, payload, task_title)[:APPROVAL_SUMMARY],
+            "message_id": message_id, "task_id": task_id, "created": created, "link": link}
+
+
+def pending_rows(c, auth, who, task_view):
+    """The approvals in Needs you's approval set, newest first: `needs_items`, the same read its count takes, so the
+    list and that count cannot disagree. Each row passes the checks GET /api/v2/approvals/{aid} makes."""
+    ids = [x["id"] for x in needs_items(c, auth, who, task_view, count_only=True) if x.get("kind") == "approval"]
+    rows = []
+    for aid in ids:
+        row = H.approval(c, aid)
+        msg = H.message(c, row["message_id"]) if row and row.get("message_id") else None
+        if not row or not msg or msg["recipient_id"] != who.actor:
+            continue
+        try:
+            privacy.require_payload(c, who, row)
+            privacy.require_message(c, who, msg)
+        except Problem:
+            continue
+        task_id = row.get("task_id")
+        readable = bool(task_id) and bool(_readable_task_ids(c, auth.task_sql(c, who), [task_id]))
+        task = H.task(c, task_id) if readable else None
+        rows.append(_list_row(row["id"], "pending", row["requested_by_id"], row["kind"], row["payload"], task_id,
+                              (task or {}).get("title"), readable, msg["id"], msg.get("conversation_id"),
+                              row["created_at"]))
+    return sorted(rows, key=lambda r: (r["created"], r["id"]), reverse=True)
+
+
+def history_rows(c, auth, who, status, from_actor, before, since, need):
+    """The approvals addressed to the caller in a decided `status`, newest first, until `need` of them pass the checks
+    (or the history ends). One SQL read per window: the caller's messages joined to their approvals (approvals_message
+    serves the join), the filters in the WHERE, keyset-paged on (created_at, id), so the rows read are the window's and
+    never the company's history. Returns (rows, total) where total counts the rows the SQL filters match, before the
+    checks; the checks are per row of the window."""
+    clauses, args = ["m.recipient_id = ?", "a.decision = ?"], [who.actor, status]
+    if from_actor:
+        clauses.append("a.requested_by_id = ?")
+        args.append(from_actor)
+    if before:
+        clauses.append("a.created_at < ?")
+        args.append(before)
+    if since:
+        clauses.append("a.created_at >= ?")
+        args.append(since)
+    where = " AND ".join(clauses)
+    total = c.execute("SELECT COUNT(*) FROM messages m CROSS JOIN approvals a WHERE a.message_id=m.id AND " + where,
+                      args).fetchone()[0]
+    message_cols = [r[1] for r in c.execute("PRAGMA table_info(messages)")]
+    select = ", ".join(["a.id", "a.kind", "a.task_id", "a.message_id", "a.payload", "a.requested_by_id", "a.created_at",
+                        "a.decision", "t.title AS task_title"]
+                       + [f'm."{k}" AS "m_{k}"' for k in message_cols])
+    # CROSS JOIN keeps messages as the outer loop: the recipient index seeks the caller's messages, not a scan of approvals.
+    sql = (f"SELECT {select} FROM messages m CROSS JOIN approvals a ON a.message_id=m.id "
+           f"LEFT JOIN tasks t ON t.id=a.task_id WHERE {where}")
+    visible_task = auth.task_sql(c, who)
+    visible, cursor, window = [], None, max(2 * need, 40)
+    while len(visible) < need:
+        cut, cut_args = ("", []) if cursor is None else (
+            " AND (a.created_at < ? OR (a.created_at = ? AND a.id < ?))", [cursor[0], cursor[0], cursor[1]])
+        cur = c.execute(sql + cut + " ORDER BY a.created_at DESC, a.id DESC LIMIT ?", [*args, *cut_args, window])
+        names = [d[0] for d in cur.description]
+        found = [dict(zip(names, r, strict=True)) for r in cur.fetchall()]
+        if not found:
+            break
+        cursor = (found[-1]["created_at"], found[-1]["id"])
+        readable = _readable_task_ids(c, visible_task, [r["task_id"] for r in found if r["task_id"]])
+        for r in found:
+            if len(visible) >= need:
+                break
+            msg = {k[2:]: v for k, v in r.items() if k.startswith("m_")}
+            msg["refs"] = H._json(msg.get("refs"), {}) or {}
+            payload = H._json(r["payload"], {}) or {}
+            row = {"id": r["id"], "kind": r["kind"], "task_id": r["task_id"], "message_id": r["message_id"],
+                   "payload": payload, "requested_by_id": r["requested_by_id"], "decision": r["decision"],
+                   "created_at": r["created_at"], "decision_owner": msg["recipient_id"]}
+            try:
+                if not privacy.message_readable(c, privacy.actor(who), msg, current=True):
+                    continue
+                privacy.require_payload(c, who, row)
+            except Problem:
+                continue
+            task_id = r["task_id"]
+            ok = bool(task_id) and task_id in readable
+            visible.append(_list_row(r["id"], r["decision"], r["requested_by_id"], r["kind"], payload, task_id,
+                                     r["task_title"] if ok else None, ok, r["message_id"], msg.get("conversation_id"),
+                                     r["created_at"]))
+        if len(found) < window:
+            break
+    return visible[:need], total
 
 def install_views(app, store, auth, mutate, task_view):
     def visible_turns(c, who, bot=None, limit=200):
@@ -1893,39 +2231,43 @@ def install_views(app, store, auth, mutate, task_view):
             rows.append((turn, message))
         for attempt in failed_attempts(c, who, auth, bot, limit=limit):
             rows.append((attempt, H.message(c, attempt["message_id"])))
-        rows.sort(key=lambda item: item[0].get("started") or "", reverse=True)
+        rows.sort(key=lambda item: item[0].get("started_at") or "", reverse=True)
         return rows[:limit]
 
     def run_view(turn, c=None, made=None):
         turn = {**turn, **attempt_details(c, turn)} if c else turn
-        started, finished = H.parse_ts(turn.get("started")), H.parse_ts(turn.get("finished"))
+        started, finished = H.parse_ts(turn.get("started_at")), H.parse_ts(turn.get("finished_at"))
         duration = max(0, round((finished - started).total_seconds())) if started and finished else None
         success = turn.get("exit") == "completed"
         if made is None and c is not None:
             made = ran_on(c, [turn["id"]])[turn["id"]]
-        return {"run": turn["id"], "bot": turn["bot"], "employee": turn["bot"], "issue": None,
-                "record_kind": turn.get("record_kind", "run"), "attempt_id": turn["id"],
-                "outcome": turn.get("exit"), "failure_reason": turn.get("failure_reason") or "",
+        return {"id": turn["id"], "bot": turn["bot"], "employee": turn["bot"], "issue": None,
+                "state": turn.get("state"), "outcome": turn.get("exit"), "failure_reason": turn.get("failure_reason") or "",
                 **{k: turn.get(k) for k in ("end_reason", "ended_at", "last_event", "last_event_at", "stalled", "stalled_at")},
-                "finished": turn.get("finished") or turn.get("started"),
+                "finished_at": turn.get("finished_at") or turn.get("started_at"),
                 "exit": 0 if success else 1, "duration_s": duration,
-                "output_tokens": turn.get("output_tokens") if turn.get("output_tokens") is not None else turn.get("tokens_out"),
-                "cost_usd": turn.get("est_cost_usd") if turn.get("est_cost_usd") is not None else turn.get("cost"),
+                "output_tokens": turn.get("output_tokens"), "cost_usd": turn.get("est_cost_usd"),
                 "resumed": False, "fallback": made["fallback"] if made else None, "ran_on": made,
                 "load_start": turn.get("load_start"), "load_end": turn.get("load_end")}
 
     def employee_rows(c, who):
         people, configs = roster(c), entries(c, store.settings.github_owner)
         bots = H.bots(c)
-        archived = {row["slug"] for row in bots if row.get("state") == "archived"}
+        archived = {row["id"] for row in bots if row.get("state") == "archived"}
         registries = {r["bot"]: r for r in read_cache.configs(c)}
+        from .browser_exit import bot_exits
+        exits = bot_exits(c)               # the computer each bot browses through, when one is set
         goals = {}
         for bot, conversation in c.execute("SELECT bot,conversation_id FROM chat_goals WHERE status='active'"):
             goals.setdefault(bot, []).append(conversation)
         company = providers.load(c, store.settings)
-        latest_run = {row["bot"]: row["id"] for row in c.execute(
-            "SELECT bot,id FROM (SELECT bot,id,row_number() OVER(PARTITION BY bot ORDER BY finished DESC,id DESC) AS n "
-            "FROM turns WHERE finished IS NOT NULL) WHERE n=1")}
+        from . import cloud_machines
+        # Each bot's cloud machine, own or shared, Tico Cloud only (backend/cloud_machines.py): one read for every bot.
+        cloud_rows = cloud_machines.rows(c) if cloud_machines.offered(c, store.settings) else None
+        # Each bot's last finished run, one attempts_bot_settled seek per bot rather than a sort of every run there is.
+        latest_run = {slug: tid for slug, tid in c.execute(
+            "SELECT b.id,(SELECT t.id FROM attempts t WHERE t.bot_id=b.id AND t.settled_at IS NOT NULL "
+            "ORDER BY t.settled_at DESC,t.id DESC LIMIT 1) FROM bots b") if tid}
         from .usage_records import ran_on
         run_views = ran_on(c, list(latest_run.values()))
         latest_models = {}
@@ -1937,15 +2279,41 @@ def install_views(app, store, auth, mutate, task_view):
             latest_models[slug] = (family, ", ".join(providers.MODEL_BY_ID.get(model, {}).get("label") or model for model in models))
         rows = []
         access = auth.bot_accesses(c, who)
+        # The viewer's own access to each bot, {see, read, write, manage}, from the teammate rules in one pass (the
+        # `my_access` a row shows). The gates below still read `access`, which applies the same rules.
+        from . import teammate_access
+        mine = teammate_access.levels_many(c, who, ["bot:" + bot["id"] for bot in bots], auth=auth)
+        # What the loop reads per bot, read for every bot at once: its computer, its open and doing tasks, and its
+        # declared configuration from the rows above.
+        shown = [bot["id"] for bot in bots if bot.get("state") != "archived"
+                 and access.get(bot["id"], auth.FULL)["see"]]
+        prime_machines(c, [slug for slug in shown if access.get(slug, auth.FULL)["read"]])
+        open_tasks = {}
+        read_now = [slug for slug in shown if access.get(slug, auth.FULL)["read"]]
+        for part in H.chunks(read_now):
+            for task in H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE owner_id IN (" + ",".join("?" * len(part)) +
+                                          ") AND status IN ('open','doing')", ["bot:" + slug for slug in part])):
+                open_tasks.setdefault(H.actor_id(task["owner_id"]), []).append(task)
+        # Each bot's task flow counts, all bots at once: the wait and step checks are read once for every task.
+        task_flow = auto_tasks.counts_many(c, {slug: open_tasks.get(slug, []) for slug in read_now}, who)
+        from .shared_bots import _json as config_of
+
+        def declared(slug):
+            row = registries.get(slug)
+            return config_of(row["config"]) if row else {}
         from .report_order import positions
         places = positions(c)              # its place among its manager's reports on the chart, when someone set one
         # The Material Symbol a bot's avatar wears: its own, else its template's. A bot made from a `kind: helper` card
         # serves a person, and the UI shows it with the built-ins, apart from the org chart.
         from .onboarding import helper_templates, template_icons
         icons, helpers = template_icons(store.settings), helper_templates(store.settings)
-        # Where each bot hangs on the chart; the CEO Bot switch moves it there and nowhere else (backend/ceo_bot.py).
-        from . import ceo_bot
-        chart = ceo_bot.chart_entries(c, store.settings, people, configs, archived)
+        # Where each bot hangs on the chart; the Strategy Bot switch moves it there and nowhere else
+        # (backend/strategy_bot.py). A person who hid the Strategy Bot from their chart sees nothing moved, and its row
+        # says so (`chart_hidden`).
+        from . import strategy_bot
+        hide_strategy = strategy_bot.hidden_for(c, who)
+        chart = strategy_bot.chart_entries(c, store.settings, people, configs, archived, hidden=hide_strategy)
+        bare = True                        # a bot's bare person id in reports_to is that person (backend/people.py)
 
         def icon_of(config):
             return str(config.get("icon") or "") or icons.get(str(config.get("template") or ""), "")
@@ -1957,45 +2325,45 @@ def install_views(app, store, auth, mutate, task_view):
         from .task_manager import Chart
         departments = Chart(c, store.settings)         # the Gateway department a bot's model picker starts from
         for bot in bots:
-            slug = bot["slug"]
+            slug = bot["id"]
             level = access.get(slug, auth.FULL)
+            mine_level = mine.get("bot:" + slug) or {**level, "manage": False}
             if bot.get("state") == "archived" or not level["see"]:
                 continue
             registry = registries.get(slug)
             # Who may manage the bot (`Auth.bot_manager`), with the audiences and its owners when they may.
             pid = H.actor_id(who.actor)
             manager = (who.role == "owner" or (who.role == "human" and (
-                auth.bot_admin(who) or (registry and (registry["operator"] == pid
-                                                      or pid in A.owner_ids(registry["bot_owners_json"])))
-                or P.manages(pid, "bot", slug, people, configs, archived))))
+                auth.bot_admin(who) or (registry and (registry["owner_id"] == pid
+                                                      or pid in A.owner_ids(registry["bot_owners"])))
+                or P.manages(pid, "bot", slug, people, configs, archived, bare))))
             policy = {"can_manage": manager, "bot_owners": bot_owner_rows(c, registry, slug, people, configs, archived)}
             if manager:
-                policy["access_policy"] = A.document(registry["access_json"] if registry else None)
+                policy["access_policy"] = A.document(registry["access"] if registry else None)
             if not level["read"]:
                 # Seen, not read: the name, role, who runs it, who it reports to. Its
                 # configuration, routines, machine and goals are its activity.
                 reports = (configs.get(slug, {}) or {}).get("reports_to") or ""
                 if reports and not str(reports).startswith("human:") and not access.get(reports, auth.FULL)["see"]:
                     reports = ""
-                rows.append({"name": slug, "display_name": bot["display_name"], "state": bot["state"],
+                rows.append({"id": bot["id"], "slug": bot["slug"], "name": bot["slug"], "display_name": bot["display_name"], "state": bot["state"],
                              "status": bot["state"], "description": (configs.get(slug, {}) or {}).get("description") or "",
-                             "reports_to": reports, "my_access": level, **policy,
-                             "private_tasks_default": H.private_tasks_default(c, "bot:" + slug),
+                             "reports_to": reports, "my_access": mine_level, **policy,
+                             "private_tasks_default": H.private_tasks_default(c, "bot:" + slug, declared),
                              "team": P.team_of(slug, configs, people),
-                             "org_parent": P.org_parent("bot", slug, people, chart, archived),
+                             "org_parent": P.org_parent("bot", slug, people, chart, archived, bare),
+                             **strategy_bot.chart_hidden_row(slug, hide_strategy),
                              "report_position": places.get("bot:" + slug),
-                             "operator": registry["operator"] if registry else None,
+                             "owner_id": registry["owner_id"] if registry else None,
                              "is_branch": bool((configs.get(slug) or {}).get("shared_from")),
                              "users": [P.brief(p) for p in P.primary_users(slug, people, configs)],
                              "icon": icon_of(configs.get(slug, {}) or {}),
                              "helper": helper(configs.get(slug, {}) or {}),
-                             "can_chat": level["write"] and slug not in (auth.settings.assistant_bot, CEO_BOT)})
+                             "can_chat": level["write"] and slug not in (auth.settings.assistant_bot, STRATEGY_BOT)})
                 continue
             config = configs.get(slug, {})
             # Configuration contains connector requirements, never connector credentials.
             config = {k: v for k, v in config.items() if k not in ("cwd", "env", "token", "secrets")}
-            from .routines import listing
-            config['schedules'] = listing(c, slug, summary=True)
             location = machine(c, slug)
             # Read-only, for the quiet runtime label beside a bot's name; empty when nothing resolves.
             try:
@@ -2016,35 +2384,42 @@ def install_views(app, store, auth, mutate, task_view):
                          "latest_runtime_model": latest_model if show_latest else "",
                          "latest_runtime_provider": providers.PROVIDER_BY_ID.get(latest_family, {}).get("label")
                          if show_latest and latest_family else "Unknown provider" if show_latest else "",
-                         "model_source": "" if not resolved_runtime else "bot" if own else "company", "name": slug, "display_name": bot["display_name"],
+                         "model_source": "" if not resolved_runtime else "bot" if own else "company",
+                         "id": bot["id"], "slug": bot["slug"], "name": bot["slug"], "display_name": bot["display_name"],
                          "state": bot["state"], "status": bot["state"],
-                         "private_tasks_default": H.private_tasks_default(c, "bot:" + slug),
+                         "private_tasks_default": H.private_tasks_default(c, "bot:" + slug, declared),
                          "host": "keeper", "tasks": "hub", "has_repo": location["ready"],
                          "keep_tasks_going": auto_tasks.of(config),
-                         "task_flow": auto_tasks.counts(c, slug, who),
+                         "turns_at_once": start_places.bot_limit(config),
+                         "task_flow": task_flow[slug],
                          "team": P.team_of(slug, configs, people),
                          "gateway_department": gateway_tiers.department_of(departments.of("bot:" + slug)),
-                         "org_parent": P.org_parent("bot", slug, people, chart, archived),
+                         "org_parent": P.org_parent("bot", slug, people, chart, archived, bare),
+                         **strategy_bot.chart_hidden_row(slug, hide_strategy),
                          "report_position": places.get("bot:" + slug),
-                         "operator": registry["operator"] if registry else None,
+                         "owner_id": registry["owner_id"] if registry else None,
                          "revision": registry["revision"] if registry else None,
                          "goals": (registry["goals"] if registry else "") or "",
                          "goal_active": readable_active(c, auth, who, slug, goals.get(slug, [])),
                          **location,
+                         "browser_exit": exits.get(slug),
                          "users": [P.brief(p) for p in P.primary_users(slug, people, configs)],
                          "icon": icon_of(config), "helper": helper(config),
                          # What Settings and the branch editor show and pick from (backend/wake_presets.py).
                          "wake": wake_presets.effective(config),
                          "profile": profiles.effective(config),
-                         "my_access": level, **policy,
-                         "can_chat": level["write"] and slug not in (auth.settings.assistant_bot, CEO_BOT),
+                         "my_access": mine_level, **policy,
+                         "can_chat": level["write"] and slug not in (auth.settings.assistant_bot, STRATEGY_BOT),
                          # Onboarding or Active, and whether this person may mark onboarding complete (backend/lifecycle.py).
                          "stage": lifecycle.stage(config.get("onboarding_state")),
                          "can_complete_onboarding": (lifecycle.stage(config.get("onboarding_state")) == lifecycle.ONBOARDING
                                                      and lifecycle.may_complete(auth, c, who, slug)),
                          # Labelled as on the bot list, so its computer is named to one who cannot see it.
                          "app_delivery": app_delivery.view(c, config),
-                         "app_delivery_app": app_delivery.HARNESS_APP.get(resolve_harness(config, config.get("runtime")))})
+                         "app_delivery_app": app_delivery.HARNESS_APP.get(resolve_harness(config, config.get("runtime"))),
+                         "cloud_machine": None if cloud_rows is None or location.get("agent") else
+                         cloud_machines.shown(slug, cloud_rows.get(slug), bool(location.get("machine")),
+                                              cloud_rows.get(cloud_machines.SHARED))})
         return rows
 
     @app.get("/api/me")
@@ -2056,10 +2431,10 @@ def install_views(app, store, auth, mutate, task_view):
             person = P.person(H.actor_id(who.actor), r) or {}
             # Sign-in needs chat choices, not every bot's routines, machine and setup state.
             access = auth.bot_accesses(c, who)
-            bots = [row["slug"] for row in H.bots(c)
-                    if row["state"] != "archived" and row["slug"] not in (store.settings.assistant_bot, CEO_BOT)
-                    and access.get(row["slug"], auth.FULL)["see"]
-                    and access.get(row["slug"], auth.FULL)["write"]]
+            bots = [row["id"] for row in H.bots(c)
+                    if row["state"] != "archived" and row["id"] not in (store.settings.assistant_bot, STRATEGY_BOT)
+                    and access.get(row["id"], auth.FULL)["see"]
+                    and access.get(row["id"], auth.FULL)["write"]]
             from .credentials import administrator, can_open
             from .onboarding import config_view
             from .mail import can_access
@@ -2093,7 +2468,9 @@ def install_views(app, store, auth, mutate, task_view):
         human_only(request.state.identity)
         # One snapshot from the start, so read_cache serves the roster, configs and access rows once.
         with store.read_transaction() as c:
-            return employee_rows(c, request.state.identity)
+            from . import teammate_access
+            # The people and groups this caller may not see are not named on a bot either.
+            return teammate_access.redact_bots(c, request.state.identity, employee_rows(c, request.state.identity), auth)
 
     @app.get("/api/people")
     def people(request: Request):
@@ -2102,25 +2479,44 @@ def install_views(app, store, auth, mutate, task_view):
         with store.read() as c:
             r, configs = roster(c), entries(c)
             from . import people_photos
-            archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
-            view = P.org_view(r, configs, archived)
-            # The CEO Bot switch hangs the Heads' groups under it on the chart (backend/ceo_bot.py).
-            from . import ceo_bot
-            chart = ceo_bot.chart_entries(c, store.settings, r, configs, archived)
-            view["org_groups"] = ceo_bot.chart_groups(r, configs, chart, view["org_groups"], archived)
+            archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
+            bare = True                    # a bot's bare person id in reports_to is that person (backend/people.py)
+            view = P.org_view(r, configs, archived, bare_people=bare)
+            # The Strategy Bot switch hangs the Heads' groups under it on the chart (backend/strategy_bot.py).
+            from . import strategy_bot
+            # this person hid it from their chart: nothing moves
+            hide_strategy = strategy_bot.hidden_for(c, who)
+            chart = strategy_bot.chart_entries(c, store.settings, r, configs, archived, hidden=hide_strategy)
+            view["org_groups"] = strategy_bot.chart_groups(r, configs, chart, view["org_groups"], archived,
+                                                           hidden=hide_strategy)
             access = auth.bot_accesses(c, who)
             from .report_order import positions
             places = positions(c)
             from . import lifecycle
             seats = lifecycle.chart_seats(c, r, chart, archived, lambda slug: access.get(slug, auth.FULL)["see"])
-            return {**r, "by_team": P.by_team(r), "org_groups": view["org_groups"], "seats": seats, "people": [{
-                **p, "org_parent": P.org_parent("person", p["id"], r, configs, archived),
+            out = {**r, "by_team": P.by_team(r), "org_groups": view["org_groups"], "seats": seats, "people": [{
+                **p, "org_parent": P.org_parent("person", p["id"], r, configs, archived, bare),
                 "report_position": places.get("human:" + p["id"]),
                 **({"photo_url": "/api/humans/" + p["id"] + "/photo"}
                    if people_photos.may_have(store.settings, p.get("email"), p.get("photo")) else {}),
                 "bots": [b for b in P.bots_of(p["id"], r, configs)
                          if access.get(b, auth.FULL)["see"] and b not in archived]}
                 for p in r["people"]]}
+            # The people and groups this caller may not see are not on the roster, the chart or the @mention picker.
+            from . import teammate_access
+            # The caller's own access to each, from the teammate rules in one pass, as a bot's row has it: what a page
+            # offers (edit a profile, add to a thread), which the server checks again.
+            mine = teammate_access.levels_many(c, who, ["human:" + p["id"] for p in out["people"]]
+                                               + ["group:" + g["id"] for g in out["org_groups"]], auth=auth)
+            out["people"] = [{**p, "my_access": mine["human:" + p["id"]]} for p in out["people"]]
+            out["org_groups"] = [{**g, "my_access": mine["group:" + g["id"]]} for g in out["org_groups"]]
+            people_hidden, groups_hidden = teammate_access.unseen(c, who, auth)
+            if people_hidden or groups_hidden:
+                out = teammate_access.redact_chart(out, r, people_hidden, groups_hidden)
+                out["by_team"] = {gid: [pid for pid in ids if pid not in people_hidden]
+                                  for gid, ids in out["by_team"].items() if gid not in groups_hidden}
+                out["developers"] = [pid for pid in out.get("developers") or [] if pid not in people_hidden]
+            return out
 
     @app.get("/api/people/{pid}/photo")
     def person_photo(request: Request, pid: str):
@@ -2129,7 +2525,8 @@ def install_views(app, store, auth, mutate, task_view):
         with store.read() as c:
             r = roster(c)
             row = P.person(pid, r)
-            if not row or row.get("hidden"):
+            from . import teammate_access
+            if not row or row.get("hidden") or not teammate_access.can(c, who, "see", "human:" + pid, auth):
                 raise Problem("not_found", "Person not found", 404)
             from . import people_photos
             fetched = people_photos.load(store.settings, row.get("email"),
@@ -2197,11 +2594,22 @@ def install_views(app, store, auth, mutate, task_view):
             from .subscription_identity import display_names
             # One pass for every renamed subscription (not one registry_metadata lookup per shared login).
             login_names = display_names(c)
-            runners = list(c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
-                                      "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
-                                      "FROM runners ORDER BY created"))
+            from . import cloud_machines
+            # {runner: {bot, shared, size, state}} for computers that are a cloud machine: a bot's own (`bot`), or the
+            # company's shared one (`shared`, bot None).
+            cloud_of = {r["runner_id"]: {"bot": None if r["bot"] == cloud_machines.SHARED else r["bot"],
+                                         "shared": r["bot"] == cloud_machines.SHARED,
+                                         "size": r["machine_size"] or r["size"], "state": r["state"]}
+                        for r in cloud_machines.rows(c).values() if r["runner_id"]}
+            from . import browser_exit
+            # One pass each for every computer's internet sharing and today's bytes through it.
+            exit_policies, exit_used = browser_exit.policies(c), browser_exit.used_today_all(c)
+            runners = list(c.execute("SELECT id,label,owner_id,last_seen_at,revoked_at,platform,version,capacity,readiness,"
+                                      "accepts_member_bots,turns_at_once,screen,performance,capabilities,"
+                                      "restart_since,"
+                                      "readiness_at FROM runners_with_state ORDER BY created_at"))
             from . import usage_limits
-            from .start_places import summaries
+            from .start_places import describe, summaries, turn_limit
             # One company Default for every computer's queue classify: without it each summary rebuilds
             # pools/groups/spend for every queued bot (same waste Health's snapshot already dropped).
             limits = usage_limits.company(c)
@@ -2211,25 +2619,26 @@ def install_views(app, store, auth, mutate, task_view):
                 # Every person sees every working computer; only an admin or its operator may change it, and only
                 # they read its signed-in accounts, own login's usage and key previews (#610, as in /v2/computers).
                 # Another member gets the bots they may see on it.
-                manage = auth.bot_admin(who) or who.actor == "human:" + row["operator"]
+                manage = auth.bot_admin(who) or who.actor == "human:" + row["owner_id"]
                 if not manage and row["revoked_at"]:
                     continue
                 hidden = set() if manage else unseen
                 bots = [bot for bot in placed.get(row["id"]) or [] if bot not in hidden]
                 value = dict(row)
-                from .start_places import describe
                 value["turn_counts"] = turn_counts[row["id"]]
                 value["turn_summary"] = describe(value["turn_counts"])
                 value["release"] = runner_versions.view(fleet.get(row["id"])).get("release") or ""
                 value["accepts_member_bots"] = bool(row["accepts_member_bots"])
+                # What the computer may run at once now: its setting, or its capacity (start_places.turn_limit).
+                value["turn_limit"] = turn_limit(row)
                 # Since when it says it is restarting after a person pressed Restart; null when it is not.
                 value["restarting"] = value.pop("restart_since")
                 from .screen import listing as screen_listing
                 from .performance import listing as performance_listing
                 value.update(screen_listing(value))
                 value.update(performance_listing(value))
-                value.pop("capabilities_json")
-                value["readiness"] = readiness_document(value.pop("readiness_json"))
+                value.pop("capabilities")
+                value["readiness"] = readiness_document(value.pop("readiness"))
                 value["repositories"] = repo_status.get(row["id"], "unknown")
                 assigned_here = active_placed.get(row["id"]) or set()
                 value["readiness"]["bots"] = {bot: report for bot, report in value["readiness"].get("bots", {}).items()
@@ -2277,6 +2686,10 @@ def install_views(app, store, auth, mutate, task_view):
                                  "signed_out": signed_out.get(row["id"]) or {},
                                  "key_cleared": key_cleared.get(row["id"]) or [],
                                  "inbox_only": row["id"] in kept_for_inbox,
+                                 # Its internet shared with bots (backend/browser_exit.py): the owner alone changes it.
+                                 "browser_exit": browser_exit.listing(
+                                     exit_policies.get(row["id"]), manage, browser_exit.is_owner(who, row), hidden,
+                                     exit_used.get(row["id"], 0)),
                                  # {runtime: {env, preview}}: its own keys stored from here, and the company's shared
                                  # ones, for the rows a key signs in (backend/computer_keys.py). Never a value, and a
                                  # preview only for whoever may change the computer.
@@ -2289,9 +2702,10 @@ def install_views(app, store, auth, mutate, task_view):
                                  "bot_runtimes": sorted(run_on.get(row["id"], ())),
                                  "update": runner_versions.view(fleet.get(row["id"])),
                                  "harness_actions": harness_recent.get(row["id"]) or [],
-                                 "harness_choices": harness_choice.get(row["id"]) or {}})
+                                 "harness_choices": harness_choice.get(row["id"]) or {},
+                                 "cloud_machine": cloud_of.get(row["id"])})
             health = [{**dict(r), "name": SERVICE_NAMES.get(r["service"], r["service"])}
-                      for r in c.execute("SELECT service,last_success,last_error FROM service_health")]
+                      for r in c.execute("SELECT service,last_succeeded_at,last_error FROM service_health")]
             from .agents import listing as agent_listing
             # `machines` is the older name of `computers`, kept for older clients.
             return {"cloud": True, "computers": machines, "machines": machines,
@@ -2307,18 +2721,18 @@ def install_views(app, store, auth, mutate, task_view):
         # after the first privacy check opens a transaction.
         with store.read_transaction() as c:
             health = c.execute("SELECT * FROM service_health WHERE service='scheduler'").fetchone()
-            tick = health["last_success"] if health else None
+            tick = health["last_succeeded_at"] if health else None
             age = max(0, (H.parse_ts(H.now()) - H.parse_ts(tick)).total_seconds()) if tick else None
-            active, queued, schedules = [], [], []
-            # Cancelled and uncertain jobs are not "up next": uncertain work already
-            # surfaces as a health issue, cancelled work is history.
+            active, queued = [], []
+            # Canceled and uncertain jobs are not "up next": uncertain work already
+            # surfaces as a health issue, canceled work is history.
             readable = auth.bot_accesses(c, who)
             jobs = [row for row in c.execute(
-                "SELECT j.*,a.started,t.title AS task_title,m.from_actor FROM jobs j "
+                "SELECT j.*,a.started_at,t.title AS task_title,m.sender_id FROM jobs j "
                 "LEFT JOIN attempts a ON a.id=j.attempt_id JOIN messages m ON m.id=j.message_id "
                 f"JOIN conversations cv ON cv.id=m.conversation_id LEFT JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
-                "WHERE j.state IN ('queued','leased','running','input') ORDER BY j.created")
-                if readable.get(row["bot"], auth.FULL)["read"]]
+                "WHERE j.state IN ('queued','leased','running','input') ORDER BY j.created_at")
+                if readable.get(row["bot_id"], auth.FULL)["read"]]
             # Every job's message and run are read and checked together, not a few queries per job. A deleted
             # message is not readable, as H.message (which leaves it out) made it.
             shown = {m["id"] for m in privacy.readable_messages(c, privacy.actor(who),
@@ -2330,17 +2744,17 @@ def install_views(app, store, auth, mutate, task_view):
                 if row["attempt_id"] and not privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"]):
                     continue
                 # Never the message text: a shared bot's private chats belong to their people.
-                title = row["task_title"] or "Message from " + H.actor_id(row["from_actor"])
-                item = {"employee": row["bot"], "bot": row["bot"], "id": row["id"], "started": row["started"],
-                        "state": row["state"], "created": row["created"],
+                title = row["task_title"] or "Message from " + H.actor_id(row["sender_id"])
+                item = {"employee": row["bot_id"], "bot_id": row["bot_id"], "id": row["id"], "started_at": row["started_at"],
+                        "state": row["state"], "created_at": row["created_at"],
                         "title": title if len(title) <= 80 else title[:79].rstrip() + "\u2026"}
                 (queued if row["state"] == "queued" else active).append(item)
-            from .routines import listing
-            schedules = [{**row, 'last_checked': tick} for row in listing(c, summary=True) if readable.get(row['bot'], auth.FULL)['read']]
             return {"cloud": True, "last_tick": tick, "active": active, "queued": queued,
                     "recent_runs": [], "keeper_alive": age is not None and age < 60,
-                    "dispatcher_alive": False, "tick_age_s": age, "server_time": H.now(), "schedules": schedules,
-                    "health_issues": operation_issues(c, who, auth)}
+                    "dispatcher_alive": False, "tick_age_s": age, "server_time": H.now(),
+                    "health_issues": operation_issues(c, who, auth),
+                    # A Tico Cloud company's access, for the banner and Pay to continue (backend/cloud_access.py).
+                    "cloud_access": cloud_access.view(cloud_access.current(store))}
 
     @app.get("/api/runs")
     def runs(request: Request):
@@ -2355,7 +2769,7 @@ def install_views(app, store, auth, mutate, task_view):
         who = request.state.identity
         human_only(who)
         with store.read() as c:
-            turn = c.execute("SELECT * FROM turns WHERE id=?", (run_id,)).fetchone()
+            turn = H.turn(c, run_id)
             if not turn:
                 turn = next((r for r in failed_attempts(c, who, auth) if r["id"] == run_id), None)
             if not turn:
@@ -2365,12 +2779,16 @@ def install_views(app, store, auth, mutate, task_view):
             if not message:
                 raise Problem("not_found", "Run not found or unavailable to this account", 404)
             attempt = c.execute("SELECT * FROM attempts WHERE id=?", (run_id,)).fetchone()
-            events = c.execute("SELECT seq,kind,payload_json,created FROM attempt_events "
+            events = c.execute("SELECT seq,kind,payload,created_at FROM attempt_events "
                                "WHERE attempt_id=? ORDER BY seq", (run_id,)).fetchall()
+            # A live run of a bot org rules apply to keeps its reply out until it is checked and delivered.
+            from .org_rule_check import hides_run
+            if hides_run(c, attempt):
+                events = [e for e in events if e["kind"] not in ("delta", "message")]
             lines = [store.settings.app_name + " cloud run " + run_id, "Bot: " + turn["bot"],
-                     "Started: " + str(turn["started"]), "Finished: " + str(turn["finished"]),
+                     "Started: " + str(turn["started_at"]), "Finished: " + str(turn["finished_at"]),
                      "Outcome: " + str(turn["exit"])]
-            result = json.loads(attempt["result_json"]) if attempt and attempt["result_json"] else {}
+            result = json.loads(attempt["result"]) if attempt and attempt["result"] else {}
             if result.get("fallback"):
                 lines.append("Fallback: " + str(result["fallback"]) + " (primary harness unavailable; the turn ran on the fallback)")
             if result.get("limited"):
@@ -2400,9 +2818,9 @@ def install_views(app, store, auth, mutate, task_view):
             # Newest readable bot-owned done tasks with a long enough note. Filter with task_sql in one pass
             # (not auth.task per candidate); 120 is the activity cap beside product releases.
             activity = [dict(r) for r in c.execute(
-                "SELECT id,title,owner,note,done_at,updated FROM tasks WHERE status='done' AND substr(owner,1,4)='bot:' "
+                "SELECT id,title,owner_id,note,done_at,updated_at FROM tasks WHERE status='done' AND substr(owner_id,1,4)='bot:' "
                 f"AND length(note)>=20 AND ({auth.task_sql(c, who)}) "
-                "ORDER BY COALESCE(NULLIF(done_at,''),updated) DESC LIMIT 120")] \
+                "ORDER BY COALESCE(NULLIF(done_at,''),updated_at) DESC LIMIT 120")] \
                 if kind != "product" and not unread and since_version is None else []
             for task in activity:
                 if len((task.get("note") or "").strip()) < 20:
@@ -2410,7 +2828,7 @@ def install_views(app, store, auth, mutate, task_view):
                 note = re.sub(r"\s+", " ", task["note"]).strip()
                 entries.append({"id": "activity-" + task["id"], "title": task["title"],
                                 "bullets": [note[:280]], "area": "Agent activity", "kind": "activity",
-                                "shipped_at": task.get("done_at") or task["updated"], "task_id": task["id"]})
+                                "shipped_at": task.get("done_at") or task["updated_at"], "task_id": task["id"]})
             entries.sort(key=lambda row: row["shipped_at"] or "", reverse=True)
             # Busy bot activity cannot push shipped releases out of the product view.
             entries = products + entries
@@ -2460,14 +2878,15 @@ def install_views(app, store, auth, mutate, task_view):
     def bot_instructions(request: Request, bot: str):
         who = request.state.identity
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_read(c, who, bot)
-            row = c.execute("SELECT content,updated FROM bot_agent_instructions WHERE bot=?", (bot,)).fetchone()
+            row = c.execute("SELECT content,updated_at FROM bot_agent_instructions WHERE bot=?", (bot,)).fetchone()
             if not row:
-                row = c.execute("SELECT content,updated FROM mail_agent_instructions WHERE bot=?", (bot,)).fetchone()
+                row = c.execute("SELECT content,updated_at FROM mail_agent_instructions WHERE bot=?", (bot,)).fetchone()
             return {"bot": bot, "content": row["content"] if row else "",
-                    "published": bool(row and row["content"].strip()), "updated": row["updated"] if row else None,
+                    "published": bool(row and row["content"].strip()), "updated_at": row["updated_at"] if row else None,
                     "source": "Computer snapshot" if row else "Not published yet"}
 
     @app.get("/api/employees/{bot}/files")
@@ -2475,10 +2894,11 @@ def install_views(app, store, auth, mutate, task_view):
         who = request.state.identity
         human_only(who)
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_read(c, who, bot)
-            row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+            row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
             config = json.loads(row[0]) if row else {}
             safe = {k: v for k, v in config.items() if k not in ("cwd", "env", "token", "secrets", "secrets_file")}
             status = H.status(c, bot) or {}
@@ -2505,22 +2925,23 @@ def install_views(app, store, auth, mutate, task_view):
         who = request.state.identity
         human_only(who)
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             rows = list(reversed(visible_turns(c, who, bot, limit=100)))
             turns = []
             for turn, message in rows:
-                turns.append({"role": "user", "text": message["body"], "ts": turn["started"]})
+                turns.append({"role": "user", "text": message["body"], "ts": turn["started_at"]})
                 attempt = c.execute("SELECT final_text FROM attempts WHERE id=?", (turn["id"],)).fetchone()
                 if attempt and attempt[0]:
                     turns.append({"role": "assistant", "text": attempt[0],
-                                  "ts": turn["finished"] or turn["started"]})
-            config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+                                  "ts": turn["finished_at"] or turn["started_at"]})
+            config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
             cfg = json.loads(config[0]) if config else {}
             runtime, model = providers.bot_choice(c, auth.settings, cfg)
             runtime = runtime or "local"
             session = c.execute("SELECT * FROM bot_sessions WHERE bot=? AND runtime=? AND model=?",
                                 (bot, str(runtime), model)).fetchone() if runtime else None
             if session and any(not privacy.attempt_readable(c, privacy.actor(who), r[0]) for r in c.execute(
-                    "SELECT id FROM attempts WHERE bot=? AND thread_id=?", (bot, session["thread_id"]))):
+                    "SELECT id FROM attempts WHERE bot_id=? AND thread_id=?", (bot, session["thread_id"]))):
                 session = None
             return {"cloud": True, "current": True, "runtime": runtime, "model": model,
                     "session_id": (session["thread_id"] if session
@@ -2547,6 +2968,34 @@ def install_views(app, store, auth, mutate, task_view):
         with store.read() as c:
             return {"actor": who.actor, "since": since,
                     "bots": recent_bots(c, auth, who, since, limit, needs_items(c, auth, who, task_view))}
+
+    @app.get("/api/v2/approvals")
+    def approval_list(request: Request, status: str = "pending", limit: int = APPROVALS_PAGE, offset: int = 0,
+                      from_actor: str | None = Query(None, alias="from"), before: str | None = None,
+                      since: str | None = None):
+        """The approvals addressed to you, newest first: `status` pending (the set Needs you counts), approved or declined;
+        `from` the actor that asked; `before` and `since` a date (YYYY-MM-DD). `next` is the offset of the page after."""
+        who = request.state.identity
+        human_only(who)
+        if status not in APPROVAL_STATUSES:
+            raise Problem("validation", "status is pending, approved or declined", 422)
+        limit, offset = max(1, min(int(limit), APPROVALS_PAGE_MAX)), max(0, int(offset))
+        need = offset + limit + 1          # one row past the page says whether there is a next page
+        with store.read_transaction() as c:
+            if status == "pending":
+                rows = pending_rows(c, auth, who, task_view)
+                if from_actor:
+                    rows = [r for r in rows if r["from_actor"] == from_actor]
+                if before:
+                    rows = [r for r in rows if r["created"] < before]
+                if since:
+                    rows = [r for r in rows if r["created"] >= since]
+                total, rows = len(rows), rows[:need]
+            else:
+                rows, total = history_rows(c, auth, who, status, from_actor, before, since, need)
+            from .automations import page      # local: automations imports this module
+            shown, more = page(rows[offset:], limit, offset, APPROVAL_LIST_BYTES)
+            return {"actor": who.actor, "status": status, "total": total, "approvals": shown, "next": more}
 
     @app.get("/api/v2/needs-you")
     def needs(request: Request, count: bool = False, ids: str | None = None, version: str | None = None,
@@ -2576,7 +3025,7 @@ def install_views(app, store, auth, mutate, task_view):
                     raise Problem("validation", f"At most {NEEDS_IDS_MAX} ids", 422)
                 positions = {str(x["id"]): n for n, x in enumerate(items) if str(x["id"]) in wanted}
                 return {"actor": who.actor, "count": len(items), "version": current, "positions": positions,
-                        "items": [x for x in items if str(x["id"]) in positions]}
+                        "items": needs_visuals(c, who, [x for x in items if str(x["id"]) in positions])}
             out = {"actor": who.actor, "count": len(items), "items": items, "older": older,
                    "went_away": went_away(c, who.actor), "version": current, "next": None}
             if limit is not None or cursor:
@@ -2584,7 +3033,25 @@ def install_views(app, store, auth, mutate, task_view):
                 out["bots"] = needs_bots(items, who.actor)
                 if restarted:
                     out["restart"] = True
+            needs_visuals(c, who, out["items"])
             return out
+
+    @app.get("/api/v2/needs-you/summary")
+    def needs_summary_route(request: Request, limit: int = NEEDS_SUMMARY_ITEMS):
+        """What the Needs you list holds, counted as the board counts it: the total, per kind and per bot, with each
+        bot's newest `limit` items (at most 10). `hub needs-you show` over MCP. A person only: the list is theirs."""
+        who = request.state.identity
+        human_only(who)
+        with store.read_transaction() as c:
+            return needs_summary(c, auth, who, task_view, max(0, min(int(limit), NEEDS_SUMMARY_ITEMS)))
+
+    def needs_visuals(c, who, items):
+        """A question's files under review (backend/file_reviews.py) as this reader sees them, with fresh addresses,
+        added after the list's version is taken: an address renewed on the hour is not a change to the list."""
+        asks = [x["ask"] for x in items if isinstance(x.get("ask"), dict) and (x["ask"].get("refs") or {}).get("attachments")]
+        if asks:
+            visuals.for_reader(app, auth.settings, c, who, asks)
+        return items
 
     @app.get("/api/v2/tico/fleet")
     def tico_fleet(request: Request):
@@ -2594,7 +3061,7 @@ def install_views(app, store, auth, mutate, task_view):
     def task_chat(c, who, tid, text=None, expected_recipient=None):
         human_only(who)
         task = auth.task(c, who, tid)
-        candidates = [task["owner"], task["requester"], H.task_origin(c, task)]
+        candidates = [task["owner_id"], task["requester_id"], H.task_origin(c, task)]
         # No assistant fallback since its chat was retired: a task with no bot has nobody to chat to.
         slug = next((H.actor_id(p) for p in candidates if str(p).startswith("bot:")
                      and auth.visible_bot(c, who, H.actor_id(p)) and H.bot(c, H.actor_id(p))), None)
@@ -2610,6 +3077,8 @@ def install_views(app, store, auth, mutate, task_view):
             conv = auth.conversation(c, who, task["conversation_id"])
         message = None
         if text is not None:
+            if expected_recipient:
+                expected_recipient = (H.resolve_bot(c, expected_recipient) or {}).get("id", expected_recipient)
             if expected_recipient and expected_recipient != slug:
                 raise Problem("recipient_changed", "Task ownership changed; refresh before sending", 409)
             if not slug:
@@ -2620,11 +3089,12 @@ def install_views(app, store, auth, mutate, task_view):
                 raise Problem("forbidden", "This bot takes requests in its own Assistant room, not here", 403)
             privacy.require_destination(c, who, "bot:" + slug, conv["id"], {"task": tid})
             message = H.say(c, who.actor, "bot:" + slug, text, conversation_id=conv["id"], refs={"task": tid})
-            c.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
                       (tid, "bot:" + slug, who.actor, message["id"], H.shift(H.now(), hours=24)))
         tagged = [m for m in (privacy.page(c, who, conv["id"])["messages"] if conv else [])
                   if H.message_task_id(m) == tid]
-        recipient = {"slug": slug, "name": bot.get("display_name") or slug, "can_chat": allowed} if slug else None
+        recipient = {"id": slug, "slug": bot.get("slug") or slug, "name": bot.get("display_name") or bot.get("slug") or slug,
+                     "can_chat": allowed} if slug else None
         return {"bot": slug, "recipient": recipient, "conversation": conv, "message": message, "messages": tagged}
 
     @app.get("/api/v2/tasks/{tid}/chat")
@@ -2641,13 +3111,14 @@ def install_views(app, store, auth, mutate, task_view):
         who = request.state.identity
         human_only(who)
         def work(c):
-            require_chat(c, auth, who, bot)
-            conv = direct_chat(c, who.actor, bot)
+            bot_id = (H.resolve_bot(c, bot) or {}).get("id", bot)
+            require_chat(c, auth, who, bot_id)
+            conv = direct_chat(c, who.actor, bot_id)
             if not conv:
                 return {"cleared": True}
             if chat_running(c, conv["id"]):
                 raise Problem("busy", "Wait for this conversation's current turn to finish", 409)
-            clear_chat_session(c, auth.settings, who.actor, bot, conv["id"])
+            clear_chat_session(c, auth.settings, who.actor, bot_id, conv["id"])
             return {"cleared": True, "conversation_id": conv["id"]}
         return mutate(request, body, work)
 
@@ -2688,13 +3159,21 @@ def runnable_choices(c, who, auth, settings):
             and not model.get("deprecated") and (not enabled or "tico" in enabled)}
     out = {}
     from .harnesses import resolve_harness
-    for row in c.execute("SELECT a.bot,b.runtime,bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
-                         "LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE b.state<>'archived' ORDER BY a.bot"):
+    from . import read_cache
+    from .readiness import CONFIG_SQL, PLACED_SQL, RUNNER_SQL
+    # `can_run` judges a bot once per harness and per computer it may move to: each bot's computer (one row per
+    # computer, shared by its bots) and each bot's config are read once here, not once per check.
+    for row in c.execute("SELECT bot,runner_id FROM assignments").fetchall():
+        read_cache.prime(c, PLACED_SQL, {(row["bot"],): read_cache.one(c, RUNNER_SQL, (row["runner_id"],))})
+    rows = c.execute(f"SELECT a.bot,{BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
+                     f"LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} WHERE b.state<>'archived' ORDER BY a.bot").fetchall()
+    read_cache.prime(c, CONFIG_SQL, {(row["bot"],): row for row in rows})
+    for row in rows:
         bot = row["bot"]
         if not auth.bot_manager(c, who, bot):
             continue
         # The bot's own harness too: the picker keeps it shown when its provider is no longer offered.
-        own = resolve_harness(H._json(row["config_json"], {}) or {}, row["runtime"])
+        own = resolve_harness(H._json(row["config"], {}) or {}, None)
         for harness in sorted(set(harnesses) | ({own} if own in HARNESS_BY_ID and not HARNESS_BY_ID[own].get("external") else set())):
             runtime = HARNESS_BY_ID[harness]["runtime"]
             answer = runtime_choice(c, bot, runtime, who, computers, harness=harness)

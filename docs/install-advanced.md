@@ -235,6 +235,22 @@ Visuals in replies are always on. For pages and SVG to show inline they need an 
 the app's: `TICO_VISUAL_ORIGIN`. Without it, the server shows pictures, video and audio, and pages and SVG open in
 the file viewer. See [Visuals in replies](visuals.md#self-hosting).
 
+## Company page on its own domain
+
+The [Company page](company-page.md) is served from an origin of its own, apart from the app. Set it with
+`--reader-origin https://open.acme.example` (the wizard's flag, written as `TICO_READER_ORIGIN`):
+
+- It must be an HTTPS origin on the standard port, with a plain DNS name that is none of the app, runner, visual or alias
+  hosts.
+- It needs the Caddy front door (`--front-door caddy`). The Cloudflare tunnel does not route it yet, so a tunnel install
+  cannot serve the page.
+- Point the name's DNS at the server, as for the app. Caddy gets its certificate for it.
+- Register `https://open.acme.example/auth/callback` as a callback with your sign-in provider, beside the app's. Private
+  audiences need that sign-in; without a sign-in provider they are off.
+
+Only the page's routes reach the server on that name; everything else there is a 404. Public files are served from the
+reader origin with no cache beyond a minute. Hosted installs need none of this; see [Company page](company-page.md#where-it-is-hosted).
+
 
 ## Run recovery
 

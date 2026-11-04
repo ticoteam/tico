@@ -4,8 +4,7 @@
 //! endpoint (404/405) is polled as before and asked again every LEGACY_RETRY_S. A stream that comes back after it
 //! was lost or unavailable says so, so a support bundle shows the outage ended.
 
-use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -15,6 +14,7 @@ use tokio::sync::Notify;
 
 use crate::client::{bearer, http_client, quote_plus, Client, CLIENT_VERSION};
 use crate::util::{diagnostic, log, mark};
+use crate::wire::{decode, ReadyFrame, RunnerFrame};
 
 pub const BACKUP_POLL_S: f64 = 300.0;
 pub const RECONNECT_MAX_S: f64 = 60.0;
@@ -24,7 +24,20 @@ pub const READ_TIMEOUT_S: u64 = 90;
 pub const HEARTBEAT_LIVE_S: f64 = 60.0;
 /// A stream that stayed up this long before it dropped had a fresh drop: its reconnect backoff starts over.
 pub const STABLE_S: u64 = 30;
+/// Every channel the runner reads on its own clock. A channel's bit in `Events::pending` is its index here.
+pub const CHANNELS: [&str; 9] = ["claim", "sync", "config", "heartbeat", "logins", "harness", "imports", "refresh", "keys"];
+/// What a catch-up pass reads: every channel but `keys`, which only a credential change asks for.
 pub const ALL: &[&str] = &["claim", "sync", "config", "heartbeat", "logins", "harness", "imports", "refresh"];
+
+/// A channel's index in `CHANNELS`, or None for a name the runner does not read.
+pub fn index(channel: &str) -> Option<usize> {
+    CHANNELS.iter().position(|c| *c == channel)
+}
+
+fn bit(channel: &str) -> u16 {
+    debug_assert!(index(channel).is_some(), "unknown event channel {channel}");
+    index(channel).map_or(0, |i| 1 << i)
+}
 
 /// What each event kind asks the runner to read again.
 pub fn channels(kind: &str) -> &'static [&'static str] {
@@ -34,7 +47,8 @@ pub fn channels(kind: &str) -> &'static [&'static str] {
         // A credential's value changed: the model keys from the app are asked for again at once (signin.rs).
         "credentials" => &["sync", "keys"],
         "config" => &["sync", "config"],
-        "worktrees" | "restart" | "performance" => &["heartbeat"],
+        "worktrees" | "restart" | "performance" | "browser_exit" => &["heartbeat"],
+        "capacity" => &["heartbeat"],
         "logins" => &["logins"],
         "harness_actions" => &["harness"],
         "credential_imports" => &["imports"],
@@ -57,7 +71,8 @@ enum Failure {
 }
 
 pub struct Events {
-    pending: Mutex<HashSet<&'static str>>,
+    /// The channels the server asked for since each was last taken, one bit per channel (`index`).
+    pending: AtomicU16,
     state: Mutex<Stream>,
     last_id: Mutex<Option<String>>,
     /// When the stream was last said to be lost or unavailable, until it is said to be back.
@@ -71,7 +86,7 @@ pub struct Events {
 impl Events {
     pub fn new() -> Arc<Events> {
         Arc::new(Events {
-            pending: Mutex::new(HashSet::new()),
+            pending: AtomicU16::new(0),
             state: Mutex::new(Stream::Down),
             last_id: Mutex::new(None),
             down_since: Mutex::new(None),
@@ -91,13 +106,13 @@ impl Events {
 
     /// True once for each time the server asked for `channel` since it was last taken.
     pub fn take(&self, channel: &str) -> bool {
-        let mut p = self.pending.lock().unwrap();
-        let found = p.iter().find(|c| **c == channel).copied();
-        found.is_some_and(|c| p.remove(c))
+        let bit = bit(channel);
+        self.pending.fetch_and(!bit, Ordering::SeqCst) & bit != 0
     }
 
     pub fn ask(&self, channels: &[&'static str]) {
-        self.pending.lock().unwrap().extend(channels.iter().copied());
+        let asked = channels.iter().fold(0, |set, channel| set | bit(channel));
+        self.pending.fetch_or(asked, Ordering::SeqCst);
         self.wake.notify_one();
     }
 
@@ -215,15 +230,16 @@ impl Events {
         Ok(self.live())
     }
 
+    /// A frame this runner cannot read counts as one that says nothing: a `runner` frame then asks for everything.
     fn dispatch(&self, event: &str, ident: Option<String>, data: &Value, recovering: bool) {
         match event {
             "ready" => {
-                let release = data.get("release").cloned().unwrap_or(Value::Null);
+                let frame: ReadyFrame = decode(data.clone()).unwrap_or_default();
+                let release = frame.release.map(Value::String).unwrap_or(Value::Null);
                 {
                     let mut last = self.last_id.lock().unwrap();
                     if last.is_none() {
-                        let seq = crate::util::text_of(data.get("seq").unwrap_or(&Value::Null));
-                        *last = (!seq.is_empty()).then_some(seq);
+                        *last = frame.seq.map(|seq| seq.to_string());
                     }
                 }
                 let changed = self.release.lock().unwrap().as_ref().is_some_and(|r| *r != release);
@@ -239,7 +255,8 @@ impl Events {
                 self.wake.notify_one();
             }
             "runner" => {
-                let kind = data["kind"].as_str().unwrap_or_default();
+                let frame: RunnerFrame = decode(data.clone()).unwrap_or_default();
+                let kind = frame.kind.as_deref().unwrap_or_default();
                 if kind == "work" {
                     mark("heard", "-");
                 }
@@ -291,14 +308,32 @@ mod tests {
         assert_eq!(channels("work"), &["claim"]);
         assert_eq!(channels("config"), &["sync", "config"]);
         assert_eq!(channels("credentials"), &["sync", "keys"]);
+        assert_eq!(channels("capacity"), &["heartbeat"]);
         assert_eq!(channels("something new"), ALL);
         let e = Events::new();
         e.dispatch("ready", Some("7".into()), &serde_json::json!({"seq": 7, "release": "v1"}), true);
         assert!(e.live() && e.take("claim") && !e.take("claim"));
-        e.pending.lock().unwrap().clear();
+        e.pending.store(0, Ordering::SeqCst);
         e.dispatch("runner", Some("8".into()), &serde_json::json!({"kind": "work"}), false);
         assert!(e.take("claim") && !e.take("sync"));
         assert_eq!(e.last_id.lock().unwrap().as_deref(), Some("8"));
+    }
+
+    #[test]
+    fn every_channel_has_its_own_bit_and_a_catch_up_pass_leaves_keys_out() {
+        for kind in ["work", "config", "credentials", "capacity", "logins", "harness_actions", "credential_imports", "subscription_refresh", "worktrees", "something new"] {
+            assert!(channels(kind).iter().all(|c| index(c).is_some()), "{kind}");
+        }
+        assert!(ALL.iter().all(|c| index(c).is_some()) && !ALL.contains(&"keys"));
+        let e = Events::new();
+        e.ask(&CHANNELS);
+        for name in CHANNELS {
+            assert!(e.take(name) && !e.take(name), "{name}");
+        }
+        e.ask(ALL);
+        assert!(!e.take("keys") && e.take("sync") && !e.take("sync"));
+        e.ask(&["keys"]);
+        assert!(e.take("keys") && !e.take("keys"));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! task per turn (runner-rs/src/execute.rs).
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -17,8 +17,14 @@ use crate::gitcred::{CredentialSocket, TokenCache};
 use crate::readiness;
 use crate::state::State;
 use crate::util::{log, mark, text_of};
+use crate::wire::{decode, ClaimAnswer, EventsAnswer, HeartbeatAnswer};
 
+/// The protocol and source version: what the shim matches against runner_support/version.py and what Health checks (a
+/// semver). Not the release; see RUNNER_RELEASE.
 pub const RUNNER_VERSION: &str = "0.5.4";
+/// The release this binary was built for: build.rs stamps TICO_VERSION ("dev" for a source build). Used where the
+/// runner reports what it is: the startup log, `--release`, and panic reports.
+pub const RUNNER_RELEASE: &str = env!("TICO_RUNNER_RELEASE");
 const CLAIM_EVERY: f64 = 0.25;
 const CLAIM_IDLE_MAX: f64 = 2.0;
 const CLAIM_HINT_S: f64 = 150.0;
@@ -36,6 +42,9 @@ pub struct Runner {
     pub stop: AtomicBool,
     pub(crate) drain: crate::drain::Drain,
     pub capacity: usize,
+    /// How many turns may hold a place: the owner's "Turns at once" from the last heartbeat reply, or the machine's
+    /// capacity while none is set (config::turn_limit). Only new starts read it; running turns keep their places.
+    pub turn_limit: AtomicUsize,
     pub tokens: Arc<TokenCache>,
     pub socket: Option<CredentialSocket>,
     /// Attempts with a live worker here; recovery leaves them alone.
@@ -49,6 +58,10 @@ pub struct Runner {
     pub publish_notes: Mutex<HashMap<String, String>>,
     pub attempt_bots: Mutex<HashMap<String, String>>,
     pub runtime_rows: Mutex<Map<String, Value>>,
+    /// The last readiness probe (readiness::probe_all): what the heartbeat's rows are composed from.
+    pub probed: Mutex<readiness::Probed>,
+    /// Held across a whole probe (probe_now), so probes run one at a time and the rows stored are from the newest reads.
+    pub probe_gate: tokio::sync::Mutex<()>,
     names: Mutex<Option<Value>>,
     /// Lane and checkout locks, live turns' lanes, the repositories this computer holds (sessions.rs).
     pub lanes: Arc<crate::sessions::Lanes>,
@@ -68,7 +81,8 @@ pub struct Runner {
     flush_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Attempts whose first streamed text has reached the server (one timing mark each).
     pub first_posted: Mutex<HashSet<String>>,
-    assignments: Mutex<Vec<Value>>,
+    /// The last `runners/assignments` answer. A writer replaces the Arc; a reader takes a clone of it, not the list.
+    assignments: Mutex<Arc<Vec<Value>>>,
     published: Mutex<HashMap<String, Option<(i128, u64)>>>,
     beat: Mutex<Option<(String, Instant)>>,
     /// When a person asked for a restart (the Restart button): the runner exits once no turn runs, and claims
@@ -84,6 +98,8 @@ pub struct Runner {
     shutdown: Mutex<Option<Instant>>,
     /// Persistent Antigravity processes kept between a conversation's turns.
     pub warm: crate::warm::WarmSessions,
+    /// pi processes kept between a thread's turns (hosts/pi.rs Pool).
+    pub pi: Arc<crate::hosts::pi::Pool>,
     /// What each bot's bot.yaml adds: tools, MCP servers, watchers, memory history (crate::perbot).
     pub perbot: crate::perbot::PerBot,
 }
@@ -135,6 +151,7 @@ impl Runner {
             stop: AtomicBool::new(false),
             drain: crate::drain::Drain::new(Duration::from_secs(drain_limit)),
             capacity,
+            turn_limit: AtomicUsize::new(capacity),
             tokens: Arc::new(TokenCache::new()),
             socket: None,
             active: Mutex::new(HashSet::new()),
@@ -144,6 +161,8 @@ impl Runner {
             publish_notes: Mutex::new(HashMap::new()),
             attempt_bots: Mutex::new(HashMap::new()),
             runtime_rows: Mutex::new(Map::new()),
+            probed: Mutex::new(readiness::Probed::default()),
+            probe_gate: tokio::sync::Mutex::new(()),
             names: Mutex::new(None),
             lanes: Arc::new(crate::sessions::Lanes::new(repositories)),
             worktrees,
@@ -154,7 +173,7 @@ impl Runner {
             accounts: AtomicBool::new(false),
             flush_locks: Mutex::new(HashMap::new()),
             first_posted: Mutex::new(HashSet::new()),
-            assignments: Mutex::new(vec![]),
+            assignments: Mutex::new(Arc::new(vec![])),
             published: Mutex::new(HashMap::new()),
             beat: Mutex::new(None),
             restart: Mutex::new(None),
@@ -162,6 +181,7 @@ impl Runner {
             restart_refused: AtomicBool::new(false),
             shutdown: Mutex::new(None),
             warm: crate::warm::WarmSessions::new(state.directory.join("antigravity"), capacity.max(8)),
+            pi: Arc::new(crate::hosts::pi::Pool::new(state.directory.join("pi"), capacity.max(8))),
             state,
             perbot: crate::perbot::PerBot::default(),
         }
@@ -200,9 +220,9 @@ impl Runner {
         }
     }
 
-    /// The last `runners/assignments` answer.
-    pub fn assignments_seen(&self) -> Vec<Value> {
-        self.assignments.lock().unwrap().clone()
+    /// The last `runners/assignments` answer, shared: a read is a pointer copy, not a copy of every bot's row.
+    pub fn assignments_seen(&self) -> Arc<Vec<Value>> {
+        Arc::clone(&self.assignments.lock().unwrap())
     }
 
     /// Stderr has its own capped row, never repeated in the event outbox or ordinary event stream.
@@ -216,7 +236,7 @@ impl Runner {
             while let Some(ev) = rx.recv().await {
                 if ev["kind"] == "diagnostic" && ev.get("stderr_tail").is_some() {
                     let text = crate::util::text_of(&ev["stderr_tail"]);
-                    let text = redactor.as_ref().map_or(text.clone(), |r| r.scrub_text(&text));
+                    let text = redactor.as_ref().map_or(text.clone(), |r| r.scrub_text(&text).into_owned());
                     let text = crate::redact::scrub_credentials(&text, &[]);
                     let id = aid.clone();
                     let _ = state.off(move |s| s.stderr(&id, &text)).await;
@@ -255,7 +275,7 @@ impl Runner {
             if had_text && self.first_posted.lock().unwrap().insert(aid.to_string()) {
                 mark("first_delta_posted", aid);
             }
-            let ack = result["ack_seq"].as_i64().unwrap_or(0);
+            let ack = decode::<EventsAnswer>(result)?.ack_seq;
             let id = aid.to_string();
             self.state.off(move |s| s.ack(&id, ack)).await.map_err(|e| ApiError::new("state", e, 0, false))?;
         }
@@ -331,6 +351,55 @@ impl Runner {
         self.config.with_profiles_of(&read)
     }
 
+    /// Probes this computer's readiness and keeps the rows (readiness::probe_all). Run by the probe loop, and by a
+    /// heartbeat pass only at start-up or when the probe's inputs changed. One probe runs at a time (`probe_gate`), and
+    /// the config and assignments are read inside the gate: a probe that waited for an earlier one stores only what it
+    /// read after that one, so an older read cannot store last. Returns whether the rows changed.
+    async fn probe_now(&self) -> bool {
+        let _gate = self.probe_gate.lock().await;
+        let config = self.config_now();
+        let candidates = readiness_candidates(&self.assignments_seen());
+        let computer_logins = computer_logins_for(&candidates);
+        let previous = self.probed.lock().unwrap().rows.clone();
+        let (rows, inputs) = readiness::probe_all(&config, &self.sign_in, &self.client, &candidates, computer_logins, &previous).await;
+        let changed = rows != previous;
+        // Read again after the probe: an input that moved while it ran is not in these rows, so one more probe is asked for.
+        let moved = self.inputs_now() != inputs;
+        let mut probed = self.probed.lock().unwrap();
+        probed.rows = rows;
+        probed.inputs = inputs;
+        probed.schedule.ran(Instant::now());
+        drop(probed);
+        if moved {
+            readiness::request_probe();
+        }
+        changed
+    }
+
+    /// The inputs a probe would take now (readiness::probe_inputs over the config and candidates probe_now reads).
+    fn inputs_now(&self) -> String {
+        let config = self.config_now();
+        let candidates = readiness_candidates(&self.assignments_seen());
+        readiness::probe_inputs(&config, &candidates, computer_logins_for(&candidates))
+    }
+
+    /// A probe a wait ended on. When an event asked for it and it changed a row, a heartbeat is asked for at once: the
+    /// heartbeat that event forced was composed from the row it made stale, so that row is corrected now, not a pass later.
+    async fn probe_on(&self, by_event: bool) {
+        if self.probe_now().await && by_event {
+            self.events.ask(&["heartbeat"]);
+        }
+    }
+
+    /// The probe's schedule: a probe when an event asks for one (readiness::request_probe) and every PROBE_EVERY otherwise.
+    /// It runs for the runner's life beside the heartbeat, which only reads what the probe stored.
+    async fn probe_loop(self: Arc<Self>) {
+        loop {
+            let by_event = readiness::wait_due(&self.probed, readiness::wake()).await;
+            self.probe_on(by_event).await;
+        }
+    }
+
     /// Readiness and the heartbeat. `full` re-reads this computer's bots from the server; without it the last
     /// answer stands and the heartbeat goes only when `forced`, changed, or HEARTBEAT_LIVE_S has passed.
     pub async fn maintain(&self, full: bool, forced: bool) -> Result<(), ApiError> {
@@ -339,7 +408,7 @@ impl Runner {
         let repository_rows = if full { self.lanes.repositories.poll().await } else { None };
         if full {
             let assignments = self.client.get("runners/assignments").await?;
-            *self.assignments.lock().unwrap() = assignments.as_array().cloned().unwrap_or_default();
+            *self.assignments.lock().unwrap() = Arc::new(assignments.as_array().cloned().unwrap_or_default());
             // Before the grants are read: a bot from before grants keeps the legacy keys it could read.
             if let Err(e) = crate::credential_migration::migrate(&self.config, &self.client, assignments.as_array().map(Vec::as_slice).unwrap_or_default()).await {
                 log(&format!("Tico runner: credential migration failed ({}); will retry", describe(&e)));
@@ -353,7 +422,7 @@ impl Runner {
                 }
             }
         }
-        let assignments = self.assignments.lock().unwrap().clone();
+        let assignments = self.assignments_seen();
         let candidates = readiness_candidates(&assignments);
         // A built-in bot is set up from the catalog first; any other (or one whose history is on GitHub) is fetched.
         // A bot delivered through an app has no repository to fetch.
@@ -365,11 +434,21 @@ impl Runner {
         let _ = tokio::task::spawn_blocking(move || crate::checkout_groups::gate_workspace(&workspace)).await;
         // Profiles as runner.json has them now, so a sign-in made since start is reported and checked.
         let config = self.config_now();
-        let computer_logins = crate::fallback::server_uses_computer_logins()
-            && candidates.iter().all(|entry| entry["computer_logins_v1"] == true);
-        let runtimes = readiness::runtime_report(&config, &self.sign_in, &self.client, &candidates, computer_logins).await;
+        let computer_logins = computer_logins_for(&candidates);
+        // The rows are composed from the last probe; a heartbeat only probes once, at start-up, and when the bots' runtimes,
+        // logins or key grants changed. Then the probe runs in this pass, so the payload never carries a row half built
+        // from the new inputs. Sign-in, install and credential events ask the probe loop instead.
+        let ran_before = self.probed.lock().unwrap().schedule.ran_before();
+        let changed = ran_before && self.probed.lock().unwrap().inputs != readiness::probe_inputs(&config, &candidates, computer_logins);
+        if !ran_before || changed {
+            self.probe_now().await;
+        }
+        let runtimes = {
+            let probed = self.probed.lock().unwrap();
+            readiness::runtime_report(&config, &self.sign_in, &candidates, computer_logins, &probed.rows)
+        };
         *self.runtime_rows.lock().unwrap() = runtimes.clone();
-        let mut checks = readiness::preflight(&config, &candidates, &runtimes, computer_logins).await;
+        let mut checks = readiness::preflight(&config, &self.sign_in, &candidates, &runtimes, computer_logins).await;
         self.perbot.decorate(&self.config, &mut checks, &candidates);
         self.publish_unpublished(&candidates, &mut checks).await;
         let notes = self.publish_notes.lock().unwrap().clone();
@@ -416,9 +495,10 @@ impl Runner {
             }
         }
         if !crate::lanes::held_back("profiles") {
+            // Profiles only: a subscription login is shared by its bots, so no bot is asked for (signin.refusal_key).
             let rejected = |runtime: &str, name: &str| {
                 let profile = crate::profiles::select(&config.data, Some(name));
-                profile.is_some_and(|p| self.sign_in.rejection(runtime, Some(&p)).is_some())
+                profile.is_some_and(|p| self.sign_in.rejection(runtime, Some(&p), "").is_some())
             };
             body["profiles"] = json!(crate::profiles::report(&config.data, &rejected).await);
         }
@@ -461,18 +541,24 @@ impl Runner {
             let beat = beat?;
             *self.beat.lock().unwrap() = Some((printed, Instant::now()));
             self.published.lock().unwrap().extend(versions);
-            let actions = beat["worktree_actions"].as_array().cloned().unwrap_or_default();
-            note_skipped_actions(beat["worktree_actions_skipped"].as_u64().unwrap_or(0));
+            let actions = beat.worktree_actions.unwrap_or_default();
+            note_skipped_actions(beat.worktree_actions_skipped.unwrap_or(0));
             if full || !actions.is_empty() {
                 self.worktrees.poll(host, &actions);
             }
-            self.start_places.store(beat["start_places"] == true, Ordering::SeqCst);
-            self.worktree_stamp.store(beat["worktree_record_stamp"] == true, Ordering::SeqCst);
-            self.credential_source.store(beat["runtime_credential_source"] == true, Ordering::SeqCst);
-            self.accounts.store(beat["subscription_accounts"] == true, Ordering::SeqCst);
+            self.start_places.store(beat.start_places == Some(true), Ordering::SeqCst);
+            self.worktree_stamp.store(beat.worktree_record_stamp == Some(true), Ordering::SeqCst);
+            self.credential_source.store(beat.runtime_credential_source == Some(true), Ordering::SeqCst);
+            self.accounts.store(beat.subscription_accounts == Some(true), Ordering::SeqCst);
+            crate::profiles::set_server_takes_usage_sources(beat.subscription_usage_sources == Some(true));
             // Performance diagnostics run only while the computer's owner has them on (crate::perf).
-            crate::perf::set_enabled(beat["performance"] == true);
-            if beat["restart"] == true && self.restart.lock().unwrap().is_none() {
+            crate::perf::set_enabled(beat.performance == Some(true));
+            // This computer is a browser exit only while its owner shares its internet (crate::browser_exit).
+            crate::browser_exit::set_sharing(beat.browser_exit == Some(true));
+            if let Some(bots) = beat.browser_exit_bots.as_deref() {
+                crate::browser_exit::keep_proxies(bots, began);
+            }
+            if beat.restart == Some(true) && self.restart.lock().unwrap().is_none() {
                 // Only a supervisor that starts the runner again may let it exit to restart; take main first if safe.
                 if supervised() {
                     if let Some(follower) = crate::follow::shared() {
@@ -510,7 +596,7 @@ impl Runner {
     /// Send the heartbeat `body`, and how many posts it took. A server older than this runner refuses what it doesn't
     /// know (422): only that comes out, held back for ten minutes, and the rest goes again, so a runner updated
     /// before its server still checks in and claims work (runners and servers update independently).
-    async fn post_heartbeat(&self, body: &mut Value) -> (Result<Value, ApiError>, u32) {
+    async fn post_heartbeat(&self, body: &mut Value) -> (Result<HeartbeatAnswer, ApiError>, u32) {
         let mut tries = 0;
         let beat = loop {
             tries += 1;
@@ -543,12 +629,18 @@ impl Runner {
                 break Err(e);
             }
         };
+        let beat = beat.and_then(decode::<HeartbeatAnswer>);
+        if let Ok(reply) = &beat {
+            // Absent or null is automatic: the machine's own capacity is the limit.
+            let owner = reply.turns_at_once.map(|n| n as usize);
+            self.turn_limit.store(crate::config::turn_limit(owner, self.capacity), Ordering::SeqCst);
+        }
         (beat, tries)
     }
 
     /// Lease expiry does not mean this worker has stopped: every live worker's lane stays busy, and a bot whose
     /// worktrees are being maintained gets nothing (service.py _claim_next).
-    async fn claim_next(&self) -> Result<Value, ApiError> {
+    async fn claim_next(&self) -> Result<ClaimAnswer, ApiError> {
         let mut maintaining: Vec<String> = self.worktrees.maintaining.lock().unwrap().iter().cloned().collect();
         maintaining.sort();
         if !crate::lanes::held_back("busy_lanes") {
@@ -567,20 +659,20 @@ impl Runner {
         let active = self.active.lock().unwrap().clone();
         let mut bots: Vec<String> = active.iter().filter_map(|aid| self.state_bot(aid)).chain(maintaining).collect::<HashSet<_>>().into_iter().collect();
         bots.sort();
-        self.client.post("jobs/claim", &json!({"next_run": true, "busy_bots": bots}), None).await
+        self.client.post("jobs/claim", &json!({"next_run": true, "busy_bots": bots}), None).await.and_then(decode)
     }
 
     /// Sends this claim, or first the one whose answer was lost: the same key and body, which the server answers from
     /// its record if it leased a job (store.py is_poll). A slow server took 20-60 s per claim on Oct 27 against this
     /// client's 10 s timeout, and every claim it finished after the runner gave up stranded a lease.
-    async fn claim_again_or(&self, body: Value) -> Result<Value, ApiError> {
+    async fn claim_again_or(&self, body: Value) -> Result<ClaimAnswer, ApiError> {
         let pending = self.unanswered_claim.lock().unwrap().take().filter(|(_, _, at)| at.elapsed() < UNANSWERED_CLAIM_REPLAY);
         let (key, body, at) = pending.unwrap_or_else(|| (uuid::Uuid::new_v4().to_string(), body, Instant::now()));
         let result = self.client.post("jobs/claim", &body, Some(&key)).await;
         if matches!(&result, Err(e) if e.retryable) {
             *self.unanswered_claim.lock().unwrap() = Some((key, body, at));
         }
-        result
+        result.and_then(decode)
     }
 
     fn state_bot(&self, aid: &str) -> Option<String> {
@@ -671,9 +763,15 @@ fn note_skipped_actions(skipped: u64) {
     }
 }
 
+/// Whether the computer's own logins are the ones readiness reads for these bots (computer_logins_v1).
+fn computer_logins_for(candidates: &[Value]) -> bool {
+    crate::fallback::server_uses_computer_logins() && candidates.iter().all(|entry| entry["computer_logins_v1"] == true)
+}
+
 /// The loop's own clocks (service.py `wants`, `claim_due`, `claimed`, `claim_wait`).
 struct Clock {
-    polled: HashMap<&'static str, Instant>,
+    /// When each event channel was last read on its interval, by its index in `events::CHANNELS`.
+    polled: [Option<Instant>; crate::events::CHANNELS.len()],
     next_claim: Option<Instant>,
     idle_claims: u32,
     claim_hint: (Option<Instant>, f64),
@@ -684,18 +782,19 @@ struct Clock {
 impl Clock {
     fn wants(&mut self, events: &Events, channel: &'static str, every: Option<f64>) -> bool {
         let now = Instant::now();
+        let Some(slot) = crate::events::index(channel) else { return false };
         let due = if events.take(channel) {
             true
         } else if let Some(every) = every {
-            match self.polled.get(channel) {
+            match self.polled[slot] {
                 None => true,
-                Some(at) => now.duration_since(*at).as_secs_f64() >= if events.live() { BACKUP_POLL_S } else { every },
+                Some(at) => now.duration_since(at).as_secs_f64() >= if events.live() { BACKUP_POLL_S } else { every },
             }
         } else {
             return false;
         };
         if due {
-            self.polled.insert(channel, now);
+            self.polled[slot] = Some(now);
         }
         due
     }
@@ -748,10 +847,12 @@ impl Runner {
         tokio::spawn(self.clone().push_backlog());
         tokio::spawn(self.events.clone().run(self.client.clone()));
         tokio::spawn(crate::perf::run_loop(self.clone()));
+        tokio::spawn(self.clone().probe_loop());
         tokio::spawn(crate::afterwatch::run_loop(self.clone()));
+        tokio::spawn(crate::memory_tidy_keep::run_loop(self.clone()));
         tokio::spawn(crate::appdriver::run_loop(self.clone()));
         let mut clock = Clock {
-            polled: HashMap::new(),
+            polled: [None; crate::events::CHANNELS.len()],
             next_claim: None,
             idle_claims: 0,
             claim_hint: (None, CLAIM_IDLE_MAX),
@@ -808,6 +909,7 @@ impl Runner {
             m.abort();
         }
         self.warm.prune(true).await;
+        self.pi.prune(true).await;
         // Git the runner started for mirrors, checkouts and worktrees goes with it, credential helpers included.
         crate::gitrun::stop_all();
         self.worktrees.settle().await;
@@ -824,7 +926,7 @@ impl Runner {
             || crate::follow::shared().is_some_and(|f| f.draining()) {
             if crate::follow::feature("runner_drain") { self.drain.begin(Instant::now()); }
         } else {
-            self.drain.end(); // a failed or cancelled update takes work again
+            self.drain.end(); // a failed or canceled update takes work again
         }
         let finished: Vec<String> = workers.iter().filter(|(_, w)| w.is_finished()).map(|(a, _)| a.clone()).collect();
         for aid in finished {
@@ -849,6 +951,7 @@ impl Runner {
             clock.next_claim = None; // capacity came free: look for the next job now
         }
         self.warm.prune(false).await;
+        self.pi.prune(false).await;
         if maintenance.as_ref().is_some_and(|m| m.is_finished()) {
             if let Ok(Err(e)) = maintenance.take().unwrap().await {
                 log(&format!("Tico runner: heartbeat failed ({}); will retry", describe(&e)));
@@ -868,9 +971,13 @@ impl Runner {
                         self.sign_in.refresh_now(&runtime);
                     }
                 }
+                readiness::request_probe();
             }
             let full = clock.wants(&self.events, "sync", Some(15.0)) || changed;
-            let forced = clock.wants(&self.events, "heartbeat", None) | self.sign_in.take_dirty();
+            // A sign-in, sign-out or refusal changed: the heartbeat goes now. No probe is asked for here: a sign-in or
+            // sign-out asks once its action has finished (login.rs Session::finish), so the probe reads the result.
+            let dirty = self.sign_in.take_dirty();
+            let forced = clock.wants(&self.events, "heartbeat", None) | dirty;
             if full || forced || clock.last_heartbeat.is_none_or(|t| t.elapsed().as_secs_f64() >= 15.0) {
                 let me = self.clone();
                 *maintenance = Some(tokio::spawn(async move { me.maintain(full, forced).await }));
@@ -890,7 +997,7 @@ impl Runner {
             }
         }
         // Programs bots declare in `watchers:` (crate::watchers); a failure is logged and never stops the runner.
-        let assignments = self.assignments.lock().unwrap().clone();
+        let assignments = self.assignments_seen();
         let ctx = crate::watchers::Ctx {
             client: self.client.clone(),
             url: self.config.url(),
@@ -901,7 +1008,7 @@ impl Runner {
         // The server reserves starts atomically; waiting workers do not consume computer capacity.
         while {
             let mut places = self.places.lock().unwrap();
-            if places.len() < self.capacity && clock.claim_due(&self.events) {
+            if places.len() < self.turn_limit.load(Ordering::SeqCst) && clock.claim_due(&self.events) {
                 places.insert("<claim>".into());
                 true
             } else {
@@ -912,14 +1019,12 @@ impl Runner {
             {
                 let mut places = self.places.lock().unwrap();
                 places.remove("<claim>");
-                if let Ok(result) = &result {
-                    if let Some(attempt) = result.get("attempt").filter(|a| a.is_object()) {
-                        places.insert(text_of(&attempt["id"]));
-                    }
+                if let Some(attempt) = result.as_ref().ok().and_then(|r| r.attempt.as_ref()) {
+                    places.insert(text_of(&attempt["id"]));
                 }
             }
             let result = result?;
-            let attempt = result.get("attempt").cloned().filter(|a| a.is_object());
+            let attempt = result.attempt.map(Value::Object);
             let got = attempt.is_some();
             if let Some(attempt) = attempt {
                 let aid = text_of(&attempt["id"]);
@@ -939,7 +1044,7 @@ impl Runner {
             }
             clock.next_claim = Some(Instant::now() + Duration::from_secs_f64(clock.claim_wait(got)));
             clock.claimed(got);
-            let paused = text_of(result.get("paused").unwrap_or(&Value::Null));
+            let paused = result.paused.unwrap_or_default();
             if !paused.is_empty() && paused != *paused_note {
                 log(&format!("Tico runner: the server is not giving this computer work: {paused}"));
                 *paused_note = paused;
@@ -978,9 +1083,9 @@ mod tests {
                               "runtimes": {"pi": {"installed": true}}, "bots": {"ops": {"ready": true}}}});
         let (beat, tries) = runner.post_heartbeat(&mut body).await;
         crate::lanes::release("readiness.isolated");
-        assert_eq!((beat.map(|b| b["ok"] == true).ok(), tries), (Some(true), 2));
+        assert_eq!((beat.is_ok(), tries), (true, 2));
         let claimed = runner.claim_next().await.unwrap();
-        assert_eq!(claimed["attempt"]["id"], "att-1");
+        assert_eq!(claimed.attempt.unwrap()["id"], "att-1");
         let seen = seen.lock().unwrap();
         assert!(seen[0].contains("\"isolated\":true"), "{}", seen[0]);
         // The same check-in again, less the one field the older server doesn't know: then the claim.
@@ -1122,6 +1227,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_heartbeat_reply_sets_the_turn_limit_and_an_absent_one_returns_it_to_the_machines_capacity() {
+        let (url, _seen) = crate::client::tests::serve(vec![
+            (200, r#"{"ok":true,"turns_at_once":1}"#),
+            (200, r#"{"ok":true}"#),
+        ]).await;
+        let dir = std::env::temp_dir().join(format!("tico-turn-limit-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url":url, "token":"synthetic", "runner_id":"r1", "capacity":3,
+                                     "projects_dir":dir.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Runner::new(config.clone(), client, State::open(&dir.join("state")).unwrap());
+        assert_eq!(runner.turn_limit.load(Ordering::SeqCst), 3);
+        let mut body = json!({"version": "test"});
+        assert!(runner.post_heartbeat(&mut body).await.0.is_ok());
+        assert_eq!(runner.turn_limit.load(Ordering::SeqCst), 1);
+        assert!(runner.post_heartbeat(&mut body).await.0.is_ok());
+        assert_eq!(runner.turn_limit.load(Ordering::SeqCst), 3);
+        assert_eq!(runner.capacity, 3, "the machine's own capacity is what the heartbeat body reports");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn a_claim_whose_answer_was_lost_is_sent_again_with_its_key() {
         let (url, seen) = crate::client::tests::serve(vec![
             (503, r#"{"error":{"code":"unavailable","detail":"busy"}}"#),
@@ -1137,7 +1266,7 @@ mod tests {
         assert!(runner.claim_next().await.is_err());
         runner.start_places.store(true, Ordering::SeqCst);             // the next claim's own body differs
         let claimed = runner.claim_next().await.unwrap();
-        assert_eq!(claimed["attempt"]["id"], "a-late");
+        assert_eq!(claimed.attempt.unwrap()["id"], "a-late");
         runner.claim_next().await.unwrap();
         let requests = seen.lock().unwrap();
         let key = |r: &str| r.lines().find_map(|l| l.split_once(':').filter(|(k, _)| k.eq_ignore_ascii_case("idempotency-key")).map(|(_, v)| v.trim().to_string()));
@@ -1151,9 +1280,158 @@ mod tests {
 
     #[test]
     fn idle_claims_back_off_to_two_seconds() {
-        let mut c = Clock { polled: HashMap::new(), next_claim: None, idle_claims: 0, claim_hint: (None, 2.0), claim_live_at: None, last_heartbeat: None };
+        let mut c = Clock { polled: [None; crate::events::CHANNELS.len()], next_claim: None, idle_claims: 0, claim_hint: (None, 2.0), claim_live_at: None, last_heartbeat: None };
         let waits: Vec<f64> = (0..5).map(|_| c.claim_wait(false)).collect();
         assert_eq!(waits, vec![0.5, 1.0, 2.0, 2.0, 2.0]);
         assert_eq!(c.claim_wait(true), 0.25);
+    }
+
+    #[test]
+    fn a_channel_is_taken_once_per_ask_and_each_channel_keeps_its_own_interval() {
+        let events = Events::new();
+        let mut c = Clock { polled: [None; crate::events::CHANNELS.len()], next_claim: None, idle_claims: 0, claim_hint: (None, 2.0), claim_live_at: None, last_heartbeat: None };
+        assert!(c.wants(&events, "sync", Some(15.0)), "never read yet");
+        assert!(!c.wants(&events, "sync", Some(15.0)), "read a moment ago");
+        assert!(!c.wants(&events, "config", None), "neither asked for nor on an interval");
+        events.ask(&["config"]);
+        assert!(c.wants(&events, "config", None) && !c.wants(&events, "config", None));
+        assert!(!c.wants(&events, "sync", Some(15.0)), "the sync interval is its own");
+    }
+
+    /// One bot's row from `runners/assignments`, about 1.2 KB as the server sends it.
+    fn bench_assignment(i: usize) -> Value {
+        json!({
+            "bot": format!("bot:role-{i}"), "runner_id": "r1", "state": "active", "generation": 12, "team": "engineering",
+            "owner_id": "user-1", "computer_label": "Studio Mac", "active": true,
+            "repository": {"owner": "acme", "name": format!("role-{i}"), "branch": "main", "url": format!("https://github.com/acme/role-{i}.git")},
+            "config": {"runtime": "claude", "model": "claude-sonnet-5", "effort": "medium", "tools": ["hub", "browser", "mail", "github"],
+                       "memory": {"history": true, "cap_bytes": 65536},
+                       "watchers": [{"name": "inbox", "every_s": 60, "command": "python3 watch.py --inbox"}],
+                       "instructions": format!("Role {i}. {}", "Keep the board current. ".repeat(30))}
+        })
+    }
+
+    /// `cargo test bench_assignments -- --ignored --nocapture`: the bytes one tick's read of the assignment list asks
+    /// the allocator for, with 20 bots (the tick runs four times a second).
+    #[tokio::test]
+    #[ignore]
+    async fn bench_assignments_read_per_tick() {
+        let dir = std::env::temp_dir().join(format!("tico-assign-bench-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": "http://127.0.0.1:9", "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Runner::new(config, client, State::open(&dir.join("state")).unwrap());
+        let assignments: Vec<Value> = (0..20).map(bench_assignment).collect();
+        let json_bytes = serde_json::to_vec(&assignments).unwrap().len();
+        *runner.assignments.lock().unwrap() = Arc::new(assignments);
+        let mut bytes = Vec::new();
+        for _ in 0..50 {
+            let asked = crate::util::alloc_probe::requested();
+            let seen = runner.assignments_seen();
+            bytes.push(crate::util::alloc_probe::requested() - asked);
+            assert_eq!(seen.len(), 20);
+        }
+        bytes.sort_unstable();
+        eprintln!("assignment read per tick, 20 bots ({json_bytes} JSON bytes): bytes requested median {} (min {}, max {})", bytes[25], bytes[0], bytes[49]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A runner whose probes find only the fake runtimes on PATH (the caller holds readiness::probe_tests::PATH_LOCK).
+    fn probe_runner(root: &std::path::Path) -> Runner {
+        let data = json!({"projects_dir": root.join("projects").display().to_string()}).as_object().unwrap().clone();
+        let config = Config { path: std::path::PathBuf::new(), data };
+        let client = Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
+        Runner::new(config, client, State::open(&root.join("state")).unwrap())
+    }
+
+    /// Probes run one at a time: a probe waits at the gate while another holds it, and starts and stores nothing until
+    /// it is let through (finding 2).
+    #[tokio::test]
+    async fn a_probe_waits_at_the_gate_until_the_one_before_it_is_done() {
+        let _guard = crate::readiness::probe_tests::PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join(format!("tico-runner-gate-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        let (_log, path) = crate::readiness::probe_tests::fake_runtimes(&root, "2.1.303");
+        let runner = probe_runner(&root);
+        let held = runner.probe_gate.lock().await;
+        assert!(tokio::time::timeout(Duration::from_millis(100), runner.probe_now()).await.is_err(), "a probe waits while another holds the gate");
+        assert!(!runner.probed.lock().unwrap().schedule.ran_before(), "and stores nothing meanwhile");
+        // Not the fake runtimes' spawn log: PATH is process-wide, so a test elsewhere may run them meanwhile.
+        assert!(runner.probed.lock().unwrap().rows.is_empty(), "and holds no rows meanwhile");
+        drop(held);
+        runner.probe_now().await;
+        assert!(runner.probed.lock().unwrap().schedule.ran_before());
+        std::env::set_var("PATH", path);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// An event's probe that changes a row asks for a heartbeat at once; a timer's probe asks for none (finding 4).
+    #[tokio::test]
+    async fn an_event_probe_that_changes_a_row_asks_for_a_heartbeat_at_once() {
+        let _guard = crate::readiness::probe_tests::PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join(format!("tico-runner-heartbeat-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        let (_log, path) = crate::readiness::probe_tests::fake_runtimes(&root, "2.1.304");
+        let runner = probe_runner(&root);
+        runner.probe_on(false).await;
+        assert!(!runner.events.take("heartbeat"), "a timer's probe asks for nothing");
+        runner.probed.lock().unwrap().rows.clear();
+        runner.probe_on(true).await;
+        assert!(runner.events.take("heartbeat"), "an event's probe that changed the rows asks for a heartbeat");
+        std::env::set_var("PATH", path);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Fake runtimes that hold each run until `gate` exists, so a probe can be caught part way through.
+    fn held_runtimes(root: &std::path::Path, gate: &std::path::Path) -> (std::path::PathBuf, String) {
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let log = root.join("spawns.log");
+        for rt in crate::harness_tools::runtimes() {
+            let exe = bin.join(crate::harness_tools::executable_for(&rt));
+            let script = format!(
+                "#!/bin/sh\necho \"{rt} $*\" >> '{log}'\ni=0\nwhile [ ! -f '{gate}' ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done\necho '2.1.305 (Claude Code)'\n",
+                log = log.display(),
+                gate = gate.display()
+            );
+            std::fs::write(&exe, script).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let before = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{before}", bin.display()));
+        (log, before)
+    }
+
+    /// An input that changes while a probe runs is not recorded as read: the rows keep the inputs the probe began with,
+    /// and one more probe is asked for, which reads the new inputs (finding 1 of the re-review).
+    #[tokio::test]
+    async fn an_input_that_changes_during_a_probe_is_not_recorded_as_read_and_asks_for_another() {
+        let _guard = crate::readiness::probe_tests::PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join(format!("tico-runner-midprobe-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        let gate = root.join("release");
+        let (log, path) = held_runtimes(&root, &gate);
+        let runner = probe_runner(&root);
+        let before = runner.inputs_now();
+        let drive = async {
+            for _ in 0..200 {
+                if std::fs::read_to_string(&log).is_ok_and(|s| !s.is_empty()) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            *runner.assignments.lock().unwrap() = Arc::new(vec![json!({"bot": "mid-probe", "config": {"runtime": "claude"}})]);
+            std::fs::write(&gate, "").unwrap();
+        };
+        let requested = readiness::requests();
+        tokio::join!(runner.probe_now(), drive);
+        assert!(runner.probed.lock().unwrap().inputs == before, "the rows carry the inputs the probe began with");
+        assert!(runner.inputs_now() != before, "and the inputs have moved on");
+        assert!(readiness::requests() > requested, "so one more probe is requested");
+        std::env::set_var("PATH", path);
+        std::fs::remove_dir_all(root).ok();
     }
 }

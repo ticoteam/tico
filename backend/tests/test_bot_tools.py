@@ -4,7 +4,10 @@ before the report still gets a row, and that a private bot's tools stay private 
 import json
 
 from backend.store import H
-from backend.tests.test_api import api, assign, get, headers, ready, restrict, runner  # noqa: F401  (fixtures)
+from backend.tests.test_api import api, assign, get, headers, post, ready, restrict, runner  # noqa: F401  (fixtures)
+from backend.tests.test_credentials import setup
+from backend.tests.test_model_subscriptions import add, company, give, machine, on
+from backend import bot_settings as BS
 
 RUNTIMES = {"codex": {"installed": True, "authenticated": "ready"}}
 TOOLS = [
@@ -18,9 +21,8 @@ TOOLS = [
 
 def configure(api, bot="ops"):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=?,repo=? WHERE bot=?",
-                  (json.dumps({"name": bot, "runtime": "codex", "model": "gpt-6-luna", "reasoning_effort": "high"}),
-                   "acme-co/emp-" + bot, bot))
+        c.execute('UPDATE bot_config SET repo=? WHERE bot=?', ('acme-co/emp-' + bot, bot))
+        BS.write(c, bot, {'name': bot, 'runtime': 'codex', 'model': 'gpt-6-luna', 'reasoning_effort': 'high'})
 
 
 def report(api, machine, bot, tools):
@@ -71,7 +73,7 @@ def test_no_value_can_reach_the_row(api):
     assert report(api, machine, "ops", [{**TOOLS[1], "env": {"SLACK_TOKEN": "xoxb-not-a-real-token"}}]).status_code == 422
     assert report(api, machine, "ops", TOOLS).status_code == 200
     with api.app.state.store.read() as c:
-        stored = c.execute("SELECT readiness_json FROM runners").fetchone()[0]
+        stored = c.execute("SELECT readiness FROM runners_with_state").fetchone()[0]
     for text in (api.get("/api/v2/bots/ops/tools", headers=headers()).text, stored,
                  api.get("/api/v2/operations", headers=headers()).text, api.get("/api/v2/bots", headers=headers()).text):
         assert "xoxb-not-a-real-token" not in text
@@ -93,6 +95,26 @@ def test_a_runner_from_before_the_report_yields_the_model_and_repository_only(ap
     # A bot with no computer at all still answers.
     bare = tools_of(api, "coo")
     assert bare["computer"] is None and bare["online"] is False and bare["tools"][0]["id"] == "model"
+
+
+def test_a_computer_whose_plan_signs_the_bots_runtime_in_reads_it_signed_in(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    m = machine(api)                                        # Claude not signed in on the computer itself
+    model = tools_of(api)["tools"][0]
+    assert (model["status"], model["problem"]) == ("problem", "Runtime is not signed in on Test Mac")
+    sid = add(api)["id"]
+    give(api, m, "claude", sid)                             # the company's plan now signs the runtime in here
+    model = tools_of(api)["tools"][0]
+    assert model["status"] == "ready" and "problem" not in model
+    # Not installed is still a problem, plan or not.
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "capabilities": ["model_subscriptions_v1"],
+                                    "readiness": {"schema_version": 1, "bots": {"ops": {"ready": True, "runtime": "claude"}},
+                                                  "runtimes": {"claude": {"installed": False, "authenticated": "missing"}}}},
+         token=m["token"])
+    model = tools_of(api)["tools"][0]
+    assert model["status"] == "problem" and model["problem"] == "Runtime is not installed on Test Mac"
 
 
 def test_a_private_bots_tools_stay_with_the_people_who_can_see_it(api):

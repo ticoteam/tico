@@ -1,38 +1,7 @@
-/* ui/styles/board.css — Page toolbars and the recurring rows (the board itself is in task-list.css).
+/* ui/styles/board.css — Page toolbars and the document viewer (the board itself is in task-list.css).
    The cascade runs in the order index.html links these files; keep rules in order. */
 .board-tools{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;margin-bottom:var(--s3)}
 .board-tools .spacer{flex:1}
 .board-tools select{width:auto;min-width:150px;max-width:220px}
 .tasks-head h1{font-size:var(--t-lg);font-weight:600;margin:0 6px 0 0}
-/* recurring: one expandable row per routine — how it runs, last run, next fire, then what ran */
-.r-filters{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;margin:0 0 12px;padding-bottom:10px;border-bottom:1px solid var(--line)}
-.r-filters .group{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-.r-filters .lbl{font-size:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);margin-right:2px;font-weight:600}
-.rchip{border:1px solid var(--line);background:var(--surface);color:var(--muted);border-radius:999px;padding:3px 10px;font-size:var(--t-sm);cursor:pointer}
-.rchip:hover{color:var(--ink);border-color:var(--ink)}
-.rchip.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
-.rblock{border-bottom:1px solid var(--line)}
-.rblock:last-child{border-bottom:0}
-.rrow{display:grid;grid-template-columns:16px 28px minmax(0,1fr) auto minmax(96px,auto);gap:10px;align-items:center;width:100%;padding:10px 4px;border:0;background:none;color:var(--ink);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer;border-radius:6px}
-.rrow:hover,.rrow[aria-expanded="true"]{background:var(--surface2)}
-.rrow .chev{display:inline-grid;place-items:center;width:16px;height:16px;margin:0;color:var(--muted);font-size:14px;line-height:1;transform:none;transition:transform var(--dur) var(--ease)}   /* not the sidebar's .chev: no turn until open */
-.rrow[aria-expanded="true"] .chev{transform:rotate(90deg)}
-.rrow .ttl{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.rrow .when{display:flex;flex-wrap:wrap;align-items:center;gap:4px 7px;font-size:var(--t-sm);color:var(--muted);line-height:1.45}
-.rrow .when .pill.inbox{background:var(--run-bg);color:var(--run)}
-.rrow .boxes{display:block;font-size:var(--t-sm);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:52ch}
-.rrow .last{display:flex;align-items:center;gap:6px;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
-.rrow .next{text-align:right;white-space:nowrap}
-.rrow .next strong{display:block}
-.rrow .next .muted{font-size:var(--t-sm)}
-.rocc{padding:2px 4px 14px 54px}
-.rocc table{font-size:var(--t-sm)}
-.rocc th{padding-bottom:6px}
-.rocc td{padding:6px 10px 6px 0}
-.rocc .empty{padding:8px 0}
-@media (max-width:640px){
-  .rrow{grid-template-columns:16px 28px minmax(0,1fr) auto}
-  .rrow .last{display:none}
-  .rocc{padding-left:8px;overflow-x:auto}
-}
 .doc-viewer{width:min(860px,calc(100vw - 24px));max-height:92vh}

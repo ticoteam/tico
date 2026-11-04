@@ -13,7 +13,7 @@ const bot = (name, display_name, org_parent, over = {}) => ({name, display_name,
 const bots = [bot('coo', 'Assistant', 'p:ana'), bot('botops', 'BotOps', 'p:ana'), bot('sales', 'Head of Sales', 'p:ana')];
 const seat = (id, title, org_parent, description = '') => ({id, kind: 'seat', stage: 'recruiting', title, description, team: '',
   reports_to: org_parent.startsWith('p:') ? 'human:' + org_parent.slice(2) : org_parent.startsWith('s:') ? 'seat:' + org_parent.slice(2) : org_parent.slice(2),
-  created: '2026-10-24T00:00:00Z', org_parent});
+  created_at: '2026-10-24T00:00:00Z', org_parent});
 const seats = [
   seat('s-eng', 'Head of Engineering', 'p:ana', 'Runs the software factory.\nOwns:\n- the roadmap'),
   seat('s-dev', 'Developer', 's:s-eng', 'Builds features.'),
@@ -57,7 +57,7 @@ const seats = [
     assert.equal(await head.getAttribute('draggable'), null, 'a seat is never dragged');
     assert.equal(await head.getAttribute('data-org'), null, 'nor a drop target');
     // Exactly the reporting lines: the Developer seat under the Head of Engineering seat, the rep under the Head of
-    // Sales bot, the head under Ana.
+    // Sales bot, the head reporting to Ana, the top of the chart, so beside her row rather than under it.
     const parentOf = id => page.locator(`#tree [data-seat="${id}"]`).evaluate(el => {
       const up = el.closest('li').parentElement.closest('li');
       const node = up && up.querySelector(':scope > .noderow [data-seat], :scope > .noderow [data-org]');
@@ -65,7 +65,7 @@ const seats = [
     });
     assert.equal(await parentOf('s-dev'), 's:s-eng');
     assert.equal(await parentOf('s-rep'), 'b:sales');
-    assert.equal(await parentOf('s-eng'), 'p:ana');
+    assert.equal(await parentOf('s-eng'), '');
     // Collapsing the head seat folds the seat under it.
     await page.locator('#tree [data-toggle="s:s-eng"]').first().click();
     await page.locator('#tree [data-seat="s-dev"]').waitFor({state: 'hidden'});

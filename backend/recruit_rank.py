@@ -88,7 +88,7 @@ def department(document):
 def build(departments, cards):
     """The org builder's catalog from parsed groups.yaml and card.yaml documents. Built-in (`required`) cards,
     helpers (`kind: helper`, which serve a person and sit outside the org chart) and cards in no offered department are
-    left out. A card with no `icon` takes its department's; with no `suggest`, it is `common`; with no `tags`, its
+    left out, and so are retired ones (`retired: true`). A card with no `icon` takes its department's; with no `suggest`, it is `common`; with no `tags`, its
     `pains` phrases stand in. A department's head is its card with `lead: true`, else the `head` groups.yaml
     names; the served `head` and each card's `lead` say which."""
     rows = departments.get("departments") if isinstance(departments, dict) else departments
@@ -104,7 +104,7 @@ def build(departments, cards):
     out = []
     for card in sorted(cards, key=lambda card: str(card.get("template") or "")):
         template = str(card.get("template") or "").strip()
-        if not template or card.get("required") or str(card.get("kind") or "") == "helper":
+        if not template or card.get("required") or str(card.get("kind") or "") == "helper" or card.get("retired"):
             continue
         home = _department_of(card, heads, teams)
         if home not in by_id:

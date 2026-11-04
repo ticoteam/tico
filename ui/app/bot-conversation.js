@@ -16,7 +16,7 @@ async function loadConversation(slug, keep) {
   convStop();
   const state = CONV = {slug, runs: [], active: null, older: false, pending: keep?.pending || [], replyFor: null, tail: 0, poll: 0, busy: false, loadedAt: Date.now()};
   let d;
-  try { d = await get(`/employees/${slug}/conversation`); }
+  try { d = await get(`/employees/${encodeURIComponent(slug)}/conversation`); }
   catch (err) {
     if (CONV !== state || !$('#conv-thread')) return;
     $('#conv-state').textContent = '';
@@ -44,7 +44,7 @@ async function convTail(state) {
   if (CONV !== state || state.busy || !state.active) return;
   state.busy = true;
   try {
-    const d = await get(`/employees/${state.slug}/conversation/tail?run=${encodeURIComponent(state.active.run)}&from=${state.active.offset || 0}`);
+    const d = await get(`/employees/${encodeURIComponent(state.slug)}/conversation/tail?run=${encodeURIComponent(state.active.run)}&from=${state.active.offset || 0}`);
     if (CONV !== state || !$('#conv-thread')) return;
     if (d.offset != null) state.active.offset = d.offset;
     const g = state.runs.find(r => r.run === (d.run || state.active.run));
@@ -79,7 +79,7 @@ function convEvent(e) {
 const isRecurring = r => r.recurring === true || /_Created by dispatcher from schedule/.test(String(r.issue_body || ''));
 function convGroup(r, slug) {
   const ev = r.events || [];
-  const live = r.finished == null;
+  const live = r.finished_at == null;
   const agents = ev.filter(x => x.kind === 'agent' && String(x.text || '').trim());
   const hasReply = typeof r.reply === 'string' && r.reply.trim();
   const reply = hasReply ? r.reply : (agents.length ? agents[agents.length - 1].text : '');
@@ -95,10 +95,10 @@ function convGroup(r, slug) {
     ${live ? '<span class="pill in-progress">running</span>' : r.exit !== 0 && r.exit != null ? `<span class="pill fail">failed · exit ${esc(r.exit)}</span>` : ''}
     ${r.needs_human ? `<span class="pill needs">${!personHandle(r.issue_from) || personHandle(r.issue_from) === myHandle() ? 'Needs you' : 'Needs ' + esc(firstName(personDisplay(personHandle(r.issue_from))))}</span>` : ''}
     <span class="spacer" style="flex:1"></span>
-    <span class="tnum" title="${esc(fmt(r.started))}">${r.finished ? ago(r.finished) : ago(r.started)}${r.duration_s != null ? ` · ${Math.round(r.duration_s / 60)}m` : ''}</span>
+    <span class="tnum" title="${esc(fmt(r.started_at))}">${r.finished_at ? ago(r.finished_at) : ago(r.started_at)}${r.duration_s != null ? ` · ${Math.round(r.duration_s / 60)}m` : ''}</span>
     ${r.local ? '' : `<a class="muted" href="${API}/runs/${esc(r.run)}/log" target="_blank" rel="noopener">log</a>`}</div>${
     live || r.local ? '' : `<div class="conv-replay">Replay of run <span class="mono">${esc(r.run)}</span> on ${
-      esc(CONV?.session?.runtime || S.emps.find(e => e.name === slug)?.runtime || 'its runtime')}, ended ${esc(fmt(r.finished) || 'unknown')}</div>`}`;
+      esc(CONV?.session?.runtime || botRow(slug)?.runtime || 'its runtime')}, ended ${esc(fmt(r.finished_at) || 'unknown')}</div>`}`;
   const ask = chat ? convChatAsk(r)
     : !r.issue_body ? ''
     : isRecurring(r) ? `<div class="bubble sched"><span class="who">Routine</span>${esc(r.issue_title || 'Routine')}
@@ -117,7 +117,7 @@ function convGroup(r, slug) {
     c.author === 'human' ? `<div class="bubble you"><span class="who">${esc(personHandle(c.who) || ownerHandle())}</span>${esc(unsigned(c.body))}${chatCopyHTML(unsigned(c.body))}</div>`
     : c.author === 'bot' ? `<div class="bubble bot"><span class="who">${empName(slug)}</span><div class="md">${md(c.body)}</div>${chatCopyHTML(c.body)}</div>`
     : `<div class="conv-note muted">${esc(plainActors(c.body))}</div>`).join('');
-  const brk = r.session_break ? `<div class="conv-break">New session started ${esc(fmt(r.started) || '')}</div>` : '';
+  const brk = r.session_break ? `<div class="conv-break">New session started ${esc(fmt(r.started_at) || '')}</div>` : '';
   return `${brk}<div class="conv-run${chat ? ' chat' : ''}">${head}${ask}${working}${answer}${comments}</div>`;
 }
 function convChatAsk(r) {
@@ -129,7 +129,7 @@ function convChatAsk(r) {
 function convChatStarted(slug, j, text, files) {
   const state = CONV; if (!state || state.slug !== slug) return;
   state.runs.push({run: j.run, issue: null, kind: 'chat', message: {from: myHandle(), text, files},
-    started: j.started || new Date().toISOString(), finished: null, exit: null,
+    started_at: j.started_at || new Date().toISOString(), finished_at: null, exit: null,
     events: [], activity: {}, comments: [], local: true});
   state.active = {run: j.run, issue: null, offset: 0};
   state.sent = true; convRender(state); convSchedule(state);
@@ -139,7 +139,7 @@ function convRender(state) {
   const slug = state.slug;
   state.openWork ||= new Set(); state.wasLive ||= new Set();
   for (const r of state.runs) {                                   // open while live, fold when it lands
-    if (r.finished == null) { state.openWork.add(r.run); state.wasLive.add(r.run); }
+    if (r.finished_at == null) { state.openWork.add(r.run); state.wasLive.add(r.run); }
     else if (state.wasLive.has(r.run)) { state.wasLive.delete(r.run); state.openWork.delete(r.run); }
   }
   // stay pinned to the newest message, unless the reader has scrolled up to read something older (ui/app/stick-scroll.js);
@@ -164,7 +164,7 @@ function convRender(state) {
   if (older) older.onclick = async () => {
     older.disabled = true; older.textContent = 'Loading…';
     try {
-      const d = await get(`/employees/${slug}/conversation?before=${encodeURIComponent(state.runs[0]?.run || '')}`);
+      const d = await get(`/employees/${encodeURIComponent(slug)}/conversation?before=${encodeURIComponent(state.runs[0]?.run || '')}`);
       if (CONV !== state) return;
       state.runs = (d.runs || []).slice().reverse().concat(state.runs);
       state.older = !!d.older; state.prepending = true; convRender(state);   // "Load older" must not move what you are reading
@@ -174,18 +174,18 @@ function convRender(state) {
   const st = $('#conv-state');
   if (st) st.innerHTML = state.active ? `<span class="pill in-progress">Running${state.active.issue ? ` on #${esc(state.active.issue)}` : ''}</span>`
     : stateOf(slug) === 'paused' ? '<span class="pill">Paused</span>'
-    : `Idle${last?.finished ? `, last active ${ago(last.finished)}` : ''}`;
+    : `Idle${last?.finished_at ? `, last active ${ago(last.finished_at)}` : ''}`;
   pillNeeds(BOT_PILL?.slug === slug ? BOT_PILL : null, last?.needs_human && last.issue ? last.issue : null);
 }
 
 // The CLI's own resume command comes from its manifest (`resume_command`); a CLI without one gets `<name> --resume`.
 function botResumeCommand(runtime, sid, slug) {
   const r = String(runtime || '').toLowerCase();
-  return `cd ~/tico-work/emp-${slug} && ${harnessCaps(r).resume_command || `${r} --resume`} ${sid}`;
+  return `cd ~/tico-work/emp-${botSlug(slug)} && ${harnessCaps(r).resume_command || `${r} --resume`} ${sid}`;
 }
 async function loadBotIssues(slug) {
   try {
-    const list = await get(`/employees/${slug}/issues`);
+    const list = await get(`/employees/${encodeURIComponent(slug)}/issues`);
     const open = list.filter(i => i.state === 'OPEN').sort((a,b) => (a.needs_human ? 0 : 1) - (b.needs_human ? 0 : 1) || (a.priority||'p9').localeCompare(b.priority||'p9'));
     // Done Recently: closed in the last 14 days, as for a Tico bot's tasks.
     const since = new Date(Date.now() - BOT_DONE_RECENT_DAYS * 86400000).toISOString();
@@ -216,7 +216,7 @@ async function fillBotRuns(slug) {
 }
 async function loadDocs(slug) {
   try {
-    const f = await get(`/employees/${slug}/files`);
+    const f = await get(`/employees/${encodeURIComponent(slug)}/files`);
     if (BOT?.slug !== slug) return;
     if ($('#agent')) $('#agent').innerHTML = f['AGENT.md'] ? md(f['AGENT.md'].replace(/^# .*\n/, '')) : '<div class="empty">Instructions have not been published by the computer yet.</div>';
     for (const [n, t] of Object.entries(f.playbooks || {})) { const el = document.getElementById('pb-' + n); if (el) el.innerHTML = md(t); }

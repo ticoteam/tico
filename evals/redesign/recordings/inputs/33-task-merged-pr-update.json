@@ -1,0 +1,24 @@
+{
+  "id": "33-task-merged-pr-update",
+  "kind": "task",
+  "questions": "stale-review",
+  "level": "low",
+  "state": {
+    "task": {
+      "title": "Fix the import button spinner on Android",
+      "status": "doing",
+      "step": "Open PR #512 and wait for review",
+      "owner": "builder-openai",
+      "created": "2026-10-14",
+      "updated": "2026-10-21",
+      "parent": null,
+      "reason": "Linked PR #512 merged on 2026-10-21",
+      "comments": [
+        "Opened PR #512",
+        "Review requested from engineering-lead",
+        "PR merged to main by engineering-lead"
+      ]
+    }
+  },
+  "note": "A linked PR merged: update, so the owner marks it done."
+}

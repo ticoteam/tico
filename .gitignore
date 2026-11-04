@@ -15,6 +15,9 @@ app/.build/
 
 relay-rs/target/
 
+# Assistant eval runs: transcripts and per-sample results, written by evals/assistant/run.py.
+evals/assistant/out/
+
 # Behaviour replay cases hold customer text; only the made-up example lives here.
 evals/replay/cases/*
 !evals/replay/cases/example.yaml
@@ -26,3 +29,7 @@ evals/replay/cases/*
 /previous-timings/
 tools/release-command/target/
 .remote-runs/
+.ruff_cache/
+
+# Local type-check environment (scripts/check_types.sh).
+.venv-pyright/
