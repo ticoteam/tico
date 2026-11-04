@@ -81,9 +81,12 @@ with **waiting: computer not reporting**, because a computer that stops reportin
 never reported is not held. The server also ends a run that has gone silent (no heartbeat or event for 5 minutes)
 once it is past its bot's max_run_minutes plus 5 minutes, without waiting for the computer.
 This includes turns with a reservation that have not started yet. Running turns continue. New starts resume when
-the hold clears. A person's own message to a bot (a chat, a message in its task) still starts, ahead of
-the waiting turns, when the computer has a free turn; Tico's notices and messages between bots wait. This brake does
-not change your account, model or computer size.
+the hold clears. A person's own message to a bot (a chat, a message in its task) passes CPU overload and stale
+reports, ahead of the waiting turns, when the computer has a free turn. Memory pressure holds everyone's new
+starts. The runner also checks current memory before preparation and execution, including fallbacks, so a surge
+between samples holds new starts even with diagnostics off. Its local hold uses the same 85% and 80% thresholds;
+while waiting it gives its start place back and keeps its delivery lease. This does not cap the memory of tools
+already running inside a turn, or change your account, model or computer size.
 
 During an update, server and runner negotiate the start rules through heartbeat and claim. Older runners retain
 their existing delivery leases, including preparation already underway, until they update. Those starts have no new

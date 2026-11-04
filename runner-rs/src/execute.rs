@@ -764,14 +764,36 @@ impl Runner {
 
     /// One ask for a computer place: false while this computer is full or the server says wait.
     async fn try_start_place(&self, attempt: &Value, flags: &Flags) -> Result<bool, Fail> {
-        if attempt.get("start_reservation_seconds").is_none() {
-            return Ok(true); // an older server still owns its original capacity gate
-        }
+        #[cfg(not(test))]
+        let memory = crate::perf::start_memory().await;
+        // Synthetic turns must not depend on the test host's load; memory admission tests supply their readings.
+        #[cfg(test)]
+        let memory = Some(0.0);
+        self.start_place_with_memory(attempt, flags, memory).await
+    }
+
+    async fn start_place_with_memory(&self, attempt: &Value, flags: &Flags, memory: Option<f64>) -> Result<bool, Fail> {
         let aid = text_of(&attempt["id"]);
         unstopped(flags)?;
         if flags.lost.load(Ordering::SeqCst) || Instant::now() >= *flags.deadline.lock().unwrap()
             || self.stop.load(Ordering::SeqCst) {
             return Err(Fail::runtime("Lease expired before the turn started"));
+        }
+        let memory_held = {
+            let mut held = self.memory_hold.lock().unwrap();
+            if let Some(mem) = memory {
+                *held = mem >= 85.0 || (*held && mem >= 80.0);
+            }
+            memory.is_some() && *held
+        };
+        if memory_held {
+            // The server's minute-old sample may still say there is room. Release preparation's place too;
+            // the delivery lease stays alive while this turn waits, including a person's message or a fallback.
+            self.wait_before_start(attempt, "pre-start requirements").await?;
+            return Ok(false);
+        }
+        if attempt.get("start_reservation_seconds").is_none() {
+            return Ok(true); // an older server still owns its original capacity gate
         }
         let local_free = {
             let mut places = self.places.lock().unwrap();
@@ -812,6 +834,26 @@ impl Runner {
             self.places.lock().unwrap().remove(&aid);
         }
         Ok(())
+    }
+
+    /// A fallback whose primary never started still waits for admission, including a hold that arrives after its grant.
+    async fn start_fallback(&self, attempt: &Value, flags: &Flags, thread: &str) -> Result<(), Fail> {
+        let aid = text_of(&attempt["id"]);
+        let mut tries = 0;
+        loop {
+            self.wait_start_place(attempt, flags).await?;
+            let active = self.active.lock().unwrap().len();
+            let started = crate::perf::with_snapshot(json!({"thread_id": thread}), active).await;
+            let key = if tries == 0 { format!("started:{aid}") } else { format!("started:{aid}:{tries}") };
+            match self.client.post(&format!("attempts/{aid}/started"), &started, Some(&key)).await {
+                Ok(_) => return Ok(()),
+                Err(e) if e.code == "start_wait" => {
+                    self.places.lock().unwrap().remove(&aid);
+                    tries += 1;
+                },
+                Err(e) => return Err(e.into()),
+            }
+        }
     }
 
     /// A Gateway turn's leased OS user. While every user is busy the turn gives its computer place back and
@@ -2103,10 +2145,8 @@ impl Runner {
                     // The primary never started (its login was busy, or held by the server), so this host
                     // acknowledges the turn instead, before it acts.
                     unstopped(&flags)?;
+                    self.during_drain(&aid, self.start_fallback(&attempt, &flags, &th)).await?;
                     if !self.drain.start(&aid) { return Err(Fail::runtime(crate::drain::WAITING)); }
-                    let active = self.active.lock().unwrap().len();
-                    let started = crate::perf::with_snapshot(json!({"thread_id": th}), active).await;
-                    self.client.post(&format!("attempts/{aid}/started"), &started, Some(&format!("started:{aid}"))).await?;
                     self.state.phase(&aid, "running")?;
                     acked = true;
                 }
@@ -3019,6 +3059,65 @@ mod tests {
     fn lease_flags() -> Flags {
         Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                 done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(30)) }
+    }
+
+    #[tokio::test]
+    async fn memory_pressure_parks_a_granted_start_until_memory_recovers() {
+        let (url, seen) = crate::client::tests::serve(vec![
+            (200, r#"{"reserved":false}"#),
+            (200, r#"{"reserved":false}"#),
+            (200, r#"{"reserved":true}"#),
+        ]).await;
+        let (runner, dir) = lease_runner(&url, "memory-admission");
+        let turn = json!({"id": "a1", "start_reservation_seconds": 180});
+        let flags = lease_flags();
+        runner.active.lock().unwrap().insert("a1".into());
+        runner.places.lock().unwrap().extend(["a1".into(), "already-running".into()]);
+        assert!(!runner.start_place_with_memory(&turn, &flags, Some(98.0)).await.unwrap());
+        assert!(!runner.places.lock().unwrap().contains("a1"));
+        assert!(runner.active.lock().unwrap().contains("a1"), "waiting keeps the delivery lease");
+        assert!(runner.places.lock().unwrap().contains("already-running"), "existing work keeps running");
+        assert!(!runner.start_place_with_memory(&turn, &flags, Some(82.0)).await.unwrap());
+        runner.places.lock().unwrap().remove("already-running");
+        assert!(runner.start_place_with_memory(&turn, &flags, Some(79.0)).await.unwrap());
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[0].contains("pre-start requirements") && requests[1].contains("pre-start requirements"));
+        assert!(!requests[2].contains("pre-start requirements"), "recovery asks for a fresh grant");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn memory_pressure_holds_legacy_starts_and_a_stop_still_wins() {
+        let (runner, dir) = lease_runner("http://127.0.0.1:9", "legacy-memory-admission");
+        let turn = json!({"id": "a1"});
+        let flags = lease_flags();
+        assert!(!runner.start_place_with_memory(&turn, &flags, Some(85.0)).await.unwrap());
+        assert!(!runner.start_place_with_memory(&turn, &flags, Some(80.0)).await.unwrap());
+        assert!(runner.start_place_with_memory(&turn, &flags, Some(79.9)).await.unwrap());
+        assert!(runner.start_place_with_memory(&turn, &flags, None).await.unwrap(), "unknown memory is not invented");
+        flags.stopped.store(true, Ordering::SeqCst);
+        assert!(runner.start_place_with_memory(&turn, &flags, Some(98.0)).await.is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn fallback_start_waits_again_when_pressure_arrives_after_its_grant() {
+        let (url, seen) = crate::client::tests::serve(vec![
+            (200, r#"{"reserved":true}"#),
+            (409, r#"{"error":{"code":"start_wait","message":"computer busy: memory"}}"#),
+            (200, r#"{"reserved":false,"waiting":"computer busy: memory"}"#),
+            (200, r#"{"reserved":true}"#),
+            (200, r#"{"started":true}"#),
+        ]).await;
+        let (runner, dir) = lease_runner(&url, "fallback-admission");
+        let turn = json!({"id": "a1", "start_reservation_seconds": 180});
+        runner.start_fallback(&turn, &lease_flags(), "thread1").await.unwrap();
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 5);
+        assert!(requests[1].contains("started:a1") && requests[4].contains("started:a1:1"));
+        assert!(runner.places.lock().unwrap().contains("a1"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

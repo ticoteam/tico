@@ -923,9 +923,9 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     elif settings and org_turns.admission(c)['at_stop']:
         # Admission only: queued labels must not classify every bot's readiness and spend on each chat/status poll.
         label = 'Saved — ' + org_turns.REASON
-    elif not human and (location.get("machine") or {}).get("runner_id") and (
-            hold := computer_hold(c, location["machine"]["runner_id"])):
-        # A person's own message still starts on a busy computer (start_places.from_person); it may wait for a turn.
+    elif (location.get("machine") or {}).get("runner_id") and (
+            hold := computer_hold(c, location["machine"]["runner_id"], person=human)):
+        # A person's priority cannot make memory available for another process.
         label = "Saved — waiting: " + hold[1]
     elif not location["ready"]:
         problems = (location.get("readiness") or {}).get("problems") or []

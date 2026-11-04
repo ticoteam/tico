@@ -60,7 +60,7 @@ def hold_rows(c, runner_ids):
     return out
 
 
-def computer_hold(c, runner_id, now=None, status=None, row=None):
+def computer_hold(c, runner_id, now=None, status=None, row=None, *, person=False):
     """Why this computer holds a bot's new start, as (wait reason, words for people), or None. Diagnostics on only.
 
     - Sustained CPU or memory overload (performance.load_status): "computer busy", as before.
@@ -69,7 +69,7 @@ def computer_hold(c, runner_id, now=None, status=None, row=None):
       has never sampled is not held: older runners never sent samples.
     - Memory at 85% or more: "computer busy: memory N%". It is admitted again below 80%; between the two it keeps
       the state its newest sample set (performance.ingest), so the queue does not flap.
-    A person's own message skips this at each caller, as it skips the overload hold. `row` is the computer's runner
+    A person's own message skips CPU overload and stale reports, but never a known memory hold. `row` is the computer's runner
     row from hold_rows when the caller has it: the same columns, read once for all its computers."""
     from .performance import load_status
 
@@ -91,10 +91,10 @@ def computer_hold(c, runner_id, now=None, status=None, row=None):
         # Samples past retention are gone, but a computer that reported before still reports nothing now.
         if not diagnostics_on():
             return None
-        return (NOT_REPORTING, NOT_REPORTING) if runner()['last_sampled_at'] else None
+        return (NOT_REPORTING, NOT_REPORTING) if not person and runner()['last_sampled_at'] else None
     if latest['stale']:
-        return NOT_REPORTING, NOT_REPORTING
-    if status['overloaded']:
+        return None if person else (NOT_REPORTING, NOT_REPORTING)
+    if status['overloaded'] and not person:
         return 'computer busy', 'computer busy'
     mem = latest['mem_pct']
     if mem is None:
@@ -318,7 +318,7 @@ def overdue(c):
 
 def from_person(c, job_id):
     """Whether a job answers a person's own message to the bot: a chat, a message in its task, an answer to its ask.
-    Such a turn starts on an overloaded computer and ahead of the turns waiting there: the load is the bots' own work,
+    Such a turn passes CPU overload and runs ahead of the turns waiting there, when memory permits: the load is the bots' own work,
     and holding it left a person's message waiting behind a hundred bot turns. A keeper notice (a routine, a sweep,
     a rule's wake), or a bot's message, is not one, even when a person's act caused it; the keeper's carrier of a
     person's message is one (H.person_sent_sql). Two primary-key reads."""
@@ -339,7 +339,7 @@ def reserve(c, attempt, settings=None):
     if attempt['stop_requested_at']:
         return {"reserved": False, "stop": True}
     person = from_person(c, attempt['job_id'])
-    hold = None if person else computer_hold(c, rid)
+    hold = computer_hold(c, rid, person=person)
     if hold:
         waiting(c, aid, hold[0])
         return {"reserved": False, "waiting": hold[1]}
