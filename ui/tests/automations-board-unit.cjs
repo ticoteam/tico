@@ -190,4 +190,98 @@ assert.throws(() => context.auApplyFlow(sized(8001), mine(templates.blank)), /ov
 // A person's turn takes the prompt as it is (an llm prompt may run to 32,000).
 const longMine = {...clone(october), steps: [{...october.steps[0], prompt: 'x'.repeat(9000)}]};
 assert.equal(plain(context.auApplyFlow(longMine, mine(templates.blank))).steps[0].prompt.length, 9000);
+// Key order: the hub stores a flow with every object's keys sorted (json.dumps sort_keys), arrays in order. A board reads
+// its questions and routes by the rules' order, so the same flow read key-sorted is the same board.
+const keySorted = x => Array.isArray(x) ? x.map(keySorted)
+  : x && typeof x === 'object' ? Object.fromEntries(Object.keys(x).sort().map(k => [k, keySorted(x[k])])) : x;
+const isYes = (field, min) => ({field, op: 'is', value: 'yes', min});
+
+// A Founder-shaped inbox: three rules, five yes/no questions whose filter tests them out of key order, and a draft turn.
+const founderInbox = {
+  id: 'au_founder', name: 'Inbox · founder@acme.example', owner_id: 'person:dana', enabled: true, builtin: false, version: 2,
+  trigger: {type: 'message', inbox: 'founder@acme.example', filters: []},
+  destinations: [
+    {id: 'me', name: 'Me', color: 'amber', then: [{do: 'leave_for_you', args: {}}]},
+    {id: 'legal', name: 'Legal', color: 'orange', then: [{do: 'create_task', args: {title: 'Legal: {{message.subject}}', owner: 'person:lee'}}]},
+    {id: 'eng', name: 'Engineering', color: 'violet', then: [{do: 'wake_bot', args: {bot: 'bot:eng-lead'}}]},
+    {id: 'finance', name: 'Finance', color: 'green', then: [{do: 'create_task', args: {title: 'Money: {{message.subject}}', owner: 'person:lee'}}]},
+    {id: 'marketing', name: 'Marketing', color: 'blue', then: []},
+    {id: 'archive', name: 'Archive', color: 'gray', then: [{do: 'archive', args: {}}]}],
+  steps: [
+    {id: 'rules', type: 'filter', enabled: true, rules: [
+      {when: [{field: 'message.subject', op: 'matches', value: 'subpoena|lawsuit'}], match: 'all', then: [{do: 'label', args: {name: 'STARRED'}}], to: 'legal', next: 'end', stop: true},
+      {when: [{field: 'message.from', op: 'contains', value: 'acme.example'}], match: 'all', then: [{do: 'label', args: {name: 'Known'}}], next: 'rule', stop: false},
+      {when: [{field: 'message.subject', op: 'contains', value: 'receipt'}], match: 'all', then: [{do: 'archive', args: {}}], next: 'end', stop: true}]},
+    {id: 'ask', type: 'decide', enabled: true, out: 'q', level: 'low', questions: {
+      only_founder: {type: 'noul', instructions: 'Is this only the founder can handle?'},
+      meet: {type: 'noul', instructions: 'Is someone asking to meet?'},
+      bug: {type: 'noul', instructions: 'Is it a bug report?'},
+      money: {type: 'noul', instructions: 'Is it about money?'},
+      partner: {type: 'noul', instructions: 'Is it a partner or press ask?'}}},
+    {id: 'route', type: 'filter', enabled: true, rules: [
+      {when: [isYes('q.only_founder', 0.75)], match: 'all', then: [{do: 'label', args: {name: 'STARRED'}}], to: 'me', next: 'end', stop: true},
+      {when: [isYes('q.meet', 0.75)], match: 'all', then: [{do: 'draft_reply', args: {body: 'Thanks. I would be glad to meet.'}}], next: 'end', stop: true},
+      {when: [isYes('q.bug', 0.75)], match: 'all', then: [], to: 'eng', next: 'end', stop: true},
+      {when: [isYes('q.money', 0.75)], match: 'all', then: [], to: 'finance', next: 'end', stop: true},
+      {when: [isYes('q.partner', 0.75)], match: 'all', then: [], to: 'marketing', next: 'end', stop: true}]},
+    {id: 'draft', type: 'llm', enabled: true, out: 'draft', as: 'assistant:dana', prompt: 'Route this message first. When unsure, choose me.',
+      choose: {to: ['me', 'legal', 'eng', 'finance', 'marketing', 'archive'], default: 'me', mode: 'draft'}}]};
+const fk = keySorted(founderInbox);
+assert.deepEqual(Object.keys(fk.steps[1].questions), ['bug', 'meet', 'money', 'only_founder', 'partner'], 'the hub sorted the questions');
+const fb = shape(fk);
+assert.ok(fb, 'the key-sorted Founder inbox is a board');
+assert.deepEqual(plain(fb.questions.map(q => q.id)), ['only_founder', 'meet', 'bug', 'money', 'partner'], 'questions in rule order');
+assert.deepEqual(plain(fb.questions.map(q => [q.min, q.to])), [[0.75, 'me'], [0.75, ''], [0.75, 'eng'], [0.75, 'finance'], [0.75, 'marketing']]);
+assert.equal(fb.llm.mode, 'draft');
+const fout = flow(fb);
+assert.deepEqual(plain(fout.steps[2].rules.map(r => r.when[0].field)), ['q.only_founder', 'q.meet', 'q.bug', 'q.money', 'q.partner'], 'written in rule order');
+assert.deepEqual(plain(fout.steps[2].rules.map(r => r.to || '')), ['me', '', 'eng', 'finance', 'marketing']);
+// Read back as the hub would store it (key-sorted), the same board in the same order.
+const fback = shape({...founderInbox, ...keySorted(fout)});
+assert.ok(fback, 'the written Founder inbox is a board');
+assert.deepEqual(plain(fback.questions), plain(fb.questions));
+assert.deepEqual(plain(flow(fback)), plain(fout));
+
+// A Sort over destinations whose ids are not alphabetical, key-sorted: its routes keep the order they were written in.
+const sorting = {
+  id: 'au_sort', name: 'Routing · ops@acme.example', owner_id: 'person:dana', enabled: true, builtin: false, version: 1,
+  trigger: {type: 'message', inbox: 'ops@acme.example', filters: []},
+  destinations: [
+    {id: 'me', name: 'Me', color: 'amber', then: [{do: 'leave_for_you', args: {}}]},
+    {id: 'orders', name: 'Orders', color: 'green', then: [{do: 'create_task', args: {title: 'Order: {{message.subject}}', owner: 'person:lee'}}]},
+    {id: 'support', name: 'Support', color: 'blue', then: [{do: 'wake_bot', args: {bot: 'bot:support'}}]},
+    {id: 'archive', name: 'Archive', color: 'gray', then: [{do: 'archive', args: {}}]}],
+  steps: [
+    {id: 'sd', type: 'decide', enabled: true, out: 'd2', level: 'high', questions: {to: {type: 'choice',
+      instructions: 'Where does this go? Unsure: Me.', criteria: {me: 'Me', orders: 'Orders', support: 'Support', archive: 'Archive'}}}},
+    {id: 'sf', type: 'filter', enabled: true, rules: [
+      {when: [{field: 'd2.to', op: 'is', value: 'me', min: 0.5}], match: 'all', then: [], to: 'me', next: 'end', stop: true},
+      {when: [{field: 'd2.to', op: 'is', value: 'orders', min: 0.5}], match: 'all', then: [], to: 'orders', next: 'end', stop: true},
+      {when: [{field: 'd2.to', op: 'is', value: 'support', min: 0.5}], match: 'all', then: [], to: 'support', next: 'end', stop: true},
+      {when: [{field: 'd2.to', op: 'is', value: 'archive', min: 0.5}], match: 'all', then: [], to: 'archive', next: 'end', stop: true},
+      {when: [], match: 'all', then: [], to: 'me', next: 'end', stop: true}]}]};
+const sk = keySorted(sorting);
+assert.deepEqual(Object.keys(sk.steps[0].questions.to.criteria), ['archive', 'me', 'orders', 'support'], 'the hub sorted the criteria');
+const sb = shape(sk);
+assert.ok(sb, 'the key-sorted Sort is a board');
+assert.deepEqual(plain(sb.llm.to), ['me', 'orders', 'support', 'archive'], 'routes in rule order');
+assert.equal(sb.llm.default, 'me');
+const sout = flow(sb);
+assert.deepEqual(plain(sout.steps[1].rules.map(r => r.to)), ['me', 'orders', 'support', 'archive', 'me'], 'the round trip keeps the route order');
+const sback = shape({...sorting, ...keySorted(sout)});
+assert.ok(sback, 'the written Sort is a board');
+assert.deepEqual(plain(sback.llm), plain(sb.llm));
+
+// Still refused: two rules test the same question, a question no rule tests, or a criterion routed twice.
+const twice = keySorted(founderInbox);
+twice.steps[2].rules[1].when[0].field = 'q.only_founder';
+assert.equal(shape(twice), null, 'two rules on one question');
+const untested = keySorted(founderInbox);
+untested.steps[1].questions.nothing = {type: 'noul', instructions: 'Does it need nothing from anyone?'};
+assert.equal(shape(untested), null, 'a question no rule tests');
+const routedTwice = keySorted(sorting);
+routedTwice.steps[1].rules[1].when[0].value = 'me';
+routedTwice.steps[1].rules[1].to = 'me';
+assert.equal(shape(routedTwice), null, 'a criterion routed twice');
+
 console.log('automations-board-unit: ok');
