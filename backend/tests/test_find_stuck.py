@@ -1,7 +1,7 @@
 """Find stuck (backend/maintenance_steps/find_stuck.py): the Maintenance step that gives each bot its task roundup list. It
 reads the bots on the connection it is handed, sends each one through the store under the wake limiter, and records a
 delivered list once, with the tasks it named; a bot the limiter refuses is left unsent and nothing is recorded for it.
-Migration 0084 withdraws the open Still wanted questions to people, and only those. Synthetic fixtures only."""
+Migration 0093 withdraws the open Still wanted questions to people, and only those. Synthetic fixtures only."""
 
 import importlib
 import sqlite3
@@ -181,8 +181,8 @@ def test_the_oldest_eligible_line_orders_bots_even_when_it_is_past_the_display_c
         assert lists(c, "coo") == []
 
 
-def test_migration_0084_withdraws_only_the_keepers_open_still_wanted_questions():
-    mig = importlib.import_module("backend.migrations.0084_withdraw_still_wanted")
+def test_migration_0093_withdraws_only_the_keepers_open_still_wanted_questions():
+    mig = importlib.import_module("backend.migrations.0093_withdraw_still_wanted")
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE messages(id TEXT, sender_id TEXT, answered_by_id TEXT, refs TEXT, superseded_at TEXT)")
     conn.executemany("INSERT INTO messages(id,sender_id,answered_by_id,refs,superseded_at) VALUES(?,?,?,?,NULL)", [
@@ -199,8 +199,8 @@ def test_migration_0084_withdraws_only_the_keepers_open_still_wanted_questions()
     assert conn.execute("SELECT superseded_at FROM messages WHERE id='open'").fetchone()[0] == stamp, "running again changes nothing"
 
 
-def test_migration_0084_skips_a_database_with_no_superseded_column():
-    mig = importlib.import_module("backend.migrations.0084_withdraw_still_wanted")
+def test_migration_0093_skips_a_database_with_no_superseded_column():
+    mig = importlib.import_module("backend.migrations.0093_withdraw_still_wanted")
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE messages(id TEXT, sender_id TEXT, refs TEXT)")
     mig.up(conn)
