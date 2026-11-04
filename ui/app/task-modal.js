@@ -22,6 +22,7 @@ function taskDialogWire(d) {
     if (!TASK_CHAT || TASK_CHAT.dialog === d) taskChatStop();
     d.tfEl?.querySelector('video, audio')?.pause();
     d.tfEl = null; d.tfOpen = null;
+    d.tpOff?.(); d.tpOff = null; d.tpEl = null;
     d.taskOpening = {}; d.askDrafts = new Map();
   });
 }
@@ -97,6 +98,7 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   const peek = !!d.dataset.peek;
   // A fresh open starts with no file open, whether or not the last close's event has run yet.
   if (!d.open || String(d.dataset.task) !== String(task.id)) {
+    d.tpOff?.(); d.tpOff = null; d.tpEl = null;
     d.taskOpening = {pending: !d.open}; d.askDrafts = new Map(); d.tfEl = null; d.tfOpen = null;
     d.classList.toggle('thread', !peek && !!opts.thread);     // a redraw of the same task keeps the view it had
   } else askDraftCapture(d);

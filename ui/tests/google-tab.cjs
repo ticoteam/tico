@@ -375,6 +375,66 @@ const scenarios = {
     assert.deepEqual(seen.errors, []);
   },
 
+  'a check paused in another Settings tab resumes, unless its ten minutes passed while away': async browser => {
+    const fake = googleFake();
+    fake.state.workspace = row('pending');
+    const {page, seen} = await open(browser, fake, {clock: true});
+    const checks = () => writesTo(fake, '/api/v2/google/workspace/check');
+    await page.locator('[data-ws-check]').click();
+    await until(() => checks().length === 1, 'the first check');
+    let timer = await nextCheckTimer(page, null, 'the timer after the first check');
+    await page.locator('[data-settings-tab=general]').click();
+    await page.clock.runFor(300000);
+    await page.locator('[data-ws-check-result]', {hasText: 'Still not accepted'}).waitFor({state: 'attached'});
+    assert.equal(checks().length, 1, 'the hidden card does not check');
+    assert.equal(await page.locator('#set-google').evaluate(host => host._googleWatch.timer), null);
+    assert.doesNotMatch(await page.locator('[data-ws-check-result]').textContent(), /Checking again every 20 seconds/);
+    await page.locator('[data-settings-tab=inbox]').click();
+    await until(() => checks().length === 2, 'the immediate check on returning');
+    timer = await nextCheckTimer(page, timer, 'the timer after returning');
+    assert.match(await page.locator('[data-ws-check-result]').innerText(), /Checking again every 20 seconds/);
+    await page.clock.runFor(20000);
+    await until(() => checks().length === 3, 'the next check after 20 s');
+    await nextCheckTimer(page, timer, 'the timer after the next check');
+    await page.locator('[data-settings-tab=general]').click();
+    // Another five minutes passes the original deadline, but not a new ten minutes from the resumed check.
+    await page.clock.runFor(300000);
+    await page.locator('[data-ws-check-result]', {hasText: 'Still not accepted'}).waitFor({state: 'attached'});
+    await page.locator('[data-settings-tab=inbox]').click();
+    await page.locator('[data-ws-check]', {hasText: 'Check again'}).waitFor();
+    assert.match(await page.locator('[data-ws-check-result]').innerText(), /Still not accepted/);
+    assert.doesNotMatch(await page.locator('[data-ws-check-result]').innerText(), /Checking again every 20 seconds/);
+    assert.equal(await page.locator('#set-google').evaluate(host => host._googleWatch.timer), null);
+    await page.clock.runFor(20000);
+    assert.equal(checks().length, 3, 'returning after the original deadline does not restart checking');
+    assert.deepEqual(seen.errors, []);
+  },
+
+  'a check paused in another Settings tab is dropped when another admin replaces the pending key': async browser => {
+    const fake = googleFake();
+    fake.state.workspace = row('connected');
+    fake.state.pending = row('pending', {generation: 2});
+    const {page, seen} = await open(browser, fake, {clock: true});
+    const checks = () => writesTo(fake, '/api/v2/google/workspace/check');
+    await page.locator('[data-ws-check]').click();
+    await until(() => checks().length === 1, 'the first check');
+    await nextCheckTimer(page, null, 'the timer after the first check');
+    await page.locator('[data-settings-tab=general]').click();
+    await page.clock.runFor(300000);
+    await page.locator('[data-ws-check-result]', {hasText: 'Still not accepted'}).waitFor({state: 'attached'});
+    assert.equal(checks().length, 1, 'the hidden card does not check');
+    // Another admin uploads a newer pending key while this card is hidden.
+    fake.state.pending = row('pending', {generation: 3});
+    await page.locator('[data-settings-tab=inbox]').click();
+    await page.waitForFunction(() => document.querySelector('#set-google')?._googleState?.g.pending?.generation === 3);
+    assert.equal(checks().length, 1, 'returning with a newer key does not resume the old watch');
+    assert.doesNotMatch(await page.locator('[data-ws-check-result]').innerText(), /Checking again every 20 seconds/);
+    assert.equal(await page.locator('#set-google').evaluate(host => host._googleWatch), null);
+    await page.clock.runFor(20000);
+    assert.equal(checks().length, 1, 'the old watch stays stopped after another 20 s');
+    assert.deepEqual(seen.errors, []);
+  },
+
   'a server that Cloud Shell cannot reach offers the upload only': async browser => {
     const fake = googleFake();
     fake.state.setup = {base: 'https://tico-ui.test', reachable: false};

@@ -55,7 +55,10 @@ TAGS = {
 EVENTS_DESCRIPTION = (
     "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` "
     "(who made it, when the viewer may know) and `at`:\n"
-    "- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n"
+    "- `tasks`: `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and "
+    "`task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). "
+    "Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. "
+    "A `bulk: true` event without `id` means read task lists in full.\n"
     "- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; "
     "a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n"
     "- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or "
@@ -625,6 +628,10 @@ STABLE = [
      "A limit on the estimated spend of a group's bots together, nested groups included; null removes a field, one left out stays. Over it, none "
      "of them takes a new job (owner and bot administrators; also the lead of the group or one above "
      "it, within the parent group's limit)", "UsagePoolLimit"),
+    ("/api/v2/usage/queues/purge", "post", "Usage", "purgeAutomaticQueue",
+     "Cancel queued automatic wakes and waits for the whole team (scope company) or one group and the groups under it "
+     "(scope group:<id>). Tasks stay on their current step. Messages from people, and keeper notices of a person's own "
+     "act, stay queued. A run that has already started finishes (owner and bot administrators)", "QueuePurgeResult"),
     ("/healthz", "get", "Health", "getLiveness", "Is the server up (no sign-in)", None),
     ("/api/v2/health", "get", "Health", "getHealth", "Checks, computers and failures (bots see counts, computers and failed runs)", "Health"),
     ("/api/v2/health-monitor", "get", "Health", "getHealthMonitor",
@@ -651,6 +658,14 @@ STABLE = [
      "business) or its daily time", "SystemRoutineUpdate"),
     ("/api/v2/system-routines/{key}/run", "post", "Health", "runSystemRoutine",
      "The owner or an admin: run one controlled system routine once, now; 409 while it is off or already running", None),
+    ("/api/v2/maintenance", "get", "Health", "getMaintenance",
+     "The Maintenance run: its schedule, pause and monthly judge cap, each step with its switch, how often it runs and its cursor, the last run, the live run, the next run, and whether the viewer may change it", None),
+    ("/api/v2/maintenance", "patch", "Health", "saveMaintenance",
+     "The owner or an admin: change the schedule, the pause or the monthly cap, and each step's switch, how often it runs or its number of bots. Only what is sent changes", "MaintenanceUpdate"),
+    ("/api/v2/maintenance/runs", "get", "Health", "listMaintenanceRuns",
+     "Maintenance runs, newest first, a page at a time, each with its step rows. Pass `next` back as `before`", None),
+    ("/api/v2/maintenance/run", "post", "Health", "runMaintenance",
+     "The owner or an admin: run now, every step or only `step`, due by the same rules as a scheduled run; a run already live is returned instead of a second one", "MaintenanceRunRequest"),
     ("/api/v2/threads/{thread_id}/catch-up", "post", "Conversations", "catchUpThread",
      "What is new in a thread (scope subtree: its sub-threads too) that you may read, summarized and posted to your "
      "Assistant DM; the newest 40 messages at most. Nothing new posts nothing", "CatchUpResult"),
@@ -997,6 +1012,11 @@ SCHEMAS = {
                        "run_model": {"oneOf": [ref("TaskRunChoice"), {"type": "null"}]},
                        "comment_delivery": {"oneOf": [ref("CommentDelivery"), {"type": "null"}]}},
                        required=["task", "events", "children", "comments", "messages", "has_more"], actors=ACTORS),
+    "TaskEvent": obj({"seq": "i", "actor": "n", "at": "s", "id": "s",
+                      "kind": {"type": "string", "description": "The last change kind for this task in the batch"},
+                      "kinds": {"type": "array", "items": {"type": "string"}, "uniqueItems": True,
+                                "description": "All change kinds for this task in the batch; files invalidates files and linked pages"},
+                      "task": ref("Task"), "gone": "b"}, required=["seq", "actor", "at", "id", "kind", "kinds"]),
     "TaskReviewAskView": obj({"questions": "a", "who": "n", "by": "s"}),
     "ReviewAnswer": {"oneOf": [
         obj({"target": "o", "answers": "o", "other": "n", "dismiss": "b", "by": "s", "at": "s"}),
@@ -1367,6 +1387,8 @@ SCHEMAS = {
                                   "with may_edit true", "additionalProperties": True},
                         "bots": {"type": "object", "additionalProperties": ref("UsageLimitView")}}),
     "BotUsageLimit": obj({"bot": "s", "limit": ref("UsageLimitView")}),
+    "QueuePurgeResult": obj({"scope": {"type": "string", "description": "company, or group:<id>"},
+                             "cancelled": "i", "kept_people": "i", "still_running": "i"}),
     "Token": obj({"access_token": "s", "token_type": "s", "expires_in": "i", "idle_timeout": "i", "person": "s"}),
     "Revoked": obj({"revoked": "b"}),
 }
@@ -2295,7 +2317,8 @@ STABLE.extend([
     ("/api/v2/pages", "post", "Pages", "publishPage",
      "A bot publishes an .html page (raw with fields in the query, or JSON); scripts and outside loads are removed", "PagePublished"),
     ("/api/v2/pages", "get", "Pages", "listPages",
-     "Pages the caller may read: `ids` (up to 50) in that order, leaving out the unreadable; else newest first by bot or task",
+     "Pages the caller may read: `ids` (up to 50) in that order, leaving out the unreadable; else newest first by bot "
+     "or task (filed on or pinned to it)",
      "PageList"),
     ("/api/v2/pages/{fid}", "get", "Pages", "getPage", "One page and its status line; 404 when the caller may not read it",
      "PageShown"),
@@ -2306,7 +2329,7 @@ STABLE.extend([
      "Library › Files: every file the caller may see, newest activity first, filtered by kind, bot, team, task, date, "
      "pinned or archived; paged and byte-capped, no totals", "FileLibrary"),
     ("/api/v2/files/search", "get", "Files", "searchFiles",
-     "Search the files the caller may read by title and text, best first, each with an excerpt", "FileSearch"),
+     "Search the files the caller may read by title and text, filtered by kind, best first with an excerpt", "FileSearch"),
     ("/api/v2/files/{fid}", "delete", "Files", "deleteFile",
      "The owner deletes a file for good: every version's bytes leave storage; activity keeps who and when", "FileDeleted"),
 ])
@@ -2368,9 +2391,11 @@ STABLE.extend([
      'default cards become pins); a team page\'s audience sets its group\'s Read', 'Place'),
     ('/api/v2/places/{place}/order', 'post', 'Cards and pins', 'orderPlace', 'Put every pin at a place in this order', 'Place'),
     ('/api/v2/pins', 'post', 'Cards and pins', 'addPin', 'Pin page:<file id> or card:<id> at a place: a bot its own, to '
-     'its sidebar or task; a person who arranges the Dashboard or a team page there', 'Place'),
+     'its sidebar or task; any person who may read a task there, without widening page access; a person who arranges '
+     'the Dashboard or a team page there', 'Place'),
     ('/api/v2/pins/{pid}', 'patch', 'Cards and pins', 'updatePin', 'Resize or move a pin', 'Place'),
-    ('/api/v2/pins/{pid}', 'delete', 'Cards and pins', 'removePin', 'Unpin; a card pinned nowhere else goes with it', None),
+    ('/api/v2/pins/{pid}', 'delete', 'Cards and pins', 'removePin', 'Unpin; on a task, whoever pinned it, its owner or '
+     'requester, or the org owner; a card pinned nowhere else goes with it', None),
     ('/api/v2/cards', 'get', 'Cards and pins', 'listCards', 'Cards the caller made or sees pinned, with their data; '
      '`ids` reads up to 50', 'CardList'),
     ('/api/v2/cards', 'post', 'Cards and pins', 'addCard', 'A built-in card, pinned at `place` in the same write', None),
@@ -2426,11 +2451,14 @@ SCHEMAS['Card'] = obj({'id': 'n', 'template': {'enum': ['tasks_by_status', 'done
                       required=['id', 'template', 'heading', 'settings', 'hidden', 'data'])
 SCHEMAS['CardList'] = obj({'cards': items(ref('Card')), 'next': 'n'})
 SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'growth', 'team', 'bot', 'task', 'person']}, 'saved': 'b',
-                        'can_edit': 'b', 'month': {'type': 'string', 'description': 'growth: the month its cards read (YYYY-MM)'},
+                        'can_edit': 'b', 'can_link': {'type': 'boolean', 'description':
+                            'Task places: whether the reader may link a readable page; does not grant card or pin management'},
+                        'month': {'type': 'string', 'description': 'growth: the month its cards read (YYYY-MM)'},
                         'months': {'type': 'array', 'items': {'type': 'string'},
                                    'description': 'growth: the newest 24 months with cohort rows, oldest first'},
                         'pins': items(obj({'id': 'n', 'item': 'n', 'position': 'i', 'size': {'enum': ['small', 'medium', 'large']},
-                                           'card': ref('Card'),
+                                           'card': ref('Card'), 'can_unpin': {'type': 'boolean', 'description':
+                                               'Task pins: whether this reader may unlink it'},
                                            'page': obj({'file_id': 's', 'title': 's', 'bot': 's', 'updated_at': 's', 'archived': 'b'})},
                                           required=['id', 'item', 'position', 'size'])),
                         'audience': {'type': 'object', 'description': 'A team page: who sees it (docs/permissions.md)'},
@@ -2821,6 +2849,7 @@ def spec(app):
             responses["200"] = {"description": "OK", "content": {"application/json": {"schema": ref(answer)}}}
         if path == "/api/v2/events":
             responses["200"] = {"description": EVENTS_DESCRIPTION,
+                                "x-task-event-schema": ref("TaskEvent"),
                                 "content": {"text/event-stream": {"schema": {"type": "string"}}}}
         if method == "get" and path.startswith("/api/v2/files/") and path.endswith("/versions/{number}"):
             responses["200"] = {"description": "The file's bytes (application/octet-stream, sent as an attachment)",
