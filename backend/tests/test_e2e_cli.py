@@ -144,7 +144,8 @@ def argv_for(path, leaf, file_path):
         if isinstance(action, (argparse._HelpAction, argparse._SubParsersAction)) or id(action) in skip:
             continue
         if not action.option_strings:
-            if action.nargs not in ("?", "*"):
+            # An optional positional is left out, unless it is the one choice of a required group (`approve <id>|--all`).
+            if action.nargs not in ("?", "*") or id(action) in first_of_required:
                 value = argument_value(action, path)
                 argv.append(str(file_path) if value == "FILE" else value)
             continue

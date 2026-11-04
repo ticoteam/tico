@@ -1,6 +1,8 @@
 /* ui/theme.js — The colour theme, set on <html data-theme> before the page paints (styles/tokens.css).
    Dark unless this browser saved Light or System; Settings changes it through window.ticoTheme. */
 'use strict';
+// The first boot timing mark (ui/app/boot-timing.js): the page's HTML has arrived and its head is running.
+try { performance.mark('tico:head'); } catch { /* no User Timing */ }
 (() => {
   const KEY = 'tico.theme', CHOICES = ['dark', 'light', 'system'];
   const saved = () => { try { const v = localStorage.getItem(KEY); return CHOICES.includes(v) ? v : 'dark'; } catch { return 'dark'; } };

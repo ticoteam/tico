@@ -110,10 +110,16 @@ function v2NeedsOne(id) {
   return NEEDS_ONE.get(key).read;
 }
 const needsOneHeld = id => NEEDS_ONE.get(String(id))?.it || null;
+// The first list held: a page drawn before it (a task opened from a link) fills its question box then. A read that
+// fails holds no list, so the wait goes on to the next one that answers.
+let needsFirstDone = null;
+const NEEDS_FIRST = new Promise(done => { needsFirstDone = done; });
+const needsFirstIn = () => !needsFirstDone;
 function needsTake(needs) {
   NEEDS_ONE.clear();
   S.v2.needs = needs.items || []; S.v2.needsVersion = needs.version || null;
   S.v2.needsCount = needs.count ?? S.v2.needs.length; S.v2.needsNext = needs.next || null; S.v2.needsBots = needs.bots || null;
+  if (needsFirstDone) { const done = needsFirstDone; needsFirstDone = null; done(); }
 }
 let NEEDS_READ = 0, NEEDS_KEPT = 0;
 async function v2NeedsRead() {

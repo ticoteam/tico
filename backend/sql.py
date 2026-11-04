@@ -585,7 +585,7 @@ class Gates:
 
     Where SQLite and Python could read the same JSON differently the clause declines and Python decides: a backslash
     (an escaped string), a repeated key (SQLite reads the first, Python the last), a task given as anything but one
-    string, a string that is itself JSON, a meeting reference, a moved input, and long provenance.
+    string or a list of strings, a string that is itself JSON, a meeting reference, a moved input, and long provenance.
     """
     KEYS = ("task", "task_id", "turn_id", "run", "attempt_id", "answers", "inputs")
 
@@ -606,11 +606,16 @@ class Gates:
                 f"AND substr(s.value,6) IN (SELECT id FROM {self.denied_tasks}))))")
 
     def task(self, refs, key):
-        """`refs.<key>` is absent, or one string naming a task that exists and is not denied."""
+        """`refs.<key>` is absent, one string naming a task that exists and is not denied, or a non-empty array in which
+        every element is such a string. ReadIndex.listed_tasks_known reads a list the same way: any other element, an
+        empty list, or a list naming one unknown or denied task is refused."""
         path = f"'$.{key}'"
+        listed = (f"SELECT 1 FROM json_each({refs},{path}) element WHERE element.type<>'text' OR "
+                  f"element.value NOT IN (SELECT id FROM {self.tasks}) OR element.value IN (SELECT id FROM {self.denied_tasks})")
         return (f"(json_type({refs},{path}) IS NULL OR (json_type({refs},{path})='text' AND "
                 f"json_extract({refs},{path}) IN (SELECT id FROM {self.tasks}) AND "
-                f"json_extract({refs},{path}) NOT IN (SELECT id FROM {self.denied_tasks})))")
+                f"json_extract({refs},{path}) NOT IN (SELECT id FROM {self.denied_tasks})) OR "
+                f"(json_type({refs},{path})='array' AND json_array_length({refs},{path})>0 AND NOT EXISTS ({listed})))")
 
     def refs(self, refs, top):
         """The row's own refs: an object naming no meeting, no denied string and only known readable tasks.

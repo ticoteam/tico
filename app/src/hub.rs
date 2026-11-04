@@ -160,6 +160,7 @@ impl CompanyUpdatePolicy {
 
     pub(crate) fn endpoint(&self) -> &Url { &self.endpoint }
 
+    #[cfg(test)]
     pub(crate) fn has_cookie(&self) -> bool { self.cookie.is_some() }
 
     pub(crate) fn allows_download(&self, download: &Url) -> bool {

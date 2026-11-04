@@ -61,6 +61,28 @@ def test_a_versioned_font_is_kept_and_an_unversioned_one_revalidates(api):
     assert api.get(url.split("?")[0], headers=AUTH).headers["cache-control"] == "private, no-cache"
 
 
+@served
+def test_the_standalone_scripts_are_named_by_content_and_kept_at_that_url(api):
+    # theme.js holds up the first paint and marked runs before the bundle: under the page's `?v=` neither needs a
+    # round trip to revalidate. Another `v` (a page from before an edit) and no `v` revalidate as before.
+    import hashlib
+    page = api.get("/", headers=AUTH).text
+    ui = Path(ui_bundle.__file__).resolve().parent.parent / "ui"
+    for path, name in ui_bundle.STANDALONE.items():
+        v = re.search(re.escape(path) + r'\?v=([0-9a-f]{16})"', page).group(1)
+        assert v == hashlib.sha256((ui / name).read_bytes()).hexdigest()[:16]
+        kept = api.get(f"{path}?v={v}", headers=AUTH)
+        assert kept.status_code == 200 and kept.content == (ui / name).read_bytes()
+        assert kept.headers["cache-control"] == ui_bundle.IMMUTABLE
+        assert api.get(f"{path}?v={v}", headers={**AUTH, "If-None-Match": kept.headers["etag"]}).status_code == 304
+        assert api.get(f"{path}?v={'0' * 16}", headers=AUTH).headers["cache-control"] == "private, no-cache"
+        assert api.get(path, headers=AUTH).headers["cache-control"] == "private, no-cache"
+        assert api.get(f"{path}?v={v}").status_code == 401
+    # The bundle marks where its own run starts, after the one strict directive (ui/app/boot-timing.js).
+    js = api.get("/tico/ui/app.bundle.js", headers=AUTH).text
+    assert js.startswith("'use strict';\n" + ui_bundle.BUNDLE_MARK)
+
+
 def test_a_change_to_a_listed_file_changes_the_url(tmp_path):
     ui = tmp_path / "ui"
     (ui / "app").mkdir(parents=True)

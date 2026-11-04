@@ -93,6 +93,8 @@ STABLE = [
      "Whether the bot's manager bot may change its direct reports: true is on (the default), false is off; the owner's team rule overrides it", None),
     ("/api/v2/computers/{rid}/turns-at-once", "post", "Computers", "setComputerTurnsAtOnce",
      "Set the most turns a computer runs at once: null is automatic (its own capacity)", None),
+    ("/api/v2/computers/{rid}/label", "post", "Computers", "renameComputer",
+     "Rename a computer: 1 to 100 characters, trimmed; owners and admins", None),
     ("/api/v2/computers/{rid}/browser-exit", "get", "Computers", "getComputerBrowserExit",
      "Whether this computer shares its internet with bots, which bots, and its daily cap in bytes", "BrowserExit"),
     ("/api/v2/computers/{rid}/browser-exit", "post", "Computers", "setComputerBrowserExit",

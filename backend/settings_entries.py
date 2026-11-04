@@ -152,6 +152,8 @@ ENTRIES = TEAM_RULES + [
       "enabled", card=_card("devices")),
     S("computer.member_bots", "Takes member bots", COMPUTERS, "admin", "confirm", "POST",
       "computers/{computer}/member-bots", "accepts", card=_card("devices")),
+    S("computer.label", "Rename a computer", COMPUTERS, "admin", "direct", "POST", "computers/{computer}/label", "label", "text",
+      card=_card("devices"), words="name computer"),
     S("computer.turns_at_once", "Turns at once", COMPUTERS, "admin", "direct", "POST",
       "computers/{computer}/turns-at-once", value="json", card=_card("devices")),
     S("computer.browser_exit", "Share internet with bots", COMPUTERS, "operator", "person", "POST",

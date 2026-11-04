@@ -282,7 +282,8 @@ registered: choose **Add computer**.
 
 ## A computer's pop-up
 
-Click a row to open its pop-up. Its sections, top to bottom:
+Click a row to open its pop-up. Owners and admins rename the computer with the pencil next to its name (1 to 100
+characters; a cloud machine made again keeps the name). Its sections, top to bottom:
 
 1. **Connections**: one line per AI tool, the computer's login for it: the tool, "Computer's login" (or "Shared key"),
    the signed-in account and plan, sign-in state, usage (weekly and, where the tool reports one, the 5-hour window) and

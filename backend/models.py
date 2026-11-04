@@ -1488,6 +1488,12 @@ class RunnerMemberBots(Contract):
     accepts: bool
 
 
+class RunnerLabel(Contract):
+    # Trimmed first (Contract strips), then 1 to 100 characters on one line.
+    label: StrictStr = Field(min_length=1, max_length=100, pattern=r"^[^\x00-\x1f\x7f]+$",
+                             description="The computer's name, as Settings > Computers shows it.")
+
+
 class RunnerTurnsAtOnce(Contract):
     # Required: an omitted field is a 422, not a null that would silently set automatic. Null itself clears it.
     turns_at_once: int | None = Field(..., ge=1, le=256, strict=True,
