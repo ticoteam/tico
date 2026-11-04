@@ -68,7 +68,7 @@ def fail(message):
 project = opt('--project')
 if POS[:2] == ['organizations', 'list']:
     for org in state['orgs']:
-        print(org)
+        print('organizations/' + org)
 elif POS[:2] == ['projects', 'list']:
     value = opt('--filter').rsplit('=', 1)[1]
     for proj in state['projects']:
@@ -124,18 +124,28 @@ elif POS[:2] == ['org-policies', 'set-policy']:
     with open(POS[2]) as f:
         policy = json.load(f)
     name = policy['name'].rsplit('/', 1)[-1]
-    if state['policy_needs_role'] and ['user:' + state['account'], ROLE] not in state['bindings']:
+    if state['set_always_denied'] or (state['policy_needs_role'] and ['user:' + state['account'], ROLE] not in state['bindings']):
         fail("ERROR: (gcloud.org-policies.set-policy) PERMISSION_DENIED: Permission 'orgpolicy.policy.set' denied.")
     state['policy_sets'].append({'name': policy['name'], 'spec': policy['spec']})
     state['enforced'] = [n for n in state['enforced'] if n != name]
     state['overridden'].append(name)
 elif POS[:3] == ['config', 'get-value', 'account']:
     print(state['account'])
+elif POS[:2] == ['organizations', 'get-iam-policy']:
+    bindings = [{'role': role, 'members': [member]} for member, role in state['bindings']]
+    if state['conditional']:
+        bindings.append({'role': 'roles/viewer', 'members': ['user:other@acme.example'],
+                         'condition': {'title': 'expires', 'expression': 'request.time < timestamp("2030-01-01T00:00:00Z")'}})
+    print(json.dumps({'bindings': bindings}))
 elif POS[:2] == ['organizations', 'add-iam-policy-binding']:
+    if state['conditional'] and opt('--condition') != 'None':
+        fail('ERROR: (gcloud.organizations.add-iam-policy-binding) The policy has conditional bindings; pass --condition.')
     binding = [opt('--member'), opt('--role')]
     if binding not in state['bindings']:
         state['bindings'].append(binding)
 elif POS[:2] == ['organizations', 'remove-iam-policy-binding']:
+    if state['conditional'] and opt('--condition') != 'None':
+        fail('ERROR: (gcloud.organizations.remove-iam-policy-binding) The policy has conditional bindings; pass --condition.')
     binding = [opt('--member'), opt('--role')]
     state['bindings'] = [b for b in state['bindings'] if b != binding]
 else:
@@ -197,7 +207,8 @@ else:
 DEFAULTS = {
     'orgs': ['111'], 'projects': [], 'sa': [], 'enforced': [], 'overridden': [], 'policy_sets': [], 'bindings': [],
     'keys': [], 'deleted': [], 'counter': 0, 'key_refusals': 0, 'key_refusal_text': GENERIC_REFUSAL,
-    'describe_refused': False, 'policy_needs_role': False, 'upload_mode': 'ok',
+    'describe_refused': False, 'policy_needs_role': False, 'conditional': False, 'set_always_denied': False,
+    'upload_mode': 'ok',
     'latest': True, 'active': None, 'uploaded': None, 'account': CALLER,
 }
 
@@ -427,6 +438,35 @@ def test_a_key_refusal_that_does_not_name_the_policy_leaves_the_policy_alone(tmp
     assert hub.state()['policy_sets'] == []
     assert len(hub.gcloud('iam', 'service-accounts', 'keys', 'create')) == 1
     assert hub.gcloud('organizations', 'add-iam-policy-binding') == []
+
+
+def test_a_discovered_organization_is_passed_without_its_resource_prefix(tmp_path):
+    hub = Hub(tmp_path, orgs=['111'])
+    result = hub.run()
+    assert result.returncode == 0, result.stderr
+    (created,) = hub.gcloud('projects', 'create')
+    assert '--organization=111' in created
+    assert not any('organizations/' in arg for arg in created)
+
+
+def test_the_temporary_role_is_unconditional_when_the_organization_has_conditional_bindings(tmp_path):
+    hub = Hub(tmp_path, enforced=list(KEY_POLICIES), policy_needs_role=True, conditional=True)
+    result = hub.run()
+    assert result.returncode == 0, result.stderr
+    (add,) = hub.gcloud('organizations', 'add-iam-policy-binding')
+    (remove,) = hub.gcloud('organizations', 'remove-iam-policy-binding')
+    assert '--condition=None' in add and '--condition=None' in remove
+    assert hub.state()['bindings'] == []
+
+
+def test_a_role_already_held_is_never_removed_even_when_the_change_is_still_refused(tmp_path):
+    hub = Hub(tmp_path, enforced=list(KEY_POLICIES), bindings=[[f'user:{CALLER}', ROLE]], set_always_denied=True)
+    result = hub.run()
+    assert result.returncode == 1
+    assert 'already has the Organization Policy Administrator role' in result.stderr
+    assert hub.gcloud('organizations', 'add-iam-policy-binding') == []
+    assert hub.gcloud('organizations', 'remove-iam-policy-binding') == []
+    assert hub.state()['bindings'] == [[f'user:{CALLER}', ROLE]]
 
 
 def test_a_lost_upload_answer_is_fixed_by_running_again(tmp_path):

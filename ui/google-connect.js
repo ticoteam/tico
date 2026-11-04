@@ -31,9 +31,11 @@
     const ws = g.workspace || null;
     return {active: ws && ws.status !== 'pending' ? ws : null, pend: g.pending || (ws && ws.status === 'pending' ? ws : null)};
   };
-  // A replacement ends when the active row changes (a new key was promoted), so it never sticks.
-  const replacingNow = (host, active) => {
-    const match = !!host._googleReplacing && host._googleReplacing.since === (active?.connected_at ?? null);
+  // A replacement ends when a new key is promoted (the active row's connected_at changes), or when a pending key arrives
+  // that was not there when Replace was clicked. It never sticks.
+  const replacingNow = (host, {active, pend}) => {
+    const r = host._googleReplacing;
+    const match = !!r && r.since === (active?.connected_at ?? null) && !(pend && !r.hadPending);
     if (!match) host._googleReplacing = null;
     return match;
   };
@@ -41,6 +43,14 @@
   const causesHtml = watching => `<p>Google hasn't accepted the key yet. Check these:</p>
     <ul class="google-causes">${CAUSES.map(cause => `<li>${esc(cause)}</li>`).join('')}</ul>
     <p class="muted" role="status">${watching ? 'Checking again every 20 seconds for 10 minutes.' : 'Still not accepted. Finish the steps above, then check again.'}</p>`;
+
+  // The in-page confirm for Disconnect. An uploaded key that never connected is removed, and nothing is read yet.
+  const disconnectConfirm = (domain, reading) => `<div class="google-confirm" data-ws-disconnect-confirm hidden>
+        <p>${reading ? `Disconnect Google for ${esc(domain || 'this domain')}? Tico stops reading every covered mailbox.`
+          : `Remove the uploaded key for ${esc(domain || 'this domain')}? Nothing is read until Google is connected.`}</p>
+        <div class="row"><button type="button" class="primary danger" data-ws-disconnect-yes>Disconnect</button>
+          <button type="button" class="ghost" data-ws-disconnect-no>Cancel</button></div>
+      </div>`;
 
   function connectedBlock(row) {
     const failing = row.status === 'failing';
@@ -52,11 +62,7 @@
       ${failing ? `<p role="alert"><strong>Failing.</strong> ${esc(row.last_error || 'Tico could not reach Google with this key.')}</p>` : ''}
       <div class="row"><button type="button" class="ghost" data-ws-replace>Replace key</button>
         <button type="button" class="ghost danger" data-ws-disconnect>Disconnect</button></div>
-      <div class="google-confirm" data-ws-disconnect-confirm hidden>
-        <p>Disconnect Google for ${esc(row.domain || 'this domain')}? Tico stops reading every covered mailbox.</p>
-        <div class="row"><button type="button" class="primary danger" data-ws-disconnect-yes>Disconnect</button>
-          <button type="button" class="ghost" data-ws-disconnect-no>Cancel</button></div>
-      </div>`;
+      ${disconnectConfirm(row.domain, true)}`;
   }
 
   function createStep(g, {reachable, cancel, domainValue}) {
@@ -116,7 +122,10 @@
       parts.push(createStep(g, {reachable, cancel: !!(active || pend), domainValue: active?.domain || pend?.domain || defaultDomain(g)}));
     }
     if (!replacing && (pend || active?.status === 'failing')) parts.push(checkStep(g));
-    if (!replacing && !active && pend) parts.push('<div class="row"><button type="button" class="ghost" data-ws-replace>Replace key</button></div>');
+    if (!replacing && !active && pend) {
+      parts.push(`<div class="row"><button type="button" class="ghost" data-ws-replace>Replace key</button>
+        <button type="button" class="ghost danger" data-ws-disconnect>Disconnect</button></div>${disconnectConfirm(pend.domain, false)}`);
+    }
     return `<section class="google-card" data-google-card="workspace"><h3>Whole Workspace</h3>${parts.join('')}
       <p class="muted" role="status" data-ws-status>${esc(flash)}</p></section>`;
   }
@@ -235,7 +244,7 @@
   function paint(host) {
     const {g, personal} = host._googleState;
     const {active, pend} = rowsOf(g);
-    const replacing = replacingNow(host, active);
+    const replacing = replacingNow(host, {active, pend});
     const kept = {};
     host.querySelectorAll('[data-keep]').forEach(el => { kept[el.dataset.keep] = el.value; });
     const flash = host._googleFlash || '';
@@ -276,7 +285,8 @@
     button.disabled = true;
     try {
       const made = await post('/v2/google/workspace/setup-code', {domain});
-      command = {command: made.command, expires_at: made.expires_at, domain};
+      // pendingBefore: a key already waiting when the command was made is not the one it brings in.
+      command = {command: made.command, expires_at: made.expires_at, domain, pendingBefore: !!rowsOf(host._googleState?.g || {}).pend};
       await window.mountGoogleConnect(host, {force: true});
     } catch (error) {
       button.disabled = false;
@@ -297,6 +307,7 @@
     try {
       await post('/v2/google/workspace/key', domain ? {key, domain} : {key});
       host._googleReplacing = null;
+      command = null; // the uploaded key supersedes the setup command
       await window.mountGoogleConnect(host, {force: true});
     } catch (error) { setWsStatus(host, error.message, true); }
   }
@@ -351,6 +362,7 @@
       host._googleWatch = null;
       host._googleCheck = null;
       host._googleReplacing = null;
+      command = null; // a setup command made before the disconnect must not show again
       await window.mountGoogleConnect(host, {force: true});
     } catch (error) {
       button.disabled = false;
@@ -422,8 +434,10 @@
     if (el.hasAttribute('data-google-disconnect')) return disconnectPersonal(host, el);
     if (el.hasAttribute('data-ws-command')) return newCommand(host, el);
     if (el.hasAttribute('data-ws-replace')) {
-      host._googleReplacing = {since: rowsOf(host._googleState.g).active?.connected_at ?? null};
-      return paint(host);
+      const {active, pend} = rowsOf(host._googleState.g);
+      host._googleReplacing = {since: active?.connected_at ?? null, hadPending: !!pend};
+      // A mount, not a paint: it re-reads the key state and starts the poll that waits for the new key.
+      return window.mountGoogleConnect(host, {force: true});
     }
     if (el.hasAttribute('data-ws-replace-cancel')) { host._googleReplacing = null; return paint(host); }
     if (el.hasAttribute('data-ws-disconnect')) return toggle(host, '[data-ws-disconnect-confirm]', true);
@@ -476,7 +490,9 @@
     if (turn !== host._googleTurn || !host.isConnected) return;
     host._googleState = {g, personal};
     const {active, pend} = rowsOf(g);
-    const replacing = replacingNow(host, active);
+    // A setup command is single use: a pending key that arrives after it was made is the upload it was for.
+    if (command && pend && !command.pendingBefore) command = null;
+    const replacing = replacingNow(host, {active, pend});
     const isLive = live();
     const snapshot = JSON.stringify([g.can_admin, unchecked(g.workspace), unchecked(g.pending), g.oauth, g.me,
       g.setup?.reachable, personal, isLive]);
@@ -486,7 +502,8 @@
     }
     bind(host);
     const personalBusy = !!personal && !personal.error && ['ready', 'finishing', 'disconnecting', 'revoking'].includes(personal.status);
-    const waitingForKey = !!g.can_admin && isLive && !pend && (!active || replacing);
+    // Polls while a replacement waits for its key, and while a live command waits for a first key.
+    const waitingForKey = !!g.can_admin && !pend && (replacing || (isLive && !active));
     if ((personalBusy || waitingForKey) && watchable(host)) {
       host._googlePoll = setTimeout(() => { if (watchable(host)) void mountGoogleConnect(host); }, POLL_MS);
     }

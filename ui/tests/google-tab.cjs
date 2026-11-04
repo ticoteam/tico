@@ -228,6 +228,70 @@ const scenarios = {
     assert.deepEqual(seen.errors, []);
   },
 
+  'a replacement ends when its new key arrives, and the Allow step and Check show': async browser => {
+    const fake = googleFake();
+    fake.state.workspace = row('connected');
+    const {page, seen} = await open(browser, fake);
+    await page.locator('[data-ws-replace]').click();
+    await page.locator('[data-ws-step=create]').waitFor();
+    // The script uploads the new key on the computer; the replacement keeps polling until it lands.
+    fake.state.pending = row('pending');
+    await page.locator('[data-ws-step=allow]').waitFor({timeout: 15000});
+    await page.locator('[data-ws-check]').waitFor();
+    assert.equal(await page.locator('[data-ws-step=create]').count(), 0, 'the replacement is over');
+    assert.equal(await page.locator('[data-ws-disconnect]').count(), 1, 'the connected key stays until the new one is checked');
+    assert.deepEqual(seen.errors, []);
+  },
+
+  'disconnect clears the setup command, so the next setup shows no code': async browser => {
+    const fake = googleFake();
+    fake.state.workspace = row('connected');
+    const {page, seen} = await open(browser, fake);
+    await page.locator('[data-ws-replace]').click();
+    await page.locator('[data-ws-command]').click();
+    await page.locator('[data-ws-step=create] code', {hasText: 'bash -s -- code1'}).waitFor();
+    await page.locator('[data-ws-replace-cancel]').click();
+    await page.locator('[data-ws-disconnect]').click();
+    await page.locator('[data-ws-disconnect-yes]').click();
+    await page.locator('[data-ws-step=create]').waitFor();
+    assert.equal(await page.locator('[data-ws-step=create] code').count(), 0, 'the old code is not shown again');
+    assert.equal(writesTo(fake, '/api/v2/google/workspace', 'DELETE').length, 1);
+    assert.deepEqual(seen.errors, []);
+  },
+
+  'a key that arrives for a command clears its code, so the next replacement shows none': async browser => {
+    const fake = googleFake();
+    fake.state.workspace = row('connected');
+    const {page, seen} = await open(browser, fake);
+    await page.locator('[data-ws-replace]').click();
+    await page.locator('[data-ws-command]').click();
+    await page.locator('[data-ws-step=create] code', {hasText: 'bash -s -- code1'}).waitFor();
+    fake.state.pending = row('pending');
+    await page.locator('[data-ws-step=allow]').waitFor({timeout: 15000});
+    await page.locator('[data-ws-replace]').click();
+    await page.locator('[data-ws-step=create]').waitFor();
+    assert.equal(await page.locator('[data-ws-step=create] code').count(), 0, 'the used code is gone');
+    assert.doesNotMatch(await page.locator('[data-google-card=workspace]').innerText(), /code1/);
+    assert.deepEqual(seen.errors, []);
+  },
+
+  'a first key that never connected can be removed in the page, with a confirm': async browser => {
+    const fake = googleFake();
+    fake.state.workspace = row('pending');
+    const {page, seen} = await open(browser, fake);
+    await page.locator('[data-ws-step=allow]').waitFor();
+    await page.locator('[data-ws-disconnect]').click();
+    await page.locator('[data-ws-disconnect-confirm]').waitFor();
+    assert.match(await page.locator('[data-ws-disconnect-confirm]').innerText(), /Remove the uploaded key for acme\.example/);
+    assert.equal(seen.dialogs, 0);
+    await page.locator('[data-ws-disconnect-yes]').click();
+    await page.locator('[data-ws-step=create]').waitFor();
+    assert.equal(await page.locator('[data-ws-step=allow]').count(), 0);
+    assert.equal(writesTo(fake, '/api/v2/google/workspace', 'DELETE').length, 1);
+    assert.equal(fake.state.workspace, null);
+    assert.deepEqual(seen.errors, []);
+  },
+
   'a failing key shows its error and a Check': async browser => {
     const fake = googleFake();
     fake.state.workspace = row('failing', {last_error: 'Google stopped accepting the key.'});

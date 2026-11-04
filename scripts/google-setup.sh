@@ -45,7 +45,7 @@ cleanup() {
   local status=$?
   if [[ "$ADDED_ROLE" == 1 ]]; then
     if gcloud organizations remove-iam-policy-binding "$ORG" --member="$(member)" --role=roles/orgpolicy.policyAdmin \
-      --quiet </dev/null >/dev/null 2>&1; then
+      --condition=None --quiet </dev/null >/dev/null 2>&1; then
       say "Removed the temporary policy-admin role"
     else
       say "Could not remove the temporary policy-admin role. Remove roles/orgpolicy.policyAdmin for $CALLER on the organization." >&2
@@ -99,7 +99,7 @@ choose_org() {
     die "Could not list organizations. $(first_line "$TMP/orgs.err")"
   fi
   while IFS= read -r line; do
-    if [[ -n "$line" ]]; then names="$names $line"; fi
+    if [[ -n "$line" ]]; then names="$names ${line#organizations/}"; fi
   done <<< "$listing"
   read -r -a org_list <<< "$names"
   if (( ${#org_list[@]} == 0 )); then
@@ -174,9 +174,17 @@ enforced() {
   ENFORCED=$(python3 -I "$TMP/enforced.py" "$TMP/policy.json") || ENFORCED=unknown
 }
 
+# Grants the policy-admin role only when the account doesn't already hold it unconditionally. Cleanup removes only what
+# this sets ADDED_ROLE for, so a role the account already had is never taken away.
 grant_policy_admin() {
   CALLER=$(gcloud config get-value account </dev/null 2>/dev/null || true)
   [[ -n "$CALLER" ]] || die "Could not tell which account this is."
+  if ! gcloud organizations get-iam-policy "$ORG" --format=json </dev/null >"$TMP/org-policy.json" 2>"$TMP/org.err"; then
+    die "Could not read the organization's roles. $(first_line "$TMP/org.err")"
+  fi
+  if [[ "$(python3 -I "$TMP/held.py" "$TMP/org-policy.json" "$(member)" roles/orgpolicy.policyAdmin)" == yes ]]; then
+    die "This account already has the Organization Policy Administrator role, and Google still refused the change. Check the organization's policies, then run this again."
+  fi
   say "Granting $CALLER the Organization Policy Administrator role on the organization, for this setup only"
   if ! gcloud organizations add-iam-policy-binding "$ORG" --member="$(member)" --role=roles/orgpolicy.policyAdmin \
     --condition=None --quiet </dev/null >/dev/null 2>"$TMP/grant.err"; then
@@ -314,6 +322,14 @@ PY
   cat > "$TMP/key_id.py" <<'PY'
 import json, sys
 print(json.load(open(sys.argv[1]))["private_key_id"])
+PY
+  cat > "$TMP/held.py" <<'PY'
+import json, sys
+policy = json.load(open(sys.argv[1]))
+member, role = sys.argv[2], sys.argv[3]
+held = any(b.get("role") == role and member in (b.get("members") or []) and not b.get("condition")
+           for b in policy.get("bindings") or [])
+print("yes" if held else "no")
 PY
   cat > "$TMP/wrap_key.py" <<'PY'
 import json, sys
