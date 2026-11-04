@@ -5,20 +5,74 @@ TICO_COMPANY_APPS is supplied through a private Actions secret, never a source f
 --dry-run validates and reports hashes without network access or printing private values.
 """
 import argparse
+from contextlib import contextmanager
+import errno
 import hashlib
 import json
 import os
 import re
+import socket
+import ssl
 import subprocess
 import sys
 import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
+from urllib.error import HTTPError, URLError
 from urllib.request import build_opener, HTTPRedirectHandler, Request
 
 
 class Invalid(ValueError):
     pass
+
+
+class OperationFailed(Exception):
+    """A diagnostic made only from fixed labels and safe numeric codes."""
+
+
+def failure_reason(exc):
+    # Exception text, URLs, HTTP bodies and subprocess output can contain private values.
+    if isinstance(exc, Invalid):
+        return str(exc)
+    if isinstance(exc, HTTPError):
+        status = exc.code if type(exc.code) is int else "error"
+        return f"HTTP {status}; verify TICO_COMPANY_APPS.icon_url serves a public PNG"
+    if isinstance(exc, URLError):
+        if not isinstance(exc.reason, Exception):
+            return "network request failed"
+        exc = exc.reason
+    if isinstance(exc, ssl.SSLCertVerificationError):
+        return "TLS certificate verification failed"
+    if isinstance(exc, ssl.SSLError):
+        return "TLS connection failed"
+    if isinstance(exc, socket.gaierror):
+        return "DNS lookup failed"
+    if isinstance(exc, TimeoutError):
+        return "request timed out"
+    if isinstance(exc, ConnectionError):
+        return "connection failed"
+    if isinstance(exc, subprocess.CalledProcessError):
+        code = exc.returncode if type(exc.returncode) is int else "unknown"
+        return f"command exited with code {code}; private tool output is suppressed"
+    if isinstance(exc, OSError):
+        code = errno.errorcode.get(exc.errno, "unknown")
+        return f"I/O error ({code})"
+    return "unexpected error; private exception details are suppressed"
+
+
+@contextmanager
+def operation(stage):
+    try:
+        yield
+    except Exception as exc:
+        raise OperationFailed(f"Company app {stage} failed: {failure_reason(exc)}") from None
+
+
+def required_env(name):
+    value = os.environ.get(name, "")
+    if not value.strip():
+        raise Invalid(f"Missing {name}")
+    return value
 
 
 def url(value):
@@ -49,9 +103,11 @@ def parse(raw):
     entries = entries_from_json(raw)
     seen, ids = set(), set()
     for entry in entries:
-        if not isinstance(entry, dict) or any(not isinstance(entry.get(k), str) or not entry[k].strip()
-                for k in ("slug", "id", "app_name", "url", "icon_url", "deploy_role_arn", "bucket")):
-            raise Invalid("Each company needs slug, id, app_name, url, icon_url, deploy_role_arn and bucket")
+        if not isinstance(entry, dict):
+            raise Invalid("Each TICO_COMPANY_APPS entry must be an object")
+        for field in ("slug", "id", "app_name", "url", "icon_url", "deploy_role_arn", "bucket"):
+            if not isinstance(entry.get(field), str) or not entry[field].strip():
+                raise Invalid(f"TICO_COMPANY_APPS.{field} is missing or empty (expected a string)")
         if any(not isinstance(v, str) or any(ord(ch) < 32 or ord(ch) == 127 for ch in v) for v in entry.values()):
             raise Invalid("Company values must be strings without control characters")
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", entry["slug"]):
@@ -63,14 +119,16 @@ def parse(raw):
             raise Invalid("Company id must be a canonical stable UUID") from exc
         if not re.fullmatch(r"[\w][\w. +()-]{0,79}", entry["app_name"]) or entry["app_name"].endswith((".", " ")):
             raise Invalid("Invalid company app name")
-        url(entry["url"])
-        if entry.get("runner_url"):
-            url(entry["runner_url"])
-        icon = entry["icon_url"]
-        if icon.startswith("/") and not icon.startswith("//"):
-            url(entry["url"].rstrip("/") + icon)
-        else:
-            url(icon)
+        for field in ("url", "runner_url", "icon_url"):
+            value = entry.get(field)
+            if not value:
+                continue
+            if field == "icon_url" and value.startswith("/") and not value.startswith("//"):
+                value = entry["url"].rstrip("/") + value
+            try:
+                url(value)
+            except Invalid as exc:
+                raise Invalid(f"TICO_COMPANY_APPS.{field}: {exc}") from None
         if not re.fullmatch(r"arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9_+=,.@/-]+", entry["deploy_role_arn"]):
             raise Invalid("Invalid company publish role")
         if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", entry["bucket"]):
@@ -113,22 +171,25 @@ def configure(entry, publishing=False):
         mask(value)
     values = {"TICO_HUB_URL": entry["url"], "TICO_APP_NAME": entry["app_name"],
               "TICO_ENV_SLUG": entry["slug"], "COMPANY_ROLE": entry["deploy_role_arn"]}
-    with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as stream:
-        for name, value in values.items():
-            stream.write(f"{name}={value}\n")
+    with operation("configuration environment"):
+        with open(required_env("GITHUB_ENV"), "a", encoding="utf-8") as stream:
+            for name, value in values.items():
+                stream.write(f"{name}={value}\n")
     if publishing:
         return
+    version = required_env("GITHUB_REF_NAME").removeprefix("v")
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?(?:\+[A-Za-z0-9.-]+)?", version):
+        raise Invalid("GITHUB_REF_NAME must be a version tag for company builds")
     icon_url = entry["icon_url"]
     if icon_url.startswith("/"):
         icon_url = entry["url"].rstrip("/") + icon_url
-    with build_opener(SafeRedirect()).open(Request(icon_url), timeout=30) as response:
-        icon = response.read(1024 * 1024 + 1)
-    if len(icon) > 1024 * 1024 or not icon.startswith(b"\x89PNG\r\n\x1a\n"):
-        raise Invalid("Company icon must be a PNG up to 1 MB")
-    Path("app/company-icon.png").write_bytes(icon)
-    version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
-    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?(?:\+[A-Za-z0-9.-]+)?", version):
-        raise Invalid("Company builds require a version tag")
+    with operation("icon download (TICO_COMPANY_APPS.icon_url)"):
+        with build_opener(SafeRedirect()).open(Request(icon_url), timeout=30) as response:
+            icon = response.read(1024 * 1024 + 1)
+        if len(icon) > 1024 * 1024 or not icon.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise Invalid("TICO_COMPANY_APPS.icon_url must serve a PNG up to 1 MB")
+    with operation("icon file write"):
+        Path("app/company-icon.png").write_bytes(icon)
     updater = {"endpoints": [base + "/download/latest.json"]}
     if base.startswith("http:"):
         updater["dangerousInsecureTransportProtocol"] = True
@@ -137,7 +198,8 @@ def configure(entry, publishing=False):
             "bundle": {"icon": ["company-icons/32x32.png", "company-icons/128x128.png",
                                     "company-icons/128x128@2x.png", "company-icons/icon.icns", "company-icons/icon.ico"]},
             "plugins": {"updater": updater}}
-    Path("app/company-config.json").write_text(json.dumps(conf), encoding="utf-8")
+    with operation("configuration file write"):
+        Path("app/company-config.json").write_text(json.dumps(conf), encoding="utf-8")
 
 
 def main(argv=None):
@@ -149,7 +211,10 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--publishing", action="store_true")
     args = parser.parse_args(argv)
+    stage = "configuration"
     try:
+        if args.action != "matrix":
+            required_env("TICO_COMPANY_APPS")
         entries = entries_from_json(os.environ.get("TICO_COMPANY_APPS", ""))
         if args.action == "matrix":
             if args.dry_run:
@@ -181,6 +246,11 @@ def main(argv=None):
         if args.action == "configure":
             configure(entry, args.publishing)
         elif args.action in ("pack", "unpack"):
+            stage = "updater signing configuration"
+            required_env("TAURI_SIGNING_PRIVATE_KEY")
+            required_env("GITHUB_REF_NAME")
+            required_env("GITHUB_RUN_ID")
+            stage = "artifact encryption" if args.action == "pack" else "artifact decryption"
             if __package__:
                 from . import company_app_artifacts as artifacts
             else:
@@ -190,18 +260,23 @@ def main(argv=None):
             else:
                 artifacts.unpack(key(entry))
         elif args.action == "build":
+            stage = "updater signing configuration"
+            required_env("TAURI_SIGNING_PRIVATE_KEY")
             # Build tools can print derived private paths; suppress their output entirely.
             with open(os.devnull, "w") as log:
+                stage = "icon generation (cargo tauri icon)"
                 subprocess.run(["cargo", "tauri", "icon", "company-icon.png", "-o", "company-icons"],
                                cwd="app", stdout=log, stderr=log, check=True)
+                stage = "build/bundling (cargo tauri build)"
                 subprocess.run(["cargo", "tauri", "build", "--target", args.target, "--bundles", args.bundles,
                                 "--config", "company-config.json"], cwd="app", stdout=log, stderr=log, check=True)
         else:
+            stage = "publish"
             if __package__:
                 from .app_release import main as release
             else:
                 from app_release import main as release
-            flags = ["--version", os.environ["GITHUB_REF_NAME"].removeprefix("v"), "--bucket", entry["bucket"],
+            flags = ["--version", required_env("GITHUB_REF_NAME").removeprefix("v"), "--bucket", entry["bucket"],
                      "--base", entry.get("runner_url") or entry["url"], "--prefix", entry.get("prefix", ""),
                      "--quiet", "--complete", "bundles"]
             if os.environ.get("APPLE_SIGNING_IDENTITY"):
@@ -211,16 +286,15 @@ def main(argv=None):
             release(flags)
         print(f"Completed {args.action} for {key(entry)}")
         return 0
-    except Invalid as exc:
+    except OperationFailed as exc:
         print("::error::" + str(exc), file=sys.stderr)
         return 1
-    except Exception:
-        # Neither remote errors nor compiler exceptions may echo company identifiers.
-        print("::error::Company app operation failed; verify private configuration, icon access, signing and publish permissions", file=sys.stderr)
+    except Exception as exc:
+        print(f"::error::Company app {stage} failed: {failure_reason(exc)}", file=sys.stderr)
         return 1
     except SystemExit as exc:
         if exc.code:
-            print("::error::Company app publication failed; verify signed bundles and storage", file=sys.stderr)
+            print(f"::error::Company app {stage} validation failed; verify complete bundles and updater signatures", file=sys.stderr)
             return 1
         return 0
 

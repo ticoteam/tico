@@ -100,6 +100,113 @@ def test_invalid_company_isolated_and_publishing_does_not_fetch_icon(tmp_path, m
     assert "TRAY_LABEL" not in (tmp_path / "env").read_text()
 
 
+@pytest.mark.parametrize("failure,diagnostic", [
+    ("http", "HTTP 404"),
+    ("dns", "DNS lookup failed"),
+    ("tls", "TLS certificate verification failed"),
+    ("timeout", "request timed out"),
+    ("redirect", "URLs require HTTPS"),
+    ("unknown", "private exception details are suppressed"),
+])
+def test_icon_failure_reports_safe_category_without_private_response(
+        failure, diagnostic, tmp_path, monkeypatch, capsys):
+    import socket
+    import ssl
+    from urllib.error import HTTPError, URLError
+    from scripts import company_apps
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "app").mkdir()
+    monkeypatch.setenv("TICO_COMPANY_APPS", json.dumps([ENTRY]))
+    monkeypatch.setenv("GITHUB_ENV", str(tmp_path / "env"))
+    monkeypatch.setenv("GITHUB_REF_NAME", "v0.5.131")
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    private = "private-response-and-credentials\n::error::injected"
+
+    class Opener:
+        def open(self, request, timeout):
+            if failure == "redirect":
+                return company_apps.SafeRedirect().redirect_request(
+                    request, None, 302, private, {}, "http://private.acme.example/icon")
+            errors = {
+                "http": HTTPError(request.full_url, 404, private, {"Private": private}, None),
+                "dns": URLError(socket.gaierror(-2, private)),
+                "tls": URLError(ssl.SSLCertVerificationError(1, private)),
+                "timeout": TimeoutError(private),
+                "unknown": RuntimeError(private),
+            }
+            raise errors[failure]
+
+    monkeypatch.setattr(company_apps, "build_opener", lambda *args: Opener())
+    assert main(["configure", "--company", key(ENTRY)]) == 1
+    output = capsys.readouterr()
+    assert "icon download (TICO_COMPANY_APPS.icon_url)" in output.err
+    assert diagnostic in output.err
+    assert private not in output.err and "injected" not in output.err
+    assert all(value not in output.out + output.err for value in ENTRY.values())
+    assert not (tmp_path / "app/company-config.json").exists()
+
+
+def test_missing_configuration_item_is_named_without_its_values(monkeypatch, capsys):
+    entry = {**ENTRY, "icon_url": ""}
+    monkeypatch.setenv("TICO_COMPANY_APPS", json.dumps([entry]))
+    assert main(["configure", "--company", key(entry)]) == 1
+    output = capsys.readouterr()
+    assert "configuration failed" in output.err and "TICO_COMPANY_APPS.icon_url" in output.err
+    assert all(value not in output.out + output.err for value in ENTRY.values())
+
+
+def test_missing_signing_key_stops_before_private_build(monkeypatch, capsys):
+    from scripts import company_apps
+    monkeypatch.setenv("TICO_COMPANY_APPS", json.dumps([ENTRY]))
+    monkeypatch.delenv("TAURI_SIGNING_PRIVATE_KEY", raising=False)
+    monkeypatch.setattr(company_apps.subprocess, "run", lambda *a, **kw: pytest.fail("must not build"))
+    assert main(["build", "--company", key(ENTRY)]) == 1
+    output = capsys.readouterr()
+    assert "updater signing configuration" in output.err and "Missing TAURI_SIGNING_PRIVATE_KEY" in output.err
+    assert all(value not in output.out + output.err for value in ENTRY.values())
+
+
+@pytest.mark.parametrize("failing_command", ["icon", "build"])
+def test_private_build_failures_identify_command_without_output(failing_command, monkeypatch, capsys):
+    import subprocess
+    from scripts import company_apps
+    monkeypatch.setenv("TICO_COMPANY_APPS", json.dumps([ENTRY]))
+    monkeypatch.setenv("TAURI_SIGNING_PRIVATE_KEY", "private-signing-key")
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command[2])
+        assert kwargs["stdout"] is kwargs["stderr"]
+        if command[2] == failing_command:
+            raise subprocess.CalledProcessError(7, [ENTRY["app_name"]], output=ENTRY["url"])
+
+    monkeypatch.setattr(company_apps.subprocess, "run", run)
+    assert main(["build", "--company", key(ENTRY), "--target", "x86_64-unknown-linux-gnu",
+                 "--bundles", "appimage,deb"]) == 1
+    output = capsys.readouterr()
+    assert "cargo tauri " + failing_command in output.err and "code 7" in output.err
+    assert commands == (["icon"] if failing_command == "icon" else ["icon", "build"])
+    assert all(value not in output.out + output.err for value in ENTRY.values())
+    assert "private-signing-key" not in output.out + output.err
+
+
+def test_publish_validation_does_not_expose_private_filenames(monkeypatch, capsys):
+    from scripts import app_release
+    monkeypatch.setenv("TICO_COMPANY_APPS", json.dumps([ENTRY]))
+    monkeypatch.setenv("GITHUB_REF_NAME", "v0.5.131")
+
+    def fail(flags):
+        assert "--quiet" in flags
+        raise SystemExit(ENTRY["app_name"] + ".app.tar.gz has no signature")
+
+    monkeypatch.setattr(app_release, "main", fail)
+    assert main(["publish", "--company", key(ENTRY)]) == 1
+    output = capsys.readouterr()
+    assert "publish validation failed" in output.err
+    assert all(value not in output.out + output.err for value in ENTRY.values())
+
+
 def test_local_check_keeps_company_identity(tmp_path):
     import os
     from pathlib import Path
