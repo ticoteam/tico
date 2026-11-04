@@ -28,7 +28,7 @@ from .migrations import renames
 
 
 # The trash keeps `owner` and `requester` until the second release; an audience clause names the tasks table's columns.
-READABLE = "(SELECT *, task_id AS id, owner AS owner_id, requester AS requester_id FROM task_trash)"
+READABLE = "(SELECT *, task_id AS id, owner AS owner_id, requester AS requester_id FROM task_trash) tasks"
 TRASH = """CREATE TABLE IF NOT EXISTS task_trash(
  task_id TEXT PRIMARY KEY, number INTEGER, title TEXT, requester TEXT, owner TEXT, status TEXT,
  private INTEGER NOT NULL DEFAULT 1, deleted_at TEXT NOT NULL, deleted_by TEXT NOT NULL,

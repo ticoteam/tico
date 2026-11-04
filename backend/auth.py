@@ -761,8 +761,8 @@ class Auth:
         inherited_private = A.qlist(sorted(private_subjects(c, who.actor)))
         parties = A.qlist(sorted(subjects(c, who.actor)))
         me = A.q(who.actor)
-        from .meeting_audience import participant_query
-        participant = f"id IN ({participant_query(c, me)})"
+        from .meeting_audience import participant_access_sql
+        participant = participant_access_sql(c, me)
         # A private task's guest (hubdb.task_reach) reads it as its two parties do.
         audience = (f"(owner_id IN {inherited_private} OR requester_id IN {inherited_private} "
                     f"OR (coalesce(private,1)<>0 AND (guest={me} OR ({participant}))) "
@@ -771,7 +771,7 @@ class Auth:
             actor = A.q(who.task_actor)
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
             audience += (f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} "
-                         f"OR guest={actor} OR id IN ({participant_query(c, actor)}))")
+                         f"OR guest={actor} OR ({participant_access_sql(c, actor)}))")
         return audience
 
     def operator(self, c, who, bot):

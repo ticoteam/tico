@@ -83,8 +83,14 @@ def participant_sql(c, actor_sql, table='tasks'):
             f"AND r.actor={actor_sql}) AND ({sent})")
 
 
+def participant_access_sql(c, actor_sql):
+    # Look up this candidate by id so queue reads keep their covering index and never build a task list.
+    return ("EXISTS (SELECT 1 FROM tasks participant_task WHERE participant_task.id=tasks.id AND ("
+            + participant_sql(c, actor_sql, table="participant_task") + "))")
+
+
 def participant_query(c, actor_sql):
-    # Keep the caller's task id unqualified: visibility also runs over aliases and historical rows.
+    # Batch the participant-only fallback used by message and task detail reads.
     return ("SELECT tasks.id FROM task_roles audience_role JOIN tasks ON tasks.id=audience_role.task_id "
             f"WHERE audience_role.actor={actor_sql} AND audience_role.role='participant' AND ("
             + participant_sql(c, actor_sql) + ")")
