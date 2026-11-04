@@ -304,4 +304,17 @@ def test_the_head_and_every_role_the_team_fills_are_shown_however_many(api, monk
     shown = {role["pick"]["template"]: role["on_team"] for role in roles}
     assert roles[0]["pick"]["template"] == "engineering-lead" and shown["engineering-lead"] is False
     picked = [t for t in shown if t != "engineering-lead"]
-    assert all(shown[t] for t in picked) and set(picked) <= set(filled)
+    assert all(shown[t] for t in picked) and set(picked) == set(filled)
+
+
+def test_a_filled_niche_role_is_shown_even_when_the_briefing_does_not_name_it(api, monkeypatch):
+    from backend import team_build
+    providers(api, "anthropic", "openai")
+    team = engineering(api)
+    dept = suggest(api, team)["department"]
+    niche = next(card["template"] for card in team_build.recruit.catalog(api.app.state.onboarding.settings)["cards"]
+                 if card["department"] == dept and card["suggest"] == "niche")
+    monkeypatch.setattr(team_build, "_filled", lambda c, group: {niche: "ghost-" + niche})
+    roles = {role["pick"]["template"]: role["on_team"] for role in suggest(api, team, briefing="")["roles"]
+             if role["pick"].get("template")}
+    assert roles.get(niche) is True

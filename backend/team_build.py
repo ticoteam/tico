@@ -159,9 +159,11 @@ def suggest(auth, onboarding, c, who, team, briefing=""):
         return {"team": team, "department": "", "roles": []}
     text = _briefing(briefing)
     ranked = R.rank(value, dept, text, _about(c, who), limit=len(value["cards"]))
-    picked = [row["template_id"] for row in ranked["bots"]]
     members = {card["template"]: card for card in value["cards"] if card["department"] == dept}
     filled = _filled(c, group)
+    picked = [row["template_id"] for row in ranked["bots"]]
+    # A filled role the recommender left out (a niche card the briefing does not name) still counts, after the ranked ones.
+    picked += [t for t in members if t in filled and t not in picked]
     words, common = R._words(text), R._common(list(members.values()))
     raw = {row["template"]: row for row in read_cards(onboarding.settings)}
     suggested = set(ranked["suggested_default"])
