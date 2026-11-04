@@ -13,6 +13,7 @@ mod hub;
 mod orgs;
 mod visual_origin;
 mod bridge;
+mod signin;
 mod windows;
 
 
@@ -108,7 +109,7 @@ fn main() {
         .plugin(autostart_plugin(identifier))
         // The real list is read in setup, once the app's folders are known.
         .manage(AppState::new(Orgs::new(Document::default(), None), None))
-        .invoke_handler(tauri::generate_handler![app_log, bridge, connect_server, server_address, setup_info, cancel_setup, rail_orgs, rail_switch, rail_add, rail_menu])
+        .invoke_handler(tauri::generate_handler![app_log, bridge, connect_server, server_address, setup_info, cancel_setup, rail_orgs, rail_switch, rail_add, rail_menu, signin::tico_signin])
         .setup(move |app| {
             match applog::attach(log_dir(app.handle()).as_deref()) {
                 Some(path) => log::info!("{} {} starting; this log is {}", config::app_name(), app.package_info().version, applog::shown(&path)),
@@ -126,6 +127,9 @@ fn main() {
             let state: State<AppState> = app.state();
             *state.orgs.lock().unwrap() = found;
             select_connection(&state, connection);
+            // Data stores a run that quit left behind: a sign-in window open at Cmd-Q, or orgs it was adding.
+            #[cfg(target_os = "macos")]
+            signin::clean_up_last_run(app.handle());
             build_window(app.handle())?;
             build_menu(app.handle())?;
             #[cfg(not(target_os = "macos"))]
@@ -152,6 +156,7 @@ fn main() {
                 // A window an org opened belongs to that org only while it is open.
                 if let WindowEvent::Destroyed = event {
                     forget_owned(window.app_handle(), window.label());
+                    signin::closed(window.app_handle(), window.label());
                 }
                 return;
             }
@@ -387,6 +392,8 @@ async fn remove_org(app: &App, id: &str) {
     {
         match removed.store_id() {
             Some(store) => {
+                // A store Tico sign-in filled for an org that never opened is still held: let go of it first.
+                signin::release_store(app, store);
                 // A page that just closed holds its store for a moment, so try again a few times before clearing.
                 let mut removed_store = app.remove_data_store(*store.as_bytes()).await;
                 for _ in 0..6 {
@@ -470,16 +477,21 @@ fn rail_menu(app: App, webview: tauri::Webview, id: String) -> Result<(), String
     Ok(())
 }
 
-/// The setup page asks whether it is adding an org (one is already open), so it can offer Cancel.
+/// The setup page asks whether it is adding an org (one is already open), so it can offer Cancel, and whether Tico
+/// sign-in is offered (a build that keeps a list of orgs), so it can make that the default.
 #[tauri::command]
 fn setup_info(app: App) -> Value {
-    serde_json::json!({"hasOrgs": orgs::multi_org_build() && org_count(&app) > 0})
+    let multi = orgs::multi_org_build();
+    serde_json::json!({"hasOrgs": multi && org_count(&app) > 0, "signIn": multi})
 }
 
-/// Cancel on the setup page while adding an org: the setup window closes and the open org stays.
+/// Cancel on the setup page while adding an org: the setup window closes, with any Tico sign-in, and the open org stays.
 #[tauri::command]
 fn cancel_setup(app: App) {
-    if org_count(&app) > 0 { close_setup_later(&app); }
+    if org_count(&app) > 0 {
+        signin::close(&app);
+        close_setup_later(&app);
+    }
 }
 
 /// The org commands are the rail's alone; the org pages have no use for them.

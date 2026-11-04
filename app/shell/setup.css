@@ -16,7 +16,8 @@ input{padding:8px 10px;background:var(--surface);color:var(--ink);border:1px sol
 input::placeholder{color:var(--muted);opacity:1}
 input:hover{border-color:color-mix(in srgb,var(--muted) 55%,var(--line))}
 input:focus{border-color:var(--accent);outline:3px solid color-mix(in srgb,var(--accent) 28%,transparent);outline-offset:0}
-#error{min-height:18px;margin:6px 0 10px;color:var(--fail);font-size:12.5px}
+.error{min-height:18px;margin:6px 0 10px;color:var(--fail);font-size:12.5px}
+#signin-error:empty{min-height:0;margin:0}
 button{padding:8px 14px;border:0;background:var(--accent);color:var(--accent-ink);font-weight:600;cursor:pointer}
 button:hover{filter:brightness(1.08)}
 button:disabled{opacity:.65;cursor:wait}
@@ -26,4 +27,7 @@ h1[hidden]{display:none}
 .mark{margin-left:auto;margin-right:auto}
 button.quiet{margin-top:8px;background:transparent;color:var(--muted);font-weight:500}
 button.quiet:hover{color:var(--ink);filter:none}
-button[hidden]{display:none}
+button.link{display:block;width:auto;margin:14px auto 0;padding:2px 4px;background:transparent;color:var(--muted);font-weight:500;font-size:12.5px;text-decoration:underline;text-underline-offset:2px}
+button.link:hover{color:var(--ink);filter:none}
+#signin:not([hidden])+form:not([hidden]){margin-top:18px}
+button[hidden],form[hidden],div[hidden]{display:none}
