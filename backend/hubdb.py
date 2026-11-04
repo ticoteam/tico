@@ -8007,9 +8007,15 @@ def _owed_the_news(conn, child):
     a delegated bot task - the flow in `policies/handoffs.md`, where the requester files a
     child with `--parent` and parks the parent as `waiting`. A person is always told: a
     message to a person starts nothing.
+
+    With check-backs off (task_check_backs.enabled) a bot that asked for the task is always told when it finishes: the
+    check-backs are what would have told it, and the task roundup sends lists, not news.
     """
     requester = child.get("requester_id")
     if not is_bot(requester):
+        return True
+    from . import task_check_backs
+    if not task_check_backs.enabled(conn):
         return True
     if is_human(child.get("owner_id")):
         return True

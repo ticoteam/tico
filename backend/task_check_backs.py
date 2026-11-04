@@ -49,8 +49,9 @@ def _event(c, task_id, actor, field, old, new, note=""):
 
 
 def enabled(c):
-    from . import read_cache, system_routines
-    return read_cache.value(c, KEY + ":enabled", lambda: system_routines.config_of(c, KEY)["on"], shared=True)
+    """Always off. The task roundup (backend/task_roundup.py) replaced the per-task check-back wakes, so no
+    appointment wakes a bot. Dates, moves and results are still recorded, and a notice queued before this was is stale."""
+    return False
 
 
 def involved(row):
@@ -136,6 +137,15 @@ def clear(c, row):
         c.execute("UPDATE tasks SET check_back_at=NULL,check_back_note=NULL WHERE id=?", (row["id"],))
 
 
+def consume(c, task_id, actor):
+    """A follow-up whose time has come was listed on its owner's task roundup (backend/task_roundup.py): it is consumed,
+    so its time is cleared, and the clearing is recorded."""
+    row = _H().task(c, task_id)
+    if row and row.get("check_back_at"):
+        _event(c, task_id, actor, "check_back_at", row["check_back_at"], None, "Listed on the task roundup")
+        clear(c, row)
+
+
 def default_time(c, row, at, stagger=False):
     H = _H()
     from . import quiet_work
@@ -187,6 +197,8 @@ def carries_result(c, row):
 
 
 def ensure(c, row, at=None):
+    """Clears a follow-up that no longer applies. Tico sets none: a time stays only if a person or a bot set it
+    (check_back_explicit), and nothing writes a default."""
     H = _H()
     if "version" not in row or "check_back_at" not in row:
         return
@@ -201,8 +213,6 @@ def ensure(c, row, at=None):
         if not actor_for(row) or routed_to(c, row)["id"] != row["id"]:
             clear(c, row)  # no consumer, or the check is routed to the parent
             return
-    if not row.get("check_back_at"):
-        set_time(c, row, default_time(c, row, at), system=True, at=at)
 
 
 def moved(c, row, at=None):
@@ -682,11 +692,22 @@ def finished_turn(c, aid, bot, task_id, at=None):
             repair(c, row, at)
 
 
-def stale(c, message, bot):
+def continuing(c, job):
+    """Whether a queued job is the rest of a turn already under way: its attempt started (a drain's time limit and a shared
+    login's hold cap yield one), or a person resumed it (job_recovery 'resume'). execution.obsolete_notices_sql keeps these."""
+    started = c.execute("SELECT 1 FROM attempts WHERE id=? AND started_at IS NOT NULL", (job["attempt_id"],)).fetchone()
+    resumed = c.execute("SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=? AND decision='resume'",
+                        (job["id"], job["attempt_id"])).fetchone()
+    return started is not None or resumed is not None
+
+
+def stale(c, message, bot, job=None):
     H = _H()
     refs = message.get("refs") or {}
     if message.get("sender_id") != H.KEEPER or refs.get("wake") != "check_back":
         return False
+    if job is not None and continuing(c, job):
+        return False                    # the rest of a turn already under way: it runs (as obsolete_notices_sql keeps it)
     row = H.task(c, H._task_ref(refs.get("task")) or "")
     return (not row or not enabled(c) or row.get("check_back_at") != refs.get("check_back_at")
             or actor_for(row) != "bot:" + bot or bool(human_snooze(row, H.now())))

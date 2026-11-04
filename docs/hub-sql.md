@@ -238,10 +238,10 @@ Every run records what woke it (`attempts.trigger_kind`), its tokens, and whethe
 - **`trigger_kind`**: `comment` (a bot wrote to it: a task comment or a message), `person_message` (a person
   wrote to it, or pressed Run now), `status_or_relation` (a task of its moved: assigned, done, unblocked, a
   subtask finished, reopened, snoozed by someone), `pr_checks` (its pull request's checks, review comments,
-  merge conflict, merge or release), `stall_check` (Tico's status check or stall wake on a quiet task, a task
+  merge conflict, merge or release), `stall_check` (a ticket late at its working step, a task
   not starting, a stale ask, a worktree left idle), `schedule` (a routine firing, a due date, a snooze ending,
   a next-run task, an update request), `background_done` (background commands an earlier turn left running
-  when the runner ended it on its wait have ended) or `other` (anything else: a Slack digest, a meeting turn, a worktree
+  when the runner ended it on its wait have ended), `task_roundup` (the list of a bot's tasks with a missed update, gone quiet, or a follow-up time that has come, one per run) or `other` (anything else: a Slack digest, a meeting turn, a worktree
   becoming ready). `trigger_source` names the event behind it where there is one: the message itself for
   `comment` and `person_message`, the subtask, the routine, the worktree.
 - **`writes`**: the hub writes the run made with its own run token (a task change, comment, link, message,

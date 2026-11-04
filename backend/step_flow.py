@@ -10,9 +10,7 @@ A step's `flow` (all keys optional):
   recorded on the ticket.
 - `timeout_hours`: a check open this long is closed unanswered and the round is skipped (the ticket goes on as if it
   had passed with no comments).
-- `status_hours`, `late_hours`: at a working step, a ticket quiet this long gets its bot owner one status check, and
-  one this long at the step gets its manager one notice (backend/step_age.py). An engineering type's working steps
-  have 2 and 4 without a setting.
+- `late_hours`: at a working step, a ticket this long at the step gets its manager one notice (backend/step_age.py). An engineering type's working steps have 4 without a setting. `status_hours` is still accepted and wakes no one.
 - `backlog`: {over, per, notify, every_hours}: when more than `over` tickets wait at the step (or for one owner there),
   who to tell (backend/step_backlog.py).
 - `can_hold`: false on steps a ticket is never put on hold from (a merged change is reverted or fixed forward).
