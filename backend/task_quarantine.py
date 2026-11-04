@@ -14,11 +14,13 @@ def source(c, actor, task_id=None):
     if not H.is_bot(actor):
         return None
     if H.RUN.get():
-        row = c.execute("SELECT a.task_id,m.conversation_id "
+        row = c.execute(f"SELECT coalesce(a.task_id,{H.MESSAGE_TASK_SQL}) AS task_id,m.conversation_id "
                         "FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
-                        "WHERE a.id=? AND a.bot_id=?",
+                        "JOIN conversations cv ON cv.id=m.conversation_id WHERE a.id=? AND a.bot_id=?",
                         (H.RUN.get(), H.actor_id(actor))).fetchone()
         if row:
+            if row["task_id"] and not H.task(c, H._task_ref(row["task_id"])):
+                return None
             return "task:" + row["task_id"] if row["task_id"] else "chat:" + row["conversation_id"]
         return None
     task_id = H._task_ref(task_id)
@@ -33,10 +35,11 @@ def free_sql(task_sql):
 
 def for_attempt(c, row):
     """The open scoped quarantine of this attempt's work, or None."""
-    return c.execute("SELECT qh.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
-                     "JOIN messages m ON m.id=j.message_id "
+    return c.execute(f"SELECT qh.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
+                     "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
                      "JOIN quarantine_holds qh ON qh.bot_id=a.bot_id AND qh.released_at IS NULL "
-                     "AND (qh.task_id=a.task_id OR (qh.conversation_id=m.conversation_id AND a.task_id IS NULL)) "
+                     f"AND (qh.task_id=coalesce(a.task_id,{H.MESSAGE_TASK_SQL}) OR "
+                     f"(qh.conversation_id=m.conversation_id AND coalesce(a.task_id,{H.MESSAGE_TASK_SQL}) IS NULL)) "
                      "WHERE a.id=?", (row["id"],)).fetchone()
 
 
