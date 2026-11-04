@@ -43150,6 +43150,16 @@
           "enabled": {
             "type": "boolean"
           },
+          "action": {
+            "type": "object",
+            "description": "Assistant Message create: the pending Confirm card"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "needs_confirm": {
+            "type": "boolean"
+          },
           "trigger": {
             "type": "object"
           },

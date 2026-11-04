@@ -148,6 +148,18 @@ def test_stale_card_does_not_approve_a_changed_flow(api):
     assert saved["enabled"] is False and saved["name"] == "Changed elsewhere"
 
 
+def test_reply_can_be_approved_but_company_send_permission_is_also_required(api):
+    token = turn(api, "Automatically send replies to customers")
+    made = post(api, "automations", flow("reply"), token=token)
+    assert confirm(api, made["action"])["action"]["status"] == "done"
+    assert get(api, "automations/" + made["id"])["enabled"] is True
+    changed = api.put("/api/v2/google/permissions", json={"organize_mail": True, "send_mail": False,
+                                                       "change_calendar": True}, headers=headers())
+    assert changed.status_code == 200, changed.text
+    refused = propose(api, token, flow("reply"), expected=403)
+    assert refused["error"]["code"] == "send_permission"
+
+
 def test_a_reply_routine_can_be_stopped_on_a_card_after_send_permission_is_revoked(api):
     saved = post(api, "automations", flow("reply"))
     token = turn(api, "Stop the routine")
