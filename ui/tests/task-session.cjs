@@ -262,6 +262,9 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
       lane: 'company', version: 1, created_at: at(30), updated_at: at(5), conversation_id: 'r-plan'};
     const said = [{id: 'p1', conversation_id: 'r-plan', sender_id: 'bot:lead', kind: 'say', body: 'What should launch first?', created_at: at(20)}];
     const sent = [], posted = [], prefs = {}, prefPosts = [];
+    let releaseQueuePreference, queuePreferenceStarted;
+    const queuePreference = new Promise(resolve => { queuePreferenceStarted = resolve; });
+    const queuePreferenceGate = new Promise(resolve => { releaseQueuePreference = resolve; });
     let to = {bot: 'lead', wakes: true, mention: []};
     let choices = {default: 'defer', default_for: '24h', steer: true, queue: true, steers: true, goal: true};
     page.on('pageerror', e => errors.push(e.message));
@@ -279,7 +282,15 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       const pref = p.match(/^\/api\/v2\/preferences\/([^/]+)$/);
-      if (pref && req.method() === 'POST') { const v = JSON.parse(req.postData() || '{}').value; prefs[pref[1]] = v; prefPosts.push([pref[1], v]); return json({key: pref[1], value: v}); }
+      if (pref && req.method() === 'POST') {
+        const v = JSON.parse(req.postData() || '{}').value;
+        if (pref[1] === 'compose.send_way' && v === 'queue' && !prefPosts.length) {
+          queuePreferenceStarted();
+          await queuePreferenceGate;
+        }
+        prefs[pref[1]] = v; prefPosts.push([pref[1], v]);
+        return json({key: pref[1], value: v});
+      }
       if (pref) return json({key: pref[1], value: prefs[pref[1]] ?? null});
       if (p === '/api/v2/tasks') return json({tasks: [plan]});
       if (p === '/api/v2/tasks/t-plan/comments' && req.method() === 'POST') {
@@ -303,6 +314,12 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
       await modal.locator('.task-comments', {hasText: 'What should launch first?'}).waitFor();
     };
     const ways = () => menu.locator('[data-deliver]').evaluateAll(xs => xs.map(x => x.dataset.deliver));
+    // The debounce ending starts the write; only its response says the server has kept the choice.
+    const savedWay = way => page.waitForResponse(response => {
+      const req = response.request();
+      return new URL(response.url()).pathname === '/api/v2/preferences/compose.send_way'
+        && req.method() === 'POST' && req.postDataJSON().value === way && response.ok();
+    });
     const looks = async () => ({shows: await main.getAttribute('data-shows'), label: await main.getAttribute('aria-label'),
       badge: await main.locator('.p-way-badge').count() ? await main.locator('.p-way-badge').innerText() : ''});
     const pick = async way => { await caret.click(); await menu.locator(`[data-deliver="${way}"]`).last().click(); assert.equal(await menu.isHidden(), true); };
@@ -345,14 +362,21 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-task-caret')), true, 'focus is back on the caret');
 
     // Queue: the icon changes, the comment names it, and it is kept on the server.
+    const queueSaved = savedWay('queue');
     await pick('queue');
     assert.deepEqual(await looks(), {shows: 'queue:', label: 'Send, queue', badge: ''});
     if (shot) await page.screenshot({path: shot.replace('.png', '-queue.png'), clip: await modal.locator('.task-pill').boundingBox()});
     assert.equal((await send('Billing first, then the docs.')).delivery, 'queue');
+    // Hold the write past the debounce so the timer cannot masquerade as persistence.
+    await queuePreference;
     await page.waitForFunction(() => !SEND_WAY_TIMER);
+    assert.deepEqual(prefPosts, [], 'the preference write is still pending after the debounce ends');
+    releaseQueuePreference();
+    await queueSaved;
     assert.deepEqual(prefPosts.at(-1), ['compose.send_way', 'queue']);
 
     // Defer 4h: a clock with a 4h badge, and it stays after the send.
+    const deferSaved = savedWay('defer:4h');
     await pick('defer:4h');
     assert.deepEqual(await looks(), {shows: 'defer:4h', label: 'Send, defer 4h', badge: '4h'});
     if (shot) await page.screenshot({path: shot.replace('.png', '-defer.png'), clip: await modal.locator('.task-pill').boundingBox()});
@@ -368,7 +392,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     assert.deepEqual(await looks(), {shows: 'goal:', label: 'Set as goal', badge: ''});
     assert.equal((await send('Finish the billing migration.')).delivery, 'goal');
     assert.deepEqual(await looks(), {shows: 'defer:4h', label: 'Send, defer 4h', badge: '4h'}, 'back to the kept way');
-    await page.waitForFunction(() => !SEND_WAY_TIMER);
+    await deferSaved;
     assert.deepEqual(prefPosts.map(([, v]) => v), ['queue', 'defer:4h'], 'goal is never written');
 
     // Send itself opens the ways: a right-click on a computer, a long press on a phone; neither sends.
@@ -406,6 +430,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     await page.keyboard.press('Escape');
     assert.deepEqual(await send('Deferred'), {text: 'Deferred', public: false, delivery: 'defer', defer_for: 'never'});
     // A kept deadline is not theirs to give either (the server 403s it), nor a server default with one: Defer with none.
+    const deadlineSaved = savedWay('defer:4h');
     await page.evaluate(() => sendWayPick('defer:4h'));
     choices = {...choices, default_for: '24h'};
     await reread(page);
@@ -414,7 +439,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     assert.deepEqual(await ways(), ['defer:never'], 'no deadlines to pick');
     await page.keyboard.press('Escape');
     assert.deepEqual(await send('No deadline'), {text: 'No deadline', public: false, delivery: 'defer', defer_for: 'never'});
-    await page.waitForFunction(() => !SEND_WAY_TIMER);
+    await deadlineSaved;
     assert.equal(prefs['compose.send_way'], 'defer:4h', 'the kept way stays what the person picked');
 
     // A task with no bot keeps the plain arrow and no caret, and its comment carries no delivery.
