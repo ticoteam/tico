@@ -5637,13 +5637,15 @@ class Execution:
                              "LEFT JOIN job_recovery r ON r.job_id=j.id AND r.attempt_id=j.attempt_id "
                              "WHERE j.bot_id=? AND j.state='uncertain' ORDER BY j.created_at", (bot,)):
             message = H.message(c, row['message_id'])
-            conv = H.conversation(c, message['conversation_id'])
+            # A deleted source message still lists its run, without words, rather than failing the whole review list.
+            conv = H.conversation(c, message['conversation_id']) if message else None
             # The operator and BotOps (reviewer) must be able to list and unblock the bot whatever it was doing. That is
             # not a way into a person's conversation: a run they may not read is reconcilable but arrives without its
             # words (readable false; no request, output, tool calls or task), as reconcile_job already allows.
-            readable = bool(self.readable(c, who, conv) and privacy.message_readable(c, privacy.actor(who), message)
+            readable = bool(message and conv and self.readable(c, who, conv)
+                            and privacy.message_readable(c, privacy.actor(who), message)
                             and (not row['attempt_id'] or privacy.attempt_readable(c, privacy.actor(who), row['attempt_id'])))
-            task = H.task(c, H.message_task_id(message, conv)) if H.message_task_id(message, conv) else None
+            task = H.task(c, H.message_task_id(message, conv)) if message and H.message_task_id(message, conv) else None
             attempt = c.execute("SELECT id,state,created_at,started_at,finished_at,final_text FROM attempts WHERE id=?",
                                 (row['attempt_id'],)).fetchone()
             events = c.execute("SELECT seq,kind,payload FROM attempt_events WHERE attempt_id=? "

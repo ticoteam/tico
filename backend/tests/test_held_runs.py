@@ -572,3 +572,15 @@ def test_an_ordinary_lease_expiry_resumes_with_the_outside_action_it_held_on_nam
     ready(api, machine, ['ops'])
     body = claim(api, machine)['message']['body']
     assert 'merge pull request' in body and 'No consumed approval or named irreversible outside action' not in body
+
+
+def test_a_held_run_whose_source_message_was_deleted_is_listed_without_words_and_the_others_stay(api):
+    """Codex P2. A deleted source message must not fail the whole review list: its run is listed without its words, and
+    the other held runs are still there."""
+    _, message, gone = held(api)
+    _, _, kept = held(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET deleted_at=? WHERE id=?", (H.now(), message['id']))
+    jobs = {job['id']: job for job in get(api, 'bots/ops/execution-review')['jobs']}
+    assert jobs[gone['job_id']]['readable'] is False and jobs[gone['job_id']]['request'] == ''
+    assert jobs[kept['job_id']]['readable'] is True
