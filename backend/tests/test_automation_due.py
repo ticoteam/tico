@@ -486,6 +486,39 @@ def test_a_single_rule_on_a_due_day_keeps_the_step_as_its_task_identity(api):
     assert [row["occurrence_step"] for row in tasks] == ["gate"]
 
 
+TWO_TASKS = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [
+    {"do": "create_task", "args": {"title": "Legal review", "owner": "coo"}},
+    {"do": "create_task", "args": {"title": "Finance review", "owner": "coo"}}]}]}
+
+
+def test_one_rule_with_two_tasks_on_a_due_day_opens_two_tasks(api):
+    aid = due(api, DUE_MARCH, steps=[TWO_TASKS])
+    _pass_at(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
+    tasks = sql(api, "SELECT title, occurrence_step FROM tasks WHERE occurrence=? ORDER BY title", (f"{aid}:2030-03-01",))
+    assert [(row["title"], row["occurrence_step"]) for row in tasks] == [("Finance review", "gate@0.1"),
+                                                                       ("Legal review", "gate")]
+
+
+def test_a_retry_of_one_rule_with_two_tasks_opens_no_more_tasks(api, monkeypatch):
+    aid = due(api, DUE_MARCH, steps=[TWO_TASKS])
+    real = hubdb.task_create
+    failed = []
+
+    def second_task_fails_once(*args, **kwargs):
+        if args[2] == "Finance review" and not failed:
+            failed.append(True)
+            raise ValueError("the second task broke")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(hubdb, "task_create", second_task_fails_once)
+    _pass_at(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
+    assert [run["status"] for run in get(api, f"automations/{aid}/runs")["runs"]] == ["failed"]
+    _pass_at(api, datetime(2030, 2, 15, 1, 10, tzinfo=timezone.utc))
+    assert sorted(run["status"] for run in get(api, f"automations/{aid}/runs")["runs"]) == ["failed", "ok"]
+    tasks = sql(api, "SELECT title FROM tasks WHERE occurrence=? ORDER BY title", (f"{aid}:2030-03-01",))
+    assert [row["title"] for row in tasks] == ["Finance review", "Legal review"]
+
+
 def test_the_same_occurrence_and_step_is_one_task_however_often_it_is_made(api):
     store = api.app.state.store
     marker = "a1:2030-03-01"
