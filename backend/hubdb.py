@@ -3786,12 +3786,12 @@ def task_private_readable(conn, actor, row):
             return False
     if actor in (row["owner_id"], row["requester_id"]):
         return True
-    from .meeting_audience import participant_tasks
-    if row['id'] in participant_tasks(conn, actor):
-        return True
     from .task_rights import private_subjects
     inherited = private_subjects(conn, actor)
     if any(row[k] in inherited for k in ("owner_id", "requester_id")):
+        return True
+    from .meeting_audience import participant_tasks
+    if row['id'] in participant_tasks(conn, actor):
         return True
     if "guest" not in row:
         row = _one(conn, "SELECT guest FROM tasks WHERE id=?", (row["id"],)) or {}

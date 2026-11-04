@@ -74,7 +74,7 @@ def participant_sql(c, actor_sql, table='tasks'):
     # Before the link migration lands, the pushed item is the same durable sent provenance.
     sent = (f"EXISTS (SELECT 1 FROM meeting_items i JOIN meetings m ON m.id=i.meeting_id "
             f"WHERE i.result_ref={table}.id AND i.status='pushed' AND json_extract(m.metadata,'$.private')=1)")
-    if H._has_table(c, 'meeting_task_links'):
+    if read_cache.one(c, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meeting_task_links'"):
         sent += (f" OR EXISTS (SELECT 1 FROM meeting_task_links l JOIN meetings m ON m.id=l.meeting_id "
                  f"WHERE l.task_id={table}.id AND l.kind='sent' AND json_extract(m.metadata,'$.private')=1)")
     sent += (f" OR EXISTS (SELECT 1 FROM live_meetings m WHERE m.id={table}.live_meeting_id "
