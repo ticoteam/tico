@@ -7,6 +7,7 @@ from backend import usage_limits
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
 from backend.tests.test_check_models import company, finish, heartbeat
+from backend import bot_settings as BS
 
 HAIKU = {"harness": "claude", "model": "claude-haiku-5-5", "effort": "low"}
 HAIKU_RAN = {"model": "claude-haiku-5-5", "runtime": "claude", "harness": "claude", "effort": "low", "billing": "api"}
@@ -25,9 +26,9 @@ def ops_on_sonnet(api):
     """ops on Claude Sonnet at high effort, on a computer signed in to Claude and Grok."""
     company(api, "anthropic", "xai")
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config.update(runtime="claude", harness="claude", model="claude-sonnet-5-5", reasoning_effort="high")
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     machine = runner(api)
     assign(api, machine, "ops")
     heartbeat(api, machine)
@@ -106,8 +107,8 @@ def test_session_bot_keeps_tasks_on_the_bots_model(api):
     """One provider thread for everything: a task cannot switch it to another model."""
     machine = ops_on_sonnet(api)
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps({**config, "session": "bot"}),))
+        config = BS.read(c, 'ops')
+        BS.write(c, 'ops', {**config, 'session': 'bot'})
     set_task_model(api, HAIKU)
     _, turn = task_turn(api, machine)
     assert turn["config"]["model"] == "claude-sonnet-5-5"
@@ -174,10 +175,10 @@ def test_a_task_model_that_cannot_run_falls_back_to_the_bots_model_and_says_why(
 def test_a_retired_or_switched_off_task_model_falls_back_too(api):
     machine = ops_on_sonnet(api)
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config["task_model"] = {"harness": "claude", "model": "claude-opus-5", "reasoning_effort": "high",
                                 "runtime": "claude"}
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     task, turn = task_turn(api, machine)
     assert turn["config"]["model"] == "claude-sonnet-5-5"
     finish(api, machine, turn)
@@ -283,10 +284,10 @@ def test_under_the_gateway_preset_a_task_model_not_signed_in_runs_on_the_bots_mo
     connected(api, monkeypatch)
     choose(api, models_preset.RECOMMENDED)
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config = {k: v for k, v in config.items() if k != "fallback"}
         config.update(runtime="claude", harness="claude", model="claude-sonnet-5-5", reasoning_effort="high")
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     machine = runner(api)
     assign(api, machine, "ops")
     rust_heartbeat(api, machine, {"claude": {"installed": True, "authenticated": "ready"},
@@ -370,12 +371,11 @@ def test_a_cheaper_task_model_on_a_bot_that_sends_warns_in_plain_words_and_still
                                         (task["id"],))] == [note]
     # The bot view judges against the bot's model now: on Haiku itself, its Haiku tasks are not below it.
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
-                  (json.dumps({**config, "model": "claude-haiku-5-5"}),))
+        config = BS.read(c, 'ops')
+        BS.write(c, 'ops', {**config, 'model': 'claude-haiku-5-5'})
     assert get(api, "bots/ops")["task_model_warning"] == ""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     # A pick of the same tier or dearer, or another provider's, is not below the minimum.
     set_task_model(api, None)
     assert set_task_model(api, {"harness": "claude", "model": "claude-opus-5-5", "effort": "high"})["warning"] == ""
@@ -407,9 +407,9 @@ def ops_on_grok(api):
     """ops on Grok at low effort, on a computer signed in to Claude and Grok, as a bot whose own model lacks max."""
     company(api, "anthropic", "xai")
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config.update(runtime="grok", harness="grok", model="grok-4.6", reasoning_effort="low")
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     machine = runner(api)
     assign(api, machine, "ops")
     heartbeat(api, machine)
@@ -512,10 +512,10 @@ def test_task_effort_and_context_length_set_and_clear_on_their_own(api):
 def test_an_old_task_model_record_runs_on_its_model_as_before(api):
     machine = ops_on_sonnet(api)
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config["task_model"] = {"harness": "claude", "model": "claude-haiku-5-5", "reasoning_effort": "low",
                                 "runtime": "claude"}
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     _, turn = task_turn(api, machine)
     assert (turn["config"]["model"], turn["config"]["reasoning_effort"]) == ("claude-haiku-5-5", "low")
     assert "compact_at" not in turn["config"]

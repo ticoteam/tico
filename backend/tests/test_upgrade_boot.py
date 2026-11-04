@@ -17,6 +17,7 @@ from backend.config import ROOT, Settings
 from backend.migrations import renames as schema_renames
 from backend.migrations.renames_data import COLUMNS, TABLES
 from backend.store import Store
+from backend.tests.test_migrations import restore_config
 
 
 def pre_rename_db(path):
@@ -33,7 +34,9 @@ def pre_rename_db(path):
             if new in have:
                 conn.execute(f'ALTER TABLE "{new}" RENAME TO "{old}"')
         # The rename waves (0013, 0014, 0031, 0034) are pending again, and so is every file after the first of them:
-        # a migration never runs before one this database has already applied.
+        # a migration never runs before one this database has already applied. The reruns read bot_config.config
+        # (0061, and the rename steps), which 0070 dropped: the column goes back, each declaration copied into it.
+        restore_config(conn)
         conn.execute("DELETE FROM schema_migrations WHERE version >= '0013' AND version NOT LIKE 'legacy_%'")
         assert schema_renames.pending(conn)
         assert "refs_json" in {r[1] for r in conn.execute("PRAGMA table_info(messages)")}

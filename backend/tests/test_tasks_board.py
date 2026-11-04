@@ -15,6 +15,7 @@ from backend.config import Settings
 from backend.store import encode
 from backend.tests.live import live  # noqa: F401
 from clients import hubcli
+from backend import bot_settings as BS
 
 
 @pytest.fixture
@@ -40,8 +41,8 @@ def api(tmp_path, monkeypatch):
                 {"id": "ben", "email": "ben@acme.example", "team": "product"},
                 {"id": "priya", "email": "priya@acme.example", "team": "sales"}]}),))
             for slug, config in bots.items():
-                c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
-                          (slug, encode(config), "product" if slug == "cpo" else "marketing" if slug == "cmo" else None, "ana"))
+                c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, 'product' if slug == 'cpo' else 'marketing' if slug == 'cmo' else None, 'ana'))
+                BS.write(c, slug, config)
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)",
                       (encode({"completed": "2026-01-01T00:00:00Z"}),))
         yield client

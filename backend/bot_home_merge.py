@@ -295,10 +295,11 @@ def _eligible(c, excluded):
 
 def _synced(c, bot):
     """A bot synced from an outside app (Grok Bot, Dots, Muse): its sync reads and writes the person's own room."""
-    from . import read_cache
-    found = read_cache.rows(c, "SELECT config FROM bot_config WHERE bot IN (?,?) LIMIT 1", (bot["id"], bot["slug"]))
+    from . import bot_settings as BS, read_cache
+    found = read_cache.rows(c, f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} "
+                               "WHERE bc.bot IN (?,?) LIMIT 1", (bot["id"], bot["slug"]))
     row = found[0] if found else None
-    config = H._json(row[0], {}) if row else {}
+    config = H._json(row["config"], {}) if row else {}
     if not isinstance(config, dict):
         return False
     if config.get("app_delivery"):

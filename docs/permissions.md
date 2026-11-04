@@ -97,7 +97,7 @@ report order, the bots' rows (`/api/employees`, `/api/v2/bots`, a bot's detail a
 users, team, department and who they report to), messages and tasks in answers and the event stream (`from_actor`,
 `to_actor`, a conversation's participants, a task's `owner`, `requester`, `closed_by`, `origin_actor` and
 `from_person`, which read `""`), the stream's actors, and `hub sql` (`humans` rows, `humans.teams`, `bot_config`'s
-`team`, `operator`, `reports_to`, owner lists, `created_by` and the same keys in `config`,
+`team`, `operator`, `reports_to`, owner lists, `created_by` and the same keys in `bot_settings.extra`,
 `conversations.participants`, `messages.sender_id` and `to_actor`, `tasks.owner_id`, `requester` and `closed_by`,
 and the `actor` of `events` and of a task's `history_events` rows, which read `''`), and their page, photo and access answer the same
 `404` as someone who does not exist. A hidden group's people and bots are shown under the nearest group above it.
@@ -850,7 +850,7 @@ access you meant there; saving any bot's access, or dismissing the note, clears 
 ## In SQL
 
 `POST /api/v2/sql` is the one place a bot the caller may only see or write to does not appear: the
-`bots`, `bot_status`, `schedules`, `bot_config`, `turns`, `jobs` and related tables hold the bots the caller can read,
+`bots`, `bot_status`, `schedules`, `bot_config`, `bot_settings`, `turns`, `jobs` and related tables hold the bots the caller can read,
 and tasks follow the rule above ([Tico SQL](hub-sql.md)).
 
 ## Tags

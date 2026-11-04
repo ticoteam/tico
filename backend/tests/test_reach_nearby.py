@@ -7,6 +7,7 @@ with no manager counts as reporting to the owner, Ana: doc-updater and Scout, wh
 Cara is a person nobody here reports to. coo is the Assistant, a built-in helper."""
 import json
 
+from backend import bot_settings as BS
 from backend import reach, task_allocator
 from backend.auth import Identity
 from backend.store import H, encode
@@ -28,10 +29,10 @@ def chart(api):
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
         for bot, boss, team in (("cpo", "human:ben", "product"), ("product-design", "cpo", "product"),
                                 ("finance", "cpo", ""), ("ops", "product-design", ""), ("doc-updater", None, "product")):
-            c.execute("UPDATE bot_config SET reports_to=?, team=?, config=json_set(config, '$.team', ?) WHERE bot=?",
-                      (boss, team, team, bot))
+            c.execute("UPDATE bot_config SET reports_to=?, team=? WHERE bot=?", (boss, team, bot))
+            BS.update(c, bot, {"team": team})
         c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('scout', 'scout', 'Scout', 'active')")
-        c.execute("INSERT INTO bot_config(bot, config, team, owner_id) VALUES('scout', '{}', '', 'ana')")
+        c.execute("INSERT INTO bot_config(bot, team, owner_id) VALUES('scout', '', 'ana')")
     as_bot(api, "product-design", "pd-test")
     as_bot(api, "doc-updater", "doc-test")
 

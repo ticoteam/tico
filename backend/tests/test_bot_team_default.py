@@ -5,6 +5,7 @@ import importlib
 import json
 import sqlite3
 
+from backend import bot_settings as BS
 from backend import groups as Groups
 from backend import people as P
 from backend.store import H, encode
@@ -29,9 +30,9 @@ def team_row(api, slug):
     """(the bot's stored team column, its team as the chart reads it, its config's team) for a bot by slug."""
     with api.app.state.store.read() as c:
         bot = H.resolve_bot(c, slug)["id"]
-        row = c.execute("SELECT team, config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        row = c.execute("SELECT team FROM bot_config WHERE bot=?", (bot,)).fetchone()
         roster, configs = Groups._roster(c), Groups._configs(c)
-        return row["team"], P.team_of(bot, configs, roster), json.loads(row["config"]).get("team")
+        return row["team"], P.team_of(bot, configs, roster), BS.read(c, bot).get("team")
 
 
 def chart_row(api, slug):

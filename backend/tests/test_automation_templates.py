@@ -9,6 +9,7 @@ from backend import automation_actions as AA
 from backend import automation_engine as E
 from backend import automation_flow as F
 from backend import automation_templates as T
+from backend import bot_settings as BS
 from backend.tests.automation_fakes import Services
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
 from backend.tests.test_automation_cli import cli
@@ -19,10 +20,10 @@ STAFF = {"coo": "general-counsel", "cpo": "engineering-manager", "finance": "fin
 
 
 def set_templates(api, roles):
-    """Give bots their catalog template (bot_config's config), a None taking it away."""
+    """Give bots their catalog template (bot_settings), a None taking it away."""
     with api.app.state.store.transaction() as c:
         for bot, template in roles.items():
-            c.execute("UPDATE bot_config SET config=json_set(config,'$.template',?) WHERE bot=?", (template, bot))
+            BS.update(c, bot, {"template": template})
 
 
 def listed(api, name):
@@ -33,9 +34,9 @@ def listed(api, name):
 
 
 def set_config(api, bot, key, value):
-    """Set one key of a bot's config (bot_config's JSON), e.g. its profile or harness."""
+    """Set one key of a bot's declaration (bot_settings), e.g. its profile or harness."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,?,?) WHERE bot=?", (f"$.{key}", value, bot))
+        BS.update(c, bot, {key: value})
 
 
 def onboarding(api, bot):

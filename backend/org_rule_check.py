@@ -69,6 +69,7 @@ import weakref
 from datetime import datetime, timedelta, timezone
 
 from clients import judge as J
+from . import bot_settings as BS
 from . import judge as B
 from . import org_rules as R
 from . import groups as G
@@ -1067,9 +1068,9 @@ def _bots_below(c, person):
     authors whose holds can be held for them. More than that is fine; `represented` settles each hold."""
     found, frontier, seen = [], [person], {person}
     while frontier and len(found) < BOTS_BELOW:
-        rows = c.execute("SELECT bot FROM bot_config WHERE reports_to IN (SELECT value FROM json_each(?)) OR "
-                         "(COALESCE(reports_to,'')='' AND json_valid(config) AND "
-                         "json_extract(config,'$.reports_to') IN (SELECT value FROM json_each(?)))",
+        rows = c.execute(f"SELECT bc.bot FROM bot_config bc {BS.JOIN} WHERE bc.reports_to IN (SELECT value FROM json_each(?)) OR "
+                         "(COALESCE(bc.reports_to,'')='' AND "
+                         "json_extract(s.extra,'$.reports_to') IN (SELECT value FROM json_each(?)))",
                          (json.dumps(frontier), json.dumps(frontier))).fetchall()
         frontier = [r[0] for r in rows if r[0] not in seen]
         seen.update(frontier)

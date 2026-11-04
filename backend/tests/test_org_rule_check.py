@@ -18,6 +18,7 @@ from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_api import claim, get, headers, post, setup_attempt  # noqa: F401
 from backend.tests.test_org_rules import api, as_bot, edit, org, rule  # noqa: F401
+from backend import bot_settings as BS
 
 COLOR = "Never tell anyone Acme's favorite color."
 NEEDLE = "favorite color is"
@@ -161,7 +162,8 @@ def test_an_all_bots_rule_covers_a_bot_made_later(ruled):
     rule(api, {"kind": "internal", "text": COLOR, "who": {"all_bots": True}})
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('late-bot', 'late-bot', 'Late', 'active')")
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('late-bot','{}','', 'ana')")
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('late-bot','','ana')")
+        BS.write(c, 'late-bot', {})
     as_bot(api, "late-bot", "late-test")
     assert say(api, "Our favorite color is teal", token="late-test")["held"]
 
@@ -350,8 +352,8 @@ def test_send_anyway_delivers_once_with_no_second_call(ruled):
 def _nobody_near_ops(api):
     """Ops with no person up its chain, no operator, and a default person (Dan) who has left the team."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET owner_id='', reports_to=NULL, config=json_remove(config, "
-                  "'$.reports_to') WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET owner_id='', reports_to=NULL WHERE bot='ops'")
+        BS.remove(c, 'ops', 'reports_to')
         c.execute("INSERT INTO humans(id, name, email) VALUES('dan', 'Dan', 'dan@acme.example')")
         raw = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         raw["default_user"] = "dan"

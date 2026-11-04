@@ -5,6 +5,7 @@ import pytest
 from backend import hubdb as H, rules, verdict_moves as V
 from backend.tests.test_github import PR, _status, _suite, api, hook, post, pr_event  # noqa: F401
 from backend.tests.usage_rows import segment
+from backend import bot_settings as BS
 
 HEAD, NEW, BASE = "a" * 40, "d" * 40, "c" * 40
 STEPS = [("On Deck", "open"), ("In Progress", "doing"), ("Review 1", "review"), ("Review 1 Fixes", "doing"),
@@ -383,9 +384,8 @@ def test_allocator_skips_inactive_pool_members_and_assigns_remaining_checks(api,
             c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot='cmo'", (unavailable["onboarding_state"],))
         if legacy:
             c.execute("PRAGMA ignore_check_constraints=OFF")
-        for key, value in unavailable.get("config", {}).items():
-            c.execute("UPDATE bot_config SET config=json_set(config, ?, ?) WHERE bot='cmo'",
-                      ("$." + key, value))
+        if unavailable.get("config"):
+            BS.update(c, "cmo", unavailable["config"])
 
         assert task_allocator.allocate(c) == [(check["id"], "cpo") for check in checks]
         assert all(H.task(c, check["id"])["owner_id"] == "bot:cpo" for check in checks)
