@@ -442,7 +442,7 @@ def test_a_stop_still_listed_as_running_keeps_its_idle_clock_and_wake_guard(clou
 
     monkeypatch.setattr(cloud.hq, "stop", delayed)
     cloud.hq.calls.clear()
-    cloud.at[0] = before["active_at"] + 300
+    cloud.at[0] = before["active_at"] + 400                # past both the start and the queued job's idle window
     assert cloud.tick() == ["stop"] and cloud.row()["state"] == stop_state
     monkeypatch.setattr(cloud.hq, "stop", stop)
     cloud.manager.synced = None                          # HQ's next list still says running while the stop lands
