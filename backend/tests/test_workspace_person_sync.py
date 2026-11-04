@@ -3,8 +3,8 @@
 import pytest
 
 from backend import google_workspace as workspace, mailbox_access, routines
-from backend.store import H, encode
-from backend.tests.test_api import api, get, post, ready, runner, setup_attempt  # noqa: F401
+from backend.store import H, encode, readiness_document
+from backend.tests.test_api import api, as_member, get, post, ready, runner, setup_attempt  # noqa: F401
 from backend.tests.test_assistant import assistant_turn
 from backend.tests.test_connectors import mail_message
 from backend.tests.test_google_workspace import personal
@@ -22,10 +22,21 @@ def known_person(api, workspace_key):
         return mailbox_access.ensure_mailbox(c, PERSONAL)
 
 
-def computers(api, count=2):
-    made = [runner(api, label=f"Computer {n}") for n in range(count)]
+def contact(api, machine, *, isolated=True):
+    with api.app.state.store.read() as c:
+        report = c.execute("SELECT readiness FROM runner_states WHERE runner_id=?", (machine["runner_id"],)).fetchone()
+        readiness = readiness_document(report[0])
+    readiness.update(schema_version=1, isolated=isolated)
+    return post(api, "runners/heartbeat", {"version": "test", "platform": "test",
+                "readiness": readiness}, machine["token"])
+
+
+def computers(api, count=2, *, operator="ana", isolated=True, shared=False):
+    made = [runner(api, operator=operator, label=f"Computer {n}") for n in range(count)]
     for machine in made:
-        ready(api, machine, [])
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE runners SET accepts_member_bots=? WHERE id=?", (int(shared), machine["runner_id"]))
+        contact(api, machine, isolated=isolated)
     return sorted(made, key=lambda m: m["runner_id"])
 
 
@@ -44,11 +55,11 @@ def addresses(api, machine):
     return {b["address"] for b in get(api, "connectors/mail/targets", machine["token"])["mailboxes"]}
 
 
-def test_botless_person_gets_one_stable_online_owner_and_fails_over(api, known_person):
+def test_botless_person_gets_one_stable_online_server_and_fails_over(api, known_person):
     first, second, third = computers(api, 3)
     machines = [first, second, third]
     assert owners(api, machines) == [first["runner_id"]]
-    ready(api, third, [])                                      # contact order does not change the owner
+    contact(api, third)                                        # contact order does not change the owner
     assert owners(api, machines) == [first["runner_id"]]
     offline(api, first)
     assert owners(api, machines) == [second["runner_id"]]
@@ -58,7 +69,71 @@ def test_botless_person_gets_one_stable_online_owner_and_fails_over(api, known_p
     assert owners(api, machines) == []
 
 
-def test_the_configured_assistants_host_precedes_the_lowest_runner(api, known_person):
+def test_other_peoples_macs_never_take_a_persons_mailbox(api, known_person):
+    machines = [computers(api, 1, operator=person, isolated=False, shared=True)[0]
+                for person in ("ana", "ben", "lena")]
+    ready(api, machines[0], [])                               # unknown isolation is not isolated either
+    # Even an owner's, an admin's or an open-to-members Mac is not a company server.
+    assert owners(api, machines) == []
+    assert addresses(api, machines[0]) == set()
+    for machine in machines[1:]:
+        get(api, "connectors/mail/targets", machine["token"], expected=403)
+    for machine in machines:
+        assert get(api, "runners/connectors", machine["token"])["connectors"] == []
+        token(api, machine["token"], PERSONAL, expected=403)
+        publish(api, machine["token"], PERSONAL, expected=403)
+
+
+def test_isolated_admin_server_precedes_own_mac_and_falls_back_when_offline(api, known_person):
+    own, server = computers(api, operator="ben")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET owner_id='cara' WHERE id=?", (own["runner_id"],))
+    contact(api, own, isolated=False)
+    # The person's Mac has the lower id; server priority still wins.
+    assert owners(api, [own, server]) == [server["runner_id"]]
+    offline(api, server)
+    assert owners(api, [own, server]) == [own["runner_id"]]
+    contact(api, server)
+    assert owners(api, [own, server]) == [server["runner_id"]]
+    as_member(api, "ben@acme.example")
+    assert owners(api, [own, server]) == [own["runner_id"]]
+
+
+def test_own_lowest_online_computer_is_used_without_a_server(api, known_person):
+    first, second = computers(api, operator="cara", isolated=False)
+    assert owners(api, [first, second]) == [first["runner_id"]]
+    offline(api, first)
+    assert owners(api, [first, second]) == [second["runner_id"]]
+    revoke(api, second)
+    assert owners(api, [first, second]) == []
+
+
+def test_a_members_isolated_computer_never_syncs_others_mail_even_when_shared(api, known_person):
+    [machine] = computers(api, 1, operator="lena")
+    assert owners(api, [machine]) == []
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET accepts_member_bots=1 WHERE id=?", (machine["runner_id"],))
+    assert owners(api, [machine]) == []
+
+
+def test_an_assistant_on_a_members_computer_does_not_take_others_mail(api, known_person):
+    [member] = computers(api, 1, operator="lena")
+    [server] = computers(api, 1)
+    api.app.state.store.settings.assistant_bot = "ops"
+    place(api, member, "ops")
+    assert owners(api, [member, server]) == [server["runner_id"]]
+
+
+def test_no_eligible_computer_means_no_sync_and_health_explains_it(api, known_person):
+    assert owners(api, []) == []
+    issues = get(api, "operations")["issues"]
+    assert any(i["kind"] == "google_workspace" and PERSONAL in i["title"] for i in issues)
+    [machine] = computers(api, 1, operator="cara", isolated=False)
+    assert addresses(api, machine) == {PERSONAL}
+    assert not any(i["kind"] == "google_workspace" for i in get(api, "operations")["issues"])
+
+
+def test_the_configured_assistants_host_precedes_the_lowest_server(api, known_person):
     first, assistant = computers(api)
     api.app.state.store.settings.assistant_bot = "ops"
     place(api, assistant, "ops")
@@ -123,8 +198,7 @@ def test_targets_connector_principal_and_token_belong_to_the_chosen_computer_onl
 
 
 def test_a_non_publisher_computer_can_sync_a_botless_workspace_mailbox(api, known_person):
-    machine = runner(api, operator="ben")
-    ready(api, machine, [])
+    [machine] = computers(api, 1, operator="cara", isolated=False)
     assert addresses(api, machine) == {PERSONAL}
     assert token(api, machine["token"], PERSONAL)["access_token"] == "ya29.workspace"
     publish(api, machine["token"], PERSONAL)
@@ -149,21 +223,29 @@ def test_publish_claim_report_and_calendar_follow_the_personal_mailbox_owner(api
     assert post(api, "automations/mail-actions/claim", {"mailbox": PERSONAL}, other["token"])["actions"] == []
 
 
-def test_a_shared_mailbox_without_a_bot_syncs_without_a_roster_person(api, known_person):
-    machines = computers(api)
+def test_a_shared_mailbox_without_a_bot_only_syncs_on_a_server(api, known_person):
+    machines = computers(api, operator="cara", isolated=False)
+    place(api, machines[0], "coo")
     with api.app.state.store.transaction() as c:
         mailbox_access.ensure_mailbox(c, "support@acme.example", kind="shared")
-    assert owners(api, machines, "support@acme.example") == [machines[0]["runner_id"]]
-    assert "support@acme.example" in addresses(api, machines[0])
-    publish(api, machines[0]["token"], "support@acme.example")
+    assert owners(api, machines, "support@acme.example") == []
+    assert "support@acme.example" not in addresses(api, machines[0])
+    [server] = computers(api, 1)
+    machines.append(server)
+    assert owners(api, machines, "support@acme.example") == [server["runner_id"]]
+    assert "support@acme.example" in addresses(api, server)
+    publish(api, server["token"], "support@acme.example")
     assert post(api, "automations/mail-actions/claim", {"mailbox": "support@acme.example"},
-                machines[0]["token"])["actions"] == []
+                server["token"])["actions"] == []
+    offline(api, server)
+    assert owners(api, machines, "support@acme.example") == []
 
 
 def test_sync_does_not_give_a_colocated_bot_mail_api_cli_or_token_access(api, known_person, monkeypatch, capsys):
     from connectors.mail import Refused, access
     from connectors.mail import __main__ as cli
     machine, _, attempt = setup_attempt(api, "ops")
+    contact(api, machine)
     assert attempt["mailbox_levels"] == {} and attempt["mailboxes"] == []
     assert owners(api, [machine]) == [machine["runner_id"]]
     post(api, "connectors/mail/messages", {"mailbox": PERSONAL, "messages": [mail_message()],
