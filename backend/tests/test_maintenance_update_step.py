@@ -1,7 +1,8 @@
 """The Update step (backend/maintenance_steps/update.py) and the update shape it asks for: the zero-work skip, close call D
 (a delivery turn that writes no update is never asked again), the taskless main-lane request, private tasks kept out of
-the request, bottom-up order with a manager waiting on its reports, the linter for version 2 only, purge_rejected
-keeping old updates, the Friday weekly kind, the draft's spend under `update-draft`, and what a turn reports back."""
+the request, bottom-up order with a manager waiting on its reports, the wake limiter (a refused bot stays queued), the
+linter for version 2 only, purge_rejected keeping old updates, the Friday weekly kind, the draft's spend under
+`update-draft`, and what a turn reports back."""
 import importlib.util
 import json
 import sqlite3
@@ -10,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from backend import execution, updates
+from backend import execution, maintenance_limits, updates
 from backend import models as M
 from backend import run_triggers as RT
 from backend.maintenance_steps import update as step
@@ -25,8 +26,17 @@ DAY = "2026-09-29"
 
 
 def ctx(api, now):
-    return {"run_id": "run-test", "window_start": "", "window_end": "", "settings": api.app.state.store.settings,
-            "now": now, "cap": 0.0}
+    """PR1's ctx: `settings` is the step's own row, the app's settings are on the store, and `now` is an H.now() string."""
+    stamp = now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    return {"run_id": "run-test", "window_start": "", "window_end": "", "now": stamp, "cap": 0.0,
+            "settings": {"key": "update", "enabled": 1, "frequency": "day"}, "store": api.app.state.store, "auth": None}
+
+
+def run_step(api, now=TUESDAY):
+    """PR1's runner holds a read connection around the step, and the step writes on its own transaction: so no
+    transaction is open when this runs."""
+    with api.app.state.store.read() as c:
+        return step.run(c, ctx(api, now))
 
 
 def bid(c, slug):
@@ -58,7 +68,8 @@ def test_a_bot_that_did_no_work_since_its_last_update_gets_no_request(api):
         c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('wake-reply',?,?,'say',"
                   "'Nothing new.',?)", (H.bot_actor(idle), H.KEEPER, H.now()))
         assert not step.did_work(c, idle, ""), "a reply to the keeper is not work"
-        result = step.run(c, ctx(api, TUESDAY))
+    result = run_step(api)
+    with store.read() as c:
         assert states(c)[idle] == "skipped", "the idle bot is skipped, not asked"
         assert c.execute("SELECT reason FROM update_queue WHERE bot=? AND day=?", (idle, DAY)).fetchone()["reason"] == updates.NO_WORK
         assert states(c)[ops] == "queued" and result["status"] == "pending" and result["details"]["asked"] >= 1
@@ -78,7 +89,8 @@ def test_a_wake_answered_with_nothing_new_is_no_update_request_even_with_a_memor
                   "'Nothing new since yesterday.',?)", (H.bot_actor(waker), H.KEEPER, H.now()))
         assert not step.did_work(c, waker, ""), "a memory commit and a reply are not work"
         assert step.plan_request(c, waker, DAY) == "skip"
-        step.run(c, ctx(api, TUESDAY))
+    run_step(api)
+    with store.read() as c:
         assert states(c)[waker] == "skipped", "no update request for a wake answered with nothing new"
 
 
@@ -103,9 +115,9 @@ def test_a_bot_with_only_learnings_waiting_gets_one_delivery_turn_that_writes_no
     bot(api, "reader", "Reader")
     monkeypatch.setattr(updates, "request_slots", lambda c, b: {"quiet_tasks": [], "learnings": ["Keep the Friday cut-off"],
                                                                  "suggestions": []})
+    run_step(api)
     with store.transaction() as c:
         reader, ops = bid(c, "reader"), bid(c, "ops")
-        step.run(c, ctx(api, TUESDAY))
         row = c.execute("SELECT * FROM update_queue WHERE bot=? AND day=?", (reader, DAY)).fetchone()
         assert row["state"] == "queued" and row["delivery_only"] == 1, "no work, but learnings waiting: a delivery turn"
         c.execute("UPDATE update_queue SET state='skipped' WHERE day=? AND bot<>?", (DAY, reader))   # only this one goes out
@@ -126,9 +138,10 @@ def test_a_bot_with_only_learnings_waiting_gets_one_delivery_turn_that_writes_no
 def test_an_ask_that_completes_without_an_update_is_asked_again(api):
     store = api.app.state.store
     with store.transaction() as c:
+        turn(c, bid(c, "ops"))
+    run_step(api)
+    with store.transaction() as c:
         ops = bid(c, "ops")
-        turn(c, ops)
-        step.run(c, ctx(api, TUESDAY))
         row = c.execute("SELECT * FROM update_queue WHERE bot=? AND day=?", (ops, DAY)).fetchone()
         assert row["delivery_only"] == 0
         message = updates.send_request(c, row)
@@ -142,9 +155,10 @@ def test_an_ask_that_completes_without_an_update_is_asked_again(api):
 def test_the_request_is_a_taskless_notice_in_the_main_lane_path(api):
     store = api.app.state.store
     with store.transaction() as c:
+        turn(c, bid(c, "ops"))
+    run_step(api)
+    with store.transaction() as c:
         ops = bid(c, "ops")
-        turn(c, ops)
-        step.run(c, ctx(api, TUESDAY))
         c.execute("UPDATE update_queue SET state='skipped' WHERE day=? AND bot<>?", (DAY, ops))
         assert updates.dispatch(c, TUESDAY) == ops
         msg = c.execute("SELECT m.* FROM update_queue q JOIN messages m ON m.id=q.message_id WHERE q.bot=? AND q.day=?",
@@ -171,9 +185,10 @@ def test_bottom_up_order_defers_a_manager_until_its_report_has_posted(api):
     bot(api, "analyst", "Analyst", reports_to="boss")
     store = api.app.state.store
     with store.transaction() as c:
+        turn(c, bid(c, "analyst"))
+    run_step(api)
+    with store.transaction() as c:
         analyst, boss = bid(c, "analyst"), bid(c, "boss")
-        turn(c, analyst)
-        step.run(c, ctx(api, TUESDAY))
         assert states(c)[boss] == "queued", "a manager is asked: its report will post today"
         c.execute("UPDATE update_queue SET state='skipped' WHERE day=? AND bot NOT IN (?,?)", (DAY, analyst, boss))
         assert updates.dispatch(c, TUESDAY) == analyst, "the report is asked first"
@@ -186,10 +201,33 @@ def test_a_manager_whose_reports_have_nothing_to_do_gets_no_request(api):
     bot(api, "boss2", "Manager", reports_to="human:ana")
     bot(api, "quiet-report", "Quiet", reports_to="boss2")
     store = api.app.state.store
-    with store.transaction() as c:
+    run_step(api)
+    with store.read() as c:
         boss, report = bid(c, "boss2"), bid(c, "quiet-report")
-        step.run(c, ctx(api, TUESDAY))
         assert states(c)[report] == "skipped" and states(c)[boss] == "skipped", "neither has work: no roll-up is asked"
+
+
+def test_a_bot_the_limiter_refuses_stays_queued_for_the_next_pass_and_each_request_is_recorded_once(api, monkeypatch):
+    bot(api, "held", "Held")
+    store = api.app.state.store
+    with store.transaction() as c:
+        turn(c, bid(c, "held"))
+        turn(c, bid(c, "ops"))
+    run_step(api)
+    refused, recorded = set(), []
+    monkeypatch.setattr(maintenance_limits, "allow", lambda c, bot_id, task_id=None: bot_id not in refused)
+    monkeypatch.setattr(maintenance_limits, "record", lambda c, bot_id, task_ids=(): recorded.append(bot_id))
+    with store.transaction() as c:
+        held, ops = bid(c, "held"), bid(c, "ops")
+        c.execute("UPDATE update_queue SET state='skipped' WHERE day=? AND bot NOT IN (?,?)", (DAY, held, ops))
+        refused.add(held)
+        assert updates.dispatch(c, TUESDAY) == ops, "the refused bot is passed over on this pass"
+        assert states(c)[held] == "queued", "a refused request is not missed: it stays queued"
+        assert recorded == [ops], "one update request is one wake"
+        c.execute("UPDATE update_queue SET state='posted' WHERE bot=? AND day=?", (ops, DAY))
+        refused.clear()
+        assert updates.dispatch(c, TUESDAY) == held, "the next pass asks the held bot"
+        assert recorded == [ops, held]
 
 
 def test_the_linter_checks_version_two_only(api):
@@ -223,9 +261,9 @@ def test_purge_rejected_keeps_old_updates_and_deletes_new_ones_that_break_the_sh
 def test_a_friday_is_the_weekly_kind(api):
     store = api.app.state.store
     with store.transaction() as c:
-        ops = bid(c, "ops")
-        turn(c, ops)
-        result = step.run(c, ctx(api, FRIDAY))
+        turn(c, bid(c, "ops"))
+    result = run_step(api, FRIDAY)
+    with store.read() as c:
         kinds = {r["kind"] for r in c.execute("SELECT kind FROM update_queue WHERE day='2026-10-02'")}
         assert kinds == {"weekly"} and result["status"] == "pending"
 

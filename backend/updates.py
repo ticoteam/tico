@@ -46,7 +46,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import run_triggers
+from . import maintenance_limits, run_triggers
 from .store import H, Problem
 
 ZONE = ZoneInfo("America/Los_Angeles")
@@ -847,7 +847,10 @@ def dispatch(c, at=None, assistant=None):
         chart = chart or _chart(c)
         if waits_on_reports(c, row, chart):
             continue                      # asked once its reports are in, or the wait is up
+        if not maintenance_limits.allow(c, row["bot"]):
+            continue                      # refused for now: the row stays queued, and the next pass asks again
         send_request(c, row, delivery=bool(row["delivery_only"]))
+        maintenance_limits.record(c, row["bot"])     # one update request is one Maintenance wake
         return row["bot"]
     drafting = set(drafted_people(c))
     for row in c.execute("SELECT * FROM update_queue WHERE state='queued' AND day=? AND bot LIKE 'human:%' "

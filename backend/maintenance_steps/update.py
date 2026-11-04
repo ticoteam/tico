@@ -59,15 +59,29 @@ def _result(status, reason, checked=0, found=0, details=None):
             "details": details or {}}
 
 
+def _at(ctx):
+    """The step's clock. PR1's ctx carries `now` as an H.now() string; a datetime is taken as it is (a test's clock)."""
+    now = ctx.get("now")
+    return H.parse_ts(now) if isinstance(now, str) else now
+
+
 def run(c, ctx):
-    """Start today's cycle (once a day, from START_HOUR) and decide its requests; `pending` while the pump sends them."""
-    local = updates.local_now(ctx.get("now"))
+    """Start today's cycle (once a day, from START_HOUR) and decide its requests; `pending` while the pump sends them.
+
+    `c` is PR1's pooled read connection and is not written to. The cycle's queue, its decisions and their writes all run
+    on one write transaction (ctx["store"]), so the decision is atomic."""
+    local = updates.local_now(_at(ctx))
     if local.hour < updates.START_HOUR:
         return _result("skipped", f"before {updates.START_HOUR:02d}:00 Pacific: today's cycle has not started")
+    with ctx["store"].transaction() as tx:
+        return _cycle(tx, ctx, local)
+
+
+def _cycle(c, ctx, local):
     day = local.date().isoformat()
     kind = updates.kind_for(day)
-    settings = ctx["settings"]
-    writer = updates.writer_for(c, settings, ctx.get("store"))
+    settings = ctx["store"].settings        # the app's settings; ctx["settings"] is this step's own row
+    writer = updates.writer_for(c, settings, ctx["store"])
     built = updates.build_queue(c, day, kind, settings.assistant_bot if writer else None)
     chart = updates._chart(c)
     skipped = delivered = asked = 0
