@@ -160,7 +160,7 @@ fn org_info(app: &App, label: &str, body: Option<&Value>) -> Result<(), String> 
 const BOOT_TIMING_MAX: usize = 4096;
 const BOOT_READS: usize = 16;
 /// The marks a report may carry, in the order an open passes them (ui/app/boot-timing.js BOOT_MARKS).
-const BOOT_MARKS: [&str; 7] = ["head", "bundle-start", "boot", "roster", "route", "native-ack", "paint-fresh"];
+const BOOT_MARKS: [&str; 8] = ["head", "bundle-start", "boot", "paint-cached", "roster", "route", "native-ack", "paint-fresh"];
 /// No time in a report is longer than ten minutes.
 const BOOT_MS_MAX: u64 = 600_000;
 

@@ -6,6 +6,7 @@
 //   tico:head          theme.js ran in the head: the page's HTML has arrived
 //   tico:bundle-start  the bundle's first statement (backend/ui_bundle.py BUNDLE_MARK); not set with the files unbundled
 //   tico:boot          every script has run and boot.js starts
+//   tico:paint-cached  the last screen this person saw here is shown again (boot-snap.js), when there is one
 //   tico:roster        the roster, /me and the people answered
 //   tico:route         the opening page is drawn (its shell and any skeleton)
 //   tico:native-ack    the desktop app answered the signed-in visual address, or its 5 s wait ended; nothing waits on it
@@ -13,7 +14,7 @@
 // With them goes each API read before that paint, with the server's own time (Server-Timing app and auth). In a
 // browser this stays in the page: window.ticoBootTiming, and the marks in the performance timeline. The desktop app
 // gets it once per load as `bootTiming` and writes one line to its log (app/src/bridge.rs boot_line).
-const BOOT_MARKS = ['head', 'bundle-start', 'boot', 'roster', 'route', 'native-ack', 'paint-fresh'];
+const BOOT_MARKS = ['head', 'bundle-start', 'boot', 'paint-cached', 'roster', 'route', 'native-ack', 'paint-fresh'];
 // A page that never settles (a skeleton left up, an error) is reported as it stands after this long.
 const BOOT_PAINT_WAIT_MS = 20000;
 // What the report keeps: the reads before the paint, and paths short enough for one log line.
@@ -78,14 +79,16 @@ function bootPaintWatch() {
   BOOT_ROUTE = S.route;
   const started = Date.now();
   const check = () => {
-    if (BOOT_REPORTED || SESSION.out) return;
+    if (BOOT_REPORTED) return;
+    if (SESSION.out) { bootSnapRelease(); return; }
     const main = document.getElementById('main');
     if (main && main.childElementCount && !main.querySelector('[aria-busy="true"]')) {
       bootMark('paint-fresh');
+      bootSnapRelease(); bootSnapSaveSoon();     // the kept screen goes, and this one is kept once it has filled in
       bootTimingSend(true);
       return;
     }
-    if (Date.now() - started > BOOT_PAINT_WAIT_MS) { bootTimingSend(false); return; }
+    if (Date.now() - started > BOOT_PAINT_WAIT_MS) { bootSnapRelease(); bootTimingSend(false); return; }
     if (document.hidden) setTimeout(check, 100); else requestAnimationFrame(check);
   };
   check();
