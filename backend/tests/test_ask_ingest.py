@@ -1115,6 +1115,19 @@ def test_a_handoff_replays_on_the_day_it_was_put_on_them(gate):
     assert kept["id"] not in [i["ref"] for i in monday]
     assert [(i["ref"], i["created_at"]) for i in tuesday if i["kind"] == "task"] == [(kept["id"], "2026-10-06T09:00:00")]
 
+    with api.app.state.store.transaction() as c:
+        # Let it through makes it theirs: it still counts on the day it was put on them, under the bot that asked.
+        c.execute("UPDATE tasks SET owner_id='human:ben' WHERE id=?", (kept["id"],))
+        human = H.task_create(c, "human:priya", "Priya's task the bot handed on", "", "bot:ops", lint=False)
+        c.execute("UPDATE tasks SET created_at='2026-10-05T11:00:00' WHERE id=?", (human["id"],))
+        c.execute("INSERT INTO ask_ingest_items(id,person,asker,kind,ref,mode,outcome,would,reason,load,created_at) "
+                  "VALUES('ai2','human:ben','bot:ops','task',?,'on','sent_back','sent_back','',0,'2026-10-06T09:30:00')",
+                  (human["id"],))
+        monday = A.replay_items(c, "human:ben", "2026-10-05T00:00:00", "2026-10-06T00:00:00")
+        tuesday = A.replay_items(c, "human:ben", "2026-10-06T00:00:00", "2026-10-07T00:00:00")
+    assert not [i for i in monday if i["kind"] == "task"]
+    assert [(i["ref"], i["asker"]) for i in tuesday if i["kind"] == "task"] == [(kept["id"], "bot:ops"), (human["id"], "bot:ops")]
+
 
 @pytest.mark.parametrize("actor,role,via,expected", [
     ("bot:ops", "bot", "botops", True),

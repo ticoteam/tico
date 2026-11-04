@@ -819,16 +819,21 @@ def replay_items(c, person, start, end, assistant_bot=None):
     well: a replay counts what On would have kept off, not only what landed. A question carries its structured questions
     (refs.questions); a task row carries none, its questions are the ask messages replayed beside it."""
     skip = H.bot_actor(assistant_bot) if assistant_bot else ""
-    # A task filed on them counts on the day it was filed; one the filter acted on, on the day it was put on them (its
-    # ask row), wherever it was created.
-    out = [{"kind": "task", "ref": r["id"], "asker": r["requester_id"], "title": r["title"] or "", "text": r["body"] or "",
+    # A task the filter saw for them counts on the day it was put on them (its ask row, with the bot that asked), wherever
+    # it was created and whoever owns it now (Let it through makes it theirs); any other task filed on them, on the day it
+    # was filed.
+    out = [{"kind": "task", "ref": r["id"], "asker": r["asker"], "title": r["title"] or "", "text": r["body"] or "",
             "asked": None, "created_at": r["at"]}
-           for r in c.execute("SELECT t.id,t.title,t.body,t.requester_id,t.created_at AS at FROM tasks t WHERE t.owner_id=? "
-                              "AND t.created_at>=? AND t.created_at<? AND t.requester_id LIKE 'bot:%' AND t.requester_id<>? "
-                              "UNION SELECT t.id,t.title,t.body,t.requester_id,MIN(i.created_at) FROM ask_ingest_items i "
+           for r in c.execute("SELECT t.id,t.title,t.body,t.requester_id AS asker,t.created_at AS at FROM tasks t "
+                              "WHERE t.owner_id=? AND t.created_at>=? AND t.created_at<? AND t.requester_id LIKE 'bot:%' "
+                              "AND t.requester_id<>? AND NOT EXISTS (SELECT 1 FROM ask_ingest_items i WHERE i.ref=t.id "
+                              "AND i.person=? AND i.kind='task') "
+                              "UNION ALL SELECT t.id,t.title,t.body,i.asker,i.created_at FROM ask_ingest_items i "
                               "JOIN tasks t ON t.id=i.ref WHERE i.person=? AND i.kind='task' AND i.created_at>=? "
-                              "AND i.created_at<? AND t.owner_id<>? AND t.requester_id LIKE 'bot:%' AND t.requester_id<>? "
-                              "GROUP BY t.id", (person, start, end, skip, person, start, end, person, skip))]
+                              "AND i.created_at<? AND i.asker LIKE 'bot:%' AND i.asker<>? AND i.created_at=(SELECT "
+                              "MIN(f.created_at) FROM ask_ingest_items f WHERE f.ref=i.ref AND f.person=i.person "
+                              "AND f.kind='task')",
+                              (person, start, end, skip, person, person, start, end, skip))]
     for m in H._rows(c.execute("SELECT * FROM messages WHERE recipient_id=? AND kind='ask' AND created_at>=? AND created_at<? "
                                "AND sender_id LIKE 'bot:%' AND sender_id<>?", (person, start, end, skip))):
         msg = H.message(c, m["id"]) or m
