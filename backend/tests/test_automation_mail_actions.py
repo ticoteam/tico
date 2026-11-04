@@ -15,7 +15,6 @@ import time_machine
 
 from backend.store import H
 from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_automation_turns import finish
 from clients.tico import APIError
 from connectors.mail import access, audit as audit_log, db, gmail as gm, policy as pl
 from connectors.mail import __main__ as cli
@@ -693,33 +692,35 @@ def test_two_rules_that_fired_and_a_destinations_mail_action_settle_into_one_rec
     assert computer.worker.mail_action_tick() == 0          # nothing left, nothing done twice
 
 
-# ---------------------------------------------------------------------------------------------- a choose turn's reply
+# ---------------------------------------------------------------------------------------------- a direct choose reply
 CHOOSE = {"to": ["legal", "sales"], "default": "sales", "mode": "draft"}
 ROUTES = [{"id": "legal", "name": "Legal", "then": [{"do": "wake_bot", "args": {"bot": "coo", "text": "Routed to legal."}}]},
           {"id": "sales", "name": "Sales", "then": []}]
 
 
 def choosing_bot(choose):
-    """A bot's flow on the inbox: the bot's turn answers `choose`, and the reply goes out through the mail computer."""
+    """A bot's flow on the inbox: the structured call answers `choose`, and the reply goes out through the mail computer."""
     return {"name": "Invoices", "owner": "bot:ops", "trigger": {"type": "message", "inbox": BOX}, "destinations": ROUTES,
             "steps": [{"id": "draft", "type": "llm", "as": "bot:ops", "prompt": "Reply to {{message.from}}.",
                        "out": "reply", "choose": choose}]}
 
 
-def bot_ops(api):
-    r = runner(api, label="Bot Mac")
-    assign(api, r, "ops")
-    ready(api, r, ["ops"])
-    return r
+def triage_answer(monkeypatch, answer):
+    from backend import automation_triage
+    def writer(model):
+        def call(system, user, schema):
+            return {"answer": answer, "model": model, "usage": {"input_tokens": 100, "output_tokens": 20}}
+        call.model = model
+        return call
+    monkeypatch.setattr(automation_triage, "writer", writer)
 
 
-def test_a_choose_answer_drafts_the_reply_in_the_thread_and_runs_the_chain(api, computer):
-    r = bot_ops(api)
+def test_a_choose_answer_drafts_the_reply_in_the_thread_and_runs_the_chain(api, computer, monkeypatch):
+    body = "Sending the deck. {{message.body}}"                 # the body is the reply as written
+    triage_answer(monkeypatch, {"to": "legal", "body": body})
     aid = post(api, "automations", choosing_bot(CHOOSE))["id"]
     computer.sync()
-    assert last_run(api, aid)["status"] == "waiting"           # the bot's turn is in its own task
-    body = "Sending the deck. {{message.body}}"                 # the body is the reply as written
-    finish(api, r, json.dumps({"to": "legal", "body": body}))
+    assert last_run(api, aid)["status"] == "waiting"           # only the mail computer is pending
     assert computer.worker.mail_action_tick() == 1
     draft, = computer.drafts()
     assert body in fake.base64.urlsafe_b64decode(draft["payload"]["body"]["data"] + "==").decode()
@@ -730,12 +731,11 @@ def test_a_choose_answer_drafts_the_reply_in_the_thread_and_runs_the_chain(api, 
     assert [(a["do"], a["ok"]) for a in out["actions"]] == [("draft_reply", True), ("wake_bot", True)]
 
 
-def test_reply_mode_with_the_send_switch_off_saves_a_draft(api, computer):
-    r = bot_ops(api)
+def test_reply_mode_with_the_send_switch_off_saves_a_draft(api, computer, monkeypatch):
+    triage_answer(monkeypatch, {"to": "sales", "body": "Thanks, here is the deck."})
     aid = post(api, "automations", choosing_bot({**CHOOSE, "mode": "reply"}))["id"]
     assert api.patch(f"/api/v2/inboxes/{BOX}", json={"send": False}, headers=headers()).status_code == 200
     computer.sync()
-    finish(api, r, json.dumps({"to": "sales", "body": "Thanks, here is the deck."}))
     assert computer.worker.mail_action_tick() == 1
     assert computer.gmail.sent == [] and len(computer.drafts()) == 1
     assert last_run(api, aid)["steps"][0]["outputs"]["actions"][0]["detail"] == "send_off"

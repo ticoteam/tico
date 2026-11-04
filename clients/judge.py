@@ -776,8 +776,9 @@ def structured_writer(provider, api_key, model, *, timeout=30, opener=None):
 
     def write(system, user, schema):
         try:
-            with opener(llm_request(provider, api_key, model, system, user, MAX_OUTPUT_TOKENS, schema),
-                        timeout=timeout) as response:
+            with within(timeout), opener(
+                    llm_request(provider, api_key, model, system, user, MAX_OUTPUT_TOKENS, schema),
+                    timeout=timeout) as response:
                 payload = read_json(response)
         except urllib.error.HTTPError as exc:
             raise JudgeError("unavailable", f"{provider} answered {exc.code}", exc.code) from None
@@ -793,6 +794,7 @@ def structured_writer(provider, api_key, model, *, timeout=30, opener=None):
         return {"answer": answer, "model": model, "usage": usage}
     write.model = model
     return write
+
 
 def through_hub(client):
     """The hub's `POST /api/v2/decisions` with a turn's credential (`clients.tico.Client`)."""
