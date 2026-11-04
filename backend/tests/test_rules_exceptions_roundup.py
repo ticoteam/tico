@@ -1,4 +1,4 @@
-"""A saved rule on the retired "exceptions" event becomes a task_roundup rule (backend/migrations/0076_rules_exceptions_roundup.py),
+"""A saved rule on the retired "exceptions" event becomes a task_roundup rule (backend/migrations/0078_rules_exceptions_roundup.py),
 so validation and loading never meet an event that no longer exists. Every other rule keeps its event."""
 import importlib
 import json
@@ -6,8 +6,8 @@ import sqlite3
 
 from backend import automations, rules
 
-MIGRATION = importlib.import_module("backend.migrations.0076_rules_exceptions_roundup")
-FLOWS = importlib.import_module("backend.migrations.0077_exceptions_flows_roundup")
+MIGRATION = importlib.import_module("backend.migrations.0078_rules_exceptions_roundup")
+FLOWS = importlib.import_module("backend.migrations.0079_exceptions_flows_roundup")
 NOW = "2026-11-01T00:00:00.000000Z"
 
 
