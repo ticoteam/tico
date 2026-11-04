@@ -205,10 +205,9 @@ function taskItems(state, view = state.view) {
   state.memo?.set(view, out);
   return out;
 }
-// Your Needs you count: the tasks, then the approvals, questions and stale check outside any task, less what was just
-// answered on a card. While only some pages of Needs you are held, the server's count of the whole list.
-const tasksMyCount = active => needsAll() ? active.filter(it => taskNeedsViewer(it.task) && !needsFolded(it.id) && !decideGone('task:' + it.id)).length + needsExtras().length
-  : S.v2.needsCount;
+// Your Needs you count: the filtered tasks and the whole list's approvals, questions and stale checks outside any
+// task, less what was just answered on a card. Every width uses this same scope, however many pages are held.
+const tasksMyCount = active => active.filter(it => taskNeedsViewer(it.task) && !needsFolded(it.id) && !decideGone('task:' + it.id)).length + needsExtrasCount();
 function tasksCounts(state) {
   if (state.loading) return {};
   const active = taskItems(state, 'list');

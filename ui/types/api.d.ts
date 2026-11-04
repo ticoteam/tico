@@ -3366,6 +3366,7 @@ export type NeedsSummary = {
 export type NeedsYou = {
   actor: string;
   bots?: Record<string, number>;
+  by_kind?: Record<string, number>;
   count?: number;
   items: Array<NeedsYouItem>;
   next?: string | null;

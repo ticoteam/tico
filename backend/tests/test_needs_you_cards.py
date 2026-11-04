@@ -2,6 +2,7 @@
 recommendation, show one card per blocker, and the list says how many items went away on their own this week."""
 
 import json
+from collections import Counter
 
 from backend import batch, views
 from backend import hubdb as H
@@ -241,10 +242,13 @@ def test_pages_cut_the_whole_list_and_a_cursor_from_an_older_version_starts_agai
     post(api, "tasks", {"title": "Plan the offsite", "body": "x", "owner": "human:ana"})
     whole = get(api, "needs-you")
     assert whole["next"] is None and whole["count"] == len(whole["items"]) >= 6 and "bots" not in whole
+    kinds = dict(Counter(it["kind"] for it in whole["items"]))
+    assert whole["by_kind"] == kinds and kinds["approval"] == 1
     seen, cursor, page = [], None, None
     while True:
         page = get(api, "needs-you?limit=2" + (f"&cursor={cursor}" if cursor else ""))
         assert page["version"] == whole["version"] and page["count"] == whole["count"] and len(page["items"]) <= 2
+        assert page["by_kind"] == kinds          # approvals on unread pages count before their rows arrive
         seen += page["items"]
         cursor = page["next"]
         if not cursor:
@@ -258,6 +262,31 @@ def test_pages_cut_the_whole_list_and_a_cursor_from_an_older_version_starts_agai
     again = get(api, f"needs-you?limit=2&cursor={held}")
     assert again["restart"] is True and ids(again["items"]) == ids(get(api, "needs-you")["items"][:2])
     get(api, "needs-you?limit=2&cursor=nonsense", expected=422)
+
+
+def test_kind_counts_keep_inbox_attention_separate_and_follow_live_decisions(api):
+    from backend import events as E, threads
+    store, auth, view = api.app.state.store, api.app.state.auth, api.app.state.task_view
+    approval = approval_for_ana(api)
+    post(api, "tasks", {"title": "Review the plan", "body": "x", "owner": "human:ana"})
+    other = post(api, "tasks", {"title": "Review Ben's plan", "body": "x", "owner": "human:ben"})
+    with store.transaction() as c:
+        room = threads.create(c, "human:cara", title="Launch", audience="members", members=["human:ana"])
+        threads.post(c, "human:cara", room["id"], "Please check the launch plan.", to_actor="human:ana")
+    page = get(api, "needs-you?limit=1")
+    whole = get(api, "needs-you")
+    assert page["by_kind"] == dict(Counter(it["kind"] for it in whole["items"]))
+    assert page["by_kind"]["approval"] == 1 and page["by_kind"]["thread_mention"] == 1
+    assert sum(page["by_kind"].values()) == page["count"] > len(page["items"])
+    assert other["id"] not in {it["id"] for it in whole["items"]}
+    who = auth.authenticate({"authorization": "Bearer ana-test"})
+    with store.read() as c:
+        held, after = E.needs_baseline(c, auth, who, view), E.latest(c)
+    post(api, f"approvals/{approval['id']}", {"decision": "declined"})
+    with store.read() as c:
+        event = E.read(c, auth, who, after, topics=("needs",), task_view=view, needs_held=held)[0][-1][2]
+    assert event["by_kind"] == get(api, "needs-you?limit=1")["by_kind"]
+    assert "approval" not in event["by_kind"] and event["by_kind"]["thread_mention"] == 1
 
 
 def test_each_card_task_is_read_by_id_once_however_many_cards(api):

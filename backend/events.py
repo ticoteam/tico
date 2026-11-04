@@ -1530,7 +1530,7 @@ def needs_baseline(c, auth, who, task_view):
 
 
 def _needs_list(view, rows, task_view, held=None):
-    from .views import needs_bots, needs_items, needs_marks, went_away
+    from .views import needs_bots, needs_items, needs_kinds, needs_marks, went_away
     items = needs_items(view.c, view.auth, view.who, task_view)
     away = went_away(view.c, view.who.actor)
     if held is None:
@@ -1542,7 +1542,7 @@ def _needs_list(view, rows, task_view, held=None):
     many = len(changed) + len(removed) > NEEDS_CHANGES_MAX
     entry = {"count": len(items), "version": version, "base": held.get("version"),
              "changed": None if many else changed, "removed": None if many else removed, "went_away": away,
-             "bots": needs_bots(items, view.who.actor)}     # each bot's count, for a page that holds only some items
+             "bots": needs_bots(items, view.who.actor), "by_kind": needs_kinds(items)}   # whole-list counts, even on a page
     held.update(marks=marks, version=version)
     return [(rows[-1], entry)]
 
