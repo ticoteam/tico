@@ -187,7 +187,7 @@ def test_two_tasks_in_one_chain_get_two_identities():
     gate = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [
         {"do": "create_task", "args": {"title": "Legal"}}, {"do": "create_task", "args": {"title": "Finance"}}]}]}
     E.execute(flow(gate), MESSAGE, services)
-    assert services.producers == ["gate", "gate@0.1"]
+    assert services.producers == ["gate", "gate@r0.1"]    # a later task is its place in the rule, not the record index
 
 
 def test_a_destination_task_has_its_own_identity_not_the_steps():

@@ -318,4 +318,13 @@ def test_destinations_round_trip_and_a_version_without_them_restores_without_the
     assert restored["version"] == 3 and "destinations" not in restored
     assert "destinations" not in get(api, f"automations/{aid}")
     assert post(api, f"automations/{aid}/versions/2/restore", {})["destinations"] == LEGAL_DESTINATION
-    assert "destinations" not in patch(api, aid, {"destinations": None})   # null takes them away
+    # Removing the destinations alone is refused: the rule still sends its thread to `legal`, which would name nothing.
+    before = get(api, f"automations/{aid}")
+    refused = patch(api, aid, {"destinations": None}, expected=422)
+    assert "names one of" in json.dumps(refused)
+    after = get(api, f"automations/{aid}")
+    assert (after["steps"], after["destinations"]) == (before["steps"], LEGAL_DESTINATION)   # refused: nothing changed
+    # Clearing the rule's `to` and the destinations together is a valid edit, and it takes both away.
+    no_to = [{**SUBPOENA, "rules": [{k: v for k, v in SUBPOENA["rules"][0].items() if k != "to"}]}]
+    assert "destinations" not in patch(api, aid, {"steps": no_to, "destinations": None})
+    assert "destinations" not in get(api, f"automations/{aid}")
