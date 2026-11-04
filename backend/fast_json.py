@@ -34,12 +34,6 @@ class OrjsonResponse(JSONResponse):
         return dumps(content)
 
 
-class RawJsonResponse(JSONResponse):
-    """JSON already encoded (bytes), answered as it is: still a JSONResponse, so it is compressed like any other."""
-    def render(self, content):
-        return content
-
-
 def answering_json(endpoint, status_code=None):
     """`endpoint`, answering its dicts and lists as an OrjsonResponse; its signature (FastAPI's parameters) and whether
     it is async stay the same. Streams and generators are left alone, as is any other answer."""

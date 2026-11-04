@@ -27,12 +27,11 @@ const BOOT_ROSTER_WAIT_MS = 10000;
 (async () => {
   bootMark('boot');
   let configVersion = nativeVisualVersion();
-  bootReadsPrefetch();               // the six reads below, as one request (hub-v2.js)
   // What the first page needs goes out first: a browser opens only a few connections to one server, so the
   // roster and the opening page's own read are not queued behind the sidebar's counts.
   const employees = get('/employees'), meRead = get('/me');
-  // A roster that never answers (a separate read after /api/v2/boot left it out, a stalled connection) ends in the
-  // error card below, with Try again, rather than a page that waits for ever.
+  // A roster or /me that never answers (a stalled connection, a hub that hangs) ends in the error card below, with
+  // Try again, rather than a page that waits for ever.
   const late = new Promise((_, fail) => setTimeout(() => fail(Object.assign(new Error('Tico took too long to answer.'),
     {timedOut: true})), BOOT_ROSTER_WAIT_MS));
   const roster = Promise.race([Promise.all([employees, meRead, get('/humans').catch(() => ({people: []}))]), late]);
