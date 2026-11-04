@@ -805,7 +805,8 @@ def test_with_the_team_rule_on_a_bots_report_is_sent_at_once_filed_as_the_defaul
     assert again.status_code == 200 and again.json()["ticket"]["id"] == body["ticket"]["id"]
     assert len(hq.seen) == 1 and len(hq.tickets) == 1
     # Without a key the direct path asks for one, as every write does; a report that does not match is refused.
-    assert api.post("/api/v2/approvals", json={"kind": "support", "payload": report}, headers=bot).status_code == 422
+    keyless = {"Authorization": bot["Authorization"]}          # signed_in() always adds a key; this call sends none
+    assert api.post("/api/v2/approvals", json={"kind": "support", "payload": report}, headers=keyless).status_code == 422
     bad = direct("bot-report-2", {"message": REPORT, "content_sha256": "0" * 64})
     assert bad.status_code >= 400 and "doesn't match" in bad.text and len(hq.seen) == 1
 
