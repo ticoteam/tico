@@ -654,3 +654,44 @@ def test_a_date_a_snooze_left_behind_holds_nothing_while_a_snooze_in_force_or_an
         assert f"{left['id'][:8]} Renew the parking permit: Quiet for 2 days, nothing waiting on anyone" in body
         assert snoozed["id"][:8] not in body
         assert explicit["id"][:8] not in body
+
+
+def test_a_private_subtask_or_blocker_its_bot_cannot_read_is_neither_counted_nor_described(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        parent = task(c, "Ship the kiosk")                      # public, owned by finance
+        settle(c, parent["id"], "finance", ago(days=2))
+        child = H.task_create(c, H.human_actor("ben"), "Confidential merger plan", "Keep it quiet.", H.human_actor("ben"),
+                              lint=False, private=True)
+        blocker = H.task_create(c, H.human_actor("ben"), "Confidential term sheet", "Keep it quiet too.",
+                                H.human_actor("ben"), lint=False, private=True)
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,'parent','human:ben',?)",
+                  (child["id"], parent["id"], ago(days=2)))
+        blocks(c, blocker["id"], parent["id"], ago(days=2))
+        for hidden in (child, blocker):
+            c.execute("UPDATE tasks SET status='done' WHERE id=?", (hidden["id"],))
+            H.history_event(c, "task", hidden["id"], H.human_actor("ben"), "status", "doing", "done", "")
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id IN (?,?) AND new='done'",
+                  (ago(hours=1), child["id"], blocker["id"]))
+        complete_jobs(c)
+        assert "finance" in task_roundup.run(c, DAY)["woke"]
+        body = only_list(c)
+        assert f"- {parent['id'][:8]} Ship the kiosk: Quiet for 2 days, nothing waiting on anyone" in body
+        for secret in ("subtask", "blocker", "Confidential", "merger", "term sheet", "Ben", "Keep it quiet"):
+            assert secret not in body, secret
+
+
+def test_a_title_that_names_a_person_makes_no_mention_in_the_roundup_so_no_person_gets_a_delivery_for_it(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        idle = H.task_create(c, H.human_actor("ana"), "Ask @ana about the parking permit", "Ask Ana about it.",
+                             "bot:finance", lint=False)
+        settle(c, idle["id"], "finance", ago(days=2))
+        complete_jobs(c)
+        assert "finance" in task_roundup.run(c, DAY)["woke"]
+        assert "Ask @ana about the parking permit" in only_list(c)
+        message_id = c.execute("SELECT id FROM messages WHERE recipient_id=? AND refs LIKE '%task_roundup%'",
+                               (H.bot_actor("finance"),)).fetchone()[0]
+        assert c.execute("SELECT count(*) FROM message_mentions WHERE message_id=?", (message_id,)).fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM message_deliveries WHERE message_id=? AND recipient LIKE 'human:%'",
+                         (message_id,)).fetchone()[0] == 0
