@@ -178,7 +178,7 @@ def test_a_key_authorized_before_the_read_only_scopes_keeps_minting_what_google_
         # ... so the key keeps minting its write scopes, and the mail connector holds What Tico may do.
         assert W.mint(c, MAILBOX, "gmail")["scopes"] == [GMAIL]
         assert W.mint(c, MAILBOX, "calendar")["scopes"] == [CALENDAR]
-    with api.app.state.store.transaction() as c:        # a row from before migration 0078: no list at all
+    with api.app.state.store.transaction() as c:        # a row from before migration 0081: no list at all
         c.execute("UPDATE google_workspaces SET authorized_scopes=NULL")
     W.forget_tokens()
     with api.app.state.store.read() as c:

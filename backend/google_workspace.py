@@ -118,7 +118,7 @@ def workspace_scopes(service, may=None):
     return list(WORKSPACE_SCOPES[service] if acts(may)[service] else READ_ONLY_SCOPES[service])
 
 
-# The scopes a key from before the read-only ones were authorized for (migration 0078): its row's list is null.
+# The scopes a key from before the read-only ones were authorized for (migration 0081): its row's list is null.
 LEGACY_SCOPES = sorted(scope for scopes in WORKSPACE_SCOPES.values() for scope in scopes)
 
 
