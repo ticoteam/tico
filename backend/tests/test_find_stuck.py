@@ -115,7 +115,7 @@ def test_a_follow_up_whose_time_has_come_is_listed_and_consumed(api):
     with store.transaction() as c:
         tid = task(c, "Chase the quote")["id"]
         task_check_backs.set_time(c, H.task(c, tid), ago(hours=1), "Check whether the quote came in",
-                                  actor=H.human_actor("ana"), at=DAY)
+                                  actor=H.human_actor("ana"), at=ago(hours=2))
         complete_jobs(c)
     assert step(store)["details"]["woken"] == ["finance"]
     body = only_list(store)
@@ -203,6 +203,7 @@ def test_a_stale_candidate_the_bot_owns_is_listed_while_the_switch_is_on(api):
         tid = task(c, "Ship the export button")["id"]
         settle(c, tid, "finance", ago(days=9))
         complete_jobs(c)
+    assert step(store)["details"]["woken"] == ["finance"]
     body = only_list(store)
     assert f"{tid[:8]} Ship the export button: Stale check: Nothing happened on it for 9 days." in body
     assert "Quiet for" not in body, "a task is listed once, as its first kind"
@@ -215,6 +216,7 @@ def test_with_the_switch_off_the_same_task_is_only_quiet(api):
         tid = task(c, "Ship the export button")["id"]
         settle(c, tid, "finance", ago(days=9))
         complete_jobs(c)
+    assert step(store)["details"]["woken"] == ["finance"]
     body = only_list(store)
     assert f"{tid[:8]} Ship the export button: Quiet for 9 days, nothing waiting on anyone" in body
     assert "Stale check" not in body
@@ -241,7 +243,7 @@ def test_a_follow_up_on_a_task_a_person_holds_is_not_listed(api):
         tid = task(c, "Pick the venue")["id"]
         c.execute("UPDATE tasks SET status='waiting', waiting_on=?, note=? WHERE id=?",
                   (H.human_actor("ana"), "Ana, which venue?", tid))
-        task_check_backs.set_time(c, H.task(c, tid), ago(hours=1), "Check the venue", actor=H.human_actor("ana"), at=DAY)
+        task_check_backs.set_time(c, H.task(c, tid), ago(hours=1), "Check the venue", actor=H.human_actor("ana"), at=ago(hours=2))
         complete_jobs(c)
     assert step(store)["woke"] == 0
     assert lists(store) == []
@@ -266,12 +268,12 @@ def test_a_re_armed_follow_up_on_an_unchanged_task_is_listed_again(api):
     store = api.app.state.store
     with store.transaction() as c:
         tid = task(c, "Chase the quote")["id"]
-        task_check_backs.set_time(c, H.task(c, tid), ago(hours=1), "Check the quote", actor=H.human_actor("ana"), at=DAY)
+        task_check_backs.set_time(c, H.task(c, tid), ago(hours=1), "Check the quote", actor=H.human_actor("ana"), at=ago(hours=2))
         complete_jobs(c)
     step(store)
     with store.transaction() as c:
         task_check_backs.set_time(c, H.task(c, tid), ago(minutes=30), "Check the quote again",
-                                  actor=H.human_actor("ana"), at=DAY)
+                                  actor=H.human_actor("ana"), at=ago(hours=1))
         complete_jobs(c)
     assert step(store)["details"]["woken"] == ["finance"]
     again = lists(store)[1]
@@ -314,7 +316,7 @@ def test_a_bot_gets_one_list_with_its_kinds_in_order(api):
     store = api.app.state.store
     with store.transaction() as c:
         due = task(c, "Chase the quote")["id"]
-        task_check_backs.set_time(c, H.task(c, due), ago(hours=1), "Check the quote", actor=H.human_actor("ana"), at=DAY)
+        task_check_backs.set_time(c, H.task(c, due), ago(hours=1), "Check the quote", actor=H.human_actor("ana"), at=ago(hours=2))
         quiet = task(c, "Draft the grant report")["id"]
         settle(c, quiet, "finance", ago(days=3))
         complete_jobs(c)
@@ -327,7 +329,7 @@ def test_the_wake_text_names_no_re_arm(api):
     store = api.app.state.store
     with store.transaction() as c:
         tid = task(c, "Chase the quote")["id"]
-        task_check_backs.set_time(c, H.task(c, tid), ago(hours=1), "Check the quote", actor=H.human_actor("ana"), at=DAY)
+        task_check_backs.set_time(c, H.task(c, tid), ago(hours=1), "Check the quote", actor=H.human_actor("ana"), at=ago(hours=2))
         complete_jobs(c)
         text = task_check_backs.context(c, H.task(c, tid), H.bot_actor("finance"))
     step(store)
