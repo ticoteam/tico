@@ -1446,6 +1446,12 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
 
 def event_readable(c, actor, event):
     event = dict(event)
+    from . import files, teammate_access
+    principals = actor if isinstance(actor, (tuple, list, set)) else [actor]
+    for principal in principals:
+        viewer = teammate_access._viewer_for(c, principal)
+        if viewer is not None and not files.page_event_readable(c, None, viewer, event.get("target"), event.get("detail")):
+            return False
     meetings = meeting_sources(c)
     if not meetings.readable(actor, meetings.references(H._json(event.get("detail"), {}) or {})):
         return False

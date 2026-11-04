@@ -528,7 +528,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "market_pages": "1",
         "docs": "id IS NOT NULL", "doc_versions": "doc_id IN (SELECT id FROM docs)",
         "linked_docs": "id IS NOT NULL",
-        "bot_files": (file_gate + " AND " + (f"bot_id={q(H.actor_id(who.actor))} AND " if bot else "")
+        "bot_files": (function("file") + "(id) AND " + file_gate + " AND " + (f"bot_id={q(H.actor_id(who.actor))} AND " if bot else "")
                       + f"(CASE WHEN scope LIKE 'task:%' THEN substr(scope,6) IN (SELECT id FROM tasks) "
                         "WHEN scope LIKE 'conversation:%' THEN substr(scope,14) IN (SELECT id FROM conversations) "
                         f"ELSE {bots_visible('bot_id')} END)"),
@@ -788,9 +788,16 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                 finally:
                     trusted[0] = False
         index = ReadIndex(Source(), who, rooms=True)
-        functions = {"message": (4, index.message), "attempt": (1, index.attempt),
+        from .files import file_visible, page_event_readable
+        source = index.c
+        def visible_file(fid):
+            row = source.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+            return bool(row) and file_visible(source, auth, who, row, {})
+        functions = {"file": (1, visible_file), "message": (4, index.message), "attempt": (1, index.attempt),
                      "conversation": (1, index.conversation), "meeting_room": (1, index.meeting_room),
-                     "event": (4, index.event), "tag": (2, index.tag), "blob": (1, index.blob),
+                     "event": (4, lambda target, actor, ts, detail:
+                                    page_event_readable(source, auth, who, target, detail) and
+                                    index.event(target, actor, ts, detail)), "tag": (2, index.tag), "blob": (1, index.blob),
                      "settled_message": (5, lambda mid, cid, refs, reply, fast:
                                          True if fast else index.message(mid, cid, refs, reply)),
                      "settled_attempt": (2, lambda aid, fast: True if fast else index.attempt(aid)),

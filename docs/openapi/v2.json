@@ -25730,6 +25730,16 @@
                       "task",
                       "bot"
                     ]
+                  },
+                  "audience": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/AccessAudience"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 }
               }
@@ -59535,6 +59545,17 @@
       "Page": {
         "type": "object",
         "properties": {
+          "audience": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessAudience"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only returned to page managers; null inherits where it is filed"
+          },
           "file_id": {
             "type": "string"
           },
@@ -59681,6 +59702,16 @@
               }
             ],
             "title": "Archived"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessAudience"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,

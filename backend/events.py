@@ -1675,6 +1675,9 @@ def read_in(c, snapshot, auth, who, after, *, topics=TOPICS, conversations=(), b
     floor = (first - 1) if first is not None else newest
     if after > newest or after < floor or newest - after > BACKLOG_MAX:
         return [], newest, True, False
+    if c.execute("SELECT 1 FROM changes WHERE topic='tasks' AND kind='bulk' AND ref='page_access' "
+                 "AND seq>? LIMIT 1", (after,)).fetchone():
+        return [], newest, True, False
     rows = snapshot.changes(who, after, limit, topics, conversations, bots, tasks, parties, threads_scope)
     more = len(rows) >= limit
     cursor = rows[-1]["seq"] if more else newest

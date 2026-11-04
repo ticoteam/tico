@@ -584,7 +584,9 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
             if v is not None:
                 actor = who.actor
                 here = base if route is who or (route and files.visible(c, route, row, served)) else None
-                inline = full or a["kind"] in MEDIA or bool(hosted and here is not None and hosted(v))
+                page = c.execute("SELECT audience FROM pages WHERE file_id=?", (fid,)).fetchone()
+                restricted = bool(page and page["audience"] is not None)
+                inline = full or a["kind"] in MEDIA or bool(not restricted and hosted and here is not None and hosted(v))
                 view["src"] = here + "/visuals/" + mint(key, actor, fid, number) if inline and here is not None else None
                 if not inline:
                     view["open"] = True
@@ -688,6 +690,8 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
         v = c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)).fetchone()
         if not v:
             return gone
+        page = c.execute("SELECT audience FROM pages WHERE file_id=?", (fid,)).fetchone()
+        restricted = bool(page and page["audience"] is not None)
         mime = (v["mime"] or "").split(";", 1)[0].strip().lower()
         kind = kind_of(mime, v["size"])
         if part in ("poster", "preview"):
@@ -709,7 +713,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
     if kind in ("page", "svg") and not part:
         from .tico_storage import visual_link
         # A page with live blocks never has a hosted copy (tico_storage.make_visual), so it is filled in below.
-        link = visual_link(blobs, blob["digest"], blob["size"], mime, ancestors)
+        link = None if restricted else visual_link(blobs, blob["digest"], blob["size"], mime, ancestors)
         if link:
             return Response(status_code=302, headers={"Location": link, "Cache-Control": "private, no-store",
                                                       "Referrer-Policy": "no-referrer"})

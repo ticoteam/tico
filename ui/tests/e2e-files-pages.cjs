@@ -27,6 +27,23 @@ journey('e2e-files-pages', async ({hub, browser, phone}) => {
   assert.match(status, /v\d+/, `${where}: the page shows its version`);
   const view = await drawn(page, '#pg-view', text => text.includes('Engineering weekly'), `${where}: the page draws its title`);
   assert.match(view, /Engineering weekly/, `${where}: the page shows its title`);
+  const access = page.locator('[data-pg-audience]');
+  await access.waitFor();
+  assert.equal((await access.innerText()).trim(), "Everyone who can see where it's filed");
+  await access.click();
+  const editor = page.locator('#access-editor');
+  await editor.locator('[data-access-everyone]').uncheck();
+  await editor.locator('[data-access-pick="people"]').first().check();
+  const saved = page.waitForResponse(r => r.request().method() === 'PATCH' && /\/api\/v2\/pages\//.test(r.url()));
+  await editor.locator('button[type=submit]').click();
+  assert.equal((await saved).status(), 200);
+  await page.locator('.pg-status .pg-lock').waitFor();
+  await page.locator('[data-pg-audience]').click();
+  await editor.locator('[data-access-everyone]').check();
+  const cleared = page.waitForResponse(r => r.request().method() === 'PATCH' && /\/api\/v2\/pages\//.test(r.url()));
+  await editor.locator('button[type=submit]').click();
+  assert.equal((await cleared).status(), 200);
+  await drawn(page, '[data-pg-audience]', text => text.includes("Everyone who can see where it's filed"), `${where}: cleared audience`);
   assertClean(page, `${where}: page open`);
   await shot(page, `e2e-page-${where}`);
 

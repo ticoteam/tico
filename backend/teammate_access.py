@@ -259,6 +259,21 @@ class _Context:
         return self._leads
 
 
+def in_audience(c, viewer, level, auth=None):
+    """Whether an audience names this viewer, including their nested groups, without management exceptions."""
+    return _Context(c, viewer, auth).names(A.audience(level))
+
+
+def parse_audience(c, value):
+    """One audience checked with the same shape and known teammates as the access editor."""
+    from . import views
+    roster = views.roster(c, shared=True)
+    people = {p["id"] for p in roster.get("people") or []} | {h["id"] for h in H.humans(c)}
+    groups = set(roster.get("org_groups") or {})
+    bots = {r["id"] for r in H.bots(c)}
+    return A.parse({level: value for level in AUDIENCE_LEVELS}, people, groups, bots)["read"]
+
+
 def _lead_actor(ref):
     text = str(ref or "").strip()
     return "human:" + text[len("person:"):] if text.startswith("person:") else text

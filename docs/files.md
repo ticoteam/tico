@@ -110,6 +110,9 @@ archive it; the attachment is detached from the task and the action is recorded.
 
 ## Visibility
 
+- A page's **Who can see it** audience can narrow its inherited visibility for humans and bots; pins and task links
+  never bypass it. The maintainer and page managers always pass this audience check ([Pages](pages.md#who-can-see-it)).
+
 A file inherits the visibility of where it came from:
 
 - made for a **task**: whoever can see the task;

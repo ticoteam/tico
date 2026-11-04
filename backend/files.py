@@ -136,6 +136,11 @@ def prime_visible(c, rows):
     H.prime_tasks(c, {row["task_id"] for row in rows if row["task_id"]}
                   | {row["scope"][5:] for row in rows if row["scope"].startswith("task:")})
     H.prime_conversations(c, {row["scope"][13:] for row in rows if row["scope"].startswith("conversation:")})
+    audiences = {row["id"]: None for row in rows}
+    for part in H.chunks(sorted(audiences)):
+        for page in c.execute("SELECT file_id,audience FROM pages WHERE file_id IN (%s)" % ",".join("?" * len(part)), part):
+            audiences[page["file_id"]] = page
+    read_cache.prime(c, PAGE_AUDIENCE_SQL, {(fid,): page for fid, page in audiences.items()})
     versions = {row["id"]: [] for row in rows}
     for part in H.chunks(sorted(versions)):
         for v in c.execute("SELECT file_id,blob_id,attempt_id FROM bot_file_versions WHERE file_id IN (%s)"
@@ -164,11 +169,36 @@ def asked_to_read(c, who, file_id, version=None, cache=None):
     return bool(read) and read["file_id"] == file_id and (version is None or int(version) == read["version"])
 
 
+PAGE_AUDIENCE_SQL = "SELECT audience FROM pages WHERE file_id=?"
+
+
+def page_audience_visible(c, auth, who, row, cache):
+    """A page only narrows its inherited visibility, with management kept outside its audience."""
+    page = read_cache.one(c, PAGE_AUDIENCE_SQL, (row["id"],))
+    if page and page["audience"] is not None:
+        from . import pages, teammate_access
+        key = ("page_audience", row["id"])
+        if key not in cache:
+            cache[key] = (pages.may_manage(c, auth, who, row) or
+                          teammate_access.in_audience(c, who, H._json(page["audience"], {}), auth))
+            other = getattr(who, "task_actor", "")
+            if other and other != who.actor:
+                viewer = teammate_access._viewer_for(c, other)
+                cache[key] = cache[key] and bool(viewer) and (
+                    pages.may_manage(c, auth, viewer, row) or
+                    teammate_access.in_audience(c, viewer, H._json(page["audience"], {}), auth))
+        if not cache[key]:
+            return False
+    return True
+
+
 def file_visible(c, auth, who, row, cache):
     """Whether `who` may know this file exists: its scope's visibility, or a person's pin of it to the Dashboard or a
     team page they see (backend/cards.py widened), and never a runner's. A private task's file is never widened, except
     to the Counsel run a person asked to read it (asked_to_read)."""
     if who.role not in ("owner", "human", "bot"):
+        return False
+    if not page_audience_visible(c, auth, who, row, cache):
         return False
     if asked_to_read(c, who, row["id"], cache=cache):
         return True
@@ -201,6 +231,19 @@ def file_visible(c, auth, who, row, cache):
         return True
     from . import cards
     return cards.widened(c, auth, who, row["id"], cache)
+
+
+def page_event_readable(c, auth, who, target, detail):
+    row = c.execute("SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id WHERE f.id=?", (target,)).fetchone()
+    if not row:
+        return True
+    if not (file_visible(c, auth, who, row, {}) if auth else page_audience_visible(c, auth, who, row, {})):
+        return False
+    data = H._json(detail, {}) if isinstance(detail, str) else detail
+    if isinstance(data, dict) and ("before" in data or "after" in data):
+        from . import pages
+        return pages.may_manage(c, auth, who, row)
+    return True
 
 
 class Files:
