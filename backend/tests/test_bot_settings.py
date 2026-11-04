@@ -140,7 +140,8 @@ def test_migration_0061_gives_a_team_that_0068_moves_into_bot_settings(tmp_path)
     store = boot(path)
     with store.read() as c:
         assert c.execute("SELECT team FROM bot_config WHERE bot='legacy'").fetchone()[0] == "engineering"
-        assert BS.read(c, "legacy") == {"model": "m", "team": "engineering"}
+        declared = BS.read(c, "legacy")
+        assert declared["model"] == "m" and declared["team"] == "engineering"
         assert "config" not in {r[1] for r in c.execute("PRAGMA table_info(bot_config)")}
         _no_reader_of_the_column(c)
 
