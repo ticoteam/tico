@@ -147,7 +147,8 @@ async fn self_update(root: &Path, running: &str) -> (bool, String) {
         return (false, format!("checkout is on {}, not main", if branch.is_empty() { "an unknown branch" } else { &branch }));
     }
     if let Some(note) = crate::repositories::repair_instruction_links(root, &crate::safegit::clean_environment(&crate::env::process_environment())).await {
-        return (false, note);
+        let status = git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await.map(|(_, status)| status).unwrap_or_default();
+        return (false, format!("{note}; changed files: {}", crate::repositories::changed_file_names(&status)));
     }
     let status = match git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await {
         Some((0, status)) => status,

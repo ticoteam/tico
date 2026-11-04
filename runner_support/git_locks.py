@@ -142,9 +142,13 @@ class RecoveryConflict(Exception):
     """Both raced copies stay available and the failed command carries their names to Health."""
 
 
-def quarantine(path, before):
+def quarantine(path, before, archive=None):
     """Keep the inode even if a Git writer replaces the path during our rename."""
-    backup = path.with_name(f"{path.name}.stale-{int(time.time())}-{uuid.uuid4().hex}")
+    directory = archive if archive is not None else path.parent
+    directory.mkdir(parents=True, exist_ok=True)
+    if directory.resolve() != directory:
+        return False
+    backup = directory / f"{path.name}.stale-{int(time.time())}-{uuid.uuid4().hex}"
     path.rename(backup)
     after = backup.lstat()
     if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
@@ -194,7 +198,7 @@ def recover(root, stderr):
                     after = path.lstat()
                     if (before.st_dev, before.st_ino, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_mtime_ns):
                         continue
-                    return quarantine(path, before)
+                    return quarantine(path, before, git_dir / "tico-lock-backups")
                 except OSError:
                     continue
     except OSError:

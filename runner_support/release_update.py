@@ -475,9 +475,10 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
     if branch not in ("main", "HEAD"):        # HEAD: detached, which is where a release update leaves it
         return say("blocked", f"the checkout is on branch {branch}; switch it to main to follow releases")
     instruction_note = repair_instruction_links(root, g)
-    if instruction_note:
-        return say("blocked", instruction_note)
     dirty = [line for line in g("status", "--porcelain", "--untracked-files=no").stdout.splitlines() if line]
+    if instruction_note:
+        names = ", ".join(line[3:] for line in dirty[:3])
+        return say("blocked", instruction_note + (f"; changed files: {names}" if names else ""))
     if dirty:
         # "XY path" lines: the status letters and the space come off; a rename keeps its "old -> new" as it is.
         named = ", ".join(line[3:] for line in dirty[:3])

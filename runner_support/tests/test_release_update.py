@@ -621,7 +621,7 @@ def test_recovery_sidecar_serializes_and_keeps_the_stale_inode(tmp_path, monkeyp
         fcntl.flock(sidecar, fcntl.LOCK_EX | fcntl.LOCK_NB)
         assert not git_locks.recover(tmp_path, error)
     assert git_locks.recover(tmp_path, error)
-    stale = list(metadata.glob("index.lock.stale-*"))
+    stale = list(metadata.rglob("index.lock.stale-*"))
     assert len(stale) == 1 and stale[0].stat().st_ino == inode and stale[0].read_text() == "preserved"
 
 
@@ -676,7 +676,7 @@ def test_two_recoveries_cannot_move_each_others_lock(tmp_path, monkeypatch):
     lock.write_text("new writer's lock")
     assert not git_locks.recover(tmp_path, error)
     assert lock.read_text() == "new writer's lock"
-    assert len(list(metadata.glob("index.lock.stale-*"))) == 1
+    assert len(list(metadata.rglob("index.lock.stale-*"))) == 1
 
 
 def test_a_raced_replacement_keeps_both_names_when_the_original_path_is_taken(tmp_path, monkeypatch):

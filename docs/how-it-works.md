@@ -710,7 +710,8 @@ directories, arguments and environment against the worktree, Git admin and commo
 and refuses recovery when it cannot inspect a possible owner. On macOS it uses `lsof` and `ps`,
 refusing ambiguous output. Rust and Python serialize recovery with `flock` on the common Git
 directory's `tico-lock-recovery` sidecar. After rechecking the inode, they rename the abandoned lock
-to `<name>.stale-<timestamp>-*` and verify the moved inode. Raced replacements are restored only if
+into the common Git directory's `tico-lock-backups/` as `<name>.stale-<timestamp>-*` and verify the
+moved inode. Keeping snapshots outside `refs/` prevents Git from reading them as additional refs. Raced replacements are restored only if
 the original pathname is free; otherwise both copies stay and the failed command names them in
 Health. Quarantined locks are retained; none are cleaned up within a day of quarantine.
 

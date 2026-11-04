@@ -154,8 +154,10 @@ async fn unused(path: &Path, _lock: &std::fs::Metadata, roots: &[PathBuf], stric
 
 pub async fn no_open_file(path: &Path, metadata: &std::fs::Metadata) -> bool { unused(path, metadata, &[], true).await }
 
-fn quarantine(path: &Path, before: &std::fs::Metadata) -> Result<bool, String> {
-    let backup = path.with_file_name(format!("{}.stale-{}-{}", path.file_name().unwrap().to_string_lossy(),
+fn quarantine(path: &Path, before: &std::fs::Metadata, archive: Option<&Path>) -> Result<bool, String> {
+    let directory = archive.unwrap_or_else(|| path.parent().unwrap());
+    if std::fs::create_dir_all(directory).is_err() || directory.canonicalize().ok().as_deref() != Some(directory) { return Ok(false); }
+    let backup = directory.join(format!("{}.stale-{}-{}", path.file_name().unwrap().to_string_lossy(),
         crate::util::epoch_s() as u64, uuid::Uuid::new_v4().simple()));
     if std::fs::rename(path, &backup).is_err() { return Ok(false); }
     if !backup.symlink_metadata().is_ok_and(|m| m.dev() == before.dev() && m.ino() == before.ino()) {
@@ -167,13 +169,13 @@ fn quarantine(path: &Path, before: &std::fs::Metadata) -> Result<bool, String> {
 }
 
 /// Called under the common directory's sidecar, including the first stat and all process inspection.
-async fn move_abandoned(path: &Path, roots: &[PathBuf]) -> Result<bool, String> {
+async fn move_abandoned(path: &Path, roots: &[PathBuf], common: &Path) -> Result<bool, String> {
     let Some(before) = old_file(path) else { return Ok(false) };
     if !path.parent().and_then(|p| p.canonicalize().ok()).is_some_and(|p| roots.iter().any(|r| p.starts_with(r)))
         || !unused(path, &before, roots, false).await { return Ok(false); }
     let Some(after) = old_file(path) else { return Ok(false) };
     if (before.dev(), before.ino(), before.mtime(), before.mtime_nsec()) != (after.dev(), after.ino(), after.mtime(), after.mtime_nsec()) { return Ok(false); }
-    quarantine(path, &before)
+    quarantine(path, &before, Some(&common.join("tico-lock-backups")))
 }
 
 fn metadata_roots(argv: &[String], cwd: Option<&Path>) -> Option<(Vec<PathBuf>, PathBuf)> {
@@ -228,7 +230,7 @@ pub async fn recover(argv: &[String], cwd: Option<&Path>, stderr: &str) -> Resul
     for path in paths {
         let path = if path.is_absolute() { path } else { at.join(path) };
         if !path.parent().and_then(|p| p.canonicalize().ok()).is_some_and(|p| roots.iter().any(|r| p.starts_with(r))) { continue; }
-        if move_abandoned(&path, &processes).await? { return Ok(true); }
+        if move_abandoned(&path, &processes, roots.last().unwrap()).await? { return Ok(true); }
     }
     Ok(false)
 }
@@ -265,7 +267,7 @@ pub async fn idle_locked(root: &Path) -> bool {
                 return false;
             }
             if m.is_dir() { pending.push(path); }
-            else if path.extension().is_some_and(|s| s == "lock") && !move_abandoned(&path, &roots).await.unwrap_or(false) { return false; }
+            else if path.extension().is_some_and(|s| s == "lock") && !move_abandoned(&path, &roots, &root).await.unwrap_or(false) { return false; }
         }
     }
     true
@@ -438,7 +440,7 @@ mod tests {
         drop(python.stdin.take());
         python.wait().unwrap();
         assert!(recover(&argv, None, &error).await.unwrap());
-        let stale: Vec<_> = std::fs::read_dir(&metadata).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("index.lock.stale-")).collect();
+        let stale: Vec<_> = std::fs::read_dir(metadata.join("tico-lock-backups")).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("index.lock.stale-")).collect();
         assert_eq!(stale.len(), 1);
         assert_eq!(stale[0].metadata().unwrap().ino(), inode);
         assert_eq!(std::fs::read_to_string(stale[0].path()).unwrap(), "preserved");
@@ -454,7 +456,7 @@ mod tests {
         let before = lock.metadata().unwrap();
         std::fs::rename(&lock, root.join("old")).unwrap();
         std::fs::write(&lock, "new writer").unwrap();
-        assert!(quarantine(&lock, &before).unwrap_err().contains("Git lock changed during recovery"));
+        assert!(quarantine(&lock, &before, None).unwrap_err().contains("Git lock changed during recovery"));
         assert_eq!(std::fs::read_to_string(&lock).unwrap(), "new writer");
         assert_eq!(std::fs::read_to_string(root.join("old")).unwrap(), "old lock");
         std::fs::remove_dir_all(root).unwrap();

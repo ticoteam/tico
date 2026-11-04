@@ -45,7 +45,11 @@ async fn git(path: &Path, env: &Env, args: &[&str], timeout_s: u64) -> Result<(b
 pub async fn fast_forward(path: &Path, turn: &Env) -> (&'static str, String) {
     let env = crate::safegit::environment(turn);
     let steps = async {
-        if let Some(note) = crate::repositories::repair_instruction_links(path, &env).await { return Err(note); }
+        let instruction_note = crate::repositories::repair_instruction_links(path, &env).await;
+        if let Some(note) = &instruction_note {
+            let (_, status) = git(path, &env, &["status", "--porcelain", "--untracked-files=no"], 15).await?;
+            return Err(format!("{note}; changed files: {}", crate::repositories::changed_file_names(&status)));
+        }
         if !git(path, &env, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], 15).await?.0 {
             return Ok(("skipped", "no upstream"));
         }
