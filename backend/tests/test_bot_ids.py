@@ -108,10 +108,21 @@ def _store_tables(conn):
         conn.executescript(schema)
 
 
-def _shape(conn, table):
+# Migration 0068 moves bot_config.config into bot_settings (test_bot_settings.py checks the declarations): that column goes.
+MOVED_OUT = {"bot_config": ("config",)}
+
+
+def _rows(conn, table, dropped=()):
+    """The table's rows, without the columns the upgrade moves out."""
+    names = [row[1] for row in conn.execute(f'PRAGMA table_info("{table}")') if row[1] not in dropped]
+    select = ", ".join(f'"{name}"' for name in names)
+    return [tuple(r) for r in conn.execute(f'SELECT {select} FROM "{table}"')]
+
+
+def _shape(conn, table, dropped=()):
     """What the upgrade must not change in a child table: its columns, its indexes and triggers as written, and its
     definition after the header (the name in the CREATE statement changes with the rebuild)."""
-    columns = [tuple(row) for row in conn.execute(f'PRAGMA table_info("{table}")')]
+    columns = [tuple(row) for row in conn.execute(f'PRAGMA table_info("{table}")') if row[1] not in dropped]
     indexes = sorted((row[1], row[3]) for row in conn.execute(f'PRAGMA index_list("{table}")'))
     objects = sorted(row[0] for row in conn.execute(
         "SELECT sql FROM sqlite_master WHERE tbl_name=? AND type IN ('index','trigger') AND sql IS NOT NULL",
@@ -160,9 +171,8 @@ class Upgrade(unittest.TestCase):
     def test_upgrade_keeps_every_bot_and_every_child_row_and_moves_references_to_id(self):
         # the fixture's table list is the 14 foreign keys into bots(slug), no more and no less
         self.assertEqual(sorted(BOT_IDS._slug_references(self.conn)), sorted(CHILD_TABLES))
-        before_rows = {table: [tuple(r) for r in self.conn.execute(f'SELECT * FROM "{table}"')]
-                       for table in CHILD_TABLES}
-        before_shape = {table: _shape(self.conn, table) for table in CHILD_TABLES}
+        before_rows = {table: _rows(self.conn, table, MOVED_OUT.get(table, ())) for table in CHILD_TABLES}
+        before_shape = {table: _shape(self.conn, table, MOVED_OUT.get(table, ())) for table in CHILD_TABLES}
         before_violations = {table: len(self.conn.execute(f'PRAGMA foreign_key_check("{table}")').fetchall())
                              for table in CHILD_TABLES}
         bots_before = [tuple(r) for r in self.conn.execute("SELECT slug, display_name, state FROM bots ORDER BY slug")]
@@ -183,18 +193,19 @@ class Upgrade(unittest.TestCase):
 
         for table in CHILD_TABLES:
             with self.subTest(table=table):
-                # every row, with the same values
-                after = [tuple(r) for r in conn.execute(f'SELECT * FROM "{table}"')]
-                self.assertEqual(after, before_rows[table])
+                # every row, with the same values (less the columns the upgrade moves out)
+                dropped = MOVED_OUT.get(table, ())
+                self.assertEqual(_rows(conn, table, dropped), before_rows[table])
                 # every column, index and trigger, and the same definition apart from the header
-                columns, indexes, objects, body = _shape(conn, table)
+                columns, indexes, objects, body = _shape(conn, table, dropped)
                 old_columns, old_indexes, old_objects, old_body = before_shape[table]
                 self.assertEqual(columns, old_columns)
                 self.assertEqual(indexes, old_indexes)
                 self.assertEqual(objects, old_objects)
-                # migration 0002 runs first and adds its status CHECKs; the rest of the definition is the same
-                self.assertEqual(_without_status_checks(body),
-                                 _without_status_checks(old_body.replace("REFERENCES bots(slug)", "REFERENCES bots(id)")))
+                if not dropped:     # a rebuilt definition loses the dropped column's text; its columns are checked above
+                    # migration 0002 runs first and adds its status CHECKs; the rest of the definition is the same
+                    self.assertEqual(_without_status_checks(body),
+                                     _without_status_checks(old_body.replace("REFERENCES bots(slug)", "REFERENCES bots(id)")))
                 # no foreign key still names bots(slug)
                 self.assertFalse([r for r in conn.execute(f'PRAGMA foreign_key_list("{table}")')
                                   if r[2] == "bots" and (r[4] or "").lower() == "slug"])
