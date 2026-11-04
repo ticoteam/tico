@@ -23,7 +23,7 @@ computer, then Tico Gateway when it is on. Otherwise the run waits.
 
 1. Open **Settings → Models** and click **Add subscription**.
 2. Pick the **Kind**: **Claude plan**, **ChatGPT plan**, or an Anthropic or OpenAI API key, and enter a **Name**, such as
-   *Claude Max*.
+   *Claude Max*. For a plan, pick the **Owner**, the person whose plan it is; it defaults to you. An API key has no owner.
 3. For a plan, click **Connect**, open the link and sign in with the account that has the plan (paste back the code the
    page shows, or enter the code Tico shows). Tico saves the result. Or paste it and click **Save**: the token from
    `claude setup-token`, or Codex's `auth.json`. An API key is always pasted.
@@ -34,10 +34,11 @@ session of that tool there starts fresh. When tasks are running, Tico asks first
 subscription does the same on each computer that had it. A computer on an older Tico says **Needs update** instead of a
 picker until it updates.
 
-Each row shows how many computers use it and its usage: the share of the 5-hour or weekly window used, or an API key's
-cost this month. **Reconnect** means the saved login stopped working; connect again or paste a new one from the row's menu. A new value
-restarts the running tasks on each computer that has the subscription, as a switch does, so no run goes on with the
-old one. The page asks first and says how many.
+Each row shows a plan's owner (blank for an API key), how many computers use it and its usage: the share of the 5-hour
+or weekly window used, or an API key's cost this month. **Reconnect** means the saved login stopped working; connect again
+or paste a new one from the row's menu. A new value restarts the running tasks on each computer that has the subscription,
+as a switch does, so no run goes on with the old one. The page asks first and says how many. **Edit** in the same menu
+changes the name or, for a plan, the owner.
 
 Tico model turns on the current Docker runner each use a separate temporary OS user. Other bots on the computer
 cannot read the turn's live environment, open file descriptors or private temporary files, or use its Gateway
@@ -223,9 +224,11 @@ from that page; a code from the previous attempt does not carry over.
 The computer's runner log records the sign-in ID, stages, elapsed time, command exit code and a safe failure category
 (code rejected, OAuth network error, or another OAuth error). It never records the authorization link, code, token or
 raw command output. A generic code rejection cannot say whether that code expired, was reused or was incomplete.
-Connecting a saved subscription is **Reconnect**, and asks first as a pasted value does. It belongs to the company; the list says
-who added it. Owners and admins add, rename, reconnect and remove them in **Settings > Models**; anyone who sees that
-page sees the list (name, kind, status, computers, usage), never a value.
+Connecting a saved subscription is **Reconnect**, and asks first as a pasted value does. It belongs to the company. A plan's
+**Owner** is the person whose plan it is. Whoever adds a plan is its owner, unless an owner or admin names another active
+person in the company, now or later. A plan is for its owner's own bots, not shared ones; the Add dialog says so. Owners
+and admins add, edit (name and owner), reconnect and remove them in **Settings > Models**; anyone who sees that page sees
+the list (name, kind, owner, status, computers, usage), never a value.
 
 Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many
 computers. Every bot on that computer then runs that tool on it. Automatic fallback can use it too when
