@@ -234,7 +234,8 @@ function pageSettings() {
             <p id="settings-team-icon-status" class="settings-cell-note" role="status"></p>
           </div>
         </div>` : ''}
-        <p class="settings-cell-note" id="settings-visuals">${settingsVisualsLine()}</p></section>
+        <p class="settings-cell-note" id="settings-visuals">${settingsVisualsLine()}</p>
+        ${S.me?.role === 'owner' ? '<div id="settings-bot-reports"></div>' : ''}</section>
       <section class="card" id="settings-company"><header><h2>Tico company</h2></header><div id="set-company"></div></section>` : ''}
       <section class="card" id="settings-assistant-pane"><header><h2>${esc(assistantName())}</h2><div class="row">
         <a class="ghost" href="${ASSISTANT}">Open chat</a>
@@ -398,7 +399,7 @@ function settingsShow(tab) {
         // The owner's one click when the team has no Assistant (ui/assistant.js): restore it or add it.
         owner && window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
         privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(),
-        company && settingsIsAdmin() && renderSettingsCompany()]).then(() => settingsReveal(SETTINGS_REVEAL));
+        company && settingsIsAdmin() && renderSettingsCompany(), owner && renderSettingsBotReports()]).then(() => settingsReveal(SETTINGS_REVEAL));
     }
   }
   const peoplePane = $('#settings-people');
@@ -501,6 +502,23 @@ async function renderSettingsAssistantApprovals() {
     catch (e) { toast(e.message, true); }
     void renderSettingsAssistantApprovals();
   });
+}
+// Settings > General > Team: whether a bot's report to the Tico team goes without a card (team rule bot_reports_direct,
+// backend/support.py report_now). Owner only. Off, every bot report waits for a person's yes in Needs you.
+async function renderSettingsBotReports() {
+  const host = $('#settings-bot-reports');
+  if (!host || formBusy(host)) return;
+  let rules;
+  try { rules = (await get('/v2/access')).rules || {}; }
+  catch (e) { if (host.isConnected) host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (!host.isConnected) return;
+  host.innerHTML = `<label class="people-line"><input type="checkbox" role="switch" class="people-switch" id="bot-reports-direct"${rules.bot_reports_direct !== false ? ' checked' : ''} aria-label="Bots send reports to the Tico team without asking">
+    <span>Bots send reports to the Tico team without asking</span></label>`;
+  host.querySelector('#bot-reports-direct').onchange = async ev => {
+    const box = ev.target;
+    try { await put('/v2/access/rules', {bot_reports_direct: box.checked}); toast('Saved'); void renderSettingsBotReports(); }
+    catch (e) { box.checked = !box.checked; settingsFieldError(box, e.message); }
+  };
 }
 // Settings > General > Privacy: the one switch for the anonymous usage count, and a new random install ID (PRIVACY.md).
 async function renderSettingsPrivacy() {

@@ -442,8 +442,15 @@ def consumed(api, approval_id):
         return c.execute("SELECT consumed_at FROM approvals WHERE id=?", (approval_id,)).fetchone()[0]
 
 
+def drafts_only(api):
+    """Bots send without asking when the team lets them, which it does by default. The tests of a drafted report turn
+    that off first: the owner's own setting (backend/team_rules.py bot_reports_direct)."""
+    assert api.put("/api/v2/access/rules", json={"bot_reports_direct": False}, headers=signed_in()).status_code == 200
+
+
 def test_a_bot_drafts_a_person_approves_and_the_bot_sends_one_ticket_owned_by_the_person(environment, hq):  # noqa: F811  (the fixture)
     api = environment()
+    drafts_only(api)
     bot = as_bot(api)
     r = draft(api, bot)
     assert r.status_code == 200, r.text
@@ -477,6 +484,7 @@ def test_a_bot_drafts_a_person_approves_and_the_bot_sends_one_ticket_owned_by_th
 
 def test_without_ids_only_the_message_goes(environment, hq):  # noqa: F811  (the fixture)
     api = environment()
+    drafts_only(api)
     bot = as_bot(api)
     approval = draft(api, bot, include_ids=False).json()
     decide(api, approval["id"])
@@ -486,6 +494,7 @@ def test_without_ids_only_the_message_goes(environment, hq):  # noqa: F811  (the
 
 def test_a_report_is_refused_when_declined_sent_by_another_or_not_what_was_approved(environment, hq):  # noqa: F811  (the fixture)
     api = environment()
+    drafts_only(api)
     bot = as_bot(api)
     declined = draft(api, bot, message="Declined report").json()
     decide(api, declined["id"], "declined")
@@ -519,12 +528,14 @@ def test_a_report_is_refused_when_declined_sent_by_another_or_not_what_was_appro
 ])
 def test_a_draft_that_is_not_exactly_a_report_is_refused(environment, hq, payload, why):  # noqa: F811  (the fixture)
     api = environment()
+    drafts_only(api)
     r = api.post("/api/v2/approvals", json={"kind": "support", "payload": payload}, headers=as_bot(api))
     assert r.status_code >= 400 and why in r.text, r.text
 
 
 def test_support_off_refuses_drafting_and_sending(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
     api = environment()
+    drafts_only(api)
     bot = as_bot(api)
     approval = draft(api, bot).json()
     decide(api, approval["id"])
@@ -536,6 +547,7 @@ def test_support_off_refuses_drafting_and_sending(environment, hq, monkeypatch):
 
 def test_hq_down_or_refusing_spends_nothing_and_a_retry_sends_it(environment, hq):  # noqa: F811  (the fixture)
     api = environment()
+    drafts_only(api)
     bot = as_bot(api)
     approval = draft(api, bot).json()
     decide(api, approval["id"])
@@ -563,6 +575,7 @@ def test_the_person_only_routes_still_refuse_a_bot(environment, hq):  # noqa: F8
 def test_a_bot_reports_and_sends_over_mcp(environment, hq):  # noqa: F811  (the fixture)
     from backend.tests.test_mcp import call, rpc
     api = environment()
+    drafts_only(api)
     as_bot(api)
     tools = {t["name"] for t in rpc(api, "tools/list", token="bot-coo")["result"]["tools"]}
     assert {"hub_support_report", "hub_support_send"} <= tools
@@ -610,6 +623,7 @@ def test_a_persons_own_draft_is_theirs_to_approve_and_is_filed_as_them(environme
 
 def test_a_bots_draft_keeps_the_usual_approver(environment, hq):  # noqa: F811  (the fixture)
     api = environment()
+    drafts_only(api)
     approval = draft(api, as_bot(api)).json()
     approver, _ = decide(api, approval["id"])
     assert approver != "bot:coo" and approver.startswith("human:")
@@ -617,6 +631,7 @@ def test_a_bots_draft_keeps_the_usual_approver(environment, hq):  # noqa: F811  
 
 def test_a_persons_token_cannot_say_yes_to_a_report_through_the_needs_you_list(environment, hq):  # noqa: F811  (the fixture)
     api = environment()
+    drafts_only(api)
     approval = draft(api, as_bot(api)).json()
     with api.app.state.store.read() as c:
         approver = c.execute("SELECT m.recipient_id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
@@ -762,3 +777,64 @@ def test_the_botops_tool_says_botops_and_keeps_its_name_in_the_message(monkeypat
     monkeypatch.setattr(hubtools, "_as_person", lambda api, ref=None: api)
     hubtools.support_file(Api(), {"message": "Sync fails"})
     assert calls == [("support/tickets", {"message": "[BotOps] Sync fails", "include_ids": True, "source": "botops"})]
+
+
+def test_with_the_team_rule_on_a_bots_report_is_sent_at_once_filed_as_the_default_person(environment, hq):  # noqa: F811
+    import hashlib
+    from backend.store import H
+    api = environment()
+    bot = as_bot(api)
+    assert api.get("/api/v2/access", headers=signed_in()).json()["rules"]["bot_reports_direct"] is True
+    report = {"message": REPORT, "content_sha256": hashlib.sha256(REPORT.encode()).hexdigest()}
+
+    def direct(key, payload=report):
+        return api.post("/api/v2/approvals", json={"kind": "support", "payload": payload},
+                        headers={**bot, "Idempotency-Key": key})
+    r = direct("bot-report-1")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM approvals").fetchone()[0] == 0       # no card: nothing waits for a yes
+        person = H.human_actor(H.default_human(c))
+    assert body["sent"] is True and body["filed_as"] == person and body["ticket"]["message"] == REPORT
+    (request,) = hq.seen
+    sent = json.loads(request.content)
+    assert set(sent) == {"message", "version", "install_id", "source"} and sent["source"] == "bot_report"
+    # A retry with the same key is the same ticket, and nothing more reaches HQ.
+    again = direct("bot-report-1")
+    assert again.status_code == 200 and again.json()["ticket"]["id"] == body["ticket"]["id"]
+    assert len(hq.seen) == 1 and len(hq.tickets) == 1
+    # Without a key the direct path asks for one, as every write does; a report that does not match is refused.
+    assert api.post("/api/v2/approvals", json={"kind": "support", "payload": report}, headers=bot).status_code == 422
+    bad = direct("bot-report-2", {"message": REPORT, "content_sha256": "0" * 64})
+    assert bad.status_code >= 400 and "doesn't match" in bad.text and len(hq.seen) == 1
+
+
+def test_with_the_team_rule_off_a_bots_report_waits_for_a_yes_and_only_the_owner_turns_the_rule_on(environment, hq):  # noqa: F811
+    api = environment()
+    bot = as_bot(api)
+    drafts_only(api)
+    approval = draft(api, bot).json()
+    assert approval["kind"] == "support" and hq.seen == []
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM approvals").fetchone()[0] == 1
+    assert api.put("/api/v2/access/rules", json={"bot_reports_direct": True}, headers=bot).status_code >= 400
+
+
+def test_a_persons_token_may_decline_a_report_and_nothing_is_sent(environment, hq):  # noqa: F811
+    api = environment()
+    bot = as_bot(api)
+    drafts_only(api)
+    declined, waiting = draft(api, bot, message="Declined through a token").json(), draft(api, bot).json()
+    with api.app.state.store.read() as c:
+        approver = c.execute("SELECT m.recipient_id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
+                             (declined["id"],)).fetchone()[0]
+    me = api.get("/api/me", headers=signed_in()).json()
+    api.app.state.store.settings.test_identities["approver-token"] = Identity(
+        approver, me.get("role") or "owner", email=me.get("email") or "", via_token=True)
+    token = signed_in("approver-token")
+    assert api.post(f"/api/v2/approvals/{declined['id']}", json={"decision": "declined"}, headers=token).status_code == 200
+    assert api.post(f"/api/v2/approvals/{waiting['id']}", json={"decision": "approved"}, headers=token).status_code == 403
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT decision FROM approvals WHERE id=?", (declined["id"],)).fetchone()[0] == "declined"
+    assert hq.seen == [] and not consumed(api, declined["id"])

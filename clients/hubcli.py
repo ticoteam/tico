@@ -596,8 +596,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub slack channel import               store the channels of the old registry/slack-channels.yaml, once
     hub support file "<message>"           tell the Tico team about a gap or fault (a Confirm card first)
     hub support report --message "..." | --file report.md [--no-ids]
-                                           draft a Tico bug report for the Tico team; a person approves it in Needs
-                                           you (the version and install ID go with it unless --no-ids). Prints its id
+                                           send a Tico bug report to the Tico team: at once when the team lets bots send
+                                           without asking, else drafted for a person to approve in Needs you (the
+                                           version and install ID go with it unless --no-ids). Prints its id or ticket
     hub support send --approval <id>       send the report once a person approved it, filed as them; again is the
                                            same ticket, never a second one
     hub health-monitor findings            the Health Monitor: what the last hourly scan found
@@ -3749,7 +3750,7 @@ def parser():
     s = support.add_parser("file", help="a Confirm card shows the message; nothing is sent until the person confirms")
     s.add_argument("message")
     s.set_defaults(fn="support file")
-    s = support.add_parser("report", help="draft a Tico bug report; a person must approve it before it is sent")
+    s = support.add_parser("report", help="send a Tico bug report (a person approves it first, unless the team lets bots send)")
     text = s.add_mutually_exclusive_group(required=True)
     text.add_argument("--message", help="the whole report: what failed, since when, the exact error, what you tried")
     text.add_argument("--file", help="a file holding the report (UTF-8)")

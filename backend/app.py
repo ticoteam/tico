@@ -905,6 +905,10 @@ def create_app(settings=None):
                                                                          assistant_mod.approval_id(request.url.path))}
                             return record
                     delegation_reset = H.DELEGATION.set(await asyncio.to_thread(cited))
+                    if approves:
+                        # The person's yes to the read-back confirms this approval, as their tap on a Confirm card does: the
+                        # identity says so (`confirmed`), which support.require_person reads for a report. Nothing else changes.
+                        request.state.identity = replace(request.state.identity, confirmed=True)
             early = None
             caller = getattr(request.state, "identity", None)
             if caller:
@@ -5679,6 +5683,11 @@ def create_app(settings=None):
         if body.kind == "support":
             from .support import require_on
             require_on(settings)            # nothing to draft where nothing can be sent (docs/support.md)
+            # A bot's report goes without a card when the team lets bots send without asking (team rule
+            # `bot_reports_direct`, backend/support.py report_now); otherwise, or for anyone else, it is drafted below.
+            sent = app.state.support.report_now(who, body.payload, (request.headers.get("idempotency-key") or "")[:200])
+            if sent is not None:
+                return sent
         def work(c):
             auth.domain(who)
             # What an approval clears is a send, a spend or a publication; an onboarding bot does none of them.
@@ -5721,8 +5730,9 @@ def create_app(settings=None):
         boards = []
         def work(c):
             row = auth.approval(c, who, aid, decide=True)
-            if row["kind"] == "support":
-                # Sending off the install is a person's own tap: not their token or the Assistant (which may have drafted it).
+            if row["kind"] == "support" and body.decision == "approved":
+                # Sending off the install is a person's own tap, or their confirmed yes: not their token, nor an Assistant
+                # that is not confirmed. A decline sends nothing, so anyone who may decide it may decline it.
                 from .support import require_person
                 require_person(who)
             from .company_page import editions

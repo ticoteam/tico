@@ -5,8 +5,8 @@ back the click or the limit the product had before. They are read wherever the d
 direct writes (backend/assistant.py), what BotOps does without a card (backend/botops_act.py), the bots BotOps
 manages in its own runs and who is a credential administrator (backend/auth.py), who stores a credential for their
 own bot (backend/credentials.py), the SQL page and personal tokens, whether a bot goes ahead on its own default when
-a person leaves its ask unanswered (backend/ask_deadlines.py), whether Tico support may be let in
-(backend/support_access.py), whether the hourly stale ticket review runs (backend/stale_review.py), and whether a direct
+a person leaves its ask unanswered (backend/ask_deadlines.py), whether a bot's report to the Tico team goes without a card
+(backend/support.py report_now), whether Tico support may be let in (backend/support_access.py), whether the hourly stale ticket review runs (backend/stale_review.py), and whether a direct
 chat starts fresh when the topic changes (backend/topic_change.py), whether Decide reads a quiet task before its stall
 check stays silent (backend/stall_triage.py), and whether a bot manages its direct reports, and how many it may add or archive a week (backend/report_managers.py).
 The stale review and fresh topics are off by default; those two and
@@ -29,6 +29,7 @@ DEFAULTS = {
     "member_tokens": True,          # members make personal tokens
     "bots_go_ahead": True,          # an ask with a reversible, internal default goes ahead after `go_ahead_days`
     "health_monitor_reports": True,  # the Health Monitor, once turned on, files Tico bug reports without a card
+    "bot_reports_direct": True,     # a bot's report to the Tico team is sent without a card (backend/support.py report_now)
     "support_access": True,         # an owner or admin may let Tico support in from a ticket (backend/support_access.py)
     "stale_review": False,          # the hourly stale ticket review suggests updates to owners (backend/stale_review.py)
     "topic_fresh": False,           # a direct chat starts fresh when the topic changes (backend/topic_change.py)

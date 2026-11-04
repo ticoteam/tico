@@ -5175,8 +5175,9 @@ def support_file(api, args):
 
 
 
-@tool("hub_support_report", "Report a Tico bug to the Tico team (the maintainers): drafts it for a person, who sees the whole "
-      "message in Needs you and approves or declines it. Nothing leaves this install until then; afterwards send it with "
+@tool("hub_support_report", "Report a Tico bug to the Tico team (the maintainers). When the team lets bots send reports without "
+      "asking, it is sent at once and this returns the ticket. Otherwise it drafts it for a person, who sees the whole message "
+      "in Needs you and approves or declines it: nothing leaves this install until then, and afterwards send it with "
       "hub_support_send. Write it self-contained: what failed, since when, the exact error, what you tried. No secrets, "
       "tokens or customer data. Don't hand the person a copy-and-paste task instead.",
       {"message": _s("The whole report, plain text, up to 4000 characters"),
@@ -5188,6 +5189,10 @@ def support_report(api, args):
     if args.get("include_ids") is False:
         payload["include_ids"] = False
     row = api.post("approvals", {"kind": "support", "payload": payload}, key=_key(args))
+    if row.get("sent"):
+        # The team rule let it go at once (backend/support.py report_now): filed as the install's default person.
+        return {"ticket": row.get("ticket"), "sent": True, "filed_as": row.get("filed_as"),
+                "next": "Sent to the Tico team without a person's approval. Replies reach the person it was filed as."}
     return {"approval": row.get("id"), "decision": row.get("decision"),
             "next": "A person must approve it in Needs you. Then send it: hub support send --approval "
                     f"{row.get('id')} (hub_support_send). Until then nothing is sent."}

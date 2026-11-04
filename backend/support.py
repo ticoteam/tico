@@ -10,9 +10,11 @@ timer of its own. Every route shows a person their own tickets and no one else's
 it is stored as plain text and the page escapes it.
 
 A bot (or the Assistant, or a person's token) reports a Tico bug the same way, with one step more: it drafts the report as
-a `support` approval (backend/hubdb.py `lint_support`: the message, its hash, whether the IDs go), a person reads it in
+a `support` approval (backend/hubdb.py `lint_approval`: the message, its hash, whether the IDs go), a person reads it in
 Needs you and says yes, and only then may the bot send it (`file_approved`). The ticket is the approving person's: it is
 filed as them, counts against their day, and its replies show on their Support page. No diagnostics bundle goes this way.
+Unless the team lets bots send without asking (team rule `bot_reports_direct`, on by default): then the bot's report is
+sent at once, filed as the install's default person (`report_now`).
 
 `TICO_SUPPORT=off` removes the feature (an air-gapped install); PRIVACY.md and docs/support.md describe it.
 """
@@ -29,13 +31,13 @@ import httpx
 
 from pydantic import Field
 
-from . import diagnostics, support_asks
+from . import diagnostics, support_asks, team_rules
 from .census import hq_url
 from .auth import Identity
 from .models import Contract
 from .replication import rehearsal_on
 from .credentials import SEALED
-from .store import H, Problem, encode
+from .store import H, Problem, encode, refused
 
 log = logging.getLogger("tico.support")
 
@@ -62,6 +64,10 @@ HQ_WAIT = 8
 # The sources this server names when it files (HQ's `source` field; HQ owns the full list and stores `unknown` for any
 # value it does not know): a person, a bot's report a person approved, BotOps, the Health Monitor.
 SOURCES = ("person", "bot_report", "botops", "health_monitor")
+RULE = "bot_reports_direct"     # the team rule: a bot's report is sent without a card (report_now)
+# Who may act for a person on their confirmation (`Identity.confirmed`): BotOps and the Assistant, with their yes to a
+# read-back or their tap on a Confirm card (backend/app.py, backend/auth.py). Unconfirmed, they are refused here.
+CONFIRMED_VIA = ("botops", "assistant")
 TRANSPORT = None             # tests replace it with an httpx.MockTransport: nothing reaches the network
 CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
 EMAIL = re.compile(r"[^@\s<>\",;()\[\]\\]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\.[A-Za-z]{2,24}")
@@ -166,10 +172,10 @@ def require_on(settings):
 
 
 def require_person(who):
-    """A person at their own browser: not a token, not the Assistant acting for them, not a bot or a computer. BotOps
-    acting with a person's delegated rights (backend/app.py delegated_identity) files as that person; BotOps with its
-    own rights is a bot and is refused."""
-    if who.role not in ("owner", "human") or who.via_token or (who.via and not (who.via == "botops" and who.confirmed)):
+    """A person at their own browser: not a token, not a bot or a computer, and not the Assistant or BotOps acting for
+    them unless they act on the person's confirmation (`confirmed`: a yes to their read-back, or a tap on a Confirm card).
+    Confirmed, they file as that person; BotOps with its own rights is a bot and is refused."""
+    if who.role not in ("owner", "human") or who.via_token or (who.via and not (who.via in CONFIRMED_VIA and who.confirmed)):
         raise Problem("forbidden", "Only a signed-in person can contact support.", 403)
 
 
@@ -437,6 +443,48 @@ class Support:
             if on_filed:
                 on_filed(c, ticket_id)
             return view(c.execute("SELECT * FROM support_tickets WHERE id=?", (ticket_id,)).fetchone())
+
+    def report_now(self, who, payload, key=""):
+        """A bot's report, sent without a card when the team lets bots send without asking (team rule `bot_reports_direct`).
+        Returns None when the rule is off or the caller is not a bot: the caller then drafts it as a `support` approval, as
+        before. Otherwise it gets the checks a drafted report gets (backend/hubdb.py `lint_approval`, a quarantined bot
+        refused, a refusal recorded and counted the same way) and is filed as an approved one is: the same HQ call, the same
+        day limit, the same source. It is filed as the install's default person (`H.default_human`), the one whose yes a
+        drafted report would ask for. A bot has no person of its own to file as; the Health Monitor files as the owner the
+        same way (backend/health_monitor.py report). `key` is the Idempotency-Key the bot sent: a retry gets the same ticket."""
+        from . import lifecycle
+        with self.store.read() as c:
+            if who.role != "bot" or not team_rules.load(c)[RULE]:
+                return None
+        if not key:
+            raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
+        refusal = None
+        with self.store.transaction() as c:
+            c.execute("SAVEPOINT domain_write")
+            try:
+                lifecycle.refuse_send(c, who, None, what="anything")
+                H._writer(c, who.actor)            # the bot is known, and not quarantined
+                problems = H.lint_approval("support", payload)
+                if problems:
+                    H.refuse(c, who.actor, "lint", "; ".join(problems))
+                c.execute("RELEASE domain_write")
+            except H.Refused as exc:
+                refusal = refused(c, who, exc)     # the write undone, the refusal kept and counted
+            person = "" if refusal else H.default_human(c)
+        if refusal:
+            raise refusal
+        if not person:
+            raise Problem("identity", "This install has no person to file a report for yet.", 409)
+        actor = H.human_actor(person)
+
+        def logged(c, ticket_id):                  # in the transaction that keeps the ticket
+            H.event(c, who.actor, "support.reported", ticket_id, {"as": actor})
+            H.path_mentioned(c, who.actor, "support report", json.dumps(payload, sort_keys=True, default=str))
+        ticket = self.file(Identity(actor, "human"),
+                           SupportTicket(message=payload["message"],
+                                         include_ids=payload.get("include_ids", True) is not False),
+                           f"bot:{who.actor}:{key}", on_filed=logged, source="bot_report")
+        return {"ticket": ticket, "sent": True, "filed_as": actor}
 
     def file_approved(self, who, approval_id):
         """Send the report a person approved, for whoever asked for the approval. The ticket is filed as the person who
