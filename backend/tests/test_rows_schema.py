@@ -83,7 +83,7 @@ UNTYPED = frozenset({
     "fin_view_defaults", "fin_view_grants", "fin_view_versions", "flight_db", "flight_events", "flight_process",
     "flight_requests", "flight_slow", "flight_sql", "goal_asks", "goal_checkins", "goal_kpis",
     "goal_proposals", "goals", "google_connects", "google_mail_holders", "google_signin_refusals",
-    "connector_reports", "google_oauth_clients", "google_setup_codes", "google_workspaces",
+    "connector_reports", "google_oauth_clients", "google_revocations", "google_setup_codes", "google_workspaces",
     "granola_connections", "growth_channels", "growth_cohorts",     "growth_settings", "gtm_sources", "health_findings", "health_reports",
     "hook_relay_state", "hosting_enrollments", "human_tokens", "humans", "idempotency", "idempotency_messages",
     "import_refs", "inbound_inboxes", "inbound_messages", "inbound_sync", "intake_items", "invariant_state",

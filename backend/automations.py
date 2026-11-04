@@ -2894,12 +2894,13 @@ def install(app, store, auth, mutate):
 
     # The computer that reads a mailbox carries out the mail actions queued for it (runner_support/connectors.py).
     def mail_computer(c, who, mailbox):
-        """Only the computer that reads this mailbox claims and reports its actions: by the check mail publishing uses
-        (backend/connectors.py `publisher`), and, once the mailbox has been published, only the runner that did."""
+        """Only the computer that may act for this mailbox claims and reports its actions (google_rights.refusal: the
+        computer hosting a Google Workspace mailbox's message bot, the one holding a person's grant, else a publisher),
+        and, once the mailbox has been published, only the runner that did."""
+        from . import google_rights
         from .connectors import human_of
-        runner = app.state.execution.runner(c, who)
-        if not runner or runner["owner_id"] not in (store.settings.processing_operators or (auth.owner_id(c),)):
-            raise Problem("forbidden", "This machine is not assigned the private app-connector capability", 403)
+        runner = google_rights.runner_of(app.state.execution, c, who)
+        google_rights.check(c, runner["id"], google_rights.publishes(store, app.state.execution, c, runner), mailbox)
         box = c.execute("SELECT runner_id FROM mail_mailboxes WHERE address=?", (mailbox,)).fetchone()
         if not box:   # not published yet: no computer has shown it reads this mailbox
             raise Problem("forbidden", "No computer has published this mailbox yet", 403)
@@ -2969,7 +2970,11 @@ def install(app, store, auth, mutate):
             row = c.execute("SELECT * FROM automation_mail_actions WHERE id=?", (mid,)).fetchone()
             if not row:
                 raise Problem("not_found", "No such mail action", 404)
-            mail_computer(c, who, row["mailbox"])
+            # The computer whose lease this is reports it, even after its mailbox moved (plan v4 R): a finished action is
+            # never retried. Any other computer must pass the gate.
+            from . import google_rights
+            if row["claimed_by"] != google_rights.runner_of(app.state.execution, c, who)["id"]:
+                mail_computer(c, who, row["mailbox"])
             if row["state"] in ("done", "failed", "canceled"):
                 return {"id": mid, "state": row["state"]}
             state = ("done" if body.ok else _requeue(c, row) if body.retry and row["attempts"] < MAIL_TRIES else "failed")

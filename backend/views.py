@@ -801,6 +801,37 @@ def operation_issues(c, who, auth):
                 continue
             add("service", row["service"] + " needs attention", row["last_error"] or "The last check failed.",
                 needs_person=bool(detail.get("needs_person")), action=detail.get("action"))
+        # Google connections: the Workspace key that stopped working, a person's grant held on a computer other than
+        # their message bot's, and an old holder's revocation still owed (backend/google_connect.py, google_workspace.py).
+        from . import google_rights, google_workspace
+        key = google_workspace.active(c)
+        if key and key["status"] == "failing":
+            add("google_workspace", "The Google Workspace key is failing",
+                key["last_error"] or "Google has refused the Workspace key for too long.",
+                needs_person=True, action="Check the key in Settings > Google.")
+        labels = {row["id"]: row["label"] for row in c.execute("SELECT id,label FROM runners_with_state")}
+        hosts = google_rights.inbox_hosts(c)
+        for grant in c.execute("SELECT person_id,mailbox,holder FROM google_connects WHERE status='connected' "
+                               "AND holder IS NOT NULL AND grant_hash IS NOT NULL").fetchall():
+            host = (hosts.get(grant["person_id"]) or {}).get("runner")
+            if host and host != grant["holder"]:
+                holder = labels.get(grant["holder"]) or "another computer"
+                add("google_grant", grant["mailbox"] + "'s Google grant is on " + holder,
+                    grant["mailbox"] + "'s Google grant is on " + holder + "; reconnect in Settings > Google or move "
+                    "the bot to " + holder + ".", machine=grant["holder"], needs_person=True,
+                    action="Open Settings > Google")
+        for owed in c.execute("SELECT g.mailbox,g.runner_id,r.label,r.revoked_at FROM google_revocations g "
+                              "LEFT JOIN runners_with_state r ON r.id=g.runner_id").fetchall():
+            label = owed["label"] or "a computer"
+            if owed["revoked_at"]:
+                add("google_revocation", label + " still holds " + owed["mailbox"] + "'s Google access",
+                    label + " was removed, so it can't revoke " + owed["mailbox"] + "'s Google access. Revoke it in the "
+                    "Google Account, then reconnect " + owed["mailbox"] + " in Settings > Google.",
+                    machine=owed["runner_id"], action="Open Settings > Google")
+            else:
+                add("google_revocation", label + " still holds " + owed["mailbox"] + "'s Google access",
+                    label + " moved " + owed["mailbox"] + "'s Google grant to another computer and revokes the old "
+                    "one the next time it is online.", machine=owed["runner_id"], severity="warning", needs_person=False)
         # A connector that stopped refreshing (the Mac lost the network, or the sync hung) writes no
         # error, so its age is checked while a Mac is online: calendar refreshes every 45 s, mail
         # reports every 10 minutes.

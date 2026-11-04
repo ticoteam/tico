@@ -4,8 +4,10 @@ The person asks to connect (`POST /api/v2/mail/google/connect`) and gets Google'
 own OAuth client (TICO_GOOGLE_OAUTH_CLIENT_ID/SECRET, run by whoever runs this server; nobody makes a Google
 Cloud project, a service account or domain-wide delegation). Google sends their browser back to
 `/api/v2/mail/google/callback`, which checks the state belongs to the same person and keeps the one-time code.
-The computer that syncs mail (runner_support/connectors.py) claims it, asks this server to trade it for the grant, confirms
-the account that signed in is the mailbox asked for and keeps the grant (connectors/mail/oauth.py `finish`).
+The computer hosting the person's message bot claims it (a disconnect goes to the computer holding the grant), asks this
+server to trade it for the grant, confirms the account that signed in is the mailbox asked for and keeps the grant
+(connectors/mail/oauth.py `finish`). With no bot computer, a publisher takes a first connect, as before; a reconnect that
+moves the grant leaves the old holder a revocation to run (`google_revocations`).
 
 The OAuth client secret never leaves this server. It is one secret for every team on Tico's public app, so no
 computer holds it: the code exchange (`/exchange`) and every later refresh (`/token`) go through here. The server
@@ -37,6 +39,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import Field
 from typing import Literal
 
+from . import google_rights
 from . import models as M
 from . import routines
 from .google_workspace import oauth_client
@@ -49,6 +52,10 @@ CREATE TABLE IF NOT EXISTS google_connects(
  updated_at TEXT NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS google_connects_oauth_state ON google_connects(oauth_state) WHERE oauth_state IS NOT NULL;
 CREATE TABLE IF NOT EXISTS google_mail_holders(runner_id TEXT PRIMARY KEY, holds INTEGER NOT NULL, seen_at REAL NOT NULL);
+-- A grant an earlier computer still holds after a reconnect moved the person's grant elsewhere (plan v5 V): that
+-- computer revokes it when it next claims, and the row goes. One per person and computer.
+CREATE TABLE IF NOT EXISTS google_revocations(person_id TEXT NOT NULL, runner_id TEXT NOT NULL, mailbox TEXT NOT NULL,
+ created_at TEXT NOT NULL, PRIMARY KEY(person_id, runner_id));
 """
 # The SHA-256 of a grant's refresh token: the one being connected (`pending_hash`, from the exchange) and the one
 # connected (`grant_hash`, once the computer says connected). A fingerprint, never the token.
@@ -237,32 +244,63 @@ def view(row, mailbox, syncing, configured_now):
     return out
 
 
-def claimable(c, runner_id, holds):
-    """The next connect or disconnect this computer may take, or None.
-
-    A person's row belongs to the computer that holds their grant (`holder`): a reconnect or a disconnect goes only
-    there, so a revoke never runs where there is nothing to revoke while the grant stays live elsewhere. A row with no
-    live holder (a first connect) goes to a computer that already holds mail credentials, so mail stays on one
-    computer; any of the publishing computers takes it only when none has said so recently."""
-    expire(c)
-    elsewhere = c.execute(
+def _other_holder(c, runner_id):
+    """Whether another computer holds mail credentials or a live grant, so a publisher leaves a first connect alone."""
+    return c.execute(
         "SELECT 1 FROM google_mail_holders h JOIN runners r ON r.id=h.runner_id AND r.revoked_at IS NULL "
         "WHERE h.runner_id<>? AND h.holds=1 AND h.seen_at>? UNION ALL SELECT 1 FROM google_connects g "
         "JOIN runners r ON r.id=g.holder AND r.revoked_at IS NULL WHERE g.holder<>? LIMIT 1",
-        (runner_id, time.time() - HOLDER_SECONDS, runner_id)).fetchone()
-    return c.execute(
-        "SELECT g.* FROM google_connects g LEFT JOIN runners r ON r.id=g.holder AND r.revoked_at IS NULL "
-        "WHERE g.status IN ('ready','disconnecting') AND (g.holder=? OR (r.id IS NULL AND ?)) "
-        "ORDER BY g.updated_at LIMIT 1", (runner_id, 1 if holds or not elsewhere else 0)).fetchone()
+        (runner_id, time.time() - HOLDER_SECONDS, runner_id)).fetchone() is not None
 
 
-def pending(c, runner_id):
+def claimable(c, runner_id, holds, named=False):
+    """The next connect or disconnect this computer may take, or None (plan v5 V).
+
+    A person's row goes to the computer hosting their message bot when there is one:
+    - a first connect goes there while that computer is online; a publisher takes it only otherwise;
+    - a reconnect goes there, whoever held the earlier grant (its old holder is asked to revoke it, see google_result);
+    - a disconnect goes to the holder, the only computer that can revoke the grant it holds.
+    With no bot computer, the rules are as they were: the holder; or, for a publisher, a first connect or a grant whose
+    holder was removed, unless another computer has said it holds mail credentials recently."""
+    expire(c)
+    rows = c.execute("SELECT * FROM google_connects WHERE status IN ('ready','disconnecting') "
+                     "ORDER BY updated_at").fetchall()
+    if not rows:
+        return None
+    hosts = google_rights.inbox_hosts(c)
+    live = {r[0] for r in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL")}
+    elsewhere = None
+    for row in rows:
+        host = hosts.get(row["person_id"]) or {}
+        holder = row["holder"]
+        holder_live = bool(holder) and holder in live
+        if elsewhere is None:
+            elsewhere = _other_holder(c, runner_id)
+        orphan = named and (holds or not elsewhere)     # a publisher, when no other computer has said it holds mail
+        if row["status"] == "disconnecting":
+            mine = holder == runner_id or (not holder_live and orphan)
+        elif holder and host.get("runner"):
+            mine = host["runner"] == runner_id          # a reconnect routes to the bot's computer
+        elif holder:
+            mine = holder == runner_id or (not holder_live and orphan)
+        elif host.get("runner") and host.get("online"):
+            mine = host["runner"] == runner_id          # a first connect goes to the bot's computer while it is online
+        else:
+            mine = orphan
+        if mine:
+            return row
+    return None
+
+
+def pending(c, runner_id, named=False):
     """Whether a connect or disconnect waits for this computer, which has no mail credentials yet (otherwise its
     connectors job runs anyway): the job then runs for it (backend/connectors.py)."""
-    return claimable(c, runner_id, False) is not None
+    return claimable(c, runner_id, False, named) is not None
 
 
-def install(app, store, publisher, mutate):
+def install(app, store, member, mutate):
+    """The four routes a computer takes its part of a connect or disconnect on. `member(c, who)` returns the computer
+    and whether it is a publisher; each route then applies the narrow gate of plan v4 O, never publisher() alone."""
     settings = store.settings
 
     def person_view(c, who):
@@ -358,14 +396,25 @@ def install(app, store, publisher, mutate):
         """The next connect or disconnect for the computer that syncs mail. A connect carries no code and no
         secret: the computer asks `/exchange` for the grant, and the code is spent there."""
         with store.transaction() as c:
-            runner = publisher(c, request.state.identity)
+            runner, named = member(c, request.state.identity)
             holds = bool(body and body.holds_mail)
             c.execute("INSERT INTO google_mail_holders(runner_id,holds,seen_at) VALUES(?,?,?) ON CONFLICT(runner_id) "
                       "DO UPDATE SET holds=excluded.holds,seen_at=excluded.seen_at", (runner["id"], int(holds), time.time()))
             # Only recent answers count (claimable), so older ones and revoked computers' go.
             c.execute("DELETE FROM google_mail_holders WHERE seen_at<? OR runner_id IN "
                       "(SELECT id FROM runners WHERE revoked_at IS NOT NULL)", (time.time() - HOLDER_SECONDS,))
-            row = claimable(c, runner["id"], holds)
+            # A grant this computer must revoke after a reconnect moved it (plan v5 V) comes before anything new here, so
+            # a connect never lands on a computer still holding the grant it replaces.
+            owed = c.execute("SELECT * FROM google_revocations WHERE runner_id=? ORDER BY created_at LIMIT 1",
+                             (runner["id"],)).fetchone()
+            if owed:
+                return {"connect": {"id": owed["person_id"], "action": "disconnect", "mailbox": owed["mailbox"]}}
+            # The narrow gate (plan v4 O): a publisher, or a computer that hosts someone's message bot, or one holding a grant.
+            hosted = any(host["runner"] == runner["id"] for host in google_rights.inbox_hosts(c).values())
+            if not named and not hosted and not c.execute(
+                    "SELECT 1 FROM google_connects WHERE holder=? LIMIT 1", (runner["id"],)).fetchone():
+                raise Problem("forbidden", google_rights.FORBIDDEN, 403)
+            row = claimable(c, runner["id"], holds, named)
             if not row:
                 return {"connect": None}
             action = "connect" if row["status"] == "ready" else "disconnect"
@@ -387,11 +436,13 @@ def install(app, store, publisher, mutate):
         """Trade a claimed connect's code for its grant, for the computer that claimed it, once. The code and the
         verifier are cleared before Google is asked; the answer goes to that computer and is not kept here."""
         with store.transaction() as c:
-            runner = publisher(c, request.state.identity)
+            runner, named = member(c, request.state.identity)
             row = c.execute("SELECT * FROM google_connects WHERE person_id=?", (person_id,)).fetchone()
             if (not row or row["runner_id"] != runner["id"] or row["status"] != "finishing" or not row["code"]
                     or not row["verifier"]):
                 raise Problem("state", "No sign-in code waits for this computer to exchange", 409)
+            if not google_rights.may_row(runner["id"], named, row, google_rights.inbox_hosts(c)):
+                raise Problem("forbidden", google_rights.FORBIDDEN, 403)
             code, verifier = row["code"], row["verifier"]
             c.execute("UPDATE google_connects SET code=NULL,verifier=NULL,updated_at=? WHERE person_id=?",
                       (H.now(), person_id))
@@ -417,7 +468,7 @@ def install(app, store, publisher, mutate):
         if not wanted <= SERVICE_SCOPES[body.service]:
             raise Problem("scope", f"A {body.service} token from Connect Google carries only its read-only scopes", 422)
         with store.transaction() as c:
-            runner = publisher(c, request.state.identity)
+            runner, _ = member(c, request.state.identity)
             held = c.execute("SELECT 1 FROM google_connects WHERE lower(mailbox)=? AND holder=? AND grant_hash=? "
                              "LIMIT 1", (body.mailbox.strip().lower(), runner["id"],
                                          fingerprint(body.refresh_token))).fetchone()
@@ -444,12 +495,27 @@ def install(app, store, publisher, mutate):
     @app.post("/api/v2/connectors/mail/google/{person_id}/result")
     def google_result(person_id: str, request: Request, body: ConnectorResult):
         with store.transaction() as c:
-            runner = publisher(c, request.state.identity)
+            runner, named = member(c, request.state.identity)
             row = c.execute("SELECT * FROM google_connects WHERE person_id=?", (person_id,)).fetchone()
+            owed = c.execute("SELECT * FROM google_revocations WHERE person_id=? AND runner_id=?",
+                             (person_id, runner["id"])).fetchone()
+            if owed and body.status == "disconnected" and not (
+                    row and row["runner_id"] == runner["id"] and row["status"] == "revoking"):
+                # The old grant this computer held is revoked (plan v5 V); the row's own connect or disconnect is not this.
+                c.execute("DELETE FROM google_revocations WHERE person_id=? AND runner_id=?", (person_id, runner["id"]))
+                H.event(c, "human:" + person_id, "mail.google.revoked", owed["mailbox"], {})
+                return {"ok": True}
             if not row:
                 raise Problem("not_found", "No Google connect is waiting for this person", 404)
             if row["runner_id"] != runner["id"] or row["status"] not in ("finishing", "revoking"):
                 raise Problem("state", "This Google connect is not this computer's to finish", 409)
+            if not google_rights.may_row(runner["id"], named, row, google_rights.inbox_hosts(c)):
+                raise Problem("forbidden", google_rights.FORBIDDEN, 403)
+            if body.status == "connected" and row["holder"] and row["holder"] != runner["id"]:
+                # The grant it replaces stays on the computer that held it until that computer revokes it (plan v5 V).
+                c.execute("INSERT INTO google_revocations(person_id,runner_id,mailbox,created_at) VALUES(?,?,?,?) "
+                          "ON CONFLICT(person_id,runner_id) DO UPDATE SET mailbox=excluded.mailbox",
+                          (person_id, row["holder"], row["mailbox"], H.now()))
             if (row["status"] == "finishing") != (body.status != "disconnected"):
                 raise Problem("state", "That result does not answer this request", 409)
             kind = body.kind if body.kind in KINDS else ("error" if body.status == "failed" else None)
