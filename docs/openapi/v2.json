@@ -23174,6 +23174,18 @@
                     ],
                     "title": "Private"
                   },
+                  "audience": {
+                    "anyOf": [
+                      {
+                        "const": "participants",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Audience"
+                  },
                   "review": {
                     "anyOf": [
                       {
@@ -23344,6 +23356,18 @@
                       }
                     ],
                     "title": "Private"
+                  },
+                  "audience": {
+                    "anyOf": [
+                      {
+                        "const": "participants",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Audience"
                   },
                   "review": {
                     "anyOf": [
@@ -61857,6 +61881,22 @@
               }
             ],
             "title": "Send To"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "team",
+                  "participants",
+                  "private"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience"
           }
         },
         "additionalProperties": false,

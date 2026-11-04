@@ -442,6 +442,75 @@ impl Tico {
             Ok(())
         })
     }
+    /// Keeps a live-shared meeting on this computer only: Tico ends it and removes what was said
+    /// (and the transcript it filed for review, if Finish got that far). A Tico without the
+    /// discard call still ends the meeting, then says what stays there.
+    pub fn keep_local(&self, store: &Store, id: &str) -> Result<()> {
+        let _guard = store.live_lock();
+        let context = store.context(id)?;
+        ensure!(
+            context.live_destination == self.destination.id && !context.live_id.is_empty(),
+            "Connect this meeting first"
+        );
+        let record = store.get(id)?;
+        ensure!(record.state != "recording", "Stop recording first");
+        let filed = record
+            .deliveries
+            .iter()
+            .find(|entry| entry.destination_id == self.destination.id);
+        ensure!(
+            !filed.is_some_and(saved_in_tico),
+            "This meeting is already saved to Tico"
+        );
+        // Durable first, so recovery cannot file it while the requests run.
+        store.update_context(id, |c| {
+            c.live_discarded = true;
+            Ok(())
+        })?;
+        if let Some(entry) = filed.filter(|entry| !entry.meeting_id.is_empty()) {
+            self.call(
+                &format!("/api/v2/meetings/{}/delete", entry.meeting_id),
+                Some(&json!({})),
+                &format!("recorder:{id}:keep-local:delete"),
+            )?;
+            store.remove_delivery(id, &self.destination.id)?;
+        }
+        let prefix = format!("/api/v2/live-meetings/{}", context.live_id);
+        let removed = self.call(
+            &format!("{prefix}/discard"),
+            Some(&json!({})),
+            &format!("recorder:{id}:keep-local"),
+        );
+        let older = match &removed {
+            Ok(_) => false,
+            // A Tico without the discard route answers 404, which reads as the older-Tico message.
+            Err(error)
+                if error
+                    .chain()
+                    .any(|cause| cause.to_string() == crate::network::OLD_TICO) =>
+            {
+                true
+            }
+            Err(_) => return removed.map(|_| ()),
+        };
+        if older && context.live_state != "ended" {
+            self.call(
+                &format!("{prefix}/control"),
+                Some(&json!({"action":"end"})),
+                &format!("recorder:{id}:live:end"),
+            )?;
+        }
+        store.update_context(id, |c| {
+            c.live_state = "ended".into();
+            c.live_removed = !older;
+            Ok(())
+        })?;
+        ensure!(
+            !older,
+            "Ended in Tico. This Tico keeps the live transcript until it is updated."
+        );
+        Ok(())
+    }
     pub fn finish_live(&self, store: &Store, id: &str) -> Result<()> {
         // Keep controls serialized through the final sync and end request.
         let _guard = store.live_lock();
@@ -727,7 +796,7 @@ pub fn item_send_blocked(context: &crate::workspace::Context) -> Option<&'static
     if context.live_discarded {
         Some("This meeting was discarded; its recording stays local")
     } else if context.live_state == "paused" || context.locally_paused {
-        Some("Resume sharing before sending an action item")
+        Some("Resume sharing before creating a task")
     } else {
         None
     }
@@ -1600,4 +1669,10 @@ pub fn shared_transcript(store: &Store, record: &Recording, recording: bool) -> 
         );
     }
     Some(json!({"id": record.id, "live": recording, "shared": true, "blocks": blocks}))
+}
+
+/// Whether a delivery left the meeting saved in Tico for its audience: sent, or approved there even if a later step
+/// failed. A Save that failed before approval (or is still partial) is not: This Mac and Delete still clean it up.
+pub fn saved_in_tico(entry: &crate::store::Delivery) -> bool {
+    entry.status == "sent" || entry.receipt["approved"] == true
 }

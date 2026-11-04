@@ -174,3 +174,28 @@ def test_subscription_runs_count_unless_the_team_turns_that_off(api):
     assert get(api, "usage/limits")["default"]["count_subscription"] is False      # a saved choice stays
     assert put(api, "usage/limits", {"daily_usd": 20})["default"]["count_subscription"] is False   # left out keeps it
     assert put(api, "usage/limits", {"count_subscription": True})["default"]["count_subscription"] is True
+
+
+def test_a_hold_counts_live_runs_once_even_when_claims_repeat(api, monkeypatch, caplog):
+    from backend import usage_limits
+
+    r = fleet(api)
+    finish(api, r, start(api, r), 500_000)
+    put(api, "usage/limits/ops", {"daily_usd": 1})
+    monkeypatch.setattr(usage_limits, "LOGGED", set())
+    caplog.clear()
+    with api.app.state.store.transaction() as c:
+        c.executemany("INSERT INTO attempts(id, bot_id, created_at, state) VALUES(?, ?, ?, ?)",
+                      [("live-lease", "cpo", "2026-10-15T12:00:00Z", "leased"),
+                       ("live-run", "product-design", "2026-10-15T12:00:00Z", "running")])
+        mine = usage_limits.own(c, "ops")
+        queries = []
+        c.set_trace_callback(queries.append)
+        try:
+            assert usage_limits.blocked(c, "ops", mine=mine) == "daily"
+            assert usage_limits.blocked(c, "ops", mine=mine) == "daily"
+        finally:
+            c.set_trace_callback(None)
+    logs = [r for r in caplog.records if r.name == "backend.usage_limits"]
+    assert len(logs) == 1 and logs[0].args[-3:] == (5, 1, 2)
+    assert len([q for q in queries if "SELECT count(*) FROM attempts WHERE state" in q]) == 1

@@ -57,6 +57,14 @@ pub(crate) fn response(response: reqwest::blocking::Response) -> Result<Value> {
         if matches!(status.as_u16(), 404 | 405) && code == "request_failed" {
             anyhow::bail!("{OLD_TICO}");
         }
+        // Tico's own words, for a refusal the person acts on there.
+        if code == "already_sent"
+            && let Some(detail) = detail
+                .as_ref()
+                .and_then(|value| value["error"]["detail"].as_str())
+        {
+            anyhow::bail!("{detail}");
+        }
         if code == "meeting_router" {
             anyhow::bail!(
                 "The Tico meeting-question model profile is not configured on this server"
@@ -560,12 +568,29 @@ impl Tico {
         )
     }
     pub fn send(&self, store: &Store, id: &str, push_items: bool) -> Result<String> {
+        self.send_to(store, id, push_items, "")
+    }
+    /// Files the meeting. `audience` is `team` (everyone in the org reads it), `participants` (only
+    /// the recorder and the people added to or joined from its live share; owners too are held to
+    /// it) or empty (private to the recorder, as before). A Tico too old to know `participants`
+    /// refuses the request, so nothing is shared wider than chosen.
+    pub fn send_to(
+        &self,
+        store: &Store,
+        id: &str,
+        push_items: bool,
+        audience: &str,
+    ) -> Result<String> {
+        ensure!(
+            ["", "team", "participants"].contains(&audience),
+            "Unknown audience"
+        );
         self.verify()?;
         let record = store.get(id)?;
         let context = store.context(id)?;
         ready(&record)?;
         ensure!(
-            !context.live_discarded,
+            !context.live_discarded || context.live_removed,
             "This meeting was discarded; its recording stays local"
         );
         ensure!(
@@ -603,10 +628,15 @@ impl Tico {
             .deliveries
             .iter()
             .find(|entry| entry.destination_id == self.destination.id);
+        let fresh = import_body(&record, &context, audience);
+        // A retry sends the same body (and so the same idempotency key) unless the audience changed.
         let body = previous
             .and_then(|entry| entry.receipt.get("import_body"))
+            .filter(|cached| {
+                cached["private"] == fresh["private"] && cached["audience"] == fresh["audience"]
+            })
             .cloned()
-            .unwrap_or_else(|| import_body(&record, &context));
+            .unwrap_or(fresh);
         let mut delivery = previous.cloned().unwrap_or(Delivery {
             destination_id: self.destination.id.clone(),
             meeting_id: String::new(),
@@ -619,12 +649,17 @@ impl Tico {
         delivery.error.clear();
         store.delivery(id, &delivery)?;
         let result = (|| -> Result<String> {
-            if delivery.meeting_id.is_empty() {
-                let reply = self.call(
-                    "/api/v2/meetings/import",
-                    Some(&body),
-                    &format!("recorder:{id}:import:{}", hash(&body)),
-                )?;
+            let live_source = ["live", "legacy-live"]
+                .contains(&delivery.receipt["source"].as_str().unwrap_or(""));
+            let chosen = delivery.receipt["audience"].as_str().unwrap_or("") == audience;
+            if !live_source && (delivery.meeting_id.is_empty() || !chosen) {
+                let reply = self
+                    .call(
+                        "/api/v2/meetings/import",
+                        Some(&body),
+                        &format!("recorder:{id}:import:{}", hash(&body)),
+                    )
+                    .map_err(|error| refused_audience(error, audience))?;
                 ensure!(
                     reply["status"] != "deleted",
                     "This meeting was deleted in Tico"
@@ -633,17 +668,52 @@ impl Tico {
                     .as_str()
                     .context("Tico did not return a meeting ID")?
                     .into();
+                delivery.receipt["audience"] = json!(audience);
                 store.delivery(id, &delivery)?;
             }
-            if ["live", "legacy-live"].contains(&delivery.receipt["source"].as_str().unwrap_or(""))
-                && delivery.receipt["approved"] != true
+            // A retry after an approval applies the audience chosen now: Tico re-files an approved meeting for it.
+            if live_source
+                && (delivery.receipt["approved"] != true
+                    || delivery.receipt["audience"] != audience)
             {
-                self.call(
-                    &format!("/api/v2/meetings/{}/review", delivery.meeting_id),
-                    Some(&json!({"action":"approve","private":true})),
-                    &format!("recorder:{id}:approve"),
-                )?;
+                // The Recorder's own save skips the review queue, filed for who was chosen.
+                let (mut approve, mut key) = match audience {
+                    "team" => (
+                        json!({"action":"approve","private":false}),
+                        "approve:team".to_owned(),
+                    ),
+                    "participants" => (
+                        json!({"action":"approve","private":true,"audience":"participants"}),
+                        "approve:participants".to_owned(),
+                    ),
+                    _ => (
+                        json!({"action":"approve","private":true}),
+                        "approve".to_owned(),
+                    ),
+                };
+                // Approved before for another audience: name this one, so Tico re-files it (a first approval
+                // leaves it out for the Team, which an older Tico would refuse).
+                if delivery.receipt["approved"] == true {
+                    let refiles = delivery.receipt["refiles"].as_u64().unwrap_or(0) + 1;
+                    delivery.receipt["refiles"] = json!(refiles);
+                    approve["audience"] = json!(match audience {
+                        "team" | "participants" => audience,
+                        _ => "private",
+                    });
+                    key = format!("{key}:refile:{refiles}");
+                }
+                let reviewed = self
+                    .call(
+                        &format!("/api/v2/meetings/{}/review", delivery.meeting_id),
+                        Some(&approve),
+                        &format!("recorder:{id}:{key}"),
+                    )
+                    .map_err(|error| refused_audience(error, audience))?;
+                if let Some(title) = reviewed["title"].as_str() {
+                    delivery.receipt["tico_title"] = json!(title);
+                }
                 delivery.receipt["approved"] = json!(true);
+                delivery.receipt["audience"] = json!(audience);
                 store.delivery(id, &delivery)?;
             }
             // A live meeting is filed from its shared transcript; my notes become its log.
@@ -654,21 +724,36 @@ impl Tico {
                 .unwrap_or(&context.notes)
                 .trim()
                 .to_owned();
-            if delivery.receipt["source"] == "live"
-                && !notes.is_empty()
-                && delivery.receipt["notes_saved"] != true
-            {
+            // It is filed with the live room's title, so a title changed here goes with the notes.
+            let save_notes = !notes.is_empty() && delivery.receipt["notes_saved"] != true;
+            let save_title = live_source
+                && delivery.receipt["tico_title"]
+                    .as_str()
+                    .is_some_and(|title| title != record.title);
+            if (delivery.receipt["source"] == "live" && save_notes) || save_title {
                 let meeting = self.call(
                     &format!("/api/v2/meetings/{}", delivery.meeting_id),
                     None,
                     "",
                 )?;
+                let mut edit = json!({"version":meeting["version"].as_u64().unwrap_or(1)});
+                if delivery.receipt["source"] == "live" && save_notes {
+                    edit["note"] = json!(notes);
+                }
+                if save_title {
+                    edit["title"] = json!(record.title);
+                }
                 self.call_meeting(
                     &format!("/meetings/{}/edit", delivery.meeting_id),
-                    Some(&json!({"version":meeting["version"].as_u64().unwrap_or(1),"note":notes})),
-                    &format!("recorder:{id}:notes"),
+                    Some(&edit),
+                    &format!("recorder:{id}:edit:{}", hash(&edit)),
                 )?;
-                delivery.receipt["notes_saved"] = json!(true);
+                if edit.get("note").is_some() {
+                    delivery.receipt["notes_saved"] = json!(true);
+                }
+                if save_title {
+                    delivery.receipt["tico_title"] = json!(record.title);
+                }
                 store.delivery(id, &delivery)?;
             }
             let path = format!("/meetings/{}/items", delivery.meeting_id);
@@ -802,7 +887,7 @@ impl Tico {
             .items
             .iter()
             .find(|item| item.id == item_id)
-            .context("This action item was removed")?
+            .context("This task was removed")?
             .clone();
         if !item.task_id.is_empty() {
             return Ok(());
@@ -811,12 +896,12 @@ impl Tico {
             paused_confirmed
                 || context.paused_windows.is_empty()
                 || (item.quote.trim().is_empty() && item.title.trim().is_empty()),
-            "This action item may quote paused speech. Review its title and quote before sending"
+            "This task may quote paused speech. Review its title and quote, then choose Create anyway"
         );
         let record = crate::live::shareable(&record, &context.paused_windows);
         ensure!(
             owner.starts_with("bot:") || owner.starts_with("human:"),
-            "Choose who gets it"
+            "Choose an owner"
         );
         let base = self.task_browser_url()?;
         let filed = record.deliveries.iter().find(|entry| {
@@ -899,8 +984,26 @@ pub fn ready(record: &Recording) -> Result<()> {
     );
     Ok(())
 }
-fn import_body(record: &Recording, context: &MeetingContext) -> Value {
-    let mut body = json!({"title":record.title,"source":"tico-recorder","external_id":record.id,"started_at":record.started_at,"duration_seconds":record.chunks.iter().map(|chunk|chunk.end_ms).max().unwrap_or(0).div_ceil(1000),"private":true,"review":"live","notes":context.notes,"participants":context.participants,"transcript":transcript::lines(&record).iter().map(|line|json!({"speaker":line.speaker,"start_ms":line.start_ms,"end_ms":line.end_ms,"text":line.text})).collect::<Vec<_>>()});
+/// A Tico that refuses `audience` (HTTP 422) is older than "Participants only": nothing was filed.
+fn refused_audience(error: anyhow::Error, audience: &str) -> anyhow::Error {
+    // Narrowing after the transcript went into a task: Tico says where to change it.
+    if let Some(sent) = error
+        .chain()
+        .map(|cause| cause.to_string())
+        .find(|cause| cause.starts_with("Already sent to "))
+    {
+        return anyhow::anyhow!(sent);
+    }
+    if audience == "participants" && format!("{error:#}").contains("HTTP 422") {
+        anyhow::anyhow!(
+            "This Tico can't save for participants only yet, so nothing was shared. Update Tico or save it for the org."
+        )
+    } else {
+        error
+    }
+}
+fn import_body(record: &Recording, context: &MeetingContext, audience: &str) -> Value {
+    let mut body = json!({"title":record.title,"source":"tico-recorder","external_id":record.id,"started_at":record.started_at,"duration_seconds":record.chunks.iter().map(|chunk|chunk.end_ms).max().unwrap_or(0).div_ceil(1000),"private":audience != "team","review":"live","notes":context.notes,"participants":context.participants,"transcript":transcript::lines(&record).iter().map(|line|json!({"speaker":line.speaker,"start_ms":line.start_ms,"end_ms":line.end_ms,"text":line.text})).collect::<Vec<_>>()});
     // Tico takes calendar attendees as participants; it has no calendar field.
     let attendees = context.calendar["attendees"]
         .as_array()
@@ -911,6 +1014,9 @@ fn import_body(record: &Recording, context: &MeetingContext) -> Value {
         if participants.len() < 100 && !participants.contains(&json!(attendee)) {
             participants.push(json!(attendee));
         }
+    }
+    if audience == "participants" {
+        body["audience"] = json!("participants");
     }
     body
 }
