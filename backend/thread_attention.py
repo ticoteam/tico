@@ -98,8 +98,9 @@ def _addressed(c, me):
     have not answered since in the same thread. A bot's plain post, one that names nobody, is not theirs to answer."""
     return [dict(r) for r in c.execute(
         "SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.body, m.created_at, cv.subject FROM message_deliveries d "
-        # CROSS JOIN keeps this order whatever sqlite_stat1 says: the person's deliveries (message_deliveries_addressed),
-        # then each message and its conversation by key. Stale stats once put messages first, a scan a call.
+        # Pin the partial index so the general recipient index cannot expand this to all of the person's deliveries.
+        # CROSS JOIN keeps deliveries first whatever sqlite_stat1 says, then each message and conversation by key.
+        "INDEXED BY message_deliveries_addressed "
         "CROSS JOIN messages m ON m.id=d.message_id CROSS JOIN conversations cv ON cv.id=m.conversation_id "
         "WHERE d.recipient=? AND d.reason IN ('mention','ask','assign','addressed') "
         "AND d.state IN ('pending','delivered','read') AND m.sender_id<>? "

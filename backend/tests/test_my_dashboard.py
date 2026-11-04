@@ -143,11 +143,17 @@ def test_home_builds_thread_attention_once_for_both_cards_and_rechecks_on_the_ne
     # Needs you keeps the loose ask once, while the sidebar's separate projection still sees the thread.
     assert {it["id"] for it in cards["needs_attention"]["items"]} == {mention["id"], ask["id"]}
     assert [it["id"] for it in cards["unread_threads"]["threads"]] == [tid]
-    say(api, tid, "Checked.", actor="human:ana")
+    reply = say(api, tid, "Checked.", actor="human:ana")
     calls.clear()
     cards = {p["card"]["template"]: p["card"]["data"] for p in place(api, "person:me")["pins"]}
     assert calls == ["human:ana"]
     assert mention["id"] not in {it["id"] for it in cards["needs_attention"]["items"]}
+    # Replying clears attention but preserves the read mark; only an explicit read clears these two human messages.
+    assert [(it["id"], it["unread"]) for it in cards["unread_threads"]["threads"]] == [(tid, 2)]
+    post(api, f"threads/{tid}/read", {"seq": reply["seq"]})
+    calls.clear()
+    cards = {p["card"]["template"]: p["card"]["data"] for p in place(api, "person:me")["pins"]}
+    assert calls == ["human:ana"]
     assert cards["unread_threads"]["threads"] == []
 
 
