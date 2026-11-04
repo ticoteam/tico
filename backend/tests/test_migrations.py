@@ -730,7 +730,10 @@ def test_a_settled_message_whose_task_list_was_read_as_none_is_requeued_with_wha
     """)
     refs = {"list": '{"task": ["t-known", "t-missing"]}', "task-id-list": '{"task_id": []}',
             "scalar": '{"task": "t-known"}', "broken": '{"task": [', "plain": None,
-            "reply": '{"task": "t-known"}', "deeper": '{"task": "t-known"}', "other": '{"task": "t-known"}'}
+            "reply": '{"task": "t-known"}', "deeper": '{"task": "t-known"}', "other": '{"task": "t-known"}',
+            # Python reads the last of a repeated key, and an escaped key name is the same key: SQLite reads neither.
+            "repeated": '{"task": "t-known", "task": []}', "escaped": '{"tas\\u006b": []}',
+            "repeated-scalar": '{"task": [], "task": "t-known"}'}
     conn.executemany("INSERT INTO messages VALUES(?,?)", list(refs.items()))
     settled = ["m:" + mid for mid in refs]
     conn.executemany("INSERT INTO read_index VALUES(?)", [(key,) for key in settled])
@@ -740,8 +743,8 @@ def test_a_settled_message_whose_task_list_was_read_as_none_is_requeued_with_wha
     up(conn)
     index = {row[0] for row in conn.execute("SELECT key FROM read_index")}
     dirty = {row[0] for row in conn.execute("SELECT key FROM read_dirty")}
-    assert dirty == {"m:list", "m:task-id-list", "m:reply", "m:deeper"}
-    assert index == {"m:scalar", "m:broken", "m:plain", "m:other"}
+    assert dirty == {"m:list", "m:task-id-list", "m:reply", "m:deeper", "m:repeated", "m:escaped"}
+    assert index == {"m:scalar", "m:broken", "m:plain", "m:other", "m:repeated-scalar"}
     up(conn)
     assert {row[0] for row in conn.execute("SELECT key FROM read_dirty")} == dirty
     assert {row[0] for row in conn.execute("SELECT key FROM read_index")} == index
