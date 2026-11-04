@@ -274,6 +274,9 @@ NEVER = [(m, re.compile(p)) for m, p in (
     # Connections to an outside account: a mail sign-in, the bank and the books, a meeting provider, an importer's login
     # and the postal intake.
     (None, r"/api/v2/mail/google/connect"), (None, r"/api/v2/finance/(connections|books/connect)(/.*)?"),
+    # The Google Workspace's setup: its setup codes, key, key keep and check, its removal, and the OAuth client. Its
+    # owner's own sign-in (backend/google_workspace.py), never a chat's.
+    (None, r"/api/v2/google/workspace(/.*)?"), (None, r"/api/v2/google/oauth-client"),
     ("POST", r"/api/v2/live-meetings"), ("POST", r"/api/v2/meeting-importers/[^/]+"), (None, r"/api/v2/postal/intake"),
     # Subscriptions: the owner's own tap.
     (None, r"/api/v2/subscriptions(/.*)?"), (None, r"/api/v2/runner-subscription-refreshes(/.*)?"),
