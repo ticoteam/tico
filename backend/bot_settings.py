@@ -12,6 +12,7 @@ The org-chart fields that live beside the declaration (owner, team, reports_to, 
 `bot_config`; a row there without a settings row reads as an empty declaration.
 """
 import json
+from typing import Any
 
 # (key, type): the settings with a column. The column has the key's name.
 FIELDS = (
@@ -128,7 +129,7 @@ def _encode(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def read(c, bot):
+def read(c: Any, bot: str) -> dict[str, Any]:
     """A bot's declaration as a dict; {} for a bot with none."""
     return join(c.execute("SELECT * FROM bot_settings WHERE bot_id=?", (bot,)).fetchone())
 
