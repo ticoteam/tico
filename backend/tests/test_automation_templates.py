@@ -65,8 +65,11 @@ def test_a_wake_the_owner_may_not_make_becomes_a_task_for_that_bot(api):
 
 def test_a_wake_the_owner_may_make_stays_a_wake_and_the_bot_turn_runs_as_that_bot(api):
     set_templates(api, STAFF)
-    # product-design is its own owner here: it may tell itself, and its llm step runs as itself. Ben operates it.
-    flow = fill(api, "founder", "bot:product-design", "ben@acme.example", token="ben-test")
+    # product-design is its own owner here: it may tell itself, and its llm step runs as itself. The fill is called
+    # directly: who may make an automation for a bot is the route's rule, tested with the rest of the access checks.
+    with api.app.state.store.read() as c:
+        flow = T.fill(c, "founder", "bot:product-design", "ben@acme.example", api.app.state.store.settings)
+    F.check(flow)
     marketing = by_id(flow["destinations"])["marketing"]
     assert [a["do"] for a in marketing["then"]] == ["wake_bot"]
     assert marketing["then"][0]["args"]["bot"] == "bot:product-design"
