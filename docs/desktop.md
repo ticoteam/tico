@@ -58,6 +58,16 @@ kept. **Show the app's log** at the foot of Help opens it in Finder; a Support r
 last 200 lines with @diagnostics, redacted like the rest of the bundle.
 Your team may also offer its own app.
 
+## Switch between organizations
+
+The generic Mac app can hold several organizations, each with its own sign-in. Once you have added more than one (see the first-launch section above), **Switch organization** appears in the account menu. It lists your organizations with a check mark on the open one; choose one to show its page. Switching needs no restart and no new sign-in.
+
+When you leave an organization, its page is hidden and stays open for 30 seconds, so switching back shows it as it was, with no reload. Up to two hidden pages are kept this way. A page past that limit closes at once and opens again where you were when you return to it. A call in the page you leave ends as you switch. A page that may be capturing the screen closes as you leave it.
+
+Choose **Remove *name*…** from the **Tico** menu to remove an organization. Tico asks first, then deletes its sign-in and its data on this Mac. The other organizations are not affected.
+
+Only the generic Mac app can hold several organizations. Company builds, environment builds with a server address, and the Windows and Linux apps connect to one server at a time.
+
 ## Optional per-environment builds
 
 `scripts/app.sh --env <slug>` still builds an app with that environment's name, icon, bundle
