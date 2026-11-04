@@ -351,11 +351,30 @@ def _llm(flow, state, thread, step, services):
 REPLY = {"draft": "draft_reply", "reply": "send_reply"}   # what a choose step's body does (`_resume`)
 
 
+OWNER_MOVED = ("the owner changed since this step was saved: no turn or reply runs for it, and only the default "
+               "destination's chain does")
+
+
+def _owner_moved(flow, step):
+    """Whether the step's turn would run as someone other than the flow's current owner. `_bot_ids` stores the owner and
+    `as` as ids, and `_chooser_fits` checks them on save; a run takes its owner as it is now, so both checks repeat here.
+    A group owns no turn at all."""
+    kind, _, ident = str(flow.get("owner") or "").partition(":")
+    own = {"person": f"assistant:{ident}", "bot": f"bot:{ident}"}.get(kind)
+    return own is None or step.get("as") != own
+
+
 def _choose_turn(flow, state, thread, step, services):
     """An llm step with `choose`: its turn's answer picks the destination (`_answered`). With no turn to wait for (the
     spend cap stops it, or a webhook's screening holds it) the default destination's chain runs at once, with no reply.
     The turn's effect key is the record's index, which the reply and the chain extend (`_resume`)."""
     choose, rec = step["choose"], len(state["steps"])
+    if _owner_moved(flow, step):
+        # The turn would run as someone the step was not saved for: none runs, and the default destination's chain does.
+        _record(state, thread, step, "ok")
+        thread["choice"] = {"record": rec, "to": choose["default"], "body": None}
+        _resume(flow, state, thread, step, services)
+        return
     started = _start(flow, state, thread, step, services, step["as"], step["prompt"], True, _choice_tail(flow, choose))
     if started is None or started.get("held"):
         # No turn ran: the record says why, and the default destination runs with no reply.
@@ -424,6 +443,10 @@ def _resume(flow, state, thread, step, services):
     choice = thread.pop("choice")
     rec = choice["record"]
     record, values, actions = state["steps"][rec], values_of(state, thread), []
+    if _owner_moved(flow, step):
+        # The owner changed since the step was saved: no reply goes out, and only the default destination's chain runs.
+        choice = {"record": rec, "to": step["choose"]["default"], "body": None}
+        record["outputs"] = {**record["outputs"], "skipped": "owner changed", "error": OWNER_MOVED}
     if choice["body"] is not None:
         do = REPLY[step["choose"]["mode"]]
         # The body is the model's reply as written: it is not rendered, so `{{...}}` in it goes out as text.
@@ -452,8 +475,9 @@ def _bot_turn(flow, state, thread, step, services):
 
 def _reads(steps, name, destinations=None):
     """Whether one of these steps (or a step on a path under them) reads step `name`'s answer: names `name.<field>`,
-    or posts an update with no text of its own, which posts what the turn before wrote. A filter rule's `to` runs its
-    destination's actions too, so they count as the rule's own; `destinations` is the flow's, by id."""
+    or posts an update with no text of its own, which posts what the turn before wrote. A filter rule's `to` and a choose
+    step's `choose.to` run their destinations' actions too, so they count as the step's own; `destinations` is the flow's,
+    by id."""
     used = re.compile(r"(?<![A-Za-z0-9_.-])" + re.escape(name) + r"\.")
     destinations = destinations or {}
     for step in steps:
@@ -465,8 +489,9 @@ def _reads(steps, name, destinations=None):
             step = {k: v for k, v in step.items() if k not in ("paths", "otherwise")} | {
                 "when": [p.get("when") for p in step.get("paths") or []]}
         rules = step.get("rules") or []
-        reached = [action for rule in rules if rule.get("to") in destinations
-                   for action in destinations[rule["to"]].get("then") or []]
+        # A filter's rule `to` and a choose step's `choose.to` run their destinations' actions: they are the step's own.
+        picked = [rule.get("to") for rule in rules] + list((step.get("choose") or {}).get("to") or [])
+        reached = [action for to in picked if to in destinations for action in destinations[to].get("then") or []]
         for action in [step] + [a for rule in rules for a in rule.get("then") or []] + reached:
             args = action.get("args") or {}
             if action.get("do") == "post_update" and not (args.get("text") or args.get("body")):
