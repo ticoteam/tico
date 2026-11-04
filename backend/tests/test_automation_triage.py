@@ -140,6 +140,15 @@ def test_transport_keeps_paid_usage_for_bad_json():
     assert failed.value.code == "shape" and failed.value.paid[0]["usage"]["input_tokens"] == 100
 
 
+
+@pytest.mark.parametrize("payload", [b"not JSON", b"[]"])
+def test_unreadable_provider_envelopes_are_retryable_parse_failures(payload):
+    write = J.structured_writer("anthropic", "synthetic", T.DEFAULT_MODEL,
+                               opener=lambda *a, **kw: io.BytesIO(payload))
+    with pytest.raises(J.JudgeError) as failed:
+        write("route", "message", T.schema(flow()["steps"][0]["choose"]))
+    assert failed.value.code == "shape" and failed.value.paid[0]["model"] == T.DEFAULT_MODEL
+
 def test_voice_note_only_contains_owner_explicit_voice_lines(api):
     with api.app.state.store.transaction() as c:
         entries = [("ana", "Tone: warm and concise"), ("ana", "Sign-off: Thanks, Ana"),

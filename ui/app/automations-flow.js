@@ -283,7 +283,7 @@ function auBoardShape(flow) {
   // Sort with one destination: a last filter whose one rule, with no conditions or actions, goes there (no LLM call).
   const sortOne = s => s?.type === 'filter' && (s.rules || []).length === 1 && !(s.rules[0]?.when || []).length
     && !(s.rules[0]?.then || []).length && ids.has(s.rules[0]?.to);
-  const b = {rules: [], questions: [], llm: null, dests: copy(dests), src: {}, mail: flow.trigger?.type === 'message'};
+  const b = {rules: [], questions: [], llm: null, dests: copy(dests), src: {}, mail: flow.trigger?.type === 'message', email: flow.trigger?.type === 'message' && String(flow.trigger.inbox || '').includes('@')};
   let i = 0;
   if (steps[i]?.type === 'filter' && !(steps.length === 1 && sortOne(steps[0]))) {
     const rules = steps[i].rules || [];
@@ -374,8 +374,8 @@ function auBoardFlow(b) {
   }
   const L = b.llm;
   // One destination needs no choice: a single rule sends everything there (a one-option choice is refused).
-  if (L.mode === 'sort' && !b.src.ls && L.to.length === 1) steps.push({...keep(b.src.sf, 'filter'), rules: [rule({when: [], match: 'all', then: [], to: L.to[0]})]});
-  else if (L.mode === 'sort' && !b.src.ls) {
+  if (L.mode === 'sort' && (!b.src.ls || !b.email) && L.to.length === 1) steps.push({...keep(b.src.sf, 'filter'), rules: [rule({when: [], match: 'all', then: [], to: L.to[0]})]});
+  else if (L.mode === 'sort' && (!b.src.ls || !b.email)) {
     const d = keep(b.src.sd, 'decide'), f = keep(b.src.sf, 'filter'), qid = b.src.sq || 'to';
     const old = b.src.sd?.questions?.[qid] || {}, was = old.criteria && !Array.isArray(old.criteria) ? old.criteria : {};
     used.delete(d.out); delete d.set;

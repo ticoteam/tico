@@ -782,10 +782,12 @@ def structured_writer(provider, api_key, model, *, timeout=30, opener=None):
                 payload = read_json(response)
         except urllib.error.HTTPError as exc:
             raise JudgeError("unavailable", f"{provider} answered {exc.code}", exc.code) from None
-        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as exc:
+        except ValueError:
+            raise _paid(JudgeError("shape", "the provider did not return JSON"), model, {}) from None
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as exc:
             raise JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}") from None
         if not isinstance(payload, dict):
-            raise JudgeError("shape", "the provider did not return an object")
+            raise _paid(JudgeError("shape", "the provider did not return an object"), model, {})
         usage = payload.get("usageMetadata" if provider == "google" else "usage") or {}
         try:
             answer = json.loads(llm_text(provider, payload))

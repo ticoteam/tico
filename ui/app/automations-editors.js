@@ -210,6 +210,7 @@ function auBotRunsFields(s) {
 }
 // The direct triage call needs a server API key for the selected provider.
 function auTriageModel(s, path) {
+  if (AU.cur?.trigger?.type !== 'message' || !String(AU.cur.trigger.inbox || '').includes('@')) return '';
   const rows = (TASK_RUN_ROWS || []).filter(m => m.provider && !['cursor', 'tico'].includes(m.provider));
   const model = s.model || '';
   return auFld('Model', auSel(`${path}.model`, auWithCur([['', 'Haiku (default)'], ...rows.map(m => [m.id, m.label || m.id])], model, model), model, 'data-blank'));
