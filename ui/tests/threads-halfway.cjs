@@ -42,6 +42,8 @@ async function open(browser, {phone = false} = {}) {
   const seen = {errors: [], posts: [], stops: [], timelines: [], reacts: []};
   const sse = {queue: [], seq: 0, latest: null, done: false};
   page.on('pageerror', e => seen.errors.push(e.message));
+  // A closed page's waiting stream ends, so node can exit.
+  page.on('close', () => { sse.done = true; });
   await page.addInitScript(() => { Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async t => { window.copied = t; }}}); });
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
