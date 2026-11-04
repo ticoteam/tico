@@ -606,7 +606,7 @@ class Scheduler:
                     webhooks.auto_disable(c, stamp(at))        # an endpoint that failed every attempt for five days is turned off
                 sweep_idempotency(self.store, stamp(at))
                 from . import computers
-                computers.sweep(self.store, stamp(at))         # unused self-hosted computers retire after a day offline
+                computers.sweep(self.store, stamp(at))         # replaced self-hosted computers retire only when unused
                 sweep_mail(self.store, stamp(at))
                 sweep_deltas(self.store, stamp(at))            # finished runs' streamed text pieces keep a day (store.DELTA_RETENTION_DAYS)
                 sweep_tokens(self.store, stamp(at))            # finished runs' token rows keep a week (store.TOKEN_RETENTION_DAYS)
