@@ -1823,6 +1823,35 @@ def test_a_stopped_machine_behind_its_server_starts_once_to_update_then_idles(cl
     assert cloud.tick(10) == ["start"]
 
 
+@pytest.mark.parametrize("wake", ["work", "update"])
+def test_a_resume_whose_answer_was_lost_gets_its_idle_window_and_spends_its_wake(cloud, monkeypatch, wake):
+    monkeypatch.setenv("TICO_VERSION", "0.5.21")
+    computer = enrolled(cloud)
+    reported(cloud, computer, "0.5.20" if wake == "update" else "0.5.21")
+    stopped_when_idle(cloud)
+    if wake == "work":
+        work(cloud, text="More work after the idle stop")
+    start = cloud.hq.start
+
+    def lost(*args):
+        start(*args)
+        raise CM.Refused("unreachable")
+
+    monkeypatch.setattr(cloud.hq, "start", lost)
+    assert cloud.tick(10) == ["start"] and cloud.row()["problem"] == "hq:unreachable"
+    cloud.manager.synced = None
+    assert cloud.tick(10) == ["start"]                     # HQ sees the resume: no immediate idle stop
+    current = cloud.row()
+    assert current["active_at"] == cloud.at[0] == current["woke_at"]
+    assert current["wake_key"].startswith("job:" if wake == "work" else "update:")
+    assert current["problem"] == "" and current["failures"] == 0 and current["next_try_at"] is None
+    cloud.tick(299)
+    assert "stop" not in cloud.hq.actions()                # later lists do not move the idle clock again
+    assert cloud.tick(1)[-1] == "stop"
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == [] and cloud.tick(600) == []   # no start/stop billing loop for the same wake
+
+
 @pytest.mark.parametrize("server, release", [("0.5.21", "0.5.21"), ("0.5.21", "0.5.22"), ("0.5.21", "dev"),
                                              ("0.5.21", ""), ("", "0.5.20")])
 def test_a_stopped_machine_is_not_woken_for_a_release_its_computer_is_not_behind(cloud, monkeypatch, server, release):

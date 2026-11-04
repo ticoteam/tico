@@ -963,10 +963,14 @@ class Manager:
                         # failing stops being asked (no_enroll), and the work it was woken for may wake a new one.
                         # Only HQ's list says so: a refused or unanswered create may be a passing outage.
                         gone.update(enroll_by=None, enroll_fails=current["enroll_fails"] + 1, wake_key=None)
-                    elif machine["state"] in ON and current["machine_id"] != machine["id"]:
-                        # a create whose answer was lost: HQ made it after all, so it starts as act() would have it
-                        gone.update(active_at=at, heartbeat_at=at,
-                                    **({"problem": ""} if current["problem"].startswith("hq:") else {}))
+                    elif machine["state"] in ON and (current["machine_id"] != machine["id"]
+                                                      or current["state"] not in ON):
+                        # HQ may have made or resumed it without the answer reaching us. Give that start its idle
+                        # window and spend its wake once, as act() does; the old clock would stop it again at once.
+                        woke_for = wake_for(current, facts(c, self.settings, current, at))[0]
+                        gone.update(active_at=at, heartbeat_at=at, wake_key=woke_for, woke_at=at,
+                                    failures=0, next_try_at=None, stop_until=None,
+                                    **({"problem": "", "problem_at": None} if current["problem"].startswith("hq:") else {}))
                     save(c, key, **self.described(machine), **gone)
             if learned and self.on_offered is not None and offered(c, self.settings):
                 c.execute("SAVEPOINT cloud_offered")
