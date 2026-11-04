@@ -175,6 +175,15 @@ def test_proposal_checks_inbox_access_before_showing_a_plan(api):
     assert propose(api, turn(api), given, expected=403)["error"]["code"] == "forbidden"
 
 
+def test_restoring_a_message_version_needs_a_card_even_after_the_trigger_changed(api):
+    saved = post(api, "automations", flow("draft"))
+    path = "/api/v2/automations/" + saved["id"]
+    changed = api.patch(path, json={"trigger": {"type": "event", "name": "test.event"}}, headers=headers())
+    assert changed.status_code == 200, changed.text
+    refused = api.post(path + "/versions/1/restore", json={}, headers=headers(turn(api, "Restore the old routine")))
+    assert refused.status_code == 403 and refused.json()["error"]["code"] == "confirm_required", refused.text
+
+
 def test_bulk_card_freezes_and_describes_message_edits_too(api):
     saved = post(api, "automations", {**flow("draft"), "enabled": False})
     token = turn(api)

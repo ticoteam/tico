@@ -49,7 +49,12 @@ def gate(store, method, path, fields):
     with store.read() as c:
         row = A._row(c, match.group(1))
         before = A.flow_of(row) if row else {}
-    if not (message(before) or message(fields)):
+        restored = {}
+        if method == "POST" and (version := re.fullmatch(CREATE + r"/[^/]+/versions/(\d+)/restore", path)):
+            saved = c.execute("SELECT flow FROM automation_versions WHERE automation_id=? AND n=?",
+                              (match.group(1), int(version.group(1)))).fetchone()
+            restored = json.loads(saved["flow"]) if saved else {}
+    if not (message(before) or message(fields) or message(restored)):
         return None
     # Stopping is always possible. Any edit, enable, restore or manual run needs the person's click.
     return not (method == "PATCH" and fields.get("enabled") is False
