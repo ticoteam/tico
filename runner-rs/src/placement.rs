@@ -6,7 +6,6 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
 
 use serde_json::Value;
 
@@ -34,12 +33,10 @@ pub fn kept(bot: &str) -> Option<String> {
 }
 
 async fn git(path: &Path, env: &Env, args: &[&str], timeout_s: u64) -> Result<(bool, String), &'static str> {
-    let mut cmd = crate::isolation::command("git");
-    cmd.args(crate::safegit::args(path)).args(args).env_clear().envs(env).stdin(std::process::Stdio::null()).kill_on_drop(true);
-    match tokio::time::timeout(Duration::from_secs(timeout_s), cmd.output()).await {
-        Err(_) => Err("timed out"),
-        Ok(Err(_)) => Err("OSError"),
-        Ok(Ok(out)) => Ok((out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned())),
+    match crate::gitrun::git_as_bot(path, env, args, timeout_s).await {
+        Err(crate::gitrun::Fault::Timeout(_)) => Err("timed out"),
+        Err(_) => Err("Git command could not run"),
+        Ok(out) => Ok((out.ok(), out.stdout)),
     }
 }
 
@@ -60,11 +57,14 @@ pub async fn fast_forward(path: &Path, turn: &Env) -> (&'static str, String) {
         if !git(path, &env, &["merge-base", "--is-ancestor", "HEAD", "@{u}"], 15).await?.0 {
             return Ok(("kept", "it has commits GitHub does not, and GitHub has commits it does not"));
         }
-        if !git(path, &env, &["status", "--porcelain", "--untracked-files=no"], 15).await?.1.trim().is_empty() {
-            return Ok(("kept", "it has uncommitted changes"));
+        crate::repositories::repair_instruction_links(path, &env).await;
+        let (ok, status) = git(path, &env, &["status", "--porcelain", "--untracked-files=no"], 15).await?;
+        if !ok { return Err("could not inspect local changes".to_string()); }
+        if !status.trim().is_empty() {
+            return Err(format!("it has uncommitted changes: {}", crate::repositories::changed_file_names(&status)));
         }
         let merged = git(path, &env, &["merge", "--ff-only", "--quiet", "@{u}"], 60).await?.0;
-        Ok::<_, &'static str>(if merged { ("updated", "") } else { ("kept", "fast-forward failed") })
+        Ok::<_, String>(if merged { ("updated", "") } else { ("kept", "fast-forward failed") })
     };
     match steps.await {
         Ok((state, detail)) => (state, detail.to_string()),

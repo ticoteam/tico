@@ -700,4 +700,11 @@ any error. A base clone failure does not change a bot's readiness. A clone that 
 from this computer's repository list for 30 days is removed from `repos/`. Older servers without
 the repository endpoint leave this feature idle.
 
+An interrupted Git command can leave a lock behind. The runner removes a reported lock only after
+five minutes and only when no process holds it open; fresh locks and locks whose owner cannot be
+checked stay in place. A broken private mirror is rebuilt from the remote. If a base clone's config
+cannot be written, the runner recreates that config from a fresh clone, keeping the old config as
+`.git/tico-config-backup-*`. Its files, index, branches, stash and task worktree registrations stay
+in place, including unpublished bot work. Git failure details are scrubbed before reaching Health.
+
 Outside source failures are isolated by computer, login profile and runtime. The provider's absolute reset time wins over a later status refresh, and a claim releases an expired reset hold even between scheduler ticks. Repeated observations update one durable source incident; only its start and recovery send quiet notices to Engineering and Health, with the since time, waiter count and expected return. Waiting automatic notices use the existing history/digest batching, while interrupted jobs retain their own checkpoint. Human bulk finish/close writes one count-only next-run note per recipient; task details remain on their original tasks, including for paused recipients.

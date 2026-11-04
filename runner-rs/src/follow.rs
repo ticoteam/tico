@@ -109,7 +109,7 @@ async fn git_in(root: &Path, args: &[&str], timeout_s: u64) -> Option<(i32, Stri
     let mut argv = vec!["git".to_string(), "-C".into(), root.to_string_lossy().into_owned()];
     argv.extend(args.iter().map(|a| a.to_string()));
     let out = crate::gitrun::run(&argv, &env, None, timeout_s).await.ok()?;
-    Some((out.code, out.stdout.trim().to_string()))
+    Some((out.code, out.stdout.trim_end().to_string()))
 }
 
 /// How the checkout stands against origin/main (service.py checkout_status, #492): commits behind, commits ahead
@@ -146,8 +146,13 @@ async fn self_update(root: &Path, running: &str) -> (bool, String) {
     if branch != "main" {
         return (false, format!("checkout is on {}, not main", if branch.is_empty() { "an unknown branch" } else { &branch }));
     }
-    if !out(git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await).is_empty() {
-        return (false, "checkout has uncommitted changes".into());
+    crate::repositories::repair_instruction_links(root, &crate::safegit::clean_environment(&crate::env::process_environment())).await;
+    let status = match git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await {
+        Some((0, status)) => status,
+        _ => return (false, "could not inspect checkout changes".into()),
+    };
+    if !status.is_empty() {
+        return (false, format!("checkout has uncommitted changes: {}", crate::repositories::changed_file_names(&status)));
     }
     let old = out(git_in(root, &["rev-parse", "HEAD"], 30).await);
     if git_in(root, &["fetch", "--quiet", "origin", "main"], 60).await.is_none_or(|(c, _)| c != 0) {
@@ -1110,7 +1115,8 @@ mod tests {
         sh(&here, &["reset", "-q", "--hard", &head]);
 
         std::fs::write(here.join("runner_support/a.py"), "dirty").unwrap();
-        assert_eq!(self_update(&here, &head).await.1, "checkout has uncommitted changes");
+        assert_eq!(self_update(&here, &head).await.1, "checkout has uncommitted changes: runner_support/a.py");
+        assert_eq!(std::fs::read_to_string(here.join("runner_support/a.py")).unwrap(), "dirty");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

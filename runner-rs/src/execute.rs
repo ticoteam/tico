@@ -320,10 +320,8 @@ fn git_env(turn: &Env) -> Env {
 
 /// Runner git in a checkout: no hooks, no fsmonitor, no optional locks (safe_git.prefix).
 async fn git(path: &Path, env: &Env, args: &[&str], timeout_s: u64) -> Option<(bool, String, String)> {
-    let mut cmd = crate::isolation::command("git");
-    cmd.args(crate::safegit::args(path)).args(args).env_clear().envs(env).stdin(std::process::Stdio::null()).kill_on_drop(true);
-    let out = tokio::time::timeout(Duration::from_secs(timeout_s), cmd.output()).await.ok()?.ok()?;
-    Some((out.status.success(), String::from_utf8_lossy(&out.stdout).into(), String::from_utf8_lossy(&out.stderr).into()))
+    let out = crate::gitrun::git_as_bot(path, env, args, timeout_s).await.ok()?;
+    Some((out.ok(), out.stdout, out.stderr))
 }
 
 /// Why git failed, scrubbed of the turn's tokens and anything shaped like a credential before it is cut.

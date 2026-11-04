@@ -12,9 +12,11 @@ import os
 import re
 import signal
 import shutil
+import stat
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,8 +49,62 @@ def kind(env=os.environ, exists=os.path.exists):
 
 
 def git(root, *args, run=subprocess.run, timeout=60):
-    return run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=timeout,
-               stdin=subprocess.DEVNULL, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    from . import git_locks
+    command = ["git", "-C", str(root), *args]
+    kwargs = dict(capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
+                  env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    done = run(command, **kwargs)
+    if done.returncode and git_locks.recover(root, done.stderr or ""):
+        done = run(command, **kwargs)
+    return done
+
+
+def repair_instruction_links(root, g):
+    """Repair dereferenced instruction links only when they contain exactly the repository's own bytes.
+
+    A filename is not proof of runner ownership: staged changes, edits to the target, and different contents stay.
+    Some copy/archive tools flatten the tracked AGENTS.md/CLAUDE.md links in an installed checkout.
+    """
+    root = Path(root).resolve()
+    listing = g("ls-files", "--stage", "-z", "--", "AGENTS.md", "CLAUDE.md",
+                ":(glob)**/AGENTS.md", ":(glob)**/CLAUDE.md")
+    if listing.returncode:
+        return
+    for entry in listing.stdout.split("\0"):
+        info, sep, name = entry.partition("\t")
+        if not sep or not info.startswith("120000 ") or not info.endswith(" 0"):
+            continue
+        path = root / name
+        try:
+            before = path.lstat()
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or path.parent.resolve() != path.parent:
+                continue
+            if g("diff", "--cached", "--quiet", "HEAD", "--", name).returncode:
+                continue
+            link = g("cat-file", "blob", info.split()[1])
+            if link.returncode or not link.stdout or "\n" in link.stdout:
+                continue
+            target = (path.parent / link.stdout).resolve()
+            if not target.is_relative_to(root) or not target.is_file():
+                continue
+            relative = target.relative_to(root).as_posix()
+            content = path.read_bytes()
+            if content != link.stdout.encode():
+                original = g("show", "HEAD:" + relative)
+                if original.returncode or g("diff", "--quiet", "HEAD", "--", relative).returncode:
+                    continue
+                if content != original.stdout.encode() or content != target.read_bytes():
+                    continue
+            temp = path.with_name(".tico-link-" + uuid.uuid4().hex)
+            try:
+                temp.symlink_to(link.stdout)
+                after = path.lstat()
+                if (before.st_ino, before.st_mtime_ns) == (after.st_ino, after.st_mtime_ns) and path.read_bytes() == content:
+                    temp.replace(path)
+            finally:
+                temp.unlink(missing_ok=True)
+        except (OSError, ValueError):
+            continue
 
 
 def checkout_release(root=ROOT, run=subprocess.run):
@@ -357,6 +413,7 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
     branch = g("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
     if branch not in ("main", "HEAD"):        # HEAD: detached, which is where a release update leaves it
         return say("blocked", f"the checkout is on branch {branch}; switch it to main to follow releases")
+    repair_instruction_links(root, g)
     dirty = [line for line in g("status", "--porcelain", "--untracked-files=no").stdout.splitlines() if line]
     if dirty:
         # "XY path" lines: the status letters and the space come off; a rename keeps its "old -> new" as it is.

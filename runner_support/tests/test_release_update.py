@@ -1,5 +1,6 @@
 """A checkout follows its server's release: the update process (python -m runner_support.release_update) against a temp repository."""
 import fcntl
+import os
 import subprocess
 import threading
 import time
@@ -94,6 +95,90 @@ def test_a_checkout_with_changes_is_refused_and_left_alone(repos):
     assert (checkout / "app.py").read_text() == "my local edit" and head(checkout) == before
     assert calls.restarts == 0 and ru.read_status(state)["state"] == "blocked"
     assert sh(checkout, "git", "branch", "--show-current") == "main"
+
+
+def instruction_links(checkout):
+    commit(checkout, "CLAUDE.md", "Repository rules\n")
+    commit(checkout, "templates/employee-repo/AGENT.md", "Bot rules\n")
+    for name, target in [("AGENTS.md", "CLAUDE.md"), ("templates/employee-repo/AGENTS.md", "AGENT.md"),
+                         ("templates/employee-repo/CLAUDE.md", "AGENT.md")]:
+        (checkout / name).symlink_to(target)
+    commit(checkout, "notes.txt", "keep the local branch\n")
+
+
+@pytest.mark.slow
+def test_flattened_instruction_links_do_not_block_a_release_update(repos):
+    _, checkout, state = repos
+    instruction_links(checkout)
+    before = head(checkout)
+    for name, text in [("AGENTS.md", "Repository rules\n"), ("templates/employee-repo/AGENTS.md", "AGENT.md"),
+                       ("templates/employee-repo/CLAUDE.md", "Bot rules\n")]:
+        (checkout / name).unlink()
+        (checkout / name).write_text(text)
+    ru.repair_instruction_links(checkout, lambda *args: ru.git(checkout, *args))
+    assert sh(checkout, "git", "status", "--porcelain") == ""
+    assert (checkout / "AGENTS.md").is_symlink()
+    result, calls = run_apply(checkout, state)
+    assert result["state"] == "healthy" and calls.restarts == 1
+    assert sh(checkout, "git", "rev-parse", "main") == before  # unpublished work retains its branch
+
+
+@pytest.mark.slow
+def test_instruction_edits_and_deliberately_staged_copies_stay_and_are_named(repos):
+    _, checkout, state = repos
+    instruction_links(checkout)
+    edited = checkout / "AGENTS.md"
+    edited.unlink()
+    edited.write_text("A bot's new rules\n")
+    staged = checkout / "templates/employee-repo/CLAUDE.md"
+    staged.unlink()
+    staged.write_text("Bot rules\n")
+    sh(checkout, "git", "add", "templates/employee-repo/CLAUDE.md")
+    index = (checkout / ".git/index").read_bytes()
+    before = head(checkout)
+    result, calls = run_apply(checkout, state)
+    assert result["state"] == "blocked" and calls.restarts == 0
+    assert "AGENTS.md" in result["error"] and "templates/employee-repo/CLAUDE.md" in result["error"]
+    assert edited.read_text() == "A bot's new rules\n" and not edited.is_symlink()
+    assert staged.read_text() == "Bot rules\n" and not staged.is_symlink()
+    assert (checkout / ".git/index").read_bytes() == index and head(checkout) == before
+
+
+@pytest.mark.slow
+def test_instruction_link_repair_preserves_edits_to_its_target_and_external_targets(repos):
+    _, checkout, _ = repos
+    instruction_links(checkout)
+    external = checkout.parent / "private.md"
+    external.write_text("Outside the checkout\n")
+    link = checkout / "nested/AGENTS.md"
+    link.parent.mkdir()
+    link.symlink_to(external)
+    commit(checkout, "notes.txt", "another commit\n")
+    edited = checkout / "AGENTS.md"
+    edited.unlink()
+    edited.write_text("Repository rules\n")
+    link.unlink()
+    link.write_text(external.read_text())
+    # Commit only the fixture links; keep the real target edit uncommitted.
+    (checkout / "CLAUDE.md").write_text("Bot target edit\n")
+    ru.repair_instruction_links(checkout, lambda *args: ru.git(checkout, *args))
+    assert not edited.is_symlink() and edited.read_text() == "Repository rules\n"
+    assert not link.is_symlink() and link.read_text() == external.read_text()
+    assert (checkout / "CLAUDE.md").read_text() == "Bot target edit\n"
+
+
+@pytest.mark.slow
+def test_updater_retries_an_abandoned_index_lock_but_keeps_fresh_and_open_locks(repos):
+    from runner_support import git_locks
+    _, checkout, _ = repos
+    lock = checkout / ".git/index.lock"
+    lock.write_text("recent")
+    assert ru.git(checkout, "add", "app.py").returncode != 0 and lock.exists()
+    old = time.time() - git_locks.OLD_S * 2
+    os.utime(lock, (old, old))
+    with lock.open():
+        assert ru.git(checkout, "add", "app.py").returncode != 0 and lock.exists()
+    assert ru.git(checkout, "add", "app.py").returncode == 0 and not lock.exists()
 
 
 def test_a_blocked_update_names_the_first_three_changed_files(repos):

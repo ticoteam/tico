@@ -93,7 +93,12 @@ pub async fn run_as_bot(argv: &[String], env: &Env, cwd: Option<&Path>, timeout_
 
 async fn run_as(argv: &[String], env: &Env, cwd: Option<&Path>, timeout_s: u64, bot: bool) -> Ran {
     let began = std::time::Instant::now();
-    let ran = run_once(argv, env, cwd, timeout_s, bot).await;
+    let mut ran = run_once(argv, env, cwd, timeout_s, bot).await;
+    if let Ok(out) = &ran {
+        if !out.ok() && crate::gitlocks::recover(argv, cwd, &out.stderr).await {
+            ran = run_once(argv, env, cwd, timeout_s, bot).await;
+        }
+    }
     let fault = match &ran {
         Ok(_) => None,
         Err(Fault::Timeout(_)) => Some("timeout"),

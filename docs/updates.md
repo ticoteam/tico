@@ -192,9 +192,12 @@ process itself runs as a transient `tico-update-<pid>` unit so the restart does 
 time; if it is off the command prints `loginctl enable-linger $USER`, because without it the jobs stop when the last session
 logs out and do not start at boot. `scripts/tico status`, `restart`, `logs` and `uninstall` work the same as on a Mac.
 
-A checkout with uncommitted changes, or on a branch other than `main`, is **refused, never touched**: nothing is
-stashed, reset or discarded. Settings > Health and Computers show "the checkout has 2 changed files" until someone commits or
-stashes them. The update process logs to `state-<runner id>/update.log`; the outcome is in `update-status.json` next
+A checkout with uncommitted changes, or on a branch other than `main`, is refused: nothing is
+stashed, reset or discarded. Before checking changes, the updater repairs tracked `AGENTS.md` and
+`CLAUDE.md` symlinks flattened by copy tools, but only if they still contain exactly the committed
+link or its unchanged target's contents. Staged changes and different instruction edits stay intact.
+Settings > Health and Computers name the changed files until someone commits or stashes them.
+The update process logs to `state-<runner id>/update.log`; the outcome is in `update-status.json` next
 to it. `scripts/tico update` still works by hand and still follows `main`.
 
 ## The server's own updater

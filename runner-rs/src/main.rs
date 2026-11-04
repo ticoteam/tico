@@ -45,6 +45,7 @@ mod follow;
 mod fetchrepo;
 mod gateway_relay;
 mod gitrun;
+mod gitlocks;
 #[cfg(test)]
 mod gittests;
 mod files_publish;
