@@ -2141,6 +2141,22 @@ def test_a_cloud_machine_left_empty_is_resting_after_its_bot_moves_to_a_computer
     assert "computer_offline" not in issue_kinds(cloud)
 
 
+def test_a_failed_cloud_update_wake_is_on_health_even_without_queued_work(cloud, monkeypatch):
+    monkeypatch.setenv("TICO_VERSION", "0.5.21")
+    computer = enrolled(cloud)
+    reported(cloud, computer, "0.5.20")
+    stopped_when_idle(cloud)
+    cloud.hq.fail["start"] = [CM.Refused("http_502", 502)]
+    assert cloud.tick(10) == ["start"]
+    waiting = health_of(cloud)["waiting"]
+    assert waiting["status"] == "warn" and "http_502" in waiting["summary"] and "ops" in waiting["summary"]
+    draining(cloud, "ops", 1)                             # a paused bot no longer wants the failed machine
+    assert health_of(cloud)["waiting"]["status"] == "ok"
+    draining(cloud, "ops", 0)
+    assert cloud.tick(CM.BACKOFF)[-1] == "start"
+    assert health_of(cloud)["waiting"]["status"] == "ok"  # the successful retry clears the warning
+
+
 def test_a_list_that_breaks_outside_hq_still_lets_the_looks_run_and_says_why(cloud):
     adopt(cloud)
     work(cloud)

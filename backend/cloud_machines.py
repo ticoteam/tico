@@ -1369,15 +1369,19 @@ def remove(store, hq, who, auth, key):
 
 
 def health(c, settings=None):
-    """Health's row, or None: some bot's machine could not be started (out of credit, or HQ refusing)."""
+    """Health's row, or None: an active bot's machine could not start, even for Always on or a release update."""
     if not offered(c, settings):
         return None
-    stuck = sorted(bot for bot, machine in homes(c).items() if machine["problem"])
+    active = {r["id"] for r in c.execute("SELECT b.id FROM bots b LEFT JOIN bot_control bc ON bc.bot=b.id "
+                                         "WHERE b.state='active' AND coalesce(bc.draining,0)=0")}
+    machines = homes(c)
+    stuck = sorted(bot for bot, machine in machines.items() if bot in active and machine["problem"])
     if not stuck:
         return None
-    names = [(H.bot(c, bot) or {}).get("slug") or bot for bot in stuck[:5]]
+    names = [f"{(H.bot(c, bot) or {}).get('slug') or bot}: {problem_words(machines[bot]['problem'])}"
+             for bot in stuck[:5]]
     return {"status": "warn", "summary": f"{len(stuck)} bot{'s' if len(stuck) != 1 else ''} waiting on a cloud machine "
-                                         f"that did not start: {', '.join(names)}"}
+                                         f"that did not start: {'; '.join(names)}"}
 
 
 # ----------------------------------------------------------------------------- routes

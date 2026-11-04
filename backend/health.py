@@ -2119,6 +2119,7 @@ def view(c, who, settings, auth, github, config):
         checks.extend(billing_check.health(c, settings))
     if full and (versions := runner_versions.health_check(computers)):
         checks.append(versions)
+    from .cloud_machines import health as cloud_health
     silent = silent_computers(c) if waiting else []
     if waiting:
         names = ", ".join(w["name"] for w in waiting[:5])
@@ -2129,6 +2130,9 @@ def view(c, who, settings, auth, github, config):
                              f"{_plural(len(waiting), 'bot')} cannot run because their computer is offline"
                              + (f": {names}." if full else ".") + stopped,
                              [_fix("Open Computers", "#/settings", "devices")] if full else []))
+    elif full and (cloud := cloud_health(c, settings)):
+        checks.append(_check("waiting", "Bots waiting", cloud["status"], cloud["summary"],
+                             [_fix("Open Computers", "#/settings", "devices")]))
     else:
         checks.append(_check("waiting", "Bots waiting", "ok", "Every active bot has a computer that is up."))
     # An offline computer (or none) is "Bots waiting"; this check is everything else, so one cause is one item.
