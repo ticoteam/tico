@@ -175,6 +175,12 @@ class Stage2(unittest.TestCase):
         # An owner run reads What Tico may do over the runner's registration: all on here; test_company.py turns it off.
         pl.RUNNER_GET = lambda path: {"company": dict.fromkeys(pl.COMPANY_FIELDS, True)}
         audit_log.AUDIT_PATH = self.root / "audit.jsonl"
+        # Tico answers who may use which mailbox (fake.mail_access: grants that match each bot.yaml); a test changes
+        # it with fake.MAIL_LEVELS. Only mail-action / connector-event lease the connector its writes.
+        fake.install_mail_access()
+        self._levels = mock.patch.dict(fake.MAIL_LEVELS, clear=True)
+        self._levels.start()
+        self.addCleanup(self._levels.stop)
         os.environ["MAIL_REVIEWER"] = "none"
         os.environ["MAIL_DECISIONS"] = "none"        # no judge either; test_judge.py injects a fake engine
         os.environ.pop("HUB_EMPLOYEE", None)

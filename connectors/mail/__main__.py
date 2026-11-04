@@ -468,23 +468,21 @@ def cmd_whoami(args):
     if args.json:
         print(json.dumps(d, indent=2))
         return 0
-    print(f"employee  {d['employee']}" + ("  (owner: every verb on every mailbox)"
-                                          if d["owner"] else ""))
+    print(f"employee  {d['employee']}" + ("  (the runner's connector: read; writes only what Tico leased)"
+                                          if d.get("connector") else ""))
     calendars = d.get("company_calendars") or {}
     if calendars.get("mailboxes"):
         print(f"calendars company-wide: {', '.join(calendars['can'])} on "
               f"{', '.join(calendars['mailboxes'])}")
     if not d["mailboxes"]:
-        print("mailboxes none declared" + (f" - {d['note']}" if d["note"] else ""))
-        print("          Adding one is the owner's call: open an Issue with owner:" + access.OWNER + " and "
-              "type:decision (policies/access.md).")
+        print("mailboxes none" + (f" - {d['note']}" if d["note"] else ""))
         return 0
     for m in d["mailboxes"]:
-        print(f"mailbox   {m['mailbox']}")
+        level = "Read" if m.get("level") == "read" else "Read and write"
+        print(f"mailbox   {m['mailbox']}  ({level})")
         print(f"          gmail: {', '.join(m['gmail']) or 'none'}"
               f"   calendar: {', '.join(m['google-calendar']) or 'none'}")
-    print("          read also allows label, archive, mark-read, star and triaged on that "
-          "mailbox (docs/mail.md).")
+    print("          organize covers label, archive, mark-read, star, triaged and rules (docs/mail.md).")
     return 0
 
 
@@ -2445,9 +2443,10 @@ def cmd_connector_event(args):
     """Execute one server-validated Hub calendar action from stdin.
 
     This is the provider-local half of `hub_calendar_schedule`; the runner claims the durable
-    action first and invokes this command as the human owner, so employee mail permissions and
-    generic email sending are not broadened.
+    action first and invokes this command as the connector (`--as connector`), which writes only
+    what the server leased it, so employee mail permissions and generic email sending are not broadened.
     """
+    access.LEASED = True                                # the server checked who asked, when it leased this
     try:
         request = json.load(sys.stdin)
     except (ValueError, TypeError) as exc:
@@ -2493,6 +2492,7 @@ def cmd_mail_action(args):
     The runner claims it from the hub and reports what this prints: always one JSON object with `ok`, `detail` and
     `retry` (false when trying again cannot help: a refusal, a message that is gone)."""
     from . import actions
+    access.LEASED = True                                # the server checked the automation's owner when it leased this
     try:
         request = json.load(sys.stdin)
     except (ValueError, TypeError):
@@ -2526,13 +2526,10 @@ def sync_targets(args):
     if getattr(args, "mailbox", None) and getattr(args, "all_roster", False):
         raise Refused("--mailbox and --all-roster ask for different things; pick one.")
     if getattr(args, "all_roster", False):
-        boxes = access.roster_mailboxes()
-        if slug != access.OWNER:
-            allowed = set(access.readable_mailboxes(slug, "read"))
-            boxes = [b for b in boxes if b in allowed]
+        allowed = set(access.readable_mailboxes(slug, "read"))
+        boxes = [b for b in access.roster_mailboxes() if b in allowed]
         if not boxes:
-            raise Refused(f"{slug} has no roster mailbox to sync.",
-                          "Pass --mailbox, or run as the owner with --all-roster.")
+            raise Refused(f"{slug} has no roster mailbox to sync.", "Pass --mailbox. " + access.ASK)
         return boxes
     box, _ = access.resolve(slug, getattr(args, "mailbox", None), "read")
     return [box]
@@ -2647,8 +2644,6 @@ def cmd_sync_export(args):
     if mailbox:
         access.resolve(slug, mailbox, "read")
         boxes = [mailbox]
-    elif slug == access.OWNER:
-        boxes = None
     else:
         boxes = access.readable_mailboxes(slug, "read")
     conn = open_db()
@@ -3109,6 +3104,7 @@ def main(argv=None):
         report(e, "failed")
         return 1
     finally:
+        access.LEASED = False                           # a lease covers the one command that carried it out
         _COMMAND_CONNECTIONS.reset(scope)
         for conn in opened:
             conn.close()
