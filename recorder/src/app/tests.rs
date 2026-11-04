@@ -73,6 +73,101 @@ fn connect_links_carry_only_a_safe_tico_address() {
 }
 
 #[test]
+fn an_open_link_chooses_its_tico_and_starts_nothing() {
+    assert_eq!(
+        link_address(
+            "tico-recorder://open?server=https://tico.example.com/",
+            "open"
+        )
+        .as_deref(),
+        Some("https://tico.example.com")
+    );
+    assert_eq!(
+        link_address(
+            "tico-recorder://open?server=https://tico.example.com",
+            "connect"
+        ),
+        None
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = app(Store::open(directory.path()).unwrap(), directory.path());
+    app.config.destinations = vec![
+        connection("first", "first.example.com"),
+        connection("second", "tico.example.com"),
+    ];
+    app.destination = "first".into();
+    app.link("tico-recorder://open?server=https://tico.example.com/");
+    assert_eq!(
+        app.destination, "second",
+        "the runner sign-in is that Tico's"
+    );
+    assert!(app.connect.is_none() && app.error.is_empty());
+    assert_eq!(full_view(&mut app)["status"]["recording"], Value::Null);
+    // A Tico the Recorder is not signed in to asks first, as a connect link does.
+    app.link("tico-recorder://open?server=https://new.example.com");
+    assert_eq!(app.connect.as_deref(), Some("https://new.example.com"));
+    assert_eq!(app.destination, "second");
+    app.dismiss_connect();
+    app.link("tico-recorder://open?server=http://evil.example");
+    assert!(app.connect.is_none());
+    assert_eq!(app.error, "That link is not a Tico Recorder connect link");
+}
+
+#[test]
+fn the_view_lists_the_desktop_apps_orgs_and_which_are_signed_in() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = app(Store::open(directory.path()).unwrap(), directory.path());
+    assert_eq!(
+        full_view(&mut app)["desktop_orgs"],
+        json!([]),
+        "the demo library reads no orgs.json"
+    );
+    let file = directory.path().join("orgs.json");
+    std::fs::write(
+        &file,
+        r#"{"version":1,"active":"o_bbbbbbbb","orgs":[
+            {"id":"o_aaaaaaaa","url":"https://tico.example.com/","name":"Acme","email":"ana@acme.example"},
+            {"id":"o_bbbbbbbb","url":"https://tidy.example.com/","name":"TIDY","email":"ana@tidy.example"}]}"#,
+    )
+    .unwrap();
+    app.desktop = tico_recorder_native::desktop::Watch::new(Some(file));
+    app.config.destinations = vec![connection("acme", "tico.example.com")];
+    assert_eq!(
+        full_view(&mut app)["desktop_orgs"],
+        json!([
+            {"name":"Acme","url":"https://tico.example.com","email":"ana@acme.example","active":false,"connected":true},
+            {"name":"TIDY","url":"https://tidy.example.com","email":"ana@tidy.example","active":true,"connected":false}
+        ])
+    );
+    let orgs = tico_recorder_native::desktop::parse(
+        r#"{"version":1,"active":"o_bbbbbbbb","orgs":[{"id":"o_aaaaaaaa","url":"https://a.example.com/"},
+            {"id":"o_bbbbbbbb","url":"https://b.example.com/"}]}"#,
+    );
+    assert_eq!(
+        suggested_address(Some(&orgs), || unreachable!()),
+        "b.example.com"
+    );
+    assert_eq!(
+        suggested_address(Some(&[]), || unreachable!()),
+        "",
+        "orgs.json wins over server.txt"
+    );
+    assert_eq!(
+        suggested_address(None, || "https://old.example.com/\n".into()),
+        "old.example.com"
+    );
+    assert_eq!(signed_in_message(&["A".into()]), "Signed in to A");
+    assert_eq!(
+        signed_in_message(&["A".into(), "B".into()]),
+        "Signed in to A and B"
+    );
+    assert_eq!(
+        signed_in_message(&["A".into(), "B".into(), "C".into()]),
+        "Signed in to A, B and C"
+    );
+}
+
+#[test]
 fn library_rows_send_and_delete_only_what_is_stopped() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
