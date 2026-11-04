@@ -292,7 +292,7 @@ function thvHeadHTML(view) {
   return `${crumbs.length ? `<nav class="thv-crumbs" aria-label="Thread path">${crumbs.map(c =>
       `<a href="${threadHref(c.id)}">${esc(c.title || 'Thread')}</a>`).join('<span aria-hidden="true">›</span>')}</nav>` : ''}
     <div class="thv-titleline">${back}
-      ${hash ? '' : threadMarkHTML(t, 22)}<h1 class="thv-title">${hash ? threadHashHTML(t) : ''}${esc(threadTitle(t))}</h1>${thvPinHTML(t)}
+      ${hash ? '' : threadMarkHTML(t, 22)}<h1 class="thv-title">${hash ? threadHashHTML(t) : ''}${esc(threadTitle(t, view.messages))}</h1>${thvPinHTML(t)}
       ${aud ? `<span class="thv-aud muted">${esc(aud)}</span>` : ''}<span class="spacer"></span>${thvActsHTML(view)}</div>`;
 }
 // Who is in it, for the faces in the header: a thread the rail lists, on the Threads page (`opts.members`). A DM keeps
@@ -773,7 +773,7 @@ function thvPlaceholder(view) {
   const t = view.thread, slug = view.opts.goals;
   if (slug) return 'Message ' + botDisplayName(slug);
   if (t && threadOnRail(t)) return 'Message #' + threadTitle(t);
-  const name = t ? threadTitle(t) : view.opts.dm ? actorName(view.opts.dm) : '';
+  const name = t ? threadTitle(t, view.messages) : view.opts.dm ? actorName(view.opts.dm) : '';
   return name ? 'Message ' + name : 'Message';
 }
 // The message being answered, above the box: who wrote it, its start, and × to answer nothing.

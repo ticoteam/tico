@@ -39,6 +39,9 @@ const marksMessages = () => [
   msg('k5', 6, 'human:zed', 'Newest on the plan.', 3, {thread_id: 't-marks'}),
   msg('k6', 7, 'human:ana', 'About that old one.', 1, {thread_id: 't-marks', reply_to: quote('kfar', 'human:zed', ZED, 'far back in the thread')}),
 ];
+// A notice DM the server names nothing: no title, no people. Its messages name it.
+const noteThread = {id: 't-note', title: '', audience: 'participants', last_seq: 3, dm_with: [], dm_with_count: 0, members: [], me: me({last_read_seq: 0})};
+const noteMessages = () => [msg('w1', 3, 'bot:ops', 'Your Acme report is ready.', 2, {thread_id: 't-note'})];
 const working = (min = 1.1) => ({actor: 'bot:ops', name: 'Ops', state: 'working', detail: 'Reading the tax table', since: at(min), run_id: 'run1', fix: null});
 const statuses = () => [working(), {actor: 'bot:fin', name: 'Fin', state: 'up_next', detail: 'After Ops', since: at(1), run_id: null, fix: null},
   {actor: 'bot:qa', name: 'QA', state: 'cant_reply', detail: 'Out of credits', since: at(2), run_id: null, fix: {label: 'Fix', href: '#/settings/billing'}}];
@@ -85,12 +88,14 @@ async function open(browser, {phone = false} = {}) {
     if (p === '/api/v2/threads' && method === 'GET') return json({attention: [], threads: [team], dms: [dmThread], next_cursor: null});
     if (p === '/api/v2/threads/dm') return json(state.archived ? {thread: null} : dmThread);
     if (p === '/api/v2/threads/t-dm-ops' && method === 'PATCH') { state.archived = true; return json({...dmThread, archived_at: at(0)}); }
+    if (p === '/api/v2/threads/catch-up') return json({items: [{thread: noteThread, new_count: 1, mention: false, messages: noteMessages(), more: 0}], count: 1, next_cursor: null});
     if (p === '/api/v2/messages/kfar') return json({error: 'not_found'}, 404);
     if (p === '/api/v2/threads/home/' + encodeURIComponent('bot:ops') || p === '/api/v2/threads/home/bot:ops') return json({error: 'not_found'}, 404);
     const tl = p.match(/^\/api\/v2\/threads\/([^/]+)\/timeline$/);
     if (tl) {
       seen.timelines.push(url.searchParams.get('flat'));
       if (tl[1] === 't-ship') return json({thread: team, breadcrumb: [{id: 't-ship', title: 'Ship day'}], next_cursor: null, messages: messages(), bot_status: statuses()});
+      if (tl[1] === 't-note') return json({thread: noteThread, breadcrumb: [], next_cursor: null, messages: noteMessages(), bot_status: [], read_marks: {'t-note': 0}});
       if (tl[1] === 't-marks') return json({thread: marksThread, breadcrumb: [], next_cursor: null, messages: marksMessages(), bot_status: [], read_marks: {'t-marks': 5, 't-side': 2}});
       if (tl[1] === 't-dm-ops') return json({thread: dmThread, breadcrumb: [], next_cursor: null, messages: dmMessages(), bot_status: [working(0.4)]});
     }
@@ -282,6 +287,40 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/bot/ops/info');
     await page.waitForFunction(() => !document.querySelector('#bot-top-acts')?.children.length);
     await page.waitForFunction(() => THV_TICK === 0, null, {timeout: 3000});
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+  }
+
+  // ---- a DM with no name: its authors name it in the header, the composer and Catch up; the Needs-you sheet waits
+  // behind the Catch up dialog
+  {
+    const {page, seen} = await open(browser);
+    await page.goto('https://tico-ui.test/#/thread/t-note');
+    await row(page, 'w1').waitFor();
+    assert.equal(await page.locator('.thv-title').textContent(), 'Ops');
+    assert.equal(await page.locator('.thv-composer .p-text').getAttribute('placeholder'), 'Message Ops');
+    await page.evaluate(() => { const s = document.createElement('section'); s.className = 'needs-you'; s.textContent = '3 things need you'; document.body.append(s); });
+    assert.equal(await page.locator('section.needs-you').isVisible(), true);
+    await page.evaluate(() => catchUpOpen());
+    await page.locator('.cu-card[data-thread="t-note"]').waitFor();
+    assert.equal(await page.locator('.cu-card h3').textContent(), 'Ops');
+    assert.equal(await page.locator('.cu-reply input').getAttribute('placeholder'), 'Message Ops');
+    assert.equal(await page.locator('section.needs-you').isVisible(), false, 'the sheet is not over the dialog');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('dialog:modal'));
+    assert.equal(await page.locator('section.needs-you').isVisible(), true, 'and is back once it closes');
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+  }
+
+  // ---- #/threads opened at phone width fills its pane once the window is a computer's
+  {
+    const {page, seen} = await open(browser, {phone: true});
+    await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('.tr-pane').waitFor({state: 'attached'});
+    assert.equal(await page.locator('.tr-pane').evaluate(e => e.children.length), 0);
+    await page.setViewportSize({width: 1280, height: 800});
+    await page.waitForFunction(() => document.querySelector('.tr-pane')?.children.length > 0 || location.hash.startsWith('#/thread/'));
     assert.deepEqual(seen.errors, []);
     await page.close();
   }

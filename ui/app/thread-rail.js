@@ -13,7 +13,9 @@ const TR_SVG = {
 };
 // `#` before a thread's name, a lock for a private one.
 const threadHashHTML = t => `<span class="tr-mark" aria-hidden="true">${threadPrivate(t) ? TR_SVG.lock : '#'}</span>`;
-const trPhone = () => matchMedia('(max-width:760px)').matches;
+const TR_PHONE = matchMedia('(max-width:760px)'), trPhone = () => TR_PHONE.matches;
+// #/threads first drawn at phone width has an empty pane: grown past the phone's width it opens what the computer does.
+TR_PHONE.addEventListener('change', () => { if (!TR_PHONE.matches && S.route === THREADS_ROUTE) void pageThreads(); });
 
 // The thread last opened here, which #/threads opens again.
 const THREADS_LAST_KEY = 'tico.threads.last';
