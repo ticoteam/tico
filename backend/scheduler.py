@@ -429,10 +429,11 @@ class Scheduler:
         from . import delivery
         with locked("deferred") as c:
             delivery.due(c, stamp(at), failures)
-            from . import queue_refusals
-            # One snapshot for the whole scan, so the bots' shared reads (runners, providers, holds) are read once.
-            with self.store.read_transaction() as c:
-                observations = queue_refusals.pending(c, self.store.settings, stamp(at), failures)
+        # The fleet scan is a read: it runs outside the write lock, in one snapshot, so the bots' shared reads (runners,
+        # providers, holds) are read once and other writers are not held while it runs.
+        from . import queue_refusals
+        with self.store.read_transaction() as c:
+            observations = queue_refusals.pending(c, self.store.settings, stamp(at), failures)
         # Each observation is its own short write: the writer gate is not reentrant, so one inside "deferred" would wait out its timeout.
         for change in observations:
             with locked("queue_refusals:" + change[0]) as c:
