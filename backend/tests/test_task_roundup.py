@@ -854,6 +854,18 @@ def test_a_backlog_named_to_a_person_reaches_no_person_through_the_roundup(api):
                          "(SELECT id FROM messages WHERE refs LIKE '%task_roundup%')").fetchone()[0] == 0
 
 
+def test_a_backlog_of_snoozed_tickets_lists_nothing_and_queues_no_roundup_job(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        typ = backlog_board(c, {"over": 3, "notify": ["owner"]})
+        for ticket in backlog_tickets(c, typ, "bot:ops", 4):
+            H.TS.snooze(c, "human:ana", ticket["id"], H.shift(DAY, days=2))
+        assert task_roundup.run(c, DAY) == {"woke": [], "listed": 0}
+        assert lists(c, "ops") == []
+        assert c.execute("SELECT count(*) FROM jobs WHERE message_id IN (SELECT id FROM messages WHERE refs LIKE "
+                         "'%task_roundup%')").fetchone()[0] == 0
+
+
 def test_a_waiting_task_whose_ask_to_a_person_is_not_a_plain_ask_is_restated_to_its_bot_alone(api):
     store = api.app.state.store
     long_ask = "Please send " + "the signed lease copy " * 12 + "today."
