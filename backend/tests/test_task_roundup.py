@@ -14,6 +14,7 @@ from backend import bot_settings as BS
 from backend.enqueue import enqueue_stored
 from backend import scheduler, still_needed, task_check_backs, task_roundup, team_rules
 from backend import step_backlog as SB
+from backend import task_holds as TH
 from backend import task_relations as TR
 from backend.store import H
 from backend.tests.hold_rows import set_holds
@@ -1091,6 +1092,52 @@ def test_a_waiting_task_held_only_by_bots_is_listed_on_its_blocker_bots_list_not
         assert f"{mine[:8]} Print the menu: Waiting on you" in only_list(c, "ops")
         assert lists(c) == [], "the owner is not told about its own blocked task"
         assert task_roundup.run(c, DAY)["woke"] == [], "listed once per update of the task"
+
+
+def test_a_person_owned_waiting_task_never_reaches_task_holds_and_a_bot_owned_one_still_does(api, monkeypatch):
+    store = api.app.state.store
+    with store.transaction() as c:
+        blocker = H.task_create(c, H.human_actor("ana"), "Finish the menu", "Ops finishes it.", H.bot_actor("ops"))["id"]
+        person = task(c, "Sign the lease")["id"]
+        c.execute("UPDATE tasks SET owner_id=?, status='waiting' WHERE id=?", (H.human_actor("ana"), person))
+        blocks(c, blocker, person, ago(days=1))
+        mine = task(c, "Print the menu")["id"]
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
+        blocks(c, blocker, mine, ago(days=1))
+        seen = []
+        real = TH.holds
+
+        def counting(conn, row):
+            seen.append(row["id"])
+            return real(conn, row)
+
+        monkeypatch.setattr(TH, "holds", counting)
+        waits = task_roundup._blocked_waits(c, DAY)
+        assert person not in seen, "a person-owned waiting task is dropped in SQL, before task_holds"
+        assert mine in seen, "a bot-owned waiting task of an active bot still reaches task_holds"
+        assert [row["id"] for row, _ in waits.get("ops", [])] == [mine]
+
+
+def test_a_waiting_task_already_listed_for_its_update_is_not_read_by_task_holds_again(api, monkeypatch):
+    store = api.app.state.store
+    with store.transaction() as c:
+        blocker = H.task_create(c, H.human_actor("ana"), "Finish the menu", "Ops finishes it.", H.bot_actor("ops"))["id"]
+        mine = task(c, "Print the menu")["id"]
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
+        blocks(c, blocker, mine, ago(days=1))
+        complete_jobs(c)
+        complete_jobs(c, "ops")
+        assert task_roundup.run(c, DAY)["woke"] == ["ops"]
+        seen = []
+        real = TH.holds
+
+        def counting(conn, row):
+            seen.append(row["id"])
+            return real(conn, row)
+
+        monkeypatch.setattr(TH, "holds", counting)
+        assert task_roundup._blocked_waits(c, DAY).get("ops", []) == []
+        assert mine not in seen, "a task marked as listed for this update is skipped before its holds are read"
 
 
 def test_a_stale_candidate_the_bot_owns_is_listed_once_while_the_stale_review_rule_is_on(api):

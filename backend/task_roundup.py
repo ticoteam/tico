@@ -389,12 +389,17 @@ def _person_held(c, row):
 
 
 def _blocked_waits(c, at):
-    """{bot id: [(task row, what)]}: each waiting task a bot owns whose every hold is on a bot (backend/task_holds.py), under
-    the bot it waits on. Read once per run (the shared reads of discover and of each send)."""
+    """{bot id: [(task row, what)]}: each waiting task a bot owns, of an active bot, whose every hold is on a bot
+    (backend/task_holds.py), under the bot it waits on. The owner and active-bot filters are in the query, so a person's
+    task never reaches task_holds; a task already marked as listed for its update is skipped before its holds are read.
+    Read once per run (the shared reads of discover and of each send)."""
     from . import task_holds as TH, task_snooze as TS
     out = {}
-    for row in H._rows(c.execute("SELECT * FROM " + H.TASKS + " tasks WHERE status='waiting' ORDER BY updated_at")):
-        if not H.is_bot(row["owner_id"]) or TS.snoozed(row, at):
+    rows = H._rows(c.execute("SELECT tasks.* FROM " + H.TASKS + " tasks JOIN bots b ON tasks.owner_id='bot:'||b.id "
+                             "WHERE tasks.status='waiting' AND tasks.owner_id LIKE 'bot:%' AND b.state='active' "
+                             "ORDER BY tasks.updated_at"))
+    for row in rows:
+        if TS.snoozed(row, at) or _blocked_marked(c, row):
             continue
         found = TH.holds(c, row)
         if not found or any(h["kind"] == "private" or not h["on"] or not H.is_bot(h["on"]) for h in found):
@@ -405,6 +410,13 @@ def _blocked_waits(c, at):
         for slug, what in whats.items():
             out.setdefault(slug, []).append((row, what))
     return out
+
+
+def _blocked_marked(c, row):
+    """True when a blocked line is already marked for this task at this update, for any blocker: it was listed, so its
+    holds are not read again. The mark key is task_roundup:blocked:<slug>:<task id>:<updated_at> (see _key)."""
+    return c.execute("SELECT 1 FROM registry_metadata WHERE instr(key, ?) = 1 AND instr(key, ?) > 0 LIMIT 1",
+                     (f"{SENT_KEY}blocked:", f":{row['id']}:{row['updated_at']}")).fetchone() is not None
 
 
 def _blocked_by(c, slug, actor, at, shared):
