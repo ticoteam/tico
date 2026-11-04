@@ -165,6 +165,7 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
       return route.fulfill({status: 200, contentType: 'text/event-stream', body}).catch(() => {});
     }
     if ((p === '/api/v2/threads' || p === '/api/v2/threads/rail') && method === 'GET') {
+      if (threadsOff === 'odd') return json(p.endsWith('/rail') ? {error: 'not_found'} : {nothing: true}, p.endsWith('/rail') ? 404 : 200);
       if (threadsOff) return json({error: 'not_found'}, 404);
       if (threadsGate) await new Promise(go => threadsGate.push(go));
     }
@@ -963,8 +964,9 @@ let browser = null;
       await page.waitForFunction(() => THREADS.on === true);
       await page.close();
     }
-    threadsOff = true;
-    for (const phone of [false, true]) {
+    // A 404, and a list read that answers something other than a list.
+    for (const [off, phone] of [[true, false], [true, true], ['odd', false], ['odd', true]]) {
+      threadsOff = off;
       const {page} = await open(browser, 'ana', {phone});
       await page.goto('https://tico-ui.test/#/tasks');
       await page.waitForFunction(() => THREADS.on === false);

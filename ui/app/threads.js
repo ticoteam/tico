@@ -128,8 +128,11 @@ async function threadsLoad() {
     } catch (e) {
       // 404: a server without threads. Anything else keeps what was drawn and tries again on the next change.
       if (e?.status === 404 && THREADS.on !== true) THREADS.on = false;
-    } finally { THREADS.loading = null; }
-    threadsSideRender();
+    } finally {
+      THREADS.loading = null;
+      // Every way out draws the sidebar again, the early return for a server without threads included.
+      threadsSideRender();
+    }
   })();
   const loading = THREADS.loading;
   await loading;
