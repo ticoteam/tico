@@ -439,7 +439,12 @@ grant). A draft is the first step of a send, so Send mail on allows one, and Tic
 (`hub/drafted`, `hub/handled/<bot>`) go with the draft or send they record. With Send mail off no bot sends mail, whatever
 its own **Mail sending** switch says (and no approval lifts it), and an automation's send becomes a draft. With it on,
 each bot still needs its own switch (Settings > Bots > Edit > Mail sending; see [Turning sending on](#turning-sending-on)).
-A bot always acts as itself: `--as <owner handle>` from a bot's run is refused. Change calendar needs `calendar.events`.
+The connector reads the boxes from Tico for each run: a bot's from its mail setting, an automation's mail action from
+the runner's own read (`GET /api/v2/connectors/mail/targets`), never from the action itself. When Tico cannot be asked, a
+bot's writes are refused ("Tico couldn't check the company's mail settings; try again") and its reads go on.
+`--as <owner handle>` holds every verb and skips these boxes, so it is only for a run Tico vouches for through
+`GET /api/v2/me`: a person's token in `HUB_TOKEN`, or the runner's own registration on the mail commands it runs. No
+token, a bot's token, `HUB_BOT` naming the owner, or a failed lookup is refused. Change calendar needs `calendar.events`.
 
 A box turned off takes effect on the next token: Connect Google asks Google only for what is ticked, each refresh leaves
 out a write turned off (the grant keeps it, so turning it back on needs no new sign-in), and Whole Workspace tokens are

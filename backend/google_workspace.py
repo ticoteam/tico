@@ -405,7 +405,9 @@ WORKSPACE_PATH = "/api/v2/google/workspace"
 OAUTH_PATH = "/api/v2/google/oauth-client"
 PEOPLE_PATH = "/api/v2/google/people"
 PERMISSIONS_PATH = "/api/v2/google/permissions"
-PEOPLE_MAX = 500                # the team list's cap; `more` says when people were left out
+PEOPLE_MAX = 500                # the team list's rows a page; `more` says when people were left out
+PAGE_BYTES = 256 * 1024         # and its bytes a page, as JSON, so long names cannot make one page huge
+CELL_MAX = 200                  # the characters of a row's name and of its mailbox
 KEY_KINDS = ("unauthorized_client", "other")   # a refusal about the key itself, not about one mailbox
 _BAD = []                       # epoch seconds of recent wrong codes
 _LOCKOUT = {"until": 0.0}
@@ -804,16 +806,24 @@ def team_statuses(c, after=""):
         mailbox = own.get(person["id"]) or str(person.get("email") or "").strip().lower()
         if not routines.MAILBOX.fullmatch(mailbox):
             continue
-        out.append({"person_id": person["id"], "name": person.get("name") or person["id"], "mailbox": mailbox,
-                    "status": _person_status(mailbox, live.get(mailbox), attempts.get(person["id"]), row)})
-    out.sort(key=lambda p: (p["name"].lower(), p["person_id"]))
+        out.append((order[person["id"]], {
+            "person_id": person["id"], "name": str(person.get("name") or person["id"])[:CELL_MAX],
+            "mailbox": mailbox[:CELL_MAX],
+            "status": _person_status(mailbox, live.get(mailbox), attempts.get(person["id"]), row)}))
+    out.sort(key=lambda pair: pair[0])
     if after:
         # The cursor is a person id, placed by its name in the whole roster: one hidden or gone since keeps its place.
         if after not in order:
             raise Problem("after", "That person is no longer on the roster; load the list again", 422)
-        out = [p for p in out if (p["name"].lower(), p["person_id"]) > order[after]]
-    page = out[:PEOPLE_MAX]
-    more = len(out) > PEOPLE_MAX
+        out = [pair for pair in out if pair[0] > order[after]]
+    # A page stops at PEOPLE_MAX rows or PAGE_BYTES of them, whichever comes first, and `next` is its last row.
+    page, size = [], 0
+    for _, person in out[:PEOPLE_MAX]:
+        size += len(json.dumps(person, ensure_ascii=False).encode()) + 1
+        if page and size > PAGE_BYTES:
+            break
+        page.append(person)
+    more = len(out) > len(page)
     return {"people": page, "more": more, "next": page[-1]["person_id"] if more else None}
 
 

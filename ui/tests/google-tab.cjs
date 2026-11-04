@@ -644,11 +644,25 @@ const scenarios = {
     assert.deepEqual(seen.errors, []);
   },
 
-  'a Workspace authorized before the read-only scopes says to redo step 2': async browser => {
+  'a Workspace authorized before the read-only scopes redoes step 2 and Check on the same key': async browser => {
     const fake = googleFake();
     fake.state.workspace = row('connected', {narrowable: false});
     let {page, seen} = await open(browser, fake);
     assert.equal((await page.locator('[data-google-may-narrow]').innerText()).trim(), 'Redo step 2 to narrow Google access.');
+    // Step 2 for the active key: its client ID and every scope, the link to Google Admin, then Check. No Replace.
+    const allow = page.locator('[data-google-card=workspace] [data-ws-step=allow]');
+    await allow.waitFor();
+    assert.match(await allow.innerText(), /Authorize in Google Admin/);
+    assert.equal(await allow.locator('a.primary').getAttribute('href'), fake.state.workspace.delegation_url);
+    const copied = await allow.locator('[data-copy]').evaluateAll(els => els.map(el => el.dataset.copy));
+    assert.deepEqual(copied, [fake.state.workspace.client_id, fake.state.workspace.scopes.join(',')]);
+    assert.equal(await page.locator('[data-ws-step=create]').count(), 0, 'the key is kept');
+    fake.checks.push('ok');
+    await page.locator('[data-ws-check]').click();
+    await page.locator('[data-google-may-narrow]').waitFor({state: 'detached'});
+    assert.equal(await page.locator('[data-ws-step=allow]').count(), 0);
+    assert.equal(await page.locator('[data-ws-step=check]').count(), 0);
+    assert.equal(fake.writes.filter(w => w.path === '/api/v2/google/workspace/check').length, 1);
     assert.deepEqual(seen.errors, []);
     await page.close();
     fake.state.workspace = row('connected', {narrowable: true});

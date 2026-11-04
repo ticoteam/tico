@@ -541,9 +541,13 @@ def company_allows(company, capability, mailbox, what):
     """Refuse a write the company turned off in Tico, whatever credential the run holds (a local service-account key,
     a standalone grant or a server token): Google's scopes alone cannot tell Organize mail from Send mail.
 
-    `company` is the run's {permission: bool} (policy.company), a callable returning it, or None when Tico said
-    nothing (a person's run, an older server, no answer): then only Google's scopes decide, as before."""
+    `company` is the run's {permission: bool} (policy.company), a callable returning it, None when Tico vouched for
+    the run as the owner or said nothing of it (an older server), or "unread" when Tico could not be asked: no write
+    goes to Google then, since a lookup that failed must not hand back what the company turned off."""
     company = company() if callable(company) else company
+    if company == "unread":
+        raise Failure("Tico couldn't check the company's mail settings; try again",
+                      f"Nothing was sent to Google for {mailbox}. Reading mail still works.")
     if not isinstance(company, dict):
         return
     needs = COMPANY_NEEDS[capability]

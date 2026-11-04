@@ -100,15 +100,14 @@ class Ctx:
         if opened is not None:
             opened.append(self.conn)
         self._gmail, self._calendar, self._policy = None, None, None
-        self._company = ()                              # () unread; read at the first write (Ctx.company)
-        self.claimed_company = None                     # a Tico mail action's own What Tico may do (cmd_mail_action)
+        self._company = ()                              # () not read yet; read at the first write (Ctx.company)
+        self.read_company = lambda: pl.company(self.slug)   # cmd_mail_action reads the runner's own (runner_company)
 
     def company(self):
-        """What the company lets Tico do here (policy.company), read once and only when a write asks. Every Gmail and
+        """What the company lets Tico do here, from Tico, read once and only when a write asks. Every Gmail and
         Calendar write checks it, whichever credential this run holds."""
         if self._company == ():
-            self._company = (self.claimed_company if self.claimed_company is not None
-                             else pl.company(self.slug))
+            self._company = self.read_company()
         return self._company
 
     @property
@@ -2499,9 +2498,10 @@ def cmd_mail_action(args):
         return 2
     try:
         ctx = Ctx(args, actions.verb(request["action"]), mailbox=str(request["mailbox"]).strip().lower())
-        # The claim carries the company's What Tico may do (backend/automations.py): an automation is Tico too.
-        if isinstance(request.get("company"), dict):
-            ctx.claimed_company = {k: request["company"].get(k) is not False for k in pl.COMPANY_FIELDS}
+        # An automation is Tico too, so What Tico may do holds it. The runner asks Tico itself: whatever the action on
+        # stdin says of it (a `company` field included) is ignored, since anything that can run this command writes it.
+        if access.owner_proof() == "runner":
+            ctx.read_company = pl.runner_company
         result = actions.perform(ctx, request)
     except Refused as e:
         print(json.dumps({"ok": False, "retry": False, "detail": e.msg[:900]}))

@@ -17,6 +17,7 @@ Two things beyond the declared verbs, both deliberate and documented in docs/mai
 import os
 
 from . import PROJECTS, Refused, bot_folders, declared_tools, hub_bot, load_yaml, manifest_file, owner_handle, repo_dir
+from .oauth import BROKER_AUTH_ENV, BROKER_URL_ENV
 
 OWNER = owner_handle()                    # the owner's roster handle; see connectors/mail/__init__.py
 MAIL_SERVICES = ("gmail", "google-calendar")
@@ -59,48 +60,59 @@ def forward_to(manifest):
 def employee(slug=None, env=None):
     """The employee this run is. --as wins, then HUB_BOT or HUB_EMPLOYEE (both set by the runner).
 
-    `--as <owner handle>` holds every verb and skips the company's What Tico may do, so it is for a person only: a
-    bot's run (HUB_BOT, or a HUB_TOKEN Tico says is a bot's) that names the owner is refused."""
+    `--as <owner handle>` holds every verb and skips the company's What Tico may do, so Tico must vouch for it
+    (owner_proof): a run whose token is a person's, or this computer's runner. A name in the environment never does."""
     env = os.environ if env is None else env
     s = (slug or hub_bot(env)).strip().lower()
     if not s:
         raise Refused("no employee: pass --as <slug>.",
                       "The runner sets HUB_BOT for every turn; outside a turn, name the "
                       "employee yourself. The owner uses --as " + OWNER + ".")
-    if s == OWNER:
-        bot = run_bot(env)
-        if bot and bot.lower() != OWNER:
-            raise Refused(f"This run is {bot}, so it may not act as the owner ({OWNER}).",
-                          f"A bot acts only as itself: drop --as {OWNER} and use the mailboxes its bot.yaml lists.")
+    if s == OWNER and not owner_proof(env):
+        raise Refused(f"--as {OWNER} is for a person signed in to Tico or this computer's runner, and Tico did not "
+                      "vouch for this run (no token, a bot's token, or Tico could not be asked).",
+                      "A bot acts only as itself: --as <its slug>, with the mailboxes its bot.yaml lists. A person "
+                      "runs it with their own Tico token in HUB_API_URL and HUB_TOKEN.")
     return s
 
 
+PERSON_ROLES = ("human", "owner")
+# Who a token is (GET /api/v2/me), once per process and token. Tests replace WHO_AM_I, or OWNER_PROOF outright.
 _ME = {}
+WHO_AM_I = None
+OWNER_PROOF = None
 
 
-def run_bot(env=None):
-    """The bot this run is: HUB_BOT (older HUB_EMPLOYEE), else the bot whose token HUB_TOKEN is (GET /api/v2/me),
-    else "" for a person's run. The token counts because a bot can unset HUB_BOT; it cannot change whose token it
-    holds. One read per process and token."""
-    env = os.environ if env is None else env
-    named = hub_bot(env)
-    if named:
-        return named
-    url, token = env.get("HUB_API_URL"), env.get("HUB_TOKEN")
-    if not (url and token):
-        return ""
+def _who(url, token):
     key = (url, token)
     if key not in _ME:
-        from . import policy                            # noqa: PLC0415 - avoids a cycle
         try:
-            me = policy.HUB_GET("me")
+            if WHO_AM_I is not None:
+                me = WHO_AM_I(url, token)
+            else:
+                from clients.tico import Client            # noqa: PLC0415
+                me = Client(url, token, timeout=15).get("me")
         except Exception:
             me = None
-        me = me if isinstance(me, dict) else {}
-        actor = str(me.get("actor") or "").strip()
-        _ME[key] = (str(me.get("slug") or "").strip() or actor[len("bot:"):].strip()
-                    if me.get("role") == "bot" and actor.startswith("bot:") else "")
+        _ME[key] = me if isinstance(me, dict) else {}
     return _ME[key]
+
+
+def owner_proof(env=None):
+    """Who vouches for `--as <owner handle>`: "person" when HUB_TOKEN is a person's, "runner" when this process holds
+    the runner's own registration (TICO_GOOGLE_BROKER_URL/AUTH, which runner_support/connectors.py gives the mail
+    commands it runs as the owner and never a bot's turn), else "". Tico answers it (GET /api/v2/me); no token, a
+    bot's token or a failed lookup is "", so the owner's exemptions never come from what a run can set itself."""
+    env = os.environ if env is None else env
+    if OWNER_PROOF is not None:
+        return OWNER_PROOF(env)
+    url, token = env.get("HUB_API_URL"), env.get("HUB_TOKEN")
+    if url and token:                                   # a run with a token is that token's, and nothing else
+        return "person" if _who(url, token).get("role") in PERSON_ROLES else ""
+    url, token = env.get(BROKER_URL_ENV), env.get(BROKER_AUTH_ENV)
+    if url and token and _who(url, token).get("role") == "runner":
+        return "runner"
+    return ""
 
 
 def load(slug):

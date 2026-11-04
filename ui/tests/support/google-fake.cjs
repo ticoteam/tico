@@ -78,7 +78,8 @@ exports.googleFake = () => {
       const answer = fake.checks.shift() || 'unauthorized';
       const mailbox = body?.mailbox || s.me?.mailbox || 'ana@acme.example';
       if (answer === 'ok') {
-        const promoted = {...(s.pending || s.workspace), status: 'connected', connected_at: ago(0)};
+        // A passing check records the scopes Google took, so the key narrows (backend _settle).
+        const promoted = {...(s.pending || s.workspace), status: 'connected', connected_at: ago(0), narrowable: true};
         s.pending = null;
         s.workspace = promoted;
         return {ok: true, mailbox, error_kind: null, message: '', workspace: promoted};

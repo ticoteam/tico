@@ -843,13 +843,13 @@ def switch(slug, manifest=None):
     requests, for messages."""
     if str(slug).strip().lower() == OWNER:
         from . import access                            # noqa: PLC0415 - avoids a cycle
-        bot = access.run_bot()
-        # The owner's switch is a person's: a bot's run that reaches here as the owner gets its own bot's switch,
-        # with the company's Send mail and the bot's onboarding on it (access.employee refuses it first).
-        if bot and bot.lower() != OWNER:
-            return switch(bot.lower())
-        return {"on": True, "forward_to": [], "source": "owner", "detail": "the owner", "asks": True,
-                "asks_forward": [], "read": True, "onboarding": False}
+        if access.owner_proof():
+            return {"on": True, "forward_to": [], "source": "owner", "detail": "the owner", "asks": True,
+                    "asks_forward": [], "read": True, "onboarding": False}
+        # access.employee refuses such a run first; anything that reaches here as the owner unvouched sends nothing.
+        return {"on": False, "forward_to": [], "source": "none", "asks": False, "asks_forward": [], "read": False,
+                "onboarding": False, "company_off": False,
+                "detail": "Tico did not vouch for this run as the owner (" + OWNER + ")"}
     try:
         from . import access                            # noqa: PLC0415 - avoids a cycle
         if manifest is None:
@@ -882,23 +882,54 @@ def switch(slug, manifest=None):
 
 COMPANY_FIELDS = {"organize_mail": "company_organize", "send_mail": "company_send",
                   "change_calendar": "company_calendar"}
+UNREAD = "unread"                                       # company(): Tico could not be asked (oauth.company_allows)
 
 
 def company(slug):
-    """The company's What Tico may do for `slug`'s run, as {organize_mail, send_mail, change_calendar}: False only
-    where Tico's mail setting for the bot says so (backend/mail_settings.py). None for a person's run and when Tico
-    said nothing (no answer, an older server): Google's scopes alone decide then. A bot's run named as the owner is
-    read as that bot (access.run_bot)."""
+    """The company's What Tico may do for `slug`'s run, as {organize_mail, send_mail, change_calendar}, from Tico's
+    mail setting for the bot (backend/mail_settings.py) and nothing the run says itself.
+
+    None (no gate) for an owner run Tico vouched for (access.owner_proof; mail-action reads the runner's own, see
+    runner_company) and for a server that answers without the fields (an older one). UNREAD when the setting could not
+    be read: a bot's writes are refused then, and its reads go on. An owner run Tico did not vouch for gets nothing."""
     from . import access                                # noqa: PLC0415 - avoids a cycle
     slug = str(slug or "").strip().lower()
     if slug == OWNER:
-        slug = access.run_bot().lower()
-        if not slug or slug == OWNER:
-            return None
+        return None if access.owner_proof() else dict.fromkeys(COMPANY_FIELDS, False)
     row = _server_row(slug)
-    if row is None or not any(f in row for f in COMPANY_FIELDS.values()):
+    if row is None:
+        return UNREAD
+    return _allowed(row)
+
+
+def _allowed(row):
+    if not any(f in row for f in COMPANY_FIELDS.values()):
         return None
     return {name: row.get(field) is not False for name, field in COMPANY_FIELDS.items()}
+
+
+# The runner's read of What Tico may do (GET /api/v2/connectors/mail/targets over its own registration). Tests
+# replace RUNNER_GET.
+RUNNER_GET = None
+
+
+def runner_company():
+    """What Tico may do for an automation's mail action: the runner asks Tico itself, as a bot's run does, so nothing
+    on the action's stdin decides it. UNREAD when Tico could not be asked."""
+    try:
+        if RUNNER_GET is not None:
+            answer = RUNNER_GET("connectors/mail/targets")
+        else:
+            from . import oauth                         # noqa: PLC0415
+            answer = oauth.broker().get("connectors/mail/targets")
+    except Exception:
+        answer = None
+    if not isinstance(answer, dict):
+        return UNREAD
+    may = answer.get("company")
+    if not isinstance(may, dict):
+        return None                                     # an older server: it says nothing of What Tico may do
+    return {name: may.get(name) is not False for name in COMPANY_FIELDS}
 
 
 def outbound_send(slug, manifest=None):

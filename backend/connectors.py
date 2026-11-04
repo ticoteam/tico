@@ -567,6 +567,7 @@ def install_connectors(app, store, execution, mutate):
             runner, named, owned = reader(c, request.state.identity)
             targets = google_rights.visible(c, runner["id"], named, owned=owned)
             freshness = {row["address"]: row for row in c.execute("SELECT * FROM mail_mailboxes")}
+            company = workspace.permissions(c)
         mailboxes = []
         for target in targets:
             address, person_id = target["address"], target["person_id"]
@@ -579,8 +580,10 @@ def install_connectors(app, store, execution, mutate):
                 "synced_at": row["synced_at"] if row else None,
                 "error": row["error"] if row else None,
             })
+        # What Tico may do (Settings > Google), which the mail CLI the runner runs checks every write against
+        # (connectors/mail/policy.py runner_company): it reads it here, over the runner's own registration.
         return {"mailboxes": mailboxes, "batch": MAIL_BATCH,
-                "retention_days": store.settings.mail_retention_days}
+                "retention_days": store.settings.mail_retention_days, "company": company}
 
     @app.post("/api/v2/connectors/mail/messages")
     def mail_publish(request: Request, body: MailPublish):

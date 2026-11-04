@@ -2950,11 +2950,10 @@ def install(app, store, auth, mutate):
                 spent += size
                 rows.append(dict(r))
             # The company's What Tico may do (Settings > Google) covers automations too: with Send mail off a send is
-            # claimed as a draft, as with the inbox's own switch off, and the connector checks each write against
-            # `company` (connectors/mail/oauth.py company_allows).
+            # claimed as a draft, as with the inbox's own switch off. The connector checks each write itself, from
+            # GET /connectors/mail/targets (connectors/mail/policy.py runner_company), not from the action.
             from .google_workspace import permissions
-            may = permissions(c)
-            sending = A.send_on(c, mailbox) and may["send_mail"]
+            sending = A.send_on(c, mailbox) and permissions(c)["send_mail"]
             out = []
             for r in rows:
                 action, result, args = r["action"], json.loads(r["result"] or "{}"), json.loads(r["args"])
@@ -2969,7 +2968,7 @@ def install(app, store, auth, mutate):
                           "attempts=attempts+1,action=?,result=? WHERE id=?",
                           (now, runner["id"], action, json.dumps(result) if result else None, r["id"]))
                 out.append({"id": r["id"], "mailbox": r["mailbox"], "msg_id": r["msg_id"], "action": action,
-                            "args": args, "attempt": r["attempts"] + 1, "company": may})
+                            "args": args, "attempt": r["attempts"] + 1})
             return {"actions": out, "lease_seconds": MAIL_LEASE_MINUTES * 60}
         return mutate(request, body, work)
 

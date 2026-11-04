@@ -4,8 +4,10 @@ Google's scopes cannot tell Organize mail from Send mail (both are gmail.modify)
 key or a standalone grant never asks the server for a narrowed token. So the connector holds each box itself, from the
 bot's mail setting in Tico (company_organize, company_send, company_calendar): a label, archive or draft with Organize
 mail off, a send with Send mail off and a calendar write with Change calendar off are refused before Google is asked,
-whichever credential the run holds. A server that says nothing leaves things as they were. A bot acts only as itself:
-`--as <owner handle>` from a bot's run is refused, so the owner's exemptions are a person's alone.
+whichever credential the run holds. A server that answers without the fields (an older one) leaves things as they were;
+a setting that cannot be read refuses a bot's writes and lets it read. `--as <owner handle>` is only for a run Tico
+vouches for (access.owner_proof: a person's token, or the runner's own registration), so the owner's exemptions never
+come from what a bot's run can set.
 """
 
 import json, os, sys, types, unittest
@@ -46,10 +48,8 @@ class Base(Stage2):
 
     def setUp(self):
         super().setUp()
-        for name in ("HUB_BOT", "HUB_EMPLOYEE", "HUB_API_URL", "HUB_TOKEN"):
+        for name in ("HUB_BOT", "HUB_EMPLOYEE", "HUB_API_URL", "HUB_TOKEN", oauth.BROKER_URL_ENV, oauth.BROKER_AUTH_ENV):
             os.environ.pop(name, None)
-        access._ME.clear()
-        self.addCleanup(access._ME.clear)
 
     def corpus(self):
         return [fake.message("m-ava", THREAD, INCOMING, body="Can you help?", epoch_ms=1788364800000)]
@@ -123,6 +123,24 @@ class CompanyGates(Base):
         self.assertEqual(self.archive()[0], 0)
         self.assertEqual(self.hold()[0], 0)
 
+    def test_a_setting_tico_cannot_read_refuses_a_bot_s_writes_and_still_lets_it_read(self):
+        def down(slug):
+            raise OSError("Tico is unreachable")
+        for get in (down, lambda slug: None):
+            pl.SERVER_GET = get
+            rc, out, _ = self.archive()
+            self.assertEqual(rc, 1, out)
+            self.assertIn("Tico couldn't check the company's mail settings; try again", out)
+            self.assertEqual(self.hold()[0], 1)
+            self.assertTrue(self.in_inbox())
+            self.assertEqual(self.calendar.created_events, {})
+            rc, out, err = self.run_cli("inbox", "--as", "inbox", "--mailbox", BOX, "--json")
+            self.assertEqual(rc, 0, out + err)
+        # A person's own run, which Tico vouched for, does not ask.
+        rc, out, err = self.run_cli("archive", "--as", access.OWNER, "--mailbox", BOX, "m-ava", "--json")
+        self.assertEqual(rc, 0, out + err)
+        self.assertFalse(self.in_inbox())
+
     def test_a_computer_s_own_key_and_a_standalone_grant_are_held_to_it_too(self):
         """The real open_gmail: auth.gmail_service builds from this computer's own credential, which the server never
         narrowed, and the connector still refuses what the company turned off."""
@@ -162,37 +180,73 @@ class CompanyGates(Base):
         self.assertFalse(self.in_inbox())
 
 
-class NoBotActsAsTheOwner(Base):
-    """`--as <owner handle>` holds every verb and skips the company's Send mail: a person's only."""
+class OnlyTicoVouchesForTheOwner(Base):
+    """`--as <owner handle>` holds every verb and skips What Tico may do: only for a run Tico vouches for."""
 
-    def test_a_bot_run_as_the_owner_is_refused_and_sends_nothing_while_send_mail_is_off(self):
-        self.company(company_send=False)
-        os.environ["HUB_BOT"] = "inbox"
-        rc, out, _ = self.reply("--as", access.OWNER, "--mailbox", BOX)
-        self.assertEqual(rc, 2, out)
-        self.assertIn("may not act as the owner", out)
-        self.assertEqual(self.service.sent, [])
-        # Without HUB_BOT the bot's token still says whose run it is.
-        os.environ.pop("HUB_BOT")
-        os.environ.update(HUB_API_URL="http://127.0.0.1:9", HUB_TOKEN="bot-turn-token")
-        pl.HUB_GET = lambda path: {"actor": "bot:inbox", "role": "bot", "slug": "inbox"} if path == "me" else None
-        rc, out, _ = self.reply("--as", access.OWNER, "--mailbox", BOX)
-        self.assertEqual(rc, 2, out)
-        self.assertEqual(self.service.sent, [])
-        # Whatever reaches the policy as the owner from a bot's run is read as that bot.
-        sw = pl.switch(access.OWNER)
-        self.assertTrue(sw["company_off"])
-        self.assertEqual(pl.company(access.OWNER)["send_mail"], False)
+    def setUp(self):
+        super().setUp()
+        access.OWNER_PROOF = None                       # the real access.owner_proof, over a fake GET /api/v2/me
+        self.asked = []
+        self.me = {"person-token": {"actor": "human:ana", "role": "human"},
+                   "bot-token": {"actor": "bot:inbox", "role": "bot", "slug": "inbox"},
+                   "runner-token": {"actor": "runner:r1", "role": "runner"}}
 
-    def test_a_person_s_run_is_still_the_owner(self):
+        def who(url, token):
+            self.asked.append(token)
+            if token == "down-token":
+                raise OSError("Tico is unreachable")
+            return self.me.get(token)
+        access.WHO_AM_I = who
+
+    def as_owner(self):
+        access._ME.clear()
+        return self.reply("--as", access.OWNER, "--mailbox", BOX)
+
+    def assert_refused(self):
+        rc, out, _ = self.as_owner()
+        self.assertEqual(rc, 2, out)
+        self.assertIn("did not vouch", out)
+        self.assertEqual(self.service.sent, [])
+        self.assertFalse(pl.switch(access.OWNER)["on"])
+        self.assertEqual(pl.company(access.OWNER), dict.fromkeys(pl.COMPANY_FIELDS, False))
+
+    def test_no_token_is_not_the_owner_and_neither_is_hub_bot_naming_the_owner(self):
         self.company(company_send=False)
-        rc, out, err = self.run_cli("whoami", "--as", access.OWNER, "--json")
-        self.assertEqual(rc, 0, out + err)
+        self.assert_refused()
+        self.assertEqual(self.asked, [])
+        os.environ["HUB_BOT"] = access.OWNER
+        rc, out, _ = self.run_cli("reply", "--thread", THREAD, "--body-file", self.body_file(BODY), "--issue", "1",
+                                  "--json")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("did not vouch", out)
+        self.assert_refused()
+
+    def test_a_bot_s_token_or_a_failed_lookup_is_not_the_owner(self):
+        self.company(company_send=False)
+        os.environ["HUB_API_URL"] = "http://127.0.0.1:9"
+        for token in ("bot-token", "down-token", "unknown-token"):
+            os.environ["HUB_TOKEN"] = token
+            self.assert_refused()
+        # A bot's token beside the runner's registration is still the bot's.
+        os.environ.update({"HUB_TOKEN": "bot-token", oauth.BROKER_URL_ENV: "http://127.0.0.1:9",
+                           oauth.BROKER_AUTH_ENV: "runner-token"})
+        self.assert_refused()
+
+    def test_a_person_s_token_or_the_runner_s_registration_is_the_owner(self):
+        self.company(company_send=False)
         os.environ.update(HUB_API_URL="http://127.0.0.1:9", HUB_TOKEN="person-token")
-        pl.HUB_GET = lambda path: {"actor": "human:ana", "role": "human"} if path == "me" else None
+        access._ME.clear()
         self.assertEqual(access.employee(access.OWNER), access.OWNER)
         self.assertTrue(pl.switch(access.OWNER)["on"])
         self.assertIsNone(pl.company(access.OWNER))
+        rc, out, err = self.run_cli("whoami", "--as", access.OWNER, "--json")
+        self.assertEqual(rc, 0, out + err)
+        for name in ("HUB_API_URL", "HUB_TOKEN"):
+            os.environ.pop(name)
+        os.environ.update({oauth.BROKER_URL_ENV: "http://127.0.0.1:9", oauth.BROKER_AUTH_ENV: "runner-token"})
+        access._ME.clear()
+        self.assertEqual(access.owner_proof(), "runner")
+        self.assertEqual(access.employee(access.OWNER), access.OWNER)
 
 
 if __name__ == "__main__":

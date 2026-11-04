@@ -4,6 +4,7 @@ grant, then the Workspace key's domain, then a Connect Google attempt. Google is
 the key is a throwaway RSA key and the domain is acme.example."""
 
 import contextlib
+import json
 
 from backend import bot_settings as BS
 from backend import google_workspace as W
@@ -178,3 +179,20 @@ def test_the_team_list_pages_on_to_person_501_at_the_same_statements(api, monkey
     assert [p["person_id"] for p in third["people"]] == ["p0500"]
     r = api.get(PEOPLE, params={"after": "nobody"}, headers=headers("ana-test"))
     assert r.status_code == 422 and r.json()["error"]["code"] == "after"
+
+
+def test_a_page_stops_at_its_byte_budget_and_long_names_are_cut(api):
+    """Names come from the directory, unbounded: each row's name and mailbox are cut at CELL_MAX characters, and a
+    page stops at PAGE_BYTES of rows as well as at PEOPLE_MAX, with `next` its last row."""
+    people = [{"id": "ana", "name": "Ana", "email": "ana@acme.example", "primary_for": ["*"]}]
+    people += [{"id": f"p{n:04d}", "name": f"P{n:04d} " + "名" * 5000, "email": f"p{n}@acme.example"} for n in range(400)]
+    set_roster(api, people)
+    first = api.get(PEOPLE, headers=headers("ana-test")).json()
+    rows = first["people"]
+    assert all(len(p["name"]) <= W.CELL_MAX and len(p["mailbox"]) <= W.CELL_MAX for p in rows)
+    assert len(rows[1]["name"]) == W.CELL_MAX
+    assert sum(len(json.dumps(p, ensure_ascii=False).encode()) + 1 for p in rows) <= W.PAGE_BYTES
+    assert 1 < len(rows) < 401 and first["more"] is True and first["next"] == rows[-1]["person_id"]
+    second = api.get(PEOPLE, params={"after": first["next"]}, headers=headers("ana-test")).json()
+    assert second["more"] is False and second["next"] is None
+    assert [p["person_id"] for p in rows + second["people"]] == ["ana"] + [f"p{n:04d}" for n in range(400)]

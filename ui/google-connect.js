@@ -212,7 +212,10 @@
   function workspaceCard(host, g, {active, pend, replacing, flash}) {
     const reachable = g.setup?.reachable !== false;
     const parts = [];
+    // A key authorized before the read-only scopes: step 2 again with every scope, then Check, keeping the key.
+    const legacy = !!active && !pend && !replacing && active.narrowable === false;
     if (active && !replacing) parts.push(connectedBlock(active));
+    if (legacy) parts.push(allowStep(active));
     if (pend && !replacing) {
       if (!active) parts.push(`<p>Key uploaded for <strong>${esc(pend.domain || '')}</strong>.</p>`);
       parts.push(allowStep(pend));
@@ -220,7 +223,7 @@
     if (replacing || (!active && !pend)) {
       parts.push(createStep(host, g, {reachable, cancel: !!(active || pend), domainValue: active?.domain || pend?.domain || defaultDomain(g)}));
     }
-    if (!replacing && (pend || active?.status === 'failing')) parts.push(checkStep(g));
+    if (!replacing && (pend || legacy || active?.status === 'failing')) parts.push(checkStep(g));
     if (!replacing && !active && pend) {
       parts.push(`<div class="row"><button type="button" class="ghost" data-ws-replace>Replace key</button>
         <button type="button" class="ghost danger" data-ws-disconnect>Disconnect</button></div>${disconnectConfirm(pend.domain, false)}`);

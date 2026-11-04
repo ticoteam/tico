@@ -17,7 +17,7 @@ from backend.store import H
 from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.test_automation_turns import finish
 from clients.tico import APIError
-from connectors.mail import access, audit as audit_log, db, gmail as gm
+from connectors.mail import access, audit as audit_log, db, gmail as gm, policy as pl
 from connectors.mail import __main__ as cli
 from connectors.mail import actions as mail_actions, unsubscribe as unsub
 from connectors.mail.tests import fake
@@ -95,6 +95,10 @@ def computer(api, tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "open_db", lambda: db.connect(tmp_path / "mail.db"))
     monkeypatch.setattr(audit_log, "AUDIT_PATH", tmp_path / "audit.jsonl")
     monkeypatch.setattr(access, "PROJECTS", tmp_path)
+    # The CLI runs as the owner with this computer's registration (access.owner_proof), and reads What Tico may do
+    # from the hub as this runner (policy.runner_company).
+    monkeypatch.setattr(access, "OWNER_PROOF", lambda env: "runner")
+    monkeypatch.setattr(pl, "RUNNER_GET", lambda path: box.worker.client.get(path))
     box.token = machine["token"]
     return box
 
@@ -298,8 +302,8 @@ def test_a_send_claimed_after_the_switch_went_off_is_a_draft(api, computer):
 
 def test_what_tico_may_do_holds_automations_a_send_is_claimed_as_a_draft_which_organize_off_refuses(api, computer):
     """Settings > Google > What Tico may do covers automations: Send mail off claims a send as a draft, as the inbox's
-    own switch does, and each claimed action carries the setting, so with Organize mail off too the connector refuses
-    the draft and the archive before Gmail is asked."""
+    own switch does, and the connector reads the setting from the hub itself, so with Organize mail off too it refuses
+    the draft and the archive before Gmail is asked. An action that says otherwise on stdin changes nothing."""
     automate(api, SEND)
     automate(api, ARCHIVE)
     automate(api, DRAFT)
@@ -309,11 +313,46 @@ def test_what_tico_may_do_holds_automations_a_send_is_claimed_as_a_draft_which_o
     assert r.status_code == 200, r.text
     actions = claim(api, computer.token)["actions"]
     assert sorted(a["action"] for a in actions) == ["archive", "draft", "draft"]     # the send became a draft
-    assert all(a["company"] == {"organize_mail": False, "send_mail": False, "change_calendar": True} for a in actions)
+    assert all("company" not in a for a in actions)
     for action in actions:
-        answer = computer.action(action)
-        assert (answer["ok"], answer["retry"]) == (False, False) and "What Tico may do" in answer["detail"], answer
+        for forged in ({}, {"company": {}}, {"company": dict.fromkeys(("organize_mail", "send_mail"), True)}):
+            answer = computer.action(dict(action, **forged))
+            assert (answer["ok"], answer["retry"]) == (False, False) and "What Tico may do" in answer["detail"], answer
+    # A send made up on stdin, past the claim's draft, is refused the same way.
+    drafted = next(a for a in actions if a["action"] == "draft")
+    answer = computer.action(dict(drafted, action="send", company={}))
+    assert answer["ok"] is False and "What Tico may do" in answer["detail"], answer
     assert "INBOX" in computer.gmail.store["m1"]["labelIds"] and computer.drafts() == [] and computer.gmail.sent == []
+
+
+def test_a_mail_action_that_cannot_read_what_tico_may_do_writes_nothing_and_is_retried(api, computer, monkeypatch):
+    automate(api, ARCHIVE)
+    computer.sync()
+    action, = claim(api, computer.token)["actions"]
+
+    def down(path):
+        raise APIError("unavailable", "the hub is down", 503)
+    monkeypatch.setattr(pl, "RUNNER_GET", down)
+    answer = computer.action(action)
+    assert (answer["ok"], answer["retry"]) == (False, True) and "couldn't check" in answer["detail"], answer
+    assert "INBOX" in computer.gmail.store["m1"]["labelIds"]
+
+
+def test_a_bot_cannot_run_a_mail_action_as_the_owner(api, computer, monkeypatch):
+    """Only the runner's own registration or a person's token makes a run the owner: a bot's mail-action is refused
+    before its stdin is read for anything."""
+    automate(api, ARCHIVE)
+    computer.sync()
+    action, = claim(api, computer.token)["actions"]
+    monkeypatch.setattr(access, "OWNER_PROOF", None)
+    monkeypatch.setattr(access, "WHO_AM_I", lambda url, token: {"actor": "bot:inbox", "role": "bot"})
+    monkeypatch.setenv("HUB_API_URL", "http://localhost:8765")
+    monkeypatch.setenv("HUB_TOKEN", "bot-turn-token")
+    access._ME.clear()
+    answer = computer.action(dict(action, company={}))
+    access._ME.clear()
+    assert answer["ok"] is False and "vouch" in answer["detail"], answer
+    assert "INBOX" in computer.gmail.store["m1"]["labelIds"]
 
 
 def test_a_send_queued_with_the_switch_off_still_says_send_off_once_drafted(api, computer):
