@@ -30,13 +30,14 @@ def sweep(api):
     """One roundup run now, as the scheduler runs it: the tasks it listed as assigned, not started (their ledger rows are
     the ones it wrote)."""
     store = api.app.state.store
+    # Diffed by event id: a task listed again (a reassignment) has the same target as its earlier ledger row.
     with store.read() as c:
-        before = {r[0] for r in c.execute('SELECT target FROM events WHERE action=?', (A.EVENT,))}
+        before = {r[0] for r in c.execute('SELECT id FROM events WHERE action=?', (A.EVENT,))}
     with store.transaction() as c:
         task_roundup.run(c, H.now())
     with store.read() as c:
-        after = {r[0] for r in c.execute('SELECT target FROM events WHERE action=?', (A.EVENT,))}
-    return sorted(after - before)
+        return sorted({r[1] for r in c.execute('SELECT id,target FROM events WHERE action=?', (A.EVENT,))
+                       if r[0] not in before})
 
 
 def roundups(api, slug='ops'):
