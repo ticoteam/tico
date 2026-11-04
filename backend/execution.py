@@ -2075,12 +2075,12 @@ def unfenced_sql():
     bot continue, and a person's chat outside any task stays claimable so an interrupted routine cannot silence its
     owner."""
     task_sql = queued_task_sql()
-    return (f"({task_quarantine.free_sql(task_sql)}) AND (({H.person_sent_sql()} AND cv.kind='chat' AND {task_sql} IS NULL) "
+    return (f"(({task_quarantine.free_sql(task_sql)}) AND (({H.person_sent_sql()} AND cv.kind='chat' AND {task_sql} IS NULL) "
             "OR NOT EXISTS(SELECT 1 FROM jobs u JOIN messages um ON um.id=u.message_id "
             "JOIN conversations uc ON uc.id=um.conversation_id WHERE u.bot_id=j.bot_id AND u.state='uncertain' "
             f"AND (({task_sql} IS NOT NULL AND "
             + H.MESSAGE_TASK_SQL.replace("m.", "um.").replace("cv.", "uc.") + f"={task_sql}) "
-            f"OR ({task_sql} IS NULL AND cv.kind='chat' AND um.conversation_id=m.conversation_id))))")
+            f"OR ({task_sql} IS NULL AND cv.kind='chat' AND um.conversation_id=m.conversation_id)))))")
 
 
 def scoped_sql():
