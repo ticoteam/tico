@@ -1,4 +1,4 @@
-//! Computer-owned task worktrees (runner/worktrees.py): the heartbeat's report of each worktree the server
+//! Computer-owned task worktrees (runner_support/worktrees.py): the heartbeat's report of each worktree the server
 //! tracks here, an attached checkout's local proof (`tasks/.checkout-state/<sha256(link)>.json`, the Python
 //! marker format), and the cleanup and restore actions a heartbeat reply asks for. Never removes a tree before
 //! preserving its history. Adding and setting up a worktree inside a turn stay in the hub CLI (`hub worktree
@@ -1182,7 +1182,7 @@ fn merge_tree_oid(out: &Out) -> Option<String> {
 }
 
 /// Aborts a merge this removal finds abandoned in its own tree, before any switch, add or commit: the rules of
-/// runner/worktrees.py `_clear_merge`. Anything not provably abandoned is kept, untouched.
+/// runner_support/worktrees.py `_clear_merge`. Anything not provably abandoned is kept, untouched.
 async fn clear_merge(path: &Path, link: &str, release: bool, env: &Env) -> R<()> {
     let gitdir = PathBuf::from(git(path, env, &["rev-parse", "--path-format=absolute", "--git-dir"], true).await?.stdout.trim());
     if !gitdir.join("MERGE_HEAD").exists() {

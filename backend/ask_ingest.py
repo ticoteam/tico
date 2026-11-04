@@ -24,6 +24,10 @@ within `DEADLINE` seconds, a malformed answer, or an answer the outcome depends 
 item through as before. Each call is one `judge.call` row (label, model, tokens, latency, cost, the answers and the
 outcome); never the item's text. Each gated item is one `ask_ingest_items` row (ids, outcome and reason; never text).
 
+Source access: a repeat is offered only the open items its bot may read in full (`source_readable`, the task-read
+check). The merge is rechecked under the write (still on the plate, still readable by the asker), and a reply is
+forwarded to a merged asker only while it can still read the item; a lost right fails open with no title named.
+
 Bounded: at most `CONCURRENCY` calls run at once in this process (`call_slots.Calls`, a pool of its own apart
 from the rule checks'). With every slot in use, or the breaker open after repeated failures, the item fails open
 at once (`busy`, `breaker`) and no call is made, so no `judge.call` row is written. A call still running at
@@ -170,11 +174,40 @@ def load(c, person):
     return len(ids) - chores + approvals, chores
 
 
-def open_items(c, person):
-    """{option name: (task id, title)} for the person's open items a new one may be the same as, newest first."""
+def source_readable(c, asker, task):
+    """Whether the bot `asker` may read `task` in full: the ordinary task-read check (`auth.Auth.task_row`, the rule
+    every task page applies), from the database alone, so the offer, the write and a reply forwarding judge it alike.
+    A private task admits its parties, their managers and its guest; a company task admits its parties, and otherwise
+    each bot it involves must let the asker read its activity. Similarity of a question never grants it."""
+    from . import teammate_access
+    from .auth import Identity
+    if not task or not str(asker).startswith("bot:") or not H.task_private_readable(c, asker, task):
+        return False
+    if H.task_private(c, task) or H.task_participant(c, asker, task):
+        return True
+    bots = [H.actor_id(a) for a in (task["owner_id"], task["requester_id"]) if str(a).startswith("bot:")]
+    levels = teammate_access.bot_levels(c, Identity(asker, "bot"), bots) if bots else {}
+    return all(level["read"] for level in levels.values())
+
+
+def open_items(c, person, asker):
+    """{option name: (task id, title)} for the person's open items a new one may be the same as, newest first, only the
+    ones `asker` may read in full (`source_readable`): no title it may not see reaches the model."""
     plate = H.needs_you(c, person)
-    rows = sorted(plate["tasks"] + plate["waiting"], key=lambda t: t.get("created_at") or "", reverse=True)[:MAX_ITEMS]
-    return {f"item-{n}": (t["id"], t.get("title") or "") for n, t in enumerate(rows, 1)}
+    rows = sorted(plate["tasks"] + plate["waiting"], key=lambda t: t.get("created_at") or "", reverse=True)
+    out = {}
+    for t in rows:
+        if len(out) >= MAX_ITEMS:
+            break
+        if source_readable(c, asker, H.task(c, t["id"])):
+            out[f"item-{len(out) + 1}"] = (t["id"], t.get("title") or "")
+    return out
+
+
+def on_plate(c, person, task_id):
+    """Whether the task is still on the person's Needs you, the list `open_items` offers from."""
+    plate = H.needs_you(c, person)
+    return any(t["id"] == task_id for t in plate["tasks"] + plate["waiting"])
 
 
 def manager_of(c, bot_actor):
@@ -371,7 +404,7 @@ def preflight(store, primary, who, target, title, text, kind="task", asked=None)
                 return {**verdict, "error": "spend_cap"} if over_spend_cap(c, store.settings) else None
             if used_today(c, H.KEEPER) >= daily_cap(store.settings, "bot"):
                 return {**verdict, "error": "budget"}
-            items = open_items(c, person)
+            items = open_items(c, person, who.actor)
             asker = _bot_line(c, who.actor)
             person_name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
         answers, call, error = _judge(store, engine, qset, own, items, asker, person_name, title, text, kind,
@@ -514,8 +547,11 @@ def apply(c, verdict):
     if would == MERGED:
         merged_into = (verdict.get("items") or {}).get(verdict["answers"]["covered"])
         open_item = H.task(c, merged_into) if merged_into else None
-        if not open_item or open_item["status"] not in H.ACTIVE_STATUSES:
-            would, reason, merged_into = FAILED_OPEN, "covered_gone", None     # it ended since the call
+        # Rechecked here, under the writer: it may have ended, left the person's plate, or become unreadable to the
+        # asker since the call. Then it goes through as before, and the reply names no source.
+        if (not open_item or open_item["status"] not in H.ACTIVE_STATUSES or not on_plate(c, person, merged_into)
+                or not source_readable(c, asker, open_item)):
+            would, reason, merged_into = FAILED_OPEN, "covered_gone", None
             outcome = would
         else:
             text = (f"Not sent to {name}: they already have this open as \u201c{open_item['title']}\u201d. Their answer "
@@ -640,8 +676,11 @@ def on_reply(c, actor, task_id, text):
     name = H.person_name(c, H.actor_id(actor)) or H.actor_id(actor)
     answer = str(text).strip()[:2000]
     for row in rows:
-        # The person's item is named only to a bot that may read it; the answer is what was asked for.
-        on = f' on \u201c{item.get("title") or ""}\u201d' if item and H.task_private_readable(c, row["asker"], item) else ""
+        # Forwarded only while the asker can still read the item in full (access lost or the item made private since
+        # the merge: nothing is forwarded). Then the title goes with it, and the answer is what was asked for.
+        if not source_readable(c, row["asker"], item):
+            continue
+        on = f' on \u201c{item.get("title") or ""}\u201d' if item.get("title") else ""
         said = f'{name} answered this{on}: "{answer}"'
         if row["kind"] == "loose":
             H.say(c, H.KEEPER, row["asker"], said, kind="notice", refs={"ask_ingest": row["id"]})
@@ -794,12 +833,17 @@ def load_at(c, person, at):
     return c.execute(f"SELECT COUNT(*) FROM tasks WHERE {_ACTIVE_AT}", (person, at, at, at, at)).fetchone()[0]
 
 
-def open_items_at(c, person, at, leave_out=""):
-    """The person's items open just before `at`, as the gate would have offered them as `covered`, the replayed
-    item itself left out."""
-    rows = c.execute(f"SELECT id,title FROM tasks WHERE {_ACTIVE_AT} AND id<>? ORDER BY created_at DESC LIMIT ?",
-                     (person, at, at, at, at, leave_out, MAX_ITEMS)).fetchall()
-    return {f"item-{n}": (r["id"], r["title"] or "") for n, r in enumerate(rows, 1)}
+def open_items_at(c, person, at, leave_out="", asker=""):
+    """The person's items open just before `at`, as the gate would have offered them as `covered` to `asker` (only those
+    it may read in full), the replayed item itself left out."""
+    out = {}
+    for r in c.execute(f"SELECT id,title FROM tasks WHERE {_ACTIVE_AT} AND id<>? ORDER BY created_at DESC",
+                       (person, at, at, at, at, leave_out)):
+        if len(out) >= MAX_ITEMS:
+            break
+        if source_readable(c, asker, H.task(c, r["id"])):
+            out[f"item-{len(out) + 1}"] = (r["id"], r["title"] or "")
+    return out
 
 
 def _shown(c, viewer, person, it):
@@ -829,7 +873,8 @@ def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, view
         if used_today(c, H.KEEPER) + len(page) > daily_cap(store.settings, "bot"):
             raise LookupError("today's decision calls would pass the daily cap")
         person_name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
-        prepared = [(it, load_at(c, person, it["created_at"]), open_items_at(c, person, it["created_at"], it["ref"]),
+        prepared = [(it, load_at(c, person, it["created_at"]),
+                     open_items_at(c, person, it["created_at"], it["ref"], it["asker"]),
                      _bot_line(c, it["asker"]), _shown(c, viewer, person, it)) for it in page]
     out = []
     for it, plate, items, asker, shown in prepared:

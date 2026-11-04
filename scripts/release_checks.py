@@ -44,6 +44,7 @@ import os
 from pathlib import Path
 import socket
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -192,7 +193,7 @@ def edge_networks(ranges=EDGE):
         remove()
 
 
-ISOLATION_FILE = 'runner/tests/test_isolation_docker.py'
+ISOLATION_FILE = 'runner_support/tests/test_isolation_docker.py'
 PARTS = ('product', 'python', 'browser', 'desktop')
 # The desktop app's own tests, among them its updater installing from a company feed served by this checkout's
 # publisher and download routes (app/tests/update_hub.py). Building them needs WebKitGTK's development files.
@@ -228,13 +229,13 @@ TIMINGS = ROOT / 'scripts' / 'test-timings.json'
 # Test files that run the release's own native binaries (runner-rs, relay-rs), by what their source names. The release
 # gate gives them python shards 1-2 (NATIVE_SHARDS), the only python VMs that wait for the native-linux build; the rest start at once.
 NATIVE_TEST = re.compile(r'rust_binary|TICO_RUNNER_BIN|TICO_SCREEN_RELAY_BIN|target/release|"target" / "release"|'
-                         r'engine\.current|screen_binary|from runner import engine|runner\.engine|'
-                         # scripts/tico runs the checkout's runner (install, status: runner/engine.py finds the binary).
+                         r'engine\.current|screen_binary|from runner(?:_support)? import engine|runner(?:_support)?\.engine|'
+                         # scripts/tico runs the checkout's runner (install, status: runner_support/engine.py finds the binary).
                          r'"scripts" / "tico"\)|scripts/tico"')
 NATIVE_BINARIES = ('runner-rs/target/release/tico-runner', 'relay-rs/target/release/tico-screen-relay')
 # A test module importing another test module (test_screen borrows test_screen_relay_contract's running_service).
-TEST_IMPORT = re.compile(r'from\s+((?:backend|runner|scripts)\.tests(?:\.\w+)*)\s+import\s+([\w, ]+)|'
-                         r'import\s+((?:backend|runner|scripts)\.tests(?:\.\w+)+)')
+TEST_IMPORT = re.compile(r'from\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)*)\s+import\s+([\w, ]+)|'
+                         r'import\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)+)')
 
 
 def native_test_files(names):
@@ -272,11 +273,22 @@ def native_test_files(names):
 NATIVE_SHARDS = 2
 
 
-def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=False):
-    """The test files of shard `index` of `total`: every file pytest collects with `selection` (by default the
-    release Python step's), grouped so each shard takes about the same time: the slowest file by its recorded
-    seconds first, into the lightest shard. A file with no record weighs its test count times the recorded files'
-    seconds per test. Deterministic, so the N shards together cover each collected file exactly once."""
+def split_junit(addopts):
+    """(PYTEST_ADDOPTS without its junit report option, the report path it names or None). The words are split the way
+    pytest splits PYTEST_ADDOPTS (shlex), so `--junitxml=PATH`, `--junitxml PATH`, quoted paths and `--junit-xml` all work."""
+    words, kept, report = iter(shlex.split(addopts)), [], None
+    for word in words:
+        name, equals, value = word.partition('=')
+        if name in ('--junitxml', '--junit-xml'):
+            report = value if equals else next(words, None)
+        else:
+            kept.append(word)
+    return shlex.join(kept), report
+
+
+def collected_counts(env, selection):
+    """{test file: its number of collected tests} for pytest's `selection` (by default the release Python step's)."""
+    env = {**env, 'PYTEST_ADDOPTS': split_junit(env.get('PYTEST_ADDOPTS', ''))[0]}   # no report from collection
     result = subprocess.run([sys.executable, '-m', 'pytest', '--collect-only', '-q', '-n', '0', *selection],
                             cwd=ROOT, env=env, capture_output=True, text=True)
     if result.returncode:
@@ -287,6 +299,15 @@ def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=Fal
         if '::' in line and not line.startswith(' '):
             name = line.split('::', 1)[0]
             counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=False, counts=None):
+    """The test files of shard `index` of `total`: every file pytest collects with `selection` (by default the
+    release Python step's), grouped so each shard takes about the same time: the slowest file by its recorded
+    seconds first, into the lightest shard. A file with no record weighs its test count times the recorded files'
+    seconds per test. Deterministic, so the N shards together cover each collected file exactly once."""
+    counts = collected_counts(env, selection) if counts is None else counts
     if len(counts) < total:
         raise RuntimeError(f'{len(counts)} test files cannot fill {total} shards')
     timings = recorded_timings('release' if selection else 'default')
@@ -444,18 +465,76 @@ def record_browser_timings(*logs):
     return 0
 
 
+# Each test leaves memory behind in its xdist worker, and xdist frees none of it: one pytest process per shard grew
+# about 25 MB per test per worker until the 32 GB VM ran out. A shard therefore runs as batches of about this many
+# tests, each in a fresh pytest process, so the workers start empty for every batch.
+TESTS_PER_BATCH = 400
+# The release step's budget. Its unbatched 16-vCPU shard 4/4 (7190 tests in one process) ran out of memory at 61.6 GiB,
+# about 31 MiB kept per test, so 600 tests keep a batch near 20 GiB, under the 24 GiB target.
+RELEASE_TESTS_PER_BATCH = 600
+
+
+def batches(files, counts, limit=TESTS_PER_BATCH):
+    """`files`, in order, cut into groups of at most `limit` tests; a file with more tests than that forms a group alone."""
+    groups, group, tests = [], [], 0
+    for name in files:
+        if group and tests + counts[name] > limit:
+            groups.append(group)
+            group, tests = [], 0
+        group.append(name)
+        tests += counts[name]
+    if group:
+        groups.append(group)
+    return groups
+
+
+# pytest's exit code for an interrupted run. A batch that exits with it, or with a negative code (killed by a signal),
+# ends the run: the batches after it would be cut short the same way.
+INTERRUPTED = 2
+
+
+def batch_commands(groups, workers, selection, env):
+    """One pytest command per batch of files: `workers` xdist workers and the run's `selection` options. A junit report
+    that PYTEST_ADDOPTS names (the release step's --junitxml=DIR/NAME.xml) becomes DIR/NAME-bNN.xml for batch NN, so no
+    batch overwrites another's report. The timings reader takes every report under the directory. PYTEST_ADDOPTS is read
+    before the command line and the last --junitxml wins, so the batch's own option overrides the base one."""
+    report = split_junit(env.get('PYTEST_ADDOPTS', ''))[1]
+    commands = []
+    for number, group in enumerate(groups, 1):
+        junit = []
+        if report:
+            path = Path(report)
+            junit = [f'--junitxml={path.with_name(f"{path.stem}-b{number:02d}.xml")}']
+        commands.append([sys.executable, '-m', 'pytest', '-q', '-n', workers, *selection, '--api-database-snapshots',
+                         *junit, *group])
+    return commands
+
+
+def run_batches(commands, env=None):
+    """Run the batch commands in order, each as its own pytest process. A batch that is interrupted or killed by a signal
+    ends the run there; a batch with failing tests (exit 1) does not, so every failure is reported. Returns the first
+    non-zero exit code, or 0."""
+    codes = []
+    for command in commands:
+        codes.append(subprocess.run(command, cwd=ROOT, env=env).returncode)
+        if codes[-1] < 0 or codes[-1] == INTERRUPTED:
+            break
+    code = next((code for code in codes if code), 0)
+    print(f'Batches: {len(codes)} of {len(commands)} ran, exit {code}', flush=True)
+    return code
+
+
 def python_shard(index, total):
     """File group `index` of `total` of the default Python suite: the PR-check Python job, split over VMs."""
     started, initial_load = time.monotonic(), load()
     env = {**os.environ, 'TICO_PYTHON': sys.executable}
+    counts = collected_counts(env, ())
+    files = shard_files(index, total, env, selection=(), counts=counts)
     # Alone on its VM, a shard uses every core rather than pytest.ini's shared-box cap.
-    workers = str(os.cpu_count() or 2)
-    result = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-n', workers, '--api-database-snapshots']
-                            + shard_files(index, total, env, selection=()),
-                            cwd=ROOT, env=env)
-    print(f'Python shard {index}/{total}: exit {result.returncode}, {time.monotonic() - started:.2f}s; '
+    code = run_batches(batch_commands(batches(files, counts), str(os.cpu_count() or 2), (), env), env)
+    print(f'Python shard {index}/{total}: exit {code}, {time.monotonic() - started:.2f}s; '
           f'load {initial_load} -> {load()}', flush=True)
-    return result.returncode
+    return code
 
 
 def phase_table(checks, started, not_run=()):
@@ -524,18 +603,23 @@ def release(args):
         built = all(code == 0 for code in build_codes)
         ready.write_text('ok' if built else 'failed')
     if runs('python'):
-        python_cmd = [sys.executable, '-m', 'pytest', '-q', '-n', workers, '-m', 'slow or not slow',
-                      f'--ignore={ISOLATION_FILE}', '--api-database-snapshots']
         name = 'all-python'
+        counts = collected_counts(test_env, RELEASE_SELECTION)
         if shard:
-            files = shard_files(shard[0], shard[1], test_env, native_first=True)
+            files = shard_files(shard[0], shard[1], test_env, native_first=True, counts=counts)
             # Never skip a native test for want of its binary: only shard 1's VM waits for the native-linux build.
             missing = [b for b in NATIVE_BINARIES if not (ROOT / b).exists()]
             if missing and native_test_files(files):
                 raise RuntimeError(f'python shard {shard[0]} has native tests but no release binaries: {missing}')
-            python_cmd += files
             name = f'python-{shard[0]}-of-{shard[1]}'
-        checks.append(Check(name, python_cmd, logs, test_env, tests=True))
+        else:
+            files = sorted(counts)
+        # One pytest process per batch, run by a child of this step: a single process keeps every test's memory.
+        plan = logs / f'{name}-batches.json'
+        plan.write_text(json.dumps(batch_commands(batches(files, counts, limit=RELEASE_TESTS_PER_BATCH), workers,
+                                                  RELEASE_SELECTION, test_env)))
+        checks.append(Check(name, [sys.executable, str(ROOT / 'scripts/release_checks.py'), '--run-batches', str(plan)],
+                            logs, test_env, tests=True))
     if runs('browser'):
         if shard:
             checks.append(Check(f'browser-{shard[0]}-of-{shard[1]}',
@@ -592,6 +676,8 @@ def main(argv=None):
                              "(xunit1) of a release validation, a directory of python-K-of-N.xml files")
     parser.add_argument('--record-browser-timings', nargs='+', metavar='LOG',
                         help="rewrite the 'browser' seconds in scripts/test-timings.json from browser-test logs")
+    parser.add_argument('--run-batches', metavar='PLAN_JSON',
+                        help='run the pytest commands in PLAN_JSON one batch at a time (the release Python step runs this)')
     parser.add_argument('--shard', type=parse_shard,
                         help='run file group K of N (K/N) of the Python tests: alone, of the default suite (PR checks); '
                              'with --release --part python, of the release set; with --part browser, of every script')
@@ -600,6 +686,8 @@ def main(argv=None):
         parser.error('--part needs --release')
     if args.shard and args.release and args.part not in ('python', 'browser'):
         parser.error('--shard with --release needs --part python or browser')
+    if args.run_batches:
+        return run_batches(json.loads(Path(args.run_batches).read_text()))
     if args.record_timings:
         return record_timings(*args.record_timings)
     if args.record_shard_timings:
@@ -617,7 +705,7 @@ def in_slot(env=os.environ):
 
 
 if __name__ == '__main__':
-    if not in_slot() and not {'--record-timings', '--record-shard-timings', '--record-browser-timings'} & set(sys.argv):
+    if not in_slot() and not {'--record-timings', '--record-shard-timings', '--record-browser-timings', '--run-batches'} & set(sys.argv):
         # A local run first takes one of the box's heavy-job slots, at low priority (scripts/heavy.sh).
         os.execvp('bash', ['bash', str(ROOT / 'scripts/heavy.sh'), sys.executable, __file__, *sys.argv[1:]])
     raise SystemExit(main())

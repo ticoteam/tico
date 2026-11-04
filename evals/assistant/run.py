@@ -172,10 +172,17 @@ def write_answer(words, state, mutate, argv, ids):
         if mutate:
             record(state, "bot", tid, {"status": status})
         return {"ok": True, "bot": {"id": tid, "status": status}}
+    if noun == "settings" and verb == "set" and len(words) > 3 and words[2] == "bot.compact_at" and words[3].isdigit():
+        bot = argv_flag(argv or [], "--bot")
+        if bot:
+            if mutate:
+                record(state, "bot", bot[-1], {"compact_at": int(words[3])})
+            return {"ok": True, "key": "bot.compact_at", "bot": bot[-1], "value": int(words[3])}
     if noun == "bot" and verb == "model" and tid and len(words) > 3 and not words[3].startswith("-"):
+        fields = {"model": words[3], **({"effort": e[-1]} if (e := argv_flag(argv or [], "--effort")) else {})}
         if mutate:
-            record(state, "bot", tid, {"model": words[3]})
-        return {"ok": True, "bot": {"id": tid, "model": words[3]}}
+            record(state, "bot", tid, fields)
+        return {"ok": True, "bot": {"id": tid, **fields}}
     if noun == "approval" and verb in ("decline", "approve") and tid:
         status = "declined" if verb == "decline" else "approved"
         if mutate:
@@ -379,6 +386,11 @@ def answer(argv, via, tool=None):
         key = lookup(bot_models, words[2])
         if key is not None and "model" in bot_models[key] and isinstance(out, dict):
             out = {**out, "model": bot_models[key]["model"]}
+    if (after_out is None and isinstance(out, dict) and words[:3] == ["settings", "show", "bot.compact_at"]
+            and (b := argv_flag(argv, "--bot"))):
+        key = lookup(bot_models, b[-1])
+        if key is not None and "compact_at" in bot_models[key]:
+            out = {**out, "bot": b[-1], "value": bot_models[key]["compact_at"]}
     if after_out is None and out is not None and not isinstance(out, str):
         if words[:2] == ["task", "list"]:
             keep = ("--all" in words or "closed" in flag_values(words, "--where-status")
@@ -820,11 +832,13 @@ def run_sample(case, sample, args, outdir):
 def judge(case, reply, lines, attached, args):
     if not case.get("reply"):
         return {"pass": True, "score": 5, "why": "no rubric"}
-    canned = json.dumps([{"matches": h["match"], "returns": h.get("out", "")} for h in case.get("hub") or []],
-                        indent=1)[:4000]
+    # A row's `after` entries are what the same read returns once a write they name has run (a read-back).
+    canned = json.dumps([{"matches": h["match"], "returns": h.get("out", ""),
+                          **({"after_a_write": [{"when": a["when"], "returns": a["out"]} for a in h["after"]]}
+                             if h.get("after") else {})} for h in case.get("hub") or []], indent=1)[:6000]
     prompt = f"""You grade one turn of an AI assistant that works for one person in a company work app (Tico). Be strict but
 fair: judge only against the rubric, not style. The assistant's hub CLI calls are listed; a call marked FAILED did not
-work (a canned failure or a rejected argument), so it does not count as done. The CANNED RECORD is what the hub returned for the calls the grader scripted; numbers in the reply must match it.
+work (a canned failure or a rejected argument), so it does not count as done. The CANNED RECORD is what the hub returned for the calls the grader scripted; numbers in the reply must match it. A row's after_a_write is what that read returns once a write its `when` names has run.
 
 THE PERSON WRITING: Dana (human:dana), the owner of this Tico workspace. The assistant's reply is addressed to Dana, so
 "you" in the reply means Dana. A record that says "Dana" describes the same person as "you"; do not mark that wrong.

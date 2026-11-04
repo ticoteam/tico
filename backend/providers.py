@@ -26,7 +26,7 @@ KEY = "providers"
 DEFAULT = "default"
 
 # `runtime` is the host a runner starts (runner-rs/src/hosts/<runtime>.rs); `harness` names the tool
-# manifest that installs it (runner/harnesses/<harness>.toml). `login`, what the person types on the runner's
+# manifest that installs it (runner-rs/harnesses/<harness>.toml). `login`, what the person types on the runner's
 # machine to sign that runtime in, comes from the manifest. Providers with no CLI of their own share the
 # catch-all runtime (`catch_all`): pi, reached with an OpenRouter API key.
 PROVIDERS = (
@@ -79,51 +79,51 @@ for _row in PROVIDERS:
 # with no `provider` belong to external agents that bring their own model: they are never a
 # default, and any company may create a bot on one.
 MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
-    {"id": "gpt-6-astra", "label": "gpt 6 astra", "runtime": "codex", "provider": "openai",
+    {"id": "gpt-6-astra", "context_tokens": 1_050_000, "label": "gpt 6 astra", "runtime": "codex", "provider": "openai",
      "efforts": ("low", "medium", "high", "xhigh", "max", "ultra"),
      "default_effort": "medium", "deprecated": True},
-    {"id": "gpt-6.1-sol", "label": "gpt 6.1 sol", "runtime": "codex", "provider": "openai",
+    {"id": "gpt-6.1-sol", "context_tokens": 1_050_000, "label": "gpt 6.1 sol", "runtime": "codex", "provider": "openai",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "medium"},
     # Gated (Dev 693): priced, not offered. `held` rows are never listed or picked, and `deprecated` gives them the
     # refusals every retired row gets (a bot cannot choose them, the cloud and memory pickers skip them). Product
     # opens customer availability separately; until then this row stays held, even if Tico HQ publishes a tier for the id.
-    {"id": "gpt-6.1-terra", "label": "gpt 6.1 terra", "runtime": "codex", "provider": "openai",
+    {"id": "gpt-6.1-terra", "context_tokens": 1_050_000, "label": "gpt 6.1 terra", "runtime": "codex", "provider": "openai",
      "efforts": ("low", "medium", "high", "xhigh", "max"), "default_effort": "medium",
      "deprecated": True, "held": True},
-    {"id": "gpt-6-sol", "label": "gpt 6 sol", "runtime": "codex", "provider": "openai",
+    {"id": "gpt-6-sol", "context_tokens": 1_050_000, "label": "gpt 6 sol", "runtime": "codex", "provider": "openai",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "medium", "deprecated": True},
-    {"id": "gpt-6-luna", "label": "gpt 6 luna", "runtime": "codex", "provider": "openai",
+    {"id": "gpt-6-luna", "context_tokens": 1_050_000, "label": "gpt 6 luna", "runtime": "codex", "provider": "openai",
      "recommended": True,
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "max"},
-    {"id": "gpt-5.6-sol", "label": "gpt 5.6 sol", "runtime": "codex", "provider": "openai",
+    {"id": "gpt-5.6-sol", "context_tokens": 1_050_000, "label": "gpt 5.6 sol", "runtime": "codex", "provider": "openai",
      "efforts": ("low", "medium", "high", "xhigh", "max", "ultra"),
      "default_effort": "low", "deprecated": True},
-    {"id": "grok-4.6", "label": "grok 4.6", "runtime": "grok", "provider": "xai",
+    {"id": "grok-4.6", "context_tokens": 500_000, "label": "grok 4.6", "runtime": "grok", "provider": "xai",
      "recommended": True,
      "efforts": ("low", "medium", "high", "xhigh"),
      "default_effort": "high"},
-    {"id": "gemini-3.8-flash", "label": "gemini 3.8 flash", "runtime": "gemini", "provider": "google",
+    {"id": "gemini-3.8-flash", "context_tokens": 1_048_576, "label": "gemini 3.8 flash", "runtime": "gemini", "provider": "google",
      "recommended": True,
      "efforts": ("low", "medium", "high"),
      "default_effort": "high"},
-    {"id": "claude-opus-5-5", "label": "opus 5.5", "runtime": "claude", "provider": "anthropic",
+    {"id": "claude-opus-5-5", "context_tokens": 1_000_000, "label": "opus 5.5", "runtime": "claude", "provider": "anthropic",
      "recommended": True,
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "high"},
-    {"id": "claude-opus-5", "label": "opus 5", "runtime": "claude", "provider": "anthropic",
+    {"id": "claude-opus-5", "context_tokens": 1_000_000, "label": "opus 5", "runtime": "claude", "provider": "anthropic",
      "deprecated": True,
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "high"},
-    {"id": "claude-sonnet-5-5", "label": "sonnet 5.5", "runtime": "claude", "provider": "anthropic",
+    {"id": "claude-sonnet-5-5", "context_tokens": 1_000_000, "label": "sonnet 5.5", "runtime": "claude", "provider": "anthropic",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "high"},
-    {"id": "claude-fable-5-1", "label": "fable 5.1", "runtime": "claude", "provider": "anthropic",
+    {"id": "claude-fable-5-1", "context_tokens": 1_000_000, "label": "fable 5.1", "runtime": "claude", "provider": "anthropic",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "high"},
-    {"id": "claude-haiku-5-5", "label": "haiku 5.5", "runtime": "claude", "provider": "anthropic",
+    {"id": "claude-haiku-5-5", "context_tokens": 1_000_000, "label": "haiku 5.5", "runtime": "claude", "provider": "anthropic",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "medium"},
     # Cursor picks the model itself on `auto`; any other model it offers is named in the bot's config.

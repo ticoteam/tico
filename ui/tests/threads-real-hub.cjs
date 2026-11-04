@@ -1,11 +1,11 @@
 // Threads on a real hub (ui/tests/support/real-hub.cjs): a company thread and a members-only thread, made through the API as
 // Dana. Dana, on a desktop, reads the company thread and replies in its composer; a sub-thread under one of its messages
 // shows inline under its header and opens on its own; and her bot page switches between the bot's Home and DM. Omar, a teammate on the
-// desktop, sees the company thread in the sidebar but not the members-only one, and its text is not on his page; opened by
+// desktop, sees the company thread on the thread rail but not the members-only one, and its text is not on his page; opened by
 // direct URL it is "Not found"; and on a bot he may see but not read, the bot has no Home tab. Priya's Home is hidden from
 // Omar until Dana makes him Priya's manager (reports_to), and then he reads it. Priya, on a phone, taps the company thread
-// in the sidebar, sees its composer, and the page does not scroll sideways. Dana, on a phone, finds a late sub-thread reply
-// by its root's row, reads DMs by who they are with, and switches a bot's Home and DM.
+// on the rail, sees its composer, and the page does not scroll sideways. Dana, on a phone, finds a late sub-thread reply
+// under its root's row, reads DMs by who they are with, and switches a bot's Home and DM.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
@@ -125,13 +125,20 @@ async function restrictPerson(hub) {
       null, {timeout: t(15000)});
     await bot.context().close();
 
-    // Omar, desktop: the company thread is in his Threads list; the members-only one is not, and its text is not on the page.
+    // Omar, desktop: he reads the company thread but is not in it, so Browse threads offers it and his rail does not list it;
+    // the members-only one is in neither, and its text is not on the page.
     // Opened by direct URL, the members-only thread is "Not found", and the bot he may only see has no Home tab.
     const omar = await pageAs(browser, hub, 'omar');
     await omar.goto(hub.url + '/#/threads');
-    await omar.locator('.threads-page .th-row-title', {hasText: 'Launch plan'}).first().waitFor({timeout: t(15000)});
-    assert.equal(await omar.locator('.threads-page .th-row-title', {hasText: 'Pricing war room'}).count(), 0,
-      'a members-only thread Omar is not in is not in his Threads list');
+    await omar.locator('#thread-rail [data-tr-browse]:not([hidden])').click({timeout: t(15000)});
+    const browse = omar.locator('#thread-browse');
+    await browse.locator(`li[data-thread="${plan.id}"]`).waitFor({timeout: t(15000)});
+    assert.equal(await browse.locator(`li[data-thread="${secret.id}"]`).count(), 0, 'Browse does not offer a members-only thread');
+    assert.equal(await omar.locator(`#thread-rail a.tr-row[data-thread="${plan.id}"]`).count(), 0,
+      'a thread Omar only reads is not on his rail');
+    assert.equal(await omar.locator(`#thread-rail a.tr-row[data-thread="${secret.id}"]`).count(), 0,
+      'a members-only thread Omar is not in is not on his rail');
+    await omar.keyboard.press('Escape');
     await omar.goto(hub.url + '/#/thread/' + secret.id);
     await omar.getByText('Not found').waitFor({timeout: t(15000)});
     assert.ok(!(await omar.content()).includes(SECRET), 'the members-only text is not on Omar\'s page');
@@ -170,18 +177,18 @@ async function restrictPerson(hub) {
     assert.equal(await manager.locator('#person-dm').count(), 1, 'her manager may write to her');
     await manager.context().close();
 
-    // Priya, phone: the Inbox tab in the bottom bar opens Inbox, and its Important tab lists the company thread; tapping
-    // it opens the thread with its composer, and the page does not scroll sideways.
+    // Priya, phone: the Threads tab in the bottom bar opens the rail, which lists the company thread; tapping it opens
+    // the thread with its composer, and the page does not scroll sideways.
+    // Priya follows the company thread first: the rail lists only threads she is in.
+    await api(hub, 'priya', 'PUT', `/v2/threads/${plan.id}/follow`, {notify: 'live'});
     const priya = await pageAs(browser, hub, 'priya', {phone: true});
     await priya.goto(hub.url + '/#/tasks');
     await priya.locator('#mobile-threads:not([hidden])').waitFor({timeout: t(15000)});
     await priya.locator('#mobile-threads').click();
-    await priya.waitForFunction(() => location.hash === '#/threads?view=inbox', null, {timeout: t(15000)});
-    await priya.locator('.threads-page [data-th-sort="important"]').click();
     await priya.waitForFunction(() => location.hash === '#/threads', null, {timeout: t(15000)});
-    await priya.locator('.threads-page .th-row-title', {hasText: 'Launch plan'}).first().waitFor({timeout: t(15000)});
-    assert.equal(await priya.locator('.threads-page .th-row-title', {hasText: 'Pricing war room'}).count(), 0);
-    await priya.locator('.threads-page a.th-row[data-thread="' + plan.id + '"]').tap();
+    await priya.locator('#thread-rail .tr-title', {hasText: 'Launch plan'}).first().waitFor({timeout: t(15000)});
+    assert.equal(await priya.locator('#thread-rail .tr-title', {hasText: 'Pricing war room'}).count(), 0);
+    await priya.locator('#thread-rail a.tr-row[data-thread="' + plan.id + '"]').tap();
     await priya.waitForURL(new RegExp('#/thread/' + plan.id), {timeout: t(15000)});
     await priya.getByText(PLAN).waitFor({timeout: t(15000)});
     await priya.locator('.thv-composer .p-text').waitFor({timeout: t(15000)});
@@ -189,38 +196,41 @@ async function restrictPerson(hub) {
     assert.equal(sideways, false, 'the phone page does not scroll sideways');
     await priya.context().close();
 
-    // Dana, phone. Omar answers in the old sub-thread: the list still shows only roots, the root's row carries the reply,
-    // and tapping it lands on that reply. Opening the sub-thread adds no row for it.
+    // Dana, phone. Omar answers in the old sub-thread: the rail still shows only roots, the root's row carries the reply,
+    // and tapping it opens the root with the reply inline under its message. Opening the sub-thread adds no row for it.
     const late = await api(hub, 'omar', 'POST', `/v2/threads/${plan.id}/messages`, {text: 'A late risk from Omar', kind: 'say', parent_message_id: kickoff.id});
     const pair = await api(hub, 'dana', 'POST', '/v2/threads/dm', {members: ['human:priya']});
-    const trio = await api(hub, 'dana', 'POST', '/v2/threads/dm', {members: ['human:priya', 'human:omar']});
+    const trio = await api(hub, 'dana', 'POST', '/v2/threads/dm', {members: ['human:priya', 'human:omar'], title: 'Launch trio'});
     await api(hub, 'priya', 'POST', `/v2/threads/${(pair.thread || pair).id}/messages`, {text: 'Got a minute?', kind: 'say'});
     const phone = await pageAs(browser, hub, 'dana', {phone: true});
     await phone.goto(hub.url + '/#/threads');
-    const planRow = phone.locator(`.threads-page a.th-row[data-thread="${plan.id}"]`).first();
+    const planRow = phone.locator(`#thread-rail a.tr-row[data-thread="${plan.id}"]`).first();
     await planRow.waitFor({timeout: t(15000)});
-    const rowTitles = await phone.locator('.threads-page .th-row-title').allInnerTexts();
+    const rowTitles = await phone.locator('#thread-rail .tr-title').allInnerTexts();
     assert.ok(!rowTitles.some(title => [PLAN, KICKOFF, RISKS].includes(title)), 'a sub-thread is not a row: ' + rowTitles);
-    assert.equal(await phone.locator(`.threads-page a.th-row[data-thread="${risks.thread_id}"]`).count(), 0);
+    assert.equal(await phone.locator(`#thread-rail a.tr-row[data-thread="${risks.thread_id}"]`).count(), 0);
     assert.match(await planRow.getAttribute('class'), /unread/, 'the root carries the new reply');
-    const marked = phone.waitForResponse(r => r.url().includes(`/threads/${risks.thread_id}/read`), {timeout: t(15000)});
     await planRow.tap();
-    await phone.waitForURL(new RegExp(`#/thread/${risks.thread_id}\\?m=${late.id}`), {timeout: t(15000)});
-    await phone.locator('.th-msg.th-focus', {hasText: 'A late risk from Omar'}).waitFor({timeout: t(15000)});
-    await marked;
-    assert.equal(await phone.locator(`#th-list a[data-thread="${risks.thread_id}"]`).count(), 0, 'opening a sub-thread adds no row');
-    await phone.goto(hub.url + '/#/threads?view=dms');
-    await phone.locator(`.threads-page a.th-row[data-thread="${(pair.thread || pair).id}"]`).waitFor({timeout: t(15000)});
+    await phone.waitForURL(new RegExp(`#/thread/${plan.id}$`), {timeout: t(15000)});
+    await phone.locator('.th-msg', {hasText: 'A late risk from Omar'}).waitFor({state: 'attached', timeout: t(15000)});
+    await phone.goto(hub.url + '/#/thread/' + risks.thread_id);
+    await phone.getByText('A late risk from Omar').waitFor({timeout: t(15000)});
+    await phone.goto(hub.url + '/#/threads');
+    await planRow.waitFor({timeout: t(15000)});
+    assert.equal(await phone.locator(`#thread-rail a[data-thread="${risks.thread_id}"]`).count(), 0, 'opening a sub-thread adds no row');
 
-    // The same phone: a DM reads as who it is with, in the list and on the Unread threads card.
-    const titleOf = id => phone.locator(`.threads-page a.th-row[data-thread="${id}"] .th-row-title`).innerText();
-    assert.match(await titleOf((pair.thread || pair).id), /Priya/);
-    const group = await titleOf((trio.thread || trio).id);
-    assert.ok(group.includes('Priya') && group.includes('Omar'), 'a group DM names everyone: ' + group);
+    // The same phone: a group chat is on the rail by its name; a 1:1 DM is not, and reads as who it is with in its own
+    // header and on the Unread threads card.
+    const group = await phone.locator(`#thread-rail a.tr-row[data-thread="${(trio.thread || trio).id}"] .tr-title`).innerText({timeout: t(15000)});
+    assert.equal(group.trim(), 'Launch trio', 'a group chat is on the rail by its name');
+    assert.equal(await phone.locator(`#thread-rail a[data-thread="${(pair.thread || pair).id}"]`).count(), 0, 'a 1:1 DM is on its teammate, not the rail');
+    // The card first: opening the DM reads it, and the card lists only unread threads.
     await phone.goto(hub.url + '/#/home');
     const card = phone.locator('.dash-list a', {hasText: 'Priya'}).first();
     await card.waitFor({timeout: t(15000)});
     assert.equal(await phone.locator('.dash-list a', {hasText: 'Untitled'}).count(), 0, 'no DM on the card is Untitled');
+    await phone.goto(hub.url + '/#/thread/' + (pair.thread || pair).id);
+    await phone.locator('.thv-title', {hasText: 'Priya'}).waitFor({timeout: t(15000)});
 
     // The same phone: a bot's Home and DM are named in the top line, and each one switches the page.
     await phone.goto(hub.url + '/#/bot/' + BOT + '/home');
@@ -257,11 +267,12 @@ async function restrictPerson(hub) {
 
       // Calls are not set up on this hub: no Start call, and no note about it.
       await page.goto(hub.url + '/#/thread/' + plan.id);
-      await page.locator('.thv-aud').waitFor({timeout: t(15000)});
+      await page.locator('.thv-title', {hasText: 'Launch plan'}).waitFor({timeout: t(15000)});
       assert.equal(await page.locator('[data-call]').count(), 0, `${tag}: no Start call without calls`);
 
-      // The audience shows in the thread's header on either screen.
-      assert.equal(await page.locator('.thv-aud').innerText(), 'Company', `${tag}: the header names the audience`);
+      // A thread on the rail says what it is with its mark (#), as its row does, on either screen; no audience word.
+      assert.match(await page.locator('.thv-title').innerText(), /^#\s*Launch plan$/, `${tag}: the header's mark`);
+      assert.equal(await page.locator('.thv-aud').count(), 0, `${tag}: no audience word beside a # thread`);
 
       // Who can read: one title, a one-line team row, and no Slack with Slack off.
       await page.goto(hub.url + '/#/thread/' + secret.id);

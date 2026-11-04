@@ -28,7 +28,7 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
     config = c.execute("SELECT team,owner_id,owner_ids,revision,description,reports_to,repo,"
                        "thread_mode,config,onboarding_state FROM bot_config WHERE bot=?", (bot["slug"],)).fetchone()
     assignment = c.execute("SELECT a.bot,a.runner_id,a.generation,r.label,r.owner_id,r.last_seen_at,"
-                           "r.revoked_at FROM assignments a JOIN runners r ON r.id=a.runner_id "
+                           "r.revoked_at FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                            "WHERE a.bot=?", (bot["slug"],)).fetchone() if level["read"] else None
     row["access"] = level
     row["team"] = config["team"] if config else None

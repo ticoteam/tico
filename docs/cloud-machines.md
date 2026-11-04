@@ -8,23 +8,25 @@ image: how the base snapshot is made and refreshed, and how a new machine become
 
 A bot in cloud mode is either on the company's **shared** cloud machine or on its **own**. Light bots (marketing,
 ops, most roles) share one machine per company, so a company pays for one machine and its starts, not one per bot.
-Heavy bots get their own: a bot made from the `video-producer` template, or one in the Engineering department of the
-team chart, starts on its own machine; every other bot starts on the shared one. That default is read once, when the
+Heavy bots get their own: a bot made from the `video-producer` template, or a Builder (named "Builder" or
+"Builder (...)"), starts on its own machine; every other bot starts on the shared one, the rest of Engineering included
+(leads, reviewers and QA run short turns). That default is read once, when the
 bot first gets a cloud machine row; after that a person switches it in the bot editor ("Shared cloud machine" / "Own
 cloud machine" under Computer).
 
 - The shared machine is one row and one HQ machine, key `_shared` (a bot's own machine is keyed by the bot id, and no
-  bot id has an underscore). It is on while any bot on it wants it (work, a move, a watcher's wake) and idles to a
-  stop only once every bot on it has been idle for its size's `idle_stop_s` (four times that when its last stop
-  lasted less than `idle_stop_s`: it was woken again too soon for the stop to pay). Its size and Always on are the
-  company's, set by owners and admins (`POST /api/v2/cloud-machines/shared`). They can also delete it, to replace a
-  broken one (`DELETE /api/v2/cloud-machines/shared`): HQ deletes its disk, its computer is revoked, its size, Always on
+  bot id has an underscore). It is on while any bot on it wants it (work, a move, a watcher's wake) and pauses once
+  every bot on it has had no turn out and no activity for its Pause after (`pause_minutes`: 30 by default, whole
+  minutes from 5 to 1440; Always on never pauses). Its size, Pause after and Always on are the
+  company's, set by owners and admins (`POST /api/v2/cloud-machines/shared`, which takes `pause_minutes` too). They can
+  also delete it, to replace a broken one (`DELETE /api/v2/cloud-machines/shared`): HQ deletes its disk, its computer is revoked, its size, Always on
   and members stay, and a member's next work makes a fresh one. The row keeps the old id as `deleted`: HQ keeps the
   machine live until boat confirms, and a create meanwhile answers with it, which is not taken for the new one. A bot's own machine is deleted once the bot runs
   elsewhere (`DELETE /api/v2/bots/{bot}/cloud-machine`).
 - Its computer is "Shared cloud machine", owned by the company owner and open to member bots: a bot that joins is
   assigned to it, one that leaves (to its own machine or a computer) is unassigned, and the machine keeps running.
   When the last bot leaves it idles to a stop like any other.
+- A bot's own machine pauses by the same rule, with its own Pause after (`pause_minutes` on `POST /api/v2/bots/{bot}/cloud-machine`).
 - A new cloud machine gets the company's plan when an admin moves a bot onto it. Before this, the bot waited on "login required" until someone
   signed in to the machine by hand. The machine takes a plan only when all of these hold: the machine is that bot's own cloud
   machine; the admin's choice put the bot there, either by moving it or by the machine's first enrollment for a bot an admin placed; no other bot on that machine already runs the same tool; and the machine has no plan or sign-in of its own for
@@ -61,7 +63,7 @@ mid-stop lets it lapse, and a start clears it.
    `enrollments` and `cloud_machine_codes`, with the machine's key: the bot, or `_shared`) and asks HQ for a machine.
 2. HQ runs the equivalent of `boat new --from <HQ_BOAT_BASE_SNAPSHOT>` (default `tico-runner-base`) with two
    per-sandbox variables: `TICO_ENROLL_TOKEN` (that code) and `TICO_HUB_URL` (the server).
-3. At boot, `tico-cloud-machine.service` (`python -m runner.cloud_machine boot`) finds the two variables, enrolls the
+3. At boot, `tico-cloud-machine.service` (`python -m runner.cloud_machine boot`, forwarded to runner_support/cloud_machine.py) finds the two variables, enrolls the
    runner once with `tico-runner enroll`, and runs `scripts/tico install`, which starts the runner and its helper jobs
    as systemd user units.
 4. The server sees a cloud code. For a bot's own machine it names the computer "&lt;bot&gt; (cloud)", closes it to
@@ -154,7 +156,7 @@ id=$(boat new --no-env --name "tico-runner-base-$V" --json | jq -r 'select(.even
 boat exec "$id" --timeout 1200 -- bash -lc "
   set -euo pipefail
   git clone --quiet --branch $V https://github.com/ticoteam/tico.git ~/tico
-  cd ~/tico && sudo python3 -m runner.cloud_machine base --user user"
+  cd ~/tico && sudo python3 -m runner_support.cloud_machine base --user user"
 # not enrolled, service enabled, linger on
 boat exec "$id" -- bash -lc 'test ! -e ~/.config/tico/runner.json && systemctl is-enabled tico-cloud-machine.service && loginctl show-user user -p Linger'
 boat snapshot "$id" "tico-runner-base-$(echo "${V#v}" | tr . -)"   # a fixed version to pin or roll back to (no dots in names)

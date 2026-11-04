@@ -76,14 +76,14 @@ def test_hosting_digest_is_bound_to_owner_machine_and_one_runner(tmp_path, monke
     with store.transaction() as c:
         assert c.execute('SELECT count(*) FROM enrollments').fetchone()[0] == 1
         assert c.execute('SELECT expires_at FROM enrollments').fetchone()[0] == renewed_expiry
-        c.execute('UPDATE runners SET last_seen_at=? WHERE id=?', (H.now(), first['runner_id']))
+        c.execute('UPDATE runner_states SET last_seen_at=? WHERE runner_id=?', (H.now(), first['runner_id']))
     assert enrollment(store, auth, ident, hashed, label, 'ana@acme.example', status=True) == {'online':True}
     now[0] = renewed_expiry
     enrollment(store, auth, ident, hashed, label, 'ana@acme.example')
     with pytest.raises(Problem, match='expired'):
         execution.enroll(Enrollment(code=code, label=label, platform='linux'))
     with store.read() as c:
-        assert c.execute('SELECT count(*) FROM runners').fetchone()[0] == 1
+        assert c.execute('SELECT count(*) FROM runners_with_state').fetchone()[0] == 1
         assert c.execute('SELECT runner_id,expires_at FROM enrollments').fetchone()[:] == (
             first['runner_id'], renewed_expiry)
     assert code.encode() not in (tmp_path/'hub.sqlite').read_bytes()

@@ -89,7 +89,8 @@ there. **Settings > Health** shows each finding as "seen N times, last ..." (`oc
 
 - **setup**: it gives BotOps a task with the fix. BotOps does it under its own rules. A setup finding is never sent to
   the Tico team: its text names this install's bots and computers, and `report` refuses it (409 `not_a_tico_bug`),
-  with or without the team rule below.
+  with or without the team rule below. It never gives a person a task or a question: the server refuses one
+  (`botops-only`), and BotOps decides who to ask.
 - **tico-bug**: `hub health-monitor report <key>` files a support ticket to the Tico team. The server writes the message
   from the check alone (check, what it means and the fix in fixed words, signature, kind, version, how often) and attaches
   the redacted [diagnostics bundle](support.md). The finding's own text (which names computers and bots), task text,

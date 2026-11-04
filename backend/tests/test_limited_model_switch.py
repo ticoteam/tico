@@ -27,7 +27,7 @@ def test_a_limited_bot_with_a_turn_running_can_be_moved_to_another_model(api, mo
     machine = runner(api)
     assign(api, machine, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
     signed_in(api, machine, ["ops"], ("codex", "claude"))
     post(api, "bots/ops/transitions", {"kind": "model", "model": "gpt-6-luna", "expected_revision": revision(api)})
 
@@ -102,7 +102,7 @@ def limited_with_a_retry_running(api, monkeypatch, machine, model="gpt-6-luna"):
     """The bot on `model` hits its plan's limit, a person writes, and the retry's turn is running: Rate limited."""
     assign(api, machine, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
     signed_in(api, machine, ["ops"], ("codex", "claude"))
     post(api, "bots/ops/model", {"model": model, "expected_revision": revision(api)})
     post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Please do it."})

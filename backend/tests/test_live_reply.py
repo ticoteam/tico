@@ -34,6 +34,7 @@ def test_a_tool_is_one_short_label_and_never_its_arguments(api):
     assert all(set(p) == {"kind", "text", "at"} for p in x["parts"])
     assert secret not in json.dumps(x)
     assert x["text"] == "Filing it now.\n\nFiled.", "a tool call is not part of the words"
+    assert x["state"] == "running" and x["started_at"], "the chat counts the turn's time from when it started"
 
 
 def test_a_follow_up_says_which_run_took_it_and_the_reply_lists_both(api):
