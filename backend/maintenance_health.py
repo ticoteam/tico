@@ -747,7 +747,7 @@ def report_message(c, row):
     from . import releases
     seen = c.execute("SELECT count(*) n, sum(occurrences) times FROM health_findings WHERE signature=?",
                      (row["signature"],)).fetchone()
-    process = public_process(row["key"].split(":", 1)[1]) if row["check_id"] == "local_busy" else ""
+    process = public_process(row["key"].split(":", 2)[2]) if row["check_id"] == "local_busy" else ""
     where = _where(c, row)
     return (f"[Health Monitor] {row['check_id']}: {MEANING.get(row['check_id'], row['check_id'])}\n\n"
             + (f"Process: {process}\n" if process else "")

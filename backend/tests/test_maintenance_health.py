@@ -474,6 +474,7 @@ def test_a_setup_finding_naming_a_bot_is_never_reported_to_the_tico_team(environ
     found = keys(api)
     silent = "computer_silent:" + runner["runner_id"]
     assert "limited_no_fallback:" + SECRET_BOT in found and "push_stuck:" + runner["runner_id"] in found and silent in found
+    run(api)                                                    # the step writes the rows the report route reads
     for rule in (True, False):                                  # neither filed nor put to a person to send
         set_rule(api, rule)
         for key in ("limited_no_fallback:" + SECRET_BOT, "push_stuck:" + runner["runner_id"], silent):
@@ -835,13 +836,14 @@ def test_event_stream_counts_drops_and_not_the_ones_a_server_restart_caused(envi
     runner_errors(api, runner, two_drops_and_a_restart + [lost % "2026-13-45T25:00:00Z"])
     key = "event_stream:" + runner["runner_id"]
     assert keys(api) == [key]                      # a line with an impossible date counts and stops nothing
+    run(api)
     monkeypatch.setattr(diagnostics.RING, "started", "2026-01-10T19:43:00Z")      # this process began at 19:43
     runner_errors(api, runner, two_drops_and_a_restart + [lost % "2026-01-10T22:30:00Z"])
     run(api)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT present FROM health_findings WHERE key=?", (key,)).fetchone()[0] == 0
 
-def test_event_stream_does_not_count_drops_the_runner_says_were_back_within_seconds(environment, monkeypatch):
+def test_event_stream_does_not_count_drops_the_runner_says_were_back_within_seconds(environment, readers, monkeypatch):
     api, runner = built(environment)
     monkeypatch.setattr(diagnostics.RING, "started", "2026-01-10T05:48:11Z")      # far from every line below
     lost = ("%s Tico runner: event stream lost (ConnectionError: error decoding response body: stream error received: "
@@ -858,6 +860,7 @@ def test_event_stream_does_not_count_drops_the_runner_says_were_back_within_seco
                    back % ("2026-01-10T08:11:00Z", 60), lost % "2026-01-10T08:20:00Z"]     # the last: not back yet
     runner_errors(api, runner, resets + stayed_down)
     assert keys(api) == [key]                      # three drops that lasted count; the brief ones still do not
+    run(api)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT detail FROM health_findings WHERE key=?", (key,)).fetchone()[0].startswith("3 of")
     # A "back" line answers only the drop just before it: two drops in a row and one quick return is one brief drop.
