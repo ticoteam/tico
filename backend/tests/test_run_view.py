@@ -309,7 +309,7 @@ def test_local_memory_wait_is_visible_with_diagnostics_off_and_clears_on_start(a
     machine = runner(api, 'ana')
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
-    tid = post(api, 'tasks', {'owner': 'ops', 'title': 'Wait before preparing'})['id']
+    tid = post(api, 'tasks', {'owner': 'ops', 'title': 'Wait before preparing', 'body': 'Start when memory is available.'})['id']
     attempt = claim(api, machine)
     aid, rid = attempt['id'], machine['runner_id']
     with api.app.state.store.transaction() as c:
