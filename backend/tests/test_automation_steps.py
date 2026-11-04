@@ -171,15 +171,30 @@ def test_each_rule_that_fires_produces_under_its_own_identity():
         {"when": FROM_NEWS, "then": [{"do": "create_task", "args": {"title": "A"}}], "next": "rule"},
         {"when": [], "then": [{"do": "create_task", "args": {"title": "B"}}], "to": "legal"}]}
     E.execute(flow(gate, destinations=LEGAL), MESSAGE, services)
-    assert services.producers == ["gate", "gate@0.1", "gate@0.2"]    # the first rule keeps the step's own id
+    assert services.producers == ["gate", "gate@0.1", "gate@0.2"]    # only the run's first task keeps the step's id
 
 
-def test_a_single_rule_keeps_the_step_as_the_identity_of_all_its_actions():
+def test_a_single_rule_keeps_the_step_as_the_identity_of_its_first_task():
     services = Services()
     gate = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [
         {"do": "create_task", "args": {"title": "A"}}, {"do": "label"}]}]}
     E.execute(flow(gate), MESSAGE, services)
-    assert services.producers == ["gate", "gate"]
+    assert services.producers == ["gate", "gate@0.1"]    # the label is not a task: it has its own effect key
+
+
+def test_two_tasks_in_one_chain_get_two_identities():
+    services = Services()
+    gate = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [
+        {"do": "create_task", "args": {"title": "Legal"}}, {"do": "create_task", "args": {"title": "Finance"}}]}]}
+    E.execute(flow(gate), MESSAGE, services)
+    assert services.producers == ["gate", "gate@0.1"]
+
+
+def test_a_destination_that_opens_the_run_first_task_keeps_the_step_as_its_identity():
+    services = Services()
+    gate = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [{"do": "label"}], "to": "legal"}]}
+    E.execute(flow(gate, destinations=LEGAL), MESSAGE, services)
+    assert services.producers == ["gate@0.0", "gate"]    # the label is not a task; the destination's task is the first
 
 
 def test_decide_asks_once_and_keeps_answers_under_out():
