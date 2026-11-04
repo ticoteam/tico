@@ -276,7 +276,9 @@ async function shot(page, name) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
-  await page.evaluate(() => Promise.all(document.getAnimations().map(a => a.finished.catch(() => {}))));   // the route's fade
+  // The route's fade and other one-offs; the Liquid Dot breathes forever, so an endless animation is not waited on.
+  await page.evaluate(() => Promise.all(document.getAnimations().filter(a => a.effect?.getTiming().iterations !== Infinity)
+    .map(a => a.finished.catch(() => {}))));
   await page.screenshot({path: path.join(dir, name + '.png')});
 }
 
