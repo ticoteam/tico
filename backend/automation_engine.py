@@ -77,15 +77,17 @@ def values_of(state, thread):
     return out
 
 
-def answer(state, ref, text, cost=0.0, ok=True):
+def answer(state, ref, text, cost=0.0, ok=True, flow=None):
     """An `llm` turn finished: its thread gets the text as the step's output and is ready again; a turn that did not
-    finish (`ok` false) fails the thread. A choose step's turn is read by `_answered` instead. Returns whether a waiting
-    thread had that ref."""
+    finish (`ok` false) fails the thread. A choose step's turn is read by `_answered` instead, which decides its owner
+    against `flow`, the run's flow as it is now (without one the owner counts as moved). Returns whether a waiting thread
+    had that ref."""
     for thread in state["threads"]:
         wait = thread.get("wait") or {}
         if thread["state"] == WAITING and wait.get("kind") == "turn" and wait.get("ref") == ref:
             if wait.get("choose"):
-                _answered(state, thread, wait, text, cost, ok)
+                moved = flow is None or _owner_moved(flow, steps_at(flow, thread["trail"])[thread["next"] - 1])
+                _answered(state, thread, wait, text, cost, ok, moved)
                 return True
             record = state["steps"][wait["record"]]
             outputs = ({**record["outputs"], "text": text} if ok
@@ -372,7 +374,7 @@ def _choose_turn(flow, state, thread, step, services):
     choose, rec = step["choose"], len(state["steps"])
     if _owner_moved(flow, step):
         # The turn would run as someone the step was not saved for: none runs, and the default destination's chain does.
-        _record(state, thread, step, "ok")
+        _record(state, thread, step, "ok", {"skipped": "owner changed", "error": OWNER_MOVED, "to": choose["default"]})
         thread["choice"] = {"record": rec, "to": choose["default"], "body": None}
         _resume(flow, state, thread, step, services)
         return
@@ -418,15 +420,19 @@ def read_choice(text, choose):
     return {"to": answer["to"], "body": body if body.strip() else None}, None
 
 
-def _answered(state, thread, wait, text, cost, ok):
+def _answered(state, thread, wait, text, cost, ok, moved):
     """A choose step's turn finished. Its answer picks the destination and the body (`read_choice`); an answer that does
-    not fit, or a turn that did not finish, picks the default destination with no body, and the record says why. The
-    thread is ready for `_resume`, which runs the reply and the chain."""
+    not fit, or a turn that did not finish, picks the default destination with no body, and the record says why. When
+    the owner has moved, no reply goes out and the default destination runs alone. The choice is recorded here, with the
+    owner decided, and is checkpointed with the answer: the thread is ready for `_resume`, which only runs it."""
     choose, record = wait["choose"], state["steps"][wait["record"]]
     choice, error = read_choice(text, choose) if ok else (None, str(text or "the turn did not finish")[:300])
     if choice is None:
         choice = {"to": choose["default"], "body": None}
-    outputs = {**record["outputs"], "to": choice["to"], "actions": []}
+    skipped = {}
+    if moved:
+        choice, error, skipped = {"to": choose["default"], "body": None}, OWNER_MOVED, {"skipped": "owner changed"}
+    outputs = {**record["outputs"], "to": choice["to"], "actions": [], **skipped}
     if ok:
         outputs["text"] = text
         thread["outputs"][wait["out"]] = {k: v for k, v in outputs.items() if k != "actions"}
@@ -440,16 +446,12 @@ def _answered(state, thread, wait, text, cost, ok):
 def _resume(flow, state, thread, step, services):
     """A choose step's effects, once its answer was read (`_answered`): the reply when the body is not blank, then the
     chosen destination's chain. The reply is keyed `<record>.0`; each destination has its own slots from `<record>.1`
-    (`1 + index * MAX_DESTINATION_ACTIONS + i`), so a run resumed after a crash repeats none of them (`_once`), and a
-    default chain never reuses the result of the destination it replaced. A refused reply ends the step without its
-    chain."""
+    (`1 + index * MAX_DESTINATION_ACTIONS + i`), so a run resumed after a crash repeats none of them (`_once`). The choice
+    was decided when the answer came in (`_answered`), so this runs it as recorded, whatever the owner is now. A refused
+    reply ends the step without its chain."""
     choice = thread.pop("choice")
     rec = choice["record"]
     record, values, actions = state["steps"][rec], values_of(state, thread), []
-    if _owner_moved(flow, step):
-        # The owner changed since the step was saved: no reply goes out, and only the default destination's chain runs.
-        choice = {"record": rec, "to": step["choose"]["default"], "body": None}
-        record["outputs"] = {**record["outputs"], "skipped": "owner changed", "error": OWNER_MOVED}
     if choice["body"] is not None:
         do = REPLY[step["choose"]["mode"]]
         # The body is the model's reply as written: it is not rendered, so `{{...}}` in it goes out as text.
