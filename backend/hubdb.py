@@ -1277,12 +1277,25 @@ def _statements(script):
 # has the history table (one whose version was set back, as the upgrade tests do), so the step neither fails on the
 # missing table nor brings it back empty beside the table that replaced it.
 MOVED_TO_HISTORY = re.compile(r"\b(task_events|goal_events|market_events)\b")
+# A numbered step's statement on the old run tables. Migration 0072 moved them into attempts (with turn_usage_segments
+# already gone to usage_facts, migration 0053), so on a file it has reached a step that names them has nothing to do.
+OLD_RUN_TABLES = re.compile(r"(?:\bON|\bTABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s+(turns|turn_usage_segments)\b", re.I)
+
+
+def _runs_merged(conn):
+    """True once migration 0072 has moved the runs: no turns table, but attempts. A fresh file has neither yet, so its
+    numbered steps create turns and migration 0072 moves it."""
+    names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' "
+                                            "AND name IN ('turns','attempts')")}
+    return "attempts" in names and "turns" not in names
 
 
 def _apply(conn, script):
     moved = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='history_events'").fetchone()
     for statement in _statements(script):
         if moved and MOVED_TO_HISTORY.search(statement):
+            continue
+        if OLD_RUN_TABLES.search(statement) and _runs_merged(conn):
             continue
         match = ADD_COLUMN.fullmatch(statement)
         if match:
@@ -1373,7 +1386,10 @@ def migrate(conn, adopt_legacy=False):
                 TR.migrate(conn)
             elif i == 39:
                 _apply(conn, MIGRATIONS[i])
-                RT.backfill(conn)
+                if _runs_merged(conn):
+                    RT.backfill(conn)
+                else:
+                    RT.backfill(conn, "turns", "bot")
             else:
                 _apply(conn, MIGRATIONS[i])
             conn.execute(f"PRAGMA user_version={i + 1}")
@@ -1495,16 +1511,6 @@ def migrate(conn, adopt_legacy=False):
     add_column(conn, "humans", "idp_issuer", "TEXT")
     add_column(conn, "humans", "idp_sub", "TEXT")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS humans_idp ON humans(idp_issuer, idp_sub) WHERE idp_sub IS NOT NULL")
-    # The newest of the bot's own model requests' whole prompt (uncached + cached), when its runner marked them from
-    # its subagents': the session's context size (backend/topic_change.py). NULL when it did not; the summed columns
-    # are not a context size.
-    add_column(conn, "turns", "prompt_tokens", "INTEGER")
-    # Why a finished run's usage reads 0 tokens or no cost (USAGE_REASONS, turn_finish): null when its runner counted
-    # its tokens and the model has a price. NULL throughout on a run finished before it was recorded.
-    add_column(conn, "turns", "usage_reason", "TEXT")
-    # The wake rule that started the run (backend/rules.py): the message's `refs.rule`, copied at claim. NULL on a run
-    # from before rules, or whose message carried none (`rule_weekly` in hub sql shows those as 'unknown').
-    add_column(conn, "turns", "rule_id", "TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_snoozed ON tasks(snoozed_until) WHERE snoozed_until IS NOT NULL")
     # A type whose tasks change status only by moving between its steps (`_task_state`).
     add_column(conn, "task_types", "steps_only", "INTEGER NOT NULL DEFAULT 0")
@@ -1603,11 +1609,6 @@ def migrate(conn, adopt_legacy=False):
     # A computer's worktrees (worktrees.inventory, on every heartbeat): a seek to its rows, not a scan of every
     # worktree link ever kept. Partial, so it holds worktree rows only.
     conn.execute("CREATE INDEX IF NOT EXISTS task_links_worktree_computer ON task_links(computer_id) WHERE kind='worktree'")
-    # The Overview's bot hours (backend/bot_hours.py) read the runs still going or finished inside its weeks,
-    # however long ago they started.
-    conn.execute("CREATE INDEX IF NOT EXISTS turns_finished ON turns(finished_at)")
-    # Each bot's last finished run, for the bot list (views.employee_rows): one seek per bot, not a sort of all runs.
-    conn.execute("CREATE INDEX IF NOT EXISTS turns_bot_finished ON turns(bot, finished_at, id) WHERE finished_at IS NOT NULL")
     conn.execute("CREATE TABLE IF NOT EXISTS preferences(actor TEXT NOT NULL, key TEXT NOT NULL, "
                  "value TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(actor, key))")
     # Which messages could be about a task, so a task's page does not read its whole room (backend/message_links.py).
@@ -1662,7 +1663,7 @@ DELEGATION = contextvars.ContextVar("hub_delegation", default=None)
 
 PRIVATE_WRITE = contextvars.ContextVar("hub_private_write", default=False)
 # The run (attempt id) whose token made this request (backend/app.py request_guard): each write it logs is counted on
-# that run's `turns.writes`, which says whether the run acted (backend/run_triggers.py).
+# that run's `attempts.writes`, which says whether the run acted (backend/run_triggers.py).
 RUN = contextvars.ContextVar("hub_run", default="")
 # The bulk change (backend/app.py task_bulk) a refusal came from: each task it skipped keeps its own refusal on record,
 # but one call counts once toward rule 8's quarantine, however many tasks it skipped (_escalate).
@@ -1723,7 +1724,7 @@ def event(conn, actor, action, target="", detail=None):
     conn.execute("INSERT INTO events (id, created_at, actor, action, target, detail) "
                  "VALUES (:id, :created_at, :actor, :action, :target, :detail)", row)
     if RUN.get() and RT.counts(action):
-        conn.execute("UPDATE turns SET writes=coalesce(writes,0)+1 WHERE id=?", (RUN.get(),))
+        conn.execute("UPDATE attempts SET writes=coalesce(writes,0)+1 WHERE id=?", (RUN.get(),))
     return row
 
 
@@ -5579,7 +5580,7 @@ def _subtask_wake(conn, actor, row, previous, note=None, quiet=False):
             f"AND {unheld_sql()} AND json_extract(m.refs,'$.subtask')=? LIMIT 1", (actor_id(bot), row["id"])):
         return bot
     # Turns on a check run on its model; one marked done from another turn before any ran there did not.
-    ran = by_checker and _one(conn, "SELECT 1 FROM turns WHERE task_id=? AND bot=? LIMIT 1",
+    ran = by_checker and _one(conn, "SELECT 1 FROM attempts WHERE task_id=? AND bot_id=? AND (job_id IS NULL OR trigger IS NOT NULL) LIMIT 1",
                               (row["id"], actor_id(row["owner_id"])))
     verdict = (f"{check['role'].capitalize()} done (ran on {check['model']})" if ran
                else f"{check['role'].capitalize()} done without running on {check['model']}") if by_checker else ""
@@ -9335,34 +9336,47 @@ def rate_limits(conn):
     return _rows(conn.execute("SELECT * FROM rate_limits ORDER BY runtime"))
 
 
+# A run's record as it reads in answers (`/api/turns`, H.turns, turn_start/turn_finish): its attempts row under the
+# names a run record had before it moved onto `attempts` (migration 0072). `job_id IS NULL OR trigger IS NOT NULL`
+# marks a run that has a record: the claim writes `trigger` with the lease, and a run recorded with no lease has no job.
+# An attempt with a job and no trigger failed before its record was written (old history) and has none.
+TURN_SELECT = ("id, bot_id AS bot, thread_id, created_at AS started_at, settled_at AS finished_at, trigger, "
+               "message_id, task_id, exit, summary, input_tokens, cached_tokens, output_tokens, usage_model AS model, "
+               "provider, est_cost_usd, billing, trigger_kind, trigger_source, writes, outcome, did_nothing, purpose, "
+               "rotated, session_kind, session_why, prompt_tokens, usage_reason, rule_id")
+LEASE = ("job_id", "runner_id", "generation", "token_hash", "state", "lease_until", "lane")
+
+
+def turn(conn, turn_id):
+    """One run's record (TURN_SELECT), or None."""
+    return _one(conn, f"SELECT {TURN_SELECT} FROM attempts WHERE id=? AND (job_id IS NULL OR trigger IS NOT NULL)", (turn_id,))
+
+
 def turn_start(conn, actor, bot_slug, thread_id=None, trigger="message", message_id=None,
-               task_id=None, trigger_kind=None, trigger_source=None, purpose=None, rule_id=None):
-    """A turn on a bot's thread. Replaces the legacy dispatcher's `runs.jsonl` record.
-    `trigger_kind` is what woke it (backend/run_triggers.py TRIGGERS) and `trigger_source` the event that did.
+               task_id=None, trigger_kind=None, trigger_source=None, purpose=None, rule_id=None, lease=None):
+    """A run on a bot's thread: its attempts row, with what woke it. Replaces the legacy dispatcher's `runs.jsonl`
+    record. `trigger_kind` is what woke it (backend/run_triggers.py TRIGGERS) and `trigger_source` the event that did.
     `purpose` is what the run is for; the caller names it, or the bot and trigger map in run_triggers does.
-    `rule_id` is the wake rule that started it (backend/rules.py)."""
+    `rule_id` is the wake rule that started it (backend/rules.py). `lease` is the claim's lease (LEASE: job_id,
+    runner_id, generation, token_hash, state, lease_until, lane), written in the same row; without it (the demo seed)
+    the run has no lease."""
     _writer(conn, actor)
     slug = actor_id(bot_slug) if actor_kind(bot_slug) else str(bot_slug).strip()
     if is_bot(actor) and actor_id(actor) != slug:
         refuse(conn, actor, "identity", f"{actor_id(actor)} may only record its own turns")
-    row = {"id": new_id(), "bot": slug, "thread_id": thread_id, "started_at": now(),
-           "finished_at": None, "trigger": trigger, "message_id": message_id, "task_id": task_id,
-           "exit": None, "summary": None,
+    row = {"id": new_id(), "bot_id": slug, "thread_id": thread_id, "created_at": now(),
+           "trigger": trigger, "message_id": message_id, "task_id": task_id,
            "trigger_kind": trigger_kind or "other", "trigger_source": trigger_source,
            "purpose": RT.clean_purpose(purpose) or RT.purpose_for(slug, trigger_kind or "other"),
-           "rule_id": (str(rule_id)[:80] if rule_id else None)}
-    conn.execute("INSERT INTO turns (id, bot, thread_id, started_at, finished_at, trigger, message_id, "
-                 "task_id, exit, summary, trigger_kind, trigger_source, purpose, writes, "
-                 "rule_id) "
-                 "VALUES (:id, :bot, :thread_id, :started_at, :finished_at, :trigger, :message_id, :task_id, :exit, "
-                 ":summary, :trigger_kind, :trigger_source, :purpose, 0, "
-                 ":rule_id)", row)
+           "rule_id": (str(rule_id)[:80] if rule_id else None), "writes": 0,
+           **{k: v for k, v in (lease or {}).items() if k in LEASE}}
+    conn.execute(f"INSERT INTO attempts ({', '.join(row)}) VALUES ({', '.join(':' + k for k in row)})", row)
     event(conn, actor, "turn.start", row["id"], {"bot": slug, "trigger": trigger, "trigger_kind": row["trigger_kind"],
                                               "purpose": row["purpose"]})
-    return _one(conn, "SELECT * FROM turns WHERE id=?", (row["id"],))
+    return turn(conn, row["id"])
 
 
-# Why a finished run's usage says 0 tokens or no cost (`turns.usage_reason`). Usage is written on every finish, so a
+# Why a finished run's usage says 0 tokens or no cost (`attempts.usage_reason`). Usage is written on every finish, so a
 # sum over input_tokens, cached_tokens, output_tokens and est_cost_usd counts every run, failed and stopped ones too.
 USAGE_REASONS = {
     "usage_unreported": "its runner sent a result with no token counts (the harness reported none)",
@@ -9381,9 +9395,9 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, 
     left blank."""
     _writer(conn, actor)
     ts = now()
-    conn.execute("UPDATE turns SET finished_at=?, exit=?, summary=? WHERE id=?", (ts, exit_code, summary, turn_id))
+    conn.execute("UPDATE attempts SET settled_at=?, exit=?, summary=? WHERE id=?", (ts, exit_code, summary, turn_id))
     # Whether it acted, from what it wrote and its task's state as it ends (backend/run_triggers.py).
-    conn.execute(f"UPDATE turns SET {RT.SETTLE_SQL} WHERE id=?", (turn_id,))
+    conn.execute(f"UPDATE attempts SET {RT.SETTLE_SQL} WHERE id=?", (turn_id,))
     measured = usage or None
     if usage:
         reason = "cost_unpriced" if usage.get("est_cost_usd") is None else None
@@ -9394,13 +9408,13 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, 
     recorded = conn.execute("SELECT 1 FROM usage_facts WHERE run_id=? AND source='estimate' LIMIT 1",
                             (turn_id,)).fetchone()
     if not recorded:
-        conn.execute("UPDATE turns SET input_tokens=:input_tokens, cached_tokens=:cached_tokens, "
-                     "output_tokens=:output_tokens, model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
+        conn.execute("UPDATE attempts SET input_tokens=:input_tokens, cached_tokens=:cached_tokens, "
+                     "output_tokens=:output_tokens, usage_model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
                      "billing=:billing, prompt_tokens=:prompt_tokens, usage_reason=:usage_reason WHERE id=:id",
                      {"input_tokens": None, "cached_tokens": None, "output_tokens": None, "model": None,
                       "provider": None, "est_cost_usd": None, "billing": None, "prompt_tokens": None, **usage,
                       "usage_reason": reason, "id": turn_id})
-    row = _one(conn, "SELECT * FROM turns WHERE id=?", (turn_id,))
+    row = turn(conn, turn_id)
     if measured and not recorded:
         # One append-only fact per segment it measured (backend/usage_facts.py); every usage reader sums those.
         from . import usage_facts
@@ -9410,8 +9424,7 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, 
         conn.execute("UPDATE bot_status SET last_turn_at=?, updated_at=? WHERE bot=?",
                      (ts, ts, row["bot"]))
     from . import run_diagnostics
-    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='attempts' AND type='table'").fetchone():
-        run_diagnostics.finish(conn, turn_id, exit_code, summary)
+    run_diagnostics.finish(conn, turn_id, exit_code, summary)
     from . import check_pools
     check_pools.capture_attempt(conn, turn_id)
     event(conn, actor, "turn.finish", turn_id, {"exit": exit_code, "est_cost_usd": usage.get("est_cost_usd")})
@@ -9419,18 +9432,18 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, 
 
 
 def delta_append(conn, actor, turn_id, text, kind="text"):
-    """Streamed text or thought while a turn runs. Pruned after an hour by `prune_deltas`."""
-    seq = (conn.execute("SELECT COALESCE(MAX(seq), 0) FROM deltas WHERE turn_id=?",
+    """Streamed text or thought while a run goes. Pruned after an hour by `prune_deltas`."""
+    seq = (conn.execute("SELECT COALESCE(MAX(seq), 0) FROM deltas WHERE attempt_id=?",
                         (turn_id,)).fetchone()[0] or 0) + 1
-    row = {"id": new_id(), "turn_id": turn_id, "seq": seq, "kind": kind, "text": str(text or ""),
+    row = {"id": new_id(), "attempt_id": turn_id, "seq": seq, "kind": kind, "text": str(text or ""),
            "created_at": now()}
-    conn.execute("INSERT INTO deltas (id, turn_id, seq, kind, text, created_at) "
-                 "VALUES (:id, :turn_id, :seq, :kind, :text, :created_at)", row)
+    conn.execute("INSERT INTO deltas (id, attempt_id, seq, kind, text, created_at) "
+                 "VALUES (:id, :attempt_id, :seq, :kind, :text, :created_at)", row)
     return row
 
 
 def deltas(conn, turn_id, since_seq=0):
-    return _rows(conn.execute("SELECT * FROM deltas WHERE turn_id=? AND seq>? ORDER BY seq",
+    return _rows(conn.execute("SELECT * FROM deltas WHERE attempt_id=? AND seq>? ORDER BY seq",
                               (turn_id, since_seq)))
 
 
@@ -10226,16 +10239,16 @@ def status_history(conn, bot_slug, since=None, limit=200):
 
 
 def turns(conn, bot_slug=None, since=None, limit=200):
-    sql, args, where = "SELECT * FROM turns", [], []
+    """Runs' records (TURN_SELECT), newest first."""
+    sql, args, where = f"SELECT {TURN_SELECT} FROM attempts", [], ["(job_id IS NULL OR trigger IS NOT NULL)"]
     if bot_slug:
-        where.append("bot=?")
+        where.append("bot_id=?")
         args.append(actor_id(bot_slug))
     if since:
-        where.append("started_at >= ?")
+        where.append("created_at >= ?")
         args.append(since)
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-    return _rows(conn.execute(sql + " ORDER BY started_at DESC LIMIT ?", (*args, limit)))
+    sql += " WHERE " + " AND ".join(where)
+    return _rows(conn.execute(sql + " ORDER BY created_at DESC LIMIT ?", (*args, limit)))
 
 
 def refusals_for(conn, actor=None, day=None):

@@ -154,7 +154,7 @@ def test_a_run_from_a_conversation_the_reader_cannot_open_stays_out(api, monkeyp
     events(api, machine, direct["id"], [("tool", {"tool": "Bash", "status": "started", "item_id": "p1",
                                                   "summary": "payroll-export.sh", "parent_id": None, "background": True})])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE turns SET task_id=? WHERE id=?", (tid, direct["id"]))
+        c.execute("UPDATE attempts SET task_id=? WHERE id=?", (tid, direct["id"]))
     assert {r["id"] for r in get(api, f"tasks/{tid}/run-view")["runs"]} == {shared["id"], direct["id"]}
     monkeypatch.setattr("backend.run_view.ATTEMPT_LIMIT", 1)
     seen = get(api, f"tasks/{tid}/run-view", token="cara-test")

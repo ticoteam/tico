@@ -211,7 +211,7 @@ def test_handing_a_turn_its_subscription_is_not_a_write(api):
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-sub"}, m["token"])
     assert get(api, "credential-runtime", turn["token"])["subscriptions"][0]["id"] == sid
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT coalesce(writes,0) FROM turns WHERE id=?", (turn["id"],)).fetchone()[0] == 0
+        assert c.execute("SELECT coalesce(writes,0) FROM attempts WHERE id=?", (turn["id"],)).fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM events WHERE action='subscription.sent_to_computer' AND target=?",
                          (sid,)).fetchone()[0] == 1
 
@@ -1094,7 +1094,7 @@ def test_an_api_key_subscriptions_month_cost_is_the_measured_cost_of_its_runs(ap
         "usage": {"input_tokens": 1000, "cached_tokens": 0, "output_tokens": 500, "model": "claude-sonnet-5-5",
                   "runtime": "claude", "billing": "api"}}, m["token"])
     with api.app.state.store.read() as c:
-        cost = c.execute("SELECT est_cost_usd FROM turns WHERE id=?", (turn["id"],)).fetchone()[0]
+        cost = c.execute("SELECT est_cost_usd FROM attempts WHERE id=?", (turn["id"],)).fetchone()[0]
     assert cost and cost > 0
     assert listed(api)[0]["usage"]["cost_usd_month"] == round(cost, 2)
 
@@ -1498,7 +1498,7 @@ def test_a_plan_list_runs_the_month_cost_query_only_when_an_api_key_is_saved(api
 def test_the_month_cost_query_reads_the_months_turns_through_their_index(api):
     with api.app.state.store.read() as c:
         plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + MS.costs_sql(1), ("2026-11-01", "sub"))]
-    assert any("turns_started" in step for step in plan), plan
+    assert any("attempts_created" in step for step in plan), plan
     assert not any(step.startswith("SCAN") for step in plan), plan
 
 

@@ -118,7 +118,7 @@ UNTYPED = frozenset({
     "task_manager_seen", "task_milestone_waits", "task_reconnects", "task_relations", "task_reminders",
     "task_requesters", "task_roles", "task_rules", "task_run_models", "task_steps", "task_tags", "task_trash",
     "task_trash_assets", "task_types", "tico_notices", "tico_storage", "trigger_bodies", "trigger_deliveries",
-    "trigger_relays", "trigger_seen", "triggers", "turns", "update_archive_overrides",
+    "trigger_relays", "trigger_seen", "triggers", "update_archive_overrides",
     "update_queue", "update_reads", "update_settings", "updates", "usage_alerts",
     "watcher_items", "watcher_pending", "watcher_refs", "watcher_runs", "watcher_triage", "webhook_attempts",
     "webhook_events", "webhook_sends", "webhooks", "worktree_waits"

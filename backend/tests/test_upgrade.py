@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from backend import hubdb as H
+from backend.tests.test_hubdb import with_legacy_run_tables
 from backend.config import Settings
 from backend.store import Store
 
@@ -62,6 +63,7 @@ def test_purpose_migration_backfills_unlabelled_turns_and_keeps_caller_labels(tm
     try:
         # A file may have the column before recording the version bump.
         conn.execute(f"PRAGMA user_version={version}")
+        with_legacy_run_tables(conn)
         conn.executemany("INSERT INTO turns(id,bot,started_at,trigger_kind,purpose) VALUES(?,?,'2026-01-01',?,?)",
                          [("builder", "pr-reviewer", "pr_checks", None),
                           ("reviewer", "pr-reviewer-sol", "status_or_relation", None),
@@ -70,10 +72,10 @@ def test_purpose_migration_backfills_unlabelled_turns_and_keeps_caller_labels(tm
         H.migrate(conn)
         expected = {"builder": "handle PR checks", "reviewer": "review PR", "unknown": "unknown",
                     "named": "prepare release"}
-        assert dict(conn.execute("SELECT id,purpose FROM turns")) == expected
+        assert dict(conn.execute("SELECT id,purpose FROM attempts")) == expected
         assert conn.execute("PRAGMA user_version").fetchone()[0] == len(H.MIGRATIONS)
         H.migrate(conn)
-        assert dict(conn.execute("SELECT id,purpose FROM turns")) == expected
+        assert dict(conn.execute("SELECT id,purpose FROM attempts")) == expected
     finally:
         conn.close()
 

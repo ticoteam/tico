@@ -41,8 +41,8 @@ def settle(c, tid, slug, turned):
     c.execute("UPDATE messages SET created_at=? WHERE conversation_id=?", (H.shift(turned, days=-1), conv))
     c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?",
               (H.shift(turned, days=-1), tid))
-    c.execute("INSERT INTO turns(id,bot,thread_id,started_at,finished_at,trigger,message_id,task_id,exit,summary) "
-              "VALUES(?,?,NULL,?,?,'schedule',NULL,?,'done','')", (H.new_id(), slug, turned, turned, tid))
+    c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,trigger,message_id,task_id,exit,summary) "
+              "VALUES(?,?,?,?,'schedule',NULL,?,'done','')", (H.new_id(), slug, turned, turned, tid))
 
 
 def blocks(c, blocker, tid, when):

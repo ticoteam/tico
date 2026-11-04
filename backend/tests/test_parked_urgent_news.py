@@ -57,7 +57,7 @@ def test_parked_party_blocker_delivers_a_usable_notice_job(api, profile, party):
                                                   'text': 'Read the blocker notice.'}, token=r['token'])
     with api.app.state.store.read() as c:
         assert H.message(c, msg['id'])['delivered_at']
-        assert c.execute('SELECT task_id FROM turns WHERE id=?', (attempt['id'],)).fetchone()[0] is None
+        assert c.execute('SELECT task_id FROM attempts WHERE id=?', (attempt['id'],)).fetchone()[0] is None
         assert H.task(c, task['id'])['status'] == task['status']
         assert H.task(c, task['id'])['checkpoint_at'] is None
         still_blocked(c, task, blocker)

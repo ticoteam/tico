@@ -399,7 +399,7 @@ def test_a_comment_taken_back_while_the_turn_read_it_does_not_break_the_turns_fi
     assert finished["outcome"] == outcome
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM attempts WHERE id=?", (first["id"],)).fetchone()[0] == outcome
-        assert c.execute("SELECT exit FROM turns WHERE id=?", (first["id"],)).fetchone()[0] == outcome
+        assert c.execute("SELECT exit FROM attempts WHERE id=?", (first["id"],)).fetchone()[0] == outcome
         # The comment still there settles with the run as before; the one taken back is never held or retried.
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (kept["id"],)).fetchone()[0] == \
             ("completed" if outcome == "completed" else "uncertain")

@@ -116,8 +116,8 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
     found = list(c.execute(
             "SELECT a.id,a.bot_id,a.started_at,a.created_at,a.finished_at,a.state,a.result,j.message_id FROM attempts a "
             "JOIN jobs j ON j.id=a.job_id WHERE a.state IN ('failed','expired') " + ("AND a.bot_id=? " if bot is not None else "") +
-            "AND (? IS NULL OR coalesce(a.finished_at,a.created_at)>=?) AND NOT EXISTS "
-            "(SELECT 1 FROM turns t WHERE t.id=a.id) ORDER BY coalesce(a.finished_at,a.created_at) DESC LIMIT ?",
+            "AND (? IS NULL OR coalesce(a.finished_at,a.created_at)>=?) AND a.trigger IS NULL "
+            "ORDER BY coalesce(a.finished_at,a.created_at) DESC LIMIT ?",
             ((bot,) if bot is not None else ()) + (since, since, limit)))
     stored = H.prime_messages(c, [row["message_id"] for row in found])
     privacy.prime_messages(c, list(stored.values()))
@@ -2243,10 +2243,10 @@ def install_views(app, store, auth, mutate, task_view):
         from . import cloud_machines
         # Each bot's cloud machine, own or shared, Tico Cloud only (backend/cloud_machines.py): one read for every bot.
         cloud_rows = cloud_machines.rows(c) if cloud_machines.offered(c, store.settings) else None
-        # Each bot's last finished run, one turns_bot_finished seek per bot rather than a sort of every run there is.
+        # Each bot's last finished run, one attempts_bot_settled seek per bot rather than a sort of every run there is.
         latest_run = {slug: tid for slug, tid in c.execute(
-            "SELECT b.id,(SELECT t.id FROM turns t WHERE t.bot=b.id AND t.finished_at IS NOT NULL "
-            "ORDER BY t.finished_at DESC,t.id DESC LIMIT 1) FROM bots b") if tid}
+            "SELECT b.id,(SELECT t.id FROM attempts t WHERE t.bot_id=b.id AND t.settled_at IS NOT NULL "
+            "ORDER BY t.settled_at DESC,t.id DESC LIMIT 1) FROM bots b") if tid}
         from .usage_records import ran_on
         run_views = ran_on(c, list(latest_run.values()))
         latest_models = {}
@@ -2748,7 +2748,7 @@ def install_views(app, store, auth, mutate, task_view):
         who = request.state.identity
         human_only(who)
         with store.read() as c:
-            turn = c.execute("SELECT * FROM turns WHERE id=?", (run_id,)).fetchone()
+            turn = H.turn(c, run_id)
             if not turn:
                 turn = next((r for r in failed_attempts(c, who, auth) if r["id"] == run_id), None)
             if not turn:
