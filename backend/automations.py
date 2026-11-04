@@ -2508,6 +2508,28 @@ def install(app, store, auth, mutate):
         auth.domain(request.state.identity)
         return {"text": F.guide_text()}
 
+    # The templates come before /{aid}, which would read "templates" as an id.
+    @app.get("/api/v2/automations/templates")
+    def automations_templates(request: Request):
+        """The inbox templates a new inbox starts from: each with its id, name and destination names."""
+        from . import automation_templates as T
+        auth.domain(request.state.identity)
+        return {"templates": T.listing()}
+
+    @app.get("/api/v2/automations/templates/{tid}")
+    def automations_template(request: Request, tid: str, owner: str, inbox: str):
+        """A template filled in for `owner` on `inbox`, as the flow the hub would save: its roles resolved on the org
+        chart, the destinations the owner may not use taken out, `enabled` off. Nothing is saved; POST
+        /api/v2/automations saves it. The caller must be allowed to change the owner's automations, and the owner must
+        hear the inbox."""
+        from . import automation_templates as T
+        who = request.state.identity
+        with store.read() as c:
+            auth.domain(who)
+            raw = T.fill(c, tid, owner, inbox, store.settings)
+            _require(c, who, raw, "make an automation for " + raw["owner"])
+            return _checked(c, raw, store.settings)
+
     @app.post("/api/v2/automations")
     def automations_create(request: Request, body: AutomationIn):
         """Save a new automation as version 1. The caller must be allowed to change an automation of that owner; a bot

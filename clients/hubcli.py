@@ -396,6 +396,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub automation discard <id> <n>        drop a pending version (a proposal); the automation stays as it is
     hub automation question-sets           the question sets a Decide step may name (set: id@version)
     hub automation guide                   how BotOps builds automations, with the flow format
+    hub automation templates               the inbox templates: founder, support, sales, blank
+    hub automation template <id> --owner <ref> --inbox <inbox>
+                                           one filled in for that owner and inbox; saves nothing
     hub audit [--object O] [--limit N] [--before B]
                                            who changed caps, spend, groups, automations and inboxes; the owner sees all
     hub automation inbox <inbox> [--send on|off]
@@ -2838,6 +2841,13 @@ def parser():
     s.set_defaults(fn="automation question-sets")
     s = auto.add_parser("guide", help="how BotOps builds automations, with the flow format")
     s.set_defaults(fn="automation guide")
+    s = auto.add_parser("templates", help="the inbox templates: founder, support, sales, blank")
+    s.set_defaults(fn="automation templates")
+    s = auto.add_parser("template", help="one inbox template filled in for an owner and an inbox (saves nothing)")
+    s.add_argument("id", help="founder, support, sales or blank")
+    s.add_argument("--owner", required=True, help="person:<id>, bot:<slug> or group:<id>")
+    s.add_argument("--inbox", required=True, help="an email address, slack:dm or slack:#<channel>")
+    s.set_defaults(fn="automation template")
     s = auto.add_parser("inbox", help="read or set an inbox's send switch")
     s.add_argument("inbox", help="an email address, slack:dm or slack:#<channel>")
     s.add_argument("--send", choices=["on", "off"], help="leave out to read it")

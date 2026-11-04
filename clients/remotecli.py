@@ -142,6 +142,8 @@ def automation(client, args):
         fields["n"] = args.n
     elif args.sub == "held":
         fields["action"] = args.action
+    elif args.sub == "template":
+        fields.update({"owner": args.owner, "inbox": args.inbox})
     return run(tool_name(args.fn), fields)
 
 
