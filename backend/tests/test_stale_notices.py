@@ -42,7 +42,10 @@ def test_a_legacy_status_check_is_dropped_at_claim_whether_or_not_its_task_was_t
     with api.app.state.store.read() as c:
         assert queued(c, quiet) == "canceled"
         assert queued(c, kept) == "canceled", "a legacy check is obsolete whatever its task says: the task roundup lists it"
-    assert not [a for a in handed if a]
+        start = [r[0] for r in c.execute(
+            "SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops' AND j.state<>'canceled' "
+            "AND json_extract(m.refs,'$.rule')='auto_start'").fetchall()]
+    assert [a["job_id"] for a in handed if a] == start, "the only claim is the start notice of the task the owner touched"
 
 
 def test_checks_news_for_a_head_the_pull_request_moved_past_is_dropped(api):
