@@ -153,7 +153,7 @@ KEEP = frozenset((
     "task_events", "goal_events", "market_events", "company_events", "strategy_events",
     # A copy of a database from before migrations 0053/0054 still holds these: kept, so the dev server's first start
     # moves them into usage_facts and budget_nodes (the copy is pruned before it is migrated).
-    # A copy from before migration 0071 still holds turns (the run records, now attempts rows): kept until 0071 moves them.
+    # A copy from before migration 0072 still holds turns (the run records, now attempts rows): kept until 0072 moves them.
     "turn_usage_segments", "usage_limits", "usage_pools",
     "feedbacks",       # 👍/👎 on bot work (backend/feedback.py)
     # Shared records (backend/records): locations, items and projects
@@ -304,7 +304,7 @@ def revoke_automation_secrets(c):
 def open_attempts(c):
     """(WHERE clause, args) for the attempts a copy removes as still open. A run with no job has no lease, so it is open
     until settled_at; a job-backed attempt is open until finished_at, or while its state is open. A file from before
-    migration 0071 has no settled_at and no run without a job."""
+    migration 0072 has no settled_at and no run without a job."""
     open_state = "finished_at IS NULL OR state IN (%s)" % ",".join("?" * len(OPEN_ATTEMPTS))
     if "settled_at" in {row[1] for row in c.execute('PRAGMA table_info("attempts")')}:
         return "(job_id IS NULL AND settled_at IS NULL) OR (job_id IS NOT NULL AND (%s))" % open_state, OPEN_ATTEMPTS
@@ -363,7 +363,7 @@ def prune(c, days, keep_automations=False):
                 f" AND {quote(key)} NOT IN (SELECT {quote(col)} FROM {quote(child)} WHERE {quote(col)} IS NOT NULL)"
                 for child, col, key in refs)
             delete(table, where, (cutoff,))
-    # A copy from before migration 0071 keeps its turns whole (KEEP). A run the cut removed must not come back through
+    # A copy from before migration 0072 keeps its turns whole (KEEP). A run the cut removed must not come back through
     # its turns row as a lease-less run, so the record goes with its attempts row.
     if "attempts" in present and "turns" in present:
         delete("turns", "id NOT IN (SELECT id FROM attempts)")

@@ -86,7 +86,7 @@ class TaskCheckBackWakeRow(TypedDict):
 
 class AttemptRow(TypedDict):
     """One `attempts` row (SELECT *): a run, its lease and its record. The lease columns are NULL together on a run
-    recorded with no lease (migration 0071); the record's columns are NULL on one that failed before it had one."""
+    recorded with no lease (migration 0072); the record's columns are NULL on one that failed before it had one."""
     id: str
     job_id: str | None
     bot_id: str

@@ -541,7 +541,7 @@ Spellings still outside the stable set:
   keeps its state in `automation_versions.status` and `automation_runs.status`).
 - `conversations.kind` (chat, ask, task, notice) and `messages.kind` (say, ask, answer, notice, steer): types, not statuses.
 - `kpis.stage`, `goal_kpis.kind`, `kpi_readings`: the KPI tree's stage and kind; not statuses, not constrained here.
-- `attempts.state` is NULL on a run recorded with no lease (the demo seed, a run from before leases; migration 0071 moved
+- `attempts.state` is NULL on a run recorded with no lease (the demo seed, a run from before leases; migration 0072 moved
   the old `turns` rows onto `attempts`); its value triggers allow NULL.
 
 ## Decisions

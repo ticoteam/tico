@@ -75,7 +75,7 @@ COLUMNS = (
     Column("tasks", "blocked_from_status", TASK_STATUSES, nullable=True),
     # "done" is the spelling older hubs stored for a finished job (seen on Tico Team, Nov 2).
     Column("jobs", "state", JOB_STATES, retired=(("cancelled", "canceled"), ("done", "completed"))),
-    # NULL for a run recorded with no lease (backend/migrations/0071_turns_into_attempts.py); attempts' CHECK keeps a
+    # NULL for a run recorded with no lease (backend/migrations/0072_turns_into_attempts.py); attempts' CHECK keeps a
     # leased run's state set.
     Column("attempts", "state", ATTEMPT_STATES, nullable=True),
     Column("automation_runs", "status", RUN_STATUSES),

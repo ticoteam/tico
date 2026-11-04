@@ -1,12 +1,12 @@
-"""Migration 0071: a run is one attempts row (backend/migrations/0071_turns_into_attempts.py)."""
+"""Migration 0072: a run is one attempts row (backend/migrations/0072_turns_into_attempts.py)."""
 import importlib
 import sqlite3
 
 import pytest
 
-MERGE = importlib.import_module("backend.migrations.0071_turns_into_attempts")
+MERGE = importlib.import_module("backend.migrations.0072_turns_into_attempts")
 
-# The run tables as the release before 0071 left them (column names after the cleanup's renames).
+# The run tables as the release before 0072 left them (column names after the cleanup's renames).
 LEGACY = """
 CREATE TABLE runners(id TEXT PRIMARY KEY);
 CREATE TABLE jobs(id TEXT PRIMARY KEY);

@@ -284,7 +284,7 @@ def test_a_copy_of_a_database_from_before_the_history_move_keeps_its_change_logs
 
 
 def test_a_lease_less_run_is_kept_only_once_settled(tmp_path):
-    """A run with no job (a chat run, or a turn migration 0071 made into an attempts row) has no lease: it is open until
+    """A run with no job (a chat run, or a turn migration 0072 made into an attempts row) has no lease: it is open until
     settled_at. A copy keeps the settled ones and removes the open ones, as it removes a job-backed attempt still running."""
     source = source_db(tmp_path)
     now = H.now()
@@ -301,8 +301,8 @@ def test_a_lease_less_run_is_kept_only_once_settled(tmp_path):
 
 
 def test_a_copy_keeps_no_turn_whose_attempt_the_cut_removed(tmp_path):
-    """A copy from before migration 0071 keeps turns whole. A turn whose attempts row the cut removed goes with it, so
-    migration 0071 does not bring the pruned run back as a lease-less one."""
+    """A copy from before migration 0072 keeps turns whole. A turn whose attempts row the cut removed goes with it, so
+    migration 0072 does not bring the pruned run back as a lease-less one."""
     source = source_db(tmp_path)
     with closing(sqlite3.connect(source)) as c:
         c.execute("CREATE TABLE turns (id TEXT PRIMARY KEY, bot TEXT, started_at TEXT)")

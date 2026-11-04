@@ -47,7 +47,7 @@ SEO = H.bot_actor("seo")
 COO = H.bot_actor("coo")
 ANALYTICS = H.bot_actor("analytics")
 
-# The run table as an install from before migration 0071 had it: a run's record in `turns` (the attempts table keeps
+# The run table as an install from before migration 0072 had it: a run's record in `turns` (the attempts table keeps
 # the lease). Its usage went to usage_facts in migration 0053, which also dropped turn_usage_segments.
 LEGACY_TURNS = ("CREATE TABLE turns (id TEXT PRIMARY KEY, bot TEXT, thread_id TEXT, started_at TEXT, finished_at TEXT, "
                 "trigger TEXT, message_id TEXT, task_id TEXT, exit TEXT, summary TEXT, input_tokens INTEGER, "
@@ -57,9 +57,9 @@ LEGACY_TURNS = ("CREATE TABLE turns (id TEXT PRIMARY KEY, bot TEXT, thread_id TE
 
 
 def with_legacy_run_tables(conn):
-    """Put back `turns` (empty) on a file `H.connect` made, and forget migration 0071, so
+    """Put back `turns` (empty) on a file `H.connect` made, and forget migration 0072, so
     the numbered steps and the migrations run on them again as on an install from before it."""
-    conn.execute("DELETE FROM schema_migrations WHERE version>='0071' AND version NOT LIKE 'legacy%'")
+    conn.execute("DELETE FROM schema_migrations WHERE version>='0072' AND version NOT LIKE 'legacy%'")
     conn.execute(LEGACY_TURNS)
     conn.commit()
 

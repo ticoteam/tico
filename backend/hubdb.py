@@ -1277,14 +1277,14 @@ def _statements(script):
 # has the history table (one whose version was set back, as the upgrade tests do), so the step neither fails on the
 # missing table nor brings it back empty beside the table that replaced it.
 MOVED_TO_HISTORY = re.compile(r"\b(task_events|goal_events|market_events)\b")
-# A numbered step's statement on the old run tables. Migration 0071 moved them into attempts (with turn_usage_segments
+# A numbered step's statement on the old run tables. Migration 0072 moved them into attempts (with turn_usage_segments
 # already gone to usage_facts, migration 0053), so on a file it has reached a step that names them has nothing to do.
 OLD_RUN_TABLES = re.compile(r"(?:\bON|\bTABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s+(turns|turn_usage_segments)\b", re.I)
 
 
 def _runs_merged(conn):
-    """True once migration 0071 has moved the runs: no turns table, but attempts. A fresh file has neither yet, so its
-    numbered steps create turns and migration 0071 moves it."""
+    """True once migration 0072 has moved the runs: no turns table, but attempts. A fresh file has neither yet, so its
+    numbered steps create turns and migration 0072 moves it."""
     names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' "
                                             "AND name IN ('turns','attempts')")}
     return "attempts" in names and "turns" not in names
@@ -9337,7 +9337,7 @@ def rate_limits(conn):
 
 
 # A run's record as it reads in answers (`/api/turns`, H.turns, turn_start/turn_finish): its attempts row under the
-# names a run record had before it moved onto `attempts` (migration 0071). `job_id IS NULL OR trigger IS NOT NULL`
+# names a run record had before it moved onto `attempts` (migration 0072). `job_id IS NULL OR trigger IS NOT NULL`
 # marks a run that has a record: the claim writes `trigger` with the lease, and a run recorded with no lease has no job.
 # An attempt with a job and no trigger failed before its record was written (old history) and has none.
 TURN_SELECT = ("id, bot_id AS bot, thread_id, created_at AS started_at, settled_at AS finished_at, trigger, "

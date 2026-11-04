@@ -79,7 +79,7 @@ DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals", "tasks_priva
 DROPPED_TRIGGERS = {"queue_bot_message"}
 # Dropped after the renames ran on them: by backend/migrations/0035_growth_rethink.py, the operation-binding tables
 # 0050_idempotency_one_table.py moves into `idempotency`, 0053_usage_facts.py (its rows are usage facts) and
-# 0054_budget_nodes.py (its rows are budget nodes), 0071_turns_into_attempts.py (its rows are attempts), and the
+# 0054_budget_nodes.py (its rows are budget nodes), 0072_turns_into_attempts.py (its rows are attempts), and the
 # federation tables 0058_drop_federation.sql drops with
 # their indexes.
 RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments", "growth_idea_segments",

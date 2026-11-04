@@ -103,7 +103,7 @@ def stamp(refs, kind, source=None, purpose=None):
 
 def backfill(conn, table="attempts", bot_column="bot_id"):
     """Give every run with no purpose the mapped default for its bot and trigger. Safe to run twice. hubdb's numbered
-    step 39 passes the old `turns` table, which held run records until migration 0071: every row of it was a run. In
+    step 39 passes the old `turns` table, which held run records until migration 0072: every row of it was a run. In
     attempts an attempt with a job and no trigger never had a run record, and gets no purpose."""
     record = "" if table == "turns" else " AND (job_id IS NULL OR trigger IS NOT NULL)"
     pairs = conn.execute(f"SELECT DISTINCT {bot_column}, trigger_kind FROM {table} "
