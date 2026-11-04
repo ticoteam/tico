@@ -34,6 +34,7 @@ from .store import H, P, SNAPSHOT_BACKUP_ROWS, Problem, bot_readiness, encode, m
 from . import task_privacy as privacy
 from .usage_records import ran_on
 from . import task_relations as TR
+from . import bot_settings as BS
 
 
 MIN_RUNNER_VERSION = (0, 2, 0)
@@ -358,7 +359,7 @@ def clear_chat_session(c, settings, actor, bot, conversation_id, detail=None):
     c.execute("INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
               "epoch=epoch+1,updated_at=excluded.updated_at", (conversation_id, H.now()))
     # Drop the provider pointer so the next turn tries a fresh thread instead of resuming the cleared session.
-    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     cfg = json.loads(config[0] or "{}") if config else {}
     if config:
         c.execute("DELETE FROM bot_sessions WHERE bot=? AND runtime=? AND model=?",
@@ -424,7 +425,7 @@ def prime_machines(c, slugs):
         return
     for part in H.chunks(sorted(set(slugs))):
         marks = ",".join("?" * len(part))
-        for statement, query in ((CONFIG_SQL, f"SELECT config,bot FROM bot_config WHERE bot IN ({marks})"),
+        for statement, query in ((CONFIG_SQL, f"SELECT {BS.CONFIG} AS config,bot FROM bot_config bc {BS.JOIN} WHERE bot IN ({marks})"),
                                  (OPERATOR_SQL, f"SELECT bot,owner_id FROM bot_config WHERE bot IN ({marks})"),
                                  (ROW_SQL, f"SELECT * FROM agents WHERE bot IN ({marks})"),
                                  (ASSIGNED_SQL, ASSIGNED_COLUMNS + ",a.bot FROM assignments a "
@@ -454,11 +455,31 @@ def machine(c, bot):
     # One parse of the computer's report: /api/employees and Health call this once per bot.
     document = readiness_document(row["readiness"])
     detail = {k: v for k, v in bot_readiness(document, bot).items() if k != "tools"}
-    detail = as_served(c, bot, document, detail)
+    detail = as_served(c, bot, document, _lapsed_plan(c, bot, row["runner_id"], document, detail))
     return {"online": online, "awake": awake, "ready": online and detail.get("ready") is True,
             "readiness": detail,
             "machine": {**{k: row[k] for k in ("runner_id", "generation", "label", "owner_id", "last_seen_at",
                                                          "platform", "version")}, **screen_listing(row)}}
+
+
+def _lapsed_plan(c, bot, runner_id, document, detail):
+    """The bot's readiness row, not ready when its computer read a plan's sign-in as ready and no plan signs it in
+    now (execution.signed_in_by_lapsed_plan, which the claim refuses on): the cheap check first, so the plans are
+    read only for a row that looks that way."""
+    from .execution import signed_in_by_lapsed_plan
+    if detail.get("ready") is not True or not signed_in_by_lapsed_plan(document, detail, {}):
+        return detail
+    from . import model_subscriptions, providers
+    runner = c.execute("SELECT id, capabilities FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
+    filled = providers.fill(providers.load(c), BS.read(c, bot))
+    if not runner or not signed_in_by_lapsed_plan(document, detail,
+                                                  model_subscriptions.covered_runtimes(c, dict(runner), filled)):
+        return detail
+    from .models_preset import LOGIN_NAMES
+    runtime = str(detail.get("runtime") or "")
+    name = LOGIN_NAMES.get(runtime) or runtime.title()
+    return {**detail, "ready": False, "sign_in": "missing",
+            "problems": [*(detail.get("problems") or []), f"{name} sign-in needed"]}
 
 
 def deploy_draining(c, bot):
@@ -826,7 +847,7 @@ def own_sign_in(c, bot, settings=None):
     """Why this bot's model is not signed in on its own computer (backend/readiness.py, the rule Health's stuck
     check and the model picker use), or '' when its computer is signed in or it waits on something else."""
     from .readiness import can_run, own_harness
-    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     runtime = providers.bot_choice(c, settings, json.loads(config[0] or "{}") if config else {})[0]
     verdict = can_run(c, bot, runtime, harness=own_harness(c, bot, runtime)) if runtime else {}
     return (verdict.get("problem") or "its model is not signed in") if verdict.get("sign_in") else ""
@@ -899,7 +920,7 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     elif behind:
         # Whether the running turn takes it (`steer`) or it waits for the next one; chat offers Stop and redirect.
         from .harnesses import steers
-        config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
         config = json.loads(config[0]) if config else {}
         label = ("Saved — steering this turn" if not queued and steers(config, config.get("runtime"))
                  else "Saved — queued for the next turn")
@@ -2856,7 +2877,7 @@ def install_views(app, store, auth, mutate, task_view):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_read(c, who, bot)
-            row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+            row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
             config = json.loads(row[0]) if row else {}
             safe = {k: v for k, v in config.items() if k not in ("cwd", "env", "token", "secrets", "secrets_file")}
             status = H.status(c, bot) or {}
@@ -2892,7 +2913,7 @@ def install_views(app, store, auth, mutate, task_view):
                 if attempt and attempt[0]:
                     turns.append({"role": "assistant", "text": attempt[0],
                                   "ts": turn["finished_at"] or turn["started_at"]})
-            config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+            config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
             cfg = json.loads(config[0]) if config else {}
             runtime, model = providers.bot_choice(c, auth.settings, cfg)
             runtime = runtime or "local"
@@ -3123,8 +3144,8 @@ def runnable_choices(c, who, auth, settings):
     # computer, shared by its bots) and each bot's config are read once here, not once per check.
     for row in c.execute("SELECT bot,runner_id FROM assignments").fetchall():
         read_cache.prime(c, PLACED_SQL, {(row["bot"],): read_cache.one(c, RUNNER_SQL, (row["runner_id"],))})
-    rows = c.execute("SELECT a.bot,bc.config FROM assignments a JOIN bots b ON b.id=a.bot "
-                     "LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE b.state<>'archived' ORDER BY a.bot").fetchall()
+    rows = c.execute(f"SELECT a.bot,{BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
+                     f"LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} WHERE b.state<>'archived' ORDER BY a.bot").fetchall()
     read_cache.prime(c, CONFIG_SQL, {(row["bot"],): row for row in rows})
     for row in rows:
         bot = row["bot"]

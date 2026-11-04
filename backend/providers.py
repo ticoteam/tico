@@ -20,6 +20,7 @@ from . import gateway_tiers, models_preset
 from .batch_work import shared_check
 from .harnesses import attach_harnesses, normalize_fallback
 from .store import Problem
+from . import bot_settings as BS
 
 KEY = "providers"
 # What a bot's config says when it has no opinion and follows the company default.
@@ -83,6 +84,9 @@ MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
      "efforts": ("low", "medium", "high", "xhigh", "max", "ultra"),
      "default_effort": "medium", "deprecated": True},
     {"id": "gpt-6.1-sol", "context_tokens": 1_050_000, "label": "gpt 6.1 sol", "runtime": "codex", "provider": "openai",
+     "efforts": ("low", "medium", "high", "xhigh", "max"),
+     "default_effort": "medium"},
+    {"id": "gpt-6.1-terra", "context_tokens": 1_050_000, "label": "gpt 6.1 terra", "runtime": "codex", "provider": "openai",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "medium"},
     {"id": "gpt-6-sol", "context_tokens": 1_050_000, "label": "gpt 6 sol", "runtime": "codex", "provider": "openai",
@@ -211,6 +215,7 @@ MODEL_BY_ID = _ById((row["id"], row) for row in MODEL_CATALOG)
 #              0.025x input on Fable 5.1, 0.05x on Opus 5.5 and Sonnet 5.5, 0.1x on the rest)
 #              claude-haiku-5-5 read 2026-10-17: the rate for prompts up to 100,000 tokens (LONG_PROMPT below).
 #   OpenAI     developers.openai.com/api/docs/pricing (standard, short context)
+#              gpt-6.1-terra read 2026-11-03 (standard, short context; its model page gives the same rates)
 #   Google     ai.google.dev/gemini-api/docs/pricing (paid standard; $0.75/$3.75 until 2026-12-31, doubling from 2027-01-01)
 #   xAI        docs.x.ai/developers/models (prompts under 200k)
 #   pi models  OpenRouter's public model list, openrouter.ai/api/v1/models (what the pi runtime is billed)
@@ -254,6 +259,7 @@ PRICES = _Priced({
     "gpt-6-sol": (2.0, 0.20, 10.0),
     "gpt-6-luna": (0.10, 0.01, 0.50),
     "gpt-6.1-sol": (2.0, 0.10, 10.0),
+    "gpt-6.1-terra": (1.0, 0.05, 5.0),
     "gpt-5.6-sol": (4.0, 0.40, 20.0),
     "gpt-5.6-terra": (2.0, 0.20, 12.0),
     "gpt-5.6-luna": (0.20, 0.02, 1.20),
@@ -774,8 +780,8 @@ def runtimes_run_on(c, settings):
     from .shared_bots import follow
     from .task_models import of as task_model_of
     record, found = load(c, settings), {}
-    for row in c.execute("SELECT a.runner_id, a.bot, bc.config FROM assignments a "
-                         "LEFT JOIN bot_config bc ON bc.bot=a.bot"):
+    for row in c.execute(f"SELECT a.runner_id, a.bot, {BS.CONFIG} AS config FROM assignments a "
+                         f"LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN}"):
         try:
             config = follow(c, row["bot"], json.loads(row["config"] or "{}"))
         except ValueError:
@@ -797,8 +803,8 @@ def runtimes_needed(c, settings):
     record = load(c, settings)
     wanted = wanted_runtimes(record)
     need = {}
-    for row in c.execute("SELECT a.runner_id, bc.config FROM assignments a JOIN bots b ON b.id=a.bot "
-                         "AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot"):
+    for row in c.execute(f"SELECT a.runner_id, {BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
+                         f"AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN}"):
         try:
             config = json.loads(row["config"] or "{}")
         except ValueError:

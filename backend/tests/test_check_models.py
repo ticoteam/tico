@@ -7,6 +7,7 @@ import pytest
 from backend import check_models
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
+from backend import bot_settings as BS
 
 GROK = {"model": "grok-4.6", "runtime": "grok", "harness": "grok", "billing": "api"}
 
@@ -31,10 +32,10 @@ def parent_turn(api):
     """ops on Claude, working a person's task: its claimed turn."""
     company(api, "anthropic", "xai")
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config.update(runtime="claude", harness="claude", model="claude-sonnet-5-5",
                       fallback={"harness": "codex", "model": "gpt-6.1-sol"})
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     machine = runner(api)
     assign(api, machine, "ops")
     heartbeat(api, machine)

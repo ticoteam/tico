@@ -13,22 +13,23 @@ from backend import wake_presets as W
 from backend.store import encode
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401  (api is a fixture)
 from backend.tests.test_wake_rules import jobs, news
+from backend import bot_settings as BS
 
 
 def add_bot(c, slug, **config):
     H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", "status": "active"}}, {"people": []})
-    c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
-              (slug, encode({"name": slug, "runtime": "fake", "status": "active", **config}), None, "ana"))
+    c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, None, 'ana'))
+    BS.write(c, slug, {'name': slug, 'runtime': 'fake', 'status': 'active', **config})
 
 
 def profile_of(c, slug):
-    return json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+    return BS.read(c, slug)
 
 
 def put(c, slug, name, **options):
     """Give an existing bot a profile the way the API does (without the Strategy Bot gate or audit)."""
     declared = profile_of(c, slug)
-    c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(P.apply(declared, name, options)), slug))
+    BS.write(c, slug, P.apply(declared, name, options))
 
 
 def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api):
@@ -48,7 +49,7 @@ def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api
         if kind is None:
             c.execute("INSERT INTO task_types(id,name,created_at,updated_at) VALUES('dev','Dev tickets',?,?)", (H.now(), H.now()))
         H.task_create(c, "human:ana", "Fix login", "x", "bot:pr-reviewer", type="Dev tickets")
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.profile','doer') WHERE bot='cpo'")
+        BS.update(c, 'cpo', {'profile': 'doer'})
         told = P.migrate(c)
         got = {slug: profile_of(c, slug) for slug in (*slugs, "saver", "grok-designer", "pr-reviewer", "cpo")}
         assert {slug: got[slug]["profile"] for slug in slugs} == slugs

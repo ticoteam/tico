@@ -66,7 +66,9 @@ def _fail(detail):
 
 def run(c, auto, run_id, do, args, values, step=None):
     """Carry out one action for the automation `auto` ({id, flow}). Wrapped in a savepoint: a refused action writes
-    nothing but its refusal. `step` is the producing step's id (a create_task's occurrence task is per step)."""
+    nothing but its refusal. `step` is what the action is keyed by: a create_task's producer (automation_engine._filter
+    gives each of a filter's actions its own), one occurrence task per producer; a mail action's is the step's own id,
+    which orders the step's mail actions on one message into one chain (`_queue_mail`)."""
     c.execute("SAVEPOINT automation_action")
     try:
         if do == "create_task":

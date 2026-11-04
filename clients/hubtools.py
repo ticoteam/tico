@@ -3574,6 +3574,11 @@ _AUTO_FIELDS = {
     "group": _s("group:<id>, for permissions"), "enabled": {"type": "boolean"},
     "spend_cap": {"type": ["object", "null"], "description": "{per_30m: dollars} for its LLM and bot turns; null = the bot's limit"},
     "batch": {"type": "object", "description": "{times: [\"08:00\", ...], tz}: filters on receipt, the rest at these times"},
+    "destinations": {"type": ["array", "null"], "items": {"type": "object"},
+                     "description": "Named chains a filter rule's `to` runs, at most 20: {id (a name like legal), name, "
+                                    "color (amber, orange, violet, green, blue, teal, pink, gray or red; optional), then: "
+                                    "the actions, at most 10 (empty = ignore)}. A rule sends a thread there with `to`, "
+                                    "after its own actions; null takes them away"},
     "trigger": {"type": "object", "description": "{type: message|task_received|schedule|webhook|listening|event|due, ...}; a due trigger is {type: due, first_due: YYYY-MM-DD, repeats: once|weekly|monthly|quarterly|yearly, open_days (default 14), tz}"},
     "steps": {"type": "array", "items": {"type": "object"},
               "description": "The whole step tree (filter, decide, llm, find, bot_turn, paths, action). An action step is "
@@ -3608,6 +3613,23 @@ def automation_question_sets(api, args):
       "steps, actions and their args), generated from the hub's code. Read it before creating or updating one.", {})
 def automation_guide(api, args):
     return _as_person(api).get("automations/guide")
+
+
+@tool("hub_automation_templates", "The inbox templates (founder, support, sales, blank): each with its `id`, `name` and "
+      "destination names. Read-only.", {})
+def automation_templates(api, args):
+    return _as_person(api).get("automations/templates")
+
+
+@tool("hub_automation_template", "One inbox template filled in for an owner and an inbox: the flow the hub would save, "
+      "with its roles resolved on the org chart and what the owner may not use taken out. Nothing is saved; save it "
+      "with hub_automation_create (off until turned on).",
+      {"id": _s("founder, support, sales or blank"),
+       "owner": _s("person:<id>, bot:<slug> or group:<id>"),
+       "inbox": _s("the inbox: an email address, slack:dm or slack:#<channel>")}, required=("id", "owner", "inbox"))
+def automation_template(api, args):
+    query = "&".join(f"{k}={quote(str(args[k]), safe='')}" for k in ("owner", "inbox"))
+    return _as_person(api).get(f"automations/templates/{quote(str(args['id']), safe='')}?{query}")
 
 
 @tool("hub_automation_create", "Save a new automation (version 1). Checked on save: a bad flow is refused with why. "
@@ -5702,10 +5724,13 @@ def thread_list(api, args):
 @tool("hub_thread_show", "One thread in tree order: each message is followed by the sub-thread that branched from it, "
       "with its depth. A long sub-thread shows its latest messages under a collapsed row: hub_thread_show on that thread "
       "with the row's cursor reads the rest. Also its title and breadcrumb. Paged over the thread's own messages; "
-      "next_cursor reads on.",
-      {"thread": THREAD_ID, "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT}, required=("thread",))
+      "next_cursor reads on. flat: the thread and its open sub-threads as one list in time order, each message with the "
+      "reply_to it answers.",
+      {"thread": THREAD_ID, "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT,
+       "flat": {"type": "boolean", "default": False, "description": "One list in time order"}}, required=("thread",))
 def thread_show(api, args):
-    return api.get(_thread_path(args["thread"], "timeline"), cursor=args.get("cursor"), limit=args.get("limit"))
+    return api.get(_thread_path(args["thread"], "timeline"), cursor=args.get("cursor"), limit=args.get("limit"),
+                   **({"flat": 1} if args.get("flat") else {}))
 
 
 @tool("hub_thread_create", "Start a thread. Its audience decides who reads it: members (the people and bots you add; "
@@ -5727,20 +5752,31 @@ def thread_create(api, args):
     return api.post("threads", body, key=_key(args))
 
 
-@tool("hub_thread_post", "Post a message to a thread. kind ask asks the person or bot in `to` for an answer. A name in "
-      "the text does not add anyone: someone outside the thread gets a warning and nothing else, until you add them "
-      "with hub_thread_members_add.",
+@tool("hub_thread_post", "Post a message to a thread. kind ask asks the person or bot in `to` for an answer. To answer "
+      "one message, give its id as reply_to: your message stays in the thread, quoting the one it answers, and a bot "
+      "you reply to hears it as an @mention. A name in the text does not add anyone: someone outside the thread gets a "
+      "warning and nothing else, until you add them with hub_thread_members_add.",
       {"thread": THREAD_ID, "text": _s("The message"),
        "kind": {"type": "string", "enum": ["say", "ask"], "default": "say"},
        "to": THREAD_ACTOR,
+       "reply_to": _s("The id of the message this answers, in the same thread or a sub-thread under it"),
        "refs": {"type": "array", "items": {"type": "string"}, "description": "References like task:<id>"}},
       required=("thread", "text"), writes=True)
 def thread_post(api, args):
-    return api.post(_thread_path(args["thread"], "messages"), _thread_message(args), key=_key(args))
+    return api.post(_thread_path(args["thread"], "messages"), _thread_message(args, in_reply_to=args.get("reply_to")),
+                    key=_key(args))
+
+
+@tool("hub_thread_bot_status", "The bots a thread is waiting on, and why: working (with its current step), up next "
+      "(finishing other work first) or can't reply (with what stops it and where to fix it). Five at most, oldest "
+      "wait first.",
+      {"thread": THREAD_ID}, required=("thread",))
+def thread_bot_status(api, args):
+    return api.get(_thread_path(args["thread"], "bot-status"))
 
 
 @tool("hub_thread_reply", "Reply in a message's sub-thread: a side branch under that message, made on its first reply. "
-      "Use it for a side topic; the main discussion stays in the thread.",
+      "Only for a separate side topic; to answer a message, use hub_thread_post with reply_to.",
       {"thread": THREAD_ID, "message": _s("The message the reply branches from"), "text": _s("The reply"),
        "refs": {"type": "array", "items": {"type": "string"}, "description": "References like task:<id>"}},
       required=("thread", "message", "text"), writes=True)
@@ -5938,7 +5974,8 @@ def thread_delete(api, args):
       {"thread": THREAD_ID, "path": _s("A local file on this computer"), "text": _s("The message's text, optional"),
        "kind": {"type": "string", "enum": ["say", "ask"], "default": "say", "description": "say, or ask for an answer"},
        "to": _s("The person or bot an ask is for"),
-       "under": _s("The message whose sub-thread the file goes under (optional)")},
+       "under": _s("The message whose sub-thread the file goes under (optional)"),
+       "reply_to": _s("The id of the message this answers (optional): the file stays in the thread, quoting it")},
       required=("thread", "path"), writes=True)
 def thread_upload(api, args):
     if not hasattr(api, "post_multipart"):
@@ -5946,7 +5983,7 @@ def thread_upload(api, args):
     from . import bot_files as BF
     path, _ = BF.local_file(BF.checkout_root(), args["path"])
     fields = {"text": args.get("text"), "kind": args.get("kind"), "to": args.get("to"),
-              "parent_message_id": args.get("under")}
+              "parent_message_id": args.get("under"), "in_reply_to": args.get("reply_to")}
     fields = {name: value for name, value in fields.items() if value is not None}
     return api.post_multipart("uploads/threads/" + quote(str(args["thread"]), safe="") + "/messages", {"file": path},
                               fields, key=_key(args))

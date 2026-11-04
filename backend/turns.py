@@ -15,6 +15,7 @@ from fastapi import Request
 
 from .store import H, Problem
 from . import task_privacy as privacy
+from . import bot_settings as BS
 
 SAID_CHARS, THINKING_CHARS, STEP_LIMIT = 280, 2000, 300
 # A tool event that opens a call; the next event for the same call closes it.
@@ -227,7 +228,7 @@ def mark_delivery(c, messages):
             if not row["live"]:
                 continue
             if row["bot_id"] not in configs:
-                config = c.execute("SELECT config FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
+                config = c.execute(BS.ONE_SQL, (row["bot_id"],)).fetchone()
                 configs[row["bot_id"]] = json.loads(config[0]) if config else {}
             config = configs[row["bot_id"]]
             mode = ("redirect" if row["redirect"] else "steer" if row["way"] != "queue"

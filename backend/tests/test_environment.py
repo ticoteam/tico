@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from backend.app import create_app
 from backend.config import Settings
 from backend.store import H, encode
+from backend import bot_settings as BS
 
 COMPANY = {"environment_id": "acme-7", "company_name": "Acme", "app_name": "Atlas",
            "assistant_name": "Morgan", "assistant_bot": "coo", "github_owner": "AcmeCorp"}
@@ -51,9 +52,8 @@ def environment(tmp_path):
             H.sync_registry(c, BOTS, roster)
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode(roster),))
             for slug, config in BOTS.items():
-                c.execute("INSERT INTO bot_config(bot,config,team,owner_id,repo) VALUES(?,?,?,?,?)",
-                          (slug, encode(config), None, "riley" if slug == "support" else "morgan",
-                           REPOS[slug]))
+                c.execute('INSERT INTO bot_config(bot,team,owner_id,repo) VALUES(?,?,?,?)', (slug, None, 'riley' if slug == 'support' else 'morgan', REPOS[slug]))
+                BS.write(c, slug, config)
         return client
 
     yield build

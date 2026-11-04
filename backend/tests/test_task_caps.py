@@ -5,6 +5,7 @@ from backend import task_caps
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.test_migrations import restore_config
 
 
 def report(api, bot, boss):
@@ -148,7 +149,9 @@ def test_the_upgrade_drops_the_retired_send_table_and_the_log_keeps_counting(api
         c.execute("CREATE TABLE task_cap_sends(task_id TEXT PRIMARY KEY, sender TEXT, receiver TEXT, sent_at TEXT)")
         c.execute("INSERT INTO task_cap_sends(task_id, sender, receiver, sent_at) VALUES('t0','bot:ops','human:ana',?)",
                   (H.now(),))
-        # As a file from before 0004 has it: that migration and every later one not run yet.
+        # As a file from before 0004 has it: that migration and every later one not run yet. The reruns read
+        # bot_config.config (0061), which 0070 dropped: the column goes back first, as on a file from before 0070.
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0004' AND version NOT LIKE 'legacy_%'")
     store.initialize(seed_market=False)
     with store.transaction() as c:

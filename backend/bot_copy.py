@@ -25,7 +25,8 @@ from . import built_on, providers
 from .credentials import administrator, ask_admin_detail, effective_grant
 from .github_app import TURN_PERMISSIONS, repo_of
 from .harnesses import EXTERNAL_HARNESSES, resolve_harness
-from .store import H, Problem, encode
+from .store import H, Problem
+from . import bot_settings as BS
 
 READ_PERMISSIONS = {"contents": "read", "metadata": "read"}
 
@@ -41,7 +42,7 @@ def _json(value):
 def folder(c, bot):
     """The folder the bot's checkout has on a computer, as recorded (H.bot_folder): the client finds its files by this,
     never by its slug, which a rename changes while the folder stays."""
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     return H.bot_folder(bot, _json(row["config"] if row else None))
 
 
@@ -171,7 +172,7 @@ def install(app, store, auth, mutate, settings_admin, place_now):
             made = settings_admin._config(c, copy_id)
             declared = _json(made["config"])
             declared["copied_from"] = {"bot": bot, "sha": body.sha}
-            c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), copy_id))
+            BS.write(c, copy_id, declared)
             credentials = credentials_for(c, app.state.vault, who, bot, copy_id, [t.model_dump() for t in body.tools],
                                           _declared(c, bot))
             # The copy's history is made after this, in BotOps's workspace, so only the computer BotOps's turn runs on (its
@@ -239,7 +240,7 @@ def install(app, store, auth, mutate, settings_admin, place_now):
             config, source = origin(c, who, bot)
             declared = _json(config["config"])
             declared["copied_from"] = {"bot": source["bot"], "sha": body.applied_sha}
-            c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), bot))
+            BS.write(c, bot, declared)
             H.event(c, who.actor, "bot.copy_updated", bot, {"from": source["bot"], "before": source.get("sha") or "",
                                                             "after": body.applied_sha})
             return {"bot": bot, "original": H.bot(c, source["bot"])["slug"], "base_sha": body.applied_sha}

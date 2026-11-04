@@ -7,6 +7,7 @@ from backend import hubdb as H
 from backend import release_flow as RF
 from backend.store import encode
 from backend.tests.test_github import PR, api, get, headers, hook, pr_event, post  # noqa: F401
+from backend import bot_settings as BS
 
 RELEASE_URL = "https://github.com/ticoteam/tico/releases/tag/v1.2.3"
 
@@ -17,8 +18,8 @@ def _team(api):
         bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in ("cpo", "cmo", "qab")}
         H.sync_registry(c, bots, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}]})
         for slug, template in (("cmo", RF.MANAGER), ("cpo", RF.WRITER), ("qab", RF.QA)):
-            c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
-                      (slug, encode({**bots[slug], "template": template}), "product", "ana"))
+            c.execute('INSERT OR REPLACE INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, 'product', 'ana'))
+            BS.write(c, slug, {**bots[slug], 'template': template})
         dev = H.type_create(c, "human:ana", "Dev tickets", numbered=True, steps=[
             {"name": "In QA", "status": "review"}, {"name": "Pending Release", "status": "review"},
             {"name": "Post Release QA", "status": "review"}, {"name": "Done", "status": "done"}])

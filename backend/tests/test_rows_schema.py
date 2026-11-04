@@ -24,11 +24,15 @@ TABLES = {
     rows.MemoryTidyPacketRow: "memory_tidy_packets",
     rows.ThreadRankingRow: "thread_rankings",
     rows.ThreadPinRow: "thread_pins",
+    rows.MessageRouteRow: "message_routes",
     rows.FeedbackRow: "feedbacks",
     rows.UsageFactRow: "usage_facts",
     rows.UsageMeterReadRow: "usage_meter_reads",
     rows.BudgetNodeRow: "budget_nodes",
+    rows.HomeMergeRow: "home_merges",
+    rows.HomeMergeMessageRow: "home_merge_messages",
     rows.HistoryEventRow: "history_events",
+    rows.BotSettingsRow: "bot_settings",
 }
 
 

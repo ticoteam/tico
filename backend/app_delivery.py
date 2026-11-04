@@ -29,6 +29,7 @@ from datetime import timezone
 from fastapi import Request
 
 from . import models as M
+from . import bot_settings as BS
 from . import rooms
 from .harnesses import resolve_harness
 from .store import H, Problem, encode, readiness_document
@@ -59,7 +60,8 @@ def setting(config):
 
 
 def _config(c, bot):
-    row = c.execute("SELECT config,owner_id FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute(f"SELECT {BS.CONFIG} AS config,bc.owner_id FROM bot_config bc {BS.JOIN} WHERE bc.bot=?",
+                    (bot,)).fetchone()
     return (H._json(row["config"], {}) or {}, row["owner_id"]) if row else ({}, None)
 
 
@@ -148,11 +150,12 @@ def turn_off(c, actor, bot, declared, reason):
 
 def runner_revoked(c, actor, runner_id):
     """A removed computer delivers nothing: each bot delivered through it goes back to the daily sync."""
-    for row in c.execute("SELECT bot,config FROM bot_config WHERE json_extract(config,'$.app_delivery.computer')=?",
+    for row in c.execute("SELECT bot_id FROM bot_settings WHERE json_extract(app_delivery,'$.computer')=?",
                          (runner_id,)).fetchall():
-        declared = H._json(row["config"], {}) or {}
-        turn_off(c, actor, row["bot"], declared, "computer removed")
-        c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), row["bot"]))
+        declared = BS.read(c, row["bot_id"])
+        turn_off(c, actor, row["bot_id"], declared, "computer removed")
+        BS.write(c, row["bot_id"], declared)
+        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (row["bot_id"],))
     c.execute("DELETE FROM registry_metadata WHERE key=?", (ERRORS + runner_id,))
 
 
@@ -249,8 +252,8 @@ def delivered(c, runner_id):
     """The bots delivered through an app on this computer, for GET /api/v2/runners/me/app-delivery. `error`: this
     computer's Health holds an error for the bot's app, which the next clean read clears."""
     out, errors = [], _errors(c, runner_id)
-    for row in c.execute("SELECT bc.bot,bc.config,b.slug FROM bot_config bc JOIN bots b ON b.id=bc.bot "
-                         "WHERE b.state<>'archived' AND json_extract(bc.config,'$.app_delivery.computer')=? "
+    for row in c.execute(f"SELECT bc.bot,{BS.CONFIG} AS config,b.slug FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+                         f"{BS.JOIN} WHERE b.state<>'archived' AND json_extract(s.app_delivery,'$.computer')=? "
                          "ORDER BY bc.bot", (runner_id,)):
         config = H._json(row["config"], {}) or {}
         bot = app_bot(config)
@@ -320,8 +323,8 @@ def health_problems(c, who, auth, online_ids):
     its readiness for the app. An administrator sees every computer; anyone else their own."""
     full = who.role == "owner" or auth.bot_admin(who)
     used = {}
-    for row in c.execute("SELECT bc.bot,bc.config,b.slug FROM bot_config bc LEFT JOIN bots b ON b.id=bc.bot "
-                         "WHERE json_extract(bc.config,'$.app_delivery.computer') IS NOT NULL"):
+    for row in c.execute(f"SELECT bc.bot,{BS.CONFIG} AS config,b.slug FROM bot_config bc LEFT JOIN bots b ON b.id=bc.bot "
+                         f"{BS.JOIN} WHERE json_extract(s.app_delivery,'$.computer') IS NOT NULL"):
         found = setting(H._json(row["config"], {}) or {})
         if found and found["computer"] in online_ids:
             used.setdefault((found["computer"], found["app"]), []).append(row["slug"] or row["bot"])

@@ -23,6 +23,12 @@ MAX_DEPTH = 3           # forks inside forks
 MAX_STEPS = 100         # every step in the flow, nested ones included
 MAX_RULES = 50
 MAX_CONDS = 20
+MAX_DESTINATIONS = 20   # a flow's named chains that a filter rule's `to` may send a thread to
+MAX_DESTINATION_ACTIONS = 10
+CHOICE_MODES = ("draft", "reply")   # what a choose step's body does: a draft for review, or a reply sent
+MAX_CHOICES = 20                    # destinations one choose step picks between
+COLORS = ("amber", "orange", "violet", "green", "blue", "teal", "pink", "gray", "red")
+NEXTS = ("end", "rule", "step")   # what a filter rule does once its actions ran (rule_next)
 MAX_TEXT = 8000
 MAX_PROMPT = 32000           # an llm or bot_turn prompt (an Inbox Manager's instructions can run long)
 MAX_FIND = 100
@@ -140,6 +146,55 @@ def check_action(action, where):
     _need(isinstance(action.get("args", {}), dict), where, "args is a map")
 
 
+def _check_destinations(destinations):
+    """A flow's destinations: named chains a filter rule's `to` sends a thread to. Each has an id, an optional color and
+    its actions (`then`, empty for "Ignore"). Returns the ids a `to` may name."""
+    _need(isinstance(destinations, list) and len(destinations) <= MAX_DESTINATIONS, "destinations",
+          f"destinations are a list of at most {MAX_DESTINATIONS}")
+    ids = set()
+    for n, dest in enumerate(destinations):
+        where = f"destination {n + 1}"
+        _need(isinstance(dest, dict) and set(dest) <= {"id", "name", "color", "then"}, where,
+              "a destination has id, name, color and then")
+        _need(isinstance(dest.get("id"), str) and NAME.fullmatch(dest["id"]), where,
+              "every destination has an id: a letter, then letters, digits, _ or - (40 at most)")
+        where = f"destination {dest['id']}"
+        _need(dest["id"] not in ids, where, "destination ids are unique")
+        ids.add(dest["id"])
+        _text(dest.get("name"), where, "name", cap=80)
+        _need(dest.get("color") is None or dest["color"] in COLORS, where, f"color is one of {', '.join(COLORS)}")
+        then = dest.get("then", [])
+        _need(isinstance(then, list) and len(then) <= MAX_DESTINATION_ACTIONS, where,
+              f"then is a list of at most {MAX_DESTINATION_ACTIONS} actions")
+        for m, action in enumerate(then):
+            check_action(action, f"{where} action {m + 1}")
+    return frozenset(ids)
+
+
+def rule_next(rule):
+    """What a filter rule does once its actions ran: `end` (the thread ends), `rule` (the rules after it are tested
+    too) or `step` (the thread goes on at the next step). As written: `next` when given; `end` for a rule with `to`;
+    otherwise `end` when `stop` is true and `step` when not, as a rule has always meant."""
+    if rule.get("next") is not None:
+        return rule["next"]
+    if rule.get("to") is not None or rule.get("stop"):
+        return "end"
+    return "step"
+
+
+def _check_move(rule, where, targets):
+    """`next`, `to` and `stop` must not contradict one another: `to` ends the thread after the rule's own actions and
+    its destination's, so it takes no `rule` or `step`; `stop` ends the thread too."""
+    nxt, to = rule.get("next"), rule.get("to")
+    _need(nxt is None or nxt in NEXTS, where, f"next is one of {', '.join(NEXTS)}")
+    if rule.get("stop") is True:
+        _need(nxt in (None, "end"), where, "stop ends the thread, so next is end or left out")
+    if to is not None:
+        _need(isinstance(to, str) and to in targets, where, "to names one of the flow's destinations")
+        _need(nxt in (None, "end"), where, "to ends the thread after its actions, so next is end or left out")
+        _need(rule.get("stop") in (None, True), where, "to ends the thread, so stop is true or left out")
+
+
 def _check_trigger(trigger):
     _need(isinstance(trigger, dict), "trigger", "is a map with a type")
     kind = trigger.get("type")
@@ -187,7 +242,7 @@ def _check_zone(zone, where):
         raise Invalid(f"{where}: {zone} is not a time zone such as Europe/Paris") from None
 
 
-def _check_step(step, where, seen, depth, counts):
+def _check_step(step, where, seen, depth, counts, targets=frozenset()):
     _need(isinstance(step, dict), where, "a step is a map")
     _need(isinstance(step.get("id"), str) and NAME.fullmatch(step["id"]), where,
           "every step has an id: a letter, then letters, digits, _ or - (40 at most)")
@@ -198,20 +253,22 @@ def _check_step(step, where, seen, depth, counts):
     _need(counts[0] <= MAX_STEPS, where, f"a flow has at most {MAX_STEPS} steps")
     kind = step.get("type")
     _need(kind in STEP_TYPES, where, f"type is one of {', '.join(STEP_TYPES)}")
+    _need(kind == "llm" or step.get("choose") is None, where, "choose is on an llm step")
     _need(isinstance(step.get("enabled", True), bool), where, "enabled is true or false")
     if kind == "filter":
         rules = step.get("rules", [])
         _need(isinstance(rules, list) and len(rules) <= MAX_RULES, where, f"rules are a list of at most {MAX_RULES}")
         for n, rule in enumerate(rules):
             at = f"{where} rule {n + 1}"
-            _need(isinstance(rule, dict) and set(rule) <= {"when", "match", "then", "stop"}, at,
-                  "a rule has when, match, then and stop")
+            _need(isinstance(rule, dict) and set(rule) <= {"when", "match", "then", "stop", "next", "to"}, at,
+                  "a rule has when, match, then, stop, next and to")
             check_conds(rule.get("when", []), at)
             _need(rule.get("match", "all") in ("all", "any"), at, "match is all or any")
             _need(isinstance(rule.get("then", []), list), at, "then is a list of actions")
             for m, action in enumerate(rule.get("then", [])):
                 check_action(action, f"{at} action {m + 1}")
             _need(isinstance(rule.get("stop", False), bool), at, "stop is true or false")
+            _check_move(rule, at, targets)
     elif kind == "decide":
         _need(("set" in step) != ("questions" in step), where, "decide takes a question set or questions, not both")
         if "set" in step:
@@ -228,6 +285,8 @@ def _check_step(step, where, seen, depth, counts):
               where, "as is assistant:<person> or bot:<slug>")
         _text(step.get("prompt"), where, "prompt", cap=MAX_PROMPT)
         _need(isinstance(step.get("out"), str) and NAME.fullmatch(step["out"]), where, "out names the result, such as draft")
+        if step.get("choose") is not None:
+            _check_choose(step["choose"], where, targets)
     elif kind == "find":
         _need(depth == 0, where, "find is a top-level step")
         _need(not counts[1], where, "a flow has one find")
@@ -267,20 +326,46 @@ def _check_step(step, where, seen, depth, counts):
             _need(path["name"] not in names, at, "path names are unique in the fork")
             names.add(path["name"])
             check_conds(path.get("when", []), at)
-            _check_steps(path.get("steps", []), at, seen, depth + 1, counts)
+            _check_steps(path.get("steps", []), at, seen, depth + 1, counts, targets)
         otherwise = step.get("otherwise")
         if otherwise is not None:
             _need(isinstance(otherwise, dict) and set(otherwise) <= {"steps"}, where, "otherwise is a map with steps")
-            _check_steps(otherwise.get("steps", []), f"{where} otherwise", seen, depth + 1, counts)
+            _check_steps(otherwise.get("steps", []), f"{where} otherwise", seen, depth + 1, counts, targets)
 
 
-def _check_steps(steps, where, seen, depth, counts):
+def _check_steps(steps, where, seen, depth, counts, targets=frozenset()):
     _need(isinstance(steps, list), where, "steps are a list")
     for n, step in enumerate(steps):
-        _check_step(step, f"{where} step {n + 1}", seen, depth, counts)
+        _check_step(step, f"{where} step {n + 1}", seen, depth, counts, targets)
         # Paths never rejoin: what comes after a fork would run on no path in particular.
         _need(step.get("type") != "paths" or n == len(steps) - 1, f"step {step['id']}",
               "paths end their list; put what follows inside each path")
+        # A choice ends its thread on the chosen destination's chain, so nothing follows it in its list.
+        _need(step.get("choose") is None or n == len(steps) - 1, f"step {step['id']}",
+              "a choose step is the last step in its list")
+
+
+def _check_choose(choose, where, targets):
+    """An llm step's `choose`: the destinations its answer may pick (ids in this flow, each once), the one a missing or
+    refused answer picks, and what its body does (a draft for review, or a reply sent)."""
+    _need(isinstance(choose, dict) and set(choose) <= {"to", "default", "mode"}, where,
+          "choose is a map with to, default and mode")
+    to = choose.get("to")
+    _need(isinstance(to, list) and 1 <= len(to) <= MAX_CHOICES and all(isinstance(x, str) for x in to)
+          and len(set(to)) == len(to), where, f"choose.to is 1 to {MAX_CHOICES} destination ids, each once")
+    _need(all(x in targets for x in to), where, "choose.to names destinations in this flow")
+    _need(choose.get("default") in to, where, "choose.default is one of choose.to")
+    _need(choose.get("mode") in CHOICE_MODES, where, "choose.mode is draft or reply")
+
+
+def choosing(steps):
+    """The llm steps that choose a destination (`choose`), nested paths included."""
+    for step in steps or []:
+        if step.get("type") == "llm" and step.get("choose") is not None:
+            yield step
+        for path in step.get("paths") or []:
+            yield from choosing(path.get("steps"))
+        yield from choosing((step.get("otherwise") or {}).get("steps"))
 
 
 def question_set(ref):
@@ -316,10 +401,17 @@ def check(flow):
               "batch", "times are 1 to 24 clock times such as 08:00")
         _check_zone(batch.get("tz") or "UTC", "batch")
     _check_trigger(flow.get("trigger"))
+    # A flow without destinations (every flow saved before them) keeps none; null is the same as leaving them out.
+    targets = _check_destinations(flow["destinations"]) if flow.get("destinations") is not None else frozenset()
     counts = [0, False]
-    _check_steps(flow.get("steps", []), "steps", set(), 0, counts)
-    return {**flow, "owner": owner, "enabled": flow.get("enabled", True) is not False,
-            "builtin": flow.get("builtin") is True, "steps": flow.get("steps", [])}
+    _check_steps(flow.get("steps", []), "steps", set(), 0, counts, targets)
+    _need(not (owner.startswith("group:") and next(choosing(flow.get("steps")), None)), "steps",
+          "a group's flow has no turn to choose with: a choose step needs a person's or a bot's flow")
+    out = {**flow, "owner": owner, "enabled": flow.get("enabled", True) is not False,
+           "builtin": flow.get("builtin") is True, "steps": flow.get("steps", [])}
+    if out.get("destinations") is None:
+        out.pop("destinations", None)
+    return out
 
 
 # ---------------------------------------------------------------------------------------------------- conditions
@@ -543,10 +635,16 @@ TRIGGER_FIELDS = {
             "open_days: days before the due day the run starts (default 14); tz: a time zone (default the company's)",
 }
 STEP_WORDS = {
-    "filter": "rules: the first rule whose conditions hold runs its actions (`stop` ends the list)",
+    "filter": "rules: the first rule whose conditions hold runs its actions. `next` says what follows: `end` (the "
+              "thread ends; `stop` true means the same), `rule` (move on: the later rules are still tested) or `step` "
+              "(the default: go on to the next step). `to` names a destination, whose actions run after the rule's own "
+              "and end the thread",
     "decide": "a judge answers each question; its answers read as `<out>.<question id>`. Give `set` (a saved question "
               "set, from hub_automation_question_sets) or `questions`, never both",
-    "llm": "a turn on a bot or an Assistant with the prompt; its text is `out`",
+    "llm": "a turn on a bot or an Assistant with the prompt; its text is `out`. With `choose` (`{to: [destination ids], "
+           "default, mode: draft or reply}`, last in its list) the turn answers `{to, body}`: the body is saved as a draft "
+           "or sent as the reply to the message (never templated), then the chosen destination's actions run. A malformed "
+           "answer, a spend cap or a held webhook runs `default` with no reply",
     "find": "pulls items from a source since the last run; the steps after it run once per item. At most one, at the top",
     "bot_turn": "a task for a bot with the prompt; the bot runs it in its own session",
     "paths": "named paths tested in order; the first whose conditions hold runs. Nothing follows a paths step in its list",
@@ -558,7 +656,7 @@ def shape_text():
     """The flow's shape as BotOps reads it (guide_text), from the constants above: a change to any of them changes this
     text, so the instructions cannot drift from what a save accepts."""
     lines = [
-        "A flow is `{\"name\", \"owner\", \"trigger\", \"steps\", \"batch\"}`. `owner` is a `person:`, `bot:` or `group:` ref; "
+        "A flow is `{\"name\", \"owner\", \"trigger\", \"steps\", \"batch\", \"destinations\"}`. `owner` is a `person:`, `bot:` or `group:` ref; "
         "`batch` (`{\"times\": [\"08:00\", \"13:00\"]}`) holds sends until those times. On an update, `summary` names the "
         "change in a few words.",
         "",
@@ -573,14 +671,30 @@ def shape_text():
               f"{MAX_RULES} rules per filter, {MAX_CONDS} conditions per rule or path, {MAX_PATHS} paths per fork, "
               f"{MAX_DEPTH} levels of forks inside forks, {MAX_STEPS} steps, {MAX_PROMPT} characters per prompt.",
               "", "Decide `level`: " + ", ".join(LEVELS) + " (default low). A `paths` path has `name`, `match` (all or any, default all), "
-              "`when` and `steps`; `otherwise` takes `steps` too. A filter rule has `when`, `match`, `then` (actions) and `stop`.",
+              "`when` and `steps`; `otherwise` takes `steps` too. A filter rule has `when`, `match`, `then` (actions), `stop`, "
+              "`next` (end, rule or step) and `to` (a destination id). With `to`, or with `stop` true, `next` is end or left out.",
+              "", "Destinations (`destinations`, at most "
+              f"{MAX_DESTINATIONS}): named chains a rule's `to` runs. Each is `{{\"id\", \"name\", \"color\", \"then\"}}`: an id like "
+              f"`legal`, a name, a color ({', '.join(COLORS)}) that may be left out, and `then` (at most {MAX_DESTINATION_ACTIONS} "
+              "actions; empty means the destination only ends the thread).",
+              "", "A choose (`choose` on an `llm` step, as its last step): `{\"to\": [destination ids, at most "
+              f"{MAX_CHOICES}], \"default\": one of them, \"mode\": \"draft\" (save the reply as a draft) or \"reply\" (send it)}}`. "
+              "The turn answers `{\"to\": <id>, \"body\": <text>}`; the body goes out as the reply, not templated, then the "
+              "chosen destination's actions run. The step's `as` is the owner's own: `assistant:<owner>` for a person, "
+              "`bot:<owner>` for a bot. A group's flow has no choose.",
               "", "Actions (`{\"do\": ..., \"args\": {...}}`):"]
     lines += [f"- `{name}`" + (": " + "; ".join(f"`{key}` {text}" for key, text in args.items()) if args else " (no args)")
               for name, args in ACTION_ARGS.items()]
     lines += ["", "Example, a rule that labels a message and archives it: "
               "`{\"id\": \"sort\", \"type\": \"filter\", \"enabled\": true, \"rules\": [{\"when\": "
               "[{\"field\": \"d1.bucket\", \"op\": \"is\", \"value\": \"archive\", \"min\": 0.85}], \"then\": "
-              "[{\"do\": \"label\", \"args\": {\"name\": \"Receipts\"}}, {\"do\": \"archive\", \"args\": {}}], \"stop\": true}]}`."]
+              "[{\"do\": \"label\", \"args\": {\"name\": \"Receipts\"}}, {\"do\": \"archive\", \"args\": {}}], \"stop\": true}]}`.",
+              "Example, a rule that stars subpoena mail and sends it to the destination Legal: "
+              "`{\"steps\": [{\"id\": \"gate\", \"type\": \"filter\", \"enabled\": true, \"rules\": [{\"when\": "
+              "[{\"field\": \"message.subject\", \"op\": \"matches\", \"value\": \"subpoena\"}], \"then\": "
+              "[{\"do\": \"label\", \"args\": {\"name\": \"STARRED\"}}], \"to\": \"legal\"}]}], \"destinations\": "
+              "[{\"id\": \"legal\", \"name\": \"Legal\", \"then\": [{\"do\": \"create_task\", \"args\": "
+              "{\"title\": \"Review the subpoena\"}}]}]`."]
     return "\n".join(lines)
 
 
@@ -599,6 +713,11 @@ Do not ask about anything a sensible default answers.
   cost the most). A message from the Automations page may carry its filters (`automations_filter` in its refs).
 - New: `hub automation create --file -` (the flow as JSON on stdin). Its owner is the asker unless they named another.
   It is saved off; send `"enabled": true` only when the request said to turn it on.
+- Use a template: `hub automation templates` lists the inbox templates (founder, support, sales, blank) with their
+  destinations. `hub automation template <id> --owner <ref> --inbox <address>` returns one filled in for that owner: the
+  roles it names resolved on the org chart, and the destinations the owner may not use taken out. It saves nothing. Show
+  the asker its rules and destinations in one line, then save it with `hub automation create --file -` as above. The
+  inbox must be one the owner reads; the hub refuses any other.
 - Edit: when the message names an automation (its `automation` reference), `hub automation update <id> --file -` with the
   changed fields and a `summary`. For a person it is the new live version. When the hub answers `pending`, the asker
   may not change it: it was saved as a proposal a person turns on.

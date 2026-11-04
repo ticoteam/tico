@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 
 from . import hubdb as H
 from . import people as P
+from . import bot_settings as BS
 
 
 def encode(value):
@@ -82,7 +83,7 @@ def _rename(c, actor, display_name):
     """The name in both places `SettingsAdmin.update_bot` keeps it, with a new revision so a form opened before
     cannot save the old name back over it."""
     c.execute("UPDATE bots SET display_name=? WHERE id=?", (display_name, SLUG))
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (SLUG,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (SLUG,)).fetchone()
     if not row:
         return
     try:
@@ -91,7 +92,7 @@ def _rename(c, actor, display_name):
         declared = None
     if isinstance(declared, dict):
         declared["display_name"] = display_name
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), SLUG))
+        BS.write(c, SLUG, declared)
     c.execute("UPDATE bot_config SET revision=revision+1,definition_updated_at=?,definition_updated_by=? WHERE bot=?",
               (H.now(), actor, SLUG))
 

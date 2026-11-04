@@ -118,7 +118,7 @@ HISTORY = {"attempts": "created_at", "jobs": "created_at", "messages": "created_
 KEEP = frozenset((
     "agents", "approvals", "archives", "assistant_actions", "attempt_conversations", "attempt_events", "attempt_load_snapshots",
     "attempt_inputs", "backup_verified_blobs", "batches", "blob_locations", "blob_media", "blobs",
-    "bot_agent_instructions", "bot_budget", "bot_config", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files",
+    "bot_agent_instructions", "bot_budget", "bot_config", "bot_settings", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files",
     "bot_memory_documents", "bot_memory_oversized", "bot_memory_seen", "bot_memory_updates", "bot_repo_access", "bot_status",
     "bot_task_tabs", "bot_tool_requests", "cards", "deferrals", "pin_places", "pins", "bot_transition_checkpoints", "bot_transitions", "bots", "strategy_actions",
     "ask_ingest_items", "ask_ingest_settings", "strategy_merges", "changes", "chat_goals",
@@ -163,7 +163,9 @@ KEEP = frozenset((
     # outside destination that has not gone is made moot below, so the copy never sends it.
     "message_deliveries", "message_mentions", "message_reactions", "message_revisions", "sequences",
     "teammate_accesses", "thread_followers", "thread_members", "thread_pins", "thread_routings",
+    "message_routes",
     "message_search_keys",    # the search index's keys (thread_search.py); its FTS table is copied whole too, and search joins messages
+    "home_merges", "home_merge_messages",   # where each person's old chat with a bot went (backend/bot_home_merge.py)
 )) | frozenset(finance.DEV_COPY_KEPT)
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.

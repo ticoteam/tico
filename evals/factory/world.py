@@ -78,6 +78,7 @@ class World:
         from fastapi.testclient import TestClient
         from backend.app import create_app
         from backend.auth import Identity
+        from backend import bot_settings
         from backend.config import Settings
         from backend.scheduler import Scheduler
         from backend.store import H, encode
@@ -102,8 +103,8 @@ class World:
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": [
                 {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]}]}),))
             for slug, config in bots.items():
-                c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
-                          (slug, encode(config), "engineering", "ana"))
+                c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)", (slug, "engineering", "ana"))
+                bot_settings.write(c, slug, config)
             if "release-manager" in bots:   # signed in as an agent, as an external Release Manager is
                 c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) "
                           "VALUES('release-manager','hermes','x-release',?,'human:ana')", (H.now(),))

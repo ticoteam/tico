@@ -5,6 +5,7 @@ import pytest
 from backend.store import H, message_page
 from backend.tests.test_api import as_member, headers, restrict
 from backend.tests.test_tasks_board import api, get, post  # noqa: F401
+from backend import bot_settings as BS
 
 
 def test_old_and_deleted_words_leave_retries_sql_events_and_bot_context(api):
@@ -76,7 +77,7 @@ def test_already_handed_comments_change_current_record_without_recalling_copies(
         elif handoff == "context":
             H.turn_start(c, "bot:ops", "ops")
         else:
-            c.execute("UPDATE bot_config SET config=json_set(config,'$.harness','hermes') WHERE bot='ops'")
+            BS.update(c, 'ops', {'harness': 'hermes'})
     edited = post(api, f"tasks/{task['id']}/comments/{said['id']}", {"text": "Replacement words"})
     assert edited['comment']['body'] == 'Replacement words'
     detail = get(api, 'tasks/' + task['id'])

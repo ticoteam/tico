@@ -24,7 +24,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            its next_before reads it. The run's prompt names it
     hub thread list [--with ACTOR] [--cursor C] [--limit N]   your threads: needs attention, then unread, then recent;
                                                DMs apart; --with: only the threads shared with that actor
-    hub thread show <thread> [--cursor C]      one thread in tree order: a message's sub-thread sits under it
+    hub thread show <thread> [--cursor C] [--flat]   one thread in tree order: a message's sub-thread sits under it
+                                               (--flat: it and its open sub-threads as one list in time order)
     hub thread home <actor>                    a teammate's Home thread, made on first use (needs Read on them)
     hub thread dm <actor>                      your DM with one person or bot: the open one, or a new one (needs Write)
     hub thread dm-group <actor> <actor> [...] [--body "<text>"] [--title T]   a group DM with these people or bots;
@@ -35,8 +36,11 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub thread pin|unpin <thread>              pin a thread for yourself, or unpin it (even one pinned for everyone)
     hub thread catch-up [--cursor C] [--limit N]   each thread with something new for you, mentions first, with its
                                                new messages; mark one read with hub thread read <thread> --all
-    hub thread post <thread> "<text>" [--kind say|ask] [--to ACTOR] [--ref KIND:ID ...]
-    hub thread reply <thread> <message> "<text>"   a side topic: the reply goes in that message's sub-thread
+    hub thread post <thread> "<text>" [--kind say|ask] [--to ACTOR] [--reply-to MESSAGE] [--ref KIND:ID ...]
+                                               --reply-to answers that message: yours stays in the thread, quoting it
+    hub thread bot-status <thread>             the bots it waits on: working, up next or can't reply, and why
+    hub thread reply <thread> <message> "<text>"   a separate side topic in that message's sub-thread (to answer a
+                                               message, post --reply-to)
     hub thread edit <message> "<text>"         edit a message you wrote: a new revision
     hub thread sub <message>                   open a message's sub-thread without posting
     hub thread react|unreact <message-id> <emoji>   your reaction to a message, such as :+1:
@@ -396,6 +400,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub automation discard <id> <n>        drop a pending version (a proposal); the automation stays as it is
     hub automation question-sets           the question sets a Decide step may name (set: id@version)
     hub automation guide                   how BotOps builds automations, with the flow format
+    hub automation templates               the inbox templates: founder, support, sales, blank
+    hub automation template <id> --owner <ref> --inbox <inbox>
+                                           one filled in for that owner and inbox; saves nothing
     hub audit [--object O] [--limit N] [--before B]
                                            who changed caps, spend, groups, automations and inboxes; the owner sees all
     hub automation inbox <inbox> [--send on|off]
@@ -1147,6 +1154,8 @@ def parser():
     s = thread.add_parser("show", help="one thread in tree order: each message, then the sub-threads under it")
     s.add_argument("thread")
     thread_page_flags(s)
+    s.add_argument("--flat", action="store_true", default=None,
+                   help="the thread and its open sub-threads as one list in time order")
     s.set_defaults(fn="thread show")
     s = thread.add_parser("home", help="a teammate's Home thread, made on first use (needs Read on them)")
     s.add_argument("actor", help="bot:<slug>, human:<id> or group:<id>")
@@ -1174,9 +1183,14 @@ def parser():
     s.add_argument("text")
     s.add_argument("--kind", choices=["say", "ask"], help="ask: wants an answer from --to")
     s.add_argument("--to", help="the person or bot it is addressed to: human:<id> or bot:<slug>")
+    s.add_argument("--reply-to", dest="reply_to", metavar="MESSAGE",
+                   help="the message this answers: yours stays in the thread, quoting it")
     s.add_argument("--ref", dest="refs", action="append", metavar="KIND:ID", help="a reference such as task:<id>; repeat for more")
     s.set_defaults(fn="thread post")
-    s = thread.add_parser("reply", help="reply in a message's sub-thread: a side topic under that message")
+    s = thread.add_parser("bot-status", help="the bots a thread waits on: working, up next or can't reply, and why")
+    s.add_argument("thread")
+    s.set_defaults(fn="thread bot-status")
+    s = thread.add_parser("reply", help="a side topic in a message's sub-thread; to answer a message use post --reply-to")
     s.add_argument("thread")
     s.add_argument("message", help="the message the reply branches from")
     s.add_argument("text")
@@ -2839,6 +2853,13 @@ def parser():
     s.set_defaults(fn="automation question-sets")
     s = auto.add_parser("guide", help="how BotOps builds automations, with the flow format")
     s.set_defaults(fn="automation guide")
+    s = auto.add_parser("templates", help="the inbox templates: founder, support, sales, blank")
+    s.set_defaults(fn="automation templates")
+    s = auto.add_parser("template", help="one inbox template filled in for an owner and an inbox (saves nothing)")
+    s.add_argument("id", help="founder, support, sales or blank")
+    s.add_argument("--owner", required=True, help="person:<id>, bot:<slug> or group:<id>")
+    s.add_argument("--inbox", required=True, help="an email address, slack:dm or slack:#<channel>")
+    s.set_defaults(fn="automation template")
     s = auto.add_parser("inbox", help="read or set an inbox's send switch")
     s.add_argument("inbox", help="an email address, slack:dm or slack:#<channel>")
     s.add_argument("--send", choices=["on", "off"], help="leave out to read it")

@@ -127,7 +127,7 @@ VALUES_BYTES = 60_000    # what a judge call is shown of a run's values
 MAIL_LEASE_MINUTES = 5   # a claimed mail action not reported by then goes back to the queue
 MAIL_TRIES = 3           # claims a mail action gets before it fails
 BOTOPS = "bot:botops"            # builds automations for whoever asks it, with that asker's rights (backend/botops_act.py)
-VERSIONED = ("trigger", "steps", "batch")   # what the automation does; a change here is a new version
+VERSIONED = ("trigger", "steps", "batch", "destinations")   # what the automation does; a change here is a new version
 # The automations a write in this context comes from: their own actions never start them again.
 CHAIN = contextvars.ContextVar("automation_chain", default=())
 _BELL = threading.Event()
@@ -544,6 +544,7 @@ def _checked(c, flow, settings=None, access=True, saved=None, aid=None, wake_ste
     except F.Invalid as exc:
         raise Problem("invalid", str(exc), 422)
     flow = _bot_ids(c, flow)
+    _chooser_fits(flow)
     if flow["trigger"]["type"] == "due":
         # Stored on the flow, so a later change to the company's zone does not move the routine.
         flow["trigger"] = {"open_days": D.OPEN_DAYS, "tz": D.zone_of({}), **flow["trigger"]}
@@ -563,7 +564,7 @@ def _checked(c, flow, settings=None, access=True, saved=None, aid=None, wake_ste
             if flow["owner"] != "person:" + person:
                 raise Problem("forbidden", f"Only {person}'s own automation runs a turn on their Assistant", 403)
         assistant_bot = getattr(settings, "assistant_bot", None)
-        for do, args in _actions(flow["steps"]):
+        for do, args in _actions(flow):
             bot = str((args or {}).get("bot") or "")
             if do in ("wake_bot", "note") and bot and "{{" not in bot and not may_tell(c, flow["owner"], bot,
                                                                                       assistant_bot):
@@ -619,6 +620,9 @@ def _bot_ids(c, flow):
         return {k: (bot_ref(v, bare=True) if k in BOT_ARGS and isinstance(v, str) else v) for k, v in args.items()}
 
     flow = {**flow, "owner": bot_ref(flow["owner"]), "steps": steps_of(flow.get("steps"))}
+    if flow.get("destinations"):
+        flow["destinations"] = [{**dest, "then": [{**a, "args": args_of(a.get("args"))} if a.get("args") else a
+                                                  for a in dest.get("then") or []]} for dest in flow["destinations"]]
     trigger = flow.get("trigger") or {}
     if trigger.get("type") == "task_received" and isinstance(trigger.get("to"), str):
         to = trigger["to"]
@@ -629,8 +633,16 @@ def _bot_ids(c, flow):
     return flow
 
 
-def _actions(steps):
-    """(do, args) of every action in the steps: action steps and filter rules', nested paths included."""
+def _actions(flow):
+    """(do, args) of every action the flow runs: its steps' (action steps and filter rules', nested paths included) and
+    its destinations' chains."""
+    yield from _step_actions(flow.get("steps"))
+    for dest in flow.get("destinations") or []:
+        for action in dest.get("then") or []:
+            yield action.get("do"), action.get("args") or {}
+
+
+def _step_actions(steps):
     for step in steps or []:
         if step.get("type") == "action":
             yield step.get("do"), step.get("args") or {}
@@ -638,8 +650,8 @@ def _actions(steps):
             for action in rule.get("then") or []:
                 yield action.get("do"), action.get("args") or {}
         for path in step.get("paths") or []:
-            yield from _actions(path.get("steps"))
-        yield from _actions((step.get("otherwise") or {}).get("steps"))
+            yield from _step_actions(path.get("steps"))
+        yield from _step_actions((step.get("otherwise") or {}).get("steps"))
 
 
 RUN_MODEL_KEYS = ("model", "effort", "harness")
@@ -714,6 +726,17 @@ def may_tell(c, owner, bot, assistant_bot=None):
         return False
     team = P.team_of(bot, chart.employees, chart.roster)
     return any(team in P.group_and_below(gid, chart.roster) for gid in led)
+
+
+def _chooser_fits(flow):
+    """A choose step's turn runs as its owner: a person's flow on the person's own Assistant, a bot's flow as the bot
+    (F.check refuses a group's flow). `flow` is as `_bot_ids` stored it, so both names are ids."""
+    kind, _, ident = str(flow["owner"]).partition(":")
+    want = f"assistant:{ident}" if kind == "person" else f"bot:{ident}"
+    for step in F.choosing(flow.get("steps")):
+        if step["as"] != want:
+            raise Problem("forbidden", f"{step['id']} runs its turn as {want}: a choose step's turn is its owner's own",
+                          403)
 
 
 def _assistants(steps):
@@ -1164,7 +1187,7 @@ def turn_source(c):
                     (refs.get("automation_run"),)).fetchone() if refs.get("automation_run") else None
     if not run:
         return None
-    out = {"turn": {"attempt": attempt, "bot": found["bot_id"], "task": refs.get("task")},
+    out = {"turn": {"attempt": attempt, "bot": found["bot_id"], "task": H._task_ref(refs.get("task"))},
            "automation": run["automation_id"], "run": refs["automation_run"]}
     try:
         heard = (json.loads(run["saved_state"] or "{}").get("payload") or {}).get("listening")
@@ -1385,6 +1408,17 @@ def on_listening(c, intake, post):
     return fire(c, "listening", payload, f"listening:{intake['id']}", lambda t: t["destination"] == intake["destination"])
 
 
+def _run_flow(c, run):
+    """The flow a run works on, as `Hub.go` builds it: its version's steps, with the owner and the rest as they are now.
+    None when the automation or its version is gone."""
+    row = c.execute("SELECT * FROM automations WHERE id=?", (run["automation_id"],)).fetchone()
+    version = c.execute("SELECT flow FROM automation_versions WHERE automation_id=? AND n=?",
+                        (run["automation_id"], run["version"])).fetchone()
+    if not row or not version:
+        return None
+    return {**{k: v for k, v in flow_of(row).items() if k not in VERSIONED}, **json.loads(version["flow"])}
+
+
 def turn_done(c, attempt, outcome, text):
     """A bot's turn ended (after `H.turn_finish` priced it). The run that started it (its notice carries
     `automation_run`) is charged its cost, which counts toward the spend cap, and a run waiting on it takes its answer
@@ -1397,7 +1431,7 @@ def turn_done(c, attempt, outcome, text):
     if not run:
         return
     # A turn the run started is its task's; a notice (wake_bot, note) is its message.
-    ref = refs.get("task") if refs.get("automation_step") else msg["id"]
+    ref = H._task_ref(refs.get("task")) if refs.get("automation_step") else msg["id"]
     priced = c.execute("SELECT est_cost_usd FROM turns WHERE id=?", (attempt["id"],)).fetchone()
     cost, ok = float((priced and priced[0]) or 0), outcome == "completed"
     if run["status"] == "running" or (run["status"] == "skipped" and run["claimed_at"]):
@@ -1410,7 +1444,7 @@ def turn_done(c, attempt, outcome, text):
     if state is None:
         c.execute("UPDATE automation_runs SET cost=round(cost+?,6) WHERE id=?", (cost, rid))
         return
-    answered = _take(state, ref, text, cost, ok)
+    answered = _take(state, ref, text, cost, ok, _run_flow(c, run))
     status = (_runnable(c, run["automation_id"]) if answered and run["status"] in ("waiting", "queued")
               else run["status"])
     c.execute("UPDATE automation_runs SET status=?,saved_state=?,cost=?,wake_at=CASE WHEN ? IN ('queued','held') "
@@ -1422,19 +1456,22 @@ def turn_done(c, attempt, outcome, text):
 def _take_parked(c, rid, state):
     """Turns that ended while the run was being worked: their answers and costs on its state, their spend holds
     released."""
+    run = c.execute("SELECT * FROM automation_runs WHERE id=?", (rid,)).fetchone()
+    flow = _run_flow(c, run) if run else None
     for answer in c.execute("SELECT * FROM automation_turn_answers WHERE run_id=? ORDER BY created_at", (rid,)).fetchall():
         if state.get("threads") is not None:
-            _take(state, answer["ref"], answer["text"], answer["cost"], bool(answer["ok"]))
+            _take(state, answer["ref"], answer["text"], answer["cost"], bool(answer["ok"]), flow)
         else:
             state["cost"] = round(state.get("cost", 0) + answer["cost"], 6)
         c.execute("DELETE FROM automation_holds WHERE ref=?", (answer["ref"],))
     c.execute("DELETE FROM automation_turn_answers WHERE run_id=?", (rid,))
 
 
-def _take(state, ref, text, cost, ok):
+def _take(state, ref, text, cost, ok, flow):
     """A turn's end on the run's state: the answer of a waiting step, else the cost of a step it started, else the
-    cost on the run. Returns whether a waiting step took it."""
-    if E.answer(state, ref, text or "", cost, ok=ok):
+    cost on the run. Returns whether a waiting step took it. `flow` is the run's flow as it is now: a choose answer
+    decides its owner against it, as it is recorded."""
+    if E.answer(state, ref, text or "", cost, ok=ok, flow=flow):
         return True
     if not E.charge(state, ref, cost):
         state["cost"] = round(state.get("cost", 0) + cost, 6)
@@ -1786,6 +1823,10 @@ class HubServices:
 
     def act(self, do, args, ctx):
         found = None
+        # A create_task is one occurrence task per producing action: its producer, `<step>@<slot>`, from
+        # automation_engine._filter. Every other action is ordered under the step's own id, so a step's mail actions on
+        # one message form one chain.
+        ident = (ctx.get("producer") or ctx.get("step")) if do == "create_task" else ctx.get("step")
         if do == "create_task":
             owner = str(args.get("owner") or "")
             bot = owner[4:] if owner.startswith("bot:") else "" if ":" in owner else owner
@@ -1798,8 +1839,7 @@ class HubServices:
         for _ in range(RULE_TRIES):
             rule = self._rule_check(do, args, ctx["values"], ctx.get("step"))
             try:
-                result = self._once(ctx, lambda c, rule=rule: self._ruled(c, rule, do, args, ctx["values"],
-                                                                         step=ctx.get("step")))
+                result = self._once(ctx, lambda c, rule=rule: self._ruled(c, rule, do, args, ctx["values"], step=ident))
                 break
             except TaskMoved:
                 continue                   # rolled back, nothing written or recorded: check it as it is now
@@ -2045,9 +2085,11 @@ class Hub:
 
 # ---------------------------------------------------------------------------------------------------- mail actions
 def _entries(record):
-    """The action results in a step record: an action step's own, a filter rule's each."""
+    """The action results in a step record: an action step's own, a filter rule's each, a choose step's reply and chain
+    (its outputs carry `actions` once its answer is read). An llm step without choose keeps its outputs as its one entry."""
     outputs = record.get("outputs") or {}
-    acts = outputs.get("actions") if record.get("type") == "filter" else [outputs]
+    listed = record.get("type") == "filter" or (record.get("type") == "llm" and "actions" in outputs)
+    acts = outputs.get("actions") if listed else [outputs]
     return [a for a in acts or [] if isinstance(a, dict)]
 
 
@@ -2444,6 +2486,7 @@ class AutomationIn(Contract):
     batch: dict | None = None
     trigger: dict
     steps: list = Field(default_factory=list)
+    destinations: list | None = None
 
 
 class AutomationPatch(Contract):
@@ -2455,6 +2498,7 @@ class AutomationPatch(Contract):
     batch: dict | None = None
     trigger: dict | None = None
     steps: list | None = None
+    destinations: list | None = None   # null takes them away
     summary: str | None = Field(default=None, max_length=200)   # a few words on a new version or proposal
 
 
@@ -2474,7 +2518,7 @@ class RunNow(Contract):
     input: dict = Field(default_factory=dict)   # shaped like the trigger's output: message, task, item, event, body
 
 
-FLOW_KEYS = ("name", "owner", "group", "enabled", "builtin", "spend_cap", "batch", "trigger", "steps")
+FLOW_KEYS = ("name", "owner", "group", "enabled", "builtin", "spend_cap", "batch", "trigger", "steps", "destinations")
 
 
 def page(rows, limit, offset, cap):
@@ -2595,6 +2639,28 @@ def install(app, store, auth, mutate):
         auth.domain(request.state.identity)
         return {"text": F.guide_text()}
 
+    # The templates come before /{aid}, which would read "templates" as an id.
+    @app.get("/api/v2/automations/templates")
+    def automations_templates(request: Request):
+        """The inbox templates a new inbox starts from: each with its id, name and destination names."""
+        from . import automation_templates as T
+        auth.domain(request.state.identity)
+        return {"templates": T.listing()}
+
+    @app.get("/api/v2/automations/templates/{tid}")
+    def automations_template(request: Request, tid: str, owner: str, inbox: str):
+        """A template filled in for `owner` on `inbox`, as the flow the hub would save: its roles resolved on the org
+        chart, the destinations the owner may not use taken out, `enabled` off. Nothing is saved; POST
+        /api/v2/automations saves it. The caller must be allowed to change the owner's automations, and the owner must
+        hear the inbox."""
+        from . import automation_templates as T
+        who = request.state.identity
+        with store.read() as c:
+            auth.domain(who)
+            raw = T.fill(c, tid, owner, inbox, store.settings)
+            _require(c, who, raw, "make an automation for " + raw["owner"])
+            return _checked(c, raw, store.settings)
+
     @app.post("/api/v2/automations")
     def automations_create(request: Request, body: AutomationIn):
         """Save a new automation as version 1. The caller must be allowed to change an automation of that owner; a bot
@@ -2658,7 +2724,8 @@ def install(app, store, auth, mutate):
             # What it reads is checked when that changes; pausing or renaming one whose owner lost access still works.
             merged = {**before_cap, **changes}
             flow = _checked(c, merged, store.settings,
-                            access=any(merged.get(k) != before.get(k) for k in ("trigger", "steps", "owner")),
+                            access=any(merged.get(k) != before.get(k)
+                                       for k in ("trigger", "steps", "owner", "destinations")),
                             saved=before, aid=aid)
             if before.get("readonly"):
                 # Tico's own rules, shown read-only: the top of the org may pause or resume it, and nothing else.

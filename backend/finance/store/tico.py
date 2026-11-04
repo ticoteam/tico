@@ -7,6 +7,7 @@ from typing import Any, cast
 
 from ... import hubdb as _hubdb
 from ..core.org import Org, Team
+from ... import bot_settings as BS
 
 # Tico's own modules are untyped: Finance reaches them only through this file, typed at each call.
 _H: Any = _hubdb
@@ -90,7 +91,7 @@ def org(c: sqlite3.Connection, owner: str) -> Org:
     roster = cast(dict[str, Any], P.load(doc if isinstance(doc, dict) else {"people": []}))
     configs: dict[str, dict[str, Any]] = {}
     archived = {str(r[0]) for r in c.execute("SELECT id FROM bots WHERE state='archived'")}
-    for row in c.execute("SELECT bot, config, reports_to FROM bot_config"):
+    for row in c.execute(f"SELECT bot, {BS.CONFIG} AS config, reports_to FROM bot_config bc {BS.JOIN}"):
         if str(row[0]) in archived:
             continue
         try:
@@ -456,18 +457,21 @@ def finance_hook_calls(c: sqlite3.Connection, at: str, most: int) -> list[Row]:
 # joining, leaving or being archived. A roster edit that changes none of these moves it too; that only costs a cache.
 _BUMP = ("UPDATE fin_view_versions SET version=version+1, reason='{why}', "
          "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=1")
-_TEAM = ("CASE WHEN json_valid(OLD.config) AND json_valid(NEW.config) "
-         "THEN json_extract(OLD.config, '$.team') IS NOT json_extract(NEW.config, '$.team') "
-         "OR json_extract(OLD.config, '$.reports_to') IS NOT json_extract(NEW.config, '$.reports_to') "
-         "ELSE OLD.config IS NOT NEW.config END")
+# A bot's declared team and manager are keys of its settings' `extra` (backend/bot_settings.py).
+_TEAM = ("CASE WHEN json_valid(OLD.extra) AND json_valid(NEW.extra) "
+         "THEN json_extract(OLD.extra, '$.team') IS NOT json_extract(NEW.extra, '$.team') "
+         "OR json_extract(OLD.extra, '$.reports_to') IS NOT json_extract(NEW.extra, '$.reports_to') "
+         "ELSE OLD.extra IS NOT NEW.extra END")
 ORG_TRIGGERS = (
     ("fin_view_roster_insert", "AFTER INSERT ON registry_metadata WHEN NEW.key = 'people'", "roster"),
     ("fin_view_roster_update", "AFTER UPDATE OF value ON registry_metadata WHEN NEW.key = 'people' "
      "AND OLD.value IS NOT NEW.value", "roster"),
     ("fin_view_bot_insert", "AFTER INSERT ON bot_config", "bot added"),
     ("fin_view_bot_delete", "AFTER DELETE ON bot_config", "bot removed"),
-    ("fin_view_bot_update", f"AFTER UPDATE OF reports_to, config ON bot_config WHEN "
-     f"OLD.reports_to IS NOT NEW.reports_to OR {_TEAM}", "reports to"),
+    ("fin_view_bot_update", "AFTER UPDATE OF reports_to ON bot_config WHEN OLD.reports_to IS NOT NEW.reports_to",
+     "reports to"),
+    ("fin_view_bot_settings_insert", "AFTER INSERT ON bot_settings", "reports to"),
+    ("fin_view_bot_settings_update", f"AFTER UPDATE OF extra ON bot_settings WHEN {_TEAM}", "reports to"),
     ("fin_view_bot_archive", "AFTER UPDATE OF state ON bots WHEN (OLD.state = 'archived') IS NOT "
      "(NEW.state = 'archived')", "bot archived"),
 )

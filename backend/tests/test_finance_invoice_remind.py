@@ -3,8 +3,8 @@
 (backend/finance/delivery.py); the Bookkeeper sends it. Paid, draft, emailless, out-of-list and no-mailbox cases are
 refused with the reason. A stage is for an invoice that is that many days past its due date, judged on the action's own
 day: no due date, a due date not yet passed, and a stage not yet reached are each refused before any stage is used."""
-import json
 
+from backend import bot_settings as BS
 from backend.finance.core.errors import CONFLICT
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, OWNER, account, act, books, finance_template, store)
@@ -18,8 +18,7 @@ DUE = "2026-08-31"
 def _mailbox(c) -> None:
     """The Bookkeeper's stored gmail tool that can send (what a real install is given)."""
     tools = [{"service": "gmail", "identity": BOX, "can": ["read", "send"]}]
-    c.execute("UPDATE bot_config SET config=? WHERE bot='bookkeeper'",
-              (json.dumps({"team": "eng", "tools": tools}),))
+    BS.write(c, "bookkeeper", {"team": "eng", "tools": tools})
 
 
 def _invoice(c, *, emails=(EMAIL,), due=DUE, issued=ISSUED, link="") -> tuple[str, str]:

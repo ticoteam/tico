@@ -48,7 +48,8 @@ function actorAvatar(a, size = 22) {
 }
 // A DM is named by who else is in it ("Chat with BotOps" and "Private … room" titles from before threads read as
 // "BotOps"); a group chat by the name it was given, else by its people; any other thread by its title.
-function threadTitle(t) {
+// `messages`: what is loaded of it, which names a DM the server sends with no title and no people (a notice thread).
+function threadTitle(t, messages) {
   if (!t) return '';
   const others = threadOthers(t), total = Number(t.dm_with_count) || others.length;
   // The server's name, for someone in this DM the viewer's people list leaves out.
@@ -59,6 +60,10 @@ function threadTitle(t) {
   if (own) return own;
   if (t.audience === 'home' && t.home?.actor) return actorName(t.home.actor);
   if (people) return people;
+  if (threadIsDm(t) && !t.parent_id) {
+    const authors = [...new Set((messages || []).map(m => m?.sender_id).filter(a => a && a !== myActor()))];
+    if (authors.length) return authors.slice(0, 3).map(actorName).join(', ') + (authors.length > 3 ? ` +${authors.length - 3}` : '');
+  }
   return t.parent_id ? 'Sub-thread' : threadIsDm(t) ? 'Direct message' : 'Untitled';
 }
 // Where a row opens: its root, or the sub-thread holding what is new (a reply there may be pages up the root's timeline).

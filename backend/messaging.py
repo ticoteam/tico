@@ -14,6 +14,7 @@ from . import slack_channels as SC
 from .slack_gateway import permalink
 from .store import H, P, Problem
 from .views import human_only, roster
+from . import bot_settings as BS
 
 
 def _json(value, fallback):
@@ -74,7 +75,7 @@ def _catalog(c, who, auth, settings):
         bot = row["id"]
         if row["state"] == "archived" or not readable.get(bot, auth.FULL)["read"]:
             continue
-        config_row = c.execute("SELECT config,description,owner_id,revision FROM bot_config WHERE bot=?",
+        config_row = c.execute(f"SELECT {BS.CONFIG} AS config,bc.description,bc.owner_id,bc.revision FROM bot_config bc {BS.JOIN} WHERE bc.bot=?",
                                (bot,)).fetchone()
         config = _json(config_row["config"], {}) if config_row else {}
         sources = _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes, reads)

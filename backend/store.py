@@ -14,6 +14,7 @@ from contextlib import ExitStack, contextmanager
 import orjson
 import yaml
 
+from . import bot_settings as BS
 from . import goals as G
 from . import hubdb as H
 from . import idempotency_messages
@@ -35,11 +36,12 @@ CREATE TABLE IF NOT EXISTS preferences(actor TEXT NOT NULL, key TEXT NOT NULL, v
 CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 -- repo holds a bare name, owner/name, or a full https URL; see store.repo_url.
 CREATE TABLE IF NOT EXISTS bot_config(
- bot TEXT PRIMARY KEY REFERENCES bots(id), config TEXT NOT NULL, team TEXT,
+ bot TEXT PRIMARY KEY REFERENCES bots(id), team TEXT,
  owner_id TEXT NOT NULL, owner_ids TEXT, revision INTEGER NOT NULL DEFAULT 1,
  description TEXT NOT NULL DEFAULT '', reports_to TEXT, repo TEXT NOT NULL DEFAULT '',
  thread_mode TEXT, definition_updated_at TEXT,
  definition_updated_by TEXT, goals TEXT NOT NULL DEFAULT '');
+-- bot_settings (a bot's declared settings) is made by migration 0070, which runs before this schema: backend/bot_settings.py.
 CREATE TABLE IF NOT EXISTS bot_control(bot TEXT PRIMARY KEY REFERENCES bots(id), draining INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS bot_transitions(
  id TEXT PRIMARY KEY, bot TEXT NOT NULL REFERENCES bots(id), kind TEXT NOT NULL,
@@ -906,10 +908,13 @@ def digest(value):
 
 def message_page(c, cid, *, before=None, since=None, limit=200):
     """Newest page, in display order; rowid breaks ties for messages in the same millisecond. A
-    deleted task comment is left out: this page is also what a bot's run is handed."""
-    clauses, args = ["conversation_id=?", "deleted_at IS NULL"], [cid]
+    deleted task comment is left out: this page is also what a bot's run is handed. `cid` may be
+    a list of conversations (a task's history across a merged room and its Home)."""
+    cids = list(cid) if isinstance(cid, (list, tuple)) else [cid]
+    where = "conversation_id IN (%s)" % ",".join("?" * len(cids))
+    clauses, args = [where, "deleted_at IS NULL"], list(cids)
     if before:
-        anchor = c.execute("SELECT rowid FROM messages WHERE id=? AND conversation_id=?", (before, cid)).fetchone()
+        anchor = c.execute("SELECT rowid FROM messages WHERE id=? AND " + where, (before, *cids)).fetchone()
         if not anchor:
             raise Problem("cursor", "Message cursor does not belong to this conversation", 422)
         clauses.append("rowid<?")
@@ -928,8 +933,12 @@ def message_page(c, cid, *, before=None, since=None, limit=200):
 def task_message_page(c, task, **kwargs):
     """Messages about this task. A dedicated task thread returns the whole conversation;
     a shared chat room returns only rows tagged with this task id."""
-    page = message_page(c, task["conversation_id"], **kwargs)
-    conv = H.conversation(c, task["conversation_id"])
+    from . import bot_home_merge
+    # A person's old chat with the bot moved into its Home (backend/bot_home_merge.py): the task's messages are in the
+    # room, its recorded Home and the Home it is in now. The last one is the room the task's messages belong to.
+    cids = bot_home_merge.history_ids(c, task["conversation_id"])
+    page = message_page(c, cids, **kwargs)
+    conv = H.conversation(c, cids[-1])
     if conv and conv.get("task_id") == task["id"]:
         return page
     page["messages"] = [m for m in page["messages"] if H.message_task_id(m) == task["id"]]
@@ -1348,7 +1357,7 @@ class Store:
                         if name not in columns:
                             c.execute(f"ALTER TABLE bot_config ADD COLUMN {name} {declaration}")
                     for row in c.execute(
-                            "SELECT bc.bot,bc.config,b.effort FROM bot_config bc "
+                            f"SELECT bc.bot,{BS.CONFIG} AS config,b.effort FROM bot_config bc {BS.JOIN} "
                             "JOIN bots b ON b.slug=bc.bot").fetchall():
                         config = json.loads(row["config"] or "{}")
                         # A model decision moves the previously seeded Grok
@@ -1362,11 +1371,12 @@ class Store:
                             c.execute("UPDATE bots SET effort='high' WHERE slug=?", (row["bot"],))
                         mode = str(config.get("thread_mode") or
                                    ("personal" if row["bot"] == "coo" else "shared" if row["bot"] == "cpo" else "personal"))
+                        BS.write(c, row["bot"], config)
                         c.execute(
-                            "UPDATE bot_config SET config=?,description=?,reports_to=?,repo=?,thread_mode=?,"
+                            "UPDATE bot_config SET description=?,reports_to=?,repo=?,thread_mode=?,"
                             "definition_updated_at=coalesce(definition_updated_at,?),"
                             "definition_updated_by=coalesce(definition_updated_by,?) WHERE bot=?",
-                            (encode(config), str(config.get("description") or ""), config.get("reports_to"),
+                            (str(config.get("description") or ""), config.get("reports_to"),
                              str(config.get("repo") or ("emp-" + row["bot"])), mode,
                              H.now(), H.KEEPER, row["bot"]))
                     c.execute("INSERT INTO cloud_migrations VALUES(6,?)", (H.now(),))
@@ -1439,12 +1449,11 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=16").fetchone():
                     from .harnesses import backfill_config
                     for row in c.execute(
-                            "SELECT bc.bot,bc.config FROM bot_config bc "
+                            f"SELECT bc.bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} "
                             "JOIN bots b ON b.slug=bc.bot").fetchall():
                         config, changed = backfill_config(json.loads(row["config"] or "{}"), slug=row["bot"])
                         if changed:
-                            c.execute("UPDATE bot_config SET config=? WHERE bot=?",
-                                      (encode(config), row["bot"]))
+                            BS.write(c, row["bot"], config)
                     c.execute("INSERT INTO cloud_migrations VALUES(16,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=17").fetchone():
                     # CREATE TABLE IF NOT EXISTS above installs bot_sessions on fresh and
@@ -1896,13 +1905,15 @@ class Store:
                 # The change log live events are read from (backend/events.py); idempotent.
                 from .events import ensure as ensure_changes
                 ensure_changes(c)
+                # A new bot's repository access, when its declaration names none: the company's default
+                # (backend/repositories.py). A bot's settings row is made with it (backend/bot_settings.py write).
                 c.execute("""CREATE TRIGGER IF NOT EXISTS repository_new_bot_default
-                    AFTER INSERT ON bot_config
-                    WHEN json_extract(NEW.config,'$.repo_access_mode') IS NULL
+                    AFTER INSERT ON bot_settings
+                    WHEN NEW.repo_access_mode IS NULL AND json_extract(NEW.extra,'$.repo_access_mode') IS NULL
                     BEGIN
-                    UPDATE bot_config SET config=json_set(config,'$.repo_access_mode',
+                    UPDATE bot_settings SET repo_access_mode=
                         coalesce((SELECT json_extract(value,'$.new_bot_default')
-                            FROM registry_metadata WHERE key='repos_new_bot_default'),'own')) WHERE bot=NEW.bot;
+                            FROM registry_metadata WHERE key='repos_new_bot_default'),'own') WHERE bot_id=NEW.bot_id;
                     END""")
                 # Lookups that scanned their whole table (performance pass): a goal's
                 # tasks, a bot's or computer's attempts, a job's attempts, and the events read by
@@ -2065,8 +2076,7 @@ class Store:
                 # Every task is its own session by default now (clients/sessions.py). Older servers wrote
                 # `session: bot` into every bot as the default, so clear it once; a later explicit `bot` stays.
                 if not c.execute("SELECT 1 FROM registry_metadata WHERE key='task_session_default'").fetchone():
-                    c.execute("UPDATE bot_config SET config=json_remove(config,'$.session') "
-                              "WHERE json_valid(config) AND json_extract(config,'$.session')='bot'")
+                    c.execute("UPDATE bot_settings SET session=NULL WHERE session='bot'")
                     c.execute("INSERT INTO registry_metadata VALUES('task_session_default','true')")
                 _docs.refresh_generated_docs(c)
                 record = c.execute("SELECT value FROM registry_metadata WHERE key='onboarding'").fetchone()
@@ -2268,11 +2278,12 @@ class Store:
                 mode = str(entry.get("thread_mode") or
                            ("personal" if slug == "coo" else "shared" if slug == "cpo" else "personal"))
                 c.execute(
-                    "INSERT INTO bot_config(bot,config,team,owner_id,description,reports_to,repo,"
-                    "thread_mode,definition_updated_at,definition_updated_by) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                    (slug, encode(entry), team, operator, str(entry.get("description") or ""),
+                    "INSERT INTO bot_config(bot,team,owner_id,description,reports_to,repo,"
+                    "thread_mode,definition_updated_at,definition_updated_by) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (slug, team, operator, str(entry.get("description") or ""),
                      entry.get("reports_to"), str(entry.get("repo") or ("emp-" + slug)), mode,
                      H.now(), H.KEEPER))
+                BS.write(c, slug, json.loads(encode(entry)))
             self.seed_goals(c)
             from . import groups as Groups
             Groups.migrate(c, self.settings)

@@ -248,10 +248,10 @@ PROFILE_RULE_IDS = frozenset(r["id"] for found in PROFILE_RULES.values() for r i
 
 
 def profile_of(conn, bot):
-    """The profile a bot runs under: its `bot_config.profile`, or `doer` for a bot with none (a database from before
+    """The profile a bot runs under: its `bot_settings.profile`, or `doer` for a bot with none (a database from before
     profiles, a bot seeded since the last start)."""
     try:
-        row = conn.execute("SELECT json_extract(config,'$.profile') FROM bot_config WHERE bot=?",
+        row = conn.execute("SELECT profile FROM bot_settings WHERE bot_id=?",
                            (H.actor_id(bot),)).fetchone()
     except sqlite3.OperationalError:
         return "doer"
@@ -737,9 +737,10 @@ THREAD_WAKE = "thread_wake"
 
 def thread_wake(conn, message, bot, thread, mode="queue"):
     """The thread wake rule (docs/dev/threads-contract.md §4.3) for a bot that a thread message reaches but is not
-    addressed to (a mention, its DM or Home, a sub-thread it posted in): (mode, rule id), or (None, None) for no
-    delivery. backend/threads.py chose the reason by precedence; the engine judges it as it judges a message to the
-    bot, so a table row or a built-in hold still decides: `wake` keeps `mode`, `note` (or a hold) defers it to the
+    addressed to (a mention, its DM or Home, a sub-thread it posted in, a reply to its message): (mode, rule id), or
+    (None, None) for no delivery. A person's reply to the bot's message is judged as a mention of it, a bot's reply as
+    a bot's mention (bot_to_bot may make it wait). backend/threads.py chose the reason by precedence; the engine judges
+    it as it judges a message to the bot, so a table row or a built-in hold still decides: `wake` keeps `mode`, `note` (or a hold) defers it to the
     bot's next run, `batch` digests it, `ignore` drops it. Fail open: an error wakes."""
     try:
         refs = dict(message.get("refs") or {})

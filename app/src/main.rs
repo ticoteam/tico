@@ -8,15 +8,16 @@
 
 mod applog;
 mod config;
+mod cookies;
 mod hub;
 mod orgs;
 mod visual_origin;
 mod bridge;
+mod signin;
 mod windows;
 
 
 use std::collections::HashSet;
-use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -33,7 +34,7 @@ use hub::{Client, HubStatus};
 use orgs::{Document, Org, Orgs};
 #[cfg(target_os = "macos")]
 use windows::clear_store;
-use windows::{build_server_window, build_window, eval, forget_owned, layout, main_window, open_search, org_label, remember_frame, reload, show_window, switch_to, sync_rail, take_owned, RAIL};
+use windows::{build_server_window, build_window, eval, forget_owned, layout, main_window, open_search, org_label, reload, show_window, switch_to, sync_rail, take_owned, RAIL};
 
 const USER_AGENT: &str = "TicoHub/2.0 Tauri";
 const MIN_WIDTH: u32 = 360;
@@ -46,8 +47,6 @@ struct AppState {
     connection: Mutex<Option<Config>>,
     visual_origin: Mutex<Option<visual_origin::VisualOrigin>>,
     status: Mutex<HubStatus>,
-    // Set while the shell itself places the window, so that placement is not saved as the person's.
-    applying_frame: AtomicBool,
     // The orgs this run shows, and which one is open. The open one's server is `connection`.
     orgs: Mutex<Orgs>,
     // The windows an org opened (hub files, meetings) as (window label, org id): removing the org closes them.
@@ -65,7 +64,6 @@ impl AppState {
             connection: Mutex::new(connection),
             visual_origin: Mutex::new(None),
             status: Mutex::new(HubStatus::default()),
-            applying_frame: AtomicBool::new(false),
             orgs: Mutex::new(orgs),
             owned: Mutex::new(Vec::new()),
             granted: Mutex::new(HashSet::new()),
@@ -76,8 +74,20 @@ impl AppState {
 
 type App = AppHandle<tauri::Wry>;
 
+/// The autostart entry is named by the bundle identifier, which each environment's build sets (scripts/app.sh).
+/// Product names are not unique, and the package name is the same for every build, so two apps would share one entry.
+fn autostart_plugin(identifier: String) -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    let builder = tauri_plugin_autostart::Builder::new().app_name(identifier);
+    #[cfg(target_os = "macos")]
+    let builder = builder.macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent);
+    builder.build()
+}
+
 fn main() {
     applog::init();
+    // Read before the builder: the autostart plugin needs the identifier, which only the context carries.
+    let context = tauri::generate_context!();
+    let identifier = context.config().identifier.clone();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -88,9 +98,18 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_window(app);
         }))
+        // The main window's frame between launches. The plugin restores it while the window is built, before the app
+        // shows the window, and only the main window is tracked (see windows::tracks_frame).
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(windows::frame_flags())
+                .with_filter(windows::tracks_frame)
+                .build(),
+        )
+        .plugin(autostart_plugin(identifier))
         // The real list is read in setup, once the app's folders are known.
         .manage(AppState::new(Orgs::new(Document::default(), None), None))
-        .invoke_handler(tauri::generate_handler![app_log, bridge, connect_server, server_address, setup_info, cancel_setup, rail_orgs, rail_switch, rail_add, rail_menu])
+        .invoke_handler(tauri::generate_handler![app_log, bridge, connect_server, server_address, setup_info, cancel_setup, rail_orgs, rail_switch, rail_add, rail_menu, signin::tico_signin])
         .setup(move |app| {
             match applog::attach(log_dir(app.handle()).as_deref()) {
                 Some(path) => log::info!("{} {} starting; this log is {}", config::app_name(), app.package_info().version, applog::shown(&path)),
@@ -108,6 +127,9 @@ fn main() {
             let state: State<AppState> = app.state();
             *state.orgs.lock().unwrap() = found;
             select_connection(&state, connection);
+            // Data stores a run that quit left behind: a sign-in window open at Cmd-Q, or orgs it was adding.
+            #[cfg(target_os = "macos")]
+            signin::clean_up_last_run(app.handle());
             build_window(app.handle())?;
             build_menu(app.handle())?;
             #[cfg(not(target_os = "macos"))]
@@ -134,6 +156,7 @@ fn main() {
                 // A window an org opened belongs to that org only while it is open.
                 if let WindowEvent::Destroyed = event {
                     forget_owned(window.app_handle(), window.label());
+                    signin::closed(window.app_handle(), window.label());
                 }
                 return;
             }
@@ -149,16 +172,12 @@ fn main() {
                 #[cfg(not(target_os = "macos"))]
                 WindowEvent::Destroyed => window.app_handle().exit(0),
                 // The rail and the org's page are placed by the shell, so both follow the window's size.
-                WindowEvent::Resized(_) => {
-                    layout(window.app_handle());
-                    remember_frame(window.app_handle());
-                }
-                WindowEvent::Moved(_) => remember_frame(window.app_handle()),
+                WindowEvent::Resized(_) => layout(window.app_handle()),
                 _ => {}
             }
         })
         .on_menu_event(|app, event| menu_event(app, event.id().as_ref()))
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("the app could not start")
         .run(|app, event| {
             // A click on the Dock icon while the main window is hidden.
@@ -373,6 +392,8 @@ async fn remove_org(app: &App, id: &str) {
     {
         match removed.store_id() {
             Some(store) => {
+                // A store Tico sign-in filled for an org that never opened is still held: let go of it first.
+                signin::release_store(app, store);
                 // A page that just closed holds its store for a moment, so try again a few times before clearing.
                 let mut removed_store = app.remove_data_store(*store.as_bytes()).await;
                 for _ in 0..6 {
@@ -456,16 +477,21 @@ fn rail_menu(app: App, webview: tauri::Webview, id: String) -> Result<(), String
     Ok(())
 }
 
-/// The setup page asks whether it is adding an org (one is already open), so it can offer Cancel.
+/// The setup page asks whether it is adding an org (one is already open), so it can offer Cancel, and whether Tico
+/// sign-in is offered (a build that keeps a list of orgs), so it can make that the default.
 #[tauri::command]
 fn setup_info(app: App) -> Value {
-    serde_json::json!({"hasOrgs": orgs::multi_org_build() && org_count(&app) > 0})
+    let multi = orgs::multi_org_build();
+    serde_json::json!({"hasOrgs": multi && org_count(&app) > 0, "signIn": multi})
 }
 
-/// Cancel on the setup page while adding an org: the setup window closes and the open org stays.
+/// Cancel on the setup page while adding an org: the setup window closes, with any Tico sign-in, and the open org stays.
 #[tauri::command]
 fn cancel_setup(app: App) {
-    if org_count(&app) > 0 { close_setup_later(&app); }
+    if org_count(&app) > 0 {
+        signin::close(&app);
+        close_setup_later(&app);
+    }
 }
 
 /// The org commands are the rail's alone; the org pages have no use for them.
@@ -500,6 +526,8 @@ fn build_menu(app: &App) -> tauri::Result<()> {
     } else if config::is_generic() {
         app_menu.append(&MenuItem::with_id(app, "server", "Change server…", true, None::<&str>)?)?;
     }
+    #[cfg(target_os = "macos")]
+    app_menu.append(&open_at_login_item(app)?)?;
     app_menu.append_items(&[
         &PredefinedMenuItem::separator(app)?,
         &PredefinedMenuItem::hide(app, None)?,
@@ -549,8 +577,37 @@ fn menu_event(app: &App, id: &str) {
         "search" => open_search(app),
         "reload" => reload(app),
         "updates" => update_now(app),
+        #[cfg(target_os = "macos")]
+        "open-at-login" => toggle_open_at_login(app),
         _ => {}
     }
+}
+
+/// Open at Login, checked while the app starts at login. It is off until the person turns it on.
+#[cfg(target_os = "macos")]
+fn open_at_login_item(app: &App) -> tauri::Result<CheckMenuItem<tauri::Wry>> {
+    use tauri_plugin_autostart::ManagerExt;
+    let enabled = app.autolaunch().is_enabled().unwrap_or(false);
+    CheckMenuItem::with_id(app, "open-at-login", "Open at Login", true, enabled, None::<&str>)
+}
+
+/// Turns Open at Login on or off, then rebuilds the menu so its check shows what the system now has. Spawned: a menu
+/// cannot be rebuilt inside the menu event that asked for the change.
+#[cfg(target_os = "macos")]
+fn toggle_open_at_login(app: &App) {
+    use tauri_plugin_autostart::ManagerExt;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let autolaunch = app.autolaunch();
+        let result = match autolaunch.is_enabled() {
+            Ok(true) => autolaunch.disable(),
+            _ => autolaunch.enable(),
+        };
+        if let Err(e) = result {
+            log::warn!("could not change Open at Login: {e}");
+        }
+        let _ = build_menu(&app);
+    });
 }
 
 // ----------------------------------------------------------------------------- Dock badge
@@ -681,7 +738,7 @@ async fn check_for_update_once(app: &App) {
             Err(_) => { report_update(app, "failed", "the update feed address is invalid"); return; }
         };
         let cookie = if hub::same_origin(&connection.hub, &endpoint) {
-            Client::new(connection.clone(), active_label(app)).cookie_header(app, &endpoint)
+            Client::new(connection.clone(), active_label(app)).cookie_header(app, &endpoint).await
         } else {
             None
         };
@@ -773,14 +830,17 @@ mod updater_integration_tests {
     const TARGET: &str = "tico-updater-test";
     const COOKIE: &str = "CF_Authorization=synthetic-test-session";
 
-    fn key_and_signature(bytes: &[u8]) -> (String, String) {
+    /// Signs `bytes` the way `cargo tauri build` does: the trusted comment records the version, which the updater
+    /// (2.14+) checks against the version the feed announces.
+    fn key_and_signature(bytes: &[u8], version: &str) -> (String, String) {
         let pair = KeyPair::generate_unencrypted_keypair().unwrap();
         let public_key = pair.pk.to_box().unwrap().to_string();
+        let comment = format!("timestamp:0\tfile:Tico.tar.gz\tversion:{version}");
         let signature = sign(
             Some(&pair.pk),
             &pair.sk,
             Cursor::new(bytes.to_vec()),
-            Some("version: 0.3.21"),
+            Some(&comment),
             Some("synthetic updater test"),
         ).unwrap().into_string();
         (base64::engine::general_purpose::STANDARD.encode(public_key),
@@ -889,12 +949,14 @@ mod updater_integration_tests {
         let (bundles, installed_dir) = (scratch.join("bundles"), scratch.join("installed"));
         std::fs::create_dir_all(&bundles).unwrap();
         std::fs::create_dir_all(&installed_dir).unwrap();
-        let candidate = b"#!/bin/sh\necho Acme Tico 0.3.99\n";
-        let (public_key, signature) = key_and_signature(candidate);
-        let (other_key, _) = key_and_signature(candidate);
+        // The updater installs only ELF AppImages, and `infer` needs a full 64-byte ELF header to call it one.
+        let mut candidate = b"\x7fELF Acme Tico 0.3.99".to_vec();
+        candidate.resize(64, 0);
+        let (public_key, signature) = key_and_signature(&candidate, CANDIDATE);
+        let (other_key, _) = key_and_signature(&candidate, CANDIDATE);
         // The file names `cargo tauri build --bundles appimage` writes, which app_release.py classifies.
         let appimage = bundles.join(format!("Acme Tico_{CANDIDATE}_amd64.AppImage"));
-        std::fs::write(&appimage, candidate).unwrap();
+        std::fs::write(&appimage, &candidate).unwrap();
         std::fs::write(bundles.join(format!("Acme Tico_{CANDIDATE}_amd64.AppImage.sig")), &signature).unwrap();
         let installed = installed_dir.join("Acme Tico.AppImage");
         let previous = b"#!/bin/sh\necho Acme Tico 0.3.98\n";
@@ -970,7 +1032,7 @@ mod updater_integration_tests {
     #[tokio::test]
     async fn tauri_updater_rejects_access_login_redirect_without_requesting_login_origin() {
         let expected = b"synthetic Tico updater artifact";
-        let (public_key, signature) = key_and_signature(expected);
+        let (public_key, signature) = key_and_signature(expected, VERSION);
         let (hub_listener, hub_address) = bind();
         let (login_listener, login_address) = bind();
         login_listener.set_nonblocking(true).unwrap();
@@ -1016,7 +1078,7 @@ mod updater_integration_tests {
     #[tokio::test]
     async fn tauri_updater_keeps_configured_public_runner_feed_and_artifact_unauthenticated() {
         let bytes = b"synthetic public runner artifact";
-        let (public_key, signature) = key_and_signature(bytes);
+        let (public_key, signature) = key_and_signature(bytes, VERSION);
         let (runner_listener, runner_address) = bind();
         let hub = Url::parse("https://tico.example.test/").unwrap();
         let endpoint = url(runner_address, "/download/latest.json");

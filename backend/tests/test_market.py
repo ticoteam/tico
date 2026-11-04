@@ -9,6 +9,7 @@ from backend import market as M
 from backend.blobs import Blobs
 from backend.store import H
 from backend.tests.test_api import api, get, headers, post, runner, setup_attempt  # noqa: F401
+from backend import bot_settings as BS
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_REGISTRY = Path(__file__).parent / "fixtures" / "registry"
@@ -22,10 +23,10 @@ def _seed(api, tmp_path):
             c.execute("INSERT INTO bots (id, slug, display_name, effort, state, created_at) VALUES (?,?,?,?,?,?)",
                       ("listening", "listening", "Listening", "high", "active", H.now()))
         if not c.execute("SELECT 1 FROM bot_config WHERE bot='listening'").fetchone():
-            c.execute("INSERT INTO bot_config (bot, config, team, owner_id, description, reports_to, repo) "
-                      "VALUES (?,?,?,?,?,?,?)",
-                      ("listening", '{"runtime":"grok","model":"grok-4.6","host":"keeper"}', "marketing", "ana",
-                       "Listening", "cmo", "emp-listening"))
+            c.execute("INSERT INTO bot_config (bot, team, owner_id, description, reports_to, repo) "
+                      "VALUES (?,?,?,?,?,?)",
+                      ("listening", "marketing", "ana", "Listening", "cmo", "emp-listening"))
+            BS.write(c, "listening", {"runtime": "grok", "model": "grok-4.6", "host": "keeper"})
 
 
 def _librarian(api):
@@ -33,8 +34,8 @@ def _librarian(api):
         if not H.bot(c, "librarian"):
             c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
                       "VALUES('librarian','librarian','Librarian','','active',?)", (H.now(),))
-            c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('librarian',?,NULL,'ana')",
-                      ('{"runtime":"fake","host":"keeper"}',))
+            c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('librarian',NULL,'ana')")
+            BS.write(c, 'librarian', {"runtime": "fake", "host": "keeper"})
 
 
 def test_the_librarian_gets_the_market_routines_and_the_old_market_analyst_is_retired(api):
@@ -45,8 +46,8 @@ def test_the_librarian_gets_the_market_routines_and_the_old_market_analyst_is_re
     with store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
                   "VALUES('market-analyst','market-analyst','Market Analyst','','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('market-analyst',?,NULL,'ana')",
-                  ('{"runtime":"fake","host":"keeper"}',))
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('market-analyst',NULL,'ana')")
+        BS.write(c, 'market-analyst', {"runtime": "fake", "host": "keeper"})
         task = H.task_create(c, "human:ana", "Check Northwind pricing", "", "bot:market-analyst", lint=False)
         M.ensure_curator(c)
         keys = {r["routine_key"]: r for r in c.execute("SELECT * FROM schedules WHERE bot='librarian'")}

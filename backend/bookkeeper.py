@@ -31,6 +31,7 @@ import json
 from typing import Any
 
 from . import hubdb as H
+from . import bot_settings as BS
 
 SLUG = "bookkeeper"
 NAME = "Bookkeeper"
@@ -74,7 +75,7 @@ CREATE TABLE IF NOT EXISTS bookkeeper_watch_listed(
 
 def built(c):
     """Whether bot:bookkeeper is the built-in one: made from the bookkeeper template and not archived."""
-    row = c.execute("SELECT bc.config, b.state FROM bot_config bc JOIN bots b ON b.id=bc.bot WHERE bc.bot=?",
+    row = c.execute(f"SELECT {BS.CONFIG} AS config, b.state FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot WHERE bc.bot=?",
                     (SLUG,)).fetchone()
     if not row or row["state"] == "archived":
         return False

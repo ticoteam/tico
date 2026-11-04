@@ -8,6 +8,7 @@ from backend import threads
 from backend.models import Completion
 from backend.store import H, encode
 from backend.tests.test_api import api, setup_attempt, post, get, ready, claim, runner, assign, headers
+from backend import bot_settings as BS
 
 
 def start(api, runner, attempt):
@@ -190,13 +191,13 @@ def test_a_task_session_becomes_the_tasks_one_primary_session_and_a_shared_threa
 
     # A bot set to one shared thread carries its other conversations there too: no task's session.
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps({**config, "session": "bot"}),))
+        config = BS.read(c, 'ops')
+        BS.write(c, 'ops', {**config, 'session': 'bot'})
     shared = post(api, "tasks", {"owner": "ops", "title": "Check the shared folder", "body": "Check it"})
     assert turn(shared, "shared-thread") == {}
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps({**config, "session": "task"}),))
+        config = BS.read(c, 'ops')
+        BS.write(c, 'ops', {**config, 'session': 'task'})
     task = post(api, "tasks", {"owner": "ops", "title": "Check the task folder", "body": "Check it"})
     assert turn(task, "old") == {"session:ops/old": True}
     # Someone linked the next thread before it ran: it becomes the one primary, the old one an alternate.

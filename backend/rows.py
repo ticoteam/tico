@@ -238,6 +238,16 @@ class ThreadPinRow(TypedDict):
     updated_at: str
 
 
+class MessageRouteRow(TypedDict):
+    """Who routing asked for one person's message (backend/thread_routing.py): `bot_ids` is a JSON list of bot actors,
+    `[]` when it asked none."""
+    message_id: str
+    thread_id: str
+    bot_ids: str
+    created_at: str
+    updated_at: str
+
+
 class MemoryTidyPacketRow(TypedDict):
     """Trusted runner custody for one editing and verification attempt."""
     attempt_id: str
@@ -307,6 +317,24 @@ class BudgetNodeRow(TypedDict):
     updated_by_id: str | None
 
 
+class HomeMergeRow(TypedDict):
+    """One `home_merges` row (SELECT *): the old personal chat with a bot that moved into that bot's Home, and the Home
+    it went to (backend/bot_home_merge.py)."""
+    conversation_id: str
+    home_id: str
+    bot_id: str
+    owner_id: str | None
+    room_key: str | None
+    messages_count: int
+    created_at: str
+
+
+class HomeMergeMessageRow(TypedDict):
+    """One `home_merge_messages` row (SELECT *): a message that a merged chat carried into the Home."""
+    message_id: str
+    conversation_id: str
+
+
 class HistoryEventRow(TypedDict):
     """One `history_events` row (SELECT *): one change to a task, a goal, the company profile, the strategy or the
     market graph (backend/migrations/0064_history_events.py). `kind` is the field that changed or what happened, `data`
@@ -323,3 +351,31 @@ class HistoryEventRow(TypedDict):
     via: str | None
     data: str | None
     created_at: str | None
+
+
+class BotSettingsRow(TypedDict):
+    """One `bot_settings` row (SELECT *): a bot's declared settings (backend/bot_settings.py)."""
+    bot_id: str
+    harness: str | None
+    runtime: str | None
+    model: str | None
+    reasoning_effort: str | None
+    host: str | None
+    template: str | None
+    profile: str | None
+    session: str | None
+    wake_preset: str | None
+    shared_from: str | None
+    bot_contact: str | None
+    repo_access_mode: str | None
+    folder: str | None
+    github_login: str | None
+    compact_at: int | None
+    turns_per_hour: int | None
+    turns_per_day: int | None
+    max_run_minutes: int | None
+    stateless: int | None
+    fallback: str | None
+    app_delivery: str | None
+    extra: str
+    updated_at: str | None

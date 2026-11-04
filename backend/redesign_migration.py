@@ -23,6 +23,7 @@ import sys
 
 from . import automation_flow as F
 from .store import H, Problem
+from . import bot_settings as BS
 
 log = logging.getLogger("tico.redesign_migration")
 CUTOVER = "redesign_cutover"                 # registry_metadata: {state: running|done, migration, at, ...}
@@ -449,7 +450,7 @@ def _budgets(c, done):
     if ("turn_budget", "budget:team") not in done:
         out.append({"kind": "turn_budget", "id": "budget:team", "title": "Team turn budgets", "becomes": after,
                     "flags": [], "_do": ("budget_team", {"raise": after != team and bool(stored)})})
-    for row in c.execute("SELECT bot, config FROM bot_config ORDER BY bot").fetchall():
+    for row in c.execute(f"SELECT bot, {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} ORDER BY bot").fetchall():
         mine = {k: v for k, v in TB.own(_json(row["config"], {})).items() if v is not None}
         if not mine or ("turn_budget", "budget:" + row["bot"]) in done:
             continue
@@ -554,11 +555,11 @@ def _convert_one(c, who, mid, obj, group_done):
         _mark(c, "turn_budget", obj["id"], mid, None)
         return None
     if kind == "budget_bot":
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (args["bot"],)).fetchone()
+        row = c.execute(BS.ONE_SQL, (args["bot"],)).fetchone()
         declared = _json(row["config"] if row else None, {})
         declared.update(args["values"])
-        c.execute("UPDATE bot_config SET config=?, revision=revision+1 WHERE bot=?",
-                  (json.dumps(declared, sort_keys=True), args["bot"]))
+        BS.write(c, args["bot"], declared)
+        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (args["bot"],))
         _mark(c, "turn_budget", obj["id"], mid, None)
         return None
     raise AssertionError(kind)
@@ -981,6 +982,8 @@ def wake_rules_of(aid, flow):
     trigger = flow.get("trigger") or {}
     if trigger.get("type") != "event" or trigger.get("name") != "tico.wake":
         raise ValueError("its trigger stays the wake rules' own (event tico.wake)")
+    if flow.get("destinations"):   # the wake executor (rules.py) runs one action per rule; it cannot run a destination
+        raise ValueError("a wake rule takes no destinations: its one action is its outcome")
     out = []
     for n, step in enumerate(flow.get("steps") or []):
         if step.get("type") != "filter":
@@ -988,6 +991,8 @@ def wake_rules_of(aid, flow):
         for i, rule in enumerate(step.get("rules") or []):
             where = f"step {step.get('id')} rule {i + 1}"
             then = rule.get("then") or []
+            if rule.get("to") is not None or rule.get("next") is not None:
+                raise ValueError(f"{where}: a wake rule takes no 'to' or 'next': it does its one action and stops")
             if len(then) != 1:
                 raise ValueError(f"{where}: a wake rule does one thing (wake, note, archive or leave for you)")
             if rule.get("stop") is False:
@@ -1349,7 +1354,7 @@ def pending(c):
 
     add("turn_budget", int(low(_json(_meta(c, TB.TEAM_KEY), {}))))
     if _table(c, "bot_config"):
-        add("turn_budget", sum(low(_json(r[0], {})) for r in c.execute("SELECT config FROM bot_config")))
+        add("turn_budget", sum(low(_json(r[0], {})) for r in c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN}")))
     row = bots.get(strategy_bot.SLUG)
     if row and row != "archived" and ("bot", "bot:" + strategy_bot.SLUG) not in done:
         name = (c.execute("SELECT "

@@ -21,7 +21,7 @@
           - {id: claude-sonnet-5-5, label: "sonnet 5.5", provider: anthropic, efforts: [low, medium, high, xhigh, max], default_effort: high}
           - {id: gpt-6.1-sol, label: "gpt 6.1 sol", provider: openai, efforts: [low, medium, high, xhigh, max], default_effort: medium}
           - {id: gpt-6-luna, label: "gpt 6 luna", provider: openai, efforts: [low, medium, high, xhigh, max], default_effort: max}
-          - {id: gpt-6.1-terra, label: "gpt 6.1 terra", provider: openai, efforts: [low, medium, high, xhigh], default_effort: medium}
+          - {id: gpt-6.1-terra, label: "gpt 6.1 terra", provider: openai, efforts: [low, medium, high, xhigh, max], default_effort: medium}
           - {id: deepseek-v4.1-flash, label: "deepseek v4.1 flash", provider: deepseek, efforts: [low, high, max], default_effort: low}
     - match: '^settings find'
       out:
