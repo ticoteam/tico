@@ -348,7 +348,8 @@ def test_what_tico_may_do_holds_automations_a_send_is_claimed_as_a_draft_which_o
     drafted = next(a for a in leased if a["action"] == "draft")
     answer = computer.action(dict(drafted, action="send", company={}))   # a send made up on stdin, past the draft
     assert answer["ok"] is False and "What Tico may do" in answer["detail"], answer
-    assert computer.gmail.sent == []
+    assert computer.gmail.sent == []                      # at most a draft: Organize mail is still on
+    drafts = len(computer.drafts())
 
     with api.app.state.store.transaction() as c:          # queue them again, then turn Organize mail off too
         c.execute("UPDATE automation_mail_actions SET state='queued', claimed_at=NULL, claimed_by=NULL, attempts=0")
@@ -361,7 +362,8 @@ def test_what_tico_may_do_holds_automations_a_send_is_claimed_as_a_draft_which_o
         assert step["status"] == "failed" and "What Tico may do" in json.dumps(step["outputs"]), step
     with api.app.state.store.transaction() as c:
         assert {r["state"] for r in c.execute("SELECT state FROM automation_mail_actions")} == {"failed"}
-    assert "INBOX" in computer.gmail.store["m1"]["labelIds"] and computer.drafts() == [] and computer.gmail.sent == []
+    assert "INBOX" in computer.gmail.store["m1"]["labelIds"] and len(computer.drafts()) == drafts
+    assert computer.gmail.sent == []
 
 
 def test_a_mail_action_that_cannot_read_what_tico_may_do_writes_nothing_and_is_retried(api, computer, monkeypatch):
