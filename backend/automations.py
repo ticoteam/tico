@@ -107,6 +107,8 @@ TURN_WAIT_DAYS = 1
 STALE_MINUTES = 15       # a claimed run not saved by then was cut off: queued again, to go on from its last save
 MAX_RESUMES = 3          # a run cut off this often is failed: it may be what stops the server
 MAX_CHAIN = 3            # automations started by automations: at most this deep, never the same one twice
+MAX_IN_FLIGHT = 10       # runs one automation has going at once (a turn it waits on counts); the rest queue
+MAIL_LOOKBACK_HOURS = 24  # a first sync acts on mail this recent; a sync after a gap this long starts over from now
 RUN_GUARD_MINUTES = 10                  # the window a flood is counted in
 RUN_GUARD_BURST = 500                   # runs in RUN_GUARD_MINUTES, any refs: a flood, held; also the held runs kept
 RUN_GUARD_SPAN = 20                     # the minutes a sustained loop is watched over
@@ -1270,9 +1272,31 @@ def _calendar_invite(attachments):
     return False
 
 
-def on_mail(c, mailbox, message):
+def mail_watch(c, mailbox, now, synced_at):
+    """Where a mailbox's watch starts, as an ISO time: its message automations act on the mail received from there on.
+    A first sync starts a day back (MAIL_LOOKBACK_HOURS), so the last day's mail is news when a mailbox is connected.
+    A sync after a gap longer than that starts from now, so the gap's mail, which the sync brings back, is not
+    replayed. Otherwise: the watch kept so far, or the last sync for a mailbox from before one was kept. `now` is the
+    hub's clock (received times are instants, so the two agree); the gap is measured on the runner's `synced_at`.
+    The caller stores the result on the mailbox's row (connectors `_refresh_mailbox`)."""
+    row = c.execute("SELECT synced_at, watching_since_at FROM mail_mailboxes WHERE address=?", (mailbox,)).fetchone()
+    last = H.parse_ts(row["synced_at"]) if row and row["synced_at"] else None
+    if last is None:
+        return H.shift(now, hours=-MAIL_LOOKBACK_HOURS)
+    gap_from = H.parse_ts(synced_at)
+    if gap_from and gap_from - last > timedelta(hours=MAIL_LOOKBACK_HOURS):
+        return now
+    return row["watching_since_at"] or row["synced_at"]
+
+
+def on_mail(c, mailbox, message, watch=None):
     """A new message in a person's mailbox (the mail connector's copy), for the automations of that mailbox's
-    person: whose it is is checked again now, since a person may have lost it since the save."""
+    person: whose it is is checked again now, since a person may have lost it since the save. `watch` (`mail_watch`):
+    a message received before the mailbox's watch began is old mail the sync brought back, and no automation hears it.
+    A message with no received time (0) is heard as it always was."""
+    epoch = int(getattr(message, "epoch", 0) or 0)
+    if watch and 0 < epoch < H.parse_ts(watch).timestamp():
+        return []
     raw = list(getattr(message, "attachments", None) or [])
     attachments = [a.get("name") if isinstance(a, dict) else str(a) for a in raw]
     sender = str(message.from_addr or "").lower()
@@ -1938,8 +1962,15 @@ class Hub:
         return self._app()
 
     def claim(self):
+        # An automation's runs in flight (running, or waiting on a turn or a mail computer, not a batch time) are
+        # capped: a backlog of triggers (a first mail sync) starts MAX_IN_FLIGHT at a time, and the rest wait queued
+        # until one of them finishes or takes its answer.
         with self.store.transaction() as c:
-            row = c.execute("SELECT id FROM automation_runs WHERE status='queued' ORDER BY started_at LIMIT 1").fetchone()
+            row = c.execute(
+                "SELECT r.id FROM automation_runs r WHERE r.status='queued' AND "
+                "(SELECT count(*) FROM automation_runs f WHERE f.automation_id=r.automation_id "
+                "AND f.status IN ('running','waiting') AND f.wake_at IS NULL)<? "
+                "ORDER BY r.started_at LIMIT 1", (MAX_IN_FLIGHT,)).fetchone()
             if not row:
                 return None
             c.execute("UPDATE automation_runs SET status='running',claimed_at=? WHERE id=? AND status='queued'",
@@ -1999,8 +2030,8 @@ class Hub:
                                      min(waits) if waits and status == "waiting" else None, rid))
             if status == "failed":
                 _due_failed(c, rid, _run_error(state))
-            if status == "queued":
-                _ring(c)
+            if status not in ("waiting", "held"):
+                _ring(c)   # queued again, or done: a run of this automation that the cap held back can start now
 
 
 # ---------------------------------------------------------------------------------------------------- mail actions

@@ -1,13 +1,15 @@
 """What starts an automation (backend/automations.py): a task received, a catalog event, mail, Slack, an incoming
 webhook, listening and a schedule (DST-safe), with trigger filters, batch times, and the chain guard."""
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import time_machine
 
 from backend import automations
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
+from backend import hubdb as H
+from backend.tests.test_api import api, get, headers, post, runner  # noqa: F401
+from backend.tests.test_connectors import mail_message
 
 WAKE = {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "{{task.title}}"}}
 
@@ -264,3 +266,79 @@ def test_on_mail_sets_the_fields_on_the_payload(api):
     bare = payload_of(api, aid, "p2")
     assert bare["from_domain"] == "" and bare["category"] == "" and bare["known_sender"] is True
 
+
+
+# ------------------------------------------------------------------------------------------- what mail counts as news
+T0 = datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc)
+
+
+def sync(api, machine, messages, synced_at, mailbox="ana@acme.example"):
+    """One batch of the runner's mail sync (runner_support/connectors.py `_post_mail`), sent at the time given."""
+    post(api, "connectors/mail/messages", {"mailbox": mailbox, "messages": messages, "deleted": [],
+                                           "synced_at": synced_at.isoformat()}, machine["token"])
+
+
+def test_a_first_sync_acts_on_the_last_day_of_mail_and_passes_the_days_before_it_over(api):
+    aid = make(api, {"type": "message", "inbox": "ana@acme.example"}, [NOOP])
+    machine = runner(api)
+    ages = [timedelta(hours=5.3 * i) for i in range(45)]          # 45 messages over about ten days, newest first
+    messages = [mail_message(msg_id=f"f{i:02d}", epoch=int((T0 - age).timestamp()), subject="Invoice")
+                for i, age in enumerate(ages)]
+    with time_machine.travel(T0, tick=False):
+        sync(api, machine, messages, T0)
+    assert ran(api, aid) == {f"f{i:02d}" for i, age in enumerate(ages) if age < timedelta(hours=24)}
+    assert len(ran(api, aid)) == 5
+    assert runs(api, aid)["daily"][0]["dropped"] == 0            # passed over, not dropped: it was never news
+
+
+def test_a_later_sync_acts_on_the_mail_that_arrives_after_the_first(api):
+    aid = make(api, {"type": "message", "inbox": "ana@acme.example"}, [NOOP])
+    machine = runner(api)
+    with time_machine.travel(T0, tick=False):
+        sync(api, machine, [mail_message(msg_id="old", epoch=int((T0 - timedelta(days=3)).timestamp()))], T0)
+    later = T0 + timedelta(minutes=10)
+    arrivals = [mail_message(msg_id="n1", epoch=int((T0 + timedelta(minutes=1)).timestamp())),
+                mail_message(msg_id="n2", epoch=int((T0 + timedelta(minutes=5)).timestamp()))]
+    with time_machine.travel(later, tick=False):
+        sync(api, machine, arrivals, later)
+    assert ran(api, aid) == {"n1", "n2"}
+
+
+def test_a_sync_after_a_long_gap_does_not_replay_the_gap(api):
+    aid = make(api, {"type": "message", "inbox": "ana@acme.example"}, [NOOP])
+    machine = runner(api)
+    with time_machine.travel(T0, tick=False):
+        sync(api, machine, [mail_message(msg_id="before", epoch=int((T0 - timedelta(hours=1)).timestamp()))], T0)
+    back = T0 + timedelta(days=3)
+    gap = [mail_message(msg_id=f"gap{d}", epoch=int((T0 + timedelta(days=d, hours=6)).timestamp())) for d in (1, 2)]
+    with time_machine.travel(back, tick=False):
+        sync(api, machine, gap, back)                              # the reconnect: the gap's mail comes back now
+    later = back + timedelta(minutes=10)
+    with time_machine.travel(later, tick=False):
+        sync(api, machine, [mail_message(msg_id="after", epoch=int((back + timedelta(minutes=2)).timestamp()))], later)
+    assert ran(api, aid) == {"before", "after"}
+
+
+def test_an_automation_has_ten_runs_in_flight_and_the_rest_wait_queued(api):
+    """A backlog starts ten runs at a time. A run waiting on a turn holds its place until the turn's answer is taken;
+    one waiting for a batch time (its wake time set) holds none."""
+    aid = make(api, {"type": "task_received", "to": "bot:ops"})
+    store = api.app.state.store
+    hub = store.automations
+    with store.transaction() as c:
+        for i in range(12):
+            c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,status,saved_state,"
+                      "chain) VALUES(?,?,?,?,?,?,?,?)",
+                      (f"run_q{i:02d}", aid, 1, f"task:q{i}", f"2026-10-28T09:00:{i:02d}.000000Z", "queued", "{}",
+                       "[]"))
+    claimed = [hub.claim() for _ in range(10)]
+    assert None not in claimed and len(set(claimed)) == 10
+    assert hub.claim() is None                                    # ten in flight: the other two wait, queued
+    with store.transaction() as c:
+        c.execute("UPDATE automation_runs SET status='ok' WHERE id=?", (claimed[0],))
+    assert hub.claim() is not None                                # one finished: one more starts
+    with store.transaction() as c:
+        c.execute("UPDATE automation_runs SET status='waiting', wake_at=? WHERE id=?",
+                  (H.shift(H.now(), days=1), claimed[1]))
+    assert hub.claim() is not None                                # waiting for a batch time holds no place
+    assert hub.claim() is None

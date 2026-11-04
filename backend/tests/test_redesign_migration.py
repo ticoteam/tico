@@ -244,7 +244,8 @@ def test_the_librarians_briefing_routine_becomes_the_market_briefing_builtin_nev
 
 def test_rehearsal_cases_team_rules_paused_bots_and_long_inbox_instructions(api):
     """What the real-data rehearsal found: wake rules scoped to a department; a routine on a paused bot; an Inbox
-    Manager whose instructions run past 8,000 characters (they move whole)."""
+    Manager whose instructions run past 8,000 characters (they do not move: the inbox runs on the short routing prompt,
+    and its report says where the instructions stay)."""
     rule(api, "rule_dept", scope=("department", "operations"))
     routine(api, "sch_ops", bot="ops", cron="0 8 * * 1", zone="UTC", title="Weekly ops check")
     with db(api).transaction() as c:
@@ -265,7 +266,9 @@ def test_rehearsal_cases_team_rules_paused_bots_and_long_inbox_instructions(api)
         dept = json.loads(c.execute("SELECT flow FROM automations WHERE id=?",
                                     (found[("wake_rule", "rule_dept")]["automation"],)).fetchone()[0])
     step = json.loads(made["flow"])["steps"][0]
-    assert step["type"] == "llm" and step["prompt"].startswith(LONG.rstrip())
+    assert step["type"] == "llm" and step["prompt"].endswith(M.MESSAGE_PART) and len(step["prompt"]) < 600
+    assert LONG.strip() not in step["prompt"]                                # the instructions stay on the bot
+    assert found[("inbox", "inbox:cara@acme.example")]["why"]                 # told: the report flags it
     assert dept["owner"] == "person:ana" and dept["wakes"]["scope_kind"] == "department"
     paused = [a for a in get(api, "automations?limit=500")["automations"] if a["name"] == "Weekly ops check"]
     assert paused and paused[0]["enabled"] is True                          # its own switch; the tick waits for the bot
@@ -461,4 +464,89 @@ def test_the_repair_leaves_an_install_without_the_automation_alone(api):
         team_rules.save(c, "human:ana", {"stale_review": False})
     assert repair(api) == [] and stale_rule(api) is False
     assert stale_automations(api) == []
+
+
+# ---------------------------------------------------------------------------------------------- inbox prompts
+OLD_INBOX = "Sort Acme mail by sender and urgency. Refunds go to Ben."   # short instructions the cutover copied whole
+
+
+def inbox_of(api, content=OLD_INBOX):
+    """Ana's inbox, moved by the cutover on this release's code, with her Inbox Manager's instructions as given."""
+    post(api, "access/people/ana", {"inbox_bot": "inbox", "mailbox": "ana@acme.example"})
+    with db(api).transaction() as c:
+        c.execute("INSERT OR REPLACE INTO mail_agent_instructions(bot, content, runner_id, updated_at) VALUES(?,?,?,?)",
+                  ("inbox", content, "", "2026-10-28T00:00:00Z"))
+    first_start(api)
+    return marks(api)[("inbox", "inbox:ana@acme.example")]["automation"]
+
+
+def as_before_this_fix(api, aid, content=OLD_INBOX):
+    """The inbox as the release before this one left it: the Inbox Manager's instructions, whole, before the message."""
+    old = (content.rstrip() + M.MESSAGE_PART)[:F.MAX_PROMPT]
+    with db(api).transaction() as c:
+        flow = json.loads(c.execute("SELECT flow FROM automations WHERE id=?", (aid,)).fetchone()[0])
+        flow["steps"][0]["prompt"] = old
+        c.execute("UPDATE automations SET flow=? WHERE id=?", (json.dumps(flow, sort_keys=True), aid))
+        first = json.loads(c.execute("SELECT flow FROM automation_versions WHERE automation_id=? AND n=1",
+                                     (aid,)).fetchone()[0])
+        first["steps"][0]["prompt"] = old
+        c.execute("UPDATE automation_versions SET flow=? WHERE automation_id=? AND n=1",
+                  (json.dumps(first, sort_keys=True), aid))
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (M.PROMPT_REPAIR,))   # an install not yet repaired
+    return aid
+
+
+def prompt_of(api, aid):
+    return json.loads(rows(api, "SELECT flow FROM automations WHERE id=?", (aid,))[0]["flow"])["steps"][0]["prompt"]
+
+
+def prompt_repair(api):
+    with db(api).transaction() as c:
+        return M.repair_inbox_prompts(c)
+
+
+def test_a_new_inbox_runs_on_the_short_routing_prompt_and_its_instructions_stay_on_the_bot(api):
+    aid = inbox_of(api)
+    prompt = prompt_of(api, aid)
+    assert prompt.endswith(M.MESSAGE_PART) and len(prompt) < 600 and "Sort Acme mail" not in prompt
+    mark = marks(api)[("inbox", "inbox:ana@acme.example")]
+    assert mark["outcome"] == "converted" and mark["automation"] == aid     # moved, not kept back
+    assert mark["why"]                                                       # the report flags the instructions
+
+
+def test_an_inbox_without_instructions_of_its_own_moves_with_no_flag(api):
+    aid = inbox_of(api, content="")
+    assert prompt_of(api, aid).endswith(M.MESSAGE_PART)
+    assert marks(api)[("inbox", "inbox:ana@acme.example")]["why"] == ""
+
+
+def test_the_repair_moves_an_unchanged_inbox_onto_the_short_prompt_once(api):
+    aid = as_before_this_fix(api, inbox_of(api))
+    assert prompt_of(api, aid).startswith(OLD_INBOX)
+    assert prompt_repair(api) == [aid]
+    assert prompt_of(api, aid).endswith(M.MESSAGE_PART) and len(prompt_of(api, aid)) < 600
+    assert len(rows(api, "SELECT n FROM automation_versions WHERE automation_id=?", (aid,))) == 2
+    with db(api).read() as c:
+        assert c.execute("SELECT 1 FROM audit_log WHERE object=? AND via=?",
+                         ("automation:" + aid, "migration repair")).fetchone()
+    assert marks(api)[("inbox", "inbox:ana@acme.example")]["why"]
+    before = rows(api, "SELECT id, flow, version FROM automations ORDER BY id")
+    assert prompt_repair(api) == [] and rows(api, "SELECT id, flow, version FROM automations ORDER BY id") == before
+
+
+def test_the_repair_leaves_an_edited_inbox_alone(api):
+    aid = as_before_this_fix(api, inbox_of(api))
+    with db(api).transaction() as c:   # an edit since the cutover: a second version, the automation at version 2
+        c.execute("INSERT INTO automation_versions(automation_id,n,actor,created_at,flow,status,summary) "
+                  "SELECT automation_id, 2, 'human:ana', ?, flow, 'active', 'edited' FROM automation_versions "
+                  "WHERE automation_id=? AND n=1", (H.now(), aid))
+        c.execute("UPDATE automations SET version=2 WHERE id=?", (aid,))
+    assert prompt_repair(api) == [] and prompt_of(api, aid).startswith(OLD_INBOX)
+
+
+def test_the_repair_leaves_an_inbox_whose_bot_instructions_changed_since_alone(api):
+    aid = as_before_this_fix(api, inbox_of(api))
+    with db(api).transaction() as c:
+        c.execute("UPDATE mail_agent_instructions SET content=? WHERE bot='inbox'", ("Sort by sender only.",))
+    assert prompt_repair(api) == [] and prompt_of(api, aid).startswith(OLD_INBOX)
 
