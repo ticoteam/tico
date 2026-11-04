@@ -799,6 +799,35 @@ def test_the_market_apply_tool_puts_the_verified_date_in_the_body_for_an_entity_
     assert 'last_verified_at' in BY_NAME['hub_market_apply']['inputSchema']['properties']
 
 
+def test_market_apply_refuses_a_timestamp_or_a_written_date_and_sends_nothing(monkeypatch):
+    """--last-verified-at takes a plain YYYY-MM-DD: a timestamp or a written date is refused before any request, never cut down."""
+    import pytest
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+    from clients.tico import APIError
+    sent = []
+
+    class Api:
+        def get(self, path, **kw):
+            return {'actor': 'bot:librarian'} if path == 'me' else {}
+
+        def post(self, path, body, **kw):
+            sent.append((path, body))
+            return {}
+    monkeypatch.setenv('HUB_API_URL', 'https://api.example.invalid')
+    monkeypatch.setattr(remotecli, 'Client', lambda *a, **kw: Api())
+    base = ['market', 'apply', 'ins-1', '--entity-id', 'company/x', '--source', 'https://acme.example/pricing']
+    for bad in ('2026-11-03T09:00:00Z', '3 Nov 2026', '2026-11-3'):
+        with pytest.raises(APIError) as refused:
+            remotecli.run(hubcli.parser().parse_args(base + ['--last-verified-at', bad]))
+        assert refused.value.status == 422 and 'YYYY-MM-DD' in str(refused.value)
+    assert sent == []
+
+    api = BY_NAME['hub_market_apply']
+    with pytest.raises(ValueError):
+        api['fn'](Api(), {'id': 'ins-1', 'entity_id': 'company/x', 'last_verified_at': '2026-11-03T09:00:00Z'})
+
+
 def test_thread_link_slack_runs_the_mcp_tool_for_each_of_its_three_behaviours(monkeypatch):
     """`hub thread link-slack` runs `hub_thread_link_slack` (clients/hubtools.py): a channel asks for the link, the thread
     alone lists its links, and --off lists them and deletes each one."""

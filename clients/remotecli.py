@@ -814,6 +814,13 @@ def run(args, who=None):
         if sub == "apply":
             body = {"evidence": {"source_url": args.source or "", "source_kind": args.source_kind or "other",
                                  "quote": args.quote or "", "our_read": args.our_read or ""}}
+            verified = None
+            if args.last_verified_at:
+                from clients import hubtools
+                try:
+                    verified = hubtools.market_day(args.last_verified_at)
+                except ValueError as exc:
+                    raise APIError("date", str(exc), 422) from None
             if args.entity_type and args.entity_name:
                 body["entity"] = {"type": args.entity_type, "name": args.entity_name,
                                   "summary": args.summary or ""}
@@ -821,15 +828,15 @@ def run(args, who=None):
                     body["entity"]["tier"] = args.tier
                 if args.new_id:
                     body["entity"]["id"] = args.new_id
-                if args.last_verified_at:
-                    body["entity"]["last_verified_at"] = args.last_verified_at
+                if verified:
+                    body["entity"]["last_verified_at"] = verified
             if args.entity_id:
                 body["entity_id"] = args.entity_id
                 if args.summary is not None:
                     body["summary"] = args.summary
-                if args.last_verified_at:
-                    body["last_verified_at"] = args.last_verified_at
-            if args.last_verified_at and "entity" not in body and "entity_id" not in body:
+                if verified:
+                    body["last_verified_at"] = verified
+            if verified and "entity" not in body and "entity_id" not in body:
                 raise APIError("entity", "--last-verified-at needs --entity-id, or --entity-type and --entity-name for a new entity")
             if args.edge_src and args.edge_rel and args.edge_dst:
                 body["edge"] = {"src": args.edge_src, "rel": args.edge_rel, "dst": args.edge_dst}

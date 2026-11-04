@@ -35,7 +35,7 @@ does and what it returns. For any other command, run `hub <group> --help` first.
   `--entity-type --entity-name --summary --tier` for a new entity, or `--edge-src --edge-rel --edge-dst` for an edge:
   writes the evidence, then the entity or edge, and marks the insight applied. It cannot set a property such as a price.
   `--last-verified-at YYYY-MM-DD` sets the date the entity was last checked, on `--entity-id` or on a new entity; that date
-  starts the staleness clock (60 days, 30 for a core company). The server refuses anything but a YYYY-MM-DD date.
+  starts the staleness clock (60 days, 30 for a core company). Only a plain YYYY-MM-DD date is sent; a timestamp is refused, not cut.
 - `hub market resolve <insight id> --status <merged|rejected|needs-human> --resolution "<one sentence>"`: closes an
   insight without writing to the graph.
 - `hub market import <file.jsonl> [--dry-run] --note "<where it came from>"`: a verified batch, one JSON line per entity

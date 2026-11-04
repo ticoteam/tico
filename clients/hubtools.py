@@ -2305,6 +2305,14 @@ def market_resolve(api, args):
                      "applied_events": args.get("applied_events") or []}, key=_key(args))
 
 
+def market_day(value):
+    """last_verified_at takes a plain YYYY-MM-DD. A timestamp is refused, never cut down to its date."""
+    text = str(value)
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        raise ValueError("last_verified_at must be a date (YYYY-MM-DD)")
+    return text
+
+
 @tool("hub_market_apply", "Librarian (the market curator): write the evidence first, then an entity or an edge that cites it, and mark the insight applied.",
       {"id": _s("Insight id"), "source_url": _s("Source URL", default=""),
        "source_kind": _s("reddit, x, news, site, other", default="other"),
@@ -2318,6 +2326,7 @@ def market_resolve(api, args):
        "edge_dst": _s("Edge destination entity")},
       required=("id",), writes=True)
 def market_apply(api, args):
+    verified = market_day(args["last_verified_at"]) if args.get("last_verified_at") else None
     body = {"evidence": {"source_url": args.get("source_url") or "", "source_kind": args.get("source_kind") or "other",
                          "quote": args.get("quote") or "", "our_read": args.get("our_read") or ""}}
     if args.get("entity_type") and args.get("entity_name"):
@@ -2326,15 +2335,15 @@ def market_apply(api, args):
             body["entity"]["tier"] = args["tier"]
         if args.get("new_id"):
             body["entity"]["id"] = args["new_id"]
-        if args.get("last_verified_at"):
-            body["entity"]["last_verified_at"] = args["last_verified_at"]
+        if verified:
+            body["entity"]["last_verified_at"] = verified
     if args.get("entity_id"):
         body["entity_id"] = args["entity_id"]
         if args.get("summary") is not None:
             body["summary"] = args["summary"]
-        if args.get("last_verified_at"):
-            body["last_verified_at"] = args["last_verified_at"]
-    if args.get("last_verified_at") and "entity" not in body and "entity_id" not in body:
+        if verified:
+            body["last_verified_at"] = verified
+    if verified and "entity" not in body and "entity_id" not in body:
         raise ValueError("last_verified_at needs entity_id, or entity_type and entity_name for a new entity")
     if args.get("edge_src") and args.get("edge_rel") and args.get("edge_dst"):
         body["edge"] = {"src": args["edge_src"], "rel": args["edge_rel"], "dst": args["edge_dst"]}
