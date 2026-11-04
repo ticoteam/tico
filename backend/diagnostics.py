@@ -291,7 +291,7 @@ def bot_label(c, slug):
     return "bot-%d" % (ids.index(slug) + 1) if slug in ids else None
 
 
-RUNNERS_SQL = "SELECT id,label,last_seen_at,version,platform,readiness FROM runners WHERE revoked_at IS NULL ORDER BY id"
+RUNNERS_SQL = "SELECT id,label,last_seen_at,version,platform,readiness FROM runners_with_state WHERE revoked_at IS NULL ORDER BY id"
 
 
 def runner_label(c, runner_id):

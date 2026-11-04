@@ -654,7 +654,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
             git_repository.address(repo)
         except ValueError as exc:
             raise Problem('worktree_repo', str(exc), 422) from None
-    assigned = c.execute('SELECT r.id,r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
+    assigned = c.execute('SELECT r.id,r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
     if not assigned or not readiness_document(assigned['readiness']).get('worktrees'):
         raise Problem('computer_update', 'Update this computer to use task worktrees', 409)
     if (who.role == 'bot' and who.runner_id != assigned['id']

@@ -11265,7 +11265,7 @@
         ],
         "responses": {
           "200": {
-            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `version`, each bot's count (`bots`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
+            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md \u00a79); an `activity` one also carries `counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` (how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`.\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `version`, each bot's count (`bots`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -36029,7 +36029,7 @@
         ]
       },
       "post": {
-        "summary": "Start a thread (audience members unless asked otherwise); with `parent_message_id` it is a sub-thread; with `body` its first message is posted too",
+        "summary": "Start a thread (audience members unless asked otherwise); with `parent_message_id` it is a sub-thread; with `body` its first message is posted too; `pin_for_members` pins it for its starter and every person added. Only a DM with one teammate may have no title (422 `name_required` otherwise)",
         "operationId": "createThread",
         "requestBody": {
           "required": true,
@@ -36086,6 +36086,172 @@
             },
             "description": "1-200 characters. Reusing a key with the same body replays the first answer."
           }
+        ]
+      }
+    },
+    "/api/v2/threads/browse": {
+      "get": {
+        "summary": "Company and team threads the viewer may read and is not in, newest activity first; `q` matches the title. Following one puts it in the rail",
+        "operationId": "browseThreads",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadBrowse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Threads"
+        ]
+      }
+    },
+    "/api/v2/threads/catch-up": {
+      "get": {
+        "summary": "Each thread with something new for the viewer and each open Needs attention item, mentions and asks first, then newest activity, with its new messages in tree order (20 at most, within the page's byte budget, each text cut at 4,000 characters with `clipped`; `more` counts the rest); `count` is the badge",
+        "operationId": "listThreadCatchUp",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadCatchUp"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Threads"
         ]
       }
     },
@@ -36151,7 +36317,7 @@
         ]
       },
       "post": {
-        "summary": "A DM with these teammates (`members`), the open one or a new one, with an optional first message (`body`); needs Write on each of them, and a bot's or person's first message passes the org rules",
+        "summary": "A DM with these teammates (`members`), the open one or a new one, with an optional first message (`body`); needs Write on each of them, and a bot's or person's first message passes the org rules. A new one with two or more others needs a `title` (422 `name_required`)",
         "operationId": "createThreadDm",
         "requestBody": {
           "required": true,
@@ -36334,6 +36500,81 @@
         ]
       }
     },
+    "/api/v2/threads/rail": {
+      "get": {
+        "summary": "The threads the viewer is in, by title: `pinned` (at most 200 a page) and `threads`, each going on through `next_cursor` until both are done; `catch_up`, `catch_up_ids` and `dms` on the first page. Company, team and members threads and group DMs; never a 1:1 DM, a Home, a task's thread or a meeting",
+        "operationId": "listThreadRail",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadRail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Threads"
+        ]
+      }
+    },
     "/api/v2/threads/search": {
       "get": {
         "summary": "Messages whose text matches every word of `q`, newest first, only in threads and messages the viewer may read",
@@ -36471,7 +36712,7 @@
         ]
       },
       "patch": {
-        "summary": "Rename, archive or unarchive a thread, change who it is for, or set how many days a root keeps its messages (`retention_days`, null for good); its managers only",
+        "summary": "Rename, archive or unarchive a thread, change who it is for, set how many days a root keeps its messages (`retention_days`, null for good), or pin a root for everyone (`pinned_for_everyone`; never a 1:1 DM, a Home, a task's or a meeting's thread); its managers only",
         "operationId": "updateThread",
         "parameters": [
           {
@@ -37198,6 +37439,117 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ThreadEarlier"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Threads"
+        ]
+      }
+    },
+    "/api/v2/threads/{thread_id}/pin": {
+      "put": {
+        "summary": "Pin a root thread for me; reading it is enough (404 otherwise, 422 for a sub-thread)",
+        "operationId": "pinThread",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Threads"
+        ]
+      },
+      "delete": {
+        "summary": "Unpin a root thread for me, a pin for everyone included (for me alone)",
+        "operationId": "unpinThread",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadView"
                 }
               }
             }
@@ -67859,6 +68211,99 @@
         ],
         "additionalProperties": true
       },
+      "ThreadBrowse": {
+        "type": "object",
+        "properties": {
+          "threads": {
+            "type": "array",
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/ThreadView"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "member_count": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "member_count"
+                  ],
+                  "additionalProperties": true
+                }
+              ]
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "next_cursor",
+          "threads"
+        ],
+        "additionalProperties": true
+      },
+      "ThreadCatchUp": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "thread": {
+                  "$ref": "#/components/schemas/ThreadView"
+                },
+                "new_count": {
+                  "type": "integer"
+                },
+                "mention": {
+                  "type": "boolean"
+                },
+                "messages": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ThreadMessage"
+                  }
+                },
+                "more": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "mention",
+                "messages",
+                "more",
+                "new_count",
+                "thread"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "count": {
+            "type": "integer",
+            "description": "Every item across pages, at most 99"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "count",
+          "items",
+          "next_cursor"
+        ],
+        "additionalProperties": true
+      },
       "ThreadCreate": {
         "properties": {
           "title": {
@@ -67926,6 +68371,11 @@
               }
             ],
             "title": "Body"
+          },
+          "pin_for_members": {
+            "type": "boolean",
+            "title": "Pin For Members",
+            "default": false
           }
         },
         "type": "object",
@@ -67946,6 +68396,13 @@
           "title"
         ],
         "additionalProperties": true
+      },
+      "ThreadDmCounts": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "integer"
+        },
+        "description": "Unread in each open DM with one teammate, by that teammate's actor (first page only; {} after)"
       },
       "ThreadEarlier": {
         "type": "object",
@@ -68122,6 +68579,9 @@
           "hidden": {
             "type": "boolean"
           },
+          "clipped": {
+            "type": "boolean"
+          },
           "sub_thread": {
             "type": [
               "object",
@@ -68212,6 +68672,17 @@
               }
             ],
             "title": "Retention Days"
+          },
+          "pinned_for_everyone": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pinned For Everyone"
           }
         },
         "type": "object",
@@ -68288,6 +68759,55 @@
           "text"
         ],
         "title": "ThreadPost"
+      },
+      "ThreadRail": {
+        "type": "object",
+        "properties": {
+          "pinned": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThreadView"
+            }
+          },
+          "threads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThreadView"
+            }
+          },
+          "catch_up": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Catch up's count, at most 99 (first page only; null after)"
+          },
+          "catch_up_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The root ids `catch_up` counts, at most 99 (first page only; [] after): a client keeps the set from the live stream"
+          },
+          "dms": {
+            "$ref": "#/components/schemas/ThreadDmCounts"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "catch_up",
+          "catch_up_ids",
+          "dms",
+          "next_cursor",
+          "pinned",
+          "threads"
+        ],
+        "additionalProperties": true
       },
       "ThreadReactions": {
         "type": "array",
@@ -68414,6 +68934,12 @@
               "string",
               "null"
             ]
+          },
+          "bot_dms": {
+            "$ref": "#/components/schemas/ThreadDmCounts"
+          },
+          "person_dms": {
+            "$ref": "#/components/schemas/ThreadDmCounts"
           }
         },
         "required": [
@@ -68574,6 +69100,10 @@
               "null"
             ],
             "description": "Only for audience home: {actor}"
+          },
+          "pinned_for_everyone": {
+            "type": "boolean",
+            "description": "Its root is pinned for everyone who reads it; `me.pinned` is whether it is pinned for the viewer"
           }
         },
         "required": [
@@ -68581,6 +69111,7 @@
           "id",
           "last_seq",
           "last_unread_seq",
+          "pinned_for_everyone",
           "root_id",
           "title"
         ],

@@ -29,7 +29,7 @@ def candidates(c, auth, bot):
         return (r["owner_id"] == operator or bool(r["accepts_member_bots"])) if member else r["owner_id"] in (operator, owner)
     from .cloud_machines import cloud_runners
     others = cloud_runners(c, but=bot)          # a cloud machine (another bot's own, or the shared one) never is
-    rows = [r for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL") if takes(r) and r["id"] not in others]
+    rows = [r for r in c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL") if takes(r) and r["id"] not in others]
     # A bot BotOps builds has its repository on BotOps's computer, so it goes there when that computer takes it; a starter
     # the runner sets up itself goes anywhere.
     declared = H._json((c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone() or {"config": "{}"})["config"], {}) or {}

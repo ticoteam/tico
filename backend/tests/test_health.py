@@ -97,9 +97,9 @@ def test_an_offline_computer_holds_its_bots(environment):
     # A second computer that is up makes it a warning, not an outage.
     heartbeat(api, runner, seconds_ago=5, runtimes=SIGNED_IN)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,last_seen_at) "
-                  "SELECT 'r2','Old laptop',owner_id,'h2',created_at,? FROM runners WHERE id=?",
-                  (H.shift(H.now(), hours=-2), runner))
+        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) "
+                  "SELECT 'r2','Old laptop',owner_id,'h2',created_at FROM runners WHERE id=?", (runner,))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r2'", (H.shift(H.now(), hours=-2),))
     body, checks = health_of(api)
     assert checks["computers"]["status"] == "warn" and "Old laptop" in checks["computers"]["summary"]
 
@@ -332,7 +332,8 @@ def test_a_bot_its_computer_cannot_start_is_stuck_with_the_reason_and_one_fix(en
     runner = enrolled(api)
     add_bot(api, "release")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET label='Team box', last_seen_at=?, readiness=? WHERE id=?",
+        c.execute("UPDATE runners SET label='Team box' WHERE id=?", (runner,))
+        c.execute("UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
                   (H.now(), json.dumps({"schema_version": 1, "runtimes": {
                       "claude": {"installed": True, "authenticated": "missing", "detail": "Claude login required"}},
                       "bots": {"release": {"ready": False, "runtime": "claude", "problems": ["Claude login required"]}}}), runner))
@@ -379,7 +380,7 @@ def test_a_chat_waiting_on_its_own_model_sign_in_says_so_and_other_waits_keep_th
 
     def report(claude):
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE runners SET last_seen_at=?, readiness=? WHERE id=?", (H.now(), json.dumps({
+            c.execute("UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?", (H.now(), json.dumps({
                 "schema_version": 1, "runtimes": {
                     "claude": {"installed": True, "authenticated": claude, "detail": "" if claude == "ready" else "Claude login required"},
                     "codex": {"installed": True, "authenticated": "ready"}},
@@ -419,7 +420,8 @@ def test_an_antigravity_bot_is_not_told_to_sign_in_to_gemini_cli(environment):
     runner = enrolled(api)
     add_bot(api, "scout")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET label='Team box', last_seen_at=?, readiness=? WHERE id=?", (H.now(), json.dumps({
+        c.execute("UPDATE runners SET label='Team box' WHERE id=?", (runner,))
+        c.execute("UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?", (H.now(), json.dumps({
             "schema_version": 1, "runtimes": {
                 "gemini": {"installed": True, "authenticated": "missing", "detail": "Gemini login required"}},
             "bots": {"scout": {"ready": False, "runtime": "gemini", "problems": ["Missing bot repository or AGENT.md"]}}}),
@@ -585,7 +587,8 @@ def test_a_repository_a_computer_could_not_copy_is_named_with_gits_reason(reques
 def _hosted(api, runner, bot, report):
     import json
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET label='Team box', last_seen_at=?, readiness=? WHERE id=?",
+        c.execute("UPDATE runners SET label='Team box' WHERE id=?", (runner,))
+        c.execute("UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
                   (H.now(), json.dumps({"schema_version": 1, "runtimes": SIGNED_IN, "bots": {bot: report}}), runner))
         c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t') "
                   "ON CONFLICT(bot) DO NOTHING", (bot, runner, H.now()))
@@ -676,7 +679,8 @@ def test_harness_denies_answers_each_bot_as_a_bot_by_bot_pass_does(environment, 
             if slug == "chosen":
                 c.execute("INSERT INTO bot_repo_access VALUES('chosen','acme/app','write')")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET label='Team box', last_seen_at=?, readiness=? WHERE id=?",
+        c.execute("UPDATE runners SET label='Team box' WHERE id=?", (runner,))
+        c.execute("UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
                   (H.now(), json.dumps({"schema_version": 1, "runtimes": SIGNED_IN, "bots": readiness}), runner))
     with api.app.state.store.read_transaction() as c:
         batched = harness_denies(c, settings)
@@ -762,7 +766,8 @@ def test_a_computer_on_the_python_runner_is_told_to_update_and_the_heartbeat_tak
     for engine, warned in (({"name": "rust", "build": "0123456789abcdef"}, False),
                            ({"name": "python", "note": "TICO_RUNNER_ENGINE=python"}, True)):
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE runners SET label='Team box', last_seen_at=?, readiness=? WHERE id=?",
+            c.execute("UPDATE runners SET label='Team box' WHERE id=?", (runner,))
+            c.execute("UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
                       (H.now(), json.dumps({"schema_version": 1, "runtimes": {}, "bots": {}, "engine": engine}), runner))
         check = health_of(api)[1].get("engine:" + runner)
         assert bool(check) == warned
@@ -776,9 +781,9 @@ def claimable(c, runner, *bots):
     import json
     for bot in bots:
         c.execute("INSERT OR IGNORE INTO bot_config(bot,config,owner_id) VALUES(?,'{}','ana')", (bot,))
-    document = json.loads(c.execute("SELECT readiness FROM runners WHERE id=?", (runner,)).fetchone()[0] or "{}")
+    document = json.loads(c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (runner,)).fetchone()[0] or "{}")
     document.setdefault("bots", {}).update({bot: {"ready": True} for bot in bots})
-    c.execute("UPDATE runners SET readiness=? WHERE id=?", (json.dumps(document), runner))
+    c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?", (json.dumps(document), runner))
 
 
 def test_refusal_quarantine_explains_the_claim_hold_and_matches_bot_status(environment):
@@ -848,7 +853,7 @@ def test_quarantine_refused_words_keep_manager_access_and_mask_secrets(environme
 
 
 def test_an_interrupted_run_fence_explains_a_busy_bot_queue(environment, monkeypatch):
-    from backend import execution, health
+    from backend import execution, health, start_places
 
     api = environment()
     runner = enrolled(api)
@@ -887,8 +892,9 @@ def test_an_interrupted_run_fence_explains_a_busy_bot_queue(environment, monkeyp
         assert without_override["reason"] == "busy"
         monkeypatch.setattr(health, "_fenced_queue_reason", original)
 
-        # With every slot occupied, no_slot is the truthful immediate wait reason, while dead stays explicit.
-        c.execute("UPDATE runners SET capacity=1 WHERE id=?", (runner,))
+        # With every slot occupied, no_slot is the truthful immediate wait reason, while dead stays explicit. One running
+        # turn fills the computer's only place, so it is full at the default claim bound (2 x the limit, not reached).
+        c.execute("UPDATE runner_states SET capacity=1 WHERE runner_id=?", (runner,))
         [full] = health._waiting(c, online)[1]
         assert (full["reason"], full["wait_reason"]) == ("busy", "no_slot") and full["dead"] >= 1
 
@@ -1138,7 +1144,7 @@ def test_roadmap_suggestions_warn_from_the_routing_rule_and_only_to_administrato
     assert health(pm="archived", headers=as_person(api, "quinn")) is None
 
 
-def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment):
+def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment, monkeypatch):
     api = environment()
     runner = enrolled(api)
     add_bot(api, "helper")
@@ -1148,7 +1154,7 @@ def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('observer','hermes','x',?,'human:ana')", (H.now(),))
         c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')", (runner, H.now()))
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.now(), runner))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), runner))
         cv = H.open_conversation(c, 'human:morgan', ['human:morgan', 'bot:helper'], kind='chat')
         H._write_message(c, 'human:morgan', 'bot:helper', 'check the queue', cv, 'say', {}, None, None)
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='helper'", (old,))
@@ -1172,13 +1178,15 @@ def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug='helper'")
         claimable(c, runner, 'helper')
-        c.execute("UPDATE runners SET capacity=1 WHERE id=?", (runner,))
+        c.execute("UPDATE runner_states SET capacity=1 WHERE runner_id=?", (runner,))
         H._write_message(c, 'human:morgan', 'bot:helper', 'one more request', cv, 'say', {}, None, None)
         job = c.execute("SELECT id FROM jobs WHERE bot_id='helper' ORDER BY created_at DESC LIMIT 1").fetchone()[0]
         c.execute("UPDATE jobs SET state='running' WHERE id=?", (job,))
         c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('helper-running',?,'helper',?,1,'x','running',?,?)",
                   (job, runner, H.shift(H.now(), hours=1), H.now()))
+    from backend import start_places
+    monkeypatch.setattr(start_places, "LIVE_CAP_FACTOR", 1)     # one running turn fills the computer
     queue = health_of(api, headers)[1]['queue']
     assert queue['status'] == 'info' and not queue.get('items')
     issues = api.get('/api/v2/health/issues', headers=headers).json()['issues']
@@ -1275,8 +1283,10 @@ def test_batched_computer_load_and_overload_reads_answer_what_each_computer_read
     busy, off, calm, revoked = enrolled(api), "r-off", "r-calm", "r-gone"
     with api.app.state.store.transaction() as c:
         for rid in (off, calm, revoked):
-            c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,last_seen_at) "
-                      "SELECT ?,?,owner_id,?,created_at,last_seen_at FROM runners WHERE id=?", (rid, rid, "h" + rid, busy))
+            c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) "
+                      "SELECT ?,?,owner_id,?,created_at FROM runners WHERE id=?", (rid, rid, "h" + rid, busy))
+            c.execute("UPDATE runner_states SET last_seen_at=(SELECT last_seen_at FROM runner_states WHERE runner_id=?) "
+                      "WHERE runner_id=?", (busy, rid))
         c.execute("UPDATE runners SET performance='off' WHERE id=?", (off,))
         c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), revoked))
         for rid, cpu in ((busy, 95), (off, 95), (calm, 10), (revoked, 95)):

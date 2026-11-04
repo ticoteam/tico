@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 from .batch_work import isolated
 
-MAX_DAYS = 730
+MAX_DAYS = 365
 # The note the snoozer leaves for the bot's wake when the snooze ends: what to check, in a sentence or two.
 NOTE_MAX = 500
 # A date without a time is the start of that day where the team keeps its calendar (backend/updates.py).
