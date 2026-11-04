@@ -573,15 +573,24 @@ fn shell_words(command: &str) -> Option<Vec<String>> {
                 loop {
                     match chars.next()? {
                         '"' => break,
-                        '\\' => word.push(chars.next()?),
+                        // Inside double quotes a backslash only escapes $ ` " \ and a
+                        // newline; before anything else it stays, as the shell keeps it.
+                        '\\' => match chars.next()? {
+                            '\n' => {}
+                            c @ ('$' | '`' | '"' | '\\') => word.push(c),
+                            c => word.extend(['\\', c]),
+                        },
                         c => word.push(c),
                     }
                 }
             }
-            '\\' => {
-                started = true;
-                word.push(chars.next()?);
-            }
+            '\\' => match chars.next()? {
+                '\n' => {}
+                c => {
+                    started = true;
+                    word.push(c);
+                }
+            },
             c => {
                 started = true;
                 word.push(c);
@@ -1234,6 +1243,9 @@ mod tests {
         assert_eq!(command_program("bash \n-c /tmp/customer-private.json"), "bash");
         assert_eq!(command_program("NOTE=\rcustomer-private"), "");
         assert_eq!(command_program("NOTE=\u{a0}customer-private"), "");
+        assert_eq!(command_program("bash -c \"NOTE=\\ customer-private /usr/bin/true\""), "");
+        assert_eq!(command_program("bash -c \"NOTE=\\$x customer-private\""), "");
+        assert_eq!(command_program("bash -c \"cd /w && hub \\\nneeds-you show\""), "hub needs-you show");
     }
 
     #[test]
