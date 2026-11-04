@@ -2024,9 +2024,13 @@ def add_recovery_reviewer(api):
 
 
 def test_restart_after_shell_resumes_on_next_scheduler_tick_with_cut_time(api, monkeypatch):
+    from backend import maintenance
     from backend.scheduler import Scheduler
     from backend.store import H
     add_recovery_reviewer(api)
+    with api.app.state.store.transaction() as c:
+        # This fixture's fake runtime has no provider configured. Keep its setup warnings out of the recovery check.
+        maintenance.save_settings(c, "human:ana", paused=True)
     machine, message, attempt = restarted_mid_turn(api, [('Bash', None)])
     with api.app.state.store.read() as c:
         cut = c.execute("SELECT finished_at FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]

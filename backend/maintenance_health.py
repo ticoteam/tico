@@ -652,10 +652,7 @@ def _server_checks(c):
                      "Runner requests are waiting too long", latency["summary"],
                      "Inspect the flight recorder's route wait/work times and write-lock holders; shorten the longest transactions.")]
            if latency else [])
-    try:
-        seen = flight.view(c, minutes=60, sections=("requests", "process", "sql"))
-    except Exception:
-        return out                                  # no process samples on this server
+    seen = flight.view(c, minutes=60, sections=("requests", "process", "sql"))
     cpu, requests = (seen.get("process") or {}).get("cpu_avg"), (seen.get("requests") or {}).get("n") or 0
     if cpu is None or cpu < SERVER_CPU or requests >= QUIET_REQUESTS:
         return out
