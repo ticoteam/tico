@@ -43,19 +43,21 @@ fn is_access_login(url: &Url) -> bool {
 
 pub struct Client {
     config: Config,
+    // The page whose cookies the requests carry: the open org's own webview.
+    label: String,
     http: reqwest::Client,
 }
 
 impl Client {
-    pub fn new(config: Config) -> Client {
-        Client { config, http: http_client() }
+    pub fn new(config: Config, label: String) -> Client {
+        Client { config, label, http: http_client() }
     }
 
     pub(crate) fn cookie_header<R: Runtime>(&self, app: &AppHandle<R>, url: &Url) -> Option<String> {
         if self.config.is_local() || !same_origin(&self.config.hub, url) {
             return None;
         }
-        let webview = app.get_webview_window("main")?;
+        let webview = app.get_webview(&self.label)?;
         let cookies = webview.cookies_for_url(url.clone()).ok()?;
         let header = cookies.iter().map(|c| format!("{}={}", c.name(), c.value())).collect::<Vec<_>>().join("; ");
         (!header.is_empty()).then_some(header)

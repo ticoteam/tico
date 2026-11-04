@@ -16,6 +16,7 @@ NO_TEST = (*FAILING_RECEIPTS, "lint_only")
 
 def setup(run, w, team):
     w.ci_skip = 0.2
+    w.ci_skip_first = True
     tickets(run, w, 10)
 
 

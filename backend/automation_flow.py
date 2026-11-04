@@ -14,7 +14,7 @@ TRIGGERS = {"message": ("inbox",), "task_received": ("to",), "schedule": ("cron"
             "listening": ("destination",), "event": ("name",), "due": ("first_due", "repeats")}
 STEP_TYPES = ("filter", "decide", "llm", "find", "bot_turn", "paths", "action")
 ACTIONS = ("archive", "leave_for_you", "draft_reply", "send_reply", "create_task", "label", "forward", "wake_bot",
-           "note", "post_update", "call_webhook", "assign")
+           "note", "post_update", "call_webhook", "assign", "unsubscribe")
 OPS = ("is", "is_not", ">=", "<=", "contains", "matches")
 SOURCES = ("mail", "tasks", "prs", "listening", "docs")
 LEVELS = J.DECIDE_LEVELS
@@ -494,6 +494,7 @@ def judge_state(values, fields):
 ACTION_ARGS = {
     "archive": {},
     "leave_for_you": {},
+    "unsubscribe": {},
     "draft_reply": {"body": "the reply text (or text); required on mail and Slack",
                     "to": "mail: the addresses to reply to (default the sender)"},
     "send_reply": {"body": "the reply text (or text); required on mail and Slack",

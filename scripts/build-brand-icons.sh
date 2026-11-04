@@ -13,7 +13,7 @@ cd "$(dirname "$0")/.."
 BRAND=ui/assets/tico
 WEB=ui/assets
 APP=app/icons
-MARK=$BRAND/tico-mark.svg      # 64x64 rounded tile, #172221, off-white "ti", green dot
+MARK=$BRAND/tico-mark.svg      # 64x64 rounded tile, #172221, the flat Liquid Dot
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 

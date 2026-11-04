@@ -2205,6 +2205,21 @@ def obsolete_notices_sql():
             "AND ya.state='interrupted' AND json_extract(ya.result,'$.yielded'))")
 
 
+def suppress_notice(c, job, task_id, reason):
+    """Cancel one queued keeper notice nothing needs any more: its job, its claim hold, its delivery mark, the status a
+    stop left on its bot, and a job.suppress event. The claim does this for obsolete_notices_sql; task_check_backs does it
+    for a check-back whose due time moved, so a stale one cannot hold the next notice on a computer that never wakes."""
+    c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job['id'],))
+    claim_holds.clear(c, job['id'], "Its run is no longer needed.")
+    c.execute("UPDATE messages SET delivered_at=coalesce(delivered_at,?) WHERE id=?", (H.now(), job['message_id']))
+    from .repositories import metadata
+    if (job["attempt_id"] and metadata(c, LAST_STOP + job["bot_id"]).get("attempt_id") == job["attempt_id"]
+            and (H.status(c, job["bot_id"]) or {}).get("state") == "idle"):
+        # Clearing the status also publishes the new header to already-open pages.
+        settle_status(c, job["bot_id"], "idle", "")
+    H.event(c, H.KEEPER, 'job.suppress', job['id'], {'reason': reason, 'task_id': task_id})
+
+
 HAND_BACK_WAIT = 15          # seconds before a handed-back job is handed out again, doubled for each hand-back
 HAND_BACK_MAX = 300
 
@@ -3493,15 +3508,7 @@ class Execution:
         for old in obsolete:
             if not prepared:
                 selected = None
-            c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (old['id'],))
-            claim_holds.clear(c, old['id'], "Its run is no longer needed.")
-            c.execute("UPDATE messages SET delivered_at=coalesce(delivered_at,?) WHERE id=?", (H.now(),old['message_id']))
-            from .repositories import metadata
-            if (old["attempt_id"] and metadata(c, LAST_STOP + old["bot_id"]).get("attempt_id") == old["attempt_id"]
-                    and (H.status(c, old["bot_id"]) or {}).get("state") == "idle"):
-                # Clearing the status also publishes the new header to already-open pages.
-                settle_status(c, old["bot_id"], "idle", "")
-            H.event(c,H.KEEPER,'job.suppress',old['id'],{'reason':'Task finished or acted on before keeper notice delivery','task_id':old['task_id']})
+            suppress_notice(c, old, old['task_id'], 'Task finished or acted on before keeper notice delivery')
         company = org_turns.observe(c, self.store.settings, detailed=False)
         if company['at_stop']:
             return {'attempt': None, 'waiting': org_turns.REASON}

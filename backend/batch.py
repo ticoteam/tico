@@ -470,8 +470,9 @@ def _apply_decide(c, auth, who, item, r, boards):
             raise Problem("approve_not_asked", "Approving is the person's own decision: the Assistant can decline here, "
                           "but the person approves it in Tico or with their yes to the Assistant's read-back", 403)
         row = auth.approval(c, who, ident, decide=True)
-        if row["kind"] == "support":
-            # As on the approve route: sending off the install is a person's own tap in Tico, not their token.
+        if row["kind"] == "support" and decision == "approve":
+            # As on the approve route: sending off the install is a person's own tap in Tico, not their token. A decline
+            # sends nothing, so it is anyone's who may decide it.
             from .support import require_person
             try:
                 require_person(who)

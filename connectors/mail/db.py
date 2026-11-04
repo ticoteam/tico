@@ -387,6 +387,40 @@ def last_send_to(conn, mailbox, recipient):
     return (r["t"] or "") if r else ""
 
 
+def has_sent_to(conn, mailbox, address):
+    """Whether this mailbox has ever written to `address`, on any of its sends (every recipient, not only the first)
+    or in the synced copy of its own sent mail (To and Cc, in any thread; only messages with the SENT label, from the
+    mailbox, not deleted, so a draft or inbound mail with the owner's From does not count). Gmail is not called. The
+    synced copy holds the 90 days sync backfills, then follows history."""
+    box, who = str(mailbox or "").strip().lower(), str(address or "").strip().lower()
+    if not box or not who:
+        return False
+    if conn.execute("SELECT 1 FROM sends WHERE mailbox=? AND status!='failed' AND (lower(recipient)=? OR "
+                    "instr(',' || lower(recipients) || ',', ?) > 0) LIMIT 1",
+                    (box, who, "," + who + ",")).fetchone():
+        return True
+    needle = json.dumps(who)            # the address as a JSON string, so a substring of another address never matches
+    for row in conn.execute("SELECT to_json, cc_json, labels_json FROM messages WHERE mailbox=? AND lower(from_addr)=? "
+                            "AND deleted_at IS NULL AND instr(labels_json, ?) > 0 "
+                            "AND (instr(lower(to_json), ?) > 0 OR instr(lower(cc_json), ?) > 0)",
+                            (box, box, json.dumps("SENT"), needle, needle)).fetchall():
+        if "SENT" not in _json_strings(row["labels_json"]):     # the prefilter is loose; the label itself is exact
+            continue
+        for column in ("to_json", "cc_json"):
+            if who in {a.strip().lower() for a in _json_strings(row[column])}:
+                return True
+    return False
+
+
+def _json_strings(text):
+    """The strings of a JSON list column; anything else reads as an empty list."""
+    try:
+        value = json.loads(text or "[]")
+    except ValueError:
+        return []
+    return [a for a in value if isinstance(a, str)] if isinstance(value, list) else []
+
+
 def send_message_ids(conn, mailbox):
     """Gmail message ids already in the log, so a reconcile does not duplicate our own sends."""
     rows = conn.execute("SELECT message_id FROM sends WHERE mailbox=? AND message_id!=''",

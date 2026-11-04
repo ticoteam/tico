@@ -101,6 +101,7 @@
  "task question": "identity",
  "task relate": "kind",
  "task run": "run-now",
+ "task wait": "milestone",
  "thread edit": "not_found",
  "thread post": "not_found",
  "thread reply": "not_found",

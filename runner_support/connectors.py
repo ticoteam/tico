@@ -14,6 +14,7 @@ from .outage import Outage, log
 ROOT = Path(__file__).resolve().parents[1]
 MAIL_BATCH = 100
 KNOWN_SENDER_RECHECK = 600      # seconds: a hub that refused known_sender is sent the field again after this
+MAIL_ROUNDS = 20       # claim rounds one pass makes for a mailbox while each round's actions succeed (chains)
 CALENDAR_FIELDS = ("occurrence_id", "event_id", "title", "start", "end", "attendees", "meeting_url")
 MAIL_FIELDS = ("thread_id", "epoch", "date", "from_addr", "from_header", "to", "cc", "subject",
                "snippet", "labels", "body", "body_truncated", "attachments", "list_id",
@@ -319,27 +320,36 @@ class ConnectorPublisher:
 
     def mail_action_tick(self):
         """Carry out the mail actions automations queued for the mailboxes this computer reads, and report each.
-        The hub answers 404 while the redesign is off and 403 for a mailbox another computer reads."""
+        A chain's next action is claimed once the one before it is done, so a claim round whose actions all came out
+        ok is followed by another (up to MAIL_ROUNDS); a round with a failure waits for the next pass, which is where
+        a failed action's retry comes. The hub answers 404 while the redesign is off and 403 for a mailbox another
+        computer reads."""
         if self.mail_boxes is None:
             self.mail_boxes = [box["address"] for box in self.client.get("connectors/mail/targets").get("mailboxes") or []]
         done = 0
         for address in self.mail_boxes:
             if self.stop.is_set():
                 break
-            try:
-                claimed = self.client.post("automations/mail-actions/claim", {"mailbox": address})
-            except APIError as exc:
-                if exc.status in (403, 404):
-                    continue
-                raise
-            for action in claimed.get("actions") or []:
-                answer = self.run_action(action)
-                body = {"ok": bool(answer.get("ok")), "detail": str(answer.get("detail") or "")[:1000],
-                        "retry": bool(answer.get("retry", True))}
-                body.update({k: str(answer[k])[:200] for k in ("message", "draft", "thread") if answer.get(k)})
-                self.client.post(f"automations/mail-actions/{action['id']}/result", body,
-                                 key=f"mail-action-{action['id']}-{action.get('attempt', 0)}")
-                done += 1
+            for _ in range(MAIL_ROUNDS):
+                try:
+                    claimed = self.client.post("automations/mail-actions/claim", {"mailbox": address})
+                except APIError as exc:
+                    if exc.status in (403, 404):
+                        break
+                    raise
+                actions = claimed.get("actions") or []
+                ok = bool(actions)
+                for action in actions:
+                    answer = self.run_action(action)
+                    ok = ok and bool(answer.get("ok"))
+                    body = {"ok": bool(answer.get("ok")), "detail": str(answer.get("detail") or "")[:1000],
+                            "retry": bool(answer.get("retry", True))}
+                    body.update({k: str(answer[k])[:200] for k in ("message", "draft", "thread") if answer.get(k)})
+                    self.client.post(f"automations/mail-actions/{action['id']}/result", body,
+                                     key=f"mail-action-{action['id']}-{action.get('attempt', 0)}")
+                    done += 1
+                if not ok:
+                    break
         return done
 
     def mail_cli(self, args):
