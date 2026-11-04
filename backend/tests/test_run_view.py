@@ -266,8 +266,7 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
 
 def test_a_persons_message_carried_to_another_bot_in_a_task_reads_as_the_person(api, monkeypatch):
     """A person's message to a bot that neither owns nor asked the task reaches that bot as a keeper carrier. The task's
-    line reads it as the person's: `from_person` and the queued label take the carried message's person, so a bot's
-    computer hold does not stand for it."""
+    line reads it as the person's: CPU overload does not stand for it, but a memory hold still does."""
     from backend import views
     from backend.tests.test_scheduler import _wake_by_hand
     machine = runner(api, "ana")
@@ -293,7 +292,14 @@ def test_a_persons_message_carried_to_another_bot_in_a_task_reads_as_the_person(
         _wake_by_hand(c, "msg-carry", "coo")
     shown = get(api, f"tasks/{tid}")["execution"]
     assert (shown["message_id"], shown["bot_id"], shown["state"], shown["from_person"]) == ("msg-carry", "coo", "queued", True)
-    assert humans and all(h is True for h in humans), "the carried message is a person's: no bot's computer hold applies"
+    assert humans and all(h is True for h in humans), "the carried message keeps its person's priority"
+    from backend.tests.test_start_places import memory, overload
+    overload(api, machine)
+    assert 'computer busy' not in get(api, f"tasks/{tid}")["execution"]["label"]
+    memory(api, machine, .86)
+    assert 'computer busy: memory' in get(api, f"tasks/{tid}")["execution"]["label"]
+    memory(api, machine, .79)
+    assert 'computer busy: memory' not in get(api, f"tasks/{tid}")["execution"]["label"]
 
 
 def test_an_opt_in_login_queue_names_the_holder_only_to_who_may_see_it(api, queued_login):
