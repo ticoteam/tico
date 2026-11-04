@@ -453,3 +453,32 @@ button.au-chip:hover{background:var(--surface2)}
   .au.ed-pop .au-edf{padding:12px 18px}
 }
 @media (max-width:1099px) and (min-width:761px){.au.ed-pop .au-body,.au.ed-pop.ed-open .au-body{grid-template-columns:184px minmax(0,1fr)}}
+
+/* New inbox and Apply template (automations-new.js): a dialog over the page, a sheet from the bottom on a phone */
+.tmodal.au-nd{width:min(620px,calc(100vw - 32px))}
+.au-nd .tmodal-head>.nav-icon{flex:none;font-size:18px;width:18px;height:18px;color:var(--muted)}
+.au-nd .au-ndb{display:grid;align-content:start;gap:16px;padding:18px}
+.au-ndb input[type=text],.au-ndb select{width:100%;box-sizing:border-box;height:var(--ctl);color:var(--ink)}
+.au-ndb .err{margin:0}
+.au-nd-seg{justify-self:start}
+.au-tps{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.au-tp{display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:0;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.au-tp:hover{border-color:var(--g4)}
+.au-tp[aria-checked="true"]{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
+.au-tp b{font-weight:600}
+.au-tp span{color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}
+.au-nd .au-ndf{display:flex;align-items:center;gap:8px;padding:12px 18px}
+.au-nd-on{flex:1;display:flex;align-items:center;gap:8px;min-width:0;cursor:pointer}
+.au-nd-dests{display:grid;gap:6px;margin:0;padding:0;list-style:none}
+.au-nd-dests li{display:flex;align-items:baseline;gap:8px;min-width:0;font-size:var(--t-sm)}
+.au-nd-dests i{flex:none;width:8px;height:8px;border-radius:50%;background:var(--c)}
+.au-nd-dests span{min-width:0;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:760px){
+  .tmodal.au-nd{width:100vw;max-width:100vw;max-height:92dvh;margin:auto 0 0;border-radius:14px 14px 0 0}
+  .au-nd .au-ndb{padding:16px}
+  .au-tps{grid-template-columns:minmax(0,1fr)}
+  .au-tp{padding:10px 12px;min-height:44px}
+  .au-nd-seg button{min-height:36px}
+  .au-nd .au-ndf{padding:10px 16px calc(10px + env(safe-area-inset-bottom))}
+  .au-ndf>button{min-height:40px}
+}
