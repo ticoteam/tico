@@ -1055,6 +1055,26 @@ def test_a_replay_never_offers_an_item_as_its_own_repeat(gate):
     assert "Pick the launch date" in offered[1].values()
 
 
+def test_a_replayed_question_on_a_task_already_on_the_plate_counts_that_task(gate):
+    """A question about a task already on the plate: the task counts there once, so with ten open items and a budget of
+    ten it replays as sent back, the same as the live gate judged it (not as under budget at nine)."""
+    api, model, token = gate
+    plate(api, 9)
+    task = file(api, token)["task"]               # the tenth open item, on Ben's plate
+    question = {"questions": [{"id": "date", "header": "Date", "question": "Nov 3 or Nov 10?",
+                               "options": [{"label": "Nov 3", "then": "Launch on Nov 3"},
+                                           {"label": "Nov 10", "then": "Launch on Nov 10"}]}], "who": "ben"}
+    r = api.post(f"/api/v2/tasks/{task['id']}/comments", json={"text": "Nov 3 or Nov 10?", "ask": question},
+                 headers=headers(token))
+    assert r.status_code == 200, r.text
+    live = [i for i in items(api) if i["kind"] == "question"][-1]
+    assert live["load"] == 10
+    r = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": H.now()[:10]}, headers=headers("ben-test"))
+    assert r.status_code == 200, r.text
+    [got] = [i for i in r.json()["items"] if i["kind"] == "question"]
+    assert (got["ref"], got["load"], got["would"], got["reason"]) == (task["id"], 10, A.SENT_BACK, "criteria")
+
+
 def test_a_replay_shows_an_admin_only_the_titles_they_may_read(gate, monkeypatch):
     api, model, token = gate
     auth = api.app.state.auth

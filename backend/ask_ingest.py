@@ -849,6 +849,12 @@ def replay_items(c, person, start, end, assistant_bot=None):
     return sorted(out, key=lambda it: it["created_at"])
 
 
+def _leave_out(it):
+    """The task a replayed item leaves out of its own plate: a task is itself, so it does not count itself. A question
+    is about a task already on the plate, which counts there once, as the live gate counted it."""
+    return it["ref"] if it["kind"] == "task" else ""
+
+
 def load_at(c, person, at, leave_out=""):
     """Roughly how full the person's plate was just before `at`: their tasks open then, snoozed ones left out, and the
     replayed item itself (put on them after it was created, it may already be theirs)."""
@@ -900,8 +906,8 @@ def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, view
         if used_today(c, H.KEEPER) + len(page) > daily_cap(store.settings, "bot"):
             raise LookupError("today's decision calls would pass the daily cap")
         person_name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
-        prepared = [(it, load_at(c, person, it["created_at"], it["ref"]),
-                     open_items_at(c, person, it["created_at"], it["ref"], it["asker"]),
+        prepared = [(it, load_at(c, person, it["created_at"], _leave_out(it)),
+                     open_items_at(c, person, it["created_at"], _leave_out(it), it["asker"]),
                      _bot_line(c, it["asker"]), _shown(c, viewer, person, it, can_read)) for it in page]
     out = []
     for it, plate, items, asker, shown in prepared:
