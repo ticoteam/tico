@@ -221,6 +221,10 @@ def test_item_references_are_redacted_in_lists_mutations_replays_and_outbox(api)
     assert response.status_code == 200, response.text
     assert response.json()['outbox']['task'][0]['result_ref'] is None
     assert items(api, rid)['sections']['task'][0]['result_ref'] == hidden['id']
+    listed = get(api, 'meetings')['meetings']
+    assert next(m for m in listed if m['id'] == rid)['outbox']['task'][0]['result_ref'] == hidden['id']
+    assert get(api, f'meetings/{rid}')['outbox']['task'][0]['result_ref'] == hidden['id']
+    assert get(api, f'meetings/{rid}', 'cara-test')['outbox']['task'][0]['result_ref'] is None
 
 
 def test_hard_deletion_cascades_links_without_deleting_the_other_resource(api):

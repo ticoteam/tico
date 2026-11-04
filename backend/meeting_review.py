@@ -106,7 +106,7 @@ def install_meeting_review(app, store, auth, mutate):
                                  'AND (?=\'live\' OR owner=? COLLATE NOCASE) ORDER BY created_at DESC',
                                  (review, review, who.email)):
                 try:
-                    item = media.view(c, who, row[0])
+                    item = media.view(c, who, row[0], auth=auth)
                 except Problem as exc:
                     if exc.status not in (403, 404):
                         raise
@@ -139,4 +139,4 @@ def install_meeting_review(app, store, auth, mutate):
     @app.get('/api/v2/meetings/{id}')
     def detail(request: Request, id: str):
         with store.read() as c:
-            return media.view(c, request.state.identity, id, include_transcripts=True)
+            return media.view(c, request.state.identity, id, include_transcripts=True, auth=auth)

@@ -271,7 +271,7 @@ def authorized(c, who, rid, *, include_deleted=False, write=False):
     raise Problem("forbidden", "This source belongs to another person", 403)
 
 
-def view(c, who, rid, *, include_transcripts=False, auth=None):
+def view(c, who, rid, *, auth, include_transcripts=False):
     record = authorized(c, who, rid)
     meta = record["metadata"]
     state = c.execute("SELECT * FROM media_control WHERE meeting_id=?", (rid,)).fetchone()
@@ -299,7 +299,7 @@ def view(c, who, rid, *, include_transcripts=False, auth=None):
     return result
 
 
-def outbox(c, rid, who=None, auth=None):
+def outbox(c, rid, who, auth):
     """Doc updates, tasks and feature requests still on this meeting — the structured outcomes."""
     groups = {"doc": [], "task": [], "feature": []}
     try:

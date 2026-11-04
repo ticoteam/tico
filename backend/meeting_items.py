@@ -127,7 +127,7 @@ def one(c, rid, iid):
     return row
 
 
-def listing(c, who, rid, auth=None):
+def listing(c, who, rid, auth):
     """Every item on this meeting, grouped by section, plus whether this person may push."""
     record = media.authorized(c, who, rid)
     rows = [task_references.redact(c, auth, who, view(r)) for r in c.execute(

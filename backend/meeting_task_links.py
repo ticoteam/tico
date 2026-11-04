@@ -132,7 +132,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         human_only(who)
         def check(c):
-            media.require_live(media.authorized(c, who, rid))
+            media.authorized(c, who, rid)
             auth.task(c, who, auth.resolve_task(c, who, tid))
         def work(c):
             record = media.authorized(c, who, rid)
