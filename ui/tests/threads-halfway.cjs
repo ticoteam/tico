@@ -265,7 +265,9 @@ let browser = null;
     await row(page, 'm2').scrollIntoViewIfNeeded();
     const b = await box(row(page, 'm2').locator('.th-body'));
     await page.evaluate(() => { window.__ev = []; for (const t of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'contextmenu', 'scroll'])
-      addEventListener(t, ev => window.__ev.push(t + ':' + (ev.pointerType || '') + ':' + (ev.target?.className || ev.target?.nodeName || '')), true); });
+      addEventListener(t, ev => window.__ev.push(t + ':' + (ev.pointerType || '') + ':' + ev.isPrimary + ':' + (ev.target?.closest?.('.th-msg')?.dataset.mid || '-') + ':' + Math.round(performance.now())), true);
+      addEventListener('error', ev => window.__ev.push('error:' + ev.message));
+      const sheet = window.thvSheet; window.thvSheet = (...a) => { window.__ev.push('sheet'); try { return sheet(...a); } catch (e) { window.__ev.push('sheet-error:' + e.message); throw e; } }; });
     const cdp = await page.context().newCDPSession(page);
     await cdp.send('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: [{x: b.x + 20, y: b.y + b.height / 2}]});
     await page.waitForTimeout(650);
