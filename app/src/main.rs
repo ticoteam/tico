@@ -8,6 +8,7 @@
 mod applog;
 mod config;
 mod hub;
+mod orgs;
 mod visual_origin;
 mod bridge;
 mod windows;
