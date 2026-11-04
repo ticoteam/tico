@@ -526,7 +526,7 @@ def test_a_follow_up_still_to_come_is_not_listed_and_wakes_nothing_on_its_own(ap
 
 def test_migration_0065_clears_a_follow_up_nobody_set_and_keeps_one_that_was(api):
     store = api.app.state.store
-    migration = importlib.import_module("backend.migrations.0065_explicit_follow_ups")
+    migration = importlib.import_module("backend.migrations.0070_explicit_follow_ups")
     with store.transaction() as c:
         system_set = task(c, "Renew the car tax")
         person_set = task(c, "Chase the quote")

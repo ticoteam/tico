@@ -189,15 +189,15 @@ async function threadMembersOpen(view) {
   // On a public thread everyone reads already: its members are the bots added to it.
   const onlyBots = ['company', 'team'].includes(t.audience);
   dlg.innerHTML = `<form>${threadDialogHead('Members')}<div class="dash-form"><ul class="thd-list"><li class="muted">Loading…</li></ul>
-    ${t.me?.can_post ? '<details class="thd-add"><summary>Add</summary><div class="thd-add-body"></div></details>' : ''}</div>
+    ${t.me?.can_post ? `<details class="thd-add"><summary>${TL_ICON.plus}Add</summary><div class="thd-add-body"></div></details>` : ''}</div>
     <footer class="dash-form-foot"><span class="err" role="status" data-status></span><span class="spacer"></span><button type="button" class="ghost" data-close>Done</button>${
       t.me?.can_post ? '<button class="primary" type="submit" hidden>Add</button>' : ''}</footer></form>`;
   threadDialogWire(dlg);
   const form = dlg.querySelector('form'), status = form.querySelector('[data-status]');
   let members = [];
   const draw = () => {
-    form.querySelector('.thd-list').innerHTML = members.map(m => `<li>${actorAvatar(m.actor, 22)}<span>${esc(actorName(m.actor))}</span>${
-      m.role === 'owner' ? '<span class="muted">Owner</span>' : ''}<span class="spacer"></span>${
+    form.querySelector('.thd-list').innerHTML = members.map(m => `<li>${actorAvatar(m.actor, 22)}<span class="thd-name">${esc(actorName(m.actor))}</span>${
+      m.role === 'owner' ? '<span class="thd-tag">Owner</span>' : ''}${
       manage && m.actor !== myActor() && m.role !== 'owner' ? `<button type="button" class="ghost small" data-remove="${esc(m.actor)}">Remove</button>` : ''}</li>`).join('')
       || '<li class="muted">Nobody</li>';
     const add = form.querySelector('.thd-add-body');
@@ -333,37 +333,4 @@ function threadKeepOpen(view) {
     } catch (e) { form.querySelector('[data-status]').textContent = e.message; }
   };
   dlg.showModal();
-}
-
-// ----------------------------------------------------------------- make task
-// A task from a message: the server copies the message, keeps its privacy and links back; the viewer picks the title
-// and an owner they may give work to.
-function threadMakeTask(m, view) {
-  const dlg = threadDialog('thread-task', 'Make task');
-  const first = v2Firstline(m.body).slice(0, 120);
-  const owners = [['human:' + (S.me?.id || ''), 'Me'], ...shownEmps().filter(e => e.can_chat !== false && (!e.my_access || e.my_access.write))
-    .map(e => [e.name, e.display_name || e.name])];
-  dlg.innerHTML = `<form>${threadDialogHead('Make task')}<div class="dash-form">
-      <label>Title<input name="title" maxlength="300" required value="${esc(first)}"></label>
-      <label>Owner<select name="owner">${owners.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select></label></div>
-    ${threadDialogFoot('Make task')}</form>`;
-  threadDialogWire(dlg);
-  const form = dlg.querySelector('form');
-  form.onsubmit = async ev => {
-    ev.preventDefault();
-    const title = form.elements.namedItem('title').value.trim(); if (!title) return;
-    try {
-      const r = await post('/v2/threads/messages/' + encodeURIComponent(m.id) + '/task', {title, owner: form.elements.namedItem('owner').value});
-      dlg.close();
-      const id = r?.task?.id || r?.id;
-      toast('Task made', false, id ? {label: 'Open', run: () => { location.hash = '#/task/' + id; }} : undefined);
-    } catch (e) {
-      const status = form.querySelector('[data-status]'), dup = e.body?.error?.code === 'duplicate', twin = dup && e.body.error.task_id;
-      status.textContent = dup ? 'A task already asks for this' : e.message;
-      if (twin) status.innerHTML = `<a href="#/task/${encodeURIComponent(twin)}" data-close>A task already asks for this</a>`;
-      threadDialogWire(dlg);
-    }
-  };
-  dlg.showModal();
-  form.elements.namedItem('title').select();
 }

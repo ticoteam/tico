@@ -1,7 +1,7 @@
 // Threads per role, at desktop and phone width (docs/dev/threads-contract.md, plan §9 "UI per role"): the sidebar's
 // Threads link and its Catch up count, the thread rail (Pinned, Threads, Find, Browse) beside one thread, the pin,
-// Catch up, New thread, a thread with its sub-threads inline, tapping into a sub-thread and back by the breadcrumb, a
-// reply shown as "Checking…" until the server answers, a held message, the bot page's Home and DM, a person's Home,
+// Catch up, New thread, a thread's flat timeline (an older server's sub-threads drawn flat, each reply quoting what it
+// answers), a message shown as "Checking…" until the server answers, a held message, the bot page's Home and DM, a person's Home,
 // New DM, a server without the rail, and a teammate who may see a bot but not read it getting no Home.
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots.
 const {chromium} = require('playwright');
@@ -226,14 +226,6 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
       title: 'A message is held for your review', requester_id: 'Bea', created_at: at(5)}], count: 1, version: 'v1'});
     if (p === '/api/v2/rule-holds/hold3') return json({id: 'hold3', operation: 'threads', can_send: true, reason: 'Names a customer'});
     if (p === '/api/v2/rule-holds/hold1') return json({id: 'hold1', can_send: false});
-    if (p === '/api/v2/rule-holds/hold2') return json({id: 'hold2', operation: 'threads_edit', message_id: 'ed1', can_send: false});
-    if (p === '/api/v2/rule-holds/hold2/withdraw') { seen.withdrawn.push('hold2'); return json({ok: true}); }
-    const edit = p.match(/^\/api\/v2\/messages\/([^/]+)$/);
-    if (edit && method === 'PATCH') {
-      const body = JSON.parse(req.postData() || '{}');
-      if (/secret/i.test(body.text)) return json({held: {id: 'hold2', outcome: 'blocked', rules: [{id: 'r1', text: 'No secrets in threads'}]}});
-      return json({...msg(edit[1], 1, 'human:ana', body.text), thread_id: 't-edit', edited_at: at(0)});
-    }
     const asked = p.match(/^\/api\/v2\/threads\/([^/]+)\/(catch-up|follow|open-earlier)$/);
     if (asked) {
       if (asked[2] === 'catch-up') { seen.catchUps.push({thread: asked[1], ...JSON.parse(req.postData() || '{}')}); return json({thread_id: asked[1], messages: 2, posted: {id: 'cu1'}}); }
@@ -247,9 +239,6 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
     const react = p.match(/^\/api\/v2\/messages\/([^/]+)\/reactions\/(.+)$/);
     // The server answers a reaction with the message's reactions, a bare list.
     if (react) return json(method === 'PUT' ? [{emoji: decodeURIComponent(react[2]), count: 1, actors: ['human:ana']}] : []);
-    const task = p.match(/^\/api\/v2\/threads\/messages\/([^/]+)\/task$/);
-    if (task) { seen.tasks.push({message: task[1], ...JSON.parse(req.postData() || '{}')}); return json({id: 'task1', private: true}); }
-    if (p === '/api/v2/tasks' && method === 'POST') { seen.tasks.push({copied: true}); return json({id: 'task-copy'}); }
     if (p === '/api/v2/threads/search') return json({hits: url.searchParams.get('q') === 'price' ? [{message_id: 'm2', thread_id: 't-plan', title: 'Launch plan',
       sender_id: 'human:ana', created_at: at(58), excerpt: 'What price do we open with?'}] : [], next_cursor: null});
     const call = p.match(/^\/api\/v2\/calls\/([^/]+)\/(join|leave|end|token)$/);
@@ -371,19 +360,22 @@ let browser = null;
     seen.patches.length = 0;
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
 
-    // One thread: its sub-threads inline under their message, indented, deepest capped.
+    // One thread, flat: an older server's tree drawn in its order with no indent, each sub-thread reply quoting the
+    // message its sub-thread opened under.
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     await page.getByText('And churn was low.').waitFor();
     const order = await page.locator('.thv-list .th-msg .th-body').allTextContents();
-    assert.deepEqual(order.slice(0, 5).map(s => s.trim()), ['Kickoff is Monday.', 'What price do we open with?', 'Last quarter we opened at 40.', 'And churn was low.', 'Then 45 this time.'], 'tree order');
-    assert.equal(await page.locator('.th-msg.th-sub[data-mid="s1a"]').getAttribute('style'), '--d:2');
+    assert.deepEqual(order.slice(0, 5).map(s => s.trim()), ['Kickoff is Monday.', 'What price do we open with?', 'Last quarter we opened at 40.', 'And churn was low.', 'Then 45 this time.'], 'time order');
     assert.equal((await page.locator('.th-notshown[data-mid="h1"]').textContent()).trim(), 'Not shown', 'a message the viewer may not read is one quiet row');
-    // Each sub-thread opens with one header row that links to it; its replies follow, indented.
-    assert.deepEqual(await page.locator('.th-subhead').evaluateAll(els => els.map(a => a.getAttribute('href'))), ['#/thread/t-sub', '#/thread/t-sub2']);
-    assert.equal(await page.locator('.th-msg[data-mid="m2"] + .th-subhead + .th-msg[data-mid="s1"]').count(), 1, 'the header sits between the message and its replies');
-    // A title only if it was given one: otherwise the row doesn't repeat the line above it.
-    assert.deepEqual(await page.locator('.th-subhead-title').allTextContents(), ['Pricing']);
-    assert.match(await page.locator('.th-msg[data-mid="s1"] + .th-subhead').innerText(), /^1 reply$/);
+    const lefts = await page.locator('.thv-list .th-msg[data-mid] .th-av').evaluateAll(els => [...new Set(els.map(e => Math.round(e.getBoundingClientRect().left)))]);
+    assert.equal(lefts.length, 1, 'no indent: ' + lefts);
+    assert.equal(await page.locator('.th-subhead, .th-sub').count(), 0, 'no sub-thread heads');
+    const quoted = id => page.locator(`.th-msg[data-mid="${id}"] .th-quote`).getAttribute('data-th-quote');
+    assert.equal(await quoted('s1'), 'm2');
+    assert.equal(await quoted('s1a'), 's1');
+    assert.equal(await quoted('s2'), 'm2');
+    assert.equal(await page.locator('.th-msg[data-mid="s1"] .th-quote-who').textContent(), 'You', 'the viewer\'s own message, as their name reads');
+    assert.equal(await page.locator('.th-msg[data-mid="m1"] .th-quote').count(), 0);
     // A turn's steps load when their fold opens.
     await page.locator('.th-msg[data-mid="m5"] details.run-steps summary').click();
     await page.locator('.th-msg[data-mid="m5"] .steps-list .step-tool').waitFor();
@@ -404,31 +396,14 @@ let browser = null;
     await page.locator('.th-held').getByText('No secrets in threads').waitFor();
     assert.equal(await page.locator('.th-held [data-held-send]').count(), 0, 'Send anyway only when the hold allows it');
 
-    // Reply in sub-thread: one inline box under the message's sub-thread.
+    // A reaction: picked from the hover bar; mine comes from the reactors the server lists, and its bare-list answer
+    // settles the row.
     await page.locator('.th-msg[data-mid="m1"]').hover();
-    await page.locator('.th-msg[data-mid="m1"] [data-th-more]').click();
-    await page.locator('.thv-pop').getByText('Reply in sub-thread').click();
-    await page.locator('.th-reply-text').fill('Monday at ten.');
-    await page.locator('[data-th-reply-send]').click();
-    await page.waitForFunction(() => document.querySelectorAll('.th-reply').length === 0);
-    assert.equal(seen.posts.at(-1).parent_message_id, 'm1');
-
-    // Acknowledge: mine comes from the reactors the server lists, and its bare-list answer settles the row.
-    await page.locator('.th-msg[data-mid="m1"]').hover();
-    await page.locator('.th-msg[data-mid="m1"] [data-th-ack]').click();
+    await page.locator('.th-msg[data-mid="m1"] [data-th-pick]').click();
+    await page.locator('.thv-emoji button[data-k="👍"]').click();
     await page.locator('.th-msg[data-mid="m1"] .th-react.me[aria-pressed="true"]').waitFor();
     await page.locator('.th-msg[data-mid="m1"] .th-react').click();
     await page.waitForFunction(() => !document.querySelector('.th-msg[data-mid="m1"] .th-react'));
-
-    // Make task: the server makes it from the message; the page never copies the words into a task of its own.
-    await page.locator('.th-msg[data-mid="m1"]').hover();
-    await page.locator('.th-msg[data-mid="m1"] [data-th-more]').click();
-    await page.locator('.thv-pop').getByText('Make task').click();
-    await page.locator('#thread-task button[type="submit"]').click();
-    await page.waitForFunction(() => !document.querySelector('#thread-task[open]'));
-    assert.deepEqual(seen.tasks.map(t => t.message), ['m1']);
-    assert.ok(!seen.tasks.some(t => t.copied), 'no task made from copied text');
-    await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
 
     // A late page from the server keeps a newer message the stream already showed.
     await page.evaluate(() => threadViewsLive('messages', {id: 'live1', thread_id: 't-plan', root_id: 't-plan',
@@ -437,14 +412,13 @@ let browser = null;
     await page.evaluate(() => thvRefresh([...THV_VIEWS].find(v => v.id === 't-plan')));
     assert.equal(await page.locator('.th-msg[data-mid="live1"]').count(), 1, 'the refresh did not wipe the live message');
 
-    // A whole tree inline: a long branch keeps its latest messages under "N more", and what is drawn is what is read.
+    // An older server's whole tree, drawn flat: a long branch's start is one link to it, and what is drawn is what is read.
     await page.goto('https://tico-ui.test/#/thread/t-tree');
     await page.getByText('Unread inline.').waitFor();
     await page.waitForFunction(() => document.querySelector('.th-msg[data-mid="n1"]'));
     const mids = () => page.locator('.thv-list [data-mid]').evaluateAll(els => els.map(e => e.dataset.mid).filter(id => !/^f\d/.test(id)));
     assert.deepEqual(await mids(), ['p1', 'r1', 'p2', 'more:t-lb', 'b3', 'b4', 'p3', 'n1']);
-    assert.match(await page.locator('.th-more').textContent(), /2 more.*new/);
-    assert.equal((await page.locator('.th-msg[data-mid="p3"] + .th-subhead').innerText()).replace(/\s+/g, ' '), '1 reply · 1 new');
+    assert.equal(await page.locator('.th-more').getAttribute('href'), '#/thread/t-lb');
     await page.waitForTimeout(150);
     assert.ok(seen.readSeqs.includes('t-nb:24'), 'a sub-thread drawn inline is read: ' + seen.readSeqs);
     assert.ok(seen.readSeqs.includes('t-tree:59') && !seen.reads.includes('t-rb'), 'read as far as drawn; nothing new, nothing sent: ' + seen.readSeqs);
@@ -456,21 +430,14 @@ let browser = null;
     assert.ok(await page.evaluate(() => document.querySelector('.th-newline').nextElementSibling?.classList.contains('th-new')), 'the line sits on the first new one');
     await page.evaluate(() => document.querySelector('.th-msg[data-mid="p1"]').scrollIntoView());
     await shot(page, 'subthreads-desktop');
-    await page.locator('.th-more').click();
-    await page.getByText('Long one.', {exact: true}).waitFor();
-    assert.deepEqual((await mids()).slice(2, 7), ['p2', 'b1', 'b2', 'b3', 'b4'], 'the older part takes the row\'s place');
-    await page.waitForTimeout(150);
-    assert.ok(seen.readSeqs.includes('t-lb:22'), 'opened, it reads to the last message: ' + seen.readSeqs);
-    // A reply in an old sub-thread lands under its parent, new, and Unread goes there.
+    // A reply arriving live in an old sub-thread lands at the bottom, in time order, quoting its sub-thread's message.
     await page.evaluate(() => { const b = document.querySelector('.thv-scroll'); b.scrollTop = b.scrollHeight; });
     await page.evaluate(() => threadViewsLive('messages', {id: 'lv', thread_id: 't-rb', root_id: 't-tree',
       message: {id: 'lv', seq: 70, revision: 0, thread_id: 't-rb', sender_id: 'human:bea', body: 'Late reply.', created_at: new Date().toISOString()}}));
-    assert.deepEqual((await mids()).slice(0, 3), ['p1', 'r1', 'lv']);
-    assert.equal(await page.locator('.th-msg[data-mid="lv"].th-new').count(), 1);
-    assert.match(await page.locator('.th-msg[data-mid="p1"] + .th-subhead').textContent(), /2 replies/);
-    await page.locator('.thv-unread').click();
-    await page.waitForFunction(() => { const b = document.querySelector('.thv-scroll').getBoundingClientRect(), r = document.querySelector('[data-mid="lv"]').getBoundingClientRect(); return r.top >= b.top && r.bottom <= b.bottom; });
-    await page.waitForTimeout(100);
+    assert.equal((await mids()).at(-1), 'lv');
+    assert.equal(await page.locator('.th-msg[data-mid="lv"].th-new').count(), 0, 'arriving at the bottom is not news, in any thread');
+    assert.equal(await page.locator('.th-msg[data-mid="lv"] .th-quote').getAttribute('data-th-quote'), 'p1');
+    await page.waitForTimeout(150);
     assert.ok(seen.readSeqs.includes('t-rb:70'), seen.readSeqs);
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     await page.getByText('And churn was low.').waitFor();
@@ -499,13 +466,10 @@ let browser = null;
     await page.waitForFunction(() => !document.querySelector('#call-bar'));
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
 
-    // Tapping a sub-thread message opens the sub-thread, with the way back.
-    await page.locator('.th-msg[data-mid="s2"] .th-body').click();
-    await page.waitForFunction(() => location.hash === '#/thread/t-sub');
+    // An older sub-thread opened by its link keeps the way back, and reads flat too.
+    await page.goto('https://tico-ui.test/#/thread/t-sub');
     await page.locator('.thv-crumbs a', {hasText: 'Launch plan'}).waitFor();
-    // Opened, it shows its own sub-threads the same way, one step in from itself.
-    assert.equal(await page.locator('.th-msg.th-sub[data-mid="s1a"]').getAttribute('style'), '--d:1');
-    assert.equal(await page.locator('.th-msg[data-mid="s1"] + .th-subhead + .th-msg[data-mid="s1a"]').count(), 1);
+    assert.equal(await page.locator('.th-msg[data-mid="s1a"] .th-quote').getAttribute('data-th-quote'), 's1');
     await page.locator('.thv-back').click();
     await page.waitForFunction(() => location.hash === '#/thread/t-plan');
 
@@ -517,8 +481,8 @@ let browser = null;
     assert.ok(!tabs.includes('chat'));
     assert.equal(await page.locator('.bot-threads-link').count(), 0, 'no Threads with link on a Home');
     await shot(page, 'bot-home-desktop');
-    // The Home's actions (the call and the menu) sit in the Home/DM bar; the thread has no title line.
-    await page.locator('#pane-chat .bot-talk-acts [data-thv-menu]').waitFor();
+    // The Home's actions (the call and the menu) sit in the page's top line; the thread has no title line.
+    await page.locator('#bot-top #bot-top-acts [data-thv-menu]').waitFor();
     assert.equal(await page.locator('#bot-thread .thv-title').count(), 0);
     // Wide, the top tabs give way to Tasks beside the thread; the switch above the thread picks Home or DM.
     assert.equal(await page.locator('#pane-chat [data-talk="home"]').getAttribute('aria-selected'), 'true');
@@ -559,35 +523,8 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/thread/t-sub');
     await page.locator('.thv-head [data-call="start"]').waitFor();
 
-    // A held edit: the message keeps its words, the held text waits under it, and Edit takes it back into the box.
     await page.goto('https://tico-ui.test/#/thread/t-edit');
-    const body = page.locator('.th-msg[data-mid="ed1"] .th-body');
-    await body.getByText('Open at 40.').waitFor();
-    const editWith = async text => {
-      await page.locator('.th-msg[data-mid="ed1"]').hover();
-      await page.locator('.th-msg[data-mid="ed1"] [data-th-more]').click();
-      await page.locator('.thv-pop').getByText('Edit', {exact: true}).click();
-      await page.locator('.th-edit-text').fill(text);
-      await page.locator('[data-th-edit-save]').click();
-    };
-    await editWith('Open at the secret price.');
-    await page.locator('.th-held').getByText('No secrets in threads').waitFor();
-    assert.equal((await body.textContent()).trim(), 'Open at 40.', 'a held edit changes nothing yet');
-    await shot(page, 'held-edit-desktop');
-    await page.locator('.th-held [data-held-edit]').click();
-    assert.equal(await page.locator('.th-edit-text').inputValue(), 'Open at the secret price.');
-    await page.waitForTimeout(100);
-    assert.deepEqual(seen.withdrawn, ['hold2'], 'editing it takes the held one back');
-    await page.locator('.th-edit-text').fill('Open at 45.');
-    await page.locator('[data-th-edit-save]').click();
-    await body.getByText('Open at 45.').waitFor();
-    assert.equal(await page.locator('.th-held').count(), 0);
-    await editWith('Another secret.');
-    await page.locator('.th-held [data-held-drop]').click();
-    await page.waitForFunction(() => !document.querySelector('.th-held'));
-    await page.waitForTimeout(100);
-    assert.equal((await body.textContent()).trim(), 'Open at 45.', 'Discard leaves the message alone');
-    assert.equal(seen.withdrawn.length, 2);
+    await page.locator('.th-msg[data-mid="ed1"] .th-body').getByText('Open at 40.').waitFor();
 
     // The thread menu: Summarize, and one reader's notification setting.
     const pick = async (...labels) => {
@@ -699,6 +636,32 @@ let browser = null;
     await shot(page, 'new-dm-desktop');
     await page.keyboard.press('Escape');
 
+    // Members: each avatar keeps its round size (a group's initials, a bot's shape), names start in one column, and
+    // Owner or Remove sits at the row's end.
+    await page.route('**/api/v2/threads/t-plan/members*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({
+      members: [{actor: 'human:ana', role: 'owner'}, {actor: 'group:ops'}, {actor: 'bot:ops'}, {actor: 'human:bea'}], next_cursor: null})}));
+    await page.goto('https://tico-ui.test/#/thread/t-plan');
+    await page.locator('.thv-head [data-thv-members]').click();
+    const mem = page.locator('#thread-members[open]');
+    await mem.locator('.thd-list li .thd-name').nth(3).waitFor();
+    const rows = await mem.locator('.thd-list li').evaluateAll(lis => lis.map(li => {
+      const box = e => e && e.getBoundingClientRect(), r = box(li), av = box(li.querySelector('.av')), name = box(li.querySelector('.thd-name'));
+      const end = box(li.querySelector('.thd-tag, [data-remove]'));
+      return {w: av.width, h: av.height, avX: av.left, nameX: name.left, endGap: end ? r.right - end.right : null, tag: li.querySelector('.thd-tag')?.textContent || ''};
+    }));
+    for (const [i, r] of rows.entries()) assert.ok(Math.abs(r.w - r.h) < 1 && r.w <= 24, `row ${i}: the avatar is round at its size: ${r.w}x${r.h}`);
+    assert.equal(new Set(rows.map(r => Math.round(r.avX))).size, 1, 'avatars line up');
+    assert.equal(new Set(rows.map(r => Math.round(r.nameX))).size, 1, 'names start at one x');
+    assert.equal(rows[0].tag, 'Owner');
+    for (const [i, r] of rows.entries()) assert.ok(r.endGap !== null && r.endGap <= 8, `row ${i}: Owner or Remove ends the row (${r.endGap}px from its end)`);
+    // Add is a plain link, with no disclosure triangle.
+    const summary = mem.locator('.thd-add>summary');
+    assert.equal(await summary.evaluate(e => getComputedStyle(e).display), 'inline-flex');
+    assert.equal(await summary.locator('svg').count(), 1);
+    await themed(page, 'members');
+    await page.keyboard.press('Escape');
+    await page.unroute('**/api/v2/threads/t-plan/members*');
+
     assert.ok(seen.reads.includes('t-plan'), 'opening a thread marks it read');
     assert.deepEqual(seen.errors, []);
     await page.close();
@@ -785,11 +748,9 @@ let browser = null;
     await page.waitForFunction(() => !document.querySelector('#thread-new')?.open);
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     await page.getByText('And churn was low.').waitFor();
-    // On a phone the tree reads the same, indented less, with no sideways scroll.
+    // On a phone the timeline reads the same, with no sideways scroll; a long press, not a hover bar, holds the actions.
     assert.equal(await page.locator('.th-msg[data-mid="s1a"]').isVisible(), true);
-    // On a phone each message shows only ⋯; Acknowledge is in its menu.
-    assert.equal(await page.locator('.th-msg[data-mid="m1"] [data-th-ack]').isVisible(), false);
-    assert.equal(await page.locator('.th-msg[data-mid="m1"] [data-th-more]').isVisible(), true);
+    assert.equal(await page.locator('.th-msg[data-mid="m1"] [data-th-reply]').isVisible(), false);
     const width = await page.evaluate(() => document.documentElement.scrollWidth);
     assert.ok(width <= 390, 'no sideways scroll: ' + width);
     await shot(page, 'thread-phone');

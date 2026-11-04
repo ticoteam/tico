@@ -431,19 +431,20 @@ Anything the filter can't judge (no model, the spend or daily cap, an error, no 
 its threshold) reaches you as before. Each call is a `judge.call` row that never holds the item's text, and Decide's
 readout counts the outcomes and what people let through.
 
-**Settings → Tasks → What bots may put on you** sets Off, Rehearsal or On, the budget, the chores budget and up to
+**Settings → Tasks → What bots may put on you** sets Off or On, the budget, the chores budget and up to
 ten lines of what you want to be asked about; an owner or admin sets the team default everyone starts from, and
 **Use the team default** goes back to it. A change applies to the next item; nothing already on a plate moves. It
-ships as **Rehearsal**: nothing changes, and **Filtered for you**, a folded line at the foot of Needs you, lists what
-On would have done. With it On, the same line lists what was kept off today, and **Let it through** puts an item on
-your plate in one click and tells the bot once. **Replay a day** on the settings card judges one past day's bot
+ships as **On**. **Filtered for you**, a folded line at the foot of Needs you, lists what was kept off today, and
+**Let it through** puts an item on your plate in one click and tells the bot once. A Rehearsal saved before this
+change reads as On. **Replay a day** on the settings card judges one past day's bot
 items with your settings and your plate as it was then, so you can see what On would have done before you turn it
 on; nothing moves. A replay counts no chores already waiting (none were grouped before the filter), so it never shows
 "chores full". A bot handing its own task to you (one or many) is judged like a task filed for you, and each item is
 judged against your plate as it was just before it. An owner or admin replaying someone else's day sees only the
 titles they may read.
 
-API: `GET`/`PUT`/`DELETE /api/v2/ask-ingest/settings`, `GET /api/v2/ask-ingest/filtered?hours=24`,
+API: `GET`/`PUT`/`DELETE /api/v2/ask-ingest/settings` (`mode` is `off` or `on`; a `rehearsal` sent is saved as `on`),
+`GET /api/v2/ask-ingest/filtered?hours=24`,
 `POST /api/v2/ask-ingest/items/{id}/let-through`, `POST /api/v2/ask-ingest/replay` (`person`, `date`, `offset`, a page
 of up to 25; the person, or an owner or admin).
 
@@ -898,6 +899,12 @@ dependency on one of those checks holds it. A Review or QA check that is itself 
 an open task, holds its ticket at its step with the check's reason ("QA blocked: GitHub refused the remote
 test run, waiting on Ana"), and the ticket's builder gets one notice in the ticket's thread for that
 hold. When the check works again, the ticket returns to its step.
+
+When a task is Blocked by waits Tico tracks, its reason names the open hold or holds and updates when
+they change. A question to a person belongs to the task that asked it: ending a parent task does not
+withdraw a question on an open child. When a question is withdrawn, its asker is told why. Clearing
+the last tracked hold reopens a bot-owned task; an engineering ticket returns to the step it left.
+An owner-written Blocked reason remains manual.
 
 A task filed to DevOps or a person about a blocker can name it: `--blocker <repo> <status> <endpoint>`,
 for example `--blocker acme/app 403 workflow_dispatch`. When an open ask names the same repository, HTTP

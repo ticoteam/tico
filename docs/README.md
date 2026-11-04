@@ -25,7 +25,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
   [Tico AI Gateway](ai-gateway.md) runs bots on Tico picks (a department, a level, Fast or not) with one key from Tico.
   Members can have 25 active bots by default; the owner can change the limit.
 - Hosted Tico: [Joining the Tico waitlist](waitlist.md), [Your Tico account page](account.md), and
-  [Ask for more credit](ask-for-credit.md). Account-page help is **unreleased** while deployment is verified.
+  [Contact support for more credit](ask-for-credit.md). Account-page help is **unreleased** while deployment is verified.
 - Keep Tico running: [Health and recovery](install.md#operating-it), [Updates](updates.md),
   [Backups and restore](install.md#backups-and-restore) and [Support](support.md).
 

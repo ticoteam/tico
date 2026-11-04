@@ -24,6 +24,10 @@
   max-width:min(300px,calc(100vw - var(--rail-left) - 24px));display:flex;align-items:center;border:1px solid var(--line);
   border-radius:999px;background:var(--ask-face);color:var(--ink);box-shadow:0 6px 18px -6px rgba(0,0,0,.35);font-size:var(--t-sm)}
 .ask-peek:not(.ask-on){display:none}   /* a class, not `hidden` (askOn) */
+/* Docked above a thread's composer (askPeekDock): a row of its own in the column, the words never under it. */
+.ask-peek.ask-peek-row{position:static;width:fit-content;max-width:100%;bottom:auto;left:auto;box-shadow:none;background:var(--surface2)}
+/* It is part of the column, so it does not fly in: the page around it does not move twice. */
+.ask-peek.ask-peek-row.ask-on{animation:none}
 .ask-peek-go{flex:1;min-width:0;height:100%;display:flex;align-items:center;padding:0 2px 0 14px;border:0;border-radius:999px 0 0 999px;
   background:transparent;color:inherit;font:inherit;cursor:pointer;text-align:left}
 .ask-peek-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -94,6 +98,7 @@ button.ask-card-q[aria-expanded="true"]{display:block;-webkit-line-clamp:none}
   /* a few words: centred over the dot, as wide as they are */
   .ask-peek{left:50%;translate:-50% 0;max-width:calc(100vw - 24px);bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px)}
   .ask-peek.ask-on{animation-name:ask-rise}
+  .ask-peek.ask-peek-row{left:auto;translate:none;max-width:100%}
   /* A page, not a sheet: the whole screen above the tab bar, nothing of the page behind it showing. */
   .ask-panel{left:0;right:0;width:auto;top:0;height:auto;padding-top:env(safe-area-inset-top);
     bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));border:0;border-radius:0;box-shadow:none}

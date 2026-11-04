@@ -886,6 +886,23 @@ def test_a_task_done_post_without_a_visual_result_has_no_line(gateway, hub):
     assert "visual" not in gateway.slack.posts[0]["text"]
 
 
+def test_a_task_done_notice_whose_task_ref_is_a_list_still_posts_its_result_and_link(gateway, hub):
+    """A saved notice may name its task as a list (what a bot sends). Its first task is the one it is about, so the post
+    still shows the owner's result and the Open task link, and the delivery pass does not fail on it."""
+    link_task_requester(hub)
+    with hub.transaction() as c:
+        made = H.task_create(c, "human:ana", "Q3 numbers", "Chart the quarter.", "bot:legal", lint=False)
+        H.task_comment(c, "bot:legal", made["id"], "Here it is.", extra_refs={"attachments": [visual()]})
+        H.task_update(c, "bot:legal", made["id"], status="done", note="Charted")
+        c.execute("UPDATE messages SET refs=json_set(refs,'$.task',json_array(?)) "
+                  "WHERE json_extract(refs,'$.task_completion.notify')=1", (made["id"],))
+    assert gateway.task_completions() == 1
+    gateway.deliver()
+    text = gateway.slack.posts[0]["text"]
+    assert "1 visual - view in Tico" in text
+    assert text.endswith(f"\n<https://tico.example.com/#/task/{made['id']}|Open task>")
+
+
 def test_a_stored_channel_message_reaches_a_message_automation_once_and_only_after_it_was_made(readers, monkeypatch):
     """The readers' copy of a channel message is what a message automation on that channel hears: offered once, only
     while the redesign is on, and never the backlog from before the automation existed. The row stays `stored`, so

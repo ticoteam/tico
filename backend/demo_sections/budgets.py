@@ -31,7 +31,7 @@ CONTENT = {
     "runs_bots": {"support": {"turns_per_hour": 120, "turns_per_day": 1200},
                   "sdr": {"turns_per_hour": 20, "turns_per_day": 150}},
     # What bots may put on a person (backend/ask_ingest.py): the team default, and Ana's own with the filter On.
-    "tasks_team": {"mode": "rehearsal", "budget": 12, "chores_budget": 4},
+    "tasks_team": {"mode": "on", "budget": 12, "chores_budget": 4},
     "tasks_ana": {"mode": "on", "budget": 8, "chores_budget": 3},
 }
 

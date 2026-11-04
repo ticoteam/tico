@@ -454,11 +454,32 @@ def machine(c, bot):
     # One parse of the computer's report: /api/employees and Health call this once per bot.
     document = readiness_document(row["readiness"])
     detail = {k: v for k, v in bot_readiness(document, bot).items() if k != "tools"}
-    detail = as_served(c, bot, document, detail)
+    detail = as_served(c, bot, document, _lapsed_plan(c, bot, row["runner_id"], document, detail))
     return {"online": online, "awake": awake, "ready": online and detail.get("ready") is True,
             "readiness": detail,
             "machine": {**{k: row[k] for k in ("runner_id", "generation", "label", "owner_id", "last_seen_at",
                                                          "platform", "version")}, **screen_listing(row)}}
+
+
+def _lapsed_plan(c, bot, runner_id, document, detail):
+    """The bot's readiness row, not ready when its computer read a plan's sign-in as ready and no plan signs it in
+    now (execution.signed_in_by_lapsed_plan, which the claim refuses on): the cheap check first, so the plans are
+    read only for a row that looks that way."""
+    from .execution import signed_in_by_lapsed_plan
+    if detail.get("ready") is not True or not signed_in_by_lapsed_plan(document, detail, {}):
+        return detail
+    from . import model_subscriptions, providers
+    runner = c.execute("SELECT id, capabilities FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
+    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    filled = providers.fill(providers.load(c), json.loads(config[0] or "{}") if config else {})
+    if not runner or not signed_in_by_lapsed_plan(document, detail,
+                                                  model_subscriptions.covered_runtimes(c, dict(runner), filled)):
+        return detail
+    from .models_preset import LOGIN_NAMES
+    runtime = str(detail.get("runtime") or "")
+    name = LOGIN_NAMES.get(runtime) or runtime.title()
+    return {**detail, "ready": False, "sign_in": "missing",
+            "problems": [*(detail.get("problems") or []), f"{name} sign-in needed"]}
 
 
 def deploy_draining(c, bot):
