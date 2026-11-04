@@ -38,9 +38,6 @@ const BOOT_ROSTER_WAIT_MS = 10000;
   bootSnapShow(meRead);              // the last screen, as soon as /me says it is this person's (boot-snap.js)
   updPrefetch();
   dashPrefetch();
-  // Health and sidebar counts enrich the page; a slow diagnostic must not hold up opening a chat or task.
-  const status = get('/status').catch(() => null).then(st => { S.status = st; S.statusPending = false; cloudAccessFromStatus(); });
-  const counts = v2Refresh();
   try {
     const [emps, me, people] = await roster;
     bootMark('roster');
@@ -95,6 +92,11 @@ const BOOT_ROSTER_WAIT_MS = 10000;
   bootSnapHandOff();                 // a kept screen stays up, still, until this one settles
   route(); renderHeartbeat(); renderAccount();
   bootMark('route');
+  // Health and sidebar counts enrich the page, so they go out once the roster is in and the page has asked for its own
+  // data: started alongside the roster they took the hub's time from it (Tico Team, Nov 4: roster 660-860 ms with them,
+  // 225-390 ms without), and every page waits on the roster.
+  const status = get('/status').catch(() => null).then(st => { S.status = st; S.statusPending = false; cloudAccessFromStatus(); });
+  const counts = v2Refresh();
   bootPaintWatch();                  // marks the first screen with data and reports the open (boot-timing.js)
   sessionResume();                   // back from signing in: the task that was open opens again (session.js)
   void Promise.all([status, counts]).then(() => {
