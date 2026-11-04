@@ -331,7 +331,7 @@ GET /api/v2/tasks?lane=company&changed_after=<cursor>
 
 ### Which run took a message
 
-Messages sent while a bot is working are folded into its current run (`execution.label` reads "Working - follow-up
+Messages sent while a bot is working are folded into its current run (`execution.label` reads "Working — follow-up
 added"). The messages say so themselves, on the routes that return them (`/messages` and `/snapshot`):
 
 ```json
@@ -353,6 +353,9 @@ added"). The messages say so themselves, on the routes that return them (`/messa
   Use it to show one reply under both messages, and to tell "answered" from "waiting for the next run".
 - These are stored with the run, so they are the same after a restart or a reconnect. If a run fails and its
   messages are queued again, they get a new `run` when the next run takes them.
+- A send that repeats the words of a message whose run is still going is dismissed as a duplicate. The chat keeps
+  showing that run: `execution.label` reads "Working", not "Delivery dismissed". A send dismissed for any other reason
+  still reads "Delivery dismissed".
 
 ## Errors
 
