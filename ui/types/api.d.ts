@@ -3909,6 +3909,7 @@ export type RequesterInput = {
 
 export type Review = {
   action: "approve" | "dismiss" | "restore";
+  audience?: "team" | "participants" | null;
   private?: boolean | null;
   send_to?: string | null;
 };
@@ -7759,6 +7760,7 @@ export type ImportMeetingParams = {
   "Idempotency-Key": string;
 };
 export type ImportMeetingBody = {
+  audience?: "participants" | null;
   context?: Record<string, unknown>;
   duration_seconds?: number | null;
   external_id?: string;

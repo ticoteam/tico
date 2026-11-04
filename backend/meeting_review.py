@@ -14,6 +14,20 @@ class Review(M.Contract):
     private: StrictBool | None = None
     # A bot to hand the meeting to once it is shared, as Send does ("auto" routes it).
     send_to: str | None = Field(default=None, min_length=1, max_length=200)
+    # Who may read it once shared: the Team, or only its participants (media.participants_only). Older Ticos refuse
+    # the field, so a recorder asking for participants only never shares it wider by mistake.
+    audience: Literal['team', 'participants'] | None = None
+
+
+def participants_of(c, rid, record):
+    """The person it is filed for, and whoever was added to or joined the live meeting it came from."""
+    emails = {record['owner'].lower()}
+    for (live,) in c.execute('SELECT id FROM live_meetings WHERE imported_meeting_id=?', (rid,)):
+        for (actor,) in c.execute('SELECT actor FROM live_meeting_humans WHERE meeting_id=? UNION '
+                                  'SELECT actor FROM live_meeting_access WHERE meeting_id=?', (live, live)):
+            if H.is_human(actor):
+                emails.add(((H.human(c, H.actor_id(actor)) or {}).get('email') or '').lower())
+    return sorted(emails - {''})
 
 
 class ReviewMany(M.Contract):
@@ -44,7 +58,7 @@ def install_meeting_review(app, store, auth, mutate):
             raise Problem('review', 'Only a pending meeting can be dismissed', 409)
         return record
 
-    def apply(c, who, rid, action, private=None, send_to=None):
+    def apply(c, who, rid, action, private=None, send_to=None, audience=None):
         record = validate(c, who, rid, action)
         meta = record['metadata']
         if action == 'approve' and send_to and meta['review_state'] == 'pending':
@@ -57,6 +71,12 @@ def install_meeting_review(app, store, auth, mutate):
             meta['reviewed_at'] = H.now()
         if action == 'approve' and private is not None:
             meta['private'] = private
+        if action == 'approve' and audience == 'team':
+            meta.update(private=False)
+            meta.pop('audience', None)
+            meta.pop('audience_emails', None)
+        elif action == 'approve' and audience == 'participants':
+            meta.update(private=True, audience='participants', audience_emails=participants_of(c, rid, record))
         media.save(c, meta, readable=record['transcript_readable'])
         c.execute('UPDATE media_control SET version=version+1 WHERE meeting_id=?', (rid,))
         if action == 'approve':
@@ -134,7 +154,8 @@ def install_meeting_review(app, store, auth, mutate):
 
     @app.post('/api/v2/meetings/{id}/review')
     def review_one(request: Request, id: str, body: Review):
-        return mutate(request, body, lambda c: apply(c, request.state.identity, id, body.action, body.private, body.send_to))
+        return mutate(request, body, lambda c: apply(c, request.state.identity, id, body.action, body.private,
+                                                    body.send_to, body.audience))
 
     @app.get('/api/v2/meetings/{id}')
     def detail(request: Request, id: str):

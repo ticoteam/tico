@@ -1651,6 +1651,30 @@ def install_live_meetings(app, store, auth, write):
                     "changed": result.get("changed", False), "event_id": _meeting(c, rid)["next_event_id"]}
         return mutate(request, body, work)
 
+    @app.post("/api/v2/live-meetings/{rid}/discard")
+    def discard(request: Request, rid: str, body: Join):
+        """The connector kept the meeting on their own computer: it ends here and what was said leaves Tico.
+
+        Turns stay (they hold no words, and the privacy index reads them to keep the bots' replies private).
+        """
+        who = request.state.identity
+        def work(c):
+            row = _connector(c, auth, who, rid)
+            if row["thread_id"]:
+                raise Problem("call_meeting", "This meeting is a call. Control it through the call.", 409)
+            if row["state"] != "ended":
+                c.execute("UPDATE live_meetings SET state='ended',ended_at=?,updated_at=? WHERE id=?",
+                          (H.now(), H.now(), rid))
+                _end_open_turns(c, rid)
+            for table in ("live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_chat_routes",
+                          "live_meeting_chat", "live_meeting_windows", "live_meeting_events"):
+                c.execute(f"DELETE FROM {table} WHERE meeting_id=?", (rid,))
+            _event(c, rid, "meeting.state", {"state": "ended", "by": who.actor, "action": "discard"})
+            return {"id": rid, "state": "ended", "discarded": True}
+        result = mutate(request, body, work)
+        app.state.meeting_frames.stop(rid)
+        return result
+
     @app.get("/api/v2/live-meetings/{rid}/events")
     async def events(request: Request, rid: str, after: int = 0):
         who = request.state.identity
