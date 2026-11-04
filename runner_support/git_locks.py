@@ -68,7 +68,7 @@ def related(cwd, arguments, environment, roots):
     return False
 
 
-def unused(path, lock, roots=()):
+def unused(path, lock, roots=(), *, strict=False):
     if sys.platform != "linux":
         try:
             out = subprocess.run(["/usr/sbin/lsof", "-F", "p", "--", str(path)], capture_output=True, timeout=5, check=False)
@@ -116,7 +116,7 @@ def unused(path, lock, roots=()):
             except FileNotFoundError:
                 continue
             except PermissionError:
-                if not inaccessible_git(process):
+                if not strict and not inaccessible_git(process):
                     continue
                 return False
             for file in files:
@@ -125,7 +125,7 @@ def unused(path, lock, roots=()):
                 except FileNotFoundError:
                     continue
                 except PermissionError:
-                    if inaccessible_git(process):
+                    if strict or inaccessible_git(process):
                         return False
                     continue
                 if (opened.st_dev, opened.st_ino) == (lock.st_dev, lock.st_ino):

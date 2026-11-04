@@ -205,6 +205,7 @@ def test_inaccessible_bot_descriptors_block_lock_recovery_only_for_git_or_unknow
     monkeypatch.setattr(Path, "iterdir", processes)
     (process / "comm").write_text("model-host\n")
     assert git_locks.unused(lock, lock.stat())
+    assert not git_locks.unused(lock, lock.stat(), strict=True), "an unreadable model process may be an instruction writer"
     (process / "comm").write_text("git\n")
     assert not git_locks.unused(lock, lock.stat())
     (process / "comm").unlink()
@@ -721,7 +722,7 @@ def test_instruction_writer_closing_during_fd_scan_cannot_lose_its_edit(tmp_path
     backup = saved / "AGENTS.md.tico-backup-1"
     backup.write_text("same bytes")
 
-    def write_and_close(path, before):
+    def write_and_close(path, before, **kwargs):
         path.write_text("late edit, writer now closed")
         return True
 

@@ -151,7 +151,7 @@ def instruction_backup_note(root, git_dir):
             else:
                 from . import git_locks
                 before = backup.lstat()
-                if stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and git_locks.unused(backup, before):
+                if stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and git_locks.unused(backup, before, strict=True):
                     # A writer may have written and closed while the fd scan was in progress.
                     if backup.read_bytes() != (root / name).read_bytes():
                         names.append(os.path.relpath(backup, root))

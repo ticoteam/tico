@@ -92,7 +92,7 @@ fn git_related(process: &Path, roots: &[PathBuf]) -> Option<bool> {
 }
 
 #[cfg(target_os = "linux")]
-async fn unused(_path: &Path, lock: &std::fs::Metadata, roots: &[PathBuf]) -> bool {
+async fn unused(_path: &Path, lock: &std::fs::Metadata, roots: &[PathBuf], strict: bool) -> bool {
     let Ok(processes) = std::fs::read_dir("/proc") else { return false };
     for process in processes {
         let Ok(process) = process else { return false };
@@ -104,14 +104,14 @@ async fn unused(_path: &Path, lock: &std::fs::Metadata, roots: &[PathBuf]) -> bo
         let files = match std::fs::read_dir(process.path().join("fd")) {
             Ok(files) => files,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(_) if !inaccessible_git(&process.path()) => continue,
+            Err(_) if !strict && !inaccessible_git(&process.path()) => continue,
             Err(_) => return false,
         };
         for file in files {
             let Ok(file) = file else { return false };
             match std::fs::metadata(file.path()) {
                 Ok(m) if m.dev() == lock.dev() && m.ino() == lock.ino() => return false,
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound && inaccessible_git(&process.path()) => return false,
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound && (strict || inaccessible_git(&process.path())) => return false,
                 _ => {}
             }
         }
@@ -127,7 +127,7 @@ async fn output(program: &str, args: &[&str]) -> Option<std::process::Output> {
 }
 
 #[cfg(not(target_os = "linux"))]
-async fn unused(path: &Path, _lock: &std::fs::Metadata, roots: &[PathBuf]) -> bool {
+async fn unused(path: &Path, _lock: &std::fs::Metadata, roots: &[PathBuf], _strict: bool) -> bool {
     let Some(out) = output("/usr/sbin/lsof", &["-F", "p", "--", &path.to_string_lossy()]).await else { return false };
     if out.status.code() != Some(1) || !out.stdout.is_empty() || !out.stderr.is_empty() { return false; }
     let Some(out) = output("ps", &["-axo", "pid=,comm="]).await else { return false };
@@ -150,7 +150,7 @@ async fn unused(path: &Path, _lock: &std::fs::Metadata, roots: &[PathBuf]) -> bo
     true
 }
 
-pub async fn no_open_file(path: &Path, metadata: &std::fs::Metadata) -> bool { unused(path, metadata, &[]).await }
+pub async fn no_open_file(path: &Path, metadata: &std::fs::Metadata) -> bool { unused(path, metadata, &[], true).await }
 
 fn quarantine(path: &Path, before: &std::fs::Metadata) -> Result<bool, String> {
     let backup = path.with_file_name(format!("{}.stale-{}-{}", path.file_name().unwrap().to_string_lossy(),
@@ -168,7 +168,7 @@ fn quarantine(path: &Path, before: &std::fs::Metadata) -> Result<bool, String> {
 async fn move_abandoned(path: &Path, roots: &[PathBuf]) -> Result<bool, String> {
     let Some(before) = old_file(path) else { return Ok(false) };
     if !path.parent().and_then(|p| p.canonicalize().ok()).is_some_and(|p| roots.iter().any(|r| p.starts_with(r)))
-        || !unused(path, &before, roots).await { return Ok(false); }
+        || !unused(path, &before, roots, false).await { return Ok(false); }
     let Some(after) = old_file(path) else { return Ok(false) };
     if (before.dev(), before.ino(), before.mtime(), before.mtime_nsec()) != (after.dev(), after.ino(), after.mtime(), after.mtime_nsec()) { return Ok(false); }
     quarantine(path, &before)
@@ -250,7 +250,7 @@ pub async fn idle_locked(root: &Path) -> bool {
     let at = if root.file_name().is_some_and(|s| s == ".git") { root.parent().unwrap() } else { &root };
     let Some(roots) = process_roots(std::slice::from_ref(&root), at) else { return false };
     let Ok(metadata) = root.metadata() else { return false };
-    if !unused(&root, &metadata, &roots).await { return false; }
+    if !unused(&root, &metadata, &roots, false).await { return false; }
     let mut pending = vec![root.clone()];
     while let Some(dir) = pending.pop() {
         let Ok(entries) = std::fs::read_dir(dir) else { return false };
