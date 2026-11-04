@@ -55,8 +55,7 @@ const posted = (page, name) => page.evaluate(n => window.__posted.filter(([k]) =
     await page.locator('#org-switch').waitFor({state:'visible'});
     assert.ok(await page.locator('#org-add').isVisible());
     await page.locator('#org-switch').click();
-    const [where] = await posted(page, 'showOrgMenu');
-    assert.ok(Number.isInteger(where.x) && Number.isInteger(where.y) && where.x >= 0 && where.y > 0, JSON.stringify(where));
+    assert.deepEqual(await posted(page, 'showOrgMenu'), [null]);
     await page.locator('#account').click();
     await page.locator('#org-add').click();
     assert.equal((await posted(page, 'addOrg')).length, 1);

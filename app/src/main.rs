@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Emitter, EventTarget, LogicalPosition, Manager, State, WindowEvent};
+use tauri::{AppHandle, Emitter, EventTarget, Manager, State, WindowEvent};
 #[cfg(target_os = "macos")]
 use tauri::RunEvent;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
@@ -86,7 +86,7 @@ fn main() {
         }))
         // The real list is read in setup, once the app's folders are known.
         .manage(AppState::new(Orgs::new(Document::default(), None), None))
-        .invoke_handler(tauri::generate_handler![app_log, bridge, connect_server, server_address, rail_orgs, rail_switch, rail_add, rail_menu])
+        .invoke_handler(tauri::generate_handler![app_log, bridge, connect_server, server_address, setup_info, cancel_setup, rail_orgs, rail_switch, rail_add, rail_menu])
         .setup(move |app| {
             match applog::attach(log_dir(app.handle()).as_deref()) {
                 Some(path) => log::info!("{} {} starting; this log is {}", config::app_name(), app.package_info().version, applog::shown(&path)),
@@ -272,9 +272,13 @@ fn rail_list(app: &App) -> Value {
     let state = app.state::<AppState>();
     let list = state.orgs.lock().unwrap();
     let open = list.active().map(|org| org.id.clone());
+    // The rail is the app's own page, so it may show each org's address and email (its initials and color come from
+    // them); org pages never receive this list.
     let items: Vec<Value> = list.orgs().iter().map(|org| serde_json::json!({
         "id": org.id,
-        "title": org.title(),
+        "url": org.url,
+        "name": org.name,
+        "email": org.email,
         "active": open.as_deref() == Some(org.id.as_str()),
     })).collect();
     Value::Array(items)
@@ -293,13 +297,13 @@ pub(crate) fn add_org(app: &App) {
     });
 }
 
-/// The org menu, shown at a point in the main window: the orgs, then add and remove. Spawned, because a popup cannot
-/// run inside the call that asked for it.
-pub(crate) fn popup_orgs(app: &App, x: f64, y: f64) {
+/// The org menu, at the pointer: the orgs, then add and remove. Spawned, because a popup cannot run inside the call
+/// that asked for it. At the pointer, because macOS measures popup points from the frame top, which Tauri can't give.
+pub(crate) fn popup_orgs(app: &App) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let (Some(window), Ok(menu)) = (main_window(&app), org_menu(&app)) else { return };
-        let _ = window.popup_menu_at(&menu, LogicalPosition::new(x, y));
+        let _ = window.popup_menu(&menu);
     });
 }
 
@@ -359,11 +363,18 @@ async fn remove_org(app: &App, id: &str) {
     }
     #[cfg(target_os = "macos")]
     {
-        if let Some(store) = removed.store_id() {
-            if let Err(e) = app.remove_data_store(*store.as_bytes()).await {
-                // The store is still in use: its data is cleared at least, and the list no longer names it.
-                log::warn!("could not delete an org's data store, so clearing it instead: {e}");
-                let _ = clear_store(app, &removed);
+        match removed.store_id() {
+            Some(store) => {
+                if let Err(e) = app.remove_data_store(*store.as_bytes()).await {
+                    // The store is still in use: its data is cleared at least, and the list no longer names it.
+                    log::warn!("could not delete an org's data store, so clearing it instead: {e}");
+                    if let Err(e) = clear_store(app, &removed) { log::warn!("could not clear an org's data store: {e}"); }
+                }
+            }
+            // The org moved over from server.txt uses the default store, which cannot be deleted: clear it, so its
+            // sign-in goes too. Every other org has a store of its own, so nothing of theirs is in it.
+            None => {
+                if let Err(e) = clear_store(app, &removed) { log::warn!("could not clear the default data store: {e}"); }
             }
         }
     }
@@ -409,10 +420,34 @@ async fn rail_add(app: App, webview: tauri::Webview) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn rail_menu(app: App, webview: tauri::Webview, x: f64, y: f64) -> Result<(), String> {
+fn rail_menu(app: App, webview: tauri::Webview, id: String) -> Result<(), String> {
     only_rail(&webview)?;
-    popup_orgs(&app, x, y);
+    let Some(org) = app.state::<AppState>().orgs.lock().unwrap().get(&id).cloned() else { return Ok(()) };
+    let app = app.clone();
+    // One org's menu at the pointer: Remove that org (the rail's own right-click). Spawned, like every popup.
+    tauri::async_runtime::spawn(async move {
+        let Some(window) = main_window(&app) else { return };
+        let Ok(menu) = Menu::with_items(&app, &[
+            &match MenuItem::with_id(&app, format!("org-remove:{}", org.id), format!("Remove {}…", org.title()), true, None::<&str>) {
+                Ok(item) => item,
+                Err(_) => return,
+            },
+        ]) else { return };
+        let _ = window.popup_menu(&menu);
+    });
     Ok(())
+}
+
+/// The setup page asks whether it is adding an org (one is already open), so it can offer Cancel.
+#[tauri::command]
+fn setup_info(app: App) -> Value {
+    serde_json::json!({"hasOrgs": orgs::multi_org_build() && org_count(&app) > 0})
+}
+
+/// Cancel on the setup page while adding an org: the setup window closes and the open org stays.
+#[tauri::command]
+fn cancel_setup(app: App) {
+    if org_count(&app) > 0 { close_setup_later(&app); }
 }
 
 /// The org commands are the rail's alone; the org pages have no use for them.
@@ -471,6 +506,11 @@ fn build_menu(app: &App) -> tauri::Result<()> {
 
 fn menu_event(app: &App, id: &str) {
     // Switching runs as its own task: it opens a page, which a menu event should not wait for.
+    if let Some(org) = id.strip_prefix("org-remove:") {
+        let found = app.state::<AppState>().orgs.lock().unwrap().get(org).cloned();
+        if let Some(found) = found { ask_remove(app, &found); }
+        return;
+    }
     if let Some(org) = id.strip_prefix("org-switch:") {
         let (app, org) = (app.clone(), org.to_string());
         tauri::async_runtime::spawn(async move {

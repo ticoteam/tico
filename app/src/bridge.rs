@@ -6,7 +6,7 @@ use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::orgs;
-use crate::windows::{open_meeting_window, org_label, Home, RAIL, RAIL_WIDTH};
+use crate::windows::{open_meeting_window, org_label, Home};
 use crate::{active_org, add_org, applog, emit_orgs, log_dir, org_count, popup_orgs, update_now, visual_origin, App, AppState, LOG_LINES};
 
 /// The page's side of the bridge: `window.ticoNative(name).postMessage(body)`, which
@@ -111,9 +111,9 @@ pub(crate) fn bridge(app: App, webview: Webview, name: String, body: Option<Valu
         // Help's "Show the app's log": the log file, selected in Finder (or the platform's file manager).
         "showLog" => show_log(&app),
         // The open org's name and email, as its page reports them: kept for the rail and the org menu.
-        "orgInfo" => org_info(&app, body.as_ref())?,
+        "orgInfo" => org_info(&app, webview.label(), body.as_ref())?,
         // The org menu, at the page's point. It lists the shell's own orgs; the page is told nothing back.
-        "showOrgMenu" => show_org_menu(&app, body.as_ref())?,
+        "showOrgMenu" => if orgs::multi_org_build() { popup_orgs(&app) },
         "addOrg" => {
             if orgs::multi_org_build() { add_org(&app); }
         }
@@ -123,7 +123,7 @@ pub(crate) fn bridge(app: App, webview: Webview, name: String, body: Option<Valu
 }
 
 /// The open org's name and email from its page, kept for that org alone. Missing fields are blank.
-fn org_info(app: &App, body: Option<&Value>) -> Result<(), String> {
+fn org_info(app: &App, label: &str, body: Option<&Value>) -> Result<(), String> {
     let object = body.and_then(Value::as_object).ok_or("The org details need a name and an email.")?;
     let text = |key: &str| match object.get(key) {
         None | Some(Value::Null) => Ok(String::new()),
@@ -132,9 +132,11 @@ fn org_info(app: &App, body: Option<&Value>) -> Result<(), String> {
     };
     let (name, email) = (text("name")?, text("email")?);
     let state = app.state::<AppState>();
+    // The caller's own org, from its webview's label: a switch between the check and here must not move the
+    // details to the org that opened next.
     let id = {
         let mut list = state.orgs.lock().unwrap();
-        let id = list.active().map(|org| org.id.clone());
+        let id = label.strip_prefix("org-").filter(|id| list.get(id).is_some()).map(str::to_string);
         if let Some(id) = &id {
             list.set_details(id, &name, &email);
         }
@@ -143,18 +145,6 @@ fn org_info(app: &App, body: Option<&Value>) -> Result<(), String> {
     if id.is_some() {
         emit_orgs(app);
     }
-    Ok(())
-}
-
-/// Pops the org menu at the page's point (CSS px in the page, which sits to the right of the rail when it is shown).
-fn show_org_menu(app: &App, body: Option<&Value>) -> Result<(), String> {
-    if !orgs::multi_org_build() { return Ok(()); }
-    let point = body.and_then(|b| Some((b.get("x")?.as_f64()?, b.get("y")?.as_f64()?)));
-    let Some((x, y)) = point.filter(|(x, y)| x.is_finite() && y.is_finite()) else {
-        return Err("The org menu needs a position.".into());
-    };
-    let left = if app.get_webview(RAIL).is_some() { RAIL_WIDTH } else { 0.0 };
-    popup_orgs(app, left + x, y);
     Ok(())
 }
 

@@ -30,7 +30,4 @@ async function nativeOrgMenu() {
   swap.hidden = !many;
 }
 $('#org-add')?.addEventListener('click', () => nativeHandler('addOrg')?.postMessage(null));
-$('#org-switch')?.addEventListener('click', ev => {
-  const box = ev.currentTarget.getBoundingClientRect();
-  nativeHandler('showOrgMenu')?.postMessage({x: Math.round(box.left), y: Math.round(box.bottom)});
-});
+$('#org-switch')?.addEventListener('click', () => nativeHandler('showOrgMenu')?.postMessage(null));

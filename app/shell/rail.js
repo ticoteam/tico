@@ -35,7 +35,7 @@ function render(orgs) {
     button.addEventListener('click', () => { if (!org.active) invoke('rail_switch', { id: org.id }).catch(() => {}); });
     button.addEventListener('contextmenu', event => {
       event.preventDefault();
-      invoke('rail_menu', { id: org.id, x: event.clientX, y: event.clientY }).catch(() => {});
+      invoke('rail_menu', { id: org.id }).catch(() => {});
     });
     li.append(button);
     return li;
