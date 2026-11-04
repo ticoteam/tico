@@ -218,15 +218,20 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     assert.equal(await page.evaluate(() => document.activeElement?.id), 'support-open');
     // A reply while the person is typing in another field: the ? gets its dot and the chat waits. It opens by itself once
     // the field is left (the unsent words are still in its box), and opening reads the reply. No notice, no toast.
-    const focused = await page.evaluate(() => { const i = Object.assign(document.createElement('input'), {id: 't-elsewhere'}); document.body.append(i); i.focus(); return document.activeElement?.id; });
+    const focused = await page.evaluate(() => {
+      window.__focus = [];
+      for (const type of ['focusin', 'focusout']) document.addEventListener(type, e => window.__focus.push(type + ' ' + (e.target.id || e.target.tagName)), true);
+      const i = Object.assign(document.createElement('input'), {id: 't-elsewhere'}); document.body.append(i); i.focus();
+      return document.activeElement?.id;
+    });
     assert.equal(focused, 't-elsewhere', 'the field being typed in has focus');
     v.hq.reply = true;
     await page.evaluate(() => window.supportPoll());
     await page.locator('#support-open.has-unread').waitFor();
-    const waiting = await page.evaluate(() => ({unread: window.supportState().unread, active: document.activeElement?.id,
-      open: document.getElementById('support-pop').open, label: document.getElementById('support-open').getAttribute('aria-label')}));
+    const {log, ...waiting} = await page.evaluate(() => ({unread: window.supportState().unread, active: document.activeElement?.id,
+      open: document.getElementById('support-pop').open, label: document.getElementById('support-open').getAttribute('aria-label'), log: window.__focus.slice()}));
     assert.deepEqual(waiting, {unread: 1, active: 't-elsewhere', open: false, label: 'Tico team, 1 new'},
-      `the reply waits while the field has focus; calls: ${v.calls.slice(-6).join(' | ')}`);
+      `the reply waits while the field has focus; focus: ${JSON.stringify(log)}; calls: ${v.calls.slice(-6).join(' | ')}`);
     assert.equal(await page.locator('#ask-row').evaluate(el => getComputedStyle(el, '::after').content), 'none', 'no count on Ask');
     await page.evaluate(() => document.getElementById('t-elsewhere').blur());
     await pop.locator('.support-msg.them').waitFor();
