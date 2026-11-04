@@ -110,7 +110,7 @@ CREATE INDEX IF NOT EXISTS update_archive_actor ON update_archive_overrides(acto
 CREATE TABLE IF NOT EXISTS update_queue(
  id TEXT PRIMARY KEY, bot TEXT NOT NULL, kind TEXT NOT NULL, day TEXT NOT NULL, rank INTEGER NOT NULL,
  state TEXT NOT NULL, message_id TEXT, sent_at TEXT, done_at TEXT, reason TEXT,
- delivery_only INTEGER NOT NULL DEFAULT 0,
+ delivery_only INTEGER NOT NULL DEFAULT 0, run_id TEXT,
  UNIQUE(bot, kind, day));
 CREATE INDEX IF NOT EXISTS update_queue_day ON update_queue(day, state, rank);
 CREATE TABLE IF NOT EXISTS update_settings(
@@ -316,6 +316,12 @@ def build_queue(c, day, kind, assistant=None):
         c.execute("INSERT INTO update_queue(id,bot,kind,day,rank,state) VALUES(?,?,?,?,?,'queued')",
                   (H.new_id(), author, kind, day, rank))
     return len(order) + len(people)
+
+
+def cycle_done(c, day):
+    """Whether today's cycle has nothing left to send or settle: no request for `day` is queued or out. The Update step
+    is pending until this is true; PR1's `complete_pending` asks it on each pass."""
+    return c.execute("SELECT 1 FROM update_queue WHERE day=? AND state IN ('queued','sent') LIMIT 1", (day,)).fetchone() is None
 
 
 def drafted_people(c):
@@ -541,10 +547,13 @@ def request_text(c, bot, kind, day, redo=False, delivery=False):
             "Open:", line(open_, lambda r: f"{r['title']} ({r['status']})"),
             "Waiting on a person:", line(asked, lambda r: f"{r['title']} ({H.actor_name(c, r['owner_id'])})"),
             "Your goals:", line(goals, lambda r: r["title"]),
-            "Quiet tasks (no change since your last update):", line(slots["quiet_tasks"], str),
-            f"Learnings to keep (up to {LEARNINGS_MAX}):", line(slots["learnings"], str),
-            "Suggestions:", line(slots["suggestions"], str),
         ]
+    # The slots go to either kind: a week in review is asked with what a day is, so a Friday request carries them too.
+    facts += [
+        "Quiet tasks (no change since your last update):", line(slots["quiet_tasks"], str),
+        f"Learnings to keep (up to {LEARNINGS_MAX}):", line(slots["learnings"], str),
+        "Suggestions:", line(slots["suggestions"], str),
+    ]
     team, missing = team_updates(c, bot, kind, day)
     if team or missing:
         ask.insert(1, "You manage a team: your update is your own work and what matters from theirs, naming who did it. "
@@ -818,15 +827,16 @@ def send_request(c, row, assistant=None, delivery=False):
     return message
 
 
-def dispatch(c, at=None, assistant=None):
-    """One step, from the scheduler's tick: build today's queue after 05:00, settle the request
+def dispatch(c, at=None, assistant=None, build=True):
+    """One step, from the scheduler's tick: build today's queue after 05:00 when `build` (the Update step builds it
+    from maintenance with build=False, once the scheduler's start is switched off), settle the request
     that is out, and send the next one. At most one request is out at a time. With an `assistant`
     (drafting is on), a person's draft is next once no bot can be asked: the caller writes it. A bot's request
     is sent as the Update step decided it (backend/maintenance_steps/update.py): a delivery-only turn when its row
     says so, and a bot with no work is skipped on the row before it gets here."""
     local = local_now(at)
     day = local.date().isoformat()
-    if local.hour >= START_HOUR:
+    if build and local.hour >= START_HOUR:
         build_queue(c, day, kind_for(day), assistant)
     out = c.execute("SELECT * FROM update_queue WHERE state='sent' ORDER BY sent_at LIMIT 1").fetchone()
     if out and settle_sent(c, out):

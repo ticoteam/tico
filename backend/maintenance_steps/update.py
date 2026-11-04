@@ -7,8 +7,9 @@ bot's request before the queue's pump sends it:
   (`delivery_only`; that turn ends `delivered_without_update` and is never retried: close call D);
 - every other bot is asked, as before.
 
-The pump (`updates.dispatch`, scheduler.py's tick) sends the rest one at a time, so the step returns `pending` while
-they go out. It is not wired into the scheduler yet: PR1 registers this step and switches off the old 05:00 start.
+The pump (`updates.dispatch`, scheduler.py's tick) sends the rest one at a time: the step returns `pending` while any of
+today's requests is queued or out (`updates.cycle_done`). It is not wired into the scheduler yet: PR1 registers this
+step and switches off the old 05:00 start.
 """
 from .. import updates
 from ..store import H
@@ -83,6 +84,7 @@ def _cycle(c, ctx, local):
     settings = ctx["store"].settings        # the app's settings; ctx["settings"] is this step's own row
     writer = updates.writer_for(c, settings, ctx["store"])
     built = updates.build_queue(c, day, kind, settings.assistant_bot if writer else None)
+    c.execute("UPDATE update_queue SET run_id=? WHERE day=? AND run_id IS NULL", (ctx["run_id"], day))
     chart = updates._chart(c)
     skipped = delivered = asked = 0
     rows = c.execute("SELECT * FROM update_queue WHERE state='queued' AND day=? AND redo=0 AND bot NOT LIKE 'human:%' "
@@ -96,9 +98,11 @@ def _cycle(c, ctx, local):
         c.execute("UPDATE update_queue SET delivery_only=? WHERE id=?", (int(decided == "deliver"), row["id"]))
         delivered += decided == "deliver"
         asked += decided == "ask"
-    queued = c.execute("SELECT count(*) FROM update_queue WHERE state='queued' AND day=?", (day,)).fetchone()[0]
+    # Pending while any of today's requests is queued or out: the pump sends the queued ones and settles the ones out.
+    open_ = c.execute("SELECT count(*) FROM update_queue WHERE day=? AND state IN ('queued','sent')", (day,)).fetchone()[0]
     details = {"day": day, "kind": kind, "built": built, "asked": asked, "delivery_only": delivered,
-               "skipped": skipped, "queued": queued}
-    reason = (f"today's {kind} cycle: {queued} requests queued, {skipped} skipped (no work since their last update), "
+               "skipped": skipped, "open": open_}
+    reason = (f"today's {kind} cycle: {open_} requests queued or out, {skipped} skipped (no work since their last update), "
               f"{delivered} delivery-only")
-    return _result("pending" if queued else "ran", reason, checked=len(rows), found=asked + delivered, details=details)
+    return _result("ran" if updates.cycle_done(c, day) else "pending", reason, checked=len(rows),
+                   found=asked + delivered, details=details)

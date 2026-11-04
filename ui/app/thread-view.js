@@ -518,12 +518,15 @@ function thvStatusReplied(view, m) {
 
 // ---- a daily update request and the bot's turn that writes the update
 // The server sends a bot its update request as a notice from the keeper that carries `refs.update_request`
-// (backend/updates.py send_request). The bot writes its update in the run that request starts, so the request and the
-// bot's own messages after it, in the same thread, read as one "Update generated" line. A group ends at the first message
-// that is not that bot's in that thread (a person's, another bot's, the keeper's, a hidden or collapsed row) and at a
+// (backend/updates.py send_request). The bot writes its update in the run that request starts, so the request and that
+// run's messages in the same thread read as one "Update generated" line. The run's messages are the bot's first reply to
+// the request (its `in_reply_to` names the request) and the bot's later messages from that same turn (`refs.turn_id`
+// matches the reply's). A group ends at the first message that is not one of those: a person's, another bot's, the
+// keeper's, another turn's message from the same bot (even one right after the reply), a hidden or collapsed row, or a
 // deleted message. The next request is the keeper's, so it ends a group too. An update card is never in a group: the
 // posted update keeps its own row, as it always did. A deleted request has no refs, so it is an ordinary message again.
 const thvUpdateReq = m => m?.sender_id === 'keeper' && !!m.refs?.update_request;
+// A message the request's bot posted in this thread, that is not an update card or deleted.
 const thvUpdateTurn = (m, req) => m?.sender_id === req.recipient_id && m.thread_id === req.thread_id && !m.deleted && !thvIsUpdateCard(m);
 // Each message in a group, by id, mapped to the id of the request that starts the group (a request maps to itself).
 function thvUpdateGroups(view) {
@@ -531,7 +534,15 @@ function thvUpdateGroups(view) {
   msgs.forEach((req, i) => {
     if (!thvUpdateReq(req) || !thvBot(req.recipient_id)) return;
     of.set(req.id, req.id);
-    for (let j = i + 1; j < msgs.length && thvUpdateTurn(msgs[j], req); j++) of.set(msgs[j].id, req.id);
+    let turn;   // the turn that answers this request: set by the bot's first reply to it, undefined until then
+    for (let j = i + 1; j < msgs.length && thvUpdateTurn(msgs[j], req); j++) {
+      const m = msgs[j];
+      if (turn === undefined) {
+        if (m.in_reply_to !== req.id) break;
+        turn = m.refs?.turn_id ?? null;
+      } else if (m.in_reply_to !== req.id && !(turn && m.refs?.turn_id === turn)) break;
+      of.set(m.id, req.id);
+    }
   });
   return of;
 }

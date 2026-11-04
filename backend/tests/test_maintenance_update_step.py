@@ -4,6 +4,7 @@ the request, bottom-up order with a manager waiting on its reports, the wake lim
 linter for version 2 only, purge_rejected keeping old updates, the Friday weekly kind, the draft's spend under
 `update-draft`, and what a turn reports back."""
 import importlib.util
+import io
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from backend import models as M
 from backend import run_triggers as RT
 from backend.maintenance_steps import update as step
 from backend.store import H
+from clients.judge import gateway_writer, llm_writer
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.tests.test_bot_contact import bot
 
@@ -323,4 +325,97 @@ def test_migration_0083_adds_the_columns_once_and_marks_old_updates_version_one(
     cols = {r[1] for r in conn.execute("PRAGMA table_info(updates)")}
     assert {"format_version", "learnings_saved", "suggestions_seen", "delivery_batch_id"} <= cols
     assert conn.execute("SELECT format_version FROM updates").fetchone()[0] == 1
-    assert "delivery_only" in {r[1] for r in conn.execute("PRAGMA table_info(update_queue)")}
+    assert {"delivery_only", "run_id"} <= {r[1] for r in conn.execute("PRAGMA table_info(update_queue)")}
+
+
+def test_dispatch_with_build_off_never_starts_a_queue(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        turn(c, bid(c, "ops"))
+        assert updates.dispatch(c, TUESDAY, build=False) is None
+        assert c.execute("SELECT count(*) FROM update_queue").fetchone()[0] == 0, "the step builds the queue, not the pump"
+        assert updates.dispatch(c, TUESDAY) is not None
+        assert c.execute("SELECT count(*) FROM update_queue").fetchone()[0] > 0, "with build on, the pump builds it"
+
+
+def test_the_step_is_pending_while_a_request_is_queued_or_out_and_ran_once_the_cycle_is_done(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        ops = bid(c, "ops")
+        turn(c, ops)
+    assert run_step(api)["status"] == "pending"
+    with store.transaction() as c:
+        assert states(c)[ops] == "queued" and not updates.cycle_done(c, DAY)
+        c.execute("UPDATE update_queue SET state='sent', sent_at=? WHERE day=? AND bot=?", (H.now(), DAY, ops))
+        assert not updates.cycle_done(c, DAY), "a request that is out is not done"
+    assert run_step(api)["status"] == "pending"
+    with store.transaction() as c:
+        c.execute("UPDATE update_queue SET state='posted', done_at=? WHERE day=?", (H.now(), DAY))
+        assert updates.cycle_done(c, DAY)
+    result = run_step(api)
+    assert result["status"] == "ran" and result["details"]["open"] == 0
+    with store.read() as c:
+        assert {r["run_id"] for r in c.execute("SELECT run_id FROM update_queue WHERE day=?", (DAY,))} == {"run-test"}
+
+
+def fake_answer(body, seen):
+    """An opener that records each request and answers with `body`, the JSON a provider sends."""
+    def opener(request, timeout=None):
+        seen.append(request)
+        return io.BytesIO(json.dumps(body).encode())
+    return opener
+
+
+def test_a_draft_that_is_not_json_is_still_metered_as_unusable_spend_and_asked_again(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("INSERT INTO update_queue(id,bot,kind,day,rank,state,sent_at) "
+                  "VALUES('draft-bad','human:ana','daily',?,0,'sent',?)", (DAY, H.now()))
+    answer = {"choices": [{"message": {"content": "Here is your update, not JSON"}}],
+              "usage": {"prompt_tokens": 120, "completion_tokens": 40}}
+    write = llm_writer("openai", "key", "acme-draft-model", opener=fake_answer(answer, []))
+    updates.write_draft(store, "human:ana", write, "coo")
+    with store.read() as c:
+        spend = c.execute("SELECT target, detail FROM events WHERE action='judge.spend'").fetchall()
+        row = c.execute("SELECT state, tries FROM update_queue WHERE id='draft-bad'").fetchone()
+    assert [r["target"] for r in spend] == ["update-draft"]
+    detail = json.loads(spend[0]["detail"])
+    assert detail["model"] == "acme-draft-model" and detail.get("unusable") is True
+    assert (row["state"], row["tries"]) == ("queued", 1), "the draft is asked again, once"
+
+
+WRITER_ANSWERS = {
+    "openai": {"choices": [{"message": {"content": '{"body": "- Shipped"}'}}], "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
+    "anthropic": {"content": [{"type": "text", "text": '{"body": "- Shipped"}'}], "usage": {"input_tokens": 10, "output_tokens": 5}},
+    "google": {"candidates": [{"content": {"parts": [{"text": '{"body": "- Shipped"}'}]}}], "usageMetadata": {"promptTokenCount": 10}},
+}
+OUTPUT_CAP = {"openai": lambda b: b["max_completion_tokens"], "anthropic": lambda b: b["max_tokens"],
+              "google": lambda b: b["generationConfig"]["maxOutputTokens"]}
+
+
+@pytest.mark.parametrize("provider", sorted(WRITER_ANSWERS))
+def test_every_provider_writer_caps_the_answer_at_the_output_limit(provider):
+    seen = []
+    write = llm_writer(provider, "key", "acme-model", opener=fake_answer(WRITER_ANSWERS[provider], seen))
+    assert write("system", "user") == {"body": "- Shipped"}
+    assert OUTPUT_CAP[provider](json.loads(seen[0].data)) == 4096
+
+
+def test_the_gateway_writer_caps_the_answer_at_the_output_limit():
+    seen = []
+    write = gateway_writer(lambda: "gw-key", "https://gateway.example/v1", "acme-model",
+                           opener=fake_answer(WRITER_ANSWERS["openai"], seen))
+    assert write("system", "user") == {"body": "- Shipped"}
+    assert json.loads(seen[0].data)["max_completion_tokens"] == 4096
+
+
+def test_a_friday_request_carries_the_quiet_tasks_learnings_and_suggestions_too(api, monkeypatch):
+    slots = {"quiet_tasks": ["Quiet: Acme refund"], "learnings": ["Keep the refund rule"],
+             "suggestions": ["Trim the weekly report"]}
+    monkeypatch.setattr(updates, "request_slots", lambda c, bot: slots)
+    with api.app.state.store.read() as c:
+        ops = bid(c, "ops")
+        weekly = updates.request_text(c, ops, "weekly", "2026-10-02")
+        daily = updates.request_text(c, ops, "daily", "2026-10-02")
+    for text in (weekly, daily):
+        assert "Quiet: Acme refund" in text and "Keep the refund rule" in text and "Trim the weekly report" in text

@@ -10,8 +10,8 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 const now = Date.now(), at = min => new Date(now - min * 60000).toISOString();
-const me = {member: true, following: true, notify: 'live', last_read_seq: 6, unread: 0, activity: false, can_post: true, can_manage: false};
-const thread = {id: 't-upd', title: 'Daily updates', audience: 'members', last_seq: 6, last_unread_seq: 0, last_message_at: at(5), me, members: []};
+const me = {member: true, following: true, notify: 'live', last_read_seq: 7, unread: 0, activity: false, can_post: true, can_manage: false};
+const thread = {id: 't-upd', title: 'Daily updates', audience: 'members', last_seq: 7, last_unread_seq: 0, last_message_at: at(5), me, members: []};
 const msg = (id, seq, from, body, min, extra = {}) => ({id, seq, thread_id: 't-upd', sender_id: from, body, created_at: at(min), reply_to: null, routed: null, ...extra});
 // The server's request: a keeper notice to the bot, carrying the queue id and the wake that starts the update's run.
 const request = (id, seq, bot, min) => msg(id, seq, 'keeper', "Write today's update: what you did, what is next and what is blocked.", min,
@@ -22,8 +22,10 @@ const messages = () => [
   request('u1', 3, 'bot:ops', 20),
   msg('u2', 4, 'bot:ops', 'Update: the invoice run is checked and queued for 4pm.', 19,
     {recipient_id: 'keeper', in_reply_to: 'u1', refs: {turn_id: 'turn-u1'}, run: {steps: 2, tool_calls: 1, took_s: 3}}),
-  msg('a3', 5, 'human:ana', 'Thanks, that helps.', 10, {recipient_id: 'bot:ops'}),
-  msg('a4', 6, 'bot:ops', 'Anything else you want checked?', 5, {recipient_id: 'human:ana'}),
+  // Another turn of the same bot, right after the reply: an ordinary reply, not part of the update's line.
+  msg('b1', 5, 'bot:ops', 'Also filed the Acme refund.', 18, {recipient_id: 'human:ana', in_reply_to: 'a1', refs: {turn_id: 'turn-a1'}}),
+  msg('a3', 6, 'human:ana', 'Thanks, that helps.', 10, {recipient_id: 'bot:ops'}),
+  msg('a4', 7, 'bot:ops', 'Anything else you want checked?', 5, {recipient_id: 'human:ana'}),
 ];
 
 // The thread page with its API faked: the timeline above, and empty answers for what the page reads beside it.
@@ -50,7 +52,7 @@ async function open(browser, {phone = false} = {}) {
     if (p === '/api/v2/threads/rail') return json({pinned: [], threads: [thread], catch_up: 0, next_cursor: null, dms: {}});
     if (p === '/api/v2/threads' && method === 'GET') return json({attention: [], threads: [thread], dms: [], next_cursor: null});
     if (p === '/api/v2/rule-holds') return json({holds: [], next_cursor: null});
-    if (p === '/api/v2/threads/t-upd/timeline') return json({thread, breadcrumb: [], next_cursor: null, messages: messages(), bot_status: [], read_marks: {'t-upd': 6}});
+    if (p === '/api/v2/threads/t-upd/timeline') return json({thread, breadcrumb: [], next_cursor: null, messages: messages(), bot_status: [], read_marks: {'t-upd': 7}});
     if (/^\/api\/v2\/threads\/[^/]+\/(read|members|calls)$/.test(p)) return json(p.endsWith('calls') ? {calls: [], next_before: null, available: false}
       : p.endsWith('members') ? {members: [], next_cursor: null} : {ok: true});
     if (/^\/api\/v2\/threads\/[^/]+\/bot-status$/.test(p)) return json({bots: []});
@@ -84,6 +86,8 @@ let browser = null;
     // The request and the bot's reply are one line, and neither row shows.
     await line(page).waitFor();
     assert.equal(await page.locator('.th-upd-btn').count(), 1, 'one line for the pair');
+    assert.equal(await row(page, 'b1').count(), 1, 'a second turn of the same bot is drawn');
+    assert.equal(await row(page, 'b1').locator('.th-head .th-bot').count(), 1, 'it keeps its header and bot tag');
     assert.equal(await line(page).textContent(), '› Update generated');
     assert.equal(await line(page).getAttribute('aria-expanded'), 'false');
     assert.equal(await row(page, 'u1').count(), 0, 'the request is hidden');

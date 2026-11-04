@@ -7,7 +7,7 @@ update, since it was never held to the new rules.
 Three columns hold what a turn reports back: `learnings_saved` (how many learnings the bot kept), `suggestions_seen` (the
 suggestions it acted on, a JSON list) and `delivery_batch_id` (the delivery the post answered). `update_queue.delivery_only`
 marks a request that only delivers learnings or suggestions: a completed turn that posts nothing ends
-`delivered_without_update` and is not asked again.
+`delivered_without_update` and is not asked again. `update_queue.run_id` is the Update step run that decided the row.
 
 On a new file the update tables do not exist yet, so this skips them: updates.SCHEMA makes the same columns. The
 default of 1 is the same in both places, so a row written without naming a version reads as the old shape. Running it
@@ -29,5 +29,9 @@ def up(conn):
                                   ("delivery_batch_id", "TEXT")):
             if name not in have:
                 conn.execute(f"ALTER TABLE updates ADD COLUMN {name} {declaration}")
-    if "update_queue" in tables and "delivery_only" not in _columns(conn, "update_queue"):
-        conn.execute("ALTER TABLE update_queue ADD COLUMN delivery_only INTEGER NOT NULL DEFAULT 0")
+    if "update_queue" in tables:
+        have = _columns(conn, "update_queue")
+        if "delivery_only" not in have:
+            conn.execute("ALTER TABLE update_queue ADD COLUMN delivery_only INTEGER NOT NULL DEFAULT 0")
+        if "run_id" not in have:
+            conn.execute("ALTER TABLE update_queue ADD COLUMN run_id TEXT")
