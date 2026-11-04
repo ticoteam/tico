@@ -15,7 +15,7 @@ from backend import maintenance_limits as L
 from backend.maintenance_steps import collect
 from backend.tests.test_api import api, get, headers  # noqa: F401  (fixtures and helpers)
 
-mig = importlib.import_module("backend.migrations.0077_maintenance")
+mig = importlib.import_module("backend.migrations.0081_maintenance")
 
 
 def la(day, hour, minute=0):
@@ -267,7 +267,7 @@ def test_the_api_saves_the_schedule_cap_and_steps_and_refuses_bad_ones(api, monk
     assert steps["learn"]["enabled"] is True and steps["learn"]["frequency"] == "custom"
     assert steps["learn"]["custom_every"] == 3 and steps["learn"]["custom_unit"] == "hours"
     assert steps["dream"]["max_bots"] == 5
-    patch(api, "maintenance", {"steps": [{"key": "find_stuck", "frequency": "day"}]}, expected=422)
+    patch(api, "maintenance", {"steps": [{"key": "collect", "frequency": "day"}]}, expected=422)
     # suggest has no custom interval saved (learn kept the 3 hours above, so a frequency-only change to it is valid)
     patch(api, "maintenance", {"steps": [{"key": "suggest", "frequency": "custom"}]}, expected=422)
     patch(api, "maintenance", {"steps": [{"key": "learn", "max_bots": 2}]}, expected=422)

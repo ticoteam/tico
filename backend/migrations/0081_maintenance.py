@@ -25,16 +25,18 @@ import json
 from datetime import datetime, timezone
 
 STEP_KEYS = ("collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream")
-# key, enabled by default, frequency by default, "Most bots per run" by default
+# key, enabled by default, frequency by default, "Most bots per run" by default, custom interval and unit by default.
+# Find stuck is custom every 6 hours. It stays on its old timer (the grouped roundup at 06:00, 12:00 and 18:00) until its
+# track lands, so this cadence is its seeded setting, not what runs it today. Every 6 hours is four runs a day, not three.
 DEFAULTS = (
-    ("collect", 1, "run", None),
-    ("clean_up", 1, "run", None),
-    ("check_health", 1, "run", None),
-    ("find_stuck", 1, "run", 10),
-    ("learn", 0, "day", None),
-    ("suggest", 1, "day", None),
-    ("update", 1, "day", None),
-    ("dream", 1, "day", 3),
+    ("collect", 1, "run", None, None, None),
+    ("clean_up", 1, "run", None, None, None),
+    ("check_health", 1, "run", None, None, None),
+    ("find_stuck", 1, "custom", 10, 6, "hours"),
+    ("learn", 0, "day", None, None, None),
+    ("suggest", 1, "day", None, None, None),
+    ("update", 1, "day", None, None, None),
+    ("dream", 1, "day", 3, None, None),
 )
 KEY_LIST = ", ".join(f"'{key}'" for key in STEP_KEYS)
 RUN_STATUSES = "'ran','skipped','failed','off','pending'"
@@ -129,8 +131,8 @@ def up(conn):
         conn.execute(statement)
     chosen = switches(_stored(conn, "system_routines"))
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
-    for key, enabled, frequency, max_bots in DEFAULTS:
+    for key, enabled, frequency, max_bots, every, unit in DEFAULTS:
         conn.execute(
-            "INSERT OR IGNORE INTO maintenance_steps(key,enabled,frequency,max_bots,updated_at,updated_by_id) "
-            "VALUES(?,?,?,?,?,?)",
-            (key, int(chosen.get(key, bool(enabled))), frequency, max_bots, stamp, "migration"))
+            "INSERT OR IGNORE INTO maintenance_steps(key,enabled,frequency,max_bots,custom_every,custom_unit,"
+            "updated_at,updated_by_id) VALUES(?,?,?,?,?,?,?,?)",
+            (key, int(chosen.get(key, bool(enabled))), frequency, max_bots, every, unit, stamp, "migration"))

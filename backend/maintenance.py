@@ -33,7 +33,7 @@ REGISTRY_KEY = "maintenance"      # registry_metadata: the run's schedule, pause
 ORDER = ("collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream")
 NAMES = {"collect": "Collect", "clean_up": "Clean up", "check_health": "Check health", "find_stuck": "Find stuck",
          "learn": "Learn", "suggest": "Suggest", "update": "Update", "dream": "Dream"}
-EVERY_RUN = ("collect", "clean_up", "check_health", "find_stuck")   # "How often" is every run, and fixed
+EVERY_RUN = ("collect", "clean_up", "check_health")   # "How often" is every run, and fixed (Find stuck is custom: every 6 hours)
 OLD_TIMER = ("check_health", "find_stuck", "learn", "suggest", "update")   # still on their own timers until their track lands
 LIVE = {"collect": collect.run, "clean_up": clean_up.run, "dream": dream.run}
 SCHEDULES = {"hourly": 1, "2h": 2, "3h": 3, "6h": 6, "12h": 12, "daily": 0}
