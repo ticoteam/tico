@@ -3,13 +3,13 @@ from urllib.parse import urlencode
 
 from backend import hubdb as H, task_references
 from backend.auth import Identity
-from backend.tests.test_api import api, as_member, get, headers, post, restrict  # noqa: F401
-from backend.tests.test_meeting_items import add, change, items, push, record
+from backend.tests.test_api import api, as_member, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.test_meeting_items import add, change, items, record
 
 
 def task(api, title='Review the plan', requester='human:ana', owner='human:ben', **kw):
     with api.app.state.store.transaction() as c:
-        return H.task_create(c, requester, title, 'Review the plan and report back.', owner, lint=False, **kw)
+        return H.task_create(c, requester, title, 'Review the plan and report back.', owner, lint=False, deduplicate=False, **kw)
 
 
 def link(api, rid, ids, token='ana-test', kind='linked', expected=200, key=None):
@@ -53,6 +53,27 @@ def test_sent_links_require_the_requester_and_batches_are_atomic(api):
     link(api, rid, [mine['id']], kind='proposal', expected=422)
 
 
+def test_an_assistant_links_as_its_person(api):
+    from backend.tests.test_assistant import assistant_turn
+    rid = record(api, token='ben-test')
+    mine = task(api, requester='human:cara', private=False)
+    _, attempt = assistant_turn(api, 'cara-test')
+    result = link(api, rid, [mine['id']], attempt['token'], kind='sent')
+    assert result['tasks'][0]['created_by'] == 'human:cara'
+    assert get(api, f"tasks/{mine['id']}/meetings", attempt['token'])['meetings']
+    remove(api, rid, mine['id'], attempt['token'])
+
+
+def test_a_bot_is_refused_the_person_only_link_routes(api):
+    rid, t = record(api), task(api, private=False)
+    _, _, claimed = setup_attempt(api)
+    token = claimed['attempt']['token']
+    get(api, f'meetings/{rid}/tasks', token, expected=403)
+    link(api, rid, [t['id']], token, expected=403)
+    remove(api, rid, t['id'], token, expected=403)
+    get(api, f"tasks/{t['id']}/meetings", token, expected=403)
+
+
 def test_each_answer_checks_full_task_access_including_bot_read(api):
     as_member(api, 'cara@acme.example')
     rid = record(api, token='ben-test')
@@ -60,6 +81,7 @@ def test_each_answer_checks_full_task_access_including_bot_read(api):
     gated = task(api, owner='bot:inbox', private=False)
     link(api, rid, [public['id'], gated['id']])
     assert [t['task_id'] for t in get(api, f'meetings/{rid}/tasks', 'cara-test')['tasks']] == [public['id']]
+    assert get(api, f'meetings/{rid}/tasks?limit=1', 'cara-test')['next_cursor'] is None
     link(api, rid, [gated['id']], 'cara-test', expected=404)
     get(api, f"tasks/{gated['id']}/meetings", 'cara-test', expected=404)
     remove(api, rid, gated['id'], 'cara-test', expected=404)
@@ -205,6 +227,7 @@ def test_hard_deletion_cascades_links_without_deleting_the_other_resource(api):
     rid, t = record(api), task(api)
     link(api, rid, [t['id']])
     with api.app.state.store.transaction() as c:
+        c.execute('DELETE FROM media_control WHERE meeting_id=?', (rid,))
         c.execute('DELETE FROM meetings WHERE id=?', (rid,))
         assert not c.execute('SELECT 1 FROM meeting_task_links WHERE task_id=?', (t['id'],)).fetchone()
         assert H.task(c, t['id'])

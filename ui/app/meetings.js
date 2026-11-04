@@ -883,14 +883,12 @@ function meetItemsRender(state, rec) {
   const sections = MEET_SECTIONS.map(({key, title}) => {
     const rows = data.sections?.[key] || [];
     const proposed = (data.sections?.[key] || []).filter(it => it.status === 'proposed').length;
-    const linked = key === 'task' ? state.linkedTasks?.[rec.id] : null;
-    const linkedHTML = (linked?.tasks || []).map(t => `<div class="meet-item"><span class="t">${t.number ? '#' + esc(t.number) + ' ' : ''}${esc(t.title)} · ${esc(t.status)}</span><a href="#/task/${encodeURIComponent(t.task_id)}">Open</a></div>`).join('');
     return `<section class="meet-sec" data-sec="${key}"><header><h4>${esc(title)}</h4>
         ${proposed ? `<span class="count">${proposed}</span>` : ''}
         ${canPush && proposed > 1 ? `<button class="linkish" type="button" data-all="${key}">Push all</button>` : ''}
         <button class="linkish" type="button" data-add="${key}">Add</button></header>
-      ${rows.map(it => meetItemHTML(state, it, canPush)).join('') || (!linkedHTML ? '<div class="meet-empty">Nothing yet.</div>' : '')}
-      ${linkedHTML}${linked?.next_cursor ? '<button class="linkish" type="button" data-linked-more>More</button>' : ''}
+      ${rows.map(it => meetItemHTML(state, it, canPush)).join('') || '<div class="meet-empty">Nothing yet.</div>'}
+      ${key === 'task' ? '<div data-linked-tasks></div>' : ''}
       ${state.itemAdd === key ? `<div class="meet-item"><form data-new="${key}">
           <textarea data-text aria-label="What to add" placeholder="What should happen?"></textarea>
           ${meetItemFields(key, {})}
@@ -899,8 +897,7 @@ function meetItemsRender(state, rec) {
   }).join('');
   box.innerHTML = `<div class="cols">${sections}</div>`;
   meetItemsHandlers(state, rec);
-  const more = $('[data-linked-more]', box);
-  if (more) more.onclick = () => { more.disabled = true; meetLinkedTasksLoad(state, rec.id, state.linkedTasks[rec.id].next_cursor); };
+  meetLinkedTasksRender(state, rec.id);
   box.querySelectorAll('.at[data-seek]').forEach(b => { b.onclick = () => meetSeek(Number(b.dataset.seek)); });
 }
 function meetItemsHandlers(state, rec) {
@@ -990,6 +987,18 @@ async function meetItemsLoad(state, id) {
   }
   return data;
 }
+function meetLinkedTasksRender(state, id) {
+  if (MEET !== state || !state.open || state.selected !== id) return;
+  const slot = $('[data-linked-tasks]');
+  if (!slot) return;
+  const linked = state.linkedTasks?.[id];
+  slot.innerHTML = (linked?.tasks || []).map(t => `<div class="meet-item"><span class="t">${t.number ? '#' + esc(t.number) + ' ' : ''}${esc(t.title)} · ${esc(t.status)}</span><a href="#/task/${encodeURIComponent(t.task_id)}">Open</a></div>`).join('')
+    + (linked?.next_cursor ? '<button class="linkish" type="button" data-linked-more>More</button>' : '');
+  const empty = $('[data-sec="task"] .meet-empty');
+  if (empty) empty.hidden = !!linked?.tasks?.length;
+  const more = $('[data-linked-more]', slot);
+  if (more) more.onclick = () => { more.disabled = true; meetLinkedTasksLoad(state, id, linked.next_cursor); };
+}
 async function meetLinkedTasksLoad(state, id, cursor) {
   try {
     const query = new URLSearchParams({limit: '20'});
@@ -998,7 +1007,7 @@ async function meetLinkedTasksLoad(state, id, cursor) {
     if (MEET !== state) return;
     const previous = cursor ? state.linkedTasks?.[id]?.tasks || [] : [];
     state.linkedTasks = {...state.linkedTasks, [id]: {...result, tasks: [...previous, ...(result.tasks || [])]}};
-    if (state.open && state.selected === id) meetItemsRender(state, {...(state.list.find(r => r.id === id) || {}), id});
+    meetLinkedTasksRender(state, id);
   } catch (e) {
     if (MEET === state && state.selected === id) {
       const more = $('[data-linked-more]');

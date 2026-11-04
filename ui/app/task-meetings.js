@@ -13,8 +13,8 @@ function taskMeetingsAdopt(d, task) {
     if (d.tmEl !== slot || !slot.isConnected) return;
     rows.push(...(result.meetings || []));
     slot.hidden = !rows.length;
-    slot.innerHTML = `<h3 class="rail-h">Meetings</h3><div class="tlinks">${rows.map(m =>
-      `<span class="tlink"><span>${esc(m.title)}</span> <span class="muted">${esc(String(m.started_at || '').slice(0, 10))}</span> <a href="#/meetings?meeting=${encodeURIComponent(m.meeting_id)}">Open</a></span>`).join('')}</div>${result.next_cursor ? '<button class="linkish" type="button" data-meetings-more>More</button>' : ''}`;
+    slot.innerHTML = `<h3 class="rail-h">Meetings</h3><ul class="task-meetings-list">${rows.map(m =>
+      `<li><span class="title">${esc(m.title)}</span><time>${esc(String(m.started_at || '').slice(0, 10))}</time><a href="#/meetings?meeting=${encodeURIComponent(m.meeting_id)}">Open</a></li>`).join('')}</ul>${result.next_cursor ? '<button class="linkish" type="button" data-meetings-more>More</button>' : ''}`;
     const more = $('[data-meetings-more]', slot);
     if (more) more.onclick = async () => {
       more.disabled = true;

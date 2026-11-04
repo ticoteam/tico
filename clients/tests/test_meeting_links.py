@@ -8,6 +8,8 @@ class Api:
         self._tico_is_botops = False
 
     def get(self, path, **query):
+        if path == 'me':
+            return {'actor': 'human:ana', 'role': 'human'}
         self.calls.append(('GET', path, query))
         return {'meetings': [], 'next_cursor': None} if path.endswith('/meetings') else {'tasks': []}
 
