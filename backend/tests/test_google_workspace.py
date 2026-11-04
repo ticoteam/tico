@@ -356,7 +356,7 @@ def test_a_pending_key_becomes_connected_when_its_check_passes(api, private, cov
     assert answer == {"ok": True, "mailbox": MAILBOX, "error_kind": None,
                       "message": "Google accepts this key for this mailbox.", "workspace": answer["workspace"]}
     assert answer["workspace"]["status"] == "connected" and answer["workspace"]["probe"] == {"mailbox": MAILBOX}
-    assert answer["workspace"]["scopes"] == [CALENDAR, GMAIL]
+    assert answer["workspace"]["scopes"] == [CALENDAR, CALENDAR + ".readonly", GMAIL, W.READ_ONLY_SCOPES["gmail"][0]]
     assert [row["status"] for row in rows(api)] == ["connected"]
     assert check(api, {"mailbox": "other@elsewhere.example"}, expected=422)["error"]["code"] == "mailbox"
 

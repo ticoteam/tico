@@ -164,6 +164,12 @@ def install(app, store, auth, mutate):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             found = view(c, bot)
+            # Send mail in Settings > Google is the company's own switch over every bot's: off, the bot's connector
+            # refuses each send before any approval (connectors/mail/policy.py), and the bot reads sending as off.
+            from .google_workspace import permissions
+            found["company_send"] = permissions(c)["send_mail"]
+            if who.actor == "bot:" + bot and not found["company_send"]:
+                found["outbound_send"] = False
             from . import lifecycle
             if who.actor == "bot:" + bot and lifecycle.is_onboarding(c, bot):
                 # An onboarding bot sends nothing (backend/lifecycle.py): its mail connector reads sending as off and

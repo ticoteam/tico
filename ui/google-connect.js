@@ -84,11 +84,30 @@
       <div class="row"><button type="button" class="ghost" data-copy-prompt>Copy</button>${more}</div></div>`;
 
   // The Workspace prompt holds the setup command, so it lives exactly as long as the command does (only in this page).
-  function workspacePrompt(made) {
+  // What Tico may do (Settings > Google, the company's one setting): reading is always on; the rest are boxes.
+  const MAY = [
+    ['organize_mail', 'Organize mail', 'Label, archive and draft.'],
+    ['send_mail', 'Send mail', 'Each bot also needs Mail sending on: Settings > Bots > Edit > Mail sending.'],
+    ['change_calendar', 'Create and change calendar events', ''],
+  ];
+  const allows = (g, name) => g?.permissions?.[name] !== false;
+  const asksFor = g => ['read mail and calendar', ...MAY.filter(([name]) => allows(g, name)).map(([, label]) => label.toLowerCase())]
+    .join(', ');
+
+  function mayCard(g) {
+    const box = ([name, label, note]) => `<label class="google-may-row"><input type="checkbox" data-google-may="${name}"${
+      allows(g, name) ? ' checked' : ''}><span>${label}${note ? `<span class="muted">${note}</span>` : ''}</span></label>`;
+    return `<section class="google-card" data-google-may-card><h3>What Tico may do</h3>
+      <div class="google-may-row" data-google-may-read><span class="google-may-always" aria-hidden="true"></span><span>Read mail and calendar<span class="muted">Always on.</span></span></div>
+      ${MAY.map(box).join('')}</section>`;
+  }
+
+  function workspacePrompt(made, g) {
     const domain = made.domain || 'your domain';
     const minutes = Math.max(1, Math.round((Date.parse(made.expires_at) - Date.now()) / 60000));
     return [
       `Connect Tico to the Google Workspace for ${domain}.`,
+      `Tico will ask Google for: ${asksFor(g)}.`,
       '',
       `1. Use gcloud signed in as a Google Workspace super admin of ${domain}: in Cloud Shell (${CLOUD_SHELL}), or locally after gcloud auth login.`,
       `2. Run this command. It is valid ${minutes} minutes, one use. Don't save it anywhere:`,
@@ -102,6 +121,7 @@
     const domain = defaultDomain(g) || 'our Google Workspace';
     return [
       `Set up Google sign-in for Tico. Use a browser signed in to Google Cloud as an admin of ${domain}.`,
+      `Tico will ask Google for: ${asksFor(g)}.`,
       '',
       `1. Create or pick a Google Cloud project under ${domain}'s Google organization (the Internal audience needs one).`,
       '2. Turn on the Gmail API (gmail.googleapis.com) and the Google Calendar API (calendar-json.googleapis.com) in it: APIs & Services > Library, or gcloud services enable gmail.googleapis.com calendar-json.googleapis.com --project <project>.',
@@ -118,9 +138,9 @@
 
   // The part of step 1 that shows the setup command (inside the prompt, or bare), in its own box so a Domain edit can
   // drop it in place without a repaint taking the cursor out of the field.
-  function madePart(how, made) {
+  function madePart(how, made, g) {
     const inner = how === 'agent'
-      ? (made ? promptBlock('workspace', workspacePrompt(made), '<button type="button" class="ghost" data-ws-prompt>New prompt</button>')
+      ? (made ? promptBlock('workspace', workspacePrompt(made, g), '<button type="button" class="ghost" data-ws-prompt>New prompt</button>')
         : '<div class="row"><button type="button" class="primary" data-ws-prompt>Make prompt</button></div>')
       : (made ? `<p class="muted">Paste this in Cloud Shell. It expires at ${esc(clock(made.expires_at))}.</p>
           <div class="machine-command"><code>${esc(made.command)}</code>
@@ -150,10 +170,10 @@
     }
     const how = howOf(host, 'workspace');
     const body = how === 'agent'
-      ? madePart(how, made)
+      ? madePart(how, made, g)
       : `<div class="row"><button type="button" class="primary" data-ws-command>New command</button>
           <a class="ghost" href="${CLOUD_SHELL}" target="_blank" rel="noopener">Open Cloud Shell</a></div>
-          ${madePart(how, made)}
+          ${madePart(how, made, g)}
           <details class="google-more"><summary>Or upload a key file</summary>${upload('Key file')}</details>`;
     return `<div class="google-step" data-ws-step="create"><h4>1 Run one command in Cloud Shell</h4>${domain}
       ${howToggle('workspace', how)}${body}${back}</div>`;
@@ -360,7 +380,8 @@
   function adminView(host, g, personal, people, rows) {
     const paths = pathsOf(host, g);
     if (!paths.length) return chooseCard();
-    const cards = paths.map(path => (path === 'workspace' ? workspaceCard(host, g, rows) : accountsCard(host, g, personal, people)));
+    // Once for the company, above whichever ways are set up: both use it.
+    const cards = [mayCard(g), ...paths.map(path => (path === 'workspace' ? workspaceCard(host, g, rows) : accountsCard(host, g, personal, people)))];
     if (paths.length === 1) {
       const other = paths[0] === 'workspace' ? 'accounts' : 'workspace';
       const {active, pend} = rowsOf(g);
@@ -531,6 +552,23 @@
     }
   }
 
+  // Each box saves on its own change, all three sent together (the server takes the whole setting).
+  async function saveMay(host, input) {
+    const boxes = [...host.querySelectorAll('[data-google-may]')];
+    const body = Object.fromEntries(boxes.map(box => [box.dataset.googleMay, box.checked]));
+    boxes.forEach(box => { box.disabled = true; });
+    try {
+      const saved = await put('/v2/google/permissions', body);
+      host._googleState.g.permissions = saved.permissions;
+      toast('Saved');
+      await window.mountGoogleConnect(host, {force: true});
+    } catch (error) {
+      input.checked = !input.checked;
+      boxes.forEach(box => { box.disabled = false; });
+      toast(error.message, true);
+    }
+  }
+
   async function saveOAuth(host, form) {
     const status = form.querySelector('[data-oauth-status]');
     const clientId = (form.querySelector('[name=client_id]')?.value || '').trim();
@@ -636,6 +674,7 @@
     });
     host.addEventListener('change', event => {
       if (event.target.matches?.('[data-ws-file]')) void uploadKey(host, event.target);
+      if (event.target.matches?.('[data-google-may]')) void saveMay(host, event.target);
     });
     host.addEventListener('input', event => {
       if (event.target.matches?.('[data-oauth-project]')) projectLinks(host);
@@ -676,7 +715,7 @@
     const replacing = replacingNow(host, g);
     const isLive = live();
     const snapshot = JSON.stringify([g.can_admin, unchecked(g.workspace), unchecked(g.pending), g.oauth, g.me,
-      g.setup?.reachable, personal, people, isLive]);
+      g.setup?.reachable, g.permissions, personal, people, isLive]);
     if (force || host._googleSnap !== snapshot || !host.childElementCount) {
       host._googleSnap = snapshot;
       paint(host);

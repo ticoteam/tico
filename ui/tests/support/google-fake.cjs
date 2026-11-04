@@ -32,6 +32,7 @@ exports.googleFake = () => {
       me: {mailbox: 'ana@acme.example', covered_by_workspace: false},
       oauth: {configured: false, source: null, redirect_uri: 'https://tico-ui.test/api/v2/mail/google/callback', client_id: null},
       setup: {base: 'https://tico-ui.test', reachable: true},
+      permissions: {organize_mail: true, send_mail: true, change_calendar: true},
     },
   };
   fake.personal = {configured: true, mailbox: 'ana@acme.example', status: 'connected', syncing: true, can: ['read']};
@@ -45,6 +46,10 @@ exports.googleFake = () => {
       const out = structuredClone(s);
       if (out.setup) out.setup.newest = newestGeneration();
       return out;
+    }
+    if (p === '/api/v2/google/permissions' && method === 'PUT') {
+      s.permissions = {organize_mail: !!body?.organize_mail, send_mail: !!body?.send_mail, change_calendar: !!body?.change_calendar};
+      return {permissions: structuredClone(s.permissions)};
     }
     if (p === '/api/v2/google/people' && method === 'GET') {
       fake.peopleReads += 1;

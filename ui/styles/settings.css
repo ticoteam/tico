@@ -972,3 +972,8 @@ section.card>header .settings-head-act{margin-left:auto}
 .google-team-status[data-status=connected],.google-team-status[data-status=workspace]{color:var(--ok)}
 .google-team-status[data-status=failing]{color:var(--fail)}
 .google-switch{margin:0;font-size:var(--t-sm)}
+.google-may-row{display:flex;align-items:flex-start;gap:10px;padding:6px 0;border-top:1px solid var(--line);min-width:0}
+.google-may-row>span{display:grid;gap:2px;min-width:0;overflow-wrap:anywhere}
+.google-may-row input{margin-top:3px}
+.google-may-row .muted{font-size:var(--t-sm)}
+.google-may-always{flex:none;width:13px}

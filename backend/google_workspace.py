@@ -41,6 +41,15 @@ from .store import H, Problem
 
 WORKSPACE_SCOPES = {"gmail": ["https://www.googleapis.com/auth/gmail.modify"],
                     "calendar": ["https://www.googleapis.com/auth/calendar"]}
+# A token minted while What Tico may do turns a service's writes off. Domain-wide delegation takes only scopes the admin
+# authorized by name (gmail.modify does not cover gmail.readonly there), so the authorized list carries these too.
+READ_ONLY_SCOPES = {"gmail": ["https://www.googleapis.com/auth/gmail.readonly"],
+                    "calendar": ["https://www.googleapis.com/auth/calendar.readonly"]}
+# What Tico may do in Google beyond reading (Settings > Google), one JSON row in registry_metadata. Each is on until an
+# admin turns it off. Organize mail and Send mail both need gmail.modify (Google has no narrower scope Tico uses), so
+# Send mail is also held in Tico: off, no bot sends (backend/mail_settings.py, connectors/mail/policy.py).
+PERMISSIONS_KEY = "google_permissions"
+PERMISSIONS = ("organize_mail", "send_mail", "change_calendar")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 DELEGATION_URL = "https://admin.google.com/ac/owl/domainwidedelegation"
 OAUTH_CONTEXT = "google-oauth-client"
@@ -62,7 +71,7 @@ KEY_FIELDS = ("client_email", "client_id", "private_key_id", "private_key")
 
 _VAULT = None
 _LOCK = threading.Lock()
-_CACHE = collections.OrderedDict()   # (row id, revision, mailbox, service) -> (answer, expiry in epoch seconds)
+_CACHE = collections.OrderedDict()   # (row id, revision, mailbox, service, scopes) -> (answer, expiry in epoch seconds)
 _AUDITED = {}                         # (mailbox, service, computer) -> epoch seconds of its last audit row
 
 
@@ -80,7 +89,32 @@ def _cipher():
 
 def scope_urls():
     """Every scope the Workspace grants, sorted: the link's clientScopeToAdd and the copy text, byte for byte."""
-    return sorted({scope for scopes in WORKSPACE_SCOPES.values() for scope in scopes})
+    return sorted({scope for table in (WORKSPACE_SCOPES, READ_ONLY_SCOPES) for scopes in table.values()
+                   for scope in scopes})
+
+
+def permissions(c):
+    """What the company lets Tico do in Google beyond reading: {organize_mail, send_mail, change_calendar}."""
+    from .read_cache import metadata
+    row = metadata(c, PERMISSIONS_KEY)
+    try:
+        stored = json.loads(row[0]) if row else {}
+    except ValueError:
+        stored = {}
+    stored = stored if isinstance(stored, dict) else {}
+    return {name: stored.get(name) is not False for name in PERMISSIONS}
+
+
+def acts(may=None):
+    """Per service, whether its write scope may be used: gmail.modify for Organize or Send, calendar events for
+    Change calendar. `may` None is everything (the app's or the key's whole grant)."""
+    may = may or dict.fromkeys(PERMISSIONS, True)
+    return {"gmail": bool(may["organize_mail"] or may["send_mail"]), "calendar": bool(may["change_calendar"])}
+
+
+def workspace_scopes(service, may=None):
+    """The scopes a Workspace token for `service` is minted with: the write scope, or read only when it is off."""
+    return list(WORKSPACE_SCOPES[service] if acts(may)[service] else READ_ONLY_SCOPES[service])
 
 
 def delegation_scopes():
@@ -228,10 +262,11 @@ def google_call(url, *, data=None, token=None):
     return status, parsed if isinstance(parsed, dict) else {}
 
 
-def _exchange(c, row, box, service, now):
-    """Google's access token for `box` and one service, from a JWT signed with the row's key. Returns (answer, epoch)."""
+def _exchange(c, row, box, scopes, now):
+    """Google's access token for `box` and one service's `scopes`, from a JWT signed with the row's key. Returns
+    (answer, epoch)."""
     creds = json.loads(_cipher().unseal(c, _context(row["id"]), row["key_sealed"]))
-    assertion = jwt.encode({"iss": creds["client_email"], "sub": box, "scope": " ".join(WORKSPACE_SCOPES[service]),
+    assertion = jwt.encode({"iss": creds["client_email"], "sub": box, "scope": " ".join(scopes),
                             "aud": TOKEN_URI, "iat": int(now), "exp": int(now) + JWT_SECONDS},
                            creds["private_key"], algorithm="RS256")
     status, body = google_call(TOKEN_URI, data={"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
@@ -243,7 +278,7 @@ def _exchange(c, row, box, service, now):
     expires = now + lifetime
     answer = {"access_token": body["access_token"],
               "expiry": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(expires)),
-              "scopes": list(WORKSPACE_SCOPES[service])}
+              "scopes": list(scopes)}
     return answer, expires
 
 
@@ -261,13 +296,15 @@ def mint(c, mailbox, service, row=None):
     if not current:
         raise Problem("not_connected", "The Google Workspace connection is not set up", 403,
                       extra={"kind": "not_connected"})
-    key = (current["id"], current["revision"], box, service)
+    # Narrowed to What Tico may do. The scopes are in the cache key, so a box turned off takes effect on the next mint.
+    scopes = workspace_scopes(service, permissions(c))
+    key = (current["id"], current["revision"], box, service, tuple(scopes))
     now = time.time()
     with _LOCK:
         hit = _CACHE.get(key)
     if hit and hit[1] > now + CACHE_MARGIN:
         return dict(hit[0])
-    answer, expires = _exchange(c, current, box, service, now)
+    answer, expires = _exchange(c, current, box, scopes, now)
     with _LOCK:
         _CACHE[key] = (answer, expires)
         while len(_CACHE) > CACHE_SIZE:
@@ -337,6 +374,7 @@ CHECK_PATH = "/api/v2/google/workspace/check"
 WORKSPACE_PATH = "/api/v2/google/workspace"
 OAUTH_PATH = "/api/v2/google/oauth-client"
 PEOPLE_PATH = "/api/v2/google/people"
+PERMISSIONS_PATH = "/api/v2/google/permissions"
 PEOPLE_MAX = 500                # the team list's cap; `more` says when people were left out
 KEY_KINDS = ("unauthorized_client", "other")   # a refusal about the key itself, not about one mailbox
 _BAD = []                       # epoch seconds of recent wrong codes
@@ -632,6 +670,12 @@ class CheckBody(M.Contract):
     mailbox: str = Field(default="", max_length=320)
 
 
+class PermissionsBody(M.Contract):
+    organize_mail: bool
+    send_mail: bool
+    change_calendar: bool
+
+
 class OAuthClientBody(M.Contract):
     client_id: str = Field(min_length=1, max_length=300)
     client_secret: str = Field(min_length=1, max_length=300)
@@ -774,9 +818,25 @@ def install(app, store):
             except Problem:
                 me = None
             return {"can_admin": administrator(c, who, settings.credential_admins), "workspace": workspace,
-                    "pending": waiting, "oauth": _oauth_view(c, settings), "me": me,
+                    "pending": waiting, "oauth": _oauth_view(c, settings), "me": me, "permissions": permissions(c),
                     # `newest` lets the page drop a setup command another admin's newer one superseded.
                     "setup": {"base": settings.runner_url, "reachable": _reachable(settings), "newest": _newest(c)}}
+
+    @app.put(PERMISSIONS_PATH)
+    def set_permissions(request: Request, body: PermissionsBody):
+        """What Tico may do in Google, for the whole company: an admin acting as themselves (Send mail lets bots
+        write to outside parties, so no bot, BotOps or the Assistant sets it, as with a bot's own Mail sending)."""
+        from .mail_settings import require_person
+        who = request.state.identity
+        require_person(who)
+        chosen = {name: bool(getattr(body, name)) for name in PERMISSIONS}
+        with store.transaction() as c:
+            require_admin(c, who, settings.credential_admins)
+            c.execute("INSERT INTO registry_metadata(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
+                      "value=excluded.value", (PERMISSIONS_KEY, json.dumps(chosen)))
+            H.event(c, who.actor, "google.permissions.set", "", chosen)
+        with store.read() as c:
+            return {"permissions": permissions(c)}
 
     @app.get(PEOPLE_PATH)
     def team_google(request: Request):

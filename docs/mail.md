@@ -426,6 +426,25 @@ Each way's setup offers **Have my agent do it** (the default) and **Set it up my
 into your own coding agent (Claude Code, Codex, or any agent with a browser or `gcloud`); the second shows the steps
 below.
 
+**What Tico may do** shows once for the company, above both ways, for an admin:
+
+- **Read mail and calendar**: always on.
+- **Organize mail** (label, archive, drafts), **Send mail** and **Create and change calendar events**: on until an admin
+  turns them off. Each box saves on its own.
+
+Organize mail and Send mail both need Google's `gmail.modify`, so Send mail is also held in Tico: with it off, no bot
+sends mail, whatever its own **Mail sending** switch says (and no approval lifts it). With it on, each bot still needs its
+own switch (Settings > Bots > Edit > Mail sending; see [Turning sending on](#turning-sending-on)). Change calendar needs
+`calendar.events`.
+
+A box turned off takes effect on the next token: Connect Google asks Google only for what is ticked, each refresh leaves
+out a write turned off (the grant keeps it, so turning it back on needs no new sign-in), and Whole Workspace tokens are
+minted read only for it (`gmail.readonly`, `calendar.readonly`). Domain-wide delegation takes only scopes authorized by
+name, so step 2 below authorizes the read-only scopes too; a Workspace authorized before them needs step 2 again before a
+box is turned off. A box turned on that a person's grant lacks shows **Connect Google again** on their card. Both agent
+prompts say what Tico will ask Google for. Only an admin acting as themselves changes it: never a bot, BotOps or the
+Assistant.
+
 **Whole Workspace** lets Tico read the mailboxes of your Google Workspace through one service account. A Workspace admin does this once:
 
 1. **Run one command in Cloud Shell.** Click **New command**, click **Open Cloud Shell**, and paste the command there (or click **Make prompt** to hand the same command to your agent, with what to do after it). If you belong to more than one organization, Cloud Shell asks which one to use. The command makes a service account in a Google Cloud project for Tico, turns on Gmail and Calendar for it, and sends its key to Tico. It never shows the key. If an organization policy blocks service account keys, the command turns that rule off for that project only. A setup command works once and expires after 30 minutes; each New command or Make prompt makes a new one, and an older one stops working. **Or upload a key file** takes a key you made yourself.

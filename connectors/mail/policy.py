@@ -856,6 +856,8 @@ def switch(slug, manifest=None):
     row = _server_row(slug)
     out["read"] = row is not None
     out["onboarding"] = bool((row or {}).get("onboarding"))
+    # The company's Settings > Google (What Tico may do): with Send mail off no bot sends, whatever its own switch says.
+    out["company_off"] = (row or {}).get("company_send") is False
     hint = SETTING_HINT.format(slug=slug)
     if row is None or not row.get("set"):
         out["detail"] = (("no person has turned sending on for " + slug + " in Tico yet"
@@ -1022,6 +1024,10 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
         return no("onboarding", f"this run cannot read {slug}'s mail setting from Tico, so it cannot confirm {slug} "
                                 "has finished onboarding and sends no email, with or without an approval; "
                                 "try again once Tico answers")
+    # Like onboarding, before the approval read: no approval lifts the company's own no.
+    if sw.get("company_off"):
+        return no("company", "the company turned Send mail off in Tico (Settings > Google > What Tico may do), so "
+                             f"{slug} sends no email, with or without an approval; an admin turns it back on there")
     ok("onboarding", f"{slug} is not onboarding")
 
     ext = externals(pol, to)
