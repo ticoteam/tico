@@ -266,46 +266,162 @@ pub fn shell_outside_actions(command: &str) -> Vec<&'static str> {
 /// summary reads past it to the next run.
 const SHELL_SETUP: [&str; 5] = ["cd", "export", "set", "source", "."];
 
-/// The command words the `hub` CLI defines (its subcommand names). A `hub` summary shows only these, so an argument
-/// such as a token or a note never reaches a run log.
-const HUB_WORDS: &str = "abandon accept access act action add agent answer answers api appeal apply approval approve \
-    approved archive ask ask-resolve ask-status assistant attach audience audiences audit automation \
-    bet bot bot-status branch brand brief briefing browser-exit budget bulk calendar call cap caps \
-    card card-fill catalog catch-up catchup change changelog channel chat check check-back \
-    check-names checkin checkin-list child classify close code cohort comment comment-delete \
-    comment-edit comment-moderate commit company company-page computer connections conversation copy \
-    create create-email credential cursor db decide decision decline define delete deleted \
-    deliveries delivery delta diff discard dismiss dm dm-group doc done draft due economics edges \
-    edit editions enable event-types example export external feedback fetch figure file finance find \
-    findings follow gateway get give go-live goal granola grant grokbot group growth guide guides \
-    health health-monitor held history home human icon image import inbound inbox inboxes item \
-    keep-tasks-going kpi kpis label later latest learn learned lens link link-list link-slack list \
-    listening log mail mark-read markers market mcp meeting members message metric metrics model \
-    models needs-you next note notice now numbers off on open-earlier order org origin outcome \
-    owners page pair params pause pending performance pin pipeline place post product-create profile \
-    proposal proposals propose publication-preview publish query-search question question-sets react \
-    read read-back readers readout ready reasons recent recent-runs recover redact redo refresh \
-    relate relay release remove replay reply repo repo-create report reports-to repos request \
-    requester-remove requester-save requesters research resolve respond restore resume retire retry \
-    review revoke roadmap rotate rule rule-draft rules run runs satisfied save schedule scope search \
-    seat segment send sends service-key set settings setup-done show sign size skill skip slack \
-    slack-resume sleep snooze source sources spend sql stall-triage start stats status stop strategy \
-    strategy-bot strategy-bot-decide strategy-bot-level3-offer strategy-bot-log strategy-bot-merge \
-    sub suggest-to-original suggested summary support sweep sync tag target task task-manager \
-    task-model tasks team template templates thread tick tool touch tree trigger turns-at-once type \
-    types unfollow unlink unpin unreact unsnooze untick update update-from-original upload versions \
-    wait waive-qa wake-url watch webhook whoami withdraw worktree write";
+/// Every command path the hub CLI parses (clients/hubcli.py), its aliases and its top-level renames included, as
+/// space-joined words such as `task close` or `needs-you show`. backend/tests/test_hub_command_tree.py fails when
+/// this list and the CLI differ, so a command added or renamed there is added here too.
+const HUB_PATHS: &[&str] = &[
+    "ack", "agent", "agent pair", "agent pair approve", "agent pair decline", "agent pair show", "answer",
+    "api", "approval", "approval approve", "approval decline", "approval list", "approval read-back",
+    "approval request", "approval show", "approvals", "approvals approve", "approvals decline",
+    "approvals list", "approvals read-back", "approvals request", "approvals show", "ask", "assistant",
+    "assistant change", "assistant change list", "assistant change restore", "assistant learn",
+    "assistant learned", "assistant proposals", "assistant propose", "assistant read", "assistant send",
+    "assistant withdraw", "audiences", "audiences list", "audit", "automation", "automation create",
+    "automation delete", "automation discard", "automation guide", "automation held", "automation inbox",
+    "automation list", "automation question-sets", "automation recent-runs", "automation restore",
+    "automation run", "automation runs", "automation show", "automation stats", "automation template",
+    "automation templates", "automation update", "automation versions", "automations", "automations create",
+    "automations delete", "automations discard", "automations guide", "automations held", "automations inbox",
+    "automations list", "automations question-sets", "automations recent-runs", "automations restore",
+    "automations run", "automations runs", "automations show", "automations stats", "automations template",
+    "automations templates", "automations update", "automations versions", "batch", "board", "bot",
+    "bot access", "bot archive", "bot branch", "bot browser-exit", "bot budget", "bot check", "bot check-names",
+    "bot copy", "bot create", "bot go-live", "bot keep-tasks-going", "bot mail", "bot model", "bot onboarded",
+    "bot owners", "bot pause", "bot place", "bot profile", "bot ready", "bot recent", "bot register",
+    "bot release", "bot repo-create", "bot repos", "bot restore", "bot resume", "bot scope", "bot set",
+    "bot setup-done", "bot show", "bot status", "bot status history", "bot status list", "bot status set",
+    "bot suggest-to-original", "bot task-model", "bot turns-at-once", "bot update", "bot update-from-original",
+    "bots", "bots access", "bots archive", "bots branch", "bots browser-exit", "bots budget", "bots check",
+    "bots check-names", "bots copy", "bots create", "bots go-live", "bots keep-tasks-going", "bots mail",
+    "bots model", "bots owners", "bots pause", "bots place", "bots profile", "bots ready", "bots recent",
+    "bots release", "bots repo-create", "bots repos", "bots restore", "bots resume", "bots scope",
+    "bots setup-done", "bots show", "bots status", "bots status history", "bots status list", "bots status set",
+    "bots suggest-to-original", "bots task-model", "bots turns-at-once", "bots update",
+    "bots update-from-original", "brand", "brand check", "brand draft", "brand publish", "brand show",
+    "brand summary", "brief", "calendar", "calendar list", "calendar schedule", "calendar status",
+    "calendar upcoming", "call", "call bot", "call bot add", "call bot remove", "call end", "call join",
+    "call leave", "call list", "call retry", "call show", "call start", "call token", "card", "card add",
+    "card list", "card remove", "card update", "catalog", "changelog", "changelog list", "changelog mark-read",
+    "chat", "chat goal", "chat send", "classify", "company-page", "computer", "computer browser-exit",
+    "computer list", "computer performance", "computer turns-at-once", "computers", "connections",
+    "connections list", "context", "context search", "context show", "conversation", "conversation show",
+    "credential", "credential delete", "credential grant", "credential import", "credential list",
+    "credential request", "credential revoke", "credential set", "db", "decision", "decision ask",
+    "decision outcome", "decision readout", "decisions", "doc", "doc archive", "doc ask", "doc ask-status",
+    "doc fetch", "doc history", "doc link-list", "doc list", "doc read", "doc search", "doc write", "docs",
+    "docs links", "editions", "editions list", "editions show", "event-types", "external", "external sync",
+    "feedback", "feedback give", "feedback list", "feedback markers", "feedback reasons", "feedback remove",
+    "feedback rule", "feedback rule-draft", "file", "file approved", "file archive", "file delete",
+    "file import", "file link", "file list", "file publish", "file read", "file review", "file search",
+    "file touch", "files", "files add-link", "finance", "finance act", "finance action", "finance card-fill",
+    "finance inbox", "finance metric", "finance report", "finance search", "fleet", "fleet-check", "gateway",
+    "gateway catalog", "gateway fetch", "gateway image", "gateway search", "github", "github create-bot-repo",
+    "goal", "goal auto", "goal checkin", "goal checkin list", "goal checkin-list", "goal checkins",
+    "goal company", "goal create", "goal list", "goal needs-you", "goal read-back", "goal refresh", "goal save",
+    "goal show", "goal status", "goal strategy-bot", "goal strategy-bot-decide",
+    "goal strategy-bot-level3-offer", "goal strategy-bot-log", "goal strategy-bot-merge", "goal update",
+    "goals", "grokbot", "grokbot sync", "group", "group access", "group delete", "group list", "group update",
+    "growth", "growth channel", "growth channel add", "growth channel list", "growth channel retire",
+    "growth channel show", "growth channel update", "growth cohort", "growth cohort list", "growth cohort set",
+    "growth economics", "growth kpis", "growth numbers", "growth settings", "growth source",
+    "growth source add", "growth source list", "growth source retire", "growth source update", "gtm",
+    "gtm show", "gtm sources", "gtm summary", "health", "health check", "health metrics", "health-monitor",
+    "health-monitor findings", "health-monitor report", "history", "human", "human access", "human add",
+    "human list", "inbound", "inbound audience", "inbound code", "inbound create-email", "inbound cursor",
+    "inbound inboxes", "inbound list", "inbound read", "inbound search", "inbound wait", "inbox", "intake",
+    "integration", "integrations", "judge", "kpi", "kpi add", "kpi archive", "kpi create", "kpi link",
+    "kpi list", "kpi log", "kpi readings", "kpi restore", "kpi show", "kpi target", "kpi unlink", "kpi update",
+    "learn", "lens", "lens list", "lens run", "lens runs", "lens show", "listen", "listen judge", "listening",
+    "listening decide", "listening item", "listening item list", "listening item resolve", "listening runs",
+    "listening save", "listening show", "listening stats", "live", "live brief", "live stats", "mail",
+    "mail list", "mail read", "market", "market apply", "market ask", "market briefing",
+    "market briefing latest", "market briefing post", "market define", "market delta", "market edges",
+    "market figure", "market figure add", "market find", "market import", "market page", "market refresh",
+    "market report", "market research", "market resolve", "market segment", "market segment add",
+    "market segment tree", "market show", "market size", "market size accept", "market size add",
+    "market size list", "market size params", "market size reject", "market sources", "market spend",
+    "market sweep", "market watch", "market watch add", "market watch check", "market watch list",
+    "market watch stop", "mcp", "mcp stats", "meeting", "meeting approve", "meeting delete", "meeting dismiss",
+    "meeting granola", "meeting granola status", "meeting granola sync", "meeting import", "meeting pending",
+    "meeting read", "meeting restore", "meeting search", "meetings", "meetings transcript", "message",
+    "message list", "message mark-read", "message redact", "message send", "needs-you", "needs-you abandon",
+    "needs-you commit", "needs-you next", "needs-you respond", "needs-you show", "needs-you start", "note",
+    "note create", "note delete", "note list", "notes", "notice", "notice list", "org", "org models",
+    "org order", "org reports-to", "origin", "origin show", "page", "page archive", "page list", "page publish",
+    "page show", "people", "person", "pin", "pin add", "pin remove", "pin update", "pipeline", "proposal",
+    "proposal create", "proposal decide", "proposal list", "queries", "question", "question answer",
+    "question ask", "readers", "readers list", "recent", "relay", "relay set", "relay status", "relay wake-url",
+    "relay wake-url off", "relay wake-url set", "relay wake-url show", "release", "release now",
+    "release schedule", "replay", "replay show", "repo", "repo list", "repo product-create", "repo review",
+    "repo tick", "repo untick", "roadmap", "roadmap settings", "roadmap tasks", "rule", "rule accept",
+    "rule add", "rule appeal", "rule ask", "rule check", "rule due", "rule due add", "rule due edit",
+    "rule due list", "rule due satisfied", "rule edit", "rule list", "rule read", "rule retire", "rule skip",
+    "rule suggested", "rule withdraw", "rules", "rules accept", "rules add", "rules appeal", "rules ask",
+    "rules check", "rules due", "rules due add", "rules due edit", "rules due list", "rules due satisfied",
+    "rules edit", "rules list", "rules read", "rules retire", "rules skip", "rules suggested", "rules withdraw",
+    "run", "run export", "run list", "say", "seat", "seat close", "seat create", "seat list", "seat update",
+    "service-key", "service-key create", "service-key list", "service-key revoke", "settings", "settings ask",
+    "settings find", "settings set", "settings show", "skill", "skill copy", "slack", "slack channel",
+    "slack channel add", "slack channel import", "slack channel list", "slack channel remove", "sleep",
+    "sleep set", "sleep status", "sql", "stall-triage", "status", "strategy", "strategy bet",
+    "strategy bet add", "strategy bet retire", "strategy bet update", "strategy diff", "strategy draft",
+    "strategy guides", "strategy publish", "strategy show", "strategy summary", "strategy versions", "support",
+    "support file", "support report", "support send", "tag", "tag create", "tag list", "tag show", "tag update",
+    "task", "task answers", "task ask", "task ask-resolve", "task attach", "task bulk", "task cap",
+    "task cap set", "task caps", "task check-back", "task child", "task close", "task comment",
+    "task comment-delete", "task comment-edit", "task comment-moderate", "task create", "task defer",
+    "task delete", "task deleted", "task done", "task label", "task later", "task link", "task list",
+    "task model", "task publication-preview", "task question", "task relate", "task requester-remove",
+    "task requester-save", "task requesters", "task restore", "task run", "task show", "task snooze",
+    "task stuck", "task tree", "task type", "task type create", "task type delete", "task type update",
+    "task types", "task unsnooze", "task update", "task wait", "task waive-qa", "task worktree",
+    "task worktree add", "task worktree attach", "task worktree setup", "task-manager", "task-manager bot",
+    "task-manager off", "task-manager on", "task-manager run", "task-manager schedule", "task-manager status",
+    "tasks", "tasks answers", "tasks ask", "tasks ask-resolve", "tasks attach", "tasks bulk", "tasks cap",
+    "tasks cap set", "tasks caps", "tasks check-back", "tasks child", "tasks close", "tasks comment",
+    "tasks comment-delete", "tasks comment-edit", "tasks comment-moderate", "tasks create", "tasks defer",
+    "tasks delete", "tasks deleted", "tasks done", "tasks label", "tasks later", "tasks link", "tasks list",
+    "tasks model", "tasks publication-preview", "tasks question", "tasks relate", "tasks requester-remove",
+    "tasks requester-save", "tasks requesters", "tasks restore", "tasks run", "tasks show", "tasks snooze",
+    "tasks tree", "tasks type", "tasks type create", "tasks type delete", "tasks type update", "tasks types",
+    "tasks unsnooze", "tasks update", "tasks wait", "tasks waive-qa", "tasks worktree", "tasks worktree add",
+    "tasks worktree attach", "tasks worktree setup", "team", "team budget", "team icon", "team show",
+    "template", "template list", "thread", "thread bot-status", "thread catch-up", "thread catchup",
+    "thread create", "thread delete", "thread dm", "thread dm-group", "thread edit", "thread follow",
+    "thread home", "thread link-slack", "thread list", "thread members", "thread members add",
+    "thread members list", "thread members remove", "thread open-earlier", "thread pin", "thread post",
+    "thread react", "thread read", "thread reply", "thread search", "thread show", "thread slack-resume",
+    "thread sub", "thread task", "thread unfollow", "thread unpin", "thread unreact", "thread update",
+    "thread upload", "tool", "tool add", "tool learn", "tool list", "tool query-search", "tool remove",
+    "tool report", "tool show", "tool update", "tools", "trigger", "trigger create", "trigger delete",
+    "trigger deliveries", "trigger delivery", "trigger list", "trigger recover", "trigger relay",
+    "trigger relay create", "trigger relay delete", "trigger relay rotate", "trigger replay", "trigger rotate",
+    "trigger show", "trigger sign", "trigger update", "turns", "unnote", "update", "update create",
+    "update list", "update mark-read", "update post", "update read", "update redo", "update reply",
+    "update settings", "update show", "updates", "webhook", "webhook create", "webhook delete",
+    "webhook enable", "webhook example", "webhook list", "webhook pause", "webhook recover", "webhook replay",
+    "webhook resume", "webhook retry", "webhook rotate", "webhook send", "webhook sends", "webhook show",
+    "webhook update", "whoami",
+];
 
 /// What a shell command does, for a tool event: the program it runs, by file name, never its arguments. A `hub` run
-/// reads as `hub` and up to two of its command words. A compound line (`&&`, `||`, `|`, `;`, newlines) names its `hub`
-/// run first, else its first run past shell setup. Leading `NAME=value` assignments are skipped, a `sh -c` wrapper is
-/// unwrapped, and a command whose quoting does not close, or whose program could come from an expansion, gives nothing.
+/// reads as `hub` and the command path its words name, up to three words. A compound line (`&&`, `||`, `|`, `;`,
+/// newlines) names its `hub` run first, else its first run past shell setup. Leading `NAME=value` assignments are
+/// skipped, a `sh -c` wrapper is unwrapped, and a `#` comment is no run at all. A command whose quoting does not close,
+/// or whose program could come from an expansion, gives nothing, and so does a program name that is not a plain file name.
 pub fn command_program(command: &str) -> String {
     let Some(words) = chosen_words(command) else { return String::new() };
     if words[0] == "hub" {
         return hub_summary(&words);
     }
-    clip(&words[0])
+    if program_name_ok(&words[0]) { clip(&words[0]) } else { String::new() }
+}
+
+/// A program name a summary may show: a plain file name (`npm`, `node18.x`, `g++`), never a word with an expansion or a
+/// secret in it.
+fn program_name_ok(program: &str) -> bool {
+    static NAME: OnceLock<Regex> = OnceLock::new();
+    NAME.get_or_init(|| Regex::new(r"^[A-Za-z0-9._+-]{1,40}$").unwrap()).is_match(program)
 }
 
 /// The words of the run that names what a command does: the first `hub` run, else the first run past shell setup,
@@ -318,7 +434,8 @@ fn chosen_words(command: &str) -> Option<Vec<String>> {
 }
 
 /// The runs a shell line holds: its text cut at `&&`, `||`, `|`, `;` and newlines. A separator inside quotes, inside
-/// `$(...)` or inside backticks keeps the run whole, and a lone `&` (as in `2>&1`) is not a separator.
+/// `$(...)` or inside backticks keeps the run whole, and a lone `&` (as in `2>&1`) is not a separator. A `#` that starts
+/// a word comments out the rest of its line: the comment is in no run, and a separator inside it splits nothing.
 fn command_runs(command: &str) -> Vec<&str> {
     let mut runs: Vec<&str> = vec![];
     let (mut start, mut quote, mut escaped, mut depth, mut ticked) = (0, None::<char>, false, 0usize, false);
@@ -337,6 +454,17 @@ fn command_runs(command: &str) -> Vec<&str> {
             (None, '(') if command[..i].ends_with('$') => depth += 1,
             (None, ')') if depth > 0 => depth -= 1,
             (None, '`') => ticked = !ticked,
+            (None, '#') if starts_word(command, i) => {
+                // A comment runs to the end of its line: no run holds its text, and a separator inside it splits nothing.
+                let end = command[i..].find('\n').map_or(command.len(), |n| i + n);
+                if cut {
+                    runs.push(&command[start..i]);
+                    start = end;
+                }
+                while chars.peek().is_some_and(|&(j, _)| j < end) {
+                    chars.next();
+                }
+            }
             (None, '&' | '|') if doubled && cut => {
                 chars.next();
                 runs.push(&command[start..i]);
@@ -351,6 +479,11 @@ fn command_runs(command: &str) -> Vec<&str> {
     }
     runs.push(&command[start..]);
     runs
+}
+
+/// Whether the character at byte `i` starts a shell word: nothing, whitespace or an operator comes before it.
+fn starts_word(command: &str, i: usize) -> bool {
+    command[..i].chars().next_back().map_or(true, |p| p.is_whitespace() || ";|&()".contains(p))
 }
 
 /// The words of one shell run: leading `NAME=value` assignments dropped and the program reduced to its file name. A
@@ -374,15 +507,20 @@ fn run_words(run: &str) -> Option<Vec<String>> {
     Some(out)
 }
 
-/// `hub` and up to two of the CLI's own command words, read in order from the positional words before the first flag.
-/// Reading stops at the first word that is not a command word, so free text after a command never reaches the summary
-/// (`hub ask botops please check` reads `hub ask`).
+/// `hub` and the command path its words name, read in order from the positional words before the first flag: the first
+/// word only if it is a top-level command, the next only if it is a subcommand of that command, and so on to three words.
+/// Reading stops at the first word that does not continue a path, so an argument, a recipient or a note never reaches the
+/// summary (`hub ask finance "x"` reads `hub ask`; `hub task close 7f3a` reads `hub task close`).
 fn hub_summary(words: &[String]) -> String {
-    let known = words[1..].iter()
-        .take_while(|w| !w.starts_with('-') && HUB_WORDS.split_whitespace().any(|word| word == w.as_str()))
-        .take(2)
-        .map(String::as_str);
-    std::iter::once("hub").chain(known).collect::<Vec<_>>().join(" ")
+    let mut path: Vec<&str> = vec![];
+    for word in words[1..].iter().take(3).take_while(|w| !w.starts_with('-')) {
+        path.push(word.as_str());
+        if !HUB_PATHS.contains(&path.join(" ").as_str()) {
+            path.pop();
+            break;
+        }
+    }
+    std::iter::once("hub").chain(path).collect::<Vec<_>>().join(" ")
 }
 
 
@@ -992,7 +1130,7 @@ mod tests {
     fn a_compound_command_names_the_work_and_never_the_arguments() {
         assert_eq!(command_program("cd /repo && hub task close --id 42 --reason 'sk-live-1'"), "hub task close");
         assert_eq!(command_program("export HUB_TOKEN=sk-live-1; /usr/local/bin/hub task create --title sk-live-1"), "hub task create");
-        assert_eq!(command_program("hub task note sk-live-1 close"), "hub task note");
+        assert_eq!(command_program("hub task note sk-live-1 close"), "hub task");
         assert_eq!(command_program("cd web && npm run build && hub task list"), "hub task list");
         assert_eq!(command_program("set -e\nnpm test | tee out.log"), "npm");
         assert_eq!(command_program("cargo test 2>&1 | tail"), "cargo");
@@ -1004,6 +1142,26 @@ mod tests {
         assert_eq!(command_program("FOO=1 && curl x"), "curl");
         assert_eq!(command_program("X=$(a && sk-live-1) hub task list"), "");
         assert_eq!(tool_summary(&json!({"command": "cd web && hub task list --token sk-live-1"})), "hub task list");
+    }
+
+    #[test]
+    fn a_shell_comment_is_in_no_run() {
+        assert_eq!(command_program("cd /repo # note; private-token\nnpm test"), "npm");
+        assert_eq!(command_program("cd /repo # note; private-token"), "cd");
+        assert_eq!(command_program("echo ok # x && hub task close"), "echo");
+        assert_eq!(command_program("cd x; a#b && hub task list"), "hub task list");
+        assert_eq!(command_program("echo '# x'; hub task list"), "hub task list");
+        assert_eq!(command_program("sk-live-1$x y"), "");
+    }
+
+    #[test]
+    fn a_hub_summary_stops_at_the_first_word_that_does_not_continue_a_command_path() {
+        assert_eq!(command_program("hub ask finance \"private question\""), "hub ask");
+        assert_eq!(command_program("hub history review"), "hub history");
+        assert_eq!(command_program("hub task close 7f3a"), "hub task close");
+        assert_eq!(command_program("hub needs-you show"), "hub needs-you show");
+        assert_eq!(command_program("hub bot status history"), "hub bot status history");
+        assert_eq!(command_program("hub nosuch command"), "hub");
     }
 
     #[test]
