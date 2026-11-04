@@ -41,6 +41,12 @@ def _cutover_roundup(conn):
         conn.execute("UPDATE automations SET enabled=0, deleted_at=?, updated_at=? WHERE deleted_at IS NULL AND builtin=1 "
                      "AND json_extract(flow,'$.readonly')=1 "
                      "AND json_extract(flow,'$.trigger.name')='tico.builtin.job.task_roundup'", (when, when))
+        if H._has_table(conn, "automation_runs"):
+            # Its unfinished runs are skipped, as a delete skips them (automations.remove); a mirror holds nothing else.
+            conn.execute("UPDATE automation_runs SET status='skipped', finished_at=? "
+                         "WHERE status IN ('queued','waiting','running') AND automation_id IN (SELECT id FROM automations "
+                         "WHERE builtin=1 AND json_extract(flow,'$.readonly')=1 "
+                         "AND json_extract(flow,'$.trigger.name')='tico.builtin.job.task_roundup')", (when,))
 
 
 def up(conn):
