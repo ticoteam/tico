@@ -303,7 +303,8 @@ def test_whole_list_facts_scope_inbox_and_folding_and_follow_live_changes(api):
         event = E.read(c, auth, who, after, topics=("needs",), task_view=view, needs_held=held)[0][-1][2]
     assert event["by_kind"] == get(api, "needs-you?limit=1")["by_kind"]
     assert "approval" not in event["by_kind"] and event["by_kind"]["thread_mention"] == 1
-    assert event["folded_task_ids"] == [wait["id"]]
+    assert event["changed"] == [] and event["removed"] == [approval["id"]]
+    assert "folded_task_ids" not in event
 
     for remove, folded in [(True, []), (False, [wait["id"]])]:
         with store.read() as c:

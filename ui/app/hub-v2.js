@@ -159,7 +159,7 @@ function v2NeedsMore() {
 // A live `needs` event (live.js asks for changes, not the list): mend the held list from the ids that changed, or read
 // it whole when the event was counted from another version than the one held. One at a time, in order. Resolves true
 // when the list may have moved. A changed item whose place falls past the pages held stays unread: only the count
-// moves, and the next page starts after what is held.
+// moves, and the next page starts after what is held. Missing folded ids keep the held set; null reads it whole.
 let NEEDS_MEND = Promise.resolve(false);
 const v2NeedsChanged = d => (NEEDS_MEND = NEEDS_MEND.catch(() => false).then(() => v2NeedsMend(d)));
 async function v2NeedsMend(d) {
@@ -168,7 +168,7 @@ async function v2NeedsMend(d) {
   const held = S.v2.needsVersion;
   if (!d.version || d.version === held) return false;
   const whole = async () => { await v2NeedsRead(); return true; };
-  if (!held || d.base !== held || !Array.isArray(d.changed) || !Array.isArray(d.removed)) return whole();
+  if (!held || d.base !== held || !Array.isArray(d.changed) || !Array.isArray(d.removed) || d.folded_task_ids === null) return whole();
   const all = needsAll(), out = new Set([...d.changed, ...d.removed].map(String));
   const items = (S.v2.needs || []).filter(it => !out.has(String(it.id)));
   if (d.changed.length) {
@@ -188,7 +188,7 @@ async function v2NeedsMend(d) {
   S.v2.needsNext = all || items.length >= d.count ? null : needsCursor(d.version, items.length);
   if (d.bots) S.v2.needsBots = d.bots;
   S.v2.needsByKind = d.by_kind || null;
-  S.v2.needsFoldedIds = d.folded_task_ids || null;
+  if (Array.isArray(d.folded_task_ids)) S.v2.needsFoldedIds = d.folded_task_ids;
   return true;
 }
 // One line above the composer when the bot cannot answer right now: its status says so, or

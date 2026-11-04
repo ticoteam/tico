@@ -35,7 +35,7 @@ const count = page => tab(page).locator('.cnt').innerText();
   try {
     const counts = [];
     for (const width of [390, 1440]) {
-      let rows = items, version = 'count-v1';
+      let rows = items, version = 'count-v1', wholeReads = 0;
       const {page, errors} = await open(browser, {viewport: {width, height: 844}, hash: '#/tasks?view=list',
         baseTasks: [...tasks, foldedWait, mergedWait, unreadCard],
         extraTasks: [task('t-other-person', {owner_id: 'human:sam'}), task('t-bot', {owner_id: 'bot:writer'}),
@@ -51,6 +51,7 @@ const count = page => tab(page).locator('.cnt').innerText();
                 items: rows.filter(it => wanted.has(it.id)),
                 positions: Object.fromEntries(rows.flatMap((it, n) => wanted.has(it.id) ? [[it.id, n]] : []))})});
             }
+            if (!q.has('cursor')) wholeReads++;
             const offset = Number((q.get('cursor') || '').split('.').at(-1)) || 0;
             const limit = Number(q.get('limit') || 50), end = offset + limit;
             return route.fulfill({contentType: 'application/json', body: JSON.stringify({items: rows.slice(offset, end),
@@ -85,11 +86,14 @@ const count = page => tab(page).locator('.cnt').innerText();
       await page.locator('#task-tab-list').click();
       await page.evaluate(() => { S.v2.needs = S.v2.needs.slice(0, 50); S.v2.needsNext = needsCursor(S.v2.needsVersion, 50); });
       rows = rows.filter(it => it.id !== 'a-send'); version = 'count-v2';
-      await page.evaluate(async ({by_kind, folded_task_ids}) => {
-        await v2NeedsChanged({base: 'count-v1', version: 'count-v2', count: 248, by_kind, folded_task_ids, changed: [], removed: ['a-send']});
+      const readsBeforeDecision = wholeReads;
+      await page.evaluate(async by_kind => {
+        await v2NeedsChanged({base: 'count-v1', version: 'count-v2', count: 248, by_kind, changed: [], removed: ['a-send']});
         tasksRender(TASKS_ST);
-      }, {by_kind: kinds(rows), folded_task_ids: foldedIds(rows)});
+      }, kinds(rows));
       assert.equal(await count(page), '10', width + ': live changes keep the whole-list extras and folding');
+      assert.equal(wholeReads, readsBeforeDecision, 'unchanged folding needs no whole read');
+      assert.deepEqual(await page.evaluate(() => S.v2.needsFoldedIds), foldedIds(rows));
 
       // The unread card can stop representing these tasks and fold them again without ever loading into the list.
       for (const folded of [false, true]) {
@@ -105,6 +109,17 @@ const count = page => tab(page).locator('.cnt').innerText();
         assert.equal(await page.evaluate(() => !!needsItem('t-unread-card')), false);
         assert.equal(await count(page), folded ? '10' : '12', width + ': live folding follows the whole list');
       }
+
+      // A bounded event uses null for a folding set that must be read whole; the unread card stays folded.
+      const base = version, readsBeforeFold = wholeReads;
+      version = 'count-v5';
+      rows = rows.map(it => it.id === unreadCard.id ? {...it, title: 'Pick the updated launch plan'} : it);
+      await page.evaluate(async d => { await v2NeedsChanged(d); tasksRender(TASKS_ST); },
+        {base, version, count: rows.length, by_kind: kinds(rows), folded_task_ids: null, changed: [unreadCard.id], removed: []});
+      assert.equal(wholeReads, readsBeforeFold + 1, 'null folding metadata reads the list whole');
+      assert.deepEqual(await page.evaluate(() => S.v2.needsFoldedIds), foldedIds(rows));
+      assert.equal(await page.evaluate(() => !!needsItem('t-unread-card')), false);
+      assert.equal(await count(page), '10', width + ': a whole read restores folding for unread cards');
       await page.setViewportSize({width: width === 390 ? 1440 : 390, height: 844});
       assert.equal(await count(page), '10', 'resizing keeps the same source');
       assert.deepEqual(errors, []);
