@@ -216,7 +216,7 @@ def online(c, slug):
                     "WHERE b.id=?", (slug,)).fetchone()
     if not row or row["state"] != "active" or row["status"] in HELD:
         return False
-    seen = c.execute("SELECT r.last_seen_at FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    seen = c.execute("SELECT r.last_seen_at FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                      "WHERE a.bot=? AND r.revoked_at IS NULL", (slug,)).fetchone()
     return bool(seen and seen[0] and seen[0] >= H.shift(H.now(), minutes=-ONLINE_MINUTES))
 

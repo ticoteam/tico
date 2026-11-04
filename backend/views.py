@@ -26,7 +26,7 @@ from . import app_delivery, login_holds, providers, runner_versions, runs
 from .harnesses import resolve_harness
 from . import personal_tokens, profiles, rooms, team_rules, turns, wake_presets
 from . import auto_tasks, bot_stops, pipeline_stats, run_triggers
-from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, bump_bot_session_epoch, turns_here
+from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, bump_bot_session_epoch
 from pathlib import Path
 
 from . import read_cache, roster_clock
@@ -412,21 +412,23 @@ def bot_owner_rows(c, registry, slug, people, configs, archived):
 # A bot's computer, as machine() reads it; prime_machines reads it for many bots at once.
 ASSIGNED_COLUMNS = ("SELECT a.runner_id,a.generation,r.label,r.owner_id,r.last_seen_at,r.revoked_at,r.readiness,"
                     "r.platform,r.version,r.awake_since,r.screen,r.capabilities")
-ASSIGNED_SQL = ASSIGNED_COLUMNS + " FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?"
+ASSIGNED_SQL = ASSIGNED_COLUMNS + " FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?"
 
 
 def prime_machines(c, slugs):
     """Read what machine() and H.status read for each of these bots one table at a time (one query per 500 bots
     each), so Health's pass over every bot reads none of them again per bot. Outside a snapshot nothing is kept."""
     from .agents import CONFIG_SQL, ROW_SQL
+    from .auth import OPERATOR_SQL
     if read_cache.cache(c) is None:
         return
     for part in H.chunks(sorted(set(slugs))):
         marks = ",".join("?" * len(part))
         for statement, query in ((CONFIG_SQL, f"SELECT config,bot FROM bot_config WHERE bot IN ({marks})"),
+                                 (OPERATOR_SQL, f"SELECT bot,owner_id FROM bot_config WHERE bot IN ({marks})"),
                                  (ROW_SQL, f"SELECT * FROM agents WHERE bot IN ({marks})"),
                                  (ASSIGNED_SQL, ASSIGNED_COLUMNS + ",a.bot FROM assignments a "
-                                                f"JOIN runners r ON r.id=a.runner_id WHERE a.bot IN ({marks})"),
+                                                f"JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot IN ({marks})"),
                                  ("SELECT * FROM bot_status WHERE bot=?", f"SELECT * FROM bot_status WHERE bot IN ({marks})")):
             found = {row["bot"]: row for row in c.execute(query, part)}
             read_cache.prime(c, statement, {(s,): found.get(s) for s in part})
@@ -753,15 +755,17 @@ def operation_issues(c, who, auth):
     if who.role == "owner":
         # Container backups report through replication; imported VM timer history stays historical.
         managed_backups = bool(os.environ.get("TICO_BACKUP_MODE"))
-        for row in c.execute("SELECT id,label,owner_id,last_seen_at,revoked_at,version,checkout,restart_requested_at "
-                             "FROM runners WHERE revoked_at IS NULL"):
+        runners = c.execute("SELECT id,label,owner_id,last_seen_at,revoked_at,version,checkout,restart_requested_at "
+                            "FROM runners_with_state WHERE revoked_at IS NULL").fetchall()
+        busy = runner_busy_many(c, [row["id"] for row in runners])     # every computer's running turns in one read
+        for row in runners:
             online = row["last_seen_at"] and row["last_seen_at"] > H.shift(H.now(), seconds=-60)
             if online and not runner_version_supported(row["version"]):
                 add("runner_version", row["label"] + " needs a runner update",
                     "Install the current " + auth.settings.app_name + " runner before assigning new work.",
                     machine=row["id"], action="Update this runner in Settings → Computers.")
             if online:
-                checkout_issue(add, row, runner_busy(c, row["id"]))
+                checkout_issue(add, row, busy[row["id"]])
         for row in c.execute("SELECT service,last_error,detail FROM service_health WHERE last_error IS NOT NULL"):
             if managed_backups and row["service"] in SNAPSHOT_BACKUP_ROWS:
                 continue
@@ -779,7 +783,7 @@ def operation_issues(c, who, auth):
         # A connector that stopped refreshing (the Mac lost the network, or the sync hung) writes no
         # error, so its age is checked while a Mac is online: calendar refreshes every 45 s, mail
         # reports every 10 minutes.
-        if c.execute("SELECT 1 FROM runners WHERE revoked_at IS NULL AND last_seen_at>?",
+        if c.execute("SELECT 1 FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
                      (H.shift(H.now(), seconds=-60),)).fetchone():
             for service, label, limit in (("connector:calendar", "Calendar", 15), ("connector:mail", "Mail", 90)):
                 row = c.execute("SELECT last_succeeded_at,last_error FROM service_health WHERE service=?", (service,)).fetchone()
@@ -829,14 +833,16 @@ def own_sign_in(c, bot, settings=None):
 
 
 def free_turn(c, bot, location, human=False):
-    """The computer whose running work and short starts occupy all its places, or ''."""
+    """The computer where no turn can start now, or '': its start places are all taken by running and starting turns
+    (start_places.held), or it already holds as many claimed turns as it may lease (start_places.live_limit)."""
     machine = location.get("machine") or {}
-    row = c.execute("SELECT * FROM runners WHERE id=?", (machine.get("runner_id"),)).fetchone()
+    row = c.execute("SELECT * FROM runners_with_state WHERE id=?", (machine.get("runner_id"),)).fetchone()
     if not row:
         return ""
-    held = turns_here(c, machine["runner_id"])
-    from .start_places import turn_limit
-    return (machine.get("label") or "its computer") if sum(held.values()) >= turn_limit(row) else ""
+    from .start_places import held, live, live_limit, turn_limit
+    rid = machine["runner_id"]
+    full = sum(held(c, rid).values()) >= turn_limit(row) or sum(live(c, rid).values()) >= live_limit(row)
+    return (machine.get("label") or "its computer") if full else ""
 
 
 def cloud_machine_wait(c, bot):
@@ -910,7 +916,8 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
 
 # The queued job of a task. INDEXED BY jobs_queued: the expression on the message cannot use an index, and with the
 # stale sqlite_stat1 row for messages the planner scanned all of them (40-44 ms a call on TIDY v0.5.1, 545 an hour).
-TASK_WAIT_SQL = ("SELECT j.bot_id FROM jobs j INDEXED BY jobs_queued JOIN messages m ON m.id=j.message_id "
+TASK_WAIT_SQL = (f"SELECT j.bot_id,{H.person_sent_sql()} AS person_sent FROM jobs j INDEXED BY jobs_queued "
+                 "JOIN messages m ON m.id=j.message_id "
                  "JOIN conversations cv ON cv.id=m.conversation_id "
                  f"WHERE j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at LIMIT 1")
 
@@ -920,7 +927,7 @@ def task_wait(c, task_id, settings=None):
     job = c.execute(TASK_WAIT_SQL, (task_id,)).fetchone()
     if not job:
         return ""
-    label = queued_label(c, job["bot_id"], machine(c, job["bot_id"]), settings)[0]
+    label = queued_label(c, job["bot_id"], machine(c, job["bot_id"]), settings, human=bool(job["person_sent"]))[0]
     reason = label.removeprefix("Saved — ")
     return "Queued" if reason == "queued" else reason[:1].upper() + reason[1:]
 
@@ -960,13 +967,17 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     run for a message a person sent, whichever bot it went to (a person's task answered by the bot that asked it).
     A run waiting for its ChatGPT login (backend/login_waits.py) says so in `waiting` and its label; `auth` lets it
     name the bot holding it."""
-    person = "m.sender_id LIKE 'human:%'"
+    person = H.person_sent_sql()
     which = (f"AND (j.bot_id=? OR {person}) " if bot and people else "AND j.bot_id=? " if bot
              else f"AND {person} " if people else "")
-    job = c.execute("SELECT j.*,m.sender_id AS sender,a.state AS attempt_state,a.lease_until,a.stop_requested_at "
+    # A send the duplicate trigger dismissed (wake_presets.HOLD_TRIGGER) repeats a run still going: the chat shows that run.
+    # person_sent: the message is a person's, or the keeper carrier of one (the sender alone is the keeper).
+    job = c.execute(f"SELECT j.*,m.sender_id AS sender,{person} AS person_sent,a.state AS attempt_state,a.lease_until,"
+                    "a.stop_requested_at,a.started_at AS attempt_started_at "
                     "FROM jobs j JOIN messages m ON m.id=j.message_id "
                     "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
                     "AND coalesce(json_extract(m.refs,'$.maintenance'),'')!='checkpoint' "
+                    "AND NOT (j.state='canceled' AND coalesce(j.wake_class,'')='duplicate') "
                     + which + "ORDER BY m.rowid DESC LIMIT 1", (cid, bot) if bot else (cid,)).fetchone()
     execution = None
     if job and who and (not privacy.message_readable(c, privacy.actor(who), H.message(c, job["message_id"]))
@@ -1001,7 +1012,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
                                "WHERE m.conversation_id=? AND j.bot_id=? AND a.state IN ('leased','running') LIMIT 1",
                                (cid, job["bot_id"])).fetchone()
             label, readiness_reason = queued_label(c, job["bot_id"], location, settings,
-                                                   human=H.is_human(message.get("sender_id") or ""), behind=bool(behind),
+                                                   human=bool(job["person_sent"]), behind=bool(behind),
                                                    queued=(message.get("refs") or {}).get("delivery") == "queue")
             if ((H.status(c, job['bot_id']) or {}).get('state') == 'limited'
                     and (reason := login_holds.fallback_resume_reason(c, job['attempt_id']))):
@@ -1020,13 +1031,15 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
         execution = {"job_id": job["id"], "message_id": job["message_id"], "bot_id": job["bot_id"],
                      "attempt_id": job["attempt_id"], "state": state, "label": label,
                      "text": "\n\n".join(p["text"] for p in parts if p["kind"] != "tool"), "parts": parts,
-                     "from_person": H.is_human(job["sender"]), **location}
+                     "from_person": bool(job["person_sent"]), **location}
         if omitted:
             execution["parts_omitted"] = omitted
         if waiting:
             execution["waiting"] = waiting
         if readiness_reason:
             execution["readiness_reason"] = readiness_reason
+        if state in ("leased", "running") and job["attempt_started_at"]:
+            execution["started_at"] = job["attempt_started_at"]   # the chat counts the turn's time from it
     return execution
 
 
@@ -1124,6 +1137,17 @@ def runner_busy(c, runner_id):
     """Turns running on a computer now: what a restart would wait for."""
     return c.execute("SELECT count(*) FROM attempts WHERE runner_id=? AND state IN ('leased','running') "
                      "AND lease_until>?", (runner_id, H.now())).fetchone()[0]
+
+
+def runner_busy_many(c, runner_ids):
+    """runner_busy for many computers, {runner: turns}, in one read per 500 computers."""
+    now, found = H.now(), {}
+    ids = sorted(set(runner_ids))
+    for part in H.chunks(ids):
+        found.update(c.execute("SELECT runner_id,count(*) FROM attempts WHERE runner_id IN (%s) "
+                               "AND state IN ('leased','running') AND lease_until>? GROUP BY runner_id"
+                               % ",".join("?" * len(part)), (*part, now)).fetchall())
+    return {rid: found.get(rid, 0) for rid in runner_ids}
 
 
 def restart_issue(add, row, busy, since=None):
@@ -2541,7 +2565,7 @@ def install_views(app, store, auth, mutate, task_view):
             runners = list(c.execute("SELECT id,label,owner_id,last_seen_at,revoked_at,platform,version,capacity,readiness,"
                                       "accepts_member_bots,turns_at_once,screen,performance,capabilities,"
                                       "restart_since,"
-                                      "readiness_at FROM runners ORDER BY created_at"))
+                                      "readiness_at FROM runners_with_state ORDER BY created_at"))
             from . import usage_limits
             from .start_places import describe, summaries, turn_limit
             # One company Default for every computer's queue classify: without it each summary rebuilds

@@ -935,7 +935,7 @@ def test_rejected_signin_cannot_replay_a_run_that_acted(api, activity):
         status = c.execute("SELECT state,focus FROM bot_status WHERE bot='ops'").fetchone()
         assert status['state'] == ('crashed' if acted else 'idle')
         assert 'sign-in' in status['focus']
-        report = json.loads(c.execute('SELECT readiness FROM runners WHERE id=?', (machine['runner_id'],)).fetchone()[0])
+        report = json.loads(c.execute('SELECT readiness FROM runners_with_state WHERE id=?', (machine['runner_id'],)).fetchone()[0])
         assert report['runtimes']['codex']['authenticated'] == 'rejected'
     assert claim(api, machine) is None
 
@@ -954,7 +954,7 @@ def test_a_model_at_capacity_after_a_tool_is_saved_for_review_not_replayed(api, 
          machine['token'])
     monkeypatch.setattr(H, 'now', lambda: '2026-10-23T05:02:01.000000Z')
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen_at=?,awake_since=NULL", (H.now(),))
+        c.execute("UPDATE runner_states SET last_seen_at=?,awake_since=NULL", (H.now(),))
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
     ready(api, machine, ['ops'])
     assert claim(api, machine) is None
@@ -985,7 +985,7 @@ def claim_at(api, monkeypatch, machine, at, continues=True):
     from backend.store import H
     monkeypatch.setattr(H, 'now', lambda: at)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen_at=?,awake_since=NULL", (H.now(),))
+        c.execute("UPDATE runner_states SET last_seen_at=?,awake_since=NULL", (H.now(),))
     post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {'ops': True},
                                     "capabilities": ['capacity_continue_v1'] if continues else []}, token=machine['token'])
     return claim(api, machine)

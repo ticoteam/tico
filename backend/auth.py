@@ -168,7 +168,7 @@ def validate_identity(c, who):
             raise Problem("paused", "This bot is " + str(state or "unknown") + ", not active; "
                           "a person changes that in Settings", 409)
         return
-    runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL",
+    runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL",
                        (who.runner_id,)).fetchone()
     if not runner:
         raise Problem("revoked", "Runner credential is revoked or unknown", 401)

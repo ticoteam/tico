@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SCAN = ("backend", "clients", "connectors", "integrations", "scripts", "tools", "runner")
+SCAN = ("backend", "clients", "connectors", "integrations", "scripts", "tools", "runner_support")
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", ".venv", "venv"}
 OWNED = ("backend/finance/",)
 EXEMPT = ("scripts/finance_lint.py", "backend/tests/test_status_values.py")  # that test builds its own small tables

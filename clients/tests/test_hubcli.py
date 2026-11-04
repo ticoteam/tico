@@ -2,7 +2,7 @@
 
 The command surface (docs/history/hub-v2.md §5) and the exit codes are the contract every bot's AGENT.md
 depends on: 0 fine, 2 refused or a non-retryable API error, 1 anything else. The real HTTP round
-trip is `runner/tests/test_conformance.py`; here the API is a stub or absent.
+trip is `runner_support/tests/test_conformance.py`; here the API is a stub or absent.
 """
 import contextlib
 import io
@@ -108,6 +108,15 @@ def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
         (["thread", "follow", "th1", "--notify", "mentions"], ("PUT", "threads/th1/follow", {"notify": "mentions"})),
         (["thread", "follow", "th1"], ("PUT", "threads/th1/follow", {"notify": "live"})),
         (["thread", "unfollow", "th1"], ("DELETE", "threads/th1/follow", None)),
+        (["thread", "pin", "th1"], ("PUT", "threads/th1/pin", None)),
+        (["thread", "unpin", "th1"], ("DELETE", "threads/th1/pin", None)),
+        (["thread", "catch-up", "--limit", "5"], ("GET", "threads/catch-up", {"limit": 5})),
+        (["thread", "update", "th1", "--pin-for-everyone"], ("PATCH", "threads/th1", {"pinned_for_everyone": True})),
+        (["thread", "update", "th1", "--unpin-for-everyone"], ("PATCH", "threads/th1", {"pinned_for_everyone": False})),
+        (["thread", "dm-group", "human:ana", "bot:ops", "--title", "Launch"],
+         ("POST", "threads/dm", {"members": ["human:ana", "bot:ops"], "body": None, "title": "Launch"})),
+        (["thread", "create", "Launch", "--member", "human:ana", "--pin-for-members"],
+         ("POST", "threads", {"title": "Launch", "members": ["human:ana"], "pin_for_members": True})),
         (["thread", "read", "th1", "--seq", "42"], ("POST", "threads/th1/read", {"seq": 42})),
         (["thread", "read", "th1", "--all"], ("POST", "threads/th1/read-all", {})),
         (["thread", "search", "refund terms"], ("GET", "threads/search", {"q": "refund terms"})),

@@ -2,7 +2,10 @@
 
 A subscription is one of the company's model logins or keys, saved once in Tico rather than on a computer: a Claude
 setup-token (`claude setup-token`), a ChatGPT login (Codex's `auth.json` from a `codex login`), or an Anthropic or
-OpenAI API key. It belongs to the company; `added_by` only says who saved it. The value is sealed with the credential
+OpenAI API key. It belongs to the company; `added_by` only says who saved it. A plan (Claude or ChatGPT) has an owner
+(`owner_id`), the person whose plan it is: the one who adds it, unless an owner or admin names another active person of
+the company, then or later. A plan is meant for its owner's own bots, not shared ones (the Add pop-up says so). An API
+key bills per use and has no owner; a company may save many. The value is sealed with the credential
 vault's data key (CredentialCipher.seal, context `model_subscription:<id>`), never shown again, never in a list, an
 event or an idempotency receipt (saves go through Vault.change, which keeps only a keyed fingerprint).
 
@@ -101,7 +104,7 @@ CREATE TABLE IF NOT EXISTS model_subscriptions(
  id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, sealed TEXT NOT NULL,
  preview TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'new',
  status_detail TEXT NOT NULL DEFAULT '', status_at TEXT, added_by TEXT NOT NULL, created_at TEXT NOT NULL,
- updated_at TEXT NOT NULL);
+ updated_at TEXT NOT NULL, owner_id TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS computer_subscriptions(
  runner_id TEXT NOT NULL, runtime TEXT NOT NULL, subscription_id TEXT NOT NULL, set_by TEXT NOT NULL,
  updated_at TEXT NOT NULL, PRIMARY KEY(runner_id, runtime));
@@ -113,14 +116,17 @@ CREATE INDEX IF NOT EXISTS attempt_subscriptions_sub ON attempt_subscriptions(su
 CREATE TABLE IF NOT EXISTS pending_subscription_fallbacks(
  attempt_id TEXT NOT NULL, runtime TEXT NOT NULL, PRIMARY KEY(attempt_id, runtime));
 CREATE TABLE IF NOT EXISTS subscription_connects(
- login_id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', subscription_id TEXT NOT NULL DEFAULT '');
+ login_id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', subscription_id TEXT NOT NULL DEFAULT '',
+ owner_id TEXT NOT NULL DEFAULT '');
 """
 
 
 class SubscriptionWrite(Contract):
-    """A new subscription, or a saved one's reconnect (a new `secret`) or rename. `confirm` accepts that a reconnect
-    stops and restarts the live runs on every computer given it."""
+    """A new subscription, or a saved one's reconnect (a new `secret`), rename or new owner (`owner_id`, a person; a new
+    plan defaults to whoever adds it; an API key has none). `confirm` accepts that a reconnect stops and restarts the
+    live runs on every computer given it."""
     name: str | None = Field(default=None, max_length=80)
+    owner_id: str | None = Field(default=None, max_length=120)
     kind: str | None = Field(default=None, max_length=40)
     secret: SecretStr | None = Field(default=None, max_length=MAX_VALUE)
     confirm: bool = False
@@ -128,9 +134,11 @@ class SubscriptionWrite(Contract):
 
 class SubscriptionConnect(Contract):
     """Sign a plan in from the page: a new subscription (`kind`, `name`), or a saved one's new value (`subscription`).
-    `confirm` accepts that a reconnect stops and restarts the live runs on every computer given it."""
+    `owner_id` names the new one's owner (default: whoever connects it). `confirm` accepts that a reconnect stops and
+    restarts the live runs on every computer given it."""
     kind: str | None = Field(default=None, max_length=40)
     name: str | None = Field(default=None, max_length=80)
+    owner_id: str | None = Field(default=None, max_length=120)
     subscription: str | None = Field(default=None, max_length=80)
     confirm: bool = False
 
@@ -261,8 +269,8 @@ def still_given(c, runner_id, runtime, subscription_id):
     return bool(sub) and sub["id"] == subscription_id
 
 
-RUNNER_READINESS_SQL = "SELECT readiness FROM runners WHERE id=?"
-RUNNER_CAPABILITIES_SQL = "SELECT capabilities FROM runners WHERE id=? AND revoked_at IS NULL"
+RUNNER_READINESS_SQL = "SELECT readiness FROM runners_with_state WHERE id=?"
+RUNNER_CAPABILITIES_SQL = "SELECT capabilities FROM runners_with_state WHERE id=? AND revoked_at IS NULL"
 
 
 def in_effect(c, runner_id, runtime, loads=None):
@@ -357,11 +365,13 @@ def view(c, sub):
     computers = [r[0] for r in c.execute("SELECT runner_id FROM computer_subscriptions WHERE subscription_id=? "
                                          "ORDER BY runner_id, runtime", (sub["id"],))]
     added = H.human(c, H.actor_id(sub["added_by"])) or {}
+    owner = (H.human(c, H.actor_id(sub["owner_id"])) or {}) if sub.get("owner_id") else {}
     return {"id": sub["id"], "name": sub["name"], "kind": sub["kind"], "runtime": spec.get("runtime", ""),
             "label": spec.get("label", sub["kind"]), "status": sub["status"], "status_detail": sub["status_detail"],
             "status_at": sub["status_at"], "preview": sub["preview"], "revision": sub["revision"],
             "computers": list(dict.fromkeys(computers)), "usage": _usage(c, sub), "added_by": sub["added_by"],
-            "added_by_name": added.get("name") or added.get("email") or "",
+            "added_by_name": added.get("name") or added.get("email") or "", "owner_id": sub.get("owner_id") or "",
+            "owner_name": owner.get("name") or owner.get("email") or "",
             "created_at": sub["created_at"], "updated_at": sub["updated_at"]}
 
 
@@ -374,7 +384,7 @@ def listed(c):
 
 def kinds():
     return [{"kind": k, "label": v["label"], "runtime": v["runtime"], "secret_label": v["secret_label"],
-             "help": v["help"], "connect": bool(v.get("connect"))} for k, v in KINDS.items()]
+             "help": v["help"], "connect": bool(v.get("connect")), "owned": owned(k)} for k, v in KINDS.items()]
 
 
 def assignments(c):
@@ -383,7 +393,7 @@ def assignments(c):
     given = [{"runner_id": r["runner_id"], "runtime": r["runtime"], "subscription_id": r["subscription_id"]}
              for r in c.execute("SELECT g.* FROM computer_subscriptions g JOIN runners r ON r.id=g.runner_id "
                                 "WHERE r.revoked_at IS NULL ORDER BY g.runner_id, g.runtime")] if _present(c) else []
-    capable = [r["id"] for r in c.execute("SELECT id,capabilities FROM runners WHERE revoked_at IS NULL "
+    capable = [r["id"] for r in c.execute("SELECT id,capabilities FROM runners_with_state WHERE revoked_at IS NULL "
                                           "ORDER BY id") if runner_takes(r)]
     return {"assignments": given, "capable": capable}
 
@@ -402,6 +412,35 @@ def _admin(auth, who, secret=False):
         raise Problem("forbidden", "Only an owner or admin changes the company's subscriptions", 403)
     if secret and (who.via or who.attempt_id):
         raise Problem("forbidden", "Save a subscription yourself in Settings > Models", 403)
+
+
+def owned(kind):
+    """Whether a subscription of this kind has an owner: a plan does, an API key does not."""
+    return (KINDS.get(kind) or {}).get("billing") == "subscription"
+
+
+def owner_of(c, value, kind):
+    """`value` (a person's id, or `human:<id>`) as the owner actor, or a Problem: an owner is a person of this company
+    who has not left and whose sign-in is on. Never Tico support, a bot or a service. An API key takes none."""
+    from .auth import standing
+    if not owned(kind):
+        raise Problem("owner", "An API key has no owner", 422)
+    text = str(value or "").strip()
+    pid = H.actor_id(text)
+    if (not pid or (":" in text and not text.startswith("human:")) or pid == "tico-support" or not H.human(c, pid)
+            or standing(c, pid)):
+        raise Problem("owner", "Choose a person in this company", 422)
+    return "human:" + pid
+
+
+def _default_owner(c, who, body, kind):
+    """The owner a new subscription is saved with: the one named, else the person adding it; none for an API key."""
+    if body.owner_id is not None:
+        return owner_of(c, body.owner_id, kind)
+    if not owned(kind):
+        return ""
+    actor = str(getattr(who, "actor", "") or "")
+    return actor if actor.startswith("human:") else ""
 
 
 # ------------------------------------------------------------------------------------------------ restarts
@@ -485,7 +524,7 @@ def _signed_in_with(c, sid):
     runs and sessions alone."""
     return [(g["runner_id"], g["runtime"]) for g in c.execute(
         "SELECT g.runner_id,g.runtime,r.capabilities FROM computer_subscriptions g "
-        "JOIN runners r ON r.id=g.runner_id WHERE g.subscription_id=? ORDER BY g.runner_id, g.runtime",
+        "JOIN runners_with_state r ON r.id=g.runner_id WHERE g.subscription_id=? ORDER BY g.runner_id, g.runtime",
         (sid,)).fetchall() if runner_takes(g)]
 
 
@@ -528,7 +567,7 @@ def _confirm_reconnect(c, settings, given):
 
 def save(c, vault, settings, who, body, sid=None):
     """Add a subscription, or change a saved one: a new secret reconnects it (status `new`, so it counts again) and ends
-    its usage-limit hold as Try now does, a name renames it. Returns its view."""
+    its usage-limit hold as Try now does, a name renames it, an `owner_id` gives it another owner. Returns its view."""
     now = H.now()
     if sid:
         sub = row(c, sid)
@@ -539,6 +578,7 @@ def save(c, vault, settings, who, body, sid=None):
         name = body.name.strip() if body.name is not None else None
         if body.name is not None and not name:
             raise Problem("name", "Enter a name", 422)
+        owner = owner_of(c, body.owner_id, sub["kind"]) if body.owner_id is not None else None
         given = []
         if body.secret is not None:
             value, preview = checked(sub["kind"], body.secret.get_secret_value())
@@ -547,6 +587,9 @@ def save(c, vault, settings, who, body, sid=None):
                 _confirm_reconnect(c, settings, given)
         if name is not None:
             c.execute("UPDATE model_subscriptions SET name=?,updated_at=? WHERE id=?", (name, now, sid))
+        if owner is not None and owner != sub["owner_id"]:
+            c.execute("UPDATE model_subscriptions SET owner_id=?,updated_at=? WHERE id=?", (owner, now, sid))
+            H.event(c, who.actor, "subscription.owner_changed", sid, {"from": sub["owner_id"], "to": owner})
         if body.secret is not None:
             c.execute("UPDATE model_subscriptions SET sealed=?,preview=?,revision=revision+1,status='new',"
                       "status_detail='',status_at=?,updated_at=? WHERE id=?",
@@ -570,10 +613,11 @@ def save(c, vault, settings, who, body, sid=None):
     if c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] >= MAX_SUBSCRIPTIONS:
         raise Problem("limit", f"The company has {MAX_SUBSCRIPTIONS} subscriptions; remove one first", 422)
     value, preview = checked(body.kind, body.secret.get_secret_value())
+    owner = _default_owner(c, who, body, body.kind)
     sid = H.new_id()
-    c.execute("INSERT INTO model_subscriptions(id,name,kind,sealed,preview,added_by,created_at,updated_at) "
-              "VALUES(?,?,?,?,?,?,?,?)",
-              (sid, name, body.kind, vault.cipher.seal(c, _context(sid), value), preview, who.actor, now, now))
+    c.execute("INSERT INTO model_subscriptions(id,name,kind,sealed,preview,added_by,owner_id,created_at,updated_at) "
+              "VALUES(?,?,?,?,?,?,?,?,?)",
+              (sid, name, body.kind, vault.cipher.seal(c, _context(sid), value), preview, who.actor, owner, now, now))
     H.event(c, who.actor, "subscription.created", sid, {"kind": body.kind})
     _tick_provider(c, settings, who.actor, body.kind)
     return view(c, row(c, sid))
@@ -609,7 +653,7 @@ def give(c, settings, who, body):
     the computer's live runs on that runtime (confirmed first), starts its sessions of that runtime fresh, and re-judges
     the bots there that were Rate limited on the old sign-in. A runner too old to take one keeps signing in with its own
     login, so there it is only recorded: nothing stops, nothing is re-judged."""
-    runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (body.runner_id,)).fetchone()
+    runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (body.runner_id,)).fetchone()
     if not runner:
         raise Problem("not_found", "Computer not found", 404)
     sub = row(c, body.subscription) if body.subscription else None
@@ -696,7 +740,7 @@ def lend(c, runner_id, runtime, actor, shared, others):
     used percent, then the most recently added. Only subscription plans count (an API key bills per use, so it is never
     chosen for a computer). Returns the subscription id given, or None when no plan fits."""
     from . import login_holds
-    runner = c.execute("SELECT readiness FROM runners WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()
+    runner = c.execute("SELECT readiness FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()
     if not runner or c.execute("SELECT 1 FROM computer_subscriptions WHERE runner_id=? AND runtime=?",
                                (runner_id, runtime)).fetchone():
         return None
@@ -918,7 +962,7 @@ def _connect_computers(c, runtime, who=None):
         (runtime, H.now()))}
     me = H.actor_id(who.actor) if who else ""
     found = []
-    for runner in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL").fetchall():
+    for runner in c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL").fetchall():
         report = readiness_document(runner["readiness"]).get("runtimes") or {}
         if (model_login.connects(runner) and model_login._online(runner)
                 and (report.get(runtime) or {}).get("installed")):
@@ -955,6 +999,9 @@ def connect(c, settings, who, body):
         raise Problem("name", "Enter a name", 422)
     elif c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] >= MAX_SUBSCRIPTIONS:
         raise Problem("limit", f"The company has {MAX_SUBSCRIPTIONS} subscriptions; remove one first", 422)
+    # A reconnect keeps its owner; a new one is checked now, before anyone signs in.
+    owner = "" if sid else _default_owner(c, who, body, kind)
+
     def answer(login, runner):
         return {**model_login.view(login), "computer": runner["label"],
                 "not_yours": runner["owner_id"] != H.actor_id(who.actor)}
@@ -979,8 +1026,8 @@ def connect(c, settings, who, body):
     if not new:
         raise Problem("state", f"You are connecting another subscription on {runner['label']}; finish or cancel that "
                       "first", 409)
-    c.execute("INSERT INTO subscription_connects(login_id,kind,name,subscription_id) VALUES(?,?,?,?)",
-              (login["id"], kind, name, sid))
+    c.execute("INSERT INTO subscription_connects(login_id,kind,name,subscription_id,owner_id) VALUES(?,?,?,?,?)",
+              (login["id"], kind, name, sid, owner))
     H.event(c, who.actor, "subscription.connect", sid or login["id"], {"kind": kind, "runner": runner["id"]})
     return answer(login, runner)
 
@@ -1004,7 +1051,8 @@ def connected(c, vault, settings, who, login_id, body):
     if not target:
         state, message = "failed", "That sign-in has ended"
     else:
-        write = SubscriptionWrite(kind=target["kind"], name=target["name"] or None, secret=body.value, confirm=True)
+        write = SubscriptionWrite(kind=target["kind"], name=target["name"] or None, secret=body.value, confirm=True,
+                                  owner_id=(target["owner_id"] or None) if not target["subscription_id"] else None)
         try:
             save(c, vault, settings, SimpleNamespace(actor=login["requested_by"]), write, target["subscription_id"] or None)
         except Problem as problem:

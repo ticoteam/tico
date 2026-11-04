@@ -61,6 +61,10 @@ EVENTS_DESCRIPTION = (
     "- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or "
     "`state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n"
     "- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n"
+    "- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md §9); an `activity` one also carries "
+    "`counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` "
+    "(how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row "
+    "without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`.\n"
     "- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. "
     "With `needs=changes`: `count`, `version`, each bot's count (`bots`), and the ids `changed` and `removed` "
     "since `base` (null when more than 100 moved: read the list whole); read the changed items with "
@@ -2424,8 +2428,8 @@ TAGS['Model subscriptions'] = ("The company's saved model logins and keys, given
                                "sent only to add or reconnect one; no answer carries it.")
 STABLE.extend([
     ('/api/v2/model-subscriptions', 'get', 'Model subscriptions', 'listModelSubscriptions', 'Saved subscriptions and the kinds that can be added', 'ModelSubscriptionList'),
-    ('/api/v2/model-subscriptions', 'post', 'Model subscriptions', 'addModelSubscription', 'Add a subscription: a kind, a name and the pasted value (owners and admins)', 'ModelSubscription'),
-    ('/api/v2/model-subscriptions/{sid}', 'post', 'Model subscriptions', 'changeModelSubscription', 'Rename a subscription and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true', 'ModelSubscription'),
+    ('/api/v2/model-subscriptions', 'post', 'Model subscriptions', 'addModelSubscription', 'Add a subscription: a kind, a name, the pasted value and, for a plan, optionally its owner, a person (default: you; an API key has none; owners and admins)', 'ModelSubscription'),
+    ('/api/v2/model-subscriptions/{sid}', 'post', 'Model subscriptions', 'changeModelSubscription', 'Rename a subscription, change a plan owner and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true', 'ModelSubscription'),
     ('/api/v2/model-subscriptions/{sid}', 'delete', 'Model subscriptions', 'removeModelSubscription', 'Remove a subscription and take it off every computer; 409 `confirm_restart` while runs would stop unless `confirm=1`', 'ModelSubscriptionDeleted'),
     ('/api/v2/computer-subscriptions', 'get', 'Model subscriptions', 'listComputerSubscriptions', 'Which subscription each computer uses per runtime, and the computers that can take one', 'ComputerSubscriptionList'),
     ('/api/v2/computer-subscriptions', 'put', 'Model subscriptions', 'setComputerSubscription', 'Give a computer a subscription for one runtime, switch it, or clear it (null); 409 `confirm_restart` while live runs would stop unless `confirm` is true', 'ComputerSubscriptionResult'),
@@ -2438,12 +2442,12 @@ SCHEMAS['ModelSubscription'] = obj({
     'usage': {'anyOf': [obj({'window': {'type': ['string', 'null'], 'enum': ['5h', 'week', None]}, 'used_pct': NUM_N,
                              'cost_usd_month': NUM_N, 'resets_at': 'n'}, required=['window', 'used_pct', 'cost_usd_month']),
                         {'type': 'null'}]},
-    'added_by': 's', 'added_by_name': 's', 'created_at': 's', 'updated_at': 's'},
+    'added_by': 's', 'added_by_name': 's', 'owner_id': 's', 'owner_name': 's', 'created_at': 's', 'updated_at': 's'},
     required=['id', 'name', 'kind', 'runtime', 'label', 'status', 'status_detail', 'status_at', 'preview', 'revision',
-              'computers', 'usage', 'added_by', 'added_by_name', 'created_at', 'updated_at'])
+              'computers', 'usage', 'added_by', 'added_by_name', 'owner_id', 'owner_name', 'created_at', 'updated_at'])
 SCHEMAS['ModelSubscriptionList'] = obj({
     'subscriptions': items(ref('ModelSubscription')),
-    'kinds': items(obj({'kind': _SUB_KIND, 'label': 's', 'runtime': {'enum': ['claude', 'codex']}, 'secret_label': 's', 'help': 's'}))})
+    'kinds': items(obj({'kind': _SUB_KIND, 'label': 's', 'runtime': {'enum': ['claude', 'codex']}, 'secret_label': 's', 'help': 's', 'connect': 'b', 'owned': 'b'}))})
 SCHEMAS['ModelSubscriptionDeleted'] = obj({'deleted': 'b', 'id': 's', 'computers': 'i', 'stopped': 'i', 'sessions_reset': 'i'})
 SCHEMAS['ComputerSubscriptionList'] = obj({
     'assignments': items(obj({'runner_id': 's', 'runtime': {'enum': ['claude', 'codex']}, 'subscription_id': 's'})),
@@ -2545,15 +2549,35 @@ SCHEMAS.update({
                        "last_seq": "i", "last_unread_seq": "i", "me": "o", "members": "o",
                        "retention_days": {"type": ["integer", "null"],
                                           "description": "Days a root keeps its messages; null keeps them for good"},
-                       "home": {"type": ["object", "null"], "description": "Only for audience home: {actor}"}},
-                      required=["id", "title", "audience", "root_id", "last_seq", "last_unread_seq"]),
+                       "home": {"type": ["object", "null"], "description": "Only for audience home: {actor}"},
+                       "pinned_for_everyone": {"type": "boolean", "description": "Its root is pinned for everyone "
+                                               "who reads it; `me.pinned` is whether it is pinned for the viewer"}},
+                      required=["id", "title", "audience", "root_id", "last_seq", "last_unread_seq",
+                                "pinned_for_everyone"]),
     "ThreadReactions": items(obj({"emoji": "s", "count": "i", "actors": "a"}, required=["emoji", "count", "actors"])),
     "ThreadEarlier": obj({"home": "s", "messages": "i"}, required=["home", "messages"]),
     "ThreadUploaded": obj({"thread": ref("ThreadView"), "message": ref("ThreadMessage")},
                           required=["thread", "message"]),
     "ThreadSidebar": obj({"attention": items({"type": "object"}), "threads": items(ref("ThreadView")),
-                          "dms": items({"type": "object"}), "next_cursor": "n"},
+                          "dms": items({"type": "object"}), "next_cursor": "n",
+                          "bot_dms": ref("ThreadDmCounts"), "person_dms": ref("ThreadDmCounts")},
                          required=["attention", "threads", "dms"]),
+    "ThreadDmCounts": {"type": "object", "additionalProperties": {"type": "integer"},
+                       "description": "Unread in each open DM with one teammate, by that teammate's actor "
+                                      "(first page only; {} after)"},
+    "ThreadRail": obj({"pinned": items(ref("ThreadView")), "threads": items(ref("ThreadView")),
+                       "catch_up": {"type": ["integer", "null"], "description": "Catch up's count, at most 99 (first "
+                                    "page only; null after)"},
+                       "catch_up_ids": {"type": "array", "items": {"type": "string"},
+                                        "description": "The root ids `catch_up` counts, at most 99 (first page only; "
+                                                       "[] after): a client keeps the set from the live stream"},
+                       "dms": ref("ThreadDmCounts"), "next_cursor": "n"}),
+    "ThreadBrowse": obj({"threads": items({"allOf": [ref("ThreadView"), obj({"member_count": "i"})]}),
+                         "next_cursor": "n"}),
+    "ThreadCatchUp": obj({"items": items(obj({"thread": ref("ThreadView"), "new_count": "i", "mention": "b",
+                                              "messages": items(ref("ThreadMessage")), "more": "i"})),
+                          "count": {"type": "integer", "description": "Every item across pages, at most 99"},
+                          "next_cursor": "n"}),
     "ThreadSearch": obj({"hits": items(obj({"message_id": "s", "thread_id": "s", "title": "s", "sender_id": "s",
                                             "created_at": "s", "excerpt": "s"},
                                            required=["message_id", "thread_id", "excerpt"])),
@@ -2561,7 +2585,7 @@ SCHEMAS.update({
     "ThreadMessage": obj({"id": "s", "conversation_id": "s", "thread_id": "s", "seq": "i", "sender_id": "s",
                           "recipient_id": "n", "kind": "s", "body": "n", "created_at": "s", "edited_at": "n",
                           "revision": "i", "refs": "o", "deleted": "b", "root_id": "n", "origin_id": "n",
-                          "parent_message_id": "n", "depth": "i", "hidden": "b",
+                          "parent_message_id": "n", "depth": "i", "hidden": "b", "clipped": "b",
                           "sub_thread": {"type": ["object", "null"], "description": "The sub-thread branching from this "
                                          "message: {id, count, last_seq, unread, more}"}},
                          required=["id", "seq", "thread_id"]),
@@ -2586,7 +2610,24 @@ STABLE.extend([
      "`with=<actor>`, only the threads that teammate is a member of", "ThreadSidebar"),
     ("/api/v2/threads", "post", "Threads", "createThread",
      "Start a thread (audience members unless asked otherwise); with `parent_message_id` it is a sub-thread; with `body` "
-     "its first message is posted too", "ThreadView"),
+     "its first message is posted too; `pin_for_members` pins it for its starter and every person added. Only a DM with "
+     "one teammate may have no title (422 `name_required` otherwise)", "ThreadView"),
+    ("/api/v2/threads/rail", "get", "Threads", "listThreadRail",
+     "The threads the viewer is in, by title: `pinned` (at most 200 a page) and `threads`, each going on through "
+     "`next_cursor` until both are done; `catch_up`, `catch_up_ids` and `dms` on the first page. "
+     "Company, team and members threads and group DMs; never a 1:1 DM, a Home, a task's thread or a meeting", "ThreadRail"),
+    ("/api/v2/threads/browse", "get", "Threads", "browseThreads",
+     "Company and team threads the viewer may read and is not in, newest activity first; `q` matches the title. "
+     "Following one puts it in the rail", "ThreadBrowse"),
+    ("/api/v2/threads/catch-up", "get", "Threads", "listThreadCatchUp",
+     "Each thread with something new for the viewer and each open Needs attention item, mentions and asks first, then "
+     "newest activity, with its new messages in tree order (20 at most, within the page's byte budget, each text cut "
+     "at 4,000 characters with `clipped`; `more` counts the rest); `count` is the badge",
+     "ThreadCatchUp"),
+    ("/api/v2/threads/{thread_id}/pin", "put", "Threads", "pinThread",
+     "Pin a root thread for me; reading it is enough (404 otherwise, 422 for a sub-thread)", "ThreadView"),
+    ("/api/v2/threads/{thread_id}/pin", "delete", "Threads", "unpinThread",
+     "Unpin a root thread for me, a pin for everyone included (for me alone)", "ThreadView"),
     ("/api/v2/threads/search", "get", "Threads", "searchThreads",
      "Messages whose text matches every word of `q`, newest first, only in threads and messages the viewer may read", "ThreadSearch"),
     ("/api/v2/threads/home/{actor}", "get", "Threads", "getThreadHome",
@@ -2597,12 +2638,13 @@ STABLE.extend([
      "applies). `create=false` makes nothing and answers 404 `no_dm` when there is none yet", "ThreadView"),
     ("/api/v2/threads/dm", "post", "Threads", "createThreadDm",
      "A DM with these teammates (`members`), the open one or a new one, with an optional first message (`body`); needs "
-     "Write on each of them, and a bot's or person's first message passes the org rules", "ThreadView"),
+     "Write on each of them, and a bot's or person's first message passes the org rules. A new one with two or more "
+     "others needs a `title` (422 `name_required`)", "ThreadView"),
     ("/api/v2/threads/{thread_id}", "get", "Threads", "getThread",
      "A thread as the viewer sees it: its unread count, read mark, what they may do and its first page of members",
      "ThreadView"),
     ("/api/v2/threads/{thread_id}", "patch", "Threads", "updateThread",
-     "Rename, archive or unarchive a thread, change who it is for, or set how many days a root keeps its messages (`retention_days`, null for good); its managers only", "ThreadView"),
+     "Rename, archive or unarchive a thread, change who it is for, set how many days a root keeps its messages (`retention_days`, null for good), or pin a root for everyone (`pinned_for_everyone`; never a 1:1 DM, a Home, a task's or a meeting's thread); its managers only", "ThreadView"),
     ("/api/v2/threads/{thread_id}/timeline", "get", "Threads", "getThreadTimeline",
      "The thread in tree order, a page of its own messages at a time (`cursor` is the seq from next_cursor), each followed by its sub-thread's messages; a long branch has a `collapsed` row with the cursor that reads the rest", "ThreadTimeline"),
     ("/api/v2/threads/{thread_id}/members", "get", "Threads", "listThreadMembers",

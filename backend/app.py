@@ -106,6 +106,8 @@ INBOX_LIMIT = 100
 INBOX_PAGE = 500            # unread messages read per query while looking for the newest INBOX_LIMIT readable ones
 # Gateway image calls in flight per process (each holds a thread up to 130 s); more answer 429 with Retry-After.
 GATEWAY_IMAGE_SLOTS = 4
+# The defers the web's Send can keep (preference compose.send_way): the durations its menu offers (ui/app/pill.js).
+SEND_WAY_DEFERS = frozenset("defer:" + f for f in ("30m", "1h", "4h", "24h", "2d", "7d", "never"))
 
 
 def _first_visible(items, visible):
@@ -1682,7 +1684,7 @@ def create_app(settings=None):
         with store.read() as c:
             cutoff = H.shift(H.now(), seconds=-views.AWAKE_GAP)
             known = runner_versions.load(c)
-            for row in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL AND last_seen_at>?", (cutoff,)):
+            for row in c.execute("SELECT id FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?", (cutoff,)):
                 state = runner_versions.view(known.get(row["id"]))["state"]
                 counts[state] = counts.get(state, 0) + 1
         return counts
@@ -5641,6 +5643,10 @@ def create_app(settings=None):
             views.human_only(who)
             if not isinstance(body.value, bool):
                 raise Problem("validation", "meetings.auto_share is a boolean", 422)
+        # The way the web's Send goes (ui/app/pill.js): read by any client; sends that name no delivery ignore it.
+        if key == "compose.send_way" and not (body.value in ("steer", "queue") or isinstance(body.value, str)
+                                              and body.value in SEND_WAY_DEFERS):
+            raise Problem("validation", "compose.send_way is steer, queue or defer:<30m|1h|4h|24h|2d|7d|never>", 422)
         # Hide from my chart on the Strategy Bot: a person's own view
         if key == strategy_bot.HIDE_PREF:
             views.human_only(who)
@@ -6887,7 +6893,7 @@ def create_app(settings=None):
         main when that is safe and restarts once no turn is running, so nothing is cut off."""
         who = request.state.identity
         def work(c):
-            runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+            runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
             if not runner or not (auth.bot_admin(who) or who.role == "human" and who.actor == "human:" + runner["owner_id"]):
                 raise Problem("forbidden", "You cannot restart this runner", 403)
             c.execute("UPDATE runners SET restart_requested_at=? WHERE id=?", (H.now(), rid))
@@ -6900,7 +6906,7 @@ def create_app(settings=None):
         """Keep this computer for inbox bots, or stop (backend/inbox_isolation.py)."""
         who = request.state.identity
         def work(c):
-            runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+            runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
             if not runner or not (auth.bot_admin(who) or who.role == "human" and who.actor == "human:" + runner["owner_id"]):
                 raise Problem("forbidden", "You cannot change this computer", 403)
             people = views.roster(c)
@@ -7046,7 +7052,7 @@ def create_app(settings=None):
     def revoke(request: Request, rid: str, body: M.Empty):
         who = request.state.identity
         def work(c):
-            runner = c.execute("SELECT * FROM runners WHERE id=?", (rid,)).fetchone()
+            runner = c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone()
             if not runner or not (auth.bot_admin(who) or who.role == "human" and who.actor == "human:" + runner["owner_id"]):
                 raise Problem("forbidden", "You cannot revoke this runner", 403)
             c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), rid))
@@ -7203,7 +7209,7 @@ def create_app(settings=None):
         rows = []
         # One Default for the whole listing: each computer's summary reuses pools/groups/spend memos.
         limits = usage_limits.company(c)
-        runners = list(c.execute("SELECT * FROM runners WHERE revoked_at IS NULL ORDER BY label"))
+        runners = list(c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL ORDER BY label"))
         # One pass for every computer's turn counts and load (not one summary and one load per computer).
         turn_counts = summaries(c, [r["id"] for r in runners], settings, limits)
         loads = load_statuses(c, [r["id"] for r in runners])
@@ -7437,7 +7443,7 @@ def create_app(settings=None):
         who = request.state.identity
         def work(c):
             admin_only(who, "sets how many turns a computer runs at once")
-            row = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+            row = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
             if not row:
                 raise Problem("not_found", "Computer not found", 404)
             c.execute("UPDATE runners SET turns_at_once=? WHERE id=?", (body.turns_at_once, rid))
@@ -7719,7 +7725,7 @@ def create_app(settings=None):
                 raise Problem("not_found", "Bot not found", 404)
             if config["revision"] != body.expected_revision:
                 raise Problem("version_conflict", "Bot configuration changed; refresh before moving it", 409)
-            runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (body.runner_id,)).fetchone()
+            runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (body.runner_id,)).fetchone()
             if not runner:
                 raise Problem("not_found", "Computer is not registered", 404)
             if (who.role != "owner" and not auth.bot_admin(who) and runner["owner_id"] != H.actor_id(who.actor)

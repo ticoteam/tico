@@ -255,7 +255,7 @@ def mark_prompts(c, messages):
     runs = c.execute(
         f"SELECT a.bot_id,a.state,coalesce(a.started_at,a.created_at) AS began,a.finished_at,t.sender_id,"
         " EXISTS(SELECT 1 FROM attempt_inputs i JOIN messages im ON im.id=i.message_id"
-        "  WHERE i.attempt_id=a.id AND im.sender_id LIKE 'human:%') AS person"
+        f"  WHERE i.attempt_id=a.id AND {H.person_sent_sql('im')}) AS person"
         " FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages t ON t.id=j.message_id"
         f" WHERE a.bot_id IN ({','.join('?' * len(bots))}) AND coalesce(a.started_at,a.created_at)<=?"
         " AND ((a.finished_at IS NULL AND a.state IN ('leased','running')) OR a.finished_at>=?)",

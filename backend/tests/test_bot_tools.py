@@ -73,7 +73,7 @@ def test_no_value_can_reach_the_row(api):
     assert report(api, machine, "ops", [{**TOOLS[1], "env": {"SLACK_TOKEN": "xoxb-not-a-real-token"}}]).status_code == 422
     assert report(api, machine, "ops", TOOLS).status_code == 200
     with api.app.state.store.read() as c:
-        stored = c.execute("SELECT readiness FROM runners").fetchone()[0]
+        stored = c.execute("SELECT readiness FROM runners_with_state").fetchone()[0]
     for text in (api.get("/api/v2/bots/ops/tools", headers=headers()).text, stored,
                  api.get("/api/v2/operations", headers=headers()).text, api.get("/api/v2/bots", headers=headers()).text):
         assert "xoxb-not-a-real-token" not in text

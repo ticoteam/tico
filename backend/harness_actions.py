@@ -44,7 +44,7 @@ def request(c, who, rid, harness, action):
         raise Problem("forbidden", "Only the owner can change the tools on a computer", 403)
     if action not in ACTIONS:
         raise Problem("kind", "Unknown action", 422)
-    runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+    runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
     if not runner:
         raise Problem("not_found", "That computer is not registered", 404)
     known = readiness_document(runner["readiness"]).get("harnesses") or {}
@@ -73,7 +73,7 @@ def request(c, who, rid, harness, action):
 def choose(c, who, rid, harness, enabled, settings=None):
     if who.role != "owner":
         raise Problem("forbidden", "Only the owner can change the tools on a computer", 403)
-    runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+    runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
     if not runner:
         raise Problem("not_found", "That computer is not registered", 404)
     report = (readiness_document(runner["readiness"]).get("harnesses") or {}).get(harness)

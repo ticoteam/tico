@@ -1,4 +1,4 @@
-//! Bot code as another user (runner/isolation.py): on the Docker runner the supervisor keeps runner.json and
+//! Bot code as another user (runner_support/isolation.py): on the Docker runner the supervisor keeps runner.json and
 //! its state to itself and starts every process that runs bot-controlled code (the model CLI, git in a bot's
 //! checkout, a watcher, any runtime probe) as `TICO_RUNNER_BOT_UID` with no capabilities, through `setpriv`.
 //! Off wherever that variable is unset (a Mac is a trust group of one user).
