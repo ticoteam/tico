@@ -8,8 +8,9 @@ The limits, enforced together:
 A wake is written as events rows when it is recorded. One wake is one list: a `maintenance.wake` event against the bot,
 however many tasks the list names, and one `maintenance.wake.task` event against each distinct task in it. So a list of
 ten tasks is one wake toward the fleet cap and one wake against each of its tasks. The events are the ledger, so a restart
-or a second process sees the same counts. Every count is by actor (Keeper), so each one reads the events_task_origin index
-(actor, action, target, created_at).
+or a second process sees the same counts. Every count is by actor (Keeper). A target count reads the events_task_origin index
+(actor, action, target, created_at); the fleet count names no target, so it reads events_actor_action_created
+(actor, action, created_at), which seeks its hour.
 """
 from .store import H
 
@@ -18,10 +19,11 @@ WAKES_PER_TASK_DAY = 3
 WAKES_PER_HOUR = 50
 BOT_ACTION = "maintenance.wake"
 TASK_ACTION = "maintenance.wake.task"
-# INDEXED BY pins events_task_origin, as backend/batch.py does: the planner otherwise takes events_action_ts.
+# INDEXED BY pins each count's index, as backend/batch.py does: the planner otherwise takes events_action_ts.
 COUNT_TARGET = ("SELECT count(*) FROM events INDEXED BY events_task_origin "
                 "WHERE actor=? AND action=? AND target=? AND created_at>=?")
-COUNT_FLEET = "SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action=? AND created_at>=?"
+COUNT_FLEET = ("SELECT count(*) FROM events INDEXED BY events_actor_action_created "
+               "WHERE actor=? AND action=? AND created_at>=?")
 
 
 def _count(c, action, target, since):

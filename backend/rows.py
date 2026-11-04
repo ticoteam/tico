@@ -456,6 +456,7 @@ class MaintenanceRunStepRow(TypedDict):
     cost_usd: float
     started_at: str
     finished_at: str | None
+    window_end: str | None
     details: str
 
 
@@ -476,3 +477,11 @@ class MaintenanceHandoffRow(TypedDict):
     kind: str
     created_at: str
     delivered_at: str | None
+
+
+class MaintenanceRequestRow(TypedDict):
+    """One `maintenance_requests` row (SELECT *): the run an actor's Idempotency-Key was given to."""
+    actor: str
+    request_key: str
+    maintenance_run_id: str
+    created_at: str

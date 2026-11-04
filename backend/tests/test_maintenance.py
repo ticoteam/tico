@@ -174,14 +174,22 @@ def test_the_switch_migration_keeps_an_explicit_choice_and_gives_an_inherited_on
     assert mig.switches({"stall_triage": {"on": False}}) == {}, "stall_triage is gone"
 
 
-def _migrated(registry, rules):
-    """The step switches after the migration runs on a bare database holding these two registry rows."""
+def _migrated_rows(registry, rules):
+    """The step rows after the migration runs on a bare database holding these two registry rows and an events table:
+    {key: (enabled, frequency, custom every, custom unit)}."""
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT)")
+    conn.execute("CREATE TABLE events(actor TEXT, action TEXT, created_at TEXT)")
     conn.executemany("INSERT INTO registry_metadata VALUES(?,?)",
                      [("system_routines", json.dumps(registry)), ("rules", json.dumps(rules))])
     mig.up(conn)
-    return dict(conn.execute("SELECT key, enabled FROM maintenance_steps").fetchall())
+    return {key: tuple(row) for key, *row in conn.execute(
+        "SELECT key, enabled, frequency, custom_every, custom_unit FROM maintenance_steps")}
+
+
+def _migrated(registry, rules):
+    """The step switches after the migration runs on a bare database."""
+    return {key: row[0] for key, row in _migrated_rows(registry, rules).items()}
 
 
 def test_only_an_explicit_roundup_switch_sets_find_stuck_and_stale_review_never_does(monkeypatch):
@@ -302,15 +310,16 @@ def test_collect_counts_a_bot_only_when_a_settled_turn_wrote_something(api):
     assert counted == {"busy"}, "only the turn that wrote something counts"
 
 
-def test_the_limiter_counts_read_the_events_index(api):
-    """Every limiter count is by actor (Keeper), so each one reads events_task_origin instead of scanning events."""
+def test_the_limiter_counts_read_their_events_index(api):
+    """A target count reads events_task_origin (actor, action, target, created_at). The fleet count names no target, so it
+    reads events_actor_action_created (actor, action, created_at) and seeks its hour instead of scanning events."""
     store, _ = stores(api)
     since = "2026-11-03T00:00:00.000000Z"
     with store.read() as c:
-        for sql, params in ((L.COUNT_TARGET, (H.KEEPER, L.BOT_ACTION, "bot", since)),
-                            (L.COUNT_FLEET, (H.KEEPER, L.BOT_ACTION, since))):
+        for sql, params, index in ((L.COUNT_TARGET, (H.KEEPER, L.BOT_ACTION, "bot", since), "events_task_origin"),
+                                   (L.COUNT_FLEET, (H.KEEPER, L.BOT_ACTION, since), "events_actor_action_created")):
             plan = " ".join(str(row[3]) for row in c.execute("EXPLAIN QUERY PLAN " + sql, params))
-            assert "events_task_origin" in plan, plan
+            assert index in plan and "SCAN events" not in plan, plan
 
 
 def _dream_started_now(store):
@@ -433,3 +442,70 @@ def test_a_run_now_with_the_same_idempotency_key_returns_the_run_it_made(api, mo
     made = api.post("/api/v2/maintenance/run", json={"step": "collect"}, headers=keyed).json()
     repeat = api.post("/api/v2/maintenance/run", json={"step": "collect"}, headers=keyed).json()
     assert made["started"] is True and repeat["started"] is False and repeat["run"]["id"] == made["run"]["id"], repeat
+
+
+def test_a_worker_whose_run_was_recovered_starts_no_further_step(api, monkeypatch):
+    store, auth = stores(api)
+    started = []
+
+    def recovered_mid_step(c, ctx):
+        with store.transaction() as tc:
+            M.recover(tc, H.shift(H.now(), minutes=60))      # the run has gone quiet: recovery ends it under this worker
+        return result("ran", "recovered mid-run")
+    monkeypatch.setitem(M.LIVE, "collect", recovered_mid_step)
+    for key in ("clean_up", "dream"):
+        monkeypatch.setitem(M.LIVE, key, lambda c, ctx, key=key: started.append(key) or result("skipped", "test"))
+    run, _ = M.run_now(store, auth, "human:ana", wait=True)
+    assert started == [], "the old worker starts no step once its run was recovered"
+    assert run["result"] == "abandoned", run
+    with store.read() as c:
+        steps = [row[0] for row in c.execute("SELECT step FROM maintenance_run_steps WHERE maintenance_run_id=?", (run["id"],))]
+    assert steps == ["collect"], steps
+
+
+def test_a_request_key_replays_the_run_it_joined_even_after_that_run_ended(api, monkeypatch):
+    store, auth = stores(api)
+    monkeypatch.setattr(M, "_start", inline)
+    monkeypatch.setitem(M.LIVE, "collect", lambda c, ctx: result("skipped", "nothing new"))
+    now = H.now()
+    with store.transaction() as c:
+        c.execute("INSERT INTO maintenance_runs(id,occurrence_key,trigger,step,started_at,heartbeat_at,result) "
+                  "VALUES('live','schedule:live','schedule',NULL,?,?,'')", (now, now))
+    joined, started = M.run_now(store, auth, "human:ana", step="collect", wait=True, key="join-1")
+    assert joined["id"] == "live" and started is False, "a request that finds a live run joins it"
+    with store.transaction() as c:
+        c.execute("UPDATE maintenance_runs SET finished_at=?, ok=1, result='done' WHERE id='live'", (H.now(),))
+    again, started_again = M.run_now(store, auth, "human:ana", step="collect", wait=True, key="join-1")
+    assert again["id"] == "live" and started_again is False, "the repeat replays the run it joined, now ended"
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM maintenance_runs WHERE trigger='run_now'").fetchone()[0] == 0, \
+            "a joined request started no run"
+
+
+def test_a_request_key_replays_the_run_it_made_after_that_run_was_recovered(api, monkeypatch):
+    store, auth = stores(api)
+    monkeypatch.setattr(M, "_start", lambda *args, **kwargs: None)      # the run is claimed, and its worker never returns
+    first, started = M.run_now(store, auth, "human:ana", step="collect", key="recover-1")
+    assert started, "the first request starts its run"
+    with store.transaction() as c:
+        M.recover(c, H.shift(H.now(), minutes=60))
+    with store.read() as c:
+        assert c.execute("SELECT result FROM maintenance_runs WHERE id=?", (first["id"],)).fetchone()[0] == "abandoned"
+        runs_before = c.execute("SELECT count(*) FROM maintenance_runs").fetchone()[0]
+    again, started_again = M.run_now(store, auth, "human:ana", step="collect", key="recover-1")
+    assert again["id"] == first["id"] and started_again is False, "the repeat replays the recovered run, starts nothing"
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM maintenance_runs").fetchone()[0] == runs_before
+
+
+def test_a_saved_roundup_preset_sets_how_often_find_stuck_runs_and_an_inherited_one_keeps_six_hours():
+    def find_stuck(registry, rules=None):
+        return _migrated_rows(registry, rules or {})["find_stuck"][1:]
+    assert find_stuck({}) == ("custom", 6, "hours"), "inherited: the seeded custom 6 hours"
+    assert find_stuck({"task_roundup": {"on": True}}) == ("custom", 6, "hours"), "a saved switch alone keeps the cadence"
+    assert find_stuck({"task_roundup": {"preset": "daily"}}) == ("day", None, None), "saved daily is a daily run"
+    assert find_stuck({"task_roundup": {"preset": "three_daily"}}) == ("custom", 8, "hours"), "three a day is every 8 hours"
+    assert find_stuck({"task_roundup": {"preset": "hourly"}}) == ("run", None, None), "saved hourly is every run"
+    assert find_stuck({"task_roundup": {"preset": "bogus"}}) == ("custom", 6, "hours"), "an unknown preset keeps the default"
+    saved = _migrated_rows({"task_roundup": {"on": False, "preset": "daily"}}, {})["find_stuck"]
+    assert saved == (0, "day", None, None), "the switch and the cadence both carry over"

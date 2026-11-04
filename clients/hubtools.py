@@ -5332,7 +5332,7 @@ def maintenance_status(api, args):
        "frequency": {"type": "string", "enum": ["run", "day", "week", "custom"]},
        "custom_every": {"type": "integer", "minimum": 1, "maximum": 999},
        "custom_unit": {"type": "string", "enum": ["hours", "days"]},
-       "max_bots": {"type": "integer", "minimum": 0, "maximum": 500}}, writes=True)
+       "max_bots": {"type": "integer", "minimum": 1, "maximum": 20}}, writes=True)
 def maintenance_set(api, args):
     body = {k: args[k] for k in ("schedule", "paused", "monthly_cap_usd") if args.get(k) is not None}
     change = {k: args[k] for k in ("enabled", "frequency", "custom_every", "custom_unit", "max_bots") if args.get(k) is not None}

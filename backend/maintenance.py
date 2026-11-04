@@ -184,25 +184,36 @@ def tick(store, auth, at, failures=None):
     return run_id
 
 
+def _receipt(c, actor, key):
+    """The run this actor's Idempotency-Key was given (the run its first request started or joined), or None."""
+    row = c.execute("SELECT maintenance_run_id FROM maintenance_requests WHERE actor=? AND request_key=?", (actor, key)).fetchone()
+    return row[0] if row else None
+
+
 def run_now(store, auth, actor, step=None, wait=False, key=None):
     """Run now (POST /api/v2/maintenance/run, `hub maintenance run`): one run, claimed like a scheduled one. A plain run keeps
     the due rules. `step` runs only that step, due or not (a switched off step stays off, and a step on its old timer is
     skipped). A run already live is returned as it is, so Run now and the schedule give one run. With an Idempotency-Key
-    (`key`), a repeat of the same key returns the run that key made, and starts nothing. Returns (run, started)."""
+    (`key`), the request leaves a receipt, and a repeat of the key returns the run that first request started or joined,
+    even once that run has finished or been recovered, and starts nothing. Returns (run, started)."""
     if step is not None and step not in ORDER:
         raise Problem("invalid", f"No such Maintenance step: {step}", 422)
     now = H.now()
-    occurrence = f"run_now:{actor}:{key}" if key else "run_now:" + H.new_id()
     with store.transaction() as c:
         recover(c, now)
-        replay = c.execute("SELECT id FROM maintenance_runs WHERE occurrence_key=?", (occurrence,)).fetchone() if key else None
-        live = None if replay else live_run(c, now)
-        if replay or live:
-            run_id, started = (replay or live)["id"], False
-        else:
-            run_id = _insert(c, occurrence, "run_now", step, now)
-            H.event(c, actor, "maintenance.run_now", run_id, {"step": step})
-            started = True
+        run_id = _receipt(c, actor, key) if key else None
+        started = False
+        if run_id is None:
+            live = live_run(c, now)
+            if live:
+                run_id = live["id"]
+            else:
+                run_id = _insert(c, "run_now:" + H.new_id(), "run_now", step, now)
+                H.event(c, actor, "maintenance.run_now", run_id, {"step": step})
+                started = True
+            if key:
+                c.execute("INSERT INTO maintenance_requests(actor,request_key,maintenance_run_id,created_at) VALUES(?,?,?,?)",
+                          (actor, key, run_id, now))
     if started:
         _start(store, auth, run_id, step, wait)
     return get_run(store, run_id), started
@@ -247,6 +258,9 @@ def _steps(store, auth, run_id, only, tally):
     # Each step reads from its own cursor. Collect reads from the oldest cursor among the steps about to run.
     windows = {key: steps[key]["cursor_at"] or H.shift(now, days=-WINDOW_BACK.days) for key in names if plan[key][0] == "run"}
     for key in names:
+        if not _claimed(store, run_id):
+            LOG.warning("maintenance run %s was recovered; its remaining steps do not start", run_id)
+            return
         status, reason = plan[key]
         if status != "run":
             _log(store, run_id, key, status, reason, now, tally)
@@ -262,6 +276,13 @@ def _log(store, run_id, key, status, reason, now, tally):
                   "VALUES(?,?,?,?,?,?,?,'{}')", (H.new_id(), run_id, key, status, reason, now, now))
         c.execute("UPDATE maintenance_runs SET heartbeat_at=? WHERE id=?", (H.now(), run_id))
     tally[status] = tally.get(status, 0) + 1
+
+
+def _claimed(store, run_id):
+    """Whether the run is still this worker's. recover() ends a run whose heartbeat went quiet, and an ended run starts no
+    more steps: its old worker must not run beside the run that replaced it."""
+    with store.read() as c:
+        return c.execute("SELECT 1 FROM maintenance_runs WHERE id=? AND finished_at IS NULL", (run_id,)).fetchone() is not None
 
 
 def _still_pending(c, row_id):

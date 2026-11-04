@@ -1,7 +1,7 @@
 """The Maintenance run: one built-in run with eight steps, in fixed order, replacing about 48 background timers
 (backend/maintenance.py, docs/maintenance.md).
 
-Five tables, with Rails names (`maintenance_run_id`, `updated_by_id`), foreign keys, CHECKs and the indexes pruning reads:
+Six tables, with Rails names (`maintenance_run_id`, `updated_by_id`), foreign keys, CHECKs and the indexes pruning reads:
 
 - `maintenance_steps`: one row per step key, its switch, "How often", its custom interval, "Most bots per run" and its
   cursor. Its cursor (`cursor_at`) moves only when the step returns `ran`.
@@ -10,12 +10,15 @@ Five tables, with Rails names (`maintenance_run_id`, `updated_by_id`), foreign k
 - `maintenance_run_steps`: one row per step of a run, with its status, reason and counts.
 - `maintenance_listings`: Find stuck's dedupe, one row per task listed for one reason at one appointment.
 - `maintenance_handoffs`: a quiet task waiting to ride along in its bot's Update turn (Update's track reads it).
+- `maintenance_requests`: the run each Run now Idempotency-Key was given, by its actor, so a repeat replays that run.
 
 The switches of the jobs that became steps are copied in, one control at a time, and only once: every row is inserted
 with INSERT OR IGNORE, so a replay of this file changes nothing. An explicit choice carries over. An inherited default
 takes the step's new default:
 - Learn (`learnings` in Settings > Routines): Learn is off by default now, so an inherited Learn is off.
 - Dream (`auto_dream`), Check health (`health_scan`) and Find stuck (`task_roundup`): an on or off the customer saved.
+- Find stuck's cadence: a schedule preset the customer saved (ROUNDUP_PRESETS) sets it. An inherited schedule keeps the
+  seeded custom 6 hours.
 - The team rule `stale_review` and the `TICO_STALE_REVIEW` environment setting do not map to Find stuck. Stale review
   defaults off, so a saved off stale review says nothing about Find stuck, and it must not turn Find stuck off.
 
@@ -87,12 +90,20 @@ SCHEMA = (
  kind TEXT NOT NULL CHECK (kind IN ({HANDOFF_KINDS})),
  created_at TEXT NOT NULL,
  delivered_at TEXT)""",
+    f"""CREATE TABLE IF NOT EXISTS maintenance_requests(
+ actor TEXT NOT NULL,
+ request_key TEXT NOT NULL,
+ maintenance_run_id TEXT NOT NULL REFERENCES maintenance_runs(id) ON DELETE CASCADE,
+ created_at TEXT NOT NULL,
+ PRIMARY KEY (actor, request_key))""",
     "CREATE INDEX IF NOT EXISTS maintenance_runs_started ON maintenance_runs(started_at)",
     "CREATE INDEX IF NOT EXISTS maintenance_runs_live ON maintenance_runs(heartbeat_at) WHERE finished_at IS NULL",
     "CREATE INDEX IF NOT EXISTS maintenance_run_steps_run ON maintenance_run_steps(maintenance_run_id)",
     "CREATE INDEX IF NOT EXISTS maintenance_run_steps_started ON maintenance_run_steps(started_at)",
     "CREATE INDEX IF NOT EXISTS maintenance_listings_bot ON maintenance_listings(bot_id, listed_at)",
     "CREATE INDEX IF NOT EXISTS maintenance_handoffs_open ON maintenance_handoffs(bot_id) WHERE delivered_at IS NULL",
+    # The wake limiter's fleet count names no target, so it seeks its hour here (backend/maintenance_limits.py).
+    "CREATE INDEX IF NOT EXISTS events_actor_action_created ON events(actor, action, created_at)",
 )
 
 
@@ -115,6 +126,27 @@ def _flag(entry, name):
     return value if isinstance(value, bool) else None
 
 
+# A saved Find stuck schedule (task_roundup's preset, backend/system_routines.py PRESETS) becomes its cadence. Three a day is
+# every 8 hours; the seeded 6 hours would be four a day.
+ROUNDUP_PRESETS = {
+    "daily": ("day", None, None),
+    "weekly": ("week", None, None),
+    "three_daily": ("custom", 8, "hours"),
+    "4h": ("custom", 4, "hours"),
+    "hourly": ("run", None, None),
+    "15m": ("run", None, None),
+    "business": ("run", None, None),
+}
+
+
+def cadences(registry):
+    """{step key: (frequency, custom every, custom unit)} for a step whose saved schedule maps. Only task_roundup's saved
+    preset maps, to Find stuck. A step not in the result keeps its seeded frequency."""
+    entry = registry.get("task_roundup") if isinstance(registry, dict) else None
+    preset = entry.get("preset") if isinstance(entry, dict) else None
+    return {"find_stuck": ROUNDUP_PRESETS[preset]} if isinstance(preset, str) and preset in ROUNDUP_PRESETS else {}
+
+
 def switches(registry):
     """{step key: on or off} for every step with an explicit choice. A step not in the result takes its default."""
     out = {}
@@ -129,9 +161,12 @@ def switches(registry):
 def up(conn):
     for statement in SCHEMA:
         conn.execute(statement)
-    chosen = switches(_stored(conn, "system_routines"))
+    registry = _stored(conn, "system_routines")
+    chosen = switches(registry)
+    cadence = cadences(registry)
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     for key, enabled, frequency, max_bots, every, unit in DEFAULTS:
+        frequency, every, unit = cadence.get(key, (frequency, every, unit))
         conn.execute(
             "INSERT OR IGNORE INTO maintenance_steps(key,enabled,frequency,max_bots,custom_every,custom_unit,"
             "updated_at,updated_by_id) VALUES(?,?,?,?,?,?,?,?)",

@@ -37,8 +37,8 @@ from .hubdb import now, shift
 
 # Emptied, never pruned: one surviving row is one thing the copy could do.
 EMPTY = (
-    # Maintenance's working state: its listings and its handoffs, both rebuilt by the next run
-    "maintenance_listings", "maintenance_handoffs",
+    # Maintenance's working state: its listings, its handoffs, and the Idempotency-Key receipts of its runs
+    "maintenance_listings", "maintenance_handoffs", "maintenance_requests",
     # queued work
     "job_recovery", "service_jobs", "doc_source_jobs", "update_queue", "task_reminders", "task_check_back_wakes", "calendar_actions",
     "meeting_deliveries", "worktree_waits", "check_waits", "check_head_provenance", "idempotency",   # bindings too
