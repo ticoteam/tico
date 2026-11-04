@@ -187,6 +187,25 @@ def turns_here(c, runner_id):
     return start_places.held(c, runner_id)
 
 
+ENROLLED_AS = "computer-enrolled-as:"   # + runner id: the name it enrolled with, kept once a person renames it
+
+
+def rename(c, runner_id, before, after):
+    """Computer `runner_id` is named `after` now. The name it enrolled with is kept the first time, so the same machine
+    retrying its enrollment (it still sends that name) is still recognised."""
+    c.execute("INSERT OR IGNORE INTO registry_metadata VALUES(?,?)", (ENROLLED_AS + runner_id, json.dumps(before)))
+    c.execute("UPDATE runners SET label=? WHERE id=?", (after, runner_id))
+
+
+def enrolled_as(c, runner_id):
+    """The name computer `runner_id` enrolled with, when a person has renamed it; else None."""
+    found = c.execute("SELECT value FROM registry_metadata WHERE key=?", (ENROLLED_AS + runner_id,)).fetchone()
+    try:
+        return json.loads(found[0]) if found else None
+    except (ValueError, TypeError):
+        return None
+
+
 # The busy lists each runner sent with its latest claim: {runner id: (bots, lanes, monotonic time)}. Only the runner
 # knows a lapsed lease whose worker still runs, or a bot whose worktrees it is maintaining: Health reads them here
 # (bot_refusal). In memory: after a server restart they are empty until each runner's next claim, a second later.
@@ -2615,7 +2634,8 @@ class Execution:
             if row["consumed_at"]:
                 runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL",
                                    (row["runner_id"],)).fetchone()
-                if not runner or (runner["label"] != body.label and not cloud_bot):
+                # The same machine retrying sends the name it enrolled with, which a person may have renamed since.
+                if not runner or (body.label not in (runner["label"], enrolled_as(c, runner["id"])) and not cloud_bot):
                     raise Problem("enrollment", "Enrollment code was already used", 409)
                 return {"runner_id": runner["id"], "token": token, "operator": row["owner_id"]}   # runner wire: its config keeps it
             rid = H.new_id()

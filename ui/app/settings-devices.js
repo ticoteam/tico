@@ -357,6 +357,28 @@ function machineUpdateWords(update) {
     return `<span class="pill ${update.state === 'incompatible' ? 'fail' : 'waiting'}" data-runner-outdated title="${esc([update.label, update.target ? `to ${update.target}` : ''].filter(Boolean).join(' '))}">Update</span>`;
   return '';
 }
+// Rename from the computer's pop-up (computer-detail.js): 1 to 100 characters once trimmed.
+async function settingsComputerRename(form) {
+  const input = form.querySelector('[data-computer-rename-input]'), id = form.dataset.computerRenameForm;
+  const label = input.value.trim();
+  settingsFieldClear(input);
+  if (!label || label.length > 100) { settingsFieldError(input, 'Enter 1 to 100 characters.'); input.focus(); return; }
+  const buttons = [...form.querySelectorAll('button')];
+  buttons.forEach(button => { button.disabled = true; });
+  try {
+    await post(`/v2/computers/${encodeURIComponent(id)}/label`, {label});
+    const machine = (SETTINGS_DATA.machines || []).find(row => row.id === id);
+    if (machine) machine.label = label;
+    COMPUTER_RENAMING = '';
+    computerDetailPaint(true);
+    $('#set-machines dialog.computer-detail [data-computer-rename]')?.focus();
+    toast('Renamed');
+    await loadSettings();
+  } catch (error) {
+    toast(error.message, true);
+    buttons.forEach(button => { button.disabled = false; });
+  }
+}
 // Turns at once on a computer: a whole number from 1 to 256, or empty for automatic. Anything else is named under the
 // row and not sent. The note is set from the answer, since a pop-up whose field is still focused is not redrawn.
 async function settingsTurnsAtOnceSave(input) {

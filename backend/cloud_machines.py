@@ -128,6 +128,7 @@ SIZES = ("small", "default", "large", "xlarge")       # the names before HQ has 
 STATES = ("starting", "running", "stopping", "stopped", "deleted", "failed")
 ON = ("starting", "running")
 SIZES_KEY = "cloud-machine-sizes"
+NAME_KEY = "cloud-machine-name:"  # + machine key: the name a person gave its computer, kept when the machine is made again
 TICK = 10                       # seconds between looks
 SYNC = 60                       # seconds between HQ lists
 HEARTBEAT = 60
@@ -405,10 +406,27 @@ def resting(c):
 
 
 def label_for(c, key):
+    """The name machine `key`'s computer enrolls with: the one a person gave it (`named`), else its bot's."""
+    chosen = c.execute("SELECT value FROM registry_metadata WHERE key=?", (NAME_KEY + key,)).fetchone()
+    if chosen:
+        try:
+            given = json.loads(chosen[0])
+        except (ValueError, TypeError):
+            given = None
+        if isinstance(given, str) and given:
+            return given[:100]
     if key == SHARED:
         return "Shared cloud machine"
     found = H.bot(c, key)
     return f"{(found or {}).get('display_name') or (found or {}).get('slug') or key} (cloud)"[:100]
+
+
+def named(c, runner_id, label):
+    """A person renamed computer `runner_id`: when it is a cloud machine's computer, the machine keeps that name for the
+    computer it enrolls next (a machine made again after its disk was deleted)."""
+    for found in c.execute("SELECT bot FROM cloud_machines WHERE runner_id=?", (runner_id,)).fetchall():
+        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                  (NAME_KEY + found["bot"], json.dumps(label)))
 
 
 def sizes(c):

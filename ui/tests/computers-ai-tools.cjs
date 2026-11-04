@@ -71,7 +71,11 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
       if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      if (req.method() !== 'GET') { writes.push({p, body: req.postDataJSON?.()}); return json({}); }
+      if (req.method() !== 'GET') {
+        writes.push({p, body: req.postDataJSON?.()});
+        if (p === '/api/v2/computers/box/label') box.label = req.postDataJSON().label;
+        return json({});
+      }
       const config = {version: '0.1.0', app_name: 'Tico'};
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
@@ -206,6 +210,32 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     await dialog.locator('[data-inbox-only=box]').check();
     for (let i = 0; i < 100 && !writes.some(w => w.p === '/api/v2/runners/box/inbox-only'); i++) await page.waitForTimeout(20);
     assert.deepEqual(writes.find(w => w.p === '/api/v2/runners/box/inbox-only').body, {enabled: true});
+    // Rename: the name becomes a field; Escape and Cancel leave it; a blank name is not sent; Save renames.
+    const renamed = () => writes.filter(w => w.p === '/api/v2/computers/box/label');
+    const nameField = dialog.locator('[data-computer-rename-input]');
+    await dialog.locator('[data-computer-rename=box]').click();
+    assert.equal(await nameField.evaluate(el => el === document.activeElement), true);
+    assert.equal(await nameField.inputValue(), 'Team box');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#set-machines dialog.computer-detail[open]').count(), 1, 'Escape leaves the pop-up open');
+    assert.equal(await nameField.count(), 0);
+    await dialog.locator('[data-computer-rename=box]').click();
+    await nameField.fill('   ');
+    await dialog.locator('.computer-rename-form button[type=submit]').click();
+    await dialog.locator('[data-field-err]').waitFor();
+    assert.equal(renamed().length, 0);
+    await dialog.locator('[data-computer-rename-cancel]').click();
+    assert.equal(await dialog.locator('#computer-detail-title').innerText(), 'Team box');
+    await dialog.locator('[data-computer-rename=box]').click();
+    await nameField.fill('  Studio box ');
+    await nameField.press('Enter');
+    for (let i = 0; i < 100 && !renamed().length; i++) await page.waitForTimeout(20);
+    assert.deepEqual(renamed().map(w => w.body), [{label: 'Studio box'}]);
+    await nameField.waitFor({state: 'detached'});
+    assert.equal(await dialog.locator('#computer-detail-title').innerText(), 'Studio box');
+    await row('box').locator('.machine-name', {hasText: 'Studio box'}).waitFor();
+    box.label = 'Team box';
+    await page.evaluate(() => loadSettings());
     assert.equal(await dialog.locator('[data-detail-section=settings] [data-computer-remove=box]').innerText(), 'Revoke computer');
     await dialog.locator('[data-detail-close]').click();
     assert.equal(await page.locator('#set-machines dialog.computer-detail[open]').count(), 0);
@@ -471,7 +501,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     assert.doesNotMatch(await dialog.innerText(), /@/, 'no account emails');
     assert.equal(await dialog.locator('[data-model-login], [data-add-connection], [data-machine-copy-login], '
       + '[data-computer-remove], [data-inbox-only], [data-member-bots], [data-turns-at-once], [data-computer-screen], '
-      + '[data-harness-choice], [data-performance-mode]').count(), 0);
+      + '[data-harness-choice], [data-performance-mode], [data-computer-rename]').count(), 0);
     await page.keyboard.press('Escape');
 
     assert.deepEqual(errors, []);
