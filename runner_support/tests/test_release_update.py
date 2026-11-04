@@ -755,6 +755,7 @@ def test_macos_closed_git_owner_and_unreadable_ps_output_block_recovery(tmp_path
     assert not git_locks.unused(lock, lock.stat(), (checkout,))
     current["cwd"] = elsewhere
     assert git_locks.unused(lock, lock.stat(), (checkout,))
+    assert not git_locks.unused(lock, lock.stat(), strict=True)
     current["command"] = f"git --git-dir={checkout} commit"
     assert not git_locks.unused(lock, lock.stat(), (checkout,))
     current["command"] = ""

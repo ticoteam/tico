@@ -70,6 +70,9 @@ def related(cwd, arguments, environment, roots):
 
 def unused(path, lock, roots=(), *, strict=False):
     if sys.platform != "linux":
+        # lsof may silently omit another user's descriptors; never unlink an instruction backup on that proof.
+        if strict:
+            return False
         try:
             out = subprocess.run(["/usr/sbin/lsof", "-F", "p", "--", str(path)], capture_output=True, timeout=5, check=False)
             if out.returncode != 1 or out.stdout or out.stderr:

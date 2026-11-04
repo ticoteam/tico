@@ -727,7 +727,8 @@ Flattened instruction links are repaired only after checking the index and commi
 The regular file is first renamed into the Git admin directory's `tico-instruction-backups/`, with
 its relative path and a `.tico-backup-<timestamp>-*` suffix, before creating the symlink. An open
 writer continues writing to this named backup. Identical backups are removed only when no process
-has them open; differing or unreadable backups stay, block updates, and are named as a bot edit to
+has them open (macOS retains them because `lsof` can omit other users' descriptors); differing or
+unreadable backups stay, block updates, and are named as a bot edit to
 review in Health and the update log. Each update rechecks retained backups to catch late writes.
 Git failure details are scrubbed before reaching Health.
 

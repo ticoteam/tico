@@ -127,7 +127,9 @@ async fn output(program: &str, args: &[&str]) -> Option<std::process::Output> {
 }
 
 #[cfg(not(target_os = "linux"))]
-async fn unused(path: &Path, _lock: &std::fs::Metadata, roots: &[PathBuf], _strict: bool) -> bool {
+async fn unused(path: &Path, _lock: &std::fs::Metadata, roots: &[PathBuf], strict: bool) -> bool {
+    // lsof may silently omit another user's descriptors. Instruction backups keep their inode on macOS.
+    if strict { return false; }
     let Some(out) = output("/usr/sbin/lsof", &["-F", "p", "--", &path.to_string_lossy()]).await else { return false };
     if out.status.code() != Some(1) || !out.stdout.is_empty() || !out.stderr.is_empty() { return false; }
     let Some(out) = output("ps", &["-axo", "pid=,comm="]).await else { return false };
