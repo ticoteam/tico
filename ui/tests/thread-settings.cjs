@@ -71,7 +71,7 @@ async function open(browser, {phone = false} = {}) {
       }
       if (!what && method === 'PATCH') {
         const b = body(); seen.patches.push(b);
-        if (b.title === 'Refused') return json({error: {code: 'invalid', message: 'Not that name'}}, 422);
+        if (b.title === 'Refused') return json({error: {code: 'invalid', detail: 'Not that name'}}, 422);
         const {archived, ...rest} = b;
         Object.assign(t, rest, 'archived' in b ? {archived_at: archived ? at(0) : null} : {});
         return json(t);
