@@ -1,8 +1,9 @@
 /* ui/app/automations.js — Automations (redesign): routing, the page's state and an open automation's header
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
    The list of every automation, its filters and the Runs tab are automations-overview.js; the flow and its "+" menu
-   automations-flow.js, the step editors automations-editors.js and the run log automations-runs.js. Ask (the Ask
-   panel) has the Assistant build or change one. Payloads: redesign CONTRACT §2 (/api/v2/automations).
+   automations-flow.js, the step editors automations-editors.js, the run log automations-runs.js, and New inbox and Apply
+   template automations-new.js. Ask (the Ask panel) has the Assistant build or change one. Payloads: redesign CONTRACT
+   §2 (/api/v2/automations).
    #/automations?q=<words> opens the list searched (a bot's or a webhook's automations, linked from their pages). */
 'use strict';
 
@@ -167,7 +168,7 @@ const auNormal = x => { const a = x?.automation || x || {}; a.steps ||= []; a.tr
 function auShell() {
   $('#main').innerHTML = `<div class="au" id="au-root">
     <header class="au-ph"><h1>Automations</h1><div class="au-seg au-range" role="group" aria-label="Time range"></div><span class="au-sp"></span><button class="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button><span class="au-newbox"><button class="primary au-new" type="button" aria-haspopup="menu" aria-expanded="false">+ New</button>
-      <div class="au-newm" role="menu" hidden>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span></header>
+      <div class="au-newm" role="menu" hidden><button type="button" role="menuitem" data-new="inbox"><span class="nav-icon" aria-hidden="true">mail</span>New inbox</button>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span></header>
     <div class="au-body">
       <aside class="au-rail" aria-label="Filters">
         <div class="au-s"><input class="au-q" type="search" placeholder="Search" aria-label="Search automations"></div>
@@ -183,7 +184,10 @@ function auShell() {
   const root = AU.root = $('#au-root');
   auOverviewWire(root);
   root.querySelector('.au-new').onclick = () => auNewMenu(root.querySelector('.au-newm').hidden);
-  root.querySelector('.au-newm').onclick = e => { const m = e.target.closest('[data-new]'); if (m) void auBlank(m.dataset.new); };
+  root.querySelector('.au-newm').onclick = e => {
+    const m = e.target.closest('[data-new]');
+    if (m?.dataset.new === 'inbox') auNewInbox(); else if (m) void auBlank(m.dataset.new);
+  };
   root.querySelector('.au-scrim').onclick = () => auEdClose();
   root.addEventListener('change', auOnSwitch);
   root.addEventListener('click', auOnClick);
@@ -194,7 +198,7 @@ function auShell() {
   auEdWire(root.querySelector('.au-ed'));
 }
 
-// + New's menu: which trigger the new one starts with.
+// + New's menu: New inbox (automations-new.js), or which trigger a blank one starts with.
 function auNewMenu(open) {
   const menu = AU.root.querySelector('.au-newm');
   menu.hidden = !open;
@@ -392,10 +396,12 @@ function auOnClick(e) {
   if ((m = t.closest('[data-open]'))) { auEdOpenStep(m.dataset.open, m.dataset.path); return; }
 }
 
-// The ⋯ menu: versions, delete (refused for a built-in, so it is shown off with why).
+// The ⋯ menu: test run, Apply template (an October inbox, automations-new.js), versions, delete (refused for a built-in,
+// so it is shown off with why).
 function auMoreHTML() {
   const a = AU.cur;
   return `${a.can_edit && !a.readonly ? '<button type="button" role="menuitem" data-mi="run"><span class="nav-icon" aria-hidden="true">play_arrow</span>Test run</button>' : ''}
+    ${auApplies(a) ? '<button type="button" role="menuitem" data-mi="apply"><span class="nav-icon" aria-hidden="true">dashboard_customize</span>Apply template</button>' : ''}
     <button type="button" role="menuitem" data-mi="versions"><span class="nav-icon" aria-hidden="true">history</span>Versions</button>
     ${a.can_edit ? `<button type="button" role="menuitem" data-mi="delete"${a.builtin ? ' disabled title="Built-in automations can’t be deleted"' : ''}>
       <span class="nav-icon" aria-hidden="true">delete</span>${a.builtin ? 'Built-in' : 'Delete'}</button>` : ''}`;
@@ -405,6 +411,7 @@ async function auMoreAct(what) {
   const a = AU.cur, state = AU;
   if (what === 'versions') { auEdOpen({kind: 'versions'}); return; }
   if (what === 'run') { auEdOpen({kind: 'run', text: auSample(a.trigger, a.next_due_at)}); return; }
+  if (what === 'apply') { auApplyTemplate(); return; }
   if (what !== 'delete' || a.builtin || !confirm(`Delete ${a.name}?`)) return;
   try {
     await writeRequest('DELETE', auApi(a.id));

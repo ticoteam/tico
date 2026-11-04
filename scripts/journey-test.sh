@@ -220,7 +220,14 @@ ask() {  # name, then what to ask (env=NAME, worktree=TASK): one turn with BotOp
   retry 120 reply_to "$cid" "$nonce" || { say "no reply from the fake harness to $nonce"; return 1; }
 }
 fact() { tr ' ' '\n' < "$WORK/reply" | sed -n "s/^$1=//p" | head -n 1; }   # one fact of the last reply
-replied() { get "conversations/$(cat "$WORK/conversation")/messages" | json 'sys.exit(0 if any(m["body"].startswith("journey-reply:") for m in d["messages"]) else 1)'; }
+current_room() {  # conversation id: the room its messages are in now. When the bot's chats moved into its Home (migration
+  # 0067, backend/bot_home_merge.py) the old room is closed and its messages carry the Home's id; home_merges records which.
+  # Looked up on every check, so the room is found where it is after the update, a rollback or a restore.
+  local home
+  home="$(sql "SELECT home_id FROM home_merges WHERE conversation_id='$1' LIMIT 1" 2>/dev/null)"
+  printf '%s\n' "${home:-$1}"
+}
+replied() { get "conversations/$(current_room "$(cat "$WORK/conversation")")/messages" | json 'sys.exit(0 if any(m["body"].startswith("journey-reply:") for m in d["messages"]) else 1)'; }
 conversation_intact() { replied && [ "$(environment_id)" = "$STATE_ID" ]; }
 fixture_intact() {  # the rows scripts/make_upgrade_fixture.py added, as many as it added
   [ "$(sql "SELECT (SELECT count(*) FROM bots WHERE slug IN ('coo','cmo','seo')) || ' ' || (SELECT count(*) FROM tasks WHERE id IN ('t1','t2','t3')) || ' ' || (SELECT count(*) FROM messages WHERE id IN ('m1','m2'))")" = "3 3 2" ]
