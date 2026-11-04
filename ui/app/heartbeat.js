@@ -246,6 +246,7 @@ function renderAccount() {
   renderInboxNav();
   renderNewVersion();
   renderDownloadLink();
+  nativeOrgSync();
   // Only a session an identity proxy vouches for has anything to end; a bearer or the local app does not.
   $('#sign-out').hidden = !me.proxy_session;
 }

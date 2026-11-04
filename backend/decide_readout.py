@@ -183,7 +183,7 @@ def readout(c, settings, days=7, at=None):
     from .ask_ingest import QUESTION_SET, outcome_counts, reconcile
     gate = outcome_counts(c, stamp(start), stamp(end))
     recon = reconcile(c, stamp(start), stamp(end))
-    if gate["outcomes"] or gate["rehearsal"] or recon["calls"] or recon["no_call"]:
+    if gate["outcomes"] or recon["calls"] or recon["no_call"]:
         row = next((r for r in out if r["set"] == QUESTION_SET), None)
         if row is None:
             row = {"set": QUESTION_SET, "versions": [], "calls": 0, "jev": 0, "fallback": 0, "failed": {},
@@ -237,8 +237,6 @@ def text(data):
             if gate["outcomes"]:
                 lines.append("  outcomes: " + ", ".join(f"{k} {n}" for k, n in gate["outcomes"].items())
                              + f"; let through {gate['let_through']}")
-            if gate["rehearsal"]:
-                lines.append("  rehearsal, would have: " + ", ".join(f"{k} {n}" for k, n in gate["rehearsal"].items()))
         if row.get("reconcile"):
             rec = row["reconcile"]
             named = "".join(f", {k} {n}" for k, n in rec["reasons"].items())

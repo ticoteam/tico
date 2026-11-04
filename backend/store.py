@@ -906,10 +906,13 @@ def digest(value):
 
 def message_page(c, cid, *, before=None, since=None, limit=200):
     """Newest page, in display order; rowid breaks ties for messages in the same millisecond. A
-    deleted task comment is left out: this page is also what a bot's run is handed."""
-    clauses, args = ["conversation_id=?", "deleted_at IS NULL"], [cid]
+    deleted task comment is left out: this page is also what a bot's run is handed. `cid` may be
+    a list of conversations (a task's history across a merged room and its Home)."""
+    cids = list(cid) if isinstance(cid, (list, tuple)) else [cid]
+    where = "conversation_id IN (%s)" % ",".join("?" * len(cids))
+    clauses, args = [where, "deleted_at IS NULL"], list(cids)
     if before:
-        anchor = c.execute("SELECT rowid FROM messages WHERE id=? AND conversation_id=?", (before, cid)).fetchone()
+        anchor = c.execute("SELECT rowid FROM messages WHERE id=? AND " + where, (before, *cids)).fetchone()
         if not anchor:
             raise Problem("cursor", "Message cursor does not belong to this conversation", 422)
         clauses.append("rowid<?")
@@ -928,8 +931,12 @@ def message_page(c, cid, *, before=None, since=None, limit=200):
 def task_message_page(c, task, **kwargs):
     """Messages about this task. A dedicated task thread returns the whole conversation;
     a shared chat room returns only rows tagged with this task id."""
-    page = message_page(c, task["conversation_id"], **kwargs)
-    conv = H.conversation(c, task["conversation_id"])
+    from . import bot_home_merge
+    # A person's old chat with the bot moved into its Home (backend/bot_home_merge.py): the task's messages are in the
+    # room, its recorded Home and the Home it is in now. The last one is the room the task's messages belong to.
+    cids = bot_home_merge.history_ids(c, task["conversation_id"])
+    page = message_page(c, cids, **kwargs)
+    conv = H.conversation(c, cids[-1])
     if conv and conv.get("task_id") == task["id"]:
         return page
     page["messages"] = [m for m in page["messages"] if H.message_task_id(m) == task["id"]]
@@ -1533,11 +1540,11 @@ class Store:
                               "SELECT source,'call',external_id,meeting_id,created_at FROM import_refs")
                     c.execute("INSERT INTO cloud_migrations VALUES(31,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=32").fetchone():
-                    # The market graph (backend/market.py). hubdb's MARKET_SCHEMA creates the
-                    # tables on connect; this marker is the cloud contract. The curator is
-                    # added once a roster exists, so a first import can still load employees.yaml.
-                    from .hubdb import MARKET_SCHEMA
-                    c.executescript(MARKET_SCHEMA)
+                    # The market graph (backend/market.py). hubdb's MARKET_SCHEMA step created the
+                    # tables on connect; this marker is the cloud contract. Running that script
+                    # again here would bring back market_events, which a migration file has since
+                    # moved into history_events (backend/migrations/0064_history_events.py). The
+                    # curator is added once a roster exists, so a first import can still load employees.yaml.
                     c.execute("INSERT INTO cloud_migrations VALUES(32,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=33").fetchone():
                     # Task list pages filter by lane and status, page finished work by its

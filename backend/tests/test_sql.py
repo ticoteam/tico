@@ -245,7 +245,7 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
     # Clone and subscription profile reports have per-computer keys; the rest are fixed.
     assert column(api, "SELECT key FROM registry_metadata WHERE key NOT LIKE 'computer-repositories:%' AND key "
                        "NOT LIKE 'computer-profiles:%'") == [
-        "access", "access_bot_limit", "bot_access", "ceo-bot", "company-turn-incident",
+        "access", "access_bot_limit", "bot-chats-to-home", "bot_access", "ceo-bot", "company-turn-incident",
         "credential-file-migration-v1", "credential-file-migration-v2-hub", "credential-use-backfill", "docs_migrated",
         "idempotency_messages.ready", "inbox-only-runners", "librarian_wording35", "librarian_wording36",
         "message_links.ready", "onboarding", "owner", "people", "redesign_cutover", "release-history",
@@ -268,8 +268,8 @@ def test_a_person_sees_the_company_but_not_private_bots_or_other_rooms(api, worl
     assert column(api, "SELECT id FROM conversations", ben) == sorted(
         [world["steven_room"], world["coo_task"]["conversation_id"], world["finance_task"]["conversation_id"]])
     assert column(api, "SELECT id FROM attempts", ben) == []
-    assert column(api, f"SELECT task_id FROM task_events WHERE task_id='{world['private']['id']}'", ben) == []
-    assert column(api, f"SELECT task_id FROM task_events WHERE task_id='{world['coo_task']['id']}'", ben)
+    assert column(api, f"SELECT subject_id AS task_id FROM history_events WHERE subject_type='task' AND subject_id='{world['private']['id']}'", ben) == []
+    assert column(api, f"SELECT subject_id AS task_id FROM history_events WHERE subject_type='task' AND subject_id='{world['coo_task']['id']}'", ben)
 
 
 def test_a_bot_reads_ordinary_tasks_but_only_its_granted_rooms_and_no_private_data(api, world):

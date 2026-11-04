@@ -11,7 +11,7 @@ const AU_STEP_STATUS = {skipped: 'skipped', failed: 'failed', spend_cap: 'spend 
 // A run's outcome in one to three words: what its last action did.
 const AU_DONE = {archive: 'Archived', leave_for_you: 'Left for you', draft_reply: 'Draft reply', send_reply: 'Replied',
   create_task: 'Task created', label: 'Labeled', forward: 'Forwarded', wake_bot: 'Bot woken', note: 'Noted',
-  post_update: 'Update posted', call_webhook: 'Webhook called', assign: 'Assigned'};
+  post_update: 'Update posted', call_webhook: 'Webhook called', assign: 'Assigned', unsubscribe: 'Unsubscribed'};
 
 async function auRunsLoad(state, more = false) {
   const id = state.cur?.id;

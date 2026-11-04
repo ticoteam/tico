@@ -87,7 +87,8 @@ def sync(c, settings):
     github = {}
     # Read the latest remembered move per ticket; stale moves neither count waiters nor keep an incident open.
     cutoff = H.shift(H.now(), seconds=-int(move_retry.RETRY_FOR.total_seconds()))
-    for (task_id,) in c.execute("SELECT DISTINCT task_id FROM task_events WHERE field=? AND created_at>=?",
+    for (task_id,) in c.execute("SELECT DISTINCT subject_id FROM history_events WHERE subject_type='task' AND kind=? "
+                                "AND created_at>=?",
                                 (move_retry.FIELD, cutoff)).fetchall():
         row = H.task(c, task_id)
         found = move_retry.remembered(c, dict(row), H.parse_ts(H.now()))
@@ -144,7 +145,7 @@ def batch_waiters(c, bot):
         refs = H._json(row['refs'], {}) or {}
         if refs.get('caused_by', '').startswith('human:') or refs.get('wake_digest'):
             continue
-        groups.setdefault((row['conversation_id'], refs.get('task')), []).append(dict(row))
+        groups.setdefault((row['conversation_id'], H._task_ref(refs.get('task'))), []).append(dict(row))
     for jobs in groups.values():
         if len(jobs) > 1:
             wake_presets._release(c, bot, jobs)

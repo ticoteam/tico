@@ -14,7 +14,7 @@ TRIGGERS = {"message": ("inbox",), "task_received": ("to",), "schedule": ("cron"
             "listening": ("destination",), "event": ("name",), "due": ("first_due", "repeats")}
 STEP_TYPES = ("filter", "decide", "llm", "find", "bot_turn", "paths", "action")
 ACTIONS = ("archive", "leave_for_you", "draft_reply", "send_reply", "create_task", "label", "forward", "wake_bot",
-           "note", "post_update", "call_webhook", "assign")
+           "note", "post_update", "call_webhook", "assign", "unsubscribe")
 OPS = ("is", "is_not", ">=", "<=", "contains", "matches")
 SOURCES = ("mail", "tasks", "prs", "listening", "docs")
 LEVELS = J.DECIDE_LEVELS
@@ -464,12 +464,16 @@ def mail_state(m):
     """A mail message as the mail connector's `message_state` shows it to `mail-triage`: the brief listing, never the
     body."""
     return {"mailbox": m.get("mailbox") or "", "from": m.get("from") or "", "from_name": m.get("from_name") or "",
-            "to": list(m.get("to") or []), "cc": list(m.get("cc") or []), "date": m.get("date") or "",
-            "subject": m.get("subject") or "", "snippet": str(m.get("snippet") or "")[:SNIPPET_CHARS],
+            "from_domain": str(m.get("from_domain") or ""), "to": list(m.get("to") or []), "cc": list(m.get("cc") or []),
+            "date": m.get("date") or "", "subject": m.get("subject") or "",
+            "snippet": str(m.get("snippet") or "")[:SNIPPET_CHARS],
             "unsubscribe": bool(m.get("unsubscribe")), "list_id": bool(str(m.get("list_id") or "").strip()),
             "attachments": [a for a in (m.get("attachments") or []) if isinstance(a, str)],
             "is_internal": bool(m.get("is_internal", m.get("internal"))),
-            "is_calendar_invite": bool(m.get("is_calendar_invite")), "labels": list(m.get("labels") or [])}
+            "is_calendar_invite": bool(m.get("is_calendar_invite")), "labels": list(m.get("labels") or []),
+            "category": str(m.get("category") or ""),
+            # None when the computer did not say (an older one): a judge reads that as unknown, not as a new sender.
+            "known_sender": m.get("known_sender")}
 
 
 def judge_state(values, fields):
@@ -490,6 +494,7 @@ def judge_state(values, fields):
 ACTION_ARGS = {
     "archive": {},
     "leave_for_you": {},
+    "unsubscribe": {},
     "draft_reply": {"body": "the reply text (or text); required on mail and Slack",
                     "to": "mail: the addresses to reply to (default the sender)"},
     "send_reply": {"body": "the reply text (or text); required on mail and Slack",
@@ -526,7 +531,9 @@ TRIGGER_WORDS = {
     "due": "a due date that repeats: its run starts open_days before each one (default 14)",
 }
 TRIGGER_FIELDS = {
-    "message": "inbox: an email address, `slack:dm`, or `slack:#<channel>`",
+    "message": "inbox: an email address, `slack:dm`, or `slack:#<channel>`. A mail message also has `message.from_domain` "
+               "(lowercase), `message.category` (promotions, social, updates, forums or primary; empty when Gmail has none), "
+               "`message.known_sender` (true when the owner has sent mail to the sender before) and `message.is_calendar_invite`",
     "task_received": "to: a person id or a bot slug",
     "schedule": "cron: five fields, e.g. `0 9 * * 1-5`; tz: a time zone such as `Europe/Paris`",
     "webhook": "id: the existing trigger's id",

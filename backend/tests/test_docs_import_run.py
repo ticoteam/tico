@@ -1,12 +1,12 @@
 """Document import conversion in a worker: golden output, time, memory, busy, output cap, cancel and cleanup."""
 
+import importlib
 import io
 import subprocess
 import sys
 import tempfile
 import threading
 import time
-import types
 import zipfile
 
 import pytest
@@ -63,6 +63,14 @@ def fake_worker(tmp_path, body):
     return script
 
 
+def test_importing_the_worker_leaves_sys_path_alone(monkeypatch):
+    # The worker used to append its folder to sys.path on import, so `import connectors` found backend/connectors.py.
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    before = list(sys.path)
+    importlib.reload(docs_import_worker)
+    assert sys.path == before
+
+
 def test_normal_files_convert_in_the_worker_exactly_as_in_process(temp_root):
     samples = {
         "notes.md": b"# Refund policy\n\nRefund within 30 days.\n\n\n\nThanks.\n",
@@ -105,7 +113,7 @@ def test_a_memory_error_in_the_worker_is_reported_as_memory(monkeypatch, tmp_pat
         raise MemoryError()
 
     monkeypatch.setattr(docs_import_worker, "_limit_memory", lambda limit: None)
-    monkeypatch.setitem(sys.modules, "docs_import", types.SimpleNamespace(to_markdown=out_of_memory))
+    monkeypatch.setattr(docs_import, "to_markdown", out_of_memory)
     (tmp_path / "request.json").write_text('{"filename": "a.md", "max_chars": 10, "memory_bytes": 1}')
     (tmp_path / "input").write_bytes(b"x")
     assert docs_import_worker.convert(tmp_path) == {"status": "memory"}

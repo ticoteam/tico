@@ -27,7 +27,7 @@ def test_delete_removes_imported_tickets_and_refuses_one_with_work_outside_the_l
 
     with store.read() as c:
         for table, column, value in (("tasks", "id", ticket["id"]), ("task_links", "task_id", ticket["id"]),
-                                     ("task_events", "task_id", ticket["id"]),
+                                     ("history_events", "subject_id", ticket["id"]),
                                      ("conversations", "id", conversation),
                                      ("messages", "conversation_id", conversation)):
             assert c.execute(f"SELECT count(*) FROM {table} WHERE {column}=?", (value,)).fetchone()[0] == 0, table

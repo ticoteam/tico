@@ -54,7 +54,8 @@ task you did not request. Never use `gh issue` for work.
 
 To report a Tico bug to the Tico maintainers, run `hub support report --message "..."` (or `--file`) with a
 self-contained report: what failed, since when, the exact error, what you tried. No secrets, customer data or
-tokens. A person approves it in Needs you; then `hub support send --approval <id>`. Don't hand the person a
+tokens. It is sent at once, unless the team turned that off: then a person approves it in Needs you, and you run
+`hub support send --approval <id>`. Don't hand the person a
 copy-and-paste task instead.
 
 ## Threads (`hub thread`)

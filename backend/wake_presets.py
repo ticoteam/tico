@@ -318,7 +318,7 @@ def _release(c, bot, jobs):
     given (execution.HISTORY_PAGE, with room to spare for what arrives before the claim): the newest starts the turn
     and the page carries the others. Otherwise one digest in the bot's notice room names each room, how many notices
     wait there and how to read them; their own messages stay unread where they are."""
-    rooms = {(j["conversation_id"], (H._json(j["refs"], {}) or {}).get("task")) for j in jobs}
+    rooms = {(j["conversation_id"], H._task_ref((H._json(j["refs"], {}) or {}).get("task"))) for j in jobs}
     if len(rooms) == 1 and _on_one_page(c, jobs):
         *earlier, last = jobs
         c.execute("UPDATE jobs SET held=0 WHERE id=?", (last["id"],))
@@ -335,7 +335,7 @@ def _release(c, bot, jobs):
     rooms = sorted(groups.items(), key=lambda kv: place[kv[1][-1]["id"]], reverse=True)
     for conversation, held in rooms[:DIGEST_ROOMS]:
         first, newest = H.message(c, held[0]["message_id"]) or {}, H.message(c, held[-1]["message_id"]) or {}
-        task = H.task(c, (H._json(held[-1]["refs"], {}) or {}).get("task") or "")
+        task = H.task(c, H._task_ref((H._json(held[-1]["refs"], {}) or {}).get("task")) or "")
         what = classify(newest)[1] + (f" and {len(held) - 1} more" if len(held) > 1 else "")
         where = (f"a private task ({task['id']})" if task and H.task_private(c, task)
                  else f"{task['title']} ({task['id']})" if task
@@ -470,7 +470,7 @@ def measures(c, since, until=None, limit=20000):
     carried = {}
     for row in rows:
         if row["wake_carrier"]:
-            task = (H._json(row["refs"], {}) or {}).get("task")
+            task = H._task_ref((H._json(row["refs"], {}) or {}).get("task"))
             carried.setdefault(row["wake_carrier"], set()).update([task] if task else [])
     out = {}
     for name in CHOICES:
@@ -538,7 +538,8 @@ def _runs(c, job_ids):
 def _blocked(c, task_id):
     """Seconds the task spent blocked or waiting, from its status history."""
     total, entered = 0.0, None
-    for row in c.execute("SELECT created_at,new FROM task_events WHERE task_id=? AND field='status' ORDER BY created_at,rowid",
+    for row in c.execute("SELECT created_at,new FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='status' ORDER BY created_at,rowid",
                          (task_id,)):
         if row["new"] in ("blocked", "waiting"):
             entered = entered or row["created_at"]

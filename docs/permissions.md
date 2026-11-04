@@ -99,7 +99,7 @@ users, team, department and who they report to), messages and tasks in answers a
 `from_person`, which read `""`), the stream's actors, and `hub sql` (`humans` rows, `humans.teams`, `bot_config`'s
 `team`, `operator`, `reports_to`, owner lists, `created_by` and the same keys in `config`,
 `conversations.participants`, `messages.sender_id` and `to_actor`, `tasks.owner_id`, `requester` and `closed_by`,
-and the `actor` of `events` and `task_events`, which read `''`), and their page, photo and access answer the same
+and the `actor` of `events` and of a task's `history_events` rows, which read `''`), and their page, photo and access answer the same
 `404` as someone who does not exist. A hidden group's people and bots are shown under the nearest group above it.
 Inside a conversation you are in, and on a task you own or asked for, everyone in it stays known to you. The owner,
 the admins and whoever manages them always see them.
@@ -197,12 +197,12 @@ asked (`hub card`, `hub pin`).
 ## Team rules
 
 The product favours getting going fast, and the owner tightens it later. Settings > People (owner only, saved as they change;
-`GET` and `PUT /api/v2/access/rules`) has eleven switches, all **on** by default:
+`GET` and `PUT /api/v2/access/rules`) has twelve switches, all **on** by default:
 
 | Rule | On (default) | Off |
 | --- | --- | --- |
 | **Assistant acts without asking** | the Assistant does what the human asks for in their Assistant chat, as them, with their rights as the ceiling; only what it may never do there (credentials, sign-in, owner transfer, support reports, deleting people, the server connection or storage) is a card ([Assistant](assistant.md)) | the Assistant writes only the human's own tasks and changes to tasks that are theirs alone; everything else, including what they asked for in chat, is a card |
-| **People may let their Assistant decide their approvals** | each person may turn on "My assistant can decide approvals for me" in Settings > General; their own Assistant then approves or declines approvals addressed to them on their words in its chat, recorded and undoable ([Assistant](assistant.md#letting-it-decide-your-approvals)) | approving is the person's click on a card again, whatever their own setting |
+| **People may let their Assistant decide their approvals** | each person's Assistant decides their approvals, on by default; a person turns "My assistant can decide approvals for me" off in Settings > General. Until then it approves or declines approvals addressed to them on their words in its chat, recorded and undoable ([Assistant](assistant.md#letting-it-decide-your-approvals)) | approving is the person's click on a card again, whatever their own setting |
 | **BotOps changes providers and limits without asking** (`botops_direct`) | BotOps changes the AI providers and raises spending limits for the person who asked, with their rights | a provider change, or a limit raised or removed, is a Confirm card in that person's BotOps chat; lowering a limit stays direct |
 | **BotOps manages every bot** (`botops_manages_bots`) | in its own runs (the daily update, or a routine the owner set for BotOps) BotOps manages every bot but the built-in ones: their Tools, repositories, contact and Instructions, with write access to each bot's repository in its GitHub token (below) | BotOps in its own runs changes only itself |
 | **Managers change their direct reports** (`managers_manage_reports`) | a bot changes its direct reports' model, task model, name and description, as itself, unless that manager's own switch is off; BotOps creates, archives and restores a report for it, within `report_creates_per_week` and `report_archives_per_week` ([Managers and their reports](#managers-and-their-reports)) | no bot changes a report's model, task model, name or description, or creates, archives or restores it, whatever the bots' own switches say |
@@ -211,6 +211,7 @@ The product favours getting going fast, and the owner tightens it later. Setting
 | **Admins see SQL** | Admins open the SQL page | the SQL page is the owner's |
 | **Members make personal tokens** | any human makes a personal API token, which sees what they see | the owner and the Admins do |
 | **Owners and admins may let Tico support in** (`support_access`) | an owner or admin may open a time-limited support session from their own request ([below](#tico-support)) | nobody can, and a live session ends |
+| **Bots send reports to the Tico team without asking** (`bot_reports_direct`, Settings > General > Team) | a bot's report to the Tico team is decided by this rule as the install's default person and sent at once, with the same checks and limits as a drafted one ([Support](support.md#a-bots-report)) | a bot's report is a `support` approval a person says yes to in Needs you first ([Support](support.md#a-bots-report)) |
 | **Bots go ahead on their recommendation** (`bots_go_ahead`, days in `go_ahead_days`, 3) | a bot's ask with a reversible, internal default goes ahead when nobody answers in that many days (or by the date the bot gave); sends, spending and deletes never go ahead: their question closes on its date and the bot decides without it ([Tasks](tasks.md#when-nobody-answers-a-bots-ask)) | no ask goes ahead on its own; one with a date still closes on it, and one without leaves **Needs you** after two business days |
 
 Only the Owner changes them, directly in Settings or by asking BotOps to act with the Owner's rights.

@@ -620,7 +620,8 @@ def _per_task(done):
 def _later(c, task_id, fields, since, action_id):
     """Who last changed any of these task event fields after the decision, or None."""
     marks = ",".join("?" * len(fields))
-    found = c.execute(f"SELECT actor FROM task_events WHERE task_id=? AND field IN ({marks}) AND created_at>? "
+    found = c.execute(f"SELECT actor_id FROM history_events WHERE subject_type='task' AND subject_id=? AND kind IN ({marks}) "
+                      "AND created_at>? "
                       "AND coalesce(action_id,'')!=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
                       (task_id, *fields, since, action_id)).fetchone()
     return found[0] if found else None

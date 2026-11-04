@@ -31,7 +31,7 @@ pub fn validate_url(raw: &str) -> Result<Url, String> {
     Ok(hub)
 }
 
-fn configured_url(raw: &str) -> Result<Url, String> {
+pub fn configured_url(raw: &str) -> Result<Url, String> {
     let mut hub = Url::parse(raw.trim()).map_err(|_| "Enter a full server address, such as https://tico.example.com.")?;
     if hub.host_str().is_none() || !matches!(hub.scheme(), "https" | "http") {
         return Err("Use an HTTP or HTTPS server address.".into());
@@ -52,6 +52,10 @@ pub async fn validate_server(raw: &str) -> Result<Url, String> {
         .redirect(reqwest::redirect::Policy::none()).no_proxy().build().map_err(|_| "Could not connect. Try again.")?;
     let response = http.get(hub.join("healthz").unwrap()).send().await
         .map_err(|_| "Could not reach the server. Check the address and try again.")?;
+    // A server behind Cloudflare Access answers with its sign-in page, not its health: the sign-in happens in the app.
+    if behind_access(&response) {
+        return Ok(hub);
+    }
     if !response.status().is_success() {
         return Err("The server did not answer its health check. Check the address.".into());
     }
@@ -60,6 +64,14 @@ pub async fn validate_server(raw: &str) -> Result<Url, String> {
         return Err("This address did not answer as a Tico server.".into());
     }
     Ok(hub)
+}
+
+/// A redirect to the team's Cloudflare Access login (`<team>.cloudflareaccess.com/cdn-cgi/access/login/...`).
+fn behind_access(response: &reqwest::Response) -> bool {
+    response.status().is_redirection() && response.headers().get(reqwest::header::LOCATION)
+        .and_then(|value| value.to_str().ok()).and_then(|value| Url::parse(value).ok())
+        .is_some_and(|login| login.scheme() == "https" && login.path().starts_with("/cdn-cgi/access/login/")
+            && login.host_str().is_some_and(|host| host.ends_with(".cloudflareaccess.com")))
 }
 
 impl Config {
@@ -169,9 +181,13 @@ mod health_tests {
     use std::io::{Read, Write};
 
     async fn check(status: &str, body: &str) -> Result<Url, String> {
+        check_with(status, "", body).await
+    }
+
+    async fn check_with(status: &str, headers: &str, body: &str) -> Result<Url, String> {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = format!("http://{}", listener.local_addr().unwrap());
-        let response = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+        let response = format!("HTTP/1.1 {status}\r\n{headers}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             stream.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
@@ -192,5 +208,16 @@ mod health_tests {
         assert!(check("200 OK", "invalid").await.is_err());
         assert!(check("503 Unavailable", r#"{"service":"tico"}"#).await.is_err());
         assert!(check("302 Found", "{}").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_server_behind_cloudflare_access_can_be_added() {
+        let login = "Location: https://acme.cloudflareaccess.com/cdn-cgi/access/login/tico.acme.example?kid=1\r\n";
+        assert!(check_with("302 Found", login, "").await.is_ok());
+        for other in ["Location: https://evil.example/cdn-cgi/access/login/x\r\n",
+                      "Location: http://acme.cloudflareaccess.com/cdn-cgi/access/login/x\r\n",
+                      "Location: https://acme.cloudflareaccess.com/elsewhere\r\n"] {
+            assert!(check_with("302 Found", other, "").await.is_err(), "{other}");
+        }
     }
 }

@@ -34,6 +34,7 @@ from . import teammate_access
 from . import start_places
 from . import ask_ingest, delivery, strategy_bot, invites, owner_link
 from . import org_rule_check
+from . import bot_home_merge
 from .roadmaps import exact_approval
 from . import login_holds
 from . import cloud_access
@@ -905,6 +906,10 @@ def create_app(settings=None):
                                                                          assistant_mod.approval_id(request.url.path))}
                             return record
                     delegation_reset = H.DELEGATION.set(await asyncio.to_thread(cited))
+                    if approves:
+                        # The person's yes to the read-back confirms this approval, as their tap on a Confirm card does: the
+                        # identity says so (`confirmed`), which support.require_person reads for a report. Nothing else changes.
+                        request.state.identity = replace(request.state.identity, confirmed=True)
             early = None
             caller = getattr(request.state, "identity", None)
             if caller:
@@ -1458,7 +1463,12 @@ def create_app(settings=None):
         # Validate referenced objects rather than trusting an arbitrary ID in a payload.
         for kind, values in refs.items():
             if kind in ("task", "task_id"):
-                for value in values if isinstance(values, list) else [values]:
+                # One task id, or a list of them (bots send `task:<id>` as a list); each must be one the caller can read.
+                # Anything else is refused here, before a SQL bind of it could fail.
+                items = values if isinstance(values, list) else [values]
+                if any(value and not isinstance(value, str) for value in items):
+                    raise Problem("reference", "A task reference is a task id or a list of task ids", 422)
+                for value in items:
                     if value:
                         auth.task(c, who, value)
             elif kind == "live":
@@ -1490,7 +1500,21 @@ def create_app(settings=None):
             elif kind not in ("depth", "turn_id"):
                 raise Problem("reference", f"Unsupported reference kind: {kind}", 422)
 
+    def named_destination(c, who, body, create=True):
+        """The conversation a message lands in, named before any check reads it, so each check and the write see the same
+        one. A room that moved names its Home (backend/bot_home_merge.py). A bot's message to a person that names no room
+        lands in that person's chat Home when there is one (hubdb.chat_home): where `H.say` would put it, but otherwise
+        only after the checks had run, so a private run's words would reach a Home that others read. A message to a bot,
+        or from a person with no room named, costs no lookup here."""
+        if body.conversation_id:
+            return bot_home_merge.home_for(c, body.conversation_id, create=create) or body.conversation_id
+        if H.is_human(who.actor) or str(body.to).lower() == "assistant" or str(body.to).startswith("bot:"):
+            return None
+        to = body.to if str(body.to).startswith("human:") else auth.target(c, who, body.to)
+        return H.chat_home(c, who.actor, to, {"ask": "ask", "notice": "notice"}.get(body.kind, "chat"), create=create)
+
     def send(c, who, body):
+        body.conversation_id = named_destination(c, who, body)
         in_assistant_room = False
         if str(body.to).lower() == "assistant":
             if who.role not in ("human", "owner") or who.via:
@@ -1530,16 +1554,18 @@ def create_app(settings=None):
                     body.conversation_id = assistant_mod.chat_room(c, settings, who)["id"]
                     in_assistant_room = True
                 auth.require_write(c, who, H.actor_id(to), missing="Unknown recipient")
-        auth.require_bot_contact(c, who, to, body.conversation_id,
-                                 (body.refs or {}).get("task") or (body.refs or {}).get("task_id"),
-                                 kind="message")
+        auth.require_bot_contact(c, who, to, body.conversation_id, H.refs_task_id(body.refs), kind="message")
         # A bot's message to a teammate out of its reach (docs/reach.md) is refused before anything is written.
-        reach.check(c, who, to, "chat", task_id=(body.refs or {}).get("task") or (body.refs or {}).get("task_id"),
+        reach.check(c, who, to, "chat", task_id=H.refs_task_id(body.refs),
                     conversation_id=body.conversation_id, in_reply_to=body.in_reply_to)
         if body.conversation_id:
             conv = auth.conversation(c, who, body.conversation_id, write=True)
             from . import threads
-            if to not in threads.legacy_participants(c, conv):
+            if conv.get("audience") == "home":
+                # A bot's Home is read by its readers, not by its participant list (which names the bot alone).
+                if not threads.readable(c, threads.actor_viewer(c, to), conv["id"]):
+                    raise Problem("forbidden", "Recipient is not a conversation participant", 403)
+            elif to not in threads.legacy_participants(c, conv):
                 raise Problem("forbidden", "Recipient is not a conversation participant", 403)
         if body.in_reply_to:
             msg = H.message(c, body.in_reply_to)
@@ -1567,9 +1593,10 @@ def create_app(settings=None):
         if in_assistant_room:
             refs["assistant"] = True           # the server's mark: this turn acts for the person
         conversation_id = body.conversation_id
-        if not conversation_id and body.kind == "steer" and who.role == "bot" and refs.get("task"):
+        steer_task = H._task_ref(refs.get("task"))
+        if not conversation_id and body.kind == "steer" and who.role == "bot" and steer_task:
             # A requester's steer goes to the task's own room, which its owner's running turn takes input from.
-            task = H.task(c, refs["task"])
+            task = H.task(c, steer_task)
             if not task or task["requester_id"] != who.actor or task["owner_id"] != to or not task.get("conversation_id"):
                 raise Problem("steer_target", "Steer a task you requested, sent to its owner", 422)
             conversation_id = task["conversation_id"]
@@ -1590,14 +1617,14 @@ def create_app(settings=None):
         message = H.say(c, who.actor, to, body.text, conversation_id=conversation_id,
                         kind=body.kind, refs=refs, in_reply_to=body.in_reply_to, wait_s=body.wait_s)
         # Everyone else it reached (its @mentions, a DM's members) is checked too; a refusal rolls the send back.
-        reach.check_delivered(c, who, message["id"], task_id=refs.get("task") or refs.get("task_id"),
+        reach.check_delivered(c, who, message["id"], task_id=H.refs_task_id(refs),
                               conversation_id=message.get("conversation_id"), in_reply_to=body.in_reply_to)
         due = None
         if to.startswith("bot:") and way == "defer":
             if who.role == "bot":
                 # A bot's deferred message rides with the recipient's next run of any kind, as a waiting
                 # bot-to-bot message does: its own DM may not see another turn.
-                task_ref = refs.get("task") if isinstance(refs.get("task"), str) else None
+                task_ref = H._task_ref(refs.get("task"))
                 held_note = bot_to_bot.hold(c, message, H.task(c, task_ref) if task_ref else None)
                 due = delivery.defer(c, to, "note", held_note["id"], defer_for=body.defer_for)
             else:
@@ -2986,9 +3013,8 @@ def create_app(settings=None):
                 refs = H._json(row["refs"], {}) or {}
                 if refs.get("goal_action") or refs.get("maintenance") or not privacy.message_readable(c, privacy.actor(who), row):
                     continue
-                task, tid = None, refs.get("task") or refs.get("task_id")
-                tid = tid[0] if isinstance(tid, list) and tid else tid
-                if isinstance(tid, str) and (t := H.task(c, tid)) and privacy.task_readable(c, who, t):
+                task, tid = None, H.refs_task_id(refs)
+                if tid and (t := H.task(c, tid)) and privacy.task_readable(c, who, t):
                     task = {"id": tid, "title": t["title"]}
                 text = " ".join(str(row["body"] or "").split())
                 prompts.append({"id": row["id"], "created_at": row["created_at"], "task": task,
@@ -3036,9 +3062,19 @@ def create_app(settings=None):
 
     def chat_place(who, bot):
         """A person's chat with a bot is the direct chat it lands in: its conversation id is the thread `where:` names.
-        The chat route names no conversation, so the check finds the open chat (none yet: a DM with no thread)."""
-        return lambda c, author, recipients: org_rule_check.place_for(
-            c, author, recipients, (views.direct_chat(c, who.actor, bot) or {}).get("id") or "")
+        The chat route names no conversation, so the check finds the open chat (none yet: a DM with no thread). Once the
+        bot's chats have moved, that chat is its Home (backend/bot_home_merge.py home_for_chat)."""
+        def place(c, author, recipients):
+            home = bot_home_merge.home_for_chat(c, who.actor, bot, create=False)
+            chat = (views.direct_chat(c, who.actor, bot) or {}).get("id") or ""
+            return org_rule_check.place_for(c, author, recipients, home or chat)
+        return place
+
+    def home_place(home):
+        """A place that is one Home: a write there is in `where: thread:<home>`, and its kind is a thread."""
+        def place(c, author, recipients):
+            return org_rule_check.place_for(c, author, recipients, home)
+        return place
 
     def task_place(who, tid):
         """A task comment's place: its task's conversation, the thread its comments are in (`where: thread:<id>`)."""
@@ -3170,9 +3206,8 @@ def create_app(settings=None):
         if body.kind != "ask":
             return None
         title = body.text.strip().split("\n")[0][:300]
-        tref = (body.refs or {}).get("task")
-        tref = tref[0] if isinstance(tref, list) and tref else tref
-        if isinstance(tref, str) and ask_ingest.gated(who, settings.assistant_bot):
+        tref = H._task_ref((body.refs or {}).get("task"))
+        if tref and ask_ingest.gated(who, settings.assistant_bot):
             # The task's title is judged only when the bot may read the task; the send refuses it otherwise.
             with store.read() as c:
                 try:
@@ -3216,9 +3251,46 @@ def create_app(settings=None):
         """Both checks of one message, outside the write: the rule check, then ask ingest (a held one skips it, and so
         does a saved retry, `retry`: `mutate` replays its answer without the write). `place`: the message's place when
         the route does not name a conversation (`rule_message_place`)."""
+        if body.conversation_id:
+            # A reply to a room that moved names its Home for every check below (backend/bot_home_merge.py); the sender's
+            # attempt, a private run's, still decides what the Home allows. A room whose Home is archived gets the bot's
+            # Home made here, before the checks, as the implicit path does, so the checks see where the words would land.
+            with store.read() as c:
+                make = bot_home_merge.home_missing(c, body.conversation_id)
+                if not make:
+                    body.conversation_id = named_destination(c, who, body, create=False)
+            if make:
+                with store.transaction() as c:
+                    body.conversation_id = named_destination(c, who, body)
+        elif not H.is_human(who.actor):
+            # A bot's message to a person that names no room goes to the person's chat Home (hubdb.chat_home). The checks
+            # must see that Home: it is made here if the bot has none open (an archived one), so a private run's words
+            # cannot reach a Home the checks never named.
+            with store.transaction() as c:
+                body.conversation_id = named_destination(c, who, body)
+        elif str(body.to).lower() != "assistant":
+            # A person's message to a bot that names no room is written to the bot's personal room (rooms.chat_room), which
+            # is the chat's Home once the bot's chats have moved (rooms.personal_room). The recipient is resolved as the
+            # write resolves it (auth.target: `bot:<slug>`, a bare slug or an id), so every spelling of one bot gets the same
+            # Home. The checks name that Home too, so `where: thread:<home>` sees it, and it is made first when archived, as
+            # the write would make it. A shared bot's shared room is not a Home: a member's message there is checked where it
+            # is written. The Assistant's own room is not a Home either (send routes it apart).
+            from .shared_bots import route as shared_route
+            with store.read() as c:
+                to = auth.target(c, who, body.to)
+                target = H.actor_id(shared_route(c, who.actor, to)) if to.startswith("bot:") else ""
+                personal = bool(target) and target != settings.assistant_bot and not (
+                    rooms.thread_mode(c, target) == rooms.SHARED and rooms.shared_member(c, auth, who.actor, target))
+                make = personal and bot_home_merge.chat_home_missing(c, who.actor, target)
+                home = None if make or not personal else bot_home_merge.home_for_chat(c, who.actor, target, create=False)
+            if make:
+                with store.transaction() as c:
+                    home = bot_home_merge.home_for_chat(c, who.actor, target)
+            if home and place is None:
+                place = home_place(home)
         reach.precheck(store, who, lambda c: reach.check(
             c, who, auth.target(c, who, body.to), "chat", conversation_id=body.conversation_id,
-            task_id=(body.refs or {}).get("task") or (body.refs or {}).get("task_id"), in_reply_to=body.in_reply_to))
+            task_id=H.refs_task_id(body.refs), in_reply_to=body.in_reply_to))
         rc = rule_check(who, operation, body.text, lambda c: rule_message_audience(c, who, body),
                         place=place or rule_message_place(who, body))
         return rc, (None if org_rule_check.holds(rc) or retry else message_ingest(who, body))
@@ -5697,7 +5769,17 @@ def create_app(settings=None):
                                      supersedes=body.supersedes_approval, to=to)
             # A proposal answers as a bot's cap PUT does too: the approval's id and that it waits on a person.
             return {**row, "approval": row["id"], "status": "pending"} if body.kind in proposals.KINDS else row
-        return mutate(request, body, work)
+        draft = mutate(request, body, work)
+        if body.kind == "support" and who.role == "bot":
+            # The team rule `bot_reports_direct` (backend/support.py send_by_rule) decides the draft as the install's default
+            # person and sends it now; off, or refused by the privacy check, it waits for a person. A same-key retry replays
+            # the draft, and send_by_rule answers with the same ticket.
+            def privacy_now(c):
+                privacy.guard_write(c, getattr(request.state, "privacy_source", who), request.url.path, auth)
+            sent = app.state.support.send_by_rule(who, draft["id"], check=privacy_now)
+            if sent is not None:
+                return sent
+        return draft
 
     @app.get("/api/v2/approvals/{aid}")
     def approval(request: Request, aid: str):
@@ -5721,8 +5803,9 @@ def create_app(settings=None):
         boards = []
         def work(c):
             row = auth.approval(c, who, aid, decide=True)
-            if row["kind"] == "support":
-                # Sending off the install is a person's own tap: not their token or the Assistant (which may have drafted it).
+            if row["kind"] == "support" and body.decision == "approved":
+                # Sending off the install is a person's own tap, or their confirmed yes: not their token, nor an Assistant
+                # that is not confirmed. A decline sends nothing, so anyone who may decide it may decline it.
                 from .support import require_person
                 require_person(who)
             from .company_page import editions
@@ -5989,7 +6072,8 @@ def create_app(settings=None):
         "" when there is none to name. None when BotOps has owned it since it was filed, or the requester moved it to
         BotOps themselves (not through BotOps or the Assistant). Otherwise any bot that owns a person's task could
         reassign it to BotOps and borrow their rights for its next run."""
-        moved = c.execute("SELECT * FROM task_events WHERE task_id=? AND field='owner' ORDER BY created_at DESC, rowid DESC "
+        moved = c.execute("SELECT new, actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='owner' "
+                          "ORDER BY created_at DESC, rowid DESC "
                           "LIMIT 1", (task["id"],)).fetchone()
         if not moved:
             made = c.execute("SELECT detail FROM events WHERE action='task.create' AND target=? ORDER BY created_at,id LIMIT 1",
@@ -6261,7 +6345,8 @@ def create_app(settings=None):
         found = carried(c, task, requester)
         if not found or not found.get("lends") or not open_task(task):
             return None
-        if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='status' AND old IN (?,?,?) LIMIT 1",
+        if c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' AND old IN (?,?,?) "
+                     "LIMIT 1",
                      (task["id"], *botops_act.TERMINAL)).fetchone():
             return None             # finished once: the request it carried was done, whoever reopened it
         msg = H.message(c, found.get("message_id") or "")

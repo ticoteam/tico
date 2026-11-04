@@ -305,3 +305,39 @@ class BudgetNodeRow(TypedDict):
     created_at: str
     updated_at: str
     updated_by_id: str | None
+
+
+class HomeMergeRow(TypedDict):
+    """One `home_merges` row (SELECT *): the old personal chat with a bot that moved into that bot's Home, and the Home
+    it went to (backend/bot_home_merge.py)."""
+    conversation_id: str
+    home_id: str
+    bot_id: str
+    owner_id: str | None
+    room_key: str | None
+    messages_count: int
+    created_at: str
+
+
+class HomeMergeMessageRow(TypedDict):
+    """One `home_merge_messages` row (SELECT *): a message that a merged chat carried into the Home."""
+    message_id: str
+    conversation_id: str
+
+
+class HistoryEventRow(TypedDict):
+    """One `history_events` row (SELECT *): one change to a task, a goal, the company profile, the strategy or the
+    market graph (backend/migrations/0064_history_events.py). `kind` is the field that changed or what happened, `data`
+    a JSON object of the subject type's extras."""
+    id: str
+    subject_type: str
+    subject_id: str
+    actor_id: str | None
+    kind: str | None
+    old: str | None
+    new: str | None
+    note: str | None
+    action_id: str | None
+    via: str | None
+    data: str | None
+    created_at: str | None

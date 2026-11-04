@@ -16,7 +16,7 @@
   {"team": "product", "template": "product-analyst"},
   {"team": "product", "template": "pricing"},
   {"team": "engineering", "template": "engineering-lead"},
-  {"team": "engineering", "template": "pr-reviewer", "title": "Builder"},
+  {"team": "engineering", "template": "builder", "title": "Builder"},
   {"team": "engineering", "template": "pr-reviewer", "title": "Reviewer 1"},
   {"team": "engineering", "template": "pr-reviewer", "title": "Reviewer 2"},
   {"team": "engineering", "template": "issue-triage"},

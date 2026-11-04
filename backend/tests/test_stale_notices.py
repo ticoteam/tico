@@ -32,7 +32,7 @@ def test_a_status_check_the_owner_has_acted_on_since_is_dropped(api):
     with api.app.state.store.transaction() as c:
         row, other = task(c), task(c, "Fix the login")
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")         # the new-task notices are not this test
-        c.execute("UPDATE task_events SET created_at=? WHERE task_id IN (?,?)", (H.shift(H.now(), minutes=-10), row["id"], other["id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id IN (?,?)", (H.shift(H.now(), minutes=-10), row["id"], other["id"]))
         quiet, kept = (H._wake(c, t, "bot:ops", "Status check: no activity for 2 h.", {"wake": "step_status"},
                                trigger="stall_check") for t in (row, other))
         c.execute("UPDATE messages SET created_at=? WHERE id IN (?,?)", (H.shift(H.now(), minutes=-5), quiet["id"], kept["id"]))
@@ -66,7 +66,7 @@ def test_a_late_warning_for_a_ticket_that_has_left_its_step_is_dropped(api):
     with api.app.state.store.transaction() as c:
         moved, still = task(c), task(c, "Fix the login")
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
-        c.execute("UPDATE task_events SET created_at=? WHERE task_id IN (?,?)", (H.shift(H.now(), minutes=-10), moved["id"], still["id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id IN (?,?)", (H.shift(H.now(), minutes=-10), moved["id"], still["id"]))
         late, kept = (H._wake(c, t, "bot:ops", "Late: it has been at In Progress for 4 h.",
                               {"wake": "blocker", "step_late": True}, trigger="stall_check") for t in (moved, still))
         c.execute("UPDATE messages SET created_at=? WHERE id IN (?,?)", (H.shift(H.now(), minutes=-5), late["id"], kept["id"]))
@@ -117,7 +117,7 @@ def test_a_review_gate_refusal_is_dropped_once_the_ticket_has_moved(api):
                                "AND json_extract(refs,'$.review_gate') IS NOT NULL", (t["id"],)).fetchone()
                      for t in (moved, still))
         # The refusal held both (the ticket keeps its step) before it told the Builder.
-        c.execute("UPDATE task_events SET created_at=? WHERE task_id IN (?,?)", (H.shift(H.now(), minutes=-10), moved["id"], still["id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id IN (?,?)", (H.shift(H.now(), minutes=-10), moved["id"], still["id"]))
         c.execute("UPDATE messages SET created_at=? WHERE id IN (?,?)", (H.shift(H.now(), minutes=-5), old["id"], kept["id"]))
         H._task_event(c, moved["id"], H.KEEPER, "step", step["In Progress"], step["Pending Release"])
     claim(api, r)

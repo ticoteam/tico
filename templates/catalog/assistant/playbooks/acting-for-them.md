@@ -36,7 +36,7 @@ For a big set of tasks you identified by id, `hub task bulk close --where-id <id
 
 ## Cards, for what only their click may run
 Propose these with a card and stop; only their click runs them:
-- approving anything when they have not turned on "My assistant can decide approvals for me" (only on a card, and only when
+- approving anything when they turned off "My assistant can decide approvals for me" (only on a card, and only when
   their message names it)
 - changing other people, access or settings they did not name
 
