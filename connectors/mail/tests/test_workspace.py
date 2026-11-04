@@ -16,13 +16,18 @@ import tempfile
 import threading
 import types
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 from clients.tico import APIError
-from connectors.mail import Failure, auth, oauth
+from connectors.mail import Failure, Refused, auth, oauth
 from connectors.mail import __main__ as cli
+from connectors.mail import calendar as cal
 from runner_support import credential_socket
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fake                                                  # noqa: E402
 
 # Imported before any test runs: unittest's patch.dict(sys.modules) drops modules first imported during a test, and
 # importing cryptography's native module a second time in one process breaks its key serialization.
@@ -334,6 +339,71 @@ class MintTokenOverTheServer(Base):
             self.assertEqual(json.loads(out), {"error_kind": kind}, mailbox)
             self.assertIn(mailbox, err)
             self.assertNotIn("ya29.", out + err)
+
+
+class WorkspaceCalendarWrites(Base):
+    """A Workspace token for calendar carries the full calendar scope, which covers event writes. calendar.py refuses a
+    write whose granted scopes lack what it needs, so that scope must pass both directly and through the supervisor."""
+
+    def setUp(self):
+        super().setUp()
+        self.with_registration()
+        self.google = fake.FakeCalendarService()
+        self.built = []
+        discovery = types.ModuleType("googleapiclient.discovery")
+
+        def build(api, version, credentials=None, **_options):
+            self.built.append((api, version, credentials))
+            return self.google
+        discovery.build = build
+        modules = patch.dict(sys.modules, {"googleapiclient": types.ModuleType("googleapiclient"),
+                                           "googleapiclient.discovery": discovery})
+        modules.start()
+        self.addCleanup(modules.stop)
+
+    def add_then_delete(self, service):
+        """One event added and deleted through calendar.py, the way the connector writes it."""
+        calendar = cal.Calendar(service, "ana@acme.example")
+        start = datetime(2026, 11, 4, 10, 0, tzinfo=timezone.utc)
+        event = calendar.create_event(start, start + timedelta(minutes=30), "Intro call", event_id="intro-1")
+        self.assertEqual(event["id"], "intro-1")
+        calendar.delete_event("intro-1")
+        self.assertEqual(self.google.deleted, ["intro-1"])
+        self.assertEqual(self.google.created_events, {})
+
+    def test_a_workspace_token_for_calendar_adds_and_deletes_events_directly(self):
+        service = auth.calendar_service("ana@acme.example")
+        self.assertEqual(self.server.calls[-1], ("connectors/mail/workspace/token",
+                                                 {"mailbox": "ana@acme.example", "service": "calendar"}))
+        self.assertEqual(service._tico_granted, CALENDAR)
+        self.assertEqual(self.built[0][2].token, "ya29.workspace")
+        self.add_then_delete(service)
+
+    def test_a_turn_given_the_workspace_calendar_token_by_the_supervisor_adds_and_deletes_events(self):
+        os.environ[auth.SOCKET_ENV] = "/run/tico/credential.sock"
+        os.environ["HUB_TOKEN"] = "synthetic-token"
+        reply = {"token": "ya29.workspace", "expiry": "2026-10-16T01:00:00Z", "scopes": CALENDAR}
+        with patch.object(credential_socket, "request_mail", return_value=reply) as request:
+            service = auth.calendar_service("ana@acme.example")
+        self.assertEqual(request.call_args.args[2:], ("calendar", "ana@acme.example"))
+        self.assertEqual(self.server.calls, [], "the turn takes the supervisor's token, not its own request to the server")
+        self.assertEqual(service._tico_granted, CALENDAR)
+        self.assertEqual(self.built[0][2].token, "ya29.workspace")
+        self.add_then_delete(service)
+
+    def test_read_only_calendar_scopes_from_the_supervisor_are_still_refused_before_google(self):
+        os.environ[auth.SOCKET_ENV] = "/run/tico/credential.sock"
+        os.environ["HUB_TOKEN"] = "synthetic-token"
+        read_only = [oauth.G + "calendar.events.readonly", oauth.G + "calendar.freebusy"]
+        with patch.object(credential_socket, "request_mail",
+                          return_value={"token": "ya29.read", "expiry": "", "scopes": read_only}):
+            service = auth.calendar_service("ana@acme.example")
+        calendar = cal.Calendar(service, "ana@acme.example")
+        with self.assertRaises(Refused) as caught:
+            calendar.create_event(datetime(2026, 11, 4, 10, 0, tzinfo=timezone.utc),
+                                  datetime(2026, 11, 4, 10, 30, tzinfo=timezone.utc), "Intro call")
+        self.assertIn("read-only at Google", caught.exception.msg)
+        self.assertEqual(self.google.created_events, {})
 
 
 if __name__ == "__main__":

@@ -60,9 +60,10 @@ SERVICE_SCOPES = {
                  G + "calendar.calendarlist.readonly"],
 }
 WRITE_SCOPES = {"gmail": {G + "gmail.modify", G + "gmail.compose"}, "calendar": {G + "calendar.events"}}
-# The granted scopes that let each capability's operations through (gmail.modify also covers drafts).
+# The granted scopes that let each capability's operations through (gmail.modify also covers drafts). The full calendar
+# scope, which the Google Workspace connection's token carries, covers event writes as calendar.events does.
 NEEDS = {"labels": {G + "gmail.modify"}, "drafts": {G + "gmail.modify", G + "gmail.compose"},
-         "calendar-write": {G + "calendar.events"}}
+         "calendar-write": {G + "calendar.events", G + "calendar"}}
 
 
 def grants_path(key_path=None):
