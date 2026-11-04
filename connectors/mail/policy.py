@@ -587,9 +587,10 @@ def approval_check(number, to=(), cc=(), thread_id="", repo=HUB_REPO, slug="", a
 
     `--approval-issue` is a GitHub Issue number, a Tico `send` approval id, or the id of a
     Tico message in which the owner told this employee to send. Returns
-    {"ok", "detail", "full", "named", "issue"}. `full` is the owner's yes to this exact message:
-    it lifts the recipient caps, the cooldown, and `outbound_send: false`, and the second
-    reviewer advises instead of blocking. docs/mail-service.md, "Per-message approval".
+    {"ok", "detail", "full", "named", "issue"}, plus `owner_instruction` for a verified
+    message or Issue. `full` lifts the recipient caps, the cooldown, and `outbound_send: false`.
+    The reviewer checks that the draft stays within any owner instruction; a hash-bound Tico
+    send approval keeps the review advisory. docs/mail-service.md, "Per-message approval".
 
     `attachments` ([{name, size, sha256}] of the files as they are in the draft) narrows it to an
     approval of these exact files: a Tico send approval whose payload names this draft and each
@@ -674,6 +675,8 @@ def _github_approval_check(n, to, cc, thread_id, repo, attachments=None):
     out["detail"] = (f"Issue {n}: closed, {', '.join(APPROVAL_LABELS)}, "
                      + ("its `Send to:` line matches every address on this message, To and Cc: "
                         "per-message approval" if out["full"] else f"names {named[0]}"))
+    out["owner_instruction"] = {"source": "GitHub Issue", "id": n, "who": f"owner:{OWNER}",
+                                "text": str(data.get("title") or "") + "\n" + str(data.get("body") or "")}
     return out
 
 
@@ -768,6 +771,8 @@ def _hub_message_check(n, slug):
     out["detail"] = (f"Tico message {n}: {OWNER} told "
                      + (f"bot:{slug}" if slug else "this employee")
                      + " to send: per-message approval")
+    out["owner_instruction"] = {"source": "Tico message", "id": n, "who": row["sender_id"],
+                                "text": str(row.get("body") or "")}
     return out
 
 
