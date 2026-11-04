@@ -126,8 +126,8 @@
       out: {group: {id: engineering, name: Engineering, parent: null, bots: [head-of-engineering, botops, upgrade-manager, performance-monitor]}}
   must:
     - '^group update security\b.*--parent\s+engineering'
-    - '^group update engineering\b.*--add-bot\b.*\bupgrade-manager\b'
-    - '^group update engineering\b.*--add-bot\b.*\bperformance-monitor\b'
+    - '^group update engineering\b.*--add-bots?\b.*\bupgrade-manager\b'
+    - '^group update engineering\b.*--add-bots?\b.*\bperformance-monitor\b'
   must_not:
     - '^group (delete|create)\b'
     - '^group update operations\b'
@@ -160,7 +160,7 @@
     - '^group update growth\b.*--name\s+Marketing\b'
   must_not:
     - '^group (delete|create)\b'
-    - '^group update growth\b.*--(parent|add-bot|remove-bot)'
+    - '^group update growth\b.*--(parent|add-bots?|remove-bots?)'
   reply: |
     Renames the Growth group to Marketing with one `hub group update growth --name Marketing`. The group keeps its people and
     bots; nothing else moves. Reply: one line with the new name and "say undo to put it back".
@@ -237,7 +237,7 @@
     - match: '^group update engineering\b'
       out: {group: {id: engineering, name: Engineering, humans: [priya], bots: [head-of-engineering, botops]}}
   must:
-    - '^group update engineering\b.*--add-human\b.*\bpriya\b'
+    - '^group update engineering\b.*--add-humans?\b.*\bpriya\b'
   must_not:
     - '(?i)invite'
     - '^human add\b'
