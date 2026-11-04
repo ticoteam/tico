@@ -54,6 +54,9 @@ FILL = {"{{app_name}}": "Tico", "{{assistant_name}}": "Tico Assistant", "{{compa
 
 FAKE_CORE = r'''import json, os, re, sys
 
+JSON_FILE_COMMANDS = {("automation", "create"), ("automation", "update"), ("listening", "save"), ("grokbot", "sync"),
+                      ("external", "sync")}
+
 WRITE_VERBS = {"update", "delete", "archive", "restore", "label", "withdraw", "answer", "approve", "decline", "done",
                "close", "cancel", "set", "remove", "add", "bulk"}
 
@@ -331,16 +334,22 @@ def answer(argv, via, tool=None):
     canon = re.sub(r" --on-behalf-of \S+", "", line)
     words = canon.split()
     files, bad = {}, None
-    for i, a in enumerate(argv[:-1]):
+    # `--file=-` is `--file -`, as the real parser reads it.
+    split = [w for a in argv for w in (a.split("=", 1) if a.startswith("--") and "=" in a else [a])]
+    for i, a in enumerate(split[:-1]):
         if a.endswith("-file") or a == "--file":
-            path = argv[i + 1]
+            path = split[i + 1]
             try:
                 # `-` is stdin, as the real CLI reads it. The MCP server's stdin is its protocol, so never there.
                 body = (sys.stdin.read() if via == "cli" and not sys.stdin.isatty() else "") if path == "-" else open(path).read()
             except Exception:
+                if a == "--file" and tuple(words[:2]) in JSON_FILE_COMMANDS:
+                    bad = bad or f"{path}: cannot read"
                 continue
             files[path] = body[:1500]
-            if path == "-" or path.endswith(".json"):
+            # Only a JSON command's `--file` (a flow or payload) or a .json file must be JSON: `--body-file -`,
+            # `classify --file` and `support report --file` are plain text.
+            if (a == "--file" and tuple(words[:2]) in JSON_FILE_COMMANDS) or path.endswith(".json"):
                 try:
                     json.loads(body)
                 except ValueError:
