@@ -430,7 +430,66 @@ _ATTENTION_WHERE = ("NEW.thread_id IS NOT NULL AND NEW.recipient LIKE 'human:%' 
 # A delivery that leaves the needs-you set (pending to read, say) is a change to that set too.
 _ATTENTION_CHANGE_WHERE = ("NEW.thread_id IS NOT NULL AND NEW.recipient LIKE 'human:%' "
                            "AND (NEW.state IN ('pending','delivered','capped') OR OLD.state IN ('pending','delivered','capped'))")
+# `bot_status` (backend/thread_bot_status.py): the status rows of a root may have moved. Written for the root of an open
+# wake a person's message gave a bot, of a run, of a bot's post where it had one, and of every open wake of a bot whose
+# claim refusal, state or pause moved. A run's step writes one only when the root had none in the last five seconds.
+_OPEN_WAKE = ("recipient LIKE 'bot:%' AND mode IN ('queue','steer') AND state IN ('pending','delivered','capped') "
+              "AND cause='human'")           # word for word migration 0065's message_deliveries_open_bots
+_MESSAGE_ROOT = "(SELECT COALESCE(t.root_id,t.id) FROM messages m JOIN conversations t ON t.id=m.conversation_id WHERE m.id={mid})"
+_RUN_ROOT = ("(SELECT COALESCE(t.root_id,t.id) FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m "
+             "ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id WHERE a.id={aid})")
+_STATUS_QUIET = ("NOT EXISTS (SELECT 1 FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=r "
+                 "AND created_at>strftime('%Y-%m-%dT%H:%M:%fZ','now','-5 seconds'))")
+
+
+def _bot_status(root, where=None):
+    """A `bot_status` row for the root `root` (an SQL expression), when it is a thread and `where` (on `r`) holds."""
+    return (f"INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) SELECT 'threads','bot_status',r,r,"
+            f"{_NOW} FROM (SELECT {root} AS r) WHERE r IS NOT NULL" + (f" AND {where}" if where else "") + ";")
+
+
+def _bot_status_roots(recipient):
+    """A `bot_status` row for each root where `recipient` (a bot actor, as SQL) has an open wake, fifty at most."""
+    return (f"INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) SELECT 'threads','bot_status',"
+            f"root_id,root_id,{_NOW} FROM (SELECT DISTINCT root_id FROM message_deliveries WHERE {_OPEN_WAKE} "
+            f"AND recipient={recipient} AND root_id IS NOT NULL LIMIT 50);")
+
+
 THREAD_TRIGGERS = [
+    ("changes_threads_bot_status_deliveries_insert", "INSERT", "message_deliveries",
+     "NEW.recipient LIKE 'bot:%' AND NEW.mode IN ('queue','steer') AND NEW.cause='human'",
+     _bot_status("NEW.root_id")),
+    ("changes_threads_bot_status_deliveries_update", "UPDATE", "message_deliveries",
+     f"NEW.recipient LIKE 'bot:%' AND NEW.cause='human' AND ({_changed('state', 'mode')}) "
+     "AND (NEW.mode IN ('queue','steer') OR OLD.mode IN ('queue','steer'))",
+     _bot_status("NEW.root_id")),
+    ("changes_threads_bot_status_posts", "INSERT", "messages",
+     f"NEW.sender_id LIKE 'bot:%' AND {_NOT_CARRIER}",
+     _bot_status(_MESSAGE_ROOT.format(mid="NEW.id"),
+                 f"EXISTS (SELECT 1 FROM message_deliveries WHERE root_id=r AND {_OPEN_WAKE} AND recipient=NEW.sender_id)")),
+    ("changes_threads_bot_status_attempts_insert", "INSERT", "attempts", None,
+     _bot_status(_RUN_ROOT.format(aid="NEW.id"))),
+    ("changes_threads_bot_status_attempts_update", "UPDATE", "attempts", _changed("state"),
+     _bot_status(_RUN_ROOT.format(aid="NEW.id"))),
+    ("changes_threads_bot_status_jobs", "UPDATE", "jobs", _changed("state"),
+     _bot_status(_MESSAGE_ROOT.format(mid="NEW.message_id"))),
+    ("changes_threads_bot_status_steps", "INSERT", "attempt_events", "NEW.kind IN ('tool','message')",
+     _bot_status(_RUN_ROOT.format(aid="NEW.attempt_id"), _STATUS_QUIET)),
+    ("changes_threads_bot_status_refusals_insert", "INSERT", "registry_metadata", "NEW.key LIKE 'queue-refusal:%'",
+     _bot_status_roots("'bot:'||substr(NEW.key,15)")),
+    ("changes_threads_bot_status_refusals_update", "UPDATE", "registry_metadata",
+     "NEW.key LIKE 'queue-refusal:%' AND json_extract(CASE WHEN json_valid(OLD.value) THEN OLD.value END,'$.reason') "
+     "IS NOT json_extract(CASE WHEN json_valid(NEW.value) THEN NEW.value END,'$.reason')",
+     _bot_status_roots("'bot:'||substr(NEW.key,15)")),
+    ("changes_threads_bot_status_refusals_delete", "DELETE", "registry_metadata", "OLD.key LIKE 'queue-refusal:%'",
+     _bot_status_roots("'bot:'||substr(OLD.key,15)")),
+    ("changes_threads_bot_status_bots", "UPDATE", "bots", _changed("state"), _bot_status_roots("'bot:'||NEW.id")),
+    ("changes_threads_bot_status_control", "UPDATE", "bot_control", _changed("draining"),
+     _bot_status_roots("'bot:'||NEW.bot")),
+    ("changes_threads_routed", "INSERT", "message_routes", None,
+     _row("threads", "routed", "NEW.thread_id", ref="NEW.message_id", conversation="NEW.thread_id")),
+    ("changes_threads_routed_update", "UPDATE", "message_routes", _changed("bot_ids"),
+     _row("threads", "routed", "NEW.thread_id", ref="NEW.message_id", conversation="NEW.thread_id")),
     ("changes_threads_insert", "INSERT", "conversations", None,
      _row("threads", "created", "NEW.id", conversation="NEW.id", where="NEW.parent_id IS NULL")
      + _row("threads", "sub_thread", "NEW.id", conversation="NEW.id", where="NEW.parent_id IS NOT NULL")),
@@ -508,6 +567,16 @@ NEEDS = {
     "changes_threads_pinned": ("conversations.pinned_for_everyone_at",),
     "changes_threads_update": ("conversations.archived_at", "conversations.audience",
                                "conversations.audience_group_id"),
+    "changes_threads_bot_status_posts": ("message_deliveries", "conversations.root_id"),
+    "changes_threads_bot_status_attempts_insert": ("jobs", "messages", "conversations.root_id"),
+    "changes_threads_bot_status_attempts_update": ("jobs", "messages", "conversations.root_id"),
+    "changes_threads_bot_status_jobs": ("messages", "conversations.root_id"),
+    "changes_threads_bot_status_steps": ("attempts", "jobs", "messages", "conversations.root_id"),
+    "changes_threads_bot_status_refusals_insert": ("message_deliveries",),
+    "changes_threads_bot_status_refusals_update": ("message_deliveries",),
+    "changes_threads_bot_status_refusals_delete": ("message_deliveries",),
+    "changes_threads_bot_status_bots": ("message_deliveries",),
+    "changes_threads_bot_status_control": ("message_deliveries", "bot_control.draining"),
 }
 # #118's first cut, replaced by `changes`.
 _RETIRED = ["task_changes_insert", "task_changes_update", "task_changes_delete",
@@ -1258,7 +1327,7 @@ def _threads(view, rows):
         if row["kind"] == "pinned" and row["ref"] and row["ref"] != view.who.actor:
             continue                # one reader's own pin; a pin for everyone has no `ref`
         # Reactions are per message: one event for each message whose reactions moved.
-        last[(row["subject_id"], row["kind"], row["ref"] if row["kind"] == "reactions" else None)] = row
+        last[(row["subject_id"], row["kind"], row["ref"] if row["kind"] in ("reactions", "routed") else None)] = row
         if row["kind"] == "activity" and row["ref"]:
             # Every message one thread's activity rows name, in order: the event stands for all of them.
             activity.setdefault(row["subject_id"], {})[row["ref"]] = None
@@ -1306,6 +1375,17 @@ def _threads(view, rows):
             # a migrated Home's old history, whose row nothing new may move.
             if threads.legacy_reader_only(view.c, view.reader, found):
                 continue
+        elif kind == "bot_status":
+            # The root's status rows as this reader reads them (backend/thread_bot_status.py), read for this one root.
+            from . import thread_bot_status
+            entry["thread_id"] = entry["root_id"]
+            entry["bots"] = thread_bot_status.status(view.c, view.reader, found)
+        elif kind == "routed":
+            message = H.message(view.c, ref) if ref else None
+            if not message or not threads.message_readable(view.c, view.reader, message, thread_checked=True):
+                continue
+            entry["message_id"] = ref
+            entry["routed"] = threads.routed(view.c, [ref]).get(ref)
         elif kind == "capped":
             entry["capped"] = view.c.execute("SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND state='capped'",
                                              (tid,)).fetchone()[0]

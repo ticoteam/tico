@@ -35,8 +35,11 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub thread pin|unpin <thread>              pin a thread for yourself, or unpin it (even one pinned for everyone)
     hub thread catch-up [--cursor C] [--limit N]   each thread with something new for you, mentions first, with its
                                                new messages; mark one read with hub thread read <thread> --all
-    hub thread post <thread> "<text>" [--kind say|ask] [--to ACTOR] [--ref KIND:ID ...]
-    hub thread reply <thread> <message> "<text>"   a side topic: the reply goes in that message's sub-thread
+    hub thread post <thread> "<text>" [--kind say|ask] [--to ACTOR] [--reply-to MESSAGE] [--ref KIND:ID ...]
+                                               --reply-to answers that message: yours stays in the thread, quoting it
+    hub thread bot-status <thread>             the bots it waits on: working, up next or can't reply, and why
+    hub thread reply <thread> <message> "<text>"   a separate side topic in that message's sub-thread (to answer a
+                                               message, post --reply-to)
     hub thread edit <message> "<text>"         edit a message you wrote: a new revision
     hub thread sub <message>                   open a message's sub-thread without posting
     hub thread react|unreact <message-id> <emoji>   your reaction to a message, such as :+1:
@@ -1173,9 +1176,14 @@ def parser():
     s.add_argument("text")
     s.add_argument("--kind", choices=["say", "ask"], help="ask: wants an answer from --to")
     s.add_argument("--to", help="the person or bot it is addressed to: human:<id> or bot:<slug>")
+    s.add_argument("--reply-to", dest="reply_to", metavar="MESSAGE",
+                   help="the message this answers: yours stays in the thread, quoting it")
     s.add_argument("--ref", dest="refs", action="append", metavar="KIND:ID", help="a reference such as task:<id>; repeat for more")
     s.set_defaults(fn="thread post")
-    s = thread.add_parser("reply", help="reply in a message's sub-thread: a side topic under that message")
+    s = thread.add_parser("bot-status", help="the bots a thread waits on: working, up next or can't reply, and why")
+    s.add_argument("thread")
+    s.set_defaults(fn="thread bot-status")
+    s = thread.add_parser("reply", help="a side topic in a message's sub-thread; to answer a message use post --reply-to")
     s.add_argument("thread")
     s.add_argument("message", help="the message the reply branches from")
     s.add_argument("text")
