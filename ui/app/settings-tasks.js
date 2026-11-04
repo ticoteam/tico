@@ -7,12 +7,91 @@
 const ASK_FILTER_MODES = [['off', 'Off', 'Bots put things on you as before.'],
   ['on', 'On', 'Over your budget, bots keep what doesn’t meet your lines; you can let any of it through.']];
 let ASK_FILTER = null;
+const TASK_AUTOMATION_TRIGGERS = [
+  ['task.created', 'a task is created', 'a task is created'],
+  ['task.step_changed', 'a task enters a step', 'a task enters a step'],
+  ['task.done', 'a task is done', 'a task is marked done'],
+  ['task.declined', 'a task is declined', 'a task is declined'],
+  ['task.closed', 'a task is closed', 'a task is closed'],
+];
+let TASK_AUTOMATION_TYPE = '';
 async function askFilterSettingsLoad() {
   const el = $('#set-ask-filter'); if (!el) return;
   const r = await v2Get('/v2/ask-ingest/settings');
   if (!r?.settings) { $('#set-ask-filter-card').hidden = true; return; }
   ASK_FILTER = {...r, editing: ASK_FILTER?.editing || 'mine'};
   askFilterSettingsPaint();
+}
+function taskAutomationSettingsMount() {
+  const host = $('#set-task-automations');
+  if (host) host.innerHTML = '<p class="settings-cell-note">Choose a task type to see its Triggers and Actions.</p>';
+}
+function taskAutomationSettingsShow(tab) {
+  if (tab === 'tasks' && S.me?.cloud) void taskAutomationSettingsLoad();
+}
+async function taskAutomationSettingsLoad() {
+  const host = $('#set-task-automations');
+  if (!host) return;
+  host.textContent = 'Loading…';
+  try {
+    const [types, automations] = await Promise.all([taskTypesLoad({cached: true}), taskAutomationList()]);
+    if (!host.isConnected) return;
+    const selected = types.some(type => type.id === TASK_AUTOMATION_TYPE) ? TASK_AUTOMATION_TYPE : '';
+    TASK_AUTOMATION_TYPE = selected;
+    const mayEdit = canMove();
+    const typeName = selected ? types.find(type => type.id === selected)?.name : '';
+    const rows = automations.filter(rule => TASK_AUTOMATION_TRIGGERS.some(([name]) => rule.trigger?.name === name)
+      && (!selected || (rule.trigger?.filters || []).some(filter => filter.field === 'event.data.type_id' && filter.value === selected)));
+    host.innerHTML = `<label class="task-automation-type">Task type
+      <select data-task-automation-type aria-label="Task type"><option value="">All tasks</option>${types.map(type =>
+        `<option value="${esc(type.id)}"${type.id === selected ? ' selected' : ''}>${esc(type.name)}</option>`).join('')}</select></label>
+      ${!mayEdit ? '<p class="settings-cell-note">Only people who can change Settings can edit task Triggers and Actions. Ask a Settings manager for help.</p>' : ''}
+      <div class="task-automation-sections">${TASK_AUTOMATION_TRIGGERS.map(([name, label, words]) => {
+        const intro = typeName ? `a task of type ${typeName} ${words.replace(/^a task /, '')}` : words;
+        const matches = rows.filter(rule => rule.trigger.name === name);
+        return `<section class="task-automation-section" data-trigger="${name}"><h3>${esc(label[0].toUpperCase() + label.slice(1))}</h3>
+          <p class="settings-cell-note"><b>Trigger:</b> ${esc(intro)}.</p>
+          ${mayEdit ? `<button class="ghost" type="button" data-task-add-action="${name}">Add action</button>` : ''}
+          ${matches.map(rule => taskAutomationRuleRow(rule, mayEdit)).join('') || '<p class="muted">No Actions</p>'}</section>`;
+      }).join('')}</div>`;
+    host.querySelector('[data-task-automation-type]').onchange = event => {
+      TASK_AUTOMATION_TYPE = event.target.value;
+      void taskAutomationSettingsLoad();
+    };
+    host.querySelectorAll('[data-task-add-action]').forEach(button => button.onclick = () => {
+      const trigger = {type: 'event', name: button.dataset.taskAddAction,
+        filters: selected ? [{field: 'event.data.type_id', op: 'is', value: selected}] : []};
+      void taskAutomationAddAction(trigger, typeName);
+    });
+  } catch (error) { host.textContent = error.message; }
+}
+async function taskAutomationList() {
+  const all = [];
+  let cursor = '';
+  do {
+    const page = await get('/v2/automations?limit=500' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''));
+    all.push(...(page.automations || []));
+    if (page.next == null || page.next === cursor) break;
+    cursor = page.next;
+  } while (cursor);
+  return all;
+}
+function taskAutomationRuleRow(rule, mayEdit) {
+  const href = auHref(rule.id), failed = !rule.builtin && rule.last_run?.status === 'failed';
+  const when = rule.last_run?.finished_at || rule.last_run?.started_at;
+  const time = when ? new Date(when).toLocaleString() : '';
+  return `<div class="task-automation-rule"><a href="${href}">${esc(rule.name || 'Untitled')}</a>
+    ${rule.paused_reason === 'Paused: too many runs' ? '<span class="pill waiting">Paused: too many runs</span>' : ''}
+    ${mayEdit ? ` <a class="ghost" data-task-edit href="${href}">Edit Trigger or Action</a>` : ''}
+    ${failed ? `<p class="err">Last Action failed${time ? ' at ' + esc(time) : ''}: ${esc(rule.last_run.error || 'failed')}</p>` : ''}</div>`;
+}
+async function taskAutomationAddAction(trigger, typeName = '') {
+  if (!canMove()) return;
+  try {
+    const out = await post('/v2/automations', {name: `${typeName || 'Task'} action`, owner: 'person:' + S.me.id,
+      enabled: false, builtin: false, trigger, steps: []});
+    location.hash = auHref(out.id);
+  } catch (error) { toast(error.message, true); }
 }
 function askFilterSettingsPaint() {
   const el = $('#set-ask-filter'); if (!el || !ASK_FILTER) return;

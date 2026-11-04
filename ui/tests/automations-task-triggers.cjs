@@ -16,6 +16,9 @@ const TYPES = [{id: 'dev', name: 'Dev tickets', steps: [{id: 'st_review', name: 
     const {page, errors, writes} = o;
     await page.locator('.au-trig[data-open="trigger"]').click();
     await page.waitForSelector('.au-ed:not([hidden]) select[data-b="stepPick"]');
+    assert.deepEqual(await page.locator('.au-ed select[data-b="evpick"] option').evaluateAll(options => options.map(option => option.value)),
+      ['task.created', 'task.step_changed', 'task.done', 'task.declined', 'task.closed'], 'the Trigger choices are the five task Triggers');
+    assert.equal(await page.locator('.au-ed label').filter({hasText: 'Trigger'}).count(), 1);
     // Nothing chosen: Save names the step and writes nothing.
     await page.locator('.au-save').click();
     await page.waitForSelector('.toast:has-text("Choose a step")');

@@ -213,7 +213,7 @@ function auNewStep(type) {
   if (type === 'find') Object.assign(s, {source: 'mail', query: '', since: 'last_run', limit: 20});
   if (type === 'bot_turn') Object.assign(s, {bot: (S.emps || []).find(e => e.id !== AU_BOT)?.id || '', prompt: ''});
   if (type === 'paths') Object.assign(s, {paths: [{name: 'Path 1', when: [], steps: []}], otherwise: {steps: []}});
-  if (type === 'action') Object.assign(s, {do: 'archive', args: {}});
+  if (type === 'action') Object.assign(s, {do: auTaskTrigger(AU.cur?.trigger) ? 'create_task' : 'archive', args: {}});
   return s;
 }
 // A new step opens in its editor; it joins the flow (a new version) when saved.

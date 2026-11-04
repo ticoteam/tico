@@ -7,12 +7,18 @@ const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
-let mover = true;   // who may change Task types (Edit and Add action show only to them)
+let mover = true;   // who may add or edit task Triggers and Actions
 const types = [{id: 'dev', name: 'Dev tickets', steps: [], roles: []}, {id: 'general', name: 'General', steps: [], roles: []}];
+const taskRules = [
+  {id: 'au_failed', name: 'Failed Action', enabled: true, trigger: {type: 'event', name: 'task.created', filters: [{field: 'event.data.type_id', value: 'dev'}]},
+    last_run: {status: 'failed', started_at: '2026-11-03T10:00:00Z', finished_at: '2026-11-03T10:00:05Z', error: 'The note could not be saved'}},
+  {id: 'au_paused', name: 'Paused Action', enabled: false, paused: true, paused_reason: 'Paused: too many runs',
+    trigger: {type: 'event', name: 'task.created', filters: [{field: 'event.data.type_id', value: 'dev'}]}}
+];
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
-  const errors = [], posts = [];
+  const errors = [], posts = [], patches = [];
   let made = null;
   try {
     const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
@@ -26,10 +32,11 @@ const types = [{id: 'dev', name: 'Dev tickets', steps: [], roles: []}, {id: 'gen
       if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const config = {version: '0.1.0', app_name: 'Tico', local: true};
-      if (p === '/api/me') return json({id: 'ana', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, role: 'owner', mover, config});
+      if (p === '/api/me') return json({id: 'ana', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, role: 'human', mover, config});
       if (p === '/api/v2/config') return json(config);
-      if (p === '/api/employees') return json([]);
+      if (p === '/api/employees') return json([{id: 'pr-reviewer', name: 'PR Reviewer', status: 'active'}]);
       if (p === '/api/v2/task-types') return json({types});
+      if (p === '/api/v2/automations' && req.method() === 'GET') return json({automations: taskRules, next: null});
       if (p === '/api/issues') return json([]);
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
@@ -39,8 +46,12 @@ const types = [{id: 'dev', name: 'Dev tickets', steps: [], roles: []}, {id: 'gen
       if (p === '/api/v2/roadmaps/settings') return json({labels: [], cors_origins: [], action_limit: 10, suggestion_limit: 20, bot_public_approval: true, suggestions_bot: null, suggestions_receiver: {bot: null, name: null, source: 'automatic'}});
       if (p === '/api/v2/automations' && req.method() === 'POST') {
         const body = req.postDataJSON(); posts.push(body);
-        made = {id: 'au_new', name: body.name, owner: body.owner, enabled: false, builtin: false, can_edit: true, trigger: body.trigger, steps: []};
+        made = {id: 'au_new', name: body.name, owner_id: body.owner, enabled: false, builtin: false, can_edit: true,
+          version: 1, trigger: body.trigger, steps: []};
         return json(made, 201);
+      }
+      if (p === '/api/v2/automations/au_new' && req.method() === 'PATCH') {
+        const body = req.postDataJSON(); patches.push(body); made = {...made, ...body, version: 2}; return json(made);
       }
       if (p === '/api/v2/automations/au_new') return json(made);
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -49,6 +60,15 @@ const types = [{id: 'dev', name: 'Dev tickets', steps: [], roles: []}, {id: 'gen
     await page.goto('https://tico-ui.test/#/settings/tasks');
     const row = page.locator('.task-type-row', {hasText: 'Dev tickets'});
     await row.locator('[data-add-action="dev"]').waitFor();
+    assert.equal(await row.locator('.task-type-intro').innerText(), 'Trigger: a task of type Dev tickets is created.');
+    assert.equal(await page.locator('#set-task-automations [data-trigger="task.created"] .settings-cell-note').innerText(), 'Trigger: a task is created.');
+    await page.locator('[data-task-automation-type]').selectOption('dev');
+    const card = page.locator('#set-task-automations');
+    await card.locator('[data-trigger]').first().waitFor();
+    assert.equal(await card.locator('[data-trigger]').count(), 5, 'the card shows the five task Triggers');
+    assert.match(await card.locator('[data-trigger="task.created"]').innerText(), /Trigger: a task of type Dev tickets is created/);
+    assert.match(await card.innerText(), /Paused: too many runs/);
+    assert.match(await card.innerText(), /Last Action failed.*2026.*The note could not be saved/);
     await row.locator('[data-add-action="dev"]').click();
     await page.waitForFunction(() => location.hash === '#/automations/au_new', null, {timeout: 5000});
 
@@ -59,13 +79,39 @@ const types = [{id: 'dev', name: 'Dev tickets', steps: [], roles: []}, {id: 'gen
     assert.equal(posts[0].enabled, false);
     assert.equal(posts[0].owner, 'person:ana');
     assert.deepEqual(posts[0].steps, []);
+    // The created automation keeps its type Trigger when the Action is selected and saved.
+    await page.locator('[data-add="root|0"]').click();
+    await page.locator('.au-menu [data-ty="action"]').click();
+    const actionOptions = await page.locator('.au-ed [data-b="step.do"] option').allInnerTexts();
+    assert.deepEqual(actionOptions, ['Note', 'Wake a bot', 'Create task', 'Call a webhook']);
+    await page.selectOption('.au-ed [data-b="step.do"]', 'create_task');
+    await page.fill('.au-ed [data-b="step.args.title"]', 'Review the change');
+    await page.selectOption('.au-ed [data-b="step.args.owner"]', 'bot:pr-reviewer');
+    await page.locator('.au-save').click();
+    await page.waitForFunction(() => document.querySelector('.au-ed')?.hidden && document.querySelector('.au-ver')?.textContent === 'v2');
+    assert.equal(patches.length, 1);
+    assert.deepEqual(made.trigger, posts[0].trigger, 'the saved automation keeps the type Trigger');
+    assert.deepEqual(patches[0].steps[0], {id: patches[0].steps[0].id, type: 'action', do: 'create_task', enabled: true,
+      args: {title: 'Review the change', owner: 'bot:pr-reviewer'}});
+    assert.match(await page.locator('.au-trig').innerText(), /Dev tickets/);
+    assert.match(await page.locator('.au-card[data-open]').last().innerText(), /Create task[\s\S]*pr-reviewer/);
     assert.deepEqual(errors, [], 'no page errors');
-    // A person who may not change Task types sees no Add action and no Edit on the rows.
+    await page.goto('https://tico-ui.test/#/settings/tasks');
+    await page.locator('#set-task-automations [data-task-automation-type]').selectOption('dev');
+    await page.locator('#set-task-automations [data-task-add-action="task.step_changed"]').click();
+    await page.waitForFunction(() => location.hash === '#/automations/au_new', null, {timeout: 5000});
+    assert.deepEqual(posts[1].trigger, {type: 'event', name: 'task.step_changed',
+      filters: [{field: 'event.data.type_id', op: 'is', value: 'dev'}]}, 'the card Add action pre-fills its Trigger and type');
+    assert.match(await page.locator('.au-trig').innerText(), /Dev tickets/);
+    // Add action and edit controls follow the Settings permission check.
     mover = false;
     await page.goto('https://tico-ui.test/?no-cache=1#/settings/tasks');   // a new document, so the page opens on Settings
     await page.locator('.task-type-row', {hasText: 'Dev tickets'}).waitFor();
-    assert.equal(await page.locator('[data-add-action]').count(), 0, 'no Add action without the right');
+    assert.equal(await page.locator('[data-add-action]').count(), 0, 'no Task types Add action without the right');
+    assert.equal(await page.locator('[data-task-add-action]').count(), 0, 'no card Add action without the right');
+    assert.equal(await page.locator('[data-task-edit]').count(), 0, 'no task Trigger or Action edit control without the right');
     assert.equal(await page.locator('[data-edit-type]').count(), 0, 'no Edit without the right');
+    assert.match(await page.locator('#set-task-automations').innerText(), /Ask a Settings manager/);
     console.log('task-types-add-action: ok');
   } finally {
     await browser.close();

@@ -128,8 +128,9 @@ function auEventField(t, ed) {
   // A task event's automation offers the five task triggers only (Dev 666); any other keeps the whole catalog.
   const list = auTaskTrigger(t) ? AU_TASK_EVENTS.map(n => [n, AU_EVENTS[n]])
     : [...auWithCur(Object.entries(AU_EVENTS), custom ? '' : t.name, auEventWords(t.name)), [AU_EV_CUSTOM, 'Custom…']];
-  const pick = auSel('evpick', list, custom ? AU_EV_CUSTOM : t.name, `aria-label="Event"${t.name && !custom ? ` title="${esc(t.name)}"` : ''}`);
-  return auFld('Event', pick + (custom ? auIn('trigger.name', t.name, 'custom.name', 'aria-label="Custom event"') : ''));
+  const label = auTaskTrigger(t) ? 'Trigger' : 'Event';
+  const pick = auSel('evpick', list, custom ? AU_EV_CUSTOM : t.name, `aria-label="${label}"${t.name && !custom ? ` title="${esc(t.name)}"` : ''}`);
+  return auFld(label, pick + (custom ? auIn('trigger.name', t.name, 'custom.name', 'aria-label="Custom event"') : ''));
 }
 // A "task step changed" trigger names its step: the step filter already saved, or the one picked here (Dev 666).
 const AU_STEP_FIELD = 'event.data.step';
