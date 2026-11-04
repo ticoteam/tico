@@ -12,7 +12,7 @@
 /** @typedef {{r: Response, text: string, kept?: {tag: string, text: string}}} RawGet */
 /**
  * Per-write options: `timeout` caps the whole write in milliseconds; the callbacks hear each retry and each answer.
- * @typedef {{timeout?: number, onRetry?: (attempt: number, status: number) => void, onResponse?: (status: number) => void}} WriteOptions
+ * @typedef {{timeout?: number, keepalive?: boolean, onRetry?: (attempt: number, status: number) => void, onResponse?: (status: number) => void}} WriteOptions
  */
 
 /** @param {number} n @returns {string} */
@@ -135,7 +135,7 @@ const writeRequestOnce = async (method, p, body={}, operationId, opts={}) => {
     const abort = new AbortController(), timer = left < Infinity ? setTimeout(() => abort.abort(), left) : 0;
     let status = 0;
     try {
-      const r = await fetch(API + p, {method, headers:{'Content-Type':'application/json', 'Idempotency-Key':key}, body:payload, signal:abort.signal});
+      const r = await fetch(API + p, {method, headers:{'Content-Type':'application/json', 'Idempotency-Key':key}, body:payload, signal:abort.signal, keepalive:!!opts.keepalive});
       status = r.status;
       opts.onResponse?.(status);
       window.TicoObservability?.response(r.status);

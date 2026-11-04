@@ -66,7 +66,11 @@ async function callAction(view, kind) {
       call = await post(`/v2/threads/${encodeURIComponent(id)}/calls`, {});
       call = call?.call || call;
     }
-    if (gen !== CALL_GEN) return;
+    if (gen !== CALL_GEN) {
+      // Hidden or overtaken while the call was being made: the server already counts this person in it, so the seat goes back.
+      if (kind === 'start' && call?.id) post(callPath(call.id) + '/leave', {}, undefined, {keepalive: true}).catch(() => {});
+      return;
+    }
     if (call?.id) await callJoin(id, call, threadTitle(view.thread), gen);
   } catch (e) {
     if (gen !== CALL_GEN) return;

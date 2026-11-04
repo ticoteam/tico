@@ -505,7 +505,8 @@ let browser = null;
       assert.equal(await page.locator('#call-bar').count(), 0);
     }
     assert.equal(seen.calls.filter(c => c === 'leave:c4').length, 2, 'each overtaken join gives its seat back: ' + seen.calls);
-    // Hidden while Start call is still making the call: in a call already, and the call made is never joined.
+    // Hidden while Start call is still making the call: in a call already, the call made is never joined, and the seat
+    // creation gave goes back.
     callMade = {id: 'c5', state: 'live', connector: 'human:ana'};
     await page.evaluate(() => { window.__rooms.length = 0; window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'); });
     for (let i = 0; i < 20 && !seen.calls.includes('start:c5'); i++) await page.waitForTimeout(25);
@@ -513,6 +514,7 @@ let browser = null;
     await page.evaluate(() => window.__starting);
     await page.waitForTimeout(450);
     assert.ok(!seen.calls.includes('join:c5'), 'the call made while hidden is not joined: ' + seen.calls);
+    assert.equal(seen.calls.filter(c => c === 'leave:c5').length, 1, 'the call made while hidden gives its seat back: ' + seen.calls);
     assert.deepEqual(await page.evaluate(() => window.__rooms.length), 0);
     assert.equal(await page.locator('#call-bar').count(), 0);
     // A join the server refuses still says so: Start call's own join number is the one the join checks.
