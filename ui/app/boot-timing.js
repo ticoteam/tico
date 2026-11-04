@@ -9,7 +9,7 @@
 //   tico:roster        the roster, /me and the people answered
 //   tico:route         the opening page is drawn (its shell and any skeleton)
 //   tico:native-ack    the desktop app answered the signed-in visual address, or its 5 s wait ended; nothing waits on it
-//   tico:paint-fresh   the opening page shows its data: #main has content and no skeleton (aria-busy) is left
+//   tico:paint-fresh   the opening page shows its data: #main has content and none of its loading rows is left
 // With them goes each API read before that paint, with the server's own time (Server-Timing app and auth). In a
 // browser this stays in the page: window.ticoBootTiming, and the marks in the performance timeline. The desktop app
 // gets it once per load as `bootTiming` and writes one line to its log (app/src/bridge.rs boot_line).
@@ -34,15 +34,17 @@ function bootMarkAt(name) {
 }
 // The page, not what is on it: `#/bot/ops/dm` is `#/bot`, so the log never names a bot, a task or a person.
 const bootRouteName = hash => { const m = /^#\/([a-z][a-z0-9-]{0,31})/.exec(String(hash || '')); return m ? '#/' + m[1] : ''; };
-// An API path without its query, read the REST way: after `/api/` (and `v2/`) parts alternate between a kind and the
-// one meant, and every one meant is `:id`, as is any kind that is not a plain lowercase word. `/api/v2/bots/ops/dm`
-// is `/api/v2/bots/:id/dm`, so the log names no bot, task or person here either.
+// An API path without its query: `/api/`, then `v2/` if there, the resource's name, and `:id` for every part after it,
+// whatever it is. `/api/v2/messaging/bots/ops` is `/api/v2/messaging/:id/:id`, so the log names no bot, task or person
+// (the desktop app refuses any other shape, app/src/bridge.rs boot_path_ok).
 function bootPath(url) {
   let path; try { path = new URL(url, location.href).pathname; } catch { return ''; }
   if (!path.startsWith('/api/')) return '';
-  const parts = path.split('/'), base = parts[2] === 'v2' ? 3 : 2;
-  return parts.map((part, i) => i < base || ((i - base) % 2 === 0 && /^[a-z][a-z-]{0,23}$/.test(part)) ? part : ':id')
-    .slice(0, 9).join('/');
+  const parts = path.split('/').slice(2).filter(Boolean), head = parts[0] === 'v2' ? ['v2'] : [];
+  const rest = parts.slice(head.length);
+  if (!rest.length) return '';
+  const name = /^[a-z][a-z-]{0,23}$/.test(rest[0]) ? rest[0] : ':id';
+  return ['/api', ...head, name, ...rest.slice(1, 7).map(() => ':id')].join('/');
 }
 const bootServerMs = (entry, name) => {
   const t = (entry.serverTiming || []).find(s => s.name === name);
@@ -74,13 +76,16 @@ function bootTimingSend(settled) {
 }
 // After route(): marks the first frame whose #main has content and no skeleton, then reports. A hidden page has no
 // frames, so it looks again on a timer instead.
+// A page's own loading rows (skelRows, ui/app/core.js, and the updates feed's blocks). Other aria-busy marks are parts
+// that load by themselves after the page (a file's preview, a send button, a Decide card), and never hold the paint.
+const BOOT_SKELETONS = '.skel, .skel-block';
 function bootPaintWatch() {
   BOOT_ROUTE = S.route;
   const started = Date.now();
   const check = () => {
     if (BOOT_REPORTED || SESSION.out) return;
     const main = document.getElementById('main');
-    if (main && main.childElementCount && !main.querySelector('[aria-busy="true"]')) {
+    if (main && main.childElementCount && !main.querySelector(BOOT_SKELETONS)) {
       bootMark('paint-fresh');
       bootTimingSend(true);
       return;
