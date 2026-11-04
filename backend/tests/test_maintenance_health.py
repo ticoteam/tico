@@ -892,6 +892,19 @@ def test_without_a_health_monitor_to_retire_its_tasks_stay_and_the_invariant_ale
     assert conn.execute("SELECT count(*) FROM history_events WHERE subject_id IN ('t1','t2','t5','t6')").fetchone()[0] == 0
 
 
+def test_the_pending_column_is_added_once_and_a_file_with_no_table_is_skipped():
+    conn = legacy_db()
+    migration = retire_migration()
+    migration.up(conn)
+    migration.up(conn)                                          # a rerun finds the column and changes nothing
+    assert "pending" in {row[1] for row in conn.execute('PRAGMA table_info("health_findings")')}
+    rows = conn.execute("SELECT pending FROM health_findings").fetchall()
+    assert rows and {row[0] for row in rows} == {0}           # the findings that were there are filed, so 0
+    empty = sqlite3.connect(":memory:")
+    migration.up(empty)                                         # no health_findings yet: the module's CREATE makes it
+    assert empty.execute("SELECT count(*) FROM sqlite_master WHERE name='health_findings'").fetchone()[0] == 0
+
+
 def test_a_default_login_out_of_quota_is_a_finding_until_a_turn_there_completes(environment, readers):
     api, runner = built(environment)
     rid = runner["runner_id"]
