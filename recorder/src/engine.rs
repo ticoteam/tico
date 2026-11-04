@@ -1005,6 +1005,7 @@ mod tests {
     fn feed(mut sink: AudioSink, samples: Vec<f32>) -> Arc<AtomicBool> {
         let done = Arc::new(AtomicBool::new(false));
         let flag = done.clone();
+        let capacity = sink.queued_capacity();
         thread::spawn(move || {
             for part in samples.chunks(1024 * 32) {
                 let deadline = Instant::now() + Duration::from_secs(10);
@@ -1017,6 +1018,13 @@ mod tests {
                 }
                 sink.push_interleaved(part, 1);
                 thread::sleep(Duration::from_millis(20));
+            }
+            // Finish only after every queued sample has reached the engine. The final
+            // partial chunk is flushed by handle.finish(), after the pump completes.
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while sink.queued_capacity() != capacity {
+                assert!(Instant::now() < deadline, "Synthetic audio did not drain");
+                thread::sleep(Duration::from_millis(2));
             }
             flag.store(true, Ordering::Release);
             // Keep the producer alive so the input does not look disconnected.
@@ -1073,8 +1081,6 @@ mod tests {
         {
             thread::sleep(Duration::from_millis(10));
         }
-        // Let the engine drain what was queued last.
-        thread::sleep(Duration::from_millis(200));
         handle.finish().unwrap();
         let chunks = store.get(&recording.id).unwrap().chunks;
         assert!(chunks.len() >= 3);

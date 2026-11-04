@@ -638,9 +638,32 @@ impl Tico {
             if ["live", "legacy-live"].contains(&delivery.receipt["source"].as_str().unwrap_or(""))
                 && delivery.receipt["approved"] != true
             {
+                // Pending imports do not carry live visibility. Read the original live meeting,
+                // including choices changed in Tico, and freeze before approval for stable retries.
+                if delivery.receipt.get("approve_body").is_none() {
+                    ensure!(
+                        !context.live_id.is_empty(),
+                        "The original live meeting is missing; nothing was approved"
+                    );
+                    let meeting = self.call(
+                        &format!("/api/v2/live-meetings/{}", context.live_id),
+                        None,
+                        "",
+                    )?;
+                    let private = match meeting["visibility"].as_str() {
+                        Some("private") => true,
+                        Some("team") => false,
+                        _ => anyhow::bail!(
+                            "Tico did not return the live meeting's visibility; nothing was approved"
+                        ),
+                    };
+                    delivery.receipt["approve_body"] =
+                        json!({"action":"approve","private":private});
+                    store.delivery(id, &delivery)?;
+                }
                 self.call(
                     &format!("/api/v2/meetings/{}/review", delivery.meeting_id),
-                    Some(&json!({"action":"approve","private":true})),
+                    Some(&delivery.receipt["approve_body"]),
                     &format!("recorder:{id}:approve"),
                 )?;
                 delivery.receipt["approved"] = json!(true);
