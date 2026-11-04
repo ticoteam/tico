@@ -1,6 +1,7 @@
 """Computer status follows live contact; retirement never removes a computer still in use."""
 
 import json
+from hashlib import sha256
 from unittest.mock import Mock
 
 import pytest
@@ -14,6 +15,8 @@ from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa
 from backend.tests.test_cloud_machines import cloud, employee, enrolled, shared_enrolled  # noqa: F401
 from backend.tests.test_credentials import setup
 from backend.tests.test_model_subscriptions import add, give
+
+DEVICE_ID = sha256(b"acme-device-one").hexdigest()
 
 
 @pytest.mark.parametrize("shared", [False, True])
@@ -52,9 +55,9 @@ def test_live_contact_overrides_stale_cloud_state_in_ui_payloads(cloud, shared):
     assert employee(cloud.api)["cloud_machine"]["state"] == "stopping", "revoked contact cannot prove the machine is live"
 
 
-def replaced_computer(api, label="Acme Mac"):
-    old = runner(api, label=label)
-    current = runner(api, label=label)
+def replaced_computer(api, label="Acme Mac", old_device_id=DEVICE_ID, new_device_id=DEVICE_ID):
+    old = runner(api, label=label, device_id=old_device_id)
+    current = runner(api, label=label, device_id=new_device_id)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET created_at=? WHERE id=?", (H.shift(H.now(), hours=-96), old["runner_id"]))
         runner_states.save(c, old["runner_id"], last_seen_at=H.shift(H.now(), hours=-72))
@@ -99,9 +102,9 @@ def test_retirement_preserves_assigned_cloud_recent_and_never_seen_computers(api
     store = api.app.state.store
     now = H.now()
     cutoff = H.shift(now, seconds=-computers.UNASSIGNED_OFFLINE_RETIRE_SECONDS)
-    boxes = {name: runner(api, label=name) for name in (
+    boxes = {name: runner(api, label=name, device_id=sha256(name.encode()).hexdigest()) for name in (
         "assigned", "cloud", "delivery", "recent", "boundary", "new", "never-seen")}
-    replacements = {name: runner(api, label=name) for name in boxes}
+    replacements = {name: runner(api, label=name, device_id=sha256(name.encode()).hexdigest()) for name in boxes}
     assign(api, boxes["assigned"], "ops")
     with store.transaction() as c:
         # Even an archived bot's assignment protects its computer.
@@ -133,7 +136,7 @@ def test_retirement_preserves_assigned_cloud_recent_and_never_seen_computers(api
 
 
 def test_an_unreplaced_computer_is_kept_after_days_offline_without_bots(api):  # noqa: F811
-    old = runner(api, label="Weekend Mac")
+    old = runner(api, label="Weekend Mac", device_id=DEVICE_ID)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET created_at=? WHERE id=?", (H.shift(H.now(), hours=-96), old["runner_id"]))
         runner_states.save(c, old["runner_id"], last_seen_at=H.shift(H.now(), hours=-72))
@@ -141,13 +144,26 @@ def test_an_unreplaced_computer_is_kept_after_days_offline_without_bots(api):  #
     assert old["runner_id"] in {r["id"] for r in get(api, "computers")["computers"]}
 
 
-def test_replacement_requires_same_owner_name_platform_newer_enrollment_and_later_contact(api):  # noqa: F811
+@pytest.mark.parametrize("old_device_id,new_device_id", [
+    (DEVICE_ID, sha256(b"acme-device-two").hexdigest()),
+    (None, DEVICE_ID),
+    (DEVICE_ID, None),
+    (None, None),
+], ids=["distinct-devices", "old-unknown", "replacement-unknown", "both-unknown"])
+def test_matching_labels_never_retire_distinct_or_unknown_devices(api, old_device_id, new_device_id):  # noqa: F811
+    old, current = replaced_computer(api, label="MacBook Pro", old_device_id=old_device_id, new_device_id=new_device_id)
+    ready(api, current, [])
+    assert computers.sweep(api.app.state.store, H.now()) == []
+    assert {r["id"] for r in get(api, "computers")["computers"]} == {old["runner_id"], current["runner_id"]}
+
+
+def test_replacement_also_requires_same_owner_name_platform_newer_enrollment_and_later_contact(api):  # noqa: F811
     old, stale = replaced_computer(api)
-    other_owner = runner(api, operator="ben", label="Acme Mac")
-    other_name = runner(api, label="Other Mac")
-    other_platform = runner(api, label="Acme Mac")
-    revoked = runner(api, label="Acme Mac")
-    earlier = runner(api, label="Acme Mac")
+    other_owner = runner(api, operator="ben", label="Acme Mac", device_id=DEVICE_ID)
+    other_name = runner(api, label="Other Mac", device_id=DEVICE_ID)
+    other_platform = runner(api, label="Acme Mac", device_id=DEVICE_ID)
+    revoked = runner(api, label="Acme Mac", device_id=DEVICE_ID)
+    earlier = runner(api, label="Acme Mac", device_id=DEVICE_ID)
     ready(api, earlier, [])
     store = api.app.state.store
     with store.transaction() as c:
@@ -162,6 +178,30 @@ def test_replacement_requires_same_owner_name_platform_newer_enrollment_and_late
     assert computers.sweep(store, H.now()) == [old["runner_id"]]
     assert {other_owner["runner_id"], other_name["runner_id"]} <= {
         r["id"] for r in get(api, "computers")["computers"]}
+
+
+def test_retirement_keeps_a_reported_grok_desktop_sign_in(api):  # noqa: F811
+    old, _ = replaced_computer(api)
+    store, rid = api.app.state.store, old["runner_id"]
+    for signed_in in (True, False):
+        post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {
+            "schema_version": 1, "appdriver": {"apps": {"grok": {"signed_in": signed_in}}}}}, token=old["token"])
+        with store.transaction() as c:
+            runner_states.save(c, rid, last_seen_at=H.shift(H.now(), hours=-72))
+        assert computers.sweep(store, H.now()) == ([] if signed_in else [rid])
+
+
+@pytest.mark.parametrize("field,report", [
+    ("readiness", {"runtimes": {"tool": {"authenticated": True}}}),
+    ("capabilities", {"apps": [{"sign_in": "ready"}]}),
+    ("capabilities", {"apps": [{"signed_in": True}]}),
+])
+def test_retirement_keeps_nested_reported_logins(api, field, report):  # noqa: F811
+    old, _ = replaced_computer(api)
+    store, rid = api.app.state.store, old["runner_id"]
+    with store.transaction() as c:
+        runner_states.save(c, rid, **{field: json.dumps(report)})
+    assert computers.sweep(store, H.now()) == []
 
 
 def test_retirement_keeps_a_sharing_browser_exit_until_sharing_is_off(api):  # noqa: F811

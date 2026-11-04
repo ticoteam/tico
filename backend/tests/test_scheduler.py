@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+import sqlite3
+from unittest.mock import Mock
 
 import pytest
 
@@ -6,6 +8,29 @@ from backend import routines
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.scheduler import Scheduler
 from backend.store import H
+
+
+def test_failed_computer_retirement_records_failure_and_runs_the_remaining_cleanup(api, monkeypatch, caplog):
+    from backend import computers, events, flight, performance, scheduler, screening, support_triage, triggers
+
+    retirement = Mock(side_effect=sqlite3.OperationalError("writer lock timeout"))
+    monkeypatch.setattr(computers, "sweep", retirement)
+    following = []
+    for module, name in [
+        *((scheduler, name) for name in ("sweep_mail", "sweep_deltas", "sweep_tokens", "sweep_events",
+                                       "sweep_credential_uses", "reclaim_free_pages")),
+        (events, "sweep"), (triggers, "sweep"), (flight, "sweep"), (performance, "sweep"),
+        (support_triage, "sweep"), (screening, "sweep"),
+    ]:
+        sweep = Mock(wraps=getattr(module, name))
+        monkeypatch.setattr(module, name, sweep)
+        following.append(sweep)
+    result = Scheduler(api.app.state.store, api.app.state.execution).tick()
+    assert result["failures"] == [{"computer_retirement": "OperationalError"}]
+    retirement.assert_called_once()
+    for sweep in following:
+        sweep.assert_called_once()
+    assert any(record.name == "tico.scheduler" and record.exc_info for record in caplog.records)
 
 
 def test_schedule_survives_restart_without_duplicate_work(api):

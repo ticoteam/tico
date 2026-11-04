@@ -998,6 +998,7 @@ class Enrollment(Contract):
     code: str = Field(min_length=32, max_length=200)
     label: str = Field(min_length=1, max_length=100)
     platform: str = Field(default="", max_length=100)
+    device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class SlashCommand(Contract):
@@ -1430,6 +1431,7 @@ class Heartbeat(Contract):
     repositories: list[RepositoryStatus] | None = None
     version: str = Field(max_length=100)
     platform: str = Field(max_length=100)
+    device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
     capabilities: list[Literal[
