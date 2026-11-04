@@ -123,7 +123,7 @@ async function pageAutomations() {
   if (!AU || !document.body.contains(AU.root)) {
     automationsStop();
     AU = {list: null, groups: [], sets: null, cur: null, id: '', view: 'flow', ed: null, runs: null, menu: null, root: null,
-          maint: null, maintError: '', mtRuns: null, mtOpen: new Set(), ...auOverviewState()};
+          maint: null, maintError: '', mtGen: 0, mtRuns: null, mtOpen: new Set(), ...auOverviewState()};
     const kept = S.lastRead.automations;
     if (kept) {
       Object.assign(AU, {list: kept.list, groups: kept.groups, maint: kept.maint || null}, kept.range === AU.range ? {stats: kept.stats} : {});
@@ -243,19 +243,24 @@ async function auAllAutomations() {
 }
 async function auLoadList(state) {
   // Maintenance is read alongside: its row leads the list (automations-maintenance.js); an older hub has none.
+  const gen = state.mtGen;
   const [found, groups, maint] = await Promise.all([
     auAllAutomations().catch(e => ({error: e})),
     get('/v2/groups').catch(() => ({groups: []})),
     get('/v2/maintenance').catch(() => null),
   ]);
-  const list = found.error ? found : auMaintList(found, maint);
+  const m = state.mtGen === gen ? maint : state.maint;
+  const list = found.error ? found : auMaintList(found, m);
   // A read that lands after the page was left is kept for the next visit when nothing is kept yet.
   if (AU !== state) {
-    if (!list.error && !S.lastRead.automations) S.lastRead.automations = {list, groups: Array.isArray(groups) ? groups : groups.groups || [], maint: auMaintOk(maint) ? maint : null};
+    if (!list.error && !S.lastRead.automations) S.lastRead.automations = {list, groups: Array.isArray(groups) ? groups : groups.groups || [], maint: auMaintOk(m) ? m : null};
     return;
   }
   state.groups = Array.isArray(groups) ? groups : groups.groups || [];
-  if (auMaintOk(maint)) state.maint = maint;
+  if (auMaintOk(m)) {
+    state.maint = m;
+    if (m.live_run_id && !state.mtFollow) auMaintFollow(state);
+  }
   if (list.error) { state.list = []; state.listError = list.error.message; return; }
   state.listError = '';
   state.list = list;

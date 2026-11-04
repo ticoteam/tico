@@ -21,6 +21,11 @@ const until = async (fn, what, ms = 6000) => {
 };
 const idle = page => page.waitForFunction(() => AU && !AU.mtBusy);
 const steps = page => page.locator('.mt-step').evaluateAll(r => r.map(x => x.dataset.mtStep));
+const finish = mt => {
+  const at = new Date().toISOString();
+  Object.assign(mt.live, {finished_at: at, heartbeat_at: at, ok: true, result: mt.live.steps.length ? '1 ran' : 'Nothing ran'});
+  mt.live = null;
+};
 // Screenshots in both themes, with animations stopped.
 async function themed(page, name) {
   const dir = process.env.TICO_UI_SHOTS;
@@ -38,7 +43,7 @@ async function themed(page, name) {
   try {
     // An owner on a computer: the list row, the screen, a save of every control kind, Run now and the run history.
     {
-      const {page, errors, writes} = await openAutomations(browser, {viewport: DESKTOP, maintenance: true, tweak});
+      const {page, errors, writes, db, hold} = await openAutomations(browser, {viewport: DESKTOP, maintenance: true, tweak});
       await page.waitForSelector('tr.au-row[data-row="maintenance"]');
       assert.equal(await page.locator('tr.au-row[data-row="au_sys_cleanup"]').count(), 0, 'a retired mirror is not listed');
       const row = page.locator('tr.au-row[data-row="maintenance"]');
@@ -62,18 +67,38 @@ async function themed(page, name) {
       assert.deepEqual(await page.locator('.mt-step:has([data-mt-old])').evaluateAll(r => r.map(x => x.dataset.mtStep)), ['learn', 'suggest']);
       assert.match(await step('learn').locator('.pill.beta').innerText(), /Beta/);
       assert.equal(await step('learn').locator('[data-mt-on]').isChecked(), false, 'Learn is off by default');
+      assert.equal(await step('suggest').locator('[data-mt-consent]').count(), 0, 'no consent field means unknown');
+      const suggest = db.maint.steps.find(x => x.key === 'suggest');
+      suggest.consent = false;
+      await page.evaluate(() => auMaintLoad(AU));
       assert.equal(await step('suggest').locator('[data-mt-consent]').getAttribute('href'), '#/settings/general/settings-privacy');
+      suggest.consent = true;
+      await page.evaluate(() => auMaintLoad(AU));
+      assert.equal(await step('suggest').locator('[data-mt-consent]').count(), 0, 'consent granted');
+      delete suggest.consent;
       assert.match(await step('find_stuck').locator('.mt-when').innerText(), /Every 6 hours/);
       assert.match(await step('dream').locator('.mt-when').innerText(), /Once a day/);
 
       // The run's schedule: no "Once a week".
       const sched = await page.locator('[data-mt-schedule] option').evaluateAll(o => o.map(x => x.textContent));
       assert.deepEqual(sched, ['Every hour', 'Every 2 hours', 'Every 3 hours', 'Every 6 hours', 'Every 12 hours', 'Once a day']);
+      await step('find_stuck').locator('[data-mt-open]').click();
+      await page.waitForSelector('.mt-step[data-mt-step="find_stuck"] [data-mt-bots]');
+      const release = hold('maintenance');
       await page.selectOption('[data-mt-schedule]', '3h');
       await until(() => writes.length === 1, 'the schedule save');
       assert.deepEqual(writes.at(-1), {method: 'PATCH', path: '/api/v2/maintenance', body: {schedule: '3h'}});
+      assert.equal(await page.locator('[data-mt-pause]').isDisabled(), true);
+      assert.equal(await page.locator('.mt select:not([disabled]),.mt input:not([disabled])').count(), 0, 'busy disables settings');
+      // A queued change redraws the saved value and sends nothing.
+      await page.locator('[data-mt-schedule]').evaluate(t => { t.value = '6h'; t.dispatchEvent(new Event('change', {bubbles: true})); });
+      assert.equal(await page.locator('[data-mt-schedule]').inputValue(), 'hourly');
+      assert.equal(await page.locator('[data-mt-schedule]').isDisabled(), true);
+      assert.equal(writes.length, 1);
+      release();
       await idle(page);
       assert.equal(await page.locator('[data-mt-schedule]').inputValue(), '3h');
+      await step('find_stuck').locator('[data-mt-open]').click();
 
       // A switch.
       await step('check_health').locator('[data-mt-on]').click();
@@ -165,6 +190,7 @@ async function themed(page, name) {
       assert.deepEqual(writes.at(-1), {method: 'POST', path: '/api/v2/maintenance/run', body: {}});
       await page.waitForSelector('[data-mt-now][disabled]');
       assert.match(await page.locator('[data-mt-now]').innerText(), /Running/);
+      finish(db.maint);
       await page.waitForSelector('[data-mt-now]:not([disabled])', {timeout: 8000});
       assert.equal(await page.locator('[data-mt-now]').innerText(), 'Run now');
 
@@ -194,6 +220,36 @@ async function themed(page, name) {
       await page.locator('.au-crumb .au-up').click();
       await page.waitForSelector('tr.au-row[data-row="maintenance"]');
       assert.match(await page.locator('tr.au-row[data-row="maintenance"]').innerText(), /Every 3 hours/);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
+    // Opening a scheduled run follows it to the end, keeping older rows, expanded steps and the scroll position.
+    {
+      const {page, errors, writes, db} = await openAutomations(browser, {viewport: DESKTOP, maintenance: true});
+      await page.waitForSelector('tr.au-row[data-row="maintenance"]');
+      const at = new Date().toISOString();
+      db.maint.live = {id: 'mrun_live', occurrence_key: 'schedule:' + at, trigger: 'schedule', step: null,
+        started_at: at, finished_at: null, heartbeat_at: at, ok: null, result: '', cost_usd: 0, steps: []};
+      db.maint.runs.unshift(db.maint.live);
+      await page.locator('tr.au-row[data-row="maintenance"] a').click();
+      await page.waitForSelector('[data-mt-now][disabled]');
+      assert.match(await page.locator('[data-mt-meta]').innerText(), /Running/);
+      await page.getByRole('tab', {name: 'Runs'}).click();
+      await page.waitForSelector('tr.au-rr[data-mt-run="mrun_live"] .au-dot.wait');
+      await page.locator('tr.au-rr[data-mt-run="mrun_98"]').click();
+      await page.locator('[data-mt-more]').click();
+      await until(async () => await page.locator('tr.au-rr').count() === 31, 'older runs');
+      await page.locator('.au-pane').evaluate(p => { p.scrollTop = 80; });
+      finish(db.maint);
+      await page.waitForSelector('[data-mt-now]:not([disabled])', {timeout: 8000});
+      await page.waitForSelector('tr.au-rr[data-mt-run="mrun_live"] .au-dot.ok');
+      assert.equal(await page.locator('tr.au-rr').count(), 31);
+      assert.equal(await page.locator('tr.au-rr.open[data-mt-run="mrun_98"]').count(), 1);
+      assert.equal(await page.locator('tr.au-rx .au-sl').count(), 8);
+      assert.equal(await page.locator('[data-mt-more]').count(), 0);
+      assert.equal(await page.locator('.au-pane').evaluate(p => p.scrollTop), 80);
+      assert.deepEqual(writes, []);
       assert.deepEqual(errors, []);
       await page.close();
     }

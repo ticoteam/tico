@@ -53,15 +53,17 @@ function auMaintAdopt(state, m) {
   if (!auMaintOk(m) || AU !== state) return;
   state.maint = m;
   if (state.list) state.list = auMaintList(state.list, m);
+  if (m.live_run_id && !state.mtFollow) auMaintFollow(state);
   if (state.id === AU_MAINT) { auDrawHead(); auDrawPane(); } else auDrawList();
 }
 async function auMaintLoad(state) {
+  const gen = state.mtGen;
   try {
     const m = await get('/v2/maintenance');
-    if (AU !== state) return;
+    if (AU !== state || state.mtGen !== gen) return;
     state.maintError = auMaintOk(m) ? '' : 'Maintenance needs a newer hub';
     if (auMaintOk(m)) auMaintAdopt(state, m);
-  } catch (e) { if (AU === state) state.maintError = [403, 404].includes(e.status) ? 'Maintenance needs a newer hub' : e.message; }
+  } catch (e) { if (AU === state && state.mtGen === gen) state.maintError = [403, 404].includes(e.status) ? 'Maintenance needs a newer hub' : e.message; }
 }
 
 // The list's runs, failures and cost for the range, from its own run log: the pages back to the range's start.
@@ -69,7 +71,7 @@ async function auMaintStats(range, n) {
   const span = AU_RANGE_SECONDS[range] * 1000, now = Date.now(), since = now - span, width = span / n;
   const out = {id: AU_MAINT, runs: 0, failed: 0, cost: 0, buckets: Array.from({length: n}, () => ({ok: 0, failed: 0}))};
   let before = '';
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 30; i++) {
     const page = await get('/v2/maintenance/runs?limit=50' + (before ? '&before=' + encodeURIComponent(before) : ''));
     for (const r of page.runs || []) {
       const t = new Date(r.started_at).getTime();
@@ -126,7 +128,7 @@ function auMaintSettingsHTML(m) {
     const on = st.enabled, isOpen = open.has(st.key), always = st.key === 'collect';
     const pills = (AU_MAINT_BETA.has(st.key) ? '<span class="pill beta">Beta</span>' : '')
       + (st.old_timer ? '<span class="pill" data-mt-old>On its old timer</span>' : '')
-      + (st.key === 'suggest' && st.consent !== true ? `<a class="pill waiting" href="${AU_MAINT_PRIVACY}" data-mt-consent>Needs Privacy consent</a>` : '');
+      + (st.key === 'suggest' && st.consent === false ? `<a class="pill waiting" href="${AU_MAINT_PRIVACY}" data-mt-consent>Needs Privacy consent</a>` : '');
     return `<li class="mt-step${on ? '' : ' off'}${isOpen ? ' open' : ''}" data-mt-step="${esc(st.key)}">
       <div class="mt-row">
         <span class="mt-n">${i + 1}</span>
@@ -209,8 +211,14 @@ async function auMaintRunsLoad(state, more = false) {
   try {
     const page = await get(`/v2/maintenance/runs?limit=${AU_MAINT_RUNS_PAGE}${more ? '&before=' + encodeURIComponent(r.next) : ''}`);
     if (state.mtRuns !== r) return;
-    r.rows = more ? r.rows.concat(page.runs || []) : page.runs || [];
-    r.next = page.next || null;
+    const rows = page.runs || [];
+    if (!more && r.rows.length) {
+      const fresh = new Map(rows.map(x => [x.id, x]));
+      r.rows = [...rows.filter(x => !r.rows.some(y => y.id === x.id)), ...r.rows.map(x => fresh.get(x.id) || x)];
+    } else {
+      r.rows = more ? r.rows.concat(rows) : rows;
+      r.next = page.next || null;
+    }
   } catch (e) { r.error = e.message; }
   r.loading = false;
   if (AU === state && state.id === AU_MAINT && state.view === 'runs') auDrawPane();
@@ -221,7 +229,8 @@ async function auMaintRunsLoad(state, more = false) {
 async function auMaintSave(body) {
   const state = AU;
   if (state.mtBusy) return;
-  state.mtBusy = true;
+  state.mtBusy = true; state.mtGen++;
+  auDrawHead(); auDrawPane();
   try {
     const m = await patch('/v2/maintenance', body);
     state.mtBusy = false;
@@ -239,26 +248,27 @@ const auMaintStepSave = (key, change) => auMaintSave({steps: [{key, ...change}]}
 async function auMaintRunNow() {
   const state = AU;
   if (state.mtStarting || state.maint?.live_run_id) return;
-  state.mtStarting = true; auDrawHead();
+  state.mtStarting = true; state.mtGen++; auDrawHead();
   try {
     const out = await post('/v2/maintenance/run', {});
     toast(out.started === false ? 'Already running' : 'Running');
     if (AU !== state) return;
     state.mtStarting = false;
     if (state.maint && out.run && !out.run.finished_at) state.maint = {...state.maint, live_run_id: out.run.id};
-    state.mtRuns = null;
     if (state.id === AU_MAINT) { auDrawHead(); if (state.view === 'runs') void auMaintRunsLoad(state); }
     auMaintFollow(state);
   } catch (e) { toast(e.message, true); if (AU === state) { state.mtStarting = false; auDrawHead(); } }
 }
 function auMaintFollow(state, tries = 0) {
   clearTimeout(state.mtFollow);
+  state.mtFollow = null;
   if (AU !== state || tries > 40) return;
   state.mtFollow = setTimeout(async () => {
     if (AU !== state) return;
     await auMaintLoad(state);
+    state.mtFollow = null;
     if (AU !== state) return;
-    if (state.id === AU_MAINT && state.view === 'runs') { state.mtRuns = null; void auMaintRunsLoad(state); }
+    if (state.id === AU_MAINT && state.view === 'runs') void auMaintRunsLoad(state);
     if (state.maint?.live_run_id) auMaintFollow(state, tries + 1);
   }, 3000);
 }
@@ -286,6 +296,7 @@ function auMaintClick(t) {
 function auMaintChange(e) {
   const t = e.target;
   if (!AU || AU.id !== AU_MAINT || !t.closest?.('.au-hd,.au-pane')) return;
+  if (AU.mtBusy) { auDrawHead(); auDrawPane(); return; }
   const d = t.dataset, step = k => auMaintStep(k) || {};
   if ('mtPause' in d) {
     if (!t.checked && !confirm('Pause Maintenance? No step runs until it is back on.')) { t.checked = true; return; }

@@ -165,7 +165,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
   const db = {
     list: fx.automations.map(a => ({...sortFlow(a), can_edit: owner && a.can_edit !== false, ...(a.can_pause != null ? {can_pause: owner && a.can_pause} : {})})),
     versions: {}, runs: {au_inbox: inboxRuns(), ...(system ? {[SYSTEM.id]: systemRuns()} : {})}, conv: null, messages: [],
-    held: {},   // id → {release, fail}: that automation's GET waits for release(), then answers (or fails)
+    held: {},   // id → {wait, fail}: an automation's GET or Maintenance's PATCH waits for release()
   };
   for (const a of db.list) {
     const old = fx.versions[a.id] || [{n: a.version, actor: a.owner_id, at: '2026-10-27T15:00:00Z'}];
@@ -179,12 +179,11 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
   }
   if (maintenance) db.maint = {settings: {schedule: 'hourly', paused: false, monthly_cap_usd: null}, cap_env: 50, steps: maintSteps(),
     runs: maintRuns(), live: null};
-  // GET /api/v2/maintenance: a live run started here ends by the next read, as a short one does.
+  // GET only reads; the test ends a live run as the backend's worker does.
   const maintListing = () => {
     const mt = db.maint;
-    if (mt.live) { Object.assign(mt.live, {finished_at: new Date().toISOString(), ok: true, result: '2 ran, 6 skipped'}); mt.live = null; }
     return clone({settings: {...mt.settings, monthly_cap_usd_in_effect: mt.settings.monthly_cap_usd ?? mt.cap_env}, steps: mt.steps,
-      last_run: mt.runs[0] || null, live_run_id: null, can_change: owner,
+      last_run: mt.runs[0] || null, live_run_id: mt.live?.id || null, can_change: owner,
       next_run_at: mt.settings.paused ? null : new Date(Date.now() + 1800000).toISOString()});
   };
   const writes = [];
@@ -241,6 +240,8 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
       if (method !== 'GET' && !owner) return refuse(403, 'forbidden', 'Only an owner or an admin changes Maintenance');
       if (p === '/api/v2/maintenance' && method === 'GET') return json(maintListing());
       if (p === '/api/v2/maintenance' && method === 'PATCH') {
+        const hold = db.held.maintenance;
+        if (hold) { await hold.wait; if (hold.fail) return refuse(500, 'boom', 'The hub stalled'); }
         // backend/maintenance.py save_settings and save_step's refusals.
         if (body.schedule != null && !['hourly', '2h', '3h', '6h', '12h', 'daily'].includes(body.schedule)) return refuse(422, 'invalid', 'No such schedule');
         for (const ch of body.steps || []) {
@@ -428,7 +429,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     return json(unrouted(p));
   });
   await page.goto('http://tico-ui.test/' + hash);
-  // Hold an automation's GET until release() (fail: then answer 500), to land a slow answer late.
+  // Hold an automation's GET or Maintenance's PATCH until release() (fail: then answer 500).
   const hold = (id, fail = false) => { let release; const wait = new Promise(r => { release = r; }); db.held[id] = {wait, fail}; return () => { delete db.held[id]; release(); }; };
   return {page, errors, writes, db, me, hold};
 }
