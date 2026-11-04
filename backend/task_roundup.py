@@ -1,8 +1,8 @@
 """The task roundup (Settings > Routines, "Task roundup"): each run gives each active bot at most one wake, with one grouped
 list of the tasks it needs to look at. Plain code: no model is called and no BotOps diagnostic is filed. It is the one
 place Tico tells a bot about its tasks on a schedule: the per-task wakes of the stall watcher, the check-backs, the late
-notices, the backlog warnings, the exceptions wake, the restate asks, the still-needed batch and the assigned-start recovery
-are all lines here now.
+notices, the backlog warnings, the exceptions lines, the restate asks, the still-needed batch and the assigned-start
+recovery are all lines here now.
 Its schedule is a setting; the default is three times a day, at 6am, noon and 6pm company time.
 
 A bot's list has these lines, in this order, MAX_LINES in all (the rest are counted), one line per task:
