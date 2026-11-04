@@ -8530,6 +8530,8 @@ def create_app(settings=None):
     finance_vault.use_vault(app.state.vault)      # never one an earlier app left behind (the scheduler may be off)
     from .google_workspace import install as install_google_workspace
     install_google_workspace(app, store)
+    from .mailboxes import install as install_mailboxes
+    install_mailboxes(app, store)
     install_credential_cards(app, store, app.state.vault, auth, BOTOPS, delegated_identity, settings_admin._manager)
     from . import company_storage
     company_storage.install(app, store, auth)

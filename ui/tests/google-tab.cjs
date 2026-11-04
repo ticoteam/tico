@@ -1,10 +1,11 @@
-// Offline browser regression: Settings > Google (ui/google-connect.js) over the contract's GET /v2/google, with a fake
-// hub (ui/tests/support/google-fake.cjs). An admin with nothing set up is asked one question (one account at a time or
-// the whole Workspace) and sees only the path picked; a path already set up skips the question. Each path's setup is a
-// prompt for the person's own agent by default (the Workspace one makes its setup code only on Make prompt), or the
-// steps by hand: the Whole Workspace key in three steps, the check polling on a 20 s timer for 10 minutes (Playwright's
-// fake clock), disconnect and replace confirming in the page. One account at a time lists the team with a link to copy,
-// and sends nothing. A member sees their own account only, and a phone width has no sideways scroll.
+// Offline browser regression: the Connection card of Settings > Mailboxes (ui/google-connect.js) over the contract's
+// GET /v2/google, with a fake hub (ui/tests/support/google-fake.cjs). An admin sees the two ways (Whole company, Each
+// person signs in) as one toggle: neither picked while nothing is set up, the way set up picked otherwise, one way shown
+// at a time. Each way's setup is a prompt for the person's own agent by default (the Workspace one makes its setup code
+// only on Make prompt), or the steps by hand: the Whole company key in three steps, the check polling on a 20 s timer for
+// 10 minutes (Playwright's fake clock), disconnect and replace confirming in the page. A member sees Connect Google for
+// their own mailbox only (nothing when the company's key covers it), and a phone width has no sideways scroll.
+// The Mailboxes table and What Tico may do are ui/tests/mailboxes.cjs.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -28,8 +29,9 @@ const SHELL = {
   '/api/v2/me/tokens': {tokens: []},
 };
 
-// Opens Settings > Google on a fresh page. `clock` installs Playwright's fake timers before the page loads.
-async function open(browser, fake, {width = 1440, clock = false} = {}) {
+// Opens Settings > Mailboxes on a fresh page. `clock` installs Playwright's fake timers before the page loads.
+const READY = '#set-google [data-google-mode], #set-google .google-card';
+async function open(browser, fake, {width = 1440, clock = false, ready = READY} = {}) {
   const page = await browser.newPage({viewport: {width, height: 900}, serviceWorkers: 'block'});
   const seen = {errors: [], dialogs: 0, sent: []};
   page.on('pageerror', error => seen.errors.push(error.message));
@@ -61,12 +63,13 @@ async function open(browser, fake, {width = 1440, clock = false} = {}) {
     return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/settings');
-  await page.locator('[data-settings-tab=inbox]').click();
-  await page.locator('#set-google .google-card').first().waitFor();
+  await page.locator('[data-settings-tab=mailboxes]').click();
+  if (ready) await page.locator(ready).first().waitFor();
+  else await page.waitForFunction(() => document.querySelector('#set-google')?._googleState);
   return {page, seen};
 }
 
-// The admin's pick when nothing is set up yet, then (optionally) the by-hand steps instead of the agent prompt.
+// The admin's pick of a way, then (optionally) the by-hand steps instead of the agent prompt.
 async function pick(page, path, {self = false} = {}) {
   await page.locator(`[data-google-pick=${path}]`).click();
   await page.locator(`[data-google-card=${path === 'workspace' ? 'workspace' : 'account'}]`).waitFor();
@@ -77,7 +80,7 @@ async function bySelf(page, path) {
   await page.locator(`[data-google-how=self][data-google-path=${path}][aria-pressed=true]`).waitFor();
 }
 const cards = page => page.$$eval('#set-google [data-google-card]', els => els.map(el => el.dataset.googleCard));
-const LINK = 'https://tico-ui.test/#/settings/google';
+const LINK = 'https://tico-ui.test/#/settings/mailboxes';
 
 const until = async (check, what, ms = 8000) => {
   const end = Date.now() + ms;
@@ -103,29 +106,27 @@ const KEY = {type: 'service_account', private_key_id: 'KEYMARK-7731', client_ema
 const keyFile = {name: 'key.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(KEY))};
 
 const scenarios = {
-  'an admin with nothing set up is asked how, and each pick shows only its path': async browser => {
+  'an admin with nothing set up sees both ways with neither picked, and each pick shows only its way': async browser => {
     const fake = googleFake();
     const {page, seen} = await open(browser, fake);
-    assert.equal((await page.locator('[data-settings-tab=inbox]').innerText()).trim(), 'Google');
-    assert.equal((await page.locator('#settings-inbox h2').innerText()).trim(), 'Google');
-    assert.match(await page.locator('[data-google-choose]').innerText(), /How do you want to connect Google\?/);
-    assert.equal(await page.locator('[data-google-pick]').count(), 2);
-    assert.deepEqual(await cards(page), [], 'no path shows before the pick');
+    assert.equal((await page.locator('[data-settings-tab=mailboxes]').innerText()).trim(), 'Mailboxes');
+    const modes = () => page.$$eval('[data-google-pick]', els => els.map(el => [el.innerText.trim(), el.getAttribute('aria-checked')]));
+    assert.deepEqual(await modes(), [['Whole company', 'false'], ['Each person signs in', 'false']]);
+    assert.deepEqual(await cards(page), [], 'no way shows before the pick');
     await pick(page, 'accounts');
     assert.deepEqual(await cards(page), ['account']);
-    assert.equal(await page.locator('[data-google-choose]').count(), 0);
-    await page.locator('[data-google-switch]', {hasText: 'Use the other way'}).click();
-    await page.locator('[data-google-card=workspace]').waitFor();
+    assert.equal(await page.locator('[data-google-pick=accounts]').getAttribute('aria-checked'), 'true');
+    await pick(page, 'workspace');
     assert.deepEqual(await cards(page), ['workspace']);
     assert.equal(await page.locator('[data-ws-step=create]').count(), 1);
-    await page.locator('[data-google-switch]').click();
-    await page.locator('[data-google-card=account]').waitFor();
+    assert.equal(await page.locator('#set-google h3').count(), 0, 'no heading over a way');
+    await pick(page, 'accounts');
     assert.deepEqual(await cards(page), ['account']);
-    assert.equal(writesTo(fake, '/api/v2/google/workspace/setup-code').length, 0, 'picking and switching make no code');
+    assert.equal(writesTo(fake, '/api/v2/google/workspace/setup-code').length, 0, 'picking makes no code');
     assert.deepEqual(seen.errors, []);
   },
 
-  'one account at a time: the agent prompt is the default and names the redirect URI and this tab': async browser => {
+  'Each person signs in: the agent prompt is the default and names the redirect URI and this tab': async browser => {
     const fake = googleFake();
     const {page, seen} = await open(browser, fake);
     await pick(page, 'accounts');
@@ -142,7 +143,7 @@ const scenarios = {
     await bySelf(page, 'accounts');
     await page.locator('[data-oauth-form]').waitFor();
     assert.equal(await page.locator('[data-google-prompt]').count(), 0);
-    assert.equal(fake.peopleReads, 0, 'no team list before Google sign-in is set up');
+    assert.equal(fake.peopleReads, 0, 'no team list: everyone else is on the Mailboxes table');
     assert.deepEqual(seen.errors, []);
   },
 
@@ -211,87 +212,53 @@ const scenarios = {
     assert.deepEqual(seen.errors, []);
   },
 
-  'What Tico may do: once above both ways, all on by default, each box saved and named in the prompt': async browser => {
-    let fake = googleFake();
-    let {page, seen} = await open(browser, fake);
-    assert.equal(await page.locator('[data-google-may-card]').count(), 0, 'the question comes first, alone');
+  'the setup prompt names what Tico may do, and the boxes are not in this card': async browser => {
+    const fake = googleFake();
+    fake.state.permissions = {organize_mail: true, send_mail: true, change_calendar: false};
+    const {page, seen} = await open(browser, fake);
     await pick(page, 'accounts');
-    const asks = /Tico will ask Google for: read mail and calendar, organize mail, send mail, create and change calendar events\./;
-    assert.match(await page.locator('[data-google-prompt=accounts] textarea').inputValue(), asks);
-    const boxes = () => page.$$eval('[data-google-may]', els => Object.fromEntries(els.map(el => [el.dataset.googleMay, el.checked])));
-    assert.deepEqual(await boxes(), {organize_mail: true, send_mail: true, change_calendar: true});
-    assert.equal(await page.locator('[data-google-may-read] input').count(), 0, 'reading is always on, not a box');
-    assert.match(await page.locator('[data-google-may-card]').innerText(), /Mail sending/);
-    await page.locator('[data-google-may=change_calendar]').uncheck();
-    await until(() => writesTo(fake, '/api/v2/google/permissions', 'PUT').length === 1, 'the box is saved');
-    assert.deepEqual(writesTo(fake, '/api/v2/google/permissions', 'PUT')[0].body,
-      {organize_mail: true, send_mail: true, change_calendar: false});
-    await page.waitForFunction(() => /send mail\.$/m.test(document.querySelector('[data-google-prompt=accounts] textarea')?.value || ''));
-    assert.deepEqual(seen.errors, []);
-    await page.close();
-    // Both ways set up: the setting shows once, above both cards, as saved.
-    fake.state.workspace = row('connected');
-    fake.state.oauth = {...fake.state.oauth, configured: true, source: 'settings', client_id: 'acme-client-id'};
-    ({page, seen} = await open(browser, fake));
-    const order = await page.$$eval('#set-google [data-google-may-card], #set-google [data-google-card]',
-      els => els.map(el => el.dataset.googleCard || 'may'));
-    assert.deepEqual(order, ['may', 'workspace', 'account']);
-    assert.deepEqual(await boxes(), {organize_mail: true, send_mail: true, change_calendar: false});
-    await page.locator('[data-google-may=send_mail]').uncheck();
-    await until(() => writesTo(fake, '/api/v2/google/permissions', 'PUT').length === 2, 'the second box is saved');
-    assert.deepEqual(fake.state.permissions, {organize_mail: true, send_mail: false, change_calendar: false});
-    await page.locator('[data-google-may=send_mail]').waitFor();
-    assert.deepEqual(await boxes(), {organize_mail: true, send_mail: false, change_calendar: false});
-    assert.deepEqual(seen.errors, []);
-    await page.close();
-    // A member sees only their own account, never the company's setting.
-    fake = googleFake();
-    fake.state.can_admin = false;
-    ({page, seen} = await open(browser, fake));
-    assert.equal(await page.locator('[data-google-may-card]').count(), 0);
+    assert.match(await page.locator('[data-google-prompt=accounts] textarea').inputValue(),
+      /Tico will ask Google for: read mail and calendar, organize mail, send mail\./);
+    assert.match(await page.locator('[data-google-prompt=accounts] textarea').inputValue(), /Each person signs in > Set it up myself/);
+    assert.equal(await page.locator('#set-google [data-google-may], #set-google [data-google-may-card]').count(), 0);
     assert.deepEqual(seen.errors, []);
   },
 
-  'a path already set up skips the question, and both show the Workspace first': async browser => {
+  'the way already set up is picked; with both set up, the Workspace': async browser => {
     const fake = googleFake();
     fake.state.workspace = row('connected');
     let {page, seen} = await open(browser, fake);
-    assert.equal(await page.locator('[data-google-choose]').count(), 0);
+    assert.equal(await page.locator('[data-google-pick=workspace]').getAttribute('aria-checked'), 'true');
     assert.deepEqual(await cards(page), ['workspace']);
-    await page.locator('[data-google-switch]', {hasText: 'Also set up One account at a time'}).click();
-    await page.locator('[data-google-card=account]').waitFor();
-    assert.deepEqual(await cards(page), ['workspace', 'account']);
+    await pick(page, 'accounts');
+    assert.deepEqual(await cards(page), ['account'], 'one way at a time');
     assert.deepEqual(seen.errors, []);
     await page.close();
+    fake.state.workspace = null;
     fake.state.oauth = {...fake.state.oauth, configured: true, source: 'env', client_id: 'acme-client-id'};
     ({page, seen} = await open(browser, fake));
-    assert.equal(await page.locator('[data-google-choose]').count(), 0);
-    assert.deepEqual(await cards(page), ['workspace', 'account']);
-    assert.equal(await page.locator('[data-google-switch]').count(), 0);
+    assert.equal(await page.locator('[data-google-pick=accounts]').getAttribute('aria-checked'), 'true');
+    assert.deepEqual(await cards(page), ['account']);
     assert.match(await page.locator('[data-acct-step=signin]').innerText(), /Done\. Set on the server\./);
+    assert.equal(await page.locator('[data-acct-step=team], .google-team').count(), 0, 'no team list');
+    await page.close();
+    fake.state.workspace = row('connected');
+    ({page, seen} = await open(browser, fake));
+    assert.equal(await page.locator('[data-google-pick=workspace]').getAttribute('aria-checked'), 'true');
+    assert.deepEqual(await cards(page), ['workspace']);
     assert.deepEqual(seen.errors, []);
   },
 
-  'Your team: each person\'s state, and Copy link copies this tab\'s link and sends nothing': async browser => {
+  'a connected key reads Connected · checked, and Check connection checks it': async browser => {
     const fake = googleFake();
-    fake.state.oauth = {...fake.state.oauth, configured: true, source: 'settings', client_id: 'acme-client-id'};
+    fake.state.workspace = row('connected', {checked_at: new Date(Date.now() - 120000).toISOString()});
+    fake.checks = ['ok'];
     const {page, seen} = await open(browser, fake);
-    await page.locator('.google-team li').first().waitFor();
-    assert.equal(await page.locator('[data-google-person=ana]').count(), 0, 'you are step 2, not the team list');
-    const status = id => page.locator(`[data-google-person=${id}] .google-team-status`).innerText();
-    assert.equal(await status('ben'), 'Not connected');
-    assert.equal(await status('cara'), 'Covered by Workspace');
-    assert.equal(await status('dan'), 'Connecting');
-    assert.equal(await page.locator('[data-google-person=ben] [data-copy-link]').count(), 1);
-    assert.equal(await page.locator('[data-google-person=cara] [data-copy-link]').count(), 0);
-    assert.equal(await page.locator('[data-google-person=dan] [data-copy-link]').count(), 0);
-    const before = seen.sent.length;
-    await page.locator('[data-google-person=ben] [data-copy-link]').click();
-    await page.waitForFunction(link => window.__copied.at(-1) === link, LINK);
-    await page.waitForTimeout(300);
-    const outgoing = /message|thread|mail|email|invite|notif|google|slack|sms/;
-    assert.deepEqual(seen.sent.slice(before).filter(sent => outgoing.test(sent)), [], 'copying a link sends nothing');
-    assert.deepEqual(fake.writes, [], 'nothing is written to anyone');
+    assert.match(await page.locator('[data-ws-connected]').innerText(), /Connected · checked 2m ago/);
+    assert.equal(await page.locator('.google-facts').count(), 0, 'no domain or client ID facts');
+    await page.locator('[data-ws-recheck]').click();
+    await until(() => writesTo(fake, '/api/v2/google/workspace/check').length === 1, 'the check');
+    await page.locator('[data-ws-status]', {hasText: 'Connected · checked'}).waitFor();
     assert.deepEqual(seen.errors, []);
   },
 
@@ -447,23 +414,29 @@ const scenarios = {
     assert.deepEqual(seen.errors, []);
   },
 
-  'a member sees only their own account, never the question or the setup': async browser => {
+  'a member sees only their own account, never the ways or the setup': async browser => {
     const fake = googleFake();
     fake.state.can_admin = false;
     let {page, seen} = await open(browser, fake);
-    assert.equal(await page.locator('[data-google-choose]').count(), 0);
+    assert.equal(await page.locator('[data-google-mode]').count(), 0);
     assert.equal(await page.locator('[data-google-card=workspace]').count(), 0);
-    assert.equal(await page.locator('[data-google-how], [data-oauth-setup], [data-google-switch]').count(), 0);
-    assert.match(await page.locator('[data-google-card=account]').innerText(), /Ask an admin to set up Google in Settings > Google\./);
+    assert.equal(await page.locator('[data-google-how], [data-oauth-setup]').count(), 0);
+    assert.match(await page.locator('[data-google-card=account]').innerText(), /Ask an admin to connect Google in Settings > Mailboxes\./);
     assert.deepEqual(seen.errors, []);
     await page.close();
-    // With Google sign-in set up: Connect your account, and no team list.
+    // With Google sign-in set up: their own Connect Google, no heading, and no team list.
     fake.state.oauth = {...fake.state.oauth, configured: true, source: 'settings', client_id: 'acme-client-id'};
     ({page, seen} = await open(browser, fake));
-    assert.equal((await page.locator('[data-google-card=account] h3').innerText()).trim(), 'Connect your account');
+    assert.equal(await page.locator('#set-google h3').count(), 0);
     assert.equal(await page.locator('[data-google-disconnect]').count(), 1);
-    assert.equal(await page.locator('.google-team, [data-oauth-remove], [data-google-choose]').count(), 0);
+    assert.equal(await page.locator('.google-team, [data-oauth-remove], [data-google-mode]').count(), 0);
     assert.equal(fake.peopleReads, 0, 'a member never reads the team list');
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+    // Covered by the company's key: the card draws nothing (the Mailboxes page says it is connected by the company).
+    fake.state.me = {mailbox: 'ana@acme.example', covered_by_workspace: true};
+    ({page, seen} = await open(browser, fake, {ready: null}));
+    assert.equal((await page.locator('#set-google').innerHTML()).trim(), '');
     assert.deepEqual(seen.errors, []);
   },
 
@@ -488,10 +461,9 @@ const scenarios = {
     await until(() => writesTo(fake, '/api/v2/google/oauth-client', 'PUT').length === 1, 'the OAuth client save');
     assert.equal(writesTo(fake, '/api/v2/google/oauth-client', 'PUT')[0].body.client_id, 'acme-client-id');
     await page.locator('[data-oauth-form]').waitFor({state: 'detached'});
-    // Step 1 is done; steps 2 and 3 fill in.
+    // Step 1 is done; step 2 fills in.
     await page.locator('[data-acct-step=signin] [data-oauth-remove]').waitFor();
     await page.locator('[data-acct-step=you] [data-google-disconnect]').waitFor();
-    await page.locator('.google-team li').first().waitFor();
     assert.deepEqual(seen.errors, []);
   },
 
@@ -705,21 +677,6 @@ const scenarios = {
     assert.deepEqual(seen.errors, []);
   },
 
-  'Your team: Show more reads the next page after the last person shown': async browser => {
-    const fake = googleFake();
-    fake.state.oauth = {...fake.state.oauth, configured: true, source: 'settings', client_id: 'acme-client-id'};
-    fake.peoplePage = 2;
-    const {page, seen} = await open(browser, fake);
-    await page.locator('.google-team li').first().waitFor();
-    assert.deepEqual(await page.$$eval('[data-google-person]', els => els.map(el => el.dataset.googlePerson)), ['ben']);
-    await page.locator('[data-google-people-more]').click();
-    await page.locator('[data-google-person=dan]').waitFor();
-    assert.deepEqual(await page.$$eval('[data-google-person]', els => els.map(el => el.dataset.googlePerson)), ['ben', 'cara', 'dan']);
-    assert.equal(await page.locator('[data-google-people-more]').count(), 0, 'no more after the last page');
-    assert.equal(fake.peopleReads, 2);
-    assert.deepEqual(seen.errors, []);
-  },
-
   'a Workspace authorized before the read-only scopes redoes step 2 and Check on the same key': async browser => {
     const fake = googleFake();
     fake.state.workspace = row('connected', {narrowable: false});
@@ -743,7 +700,7 @@ const scenarios = {
     await page.close();
     fake.state.workspace = row('connected', {narrowable: true});
     ({page, seen} = await open(browser, fake));
-    await page.locator('[data-google-may-card]').waitFor();
+    await page.locator('[data-ws-connected]').waitFor();
     assert.equal(await page.locator('[data-google-may-narrow]').count(), 0);
     assert.deepEqual(seen.errors, []);
   },

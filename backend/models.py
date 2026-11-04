@@ -3136,3 +3136,22 @@ class GrowthSettingsUpdate(Contract):
     unit: str | None = Field(default=None, min_length=1, max_length=40)
     revenue_month: float | None = Field(default=None, ge=0)
     margin_pct: float | None = Field(default=None, ge=0, le=100)
+
+
+# Settings > Mailboxes (backend/mailboxes.py): connect a mailbox, and who can use it.
+MailboxLevel = Literal["read", "read_write"]
+
+
+class MailboxCreate(Contract):
+    address: Annotated[str, Field(min_length=3, max_length=254)]
+    shared: StrictBool = False
+
+
+class MailboxAccessCreate(Contract):
+    grantee_type: Literal["person", "bot"]
+    grantee_id: ID
+    level: MailboxLevel
+
+
+class MailboxAccessUpdate(Contract):
+    level: MailboxLevel
