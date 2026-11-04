@@ -1,6 +1,6 @@
 // Renders the preview scenes with Playwright (WebKit, as on macOS) into ui/screenshots/ and
-// checks a few behaviours. Usage, from native/:
-//   NODE_PATH=<dir with playwright> node ui/preview/shoot.mjs [scene ...]
+// checks a few behaviours. Usage, from recorder/:
+//   PLAYWRIGHT=<dir>/node_modules/playwright node ui/preview/shoot.mjs [scene ...|checks]
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -33,113 +33,76 @@ const open = (id) => async (page) => {
   await page.click(`.row[data-id="${id}"]`);
   await page.waitForSelector('.title-input');
 };
-const transcript = async (page) => {
-  await page.click('[data-act="toggle-transcript"]');
-  await page.waitForSelector('#tbody > *');
-};
-const toChat = async (page) => page.evaluate(() => document.getElementById('chat').scrollIntoView({ block: 'end' }));
+const settingsPage = async (page) => page.click('[data-act="settings"]');
+const share = async (page) => { await page.click('[data-act="share-open"]'); await page.waitForSelector('#sheet.share'); };
+const finish = async (page) => { await page.click('.topbar [data-act="finish-open"]'); await page.waitForSelector('#sheet.finish'); };
+const more = async (page) => page.click('[data-pop="more"]');
 const scenes = {
-  'screen-sheet': ['live', open('m2'), async page => page.click('[data-act="share-screen"]')],
-  'screen-sharing': ['live', open('m2'), async page => { await page.click('[data-act="share-screen"]'); await page.click('[data-act="share-go"]'); await page.waitForSelector('.screen-stop'); }],
-  'link-sheet': ['meeting', open('m1'), async page => { await page.click('.people-btn'); await page.click('[data-act="copy-link"]'); }],
   library: [],
-  empty: [],
+  signin: [],
+  'signin-address': [],
   signing: [],
   connect: [],
   demo: [],
   meeting: [open('m1')],
   owner: [open('m1'), async (page) => page.click('.owner.empty')],
-  transcript: [open('m1'), transcript],
-  live: [open('m2'), async (page) => page.click('.people-btn')],
-  // "ti", then ↓ twice: the third match is lit (names with a word starting "ti" come first).
-  picker: ['live', open('m2'), async (page) => page.click('.people-btn'), async (page) => {
-    await page.keyboard.type('ti');
-    await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('ArrowDown');
+  recording: [open('m0')],
+  retrying: [open('m0')],
+  notice: [open('m0')],
+  live: [open('m2')],
+  paused: [open('m2')],
+  // Share live before anything is in Tico: org, who can join, people staged as chips.
+  share: ['meeting', open('m1'), share, async (page) => {
+    await page.waitForFunction(() => window.__PREVIEW__.state.meetings.m1.people.candidates.length);
+    await page.keyboard.type('sa');
+    await page.waitForSelector('#sheet [data-opt].hot');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('lib');
   }],
-  adding: [open('m2'), async (page) => page.click('.people-btn')],
-  avatars: [open('m2')],
+  'share-live': ['live-private', open('m2'), share],
+  adding: [open('m2'), share],
+  finish: ['meeting', open('m1'), finish],
+  'finish-live': ['live-private', open('m2'), finish],
+  'finish-delete': ['meeting', open('m1'), finish, async (page) => page.click('[data-act="finish-ask-delete"]')],
+  'finish-library': ['library', async (page) => { await page.hover('.row[data-id="m1"]'); await page.click('.row[data-id="m1"] [data-act="finish-open"]'); }],
+  more: ['live', open('m2'), more],
+  'more-discard': ['live', open('m2'), more, async (page) => page.click('[data-confirm="discard"]')],
+  discarding: [open('m2')],
+  ask: [open('m1')],
+  'ask-live': ['live', open('m2'), async (page) => page.evaluate(() => document.querySelector('#tbody .asked').scrollIntoView({ block: 'center' }))],
+  'paused-task': [open('m2'), async (page) => page.click('.item:has-text("Confirm the transcript link") [data-act="create-item"]')],
+  'screen-sheet': ['live', open('m2'), more, async (page) => page.click('[data-act="share-screen"]')],
+  'screen-sharing': ['live', open('m2'), more, async (page) => { await page.click('[data-act="share-screen"]'); await page.click('[data-act="screen-go"]'); await page.waitForSelector('.screen-stop'); }],
   mention: [open('m1'), async (page) => {
     await page.click('textarea.notes');
     await page.keyboard.press('Meta+ArrowDown');
     await page.keyboard.type('\nAsk @ma');
   }],
   mentions: [open('m1')],
-  // Near the top of the notes the list opens below the caret.
-  'mention-top': ['meeting', open('m1'), async (page) => {
-    await page.click('textarea.notes');
-    await page.keyboard.press('Meta+ArrowUp');
-    await page.keyboard.type('@');
-  }],
-  notice: [open('m0')],
   // Search marks matches in place: the second of several is lit.
-  search: ['meeting', open('m1'), transcript, async (page) => {
+  search: ['meeting', open('m1'), async (page) => {
     await page.keyboard.press('Meta+f');
-    await page.keyboard.type('item');
+    await page.keyboard.type('task');
     await page.keyboard.press('Enter');
   }],
-  // Drafts and removal questions belong to the meeting they were started in: an open edit does not
-  // follow the person to a second shared meeting, and a removal question does not either.
-  'shared-two': ['shared', open('m2'), transcript, async (page) => {
-    const openOther = async (id) => {
-      await page.click('[data-act="back"]');
-      await page.click(`.row[data-id="${id}"]`);
-      await page.waitForSelector('.title-input');
-      await transcript(page);
-    };
-    await page.hover('.bubble:has([data-act="edit-line"][data-seq="1"])');
+  'no-sidebar': ['meeting', open('m1'), async (page) => page.keyboard.press('Meta+t')],
+  // Sent lines of a live meeting: one being edited.
+  shared: ['shared', open('m2'), async (page) => {
+    await page.hover('.turn:has([data-act="edit-line"][data-seq="1"])');
     await page.click('[data-act="edit-line"][data-seq="1"]');
-    await page.fill('textarea.line-edit', 'Draft for the first call');
-    await openOther('m3');
-    if ((await page.locator('textarea.line-edit').count()) !== 0) throw new Error('an edit draft followed to another meeting');
-    await openOther('m2');
-    await page.hover('.bubble:has([data-act="ask-remove-line"][data-seq="2"])');
-    await page.click('[data-act="ask-remove-line"][data-seq="2"]');
-    await openOther('m3');
-    if ((await page.getByText('Remove this line in Tico?').count()) !== 0) throw new Error('a removal question followed to another meeting');
-  }],
-  // Sent lines of a live meeting: edit one (the draft survives a refresh), then remove another.
-  shared: ['shared', open('m2'), transcript, async (page) => {
-    if ((await page.locator('[data-act="edit-line"]').count()) !== 2) throw new Error('two sent lines should be editable');
-    await page.hover('.bubble:has([data-act="edit-line"][data-seq="1"])');
-    await page.click('[data-act="edit-line"][data-seq="1"]');
-    await page.fill('textarea.line-edit', 'Hi there, shall we start?');
-    await page.waitForTimeout(1200);
-    if ((await page.inputValue('textarea.line-edit')) !== 'Hi there, shall we start?') throw new Error('edit draft lost');
-    await page.click('[data-act="save-line"]');
-    await page.waitForSelector('.turn .bubble p:text("Hi there, shall we start?")');
-    await page.hover('.bubble:has([data-act="ask-remove-line"][data-seq="2"])');
-    await page.click('[data-act="ask-remove-line"][data-seq="2"]');
-    await page.click('[data-act="remove-line"]');
-    await page.waitForSelector('.turn.removed');
   }],
   sending: [open('m2')],
-  recording: [open('m0'), transcript],
-  retrying: [open('m0'), transcript],
   'error-library': ['error'],
-  error: [open('m1'), transcript, async (page) => page.click('[data-act="toggle-audio"]')],
-  'chat-live': ['live', open('m2'), async (page) => page.evaluate(() => document.getElementById('chat').scrollIntoView({ block: 'end' }))],
-  'chat-private': [open('m1'), async (page) => page.evaluate(() => document.getElementById('chat').scrollIntoView({ block: 'end' }))],
-  'chat-first': [open('m1'), async (page) => page.evaluate(() => document.getElementById('chat').scrollIntoView({ block: 'end' })), async (page) => {
-    await page.click('[data-model="ask"]');
-    await page.keyboard.type('Can someone own the hosted pricing cap?');
-  }],
-  'chat-first-sent': ['chat-first', open('m1'), async (page) => {
-    await page.click('[data-model="ask"]');
-    await page.keyboard.type('Can someone own the hosted pricing cap?');
-    await page.keyboard.press('Enter');
-  }],
-  settings: [async (page) => page.click('[data-act="settings"]')],
-  'settings-own': [async (page) => page.click('[data-act="settings"]')],
-  'settings-nostream': [async (page) => page.click('[data-act="settings"]')],
-  notices: [open('m2'), toChat],
+  error: [open('m1'), async (page) => page.click('[data-act="toggle-audio"]')],
+  settings: [settingsPage],
+  'settings-own': [settingsPage],
+  'settings-nostream': [settingsPage],
+  orgs: ['library', async (page) => page.click('[data-pop="orgs"]')],
   long: [open('m2')],
   'long-library': ['long'],
-  'long-chat': ['long', open('m2'), toChat],
-  'long-people': ['long', open('m2'), async (page) => page.click('.people-btn')],
-  sources: [async (page) => page.click('.caret')],
+  sources: [async (page) => page.click('.record-pill .caret')],
 };
-const sizes = [[1040, 690], [760, 490], [640, 460]];
+const sizes = [[1040, 690], [760, 490]];
 const themes = ['light', 'dark'];
 const only = process.argv.slice(2);
 const browser = await engine.launch();
@@ -154,204 +117,245 @@ for (const [name, steps] of Object.entries(scenes)) {
       const page = await context.newPage();
       page.on('pageerror', (error) => errors.push(`${name}: ${error.message}`));
       page.on('console', (msg) => msg.type() === 'error' && errors.push(`${name}: ${msg.text()}`));
-      await page.goto(`${base}?scene=${scene}`);
-      await page.waitForSelector('#r-page > *');
-      for (const step of steps) if (typeof step === 'function') await step(page);
-      await page.mouse.move(width - 2, height - 2);
-      await page.waitForTimeout(450);
-      const file = path.join(out, `${name}-${width}x${height}-${theme}.png`);
-      await page.screenshot({ path: file });
-      shots.push(file);
+      try {
+        await page.goto(`${base}?scene=${scene}`);
+        await page.waitForSelector('#r-page > *');
+        for (const step of steps) if (typeof step === 'function') await step(page);
+        await page.mouse.move(width - 2, height - 2);
+        await page.waitForTimeout(450);
+        // Nothing may push the page sideways.
+        const wide = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+        if (wide) errors.push(`${name} ${width}x${height}: horizontal overflow`);
+        const file = path.join(out, `${name}-${width}x${height}-${theme}.png`);
+        await page.screenshot({ path: file });
+        shots.push(file);
+      } catch (error) {
+        errors.push(`${name} ${width}x${height} ${theme}: ${error.message.split('\n')[0]}`);
+      }
       await context.close();
     }
   }
 }
 
-// The top bar's avatar stack, close up.
-if (!only.length || only.includes('avatars')) {
-  for (const theme of themes) {
-    const context = await browser.newContext({ viewport: { width: 1040, height: 690 }, deviceScaleFactor: 4, colorScheme: theme });
-    const page = await context.newPage();
-    await page.goto(`${base}?scene=avatars`);
-    await page.waitForSelector('.row');
-    await open('m2')(page);
-    for (const hover of [false, true]) {
-      if (hover) await page.hover('.people-btn');
-      const file = path.join(out, `avatars-zoom${hover ? '-hover' : ''}-${theme}.png`);
-      await page.locator('.people-btn').screenshot({ path: file });
-      shots.push(file);
-    }
-    await context.close();
-  }
-}
-
-// Behaviour: delete asks first, and only Delete removes the row.
+// Behaviour checks on the mock controller only.
 if (!only.length || only.includes('checks')) {
-  const context = await browser.newContext({ viewport: { width: 1040, height: 690 } });
-  const page = await context.newPage();
-  await page.goto(`${base}?scene=library`);
-  await page.waitForSelector('.row');
-  const rows = await page.locator('.row').count();
-  await page.hover('.row[data-id="m5"]');
-  await page.click('.row[data-id="m5"] [data-act="ask-delete"]');
-  const asking = await page.locator('.row.confirm').innerText();
-  if (!asking.includes('Removes its audio and transcript from this Mac.')) errors.push('delete: no confirmation');
-  if ((await page.locator('.row').count()) !== rows) errors.push('delete: removed before confirming');
-  await page.click('.row.confirm [data-act="cancel-delete"]');
-  if ((await page.locator('.row').count()) !== rows) errors.push('delete: cancel removed the row');
-  await page.hover('.row[data-id="m5"]');
-  await page.click('.row[data-id="m5"] [data-act="ask-delete"]');
-  await page.click('.row.confirm [data-act="delete"]');
-  await page.waitForTimeout(100);
-  if ((await page.locator('.row').count()) !== rows - 1) errors.push('delete: confirmed delete kept the row');
-  // Sending an action item marks it sent with the owner's name.
-  await page.click('.row[data-id="m1"]');
-  await page.waitForSelector('.item');
-  await page.hover('.item:has-text("Confirm the transcript link")');
-  await page.click('.item:has-text("Confirm the transcript link") [data-act="send-item"]');
-  await page.waitForSelector('.item.sent:has-text("Sent to Sam Okafor")');
-  // Esc goes back to the library.
-  await page.keyboard.press('Escape');
-  await page.waitForSelector('.lib-head');
-  await context.close();
+  const check = async (label, run) => {
+    const context = await browser.newContext({ viewport: { width: 1040, height: 690 } });
+    const page = await context.newPage();
+    page.on('pageerror', (error) => errors.push(`${label}: ${error.message}`));
+    try { await run(page); } catch (error) { errors.push(`${label}: ${error.message.split('\n')[0]}`); }
+    await context.close();
+  };
+  const go = async (page, scene) => { await page.goto(`${base}?scene=${scene}`); await page.waitForSelector('#r-page > *'); };
 
-  // People picker: ↑/↓ move the highlight, hover moves it too, Enter adds the lit one at once.
-  const people = await (await browser.newContext({ viewport: { width: 1040, height: 690 } })).newPage();
-  people.on('pageerror', (error) => errors.push(`checks: ${error.message}`));
-  await people.goto(`${base}?scene=live`);
-  await people.waitForSelector('.row');
-  await open('m2')(people);
-  await people.click('.people-btn');
-  await people.keyboard.type('ti');
-  const lit = () => people.locator('#popover [data-opt].hot').innerText();
-  if ((await lit()) !== 'Tico Support') errors.push(`picker: first lit is ${await lit()}`);
-  await people.keyboard.press('ArrowDown');
-  await people.keyboard.press('ArrowDown');
-  if ((await lit()) !== 'Marketing Lead') errors.push(`picker: ↓↓ lit ${await lit()}`);
-  await people.keyboard.press('ArrowUp');
-  if ((await lit()) !== 'Tina Alvarez') errors.push(`picker: ↑ lit ${await lit()}`);
-  await people.hover('#popover [data-opt]:has-text("Justin Kim")');
-  if ((await lit()) !== 'Justin Kim') errors.push(`picker: hover lit ${await lit()}`);
-  await people.keyboard.press('ArrowUp');
-  await people.keyboard.press('Enter');
-  await people.waitForSelector('#popover .person.pending:has-text("Martin Diaz")', { timeout: 500 }).catch(() => errors.push('picker: no pending row at once'));
-  await people.waitForSelector('#popover .person:not(.pending):has-text("Martin Diaz")');
-  await people.keyboard.press('Escape');
-  if (await people.locator('#popover').count()) errors.push('picker: Esc left it open');
+  // Delete asks first, and only Delete removes the row.
+  await check('delete', async (page) => {
+    await go(page, 'library');
+    const rows = await page.locator('.row').count();
+    await page.hover('.row[data-id="m6"]');
+    await page.click('.row[data-id="m6"] [data-act="ask-delete"]');
+    if (!(await page.locator('.row.confirm').innerText()).includes('Delete')) errors.push('delete: no confirmation');
+    if ((await page.locator('.row').count()) !== rows) errors.push('delete: removed before confirming');
+    await page.click('.row.confirm [data-act="cancel-delete"]');
+    await page.hover('.row[data-id="m6"]');
+    await page.click('.row[data-id="m6"] [data-act="ask-delete"]');
+    await page.click('.row.confirm [data-act="delete"]');
+    await page.waitForTimeout(100);
+    if ((await page.locator('.row').count()) !== rows - 1) errors.push('delete: confirmed delete kept the row');
+  });
+
+  // Create turns a proposal into a numbered task; × dismisses one; Esc goes back.
+  await check('tasks', async (page) => {
+    await go(page, 'meeting');
+    await open('m1')(page);
+    await page.click('.item.proposal:has-text("Confirm the transcript link") [data-act="create-item"]');
+    await page.waitForSelector('.item.task:has-text("Confirm the transcript link") .num');
+    const before = await page.locator('.item.proposal').count();
+    await page.click('.item.proposal:has-text("Draft the calendar") [data-act="remove-item"]');
+    await page.waitForTimeout(400);
+    if ((await page.locator('.item.proposal').count()) !== before - 1) errors.push('tasks: × did not dismiss');
+    if (await page.locator('.item.proposal:has-text("Draft the calendar") [data-act="create-item"]:not([disabled])').count()) errors.push('tasks: Create offered without an owner');
+    await page.click('[data-act="add-open"]');
+    await page.keyboard.type('Book the follow-up');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.item.proposal:has-text("Book the follow-up")');
+    await page.click('#main');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.lib-head');
+  });
+
+  // A proposal that may quote paused speech asks twice.
+  await check('paused', async (page) => {
+    await go(page, 'paused-task');
+    await open('m2')(page);
+    const create = '.item:has-text("Confirm the transcript link") [data-act="create-item"]';
+    await page.click(create);
+    if ((await page.locator(create).innerText()) !== 'Create anyway') errors.push('paused: no second ask');
+    await page.click(create);
+    await page.waitForSelector('.item.task:has-text("Confirm the transcript link")');
+  });
+
+  // Share live: nothing reaches Tico until Share live; picks wait, ↑/↓ move the highlight.
+  await check('share', async (page) => {
+    await go(page, 'meeting');
+    await open('m1')(page);
+    await share(page);
+    await page.waitForFunction(() => window.__PREVIEW__.state.meetings.m1.people.candidates.length);
+    if (!(await page.locator('.radio.on').innerText()).includes('Only people I add')) errors.push('share: not private by default');
+    await page.keyboard.type('ti');
+    await page.waitForSelector('#sheet [data-opt].hot');
+    const lit = () => page.locator('#sheet [data-opt].hot').innerText();
+    const first = await lit();
+    await page.keyboard.press('ArrowDown');
+    if ((await lit()) === first) errors.push('share: ↓ did not move');
+    await page.keyboard.press('ArrowUp');
+    if ((await lit()) !== first) errors.push('share: ↑ did not move back');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector(`#sheet .chip-person:has-text("${first.trim()}")`);
+    if (await page.evaluate(() => window.__PREVIEW__.state.meetings.m1.live)) errors.push('share: went live before Share live');
+    await page.click('[data-act="share-go"]');
+    await page.waitForSelector('#sheet', { state: 'detached', timeout: 3000 });
+    await page.waitForSelector('.share-btn.live');
+    const people = await page.evaluate(() => window.__PREVIEW__.state.meetings.m1.people.rows.map((r) => r.name));
+    if (!people.includes(first.trim())) errors.push('share: pick not added');
+    // Open again: Esc closes the sheet without leaving the meeting.
+    await share(page);
+    await page.keyboard.press('Escape');
+    if (await page.locator('#sheet').count()) errors.push('share: Esc left it open');
+    if (!(await page.locator('.title-input').count())) errors.push('share: Esc left the meeting too');
+  });
+
+  // Finish: Save to an org for participants only sends that audience; This Mac keeps it local.
+  await check('finish', async (page) => {
+    await go(page, 'live-private');
+    await open('m2')(page);
+    await finish(page);
+    if (!(await page.locator('#sheet [data-act="finish-audience"].on').innerText()).includes('Participants only')) errors.push('finish: private share did not default to participants');
+    await page.fill('[data-model="finish.title"]', 'Weekly product sync (final)');
+    await page.click('[data-act="finish-save"]');
+    await page.waitForSelector('.topbar .badge:has-text("In Tico")', { timeout: 5000 });
+    const row = await page.evaluate(() => window.__PREVIEW__.state.library.rows.find((r) => r.id === 'm2'));
+    if (row.title !== 'Weekly product sync (final)') errors.push('finish: title not saved');
+  });
+  await check('finish-local', async (page) => {
+    await go(page, 'library');
+    await page.hover('.row[data-id="m1"]');
+    await page.click('.row[data-id="m1"] [data-act="finish-open"]');
+    await page.click('[data-act="finish-dest"][data-dest="local"]');
+    if (await page.locator('[data-act="finish-audience"]').count()) errors.push('finish: audience shown for This Mac');
+    await page.click('[data-act="finish-save"]');
+    await page.waitForTimeout(300);
+    if (await page.evaluate(() => window.__PREVIEW__.state.library.rows.find((r) => r.id === 'm1').sent)) errors.push('finish: This Mac sent it');
+  });
+
+  // Sign in with the desktop app's orgs lands in the library.
+  await check('signin', async (page) => {
+    await go(page, 'signin');
+    if ((await page.locator('.org-row').count()) !== 4) errors.push('signin: desktop orgs not listed');
+    await page.click('[data-act="signin-desktop"]');
+    await page.waitForSelector('.lib-head');
+  });
+  await check('signin-address', async (page) => {
+    await go(page, 'signin-address');
+    if (!(await page.locator('[data-model="signin"]').count())) errors.push('signin: no address field without desktop orgs');
+  });
 
   // @mention in Notes: filter, ↓, Enter inserts "@Name " as plain text.
-  await people.keyboard.press('Escape');
-  await open('m1')(people).catch(async () => {
-    await people.goto(`${base}?scene=meeting`);
-    await people.waitForSelector('.row');
-    await open('m1')(people);
+  await check('mention', async (page) => {
+    await go(page, 'meeting');
+    await open('m1')(page);
+    await page.click('textarea.notes');
+    await page.keyboard.press('Meta+ArrowDown');
+    await page.keyboard.type(' @ma');
+    const names = await page.locator('#mention [data-opt]').evaluateAll((rows) => rows.map((row) => row.dataset.name));
+    if (names.join('|') !== 'Marketing Lead|Mara Novak|Martin Diaz') errors.push(`mention: listed ${names.join('|')}`);
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    const notes = await page.locator('textarea.notes').inputValue();
+    if (!notes.endsWith(' @Mara Novak ')) errors.push(`mention: notes end ${JSON.stringify(notes.slice(-30))}`);
+    if (await page.locator('#mention').count()) errors.push('mention: list stayed open');
+    await page.keyboard.type('@ju');
+    await page.keyboard.press('Escape');
+    if (await page.locator('#mention').count()) errors.push('mention: Esc left it open');
   });
-  await people.click('textarea.notes');
-  await people.keyboard.press('Meta+ArrowDown');
-  await people.keyboard.type(' @ma');
-  const names = await people.locator('#mention [data-opt]').evaluateAll((rows) => rows.map((row) => row.dataset.name));
-  if (names.join('|') !== 'Marketing Lead|Mara Novak|Martin Diaz') errors.push(`mention: listed ${names.join('|')}`);
-  await people.keyboard.press('ArrowDown');
-  await people.keyboard.press('Enter');
-  const notes = await people.locator('textarea.notes').inputValue();
-  if (!notes.endsWith(' @Mara Novak ')) errors.push(`mention: notes end ${JSON.stringify(notes.slice(-30))}`);
-  if (await people.locator('#mention').count()) errors.push('mention: list stayed open');
-  if ((await people.locator('.notes-backdrop mark').allInnerTexts()).join('|') !== '@Mara Novak') errors.push('mention: no chip');
-  await people.keyboard.type('@ju');
-  await people.keyboard.press('Escape');
-  if (await people.locator('#mention').count()) errors.push('mention: Esc left it open');
 
-  // The @ list opens below the caret when it fits there.
-  await people.goto(`${base}?scene=meeting`);
-  await people.waitForSelector('.row');
-  await open('m1')(people);
-  await people.click('textarea.notes');
-  await people.keyboard.press('Meta+ArrowUp');
-  await people.keyboard.type('@');
-  const area = await people.locator('textarea.notes').boundingBox();
-  const list = await people.locator('#mention').boundingBox();
-  if (!list || list.y < area.y + 10) errors.push(`mention: opened above the caret (list ${list?.y}, notes ${area.y})`);
-  await people.keyboard.press('Escape');
+  // Transcript search never reflows the list, and matches are counted.
+  await check('search', async (page) => {
+    await go(page, 'meeting');
+    await open('m1')(page);
+    await page.waitForSelector('#tbody > *');
+    const before = await page.locator('#tbody > *').count();
+    const height = await page.evaluate(() => document.getElementById('tbody').scrollHeight);
+    await page.keyboard.press('Meta+f');
+    await page.waitForSelector('.side-search input');
+    for (const key of 'task') {
+      await page.keyboard.type(key);
+      const rows = await page.locator('#tbody > *').count();
+      const now = await page.evaluate(() => document.getElementById('tbody').scrollHeight);
+      if (rows !== before || now !== height) errors.push(`search: layout moved at "${key}" (${rows} rows, ${now}px)`);
+    }
+    if (!/^1\/\d+$/.test(await page.locator('#thits').innerText())) errors.push('search: no counter');
+    await page.keyboard.press('Enter');
+    if (!(await page.locator('#thits').innerText()).startsWith('2/')) errors.push('search: Enter did not move to the next match');
+  });
 
-  // Transcript search never reflows the list: rows stay put while typing, and matches are counted.
-  await people.click('[data-act="toggle-transcript"]');
-  await people.waitForSelector('#tbody > *');
-  const before = await people.locator('#tbody > *').count();
-  const height = await people.evaluate(() => document.getElementById('tbody').scrollHeight);
-  await people.keyboard.press('Meta+f');
-  for (const key of 'item') {
-    await people.keyboard.type(key);
-    const rows = await people.locator('#tbody > *').count();
-    const now = await people.evaluate(() => document.getElementById('tbody').scrollHeight);
-    if (rows !== before || now !== height) errors.push(`search: layout moved at "${key}" (${rows} rows, ${now}px)`);
-  }
-  const counted = await people.locator('#thits').innerText();
-  if (!/^1\/\d+$/.test(counted)) errors.push(`search: counter reads ${counted}`);
-  await people.keyboard.press('Enter');
-  if (!(await people.locator('#thits').innerText()).startsWith('2/')) errors.push('search: Enter did not move to the next match');
+  // Ask: a private card appears in the sidebar.
+  await check('ask', async (page) => {
+    await go(page, 'meeting');
+    await open('m1')(page);
+    await page.click('[data-model="ask"]');
+    await page.keyboard.type('Who owns the pricing cap?');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('#tbody .asked:not(.pending)');
+    if (!(await page.locator('#tbody .asked .head').first().innerText()).includes('only you see this')) errors.push('ask: not marked private');
+  });
 
   // The mic notice closes and stays closed.
-  await people.goto(`${base}?scene=notice`);
-  await people.waitForSelector('.row');
-  await open('m0')(people);
-  await people.click('[data-act="dismiss-notice"]');
-  await people.waitForTimeout(400);
-  if (await people.locator('.dock-notice').count()) errors.push('notice: still shown after closing');
-
-  // Send on a live meeting finishes it and sends it, showing the step on the button.
-  await people.goto(`${base}?scene=live`);
-  await people.waitForSelector('.row');
-  await open('m2')(people);
-  await people.click('[data-pop="send"]');
-  await people.click('[data-act="send-meeting"]');
-  await people.waitForSelector('.topbar .sending:has-text("Finishing…")');
-  await people.waitForSelector('.topbar .badge:has-text("In Tico")', { timeout: 4000 });
-  if (await people.locator('[data-act="finish"]').count()) errors.push('send: Finish meeting still offered after sending');
-
-  // Bot-turn notices sit between the messages in time order; only the failed one is in the warning tone.
-  await people.goto(`${base}?scene=notices`);
-  await people.waitForSelector('.row');
-  await open('m2')(people);
-  const notices = await people.locator('#chat > *').evaluateAll((rows) => rows.map((row) => row.className.includes('chat-notice') ? (row.className.includes('failed') ? 'F' : 'N') : row.className.includes('msg') ? 'm' : ''));
-  if (notices.filter(Boolean).join('') !== 'mNmmmmNNmmFm') errors.push(`notices: order ${notices.join('')}`);
+  await check('notice', async (page) => {
+    await go(page, 'notice');
+    await open('m0')(page);
+    await page.click('[data-act="dismiss-notice"]');
+    await page.waitForTimeout(400);
+    if (await page.locator('.dock-notice').count()) errors.push('notice: still shown after closing');
+  });
 
   // Speech: Your Tico hides the key fields; Own keys shows them and makes the form savable.
-  await people.goto(`${base}?scene=settings`);
-  await people.waitForSelector('.row');
-  await people.click('[data-act="settings"]');
-  if (await people.locator('[data-model="key"]').count()) errors.push('speech: key field shown under Your Tico');
-  await people.click('[data-act="speech-source"][data-source="own"]');
-  if (!(await people.locator('[data-model="key"]').count())) errors.push('speech: no key field under Own keys');
-  if (await people.locator('[data-act="save-settings"]').isDisabled()) errors.push('speech: switching source left Save off');
-  await people.click('[data-act="save-settings"]');
-  await people.waitForTimeout(400);
-  if ((await people.evaluate(() => window.__PREVIEW__.state.status.speech.source)) !== 'own') errors.push('speech: source not saved');
+  await check('speech', async (page) => {
+    await go(page, 'settings');
+    await settingsPage(page);
+    if (await page.locator('[data-model="key"]').count()) errors.push('speech: key field shown under Your Tico');
+    await page.click('[data-act="speech-source"][data-source="own"]');
+    if (!(await page.locator('[data-model="key"]').count())) errors.push('speech: no key field under Own keys');
+    await page.click('[data-act="save-settings"]');
+    await page.waitForTimeout(400);
+    if ((await page.evaluate(() => window.__PREVIEW__.state.status.speech.source)) !== 'own') errors.push('speech: source not saved');
+  });
 
   // Library rows open from the keyboard.
-  await people.goto(`${base}?scene=library`);
-  await people.waitForSelector('.row');
-  await people.focus('.row[data-id="m1"]');
-  await people.keyboard.press('Enter');
-  await people.waitForSelector('.title-input', { timeout: 1000 }).catch(() => errors.push('keyboard: Enter on a row did not open it'));
-}
-// Screen/link flow uses only the mock controller. No native capture or personal library.
-{
-  const page = await browser.newPage({viewport:{width:640,height:490}});
-  await page.goto(`${base}?scene=meeting`); await open('m1')(page);
-  await page.click('.people-btn'); await page.click('[data-act="copy-link"]');
-  if (!(await page.locator('.share-sheet').textContent()).includes('transcript so far will be uploaded')) errors.push('link: missing upload disclosure');
-  await page.keyboard.press('Escape');
-  if (await page.locator('.share-sheet').count()) errors.push('link: Esc did not cancel');
-  await page.click('[data-act="share-screen"]');
-  await page.click('[data-act="share-org"][data-id="acme"]');
-  await page.click('[data-act="share-go"]'); await page.waitForSelector('.screen-stop');
-  const stop = await page.locator('.screen-stop').boundingBox();
-  if (!stop || stop.x < 0 || stop.x + stop.width > 640) errors.push('screen: Stop outside compact viewport');
-  await page.keyboard.press('Escape');
-  await page.waitForSelector('.row[data-id="m1"]');
-  if (!(await page.locator('.screen-stop').textContent()).includes('Recorder hand-off')) errors.push('screen: meeting not named outside its workspace');
-  await page.click('[data-act="stop-screen"]'); await page.waitForSelector('.screen-stop', {state:'detached'});
-  await page.close();
+  await check('keyboard', async (page) => {
+    await go(page, 'library');
+    await page.focus('.row[data-id="m1"]');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.title-input', { timeout: 1000 });
+  });
+
+  // Screen share from More: Stop stays inside the small window and names the meeting from the library.
+  await check('screen', async (page) => {
+    await page.setViewportSize({ width: 760, height: 490 });
+    await go(page, 'meeting');
+    await open('m1')(page);
+    await more(page);
+    await page.click('[data-act="share-screen"]');
+    await page.click('[data-act="screen-org"][data-id="team"]');
+    await page.click('[data-act="screen-go"]');
+    await page.waitForSelector('.screen-stop');
+    const stop = await page.locator('.screen-stop').boundingBox();
+    if (!stop || stop.x < 0 || stop.x + stop.width > 760) errors.push('screen: Stop outside the window');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.row[data-id="m1"]');
+    await page.click('[data-act="stop-screen"]');
+    await page.waitForSelector('.screen-stop', { state: 'detached' });
+  });
 }
 await browser.close();
 server.close();

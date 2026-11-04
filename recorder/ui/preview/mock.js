@@ -154,8 +154,8 @@
     chat: {
       ...chatEmpty, connected: true,
       messages: [
-        msg('p1', 'You', 'What did we decide about creating tasks?', 190, { me: true, private: true }),
-        msg('p2', 'Tico', 'One task at a time, private, to the bot or person you pick. Each carries the quote and a link to the transcript.', 189.8, { bot: true, private: true }),
+        msg('p1', 'You', 'What did we decide about creating tasks?', 195, { me: true, private: true }),
+        msg('p2', 'Tico', 'One task at a time, private, to the bot or person you pick. Each carries the quote and a link to the transcript.', 194.8, { bot: true, private: true }),
       ],
     },
     ...over,
