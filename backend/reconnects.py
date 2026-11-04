@@ -662,8 +662,8 @@ def google_failing(c, accounts):
             continue
         bot = box["bot"]
         for (task_id,) in c.execute(
-                "SELECT DISTINCT u.task_id FROM turns u JOIN tasks t ON t.id=u.task_id WHERE u.bot=? AND t.owner_id=? "
-                "AND u.started_at>? AND (u.finished_at IS NULL OR u.finished_at>?)",
+                "SELECT DISTINCT u.task_id FROM attempts u JOIN tasks t ON t.id=u.task_id WHERE u.bot_id=? AND t.owner_id=? "
+                "AND u.created_at>? AND (u.settled_at IS NULL OR u.settled_at>?)",
                 (bot, H.bot_actor(bot), H.shift(since, hours=-6), since)).fetchall():
             row = open(c, task_id, bot, "google:" + address, "google", f"Google ({address})",
                        H.human_actor(box["person_id"]), {"kind": "google", "account": address})

@@ -240,8 +240,8 @@ def run_holds_settled(c: sqlite3.Connection, month: str, through: str, page: int
     last = ""
     while True:
         rows = c.execute(
-            "SELECT id, source_id FROM (SELECT h.id, h.source_id, coalesce((SELECT max(t.finished_at) FROM attempts a "
-            "JOIN turns t ON t.id = a.id WHERE a.job_id = substr(h.source_id, 5)), h.settled_at) AS finished_at "
+            "SELECT id, source_id FROM (SELECT h.id, h.source_id, coalesce((SELECT max(a.settled_at) FROM attempts a "
+            "WHERE a.job_id = substr(h.source_id, 5)), h.settled_at) AS finished_at "
             "FROM fin_holds h WHERE h.source='run' AND h.status='settled' AND h.entry_id IS NULL AND h.id>?) "
             "WHERE substr(finished_at, 1, 7)=? AND finished_at<=? ORDER BY id LIMIT ?", (last, month, through, page)).fetchall()
         out += [(str(r[0]), str(r[1])) for r in rows]

@@ -106,7 +106,7 @@ def changed_lines(diff):
 def _own_runs(c, owner):
     """The runs that worked on any dream of this owner, in one query: a run started by a message of one of its dreams, or
     handed one as an input (learnings.run_attempts, for every dream at once). Their commits are the dream's, not memory.
-    A run's id is its turn's id too (execution.py joins attempts to turns on the same id)."""
+    A run is its attempts row, so its id is the attempt's id."""
     params = (dream.LABEL, owner)
     return {row[0] for row in c.execute(
         "SELECT a.id FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
@@ -117,10 +117,10 @@ def _own_runs(c, owner):
 
 
 def _tidy_runs(c, bot):
-    """The turns of this bot's memory tidy passes. memory_tidy_runs.changed leaves them out the same way."""
+    """The runs of this bot's memory tidy passes. memory_tidy_runs.changed leaves them out the same way."""
     return {row[0] for row in c.execute(
-        "SELECT t.id FROM turns t JOIN memory_tidy_passes p ON t.task_id=p.parent_task_id OR t.task_id=p.check_task_id "
-        "WHERE p.bot=?", (bot,))}
+        "SELECT t.id FROM attempts t JOIN memory_tidy_passes p ON t.task_id=p.parent_task_id OR t.task_id=p.check_task_id "
+        "WHERE (t.job_id IS NULL OR t.trigger IS NOT NULL) AND p.bot=?", (bot,))}
 
 
 def change(c, bot, since, owner=None):

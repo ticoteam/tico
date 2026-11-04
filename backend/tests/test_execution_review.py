@@ -241,7 +241,7 @@ def test_a_result_that_arrives_after_the_lease_lapsed_settles_the_job_instead_of
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0] == 'completed'
         assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt['job_id'],)).fetchone()[0] == 'completed'
-        turn = c.execute("SELECT exit,summary FROM turns WHERE id=?", (attempt['id'],)).fetchone()
+        turn = c.execute("SELECT exit,summary FROM attempts WHERE id=?", (attempt['id'],)).fetchone()
         assert turn['exit'] == 'completed' and turn['summary'] == 'Opened the three pull requests.'
         assert H.status(c, 'ops')['state'] == 'idle'
     assert get(api, 'bots/ops/execution-review')['jobs'] == []
@@ -340,7 +340,7 @@ def test_a_sparse_failure_with_recorded_writes_is_held_not_retried(api):
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'sparse-positive'}, machine['token'])
     post(api, 'messages', {'to': 'ana', 'text': 'Synthetic effect already delivered'}, attempt['token'])
     with api.app.state.store.read() as c:
-        assert c.execute('SELECT writes FROM turns WHERE id=?', (attempt['id'],)).fetchone()[0] > 0
+        assert c.execute('SELECT writes FROM attempts WHERE id=?', (attempt['id'],)).fetchone()[0] > 0
     post(api, f"attempts/{attempt['id']}/complete",
          {'outcome': 'failed', 'last_seq': 0, 'text': 'Synthetic partial output',
           'usage': {'output_tokens': 100_000, 'model': 'gpt-6-sol', 'runtime': 'codex'}}, machine['token'])
@@ -1263,7 +1263,7 @@ def test_a_finished_turn_dismissed_because_its_task_closed_still_ends_completed_
     assert done['message']['recipient_id'] == 'human:ana'
     with api.app.state.store.read() as c:
         assert H.task(c, task['id'])['status'] == 'closed'
-        assert c.execute("SELECT exit FROM turns WHERE id=?", (attempt['id'],)).fetchone()[0] == 'completed'
+        assert c.execute("SELECT exit FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0] == 'completed'
         assert c.execute("SELECT count(*) FROM events WHERE action='attempt.late-settled' AND target=?",
                          (attempt['id'],)).fetchone()[0] == 1
     assert get(api, 'bots/ops/execution-review')['jobs'] == []
@@ -1916,12 +1916,12 @@ def test_a_busy_bots_stopped_run_records_dependency_until_task_and_lane_free(api
 
     # A live run on the same task still makes it wait: that run may be doing the same work.
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE turns SET task_id=? WHERE id=?', (stopped['id'], other['id']))
+        c.execute('UPDATE attempts SET task_id=? WHERE id=?', (stopped['id'], other['id']))
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
 
     # A different task still owns this shared main lane, so record its dependency until it ends.
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE turns SET task_id=? WHERE id=?', (busy['id'], other['id']))
+        c.execute('UPDATE attempts SET task_id=? WHERE id=?', (busy['id'], other['id']))
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     post(api, f"attempts/{other['id']}/complete", {'outcome': 'completed', 'last_seq': 0, 'text': 'Done.'}, machine['token'])
     assert [d['state'] for d in sweep(api)] == ['queued']
@@ -1976,29 +1976,29 @@ def test_auto_reconcile_defers_only_for_the_live_work_identity_that_matches(api,
             c.execute('INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)',
                       (live_attempt['id'], target_message['id']))
         elif live_match == 'same_task':
-            c.execute('UPDATE turns SET task_id=? WHERE id=?', (target_task['id'], live_attempt['id']))
+            c.execute('UPDATE attempts SET task_id=? WHERE id=?', (target_task['id'], live_attempt['id']))
         elif live_match == 'no_task_conversation':
             c.execute('INSERT INTO attempt_conversations(attempt_id,conversation_id) VALUES(?,?)',
                       (live_attempt['id'], target_message['conversation_id']))
         elif live_match == 'different_task_same_main_lane':
             assert target_task['id'] != other_task['id']
-            c.execute('UPDATE turns SET task_id=? WHERE id=?', (other_task['id'], live_attempt['id']))
+            c.execute('UPDATE attempts SET task_id=? WHERE id=?', (other_task['id'], live_attempt['id']))
             c.execute("UPDATE attempts SET lane='main' WHERE id IN (?,?)",
                       (target_attempt['id'], live_attempt['id']))
         elif live_match == 'different_task_shared_session':
             assert target_task['id'] != other_task['id']
-            c.execute('UPDATE turns SET task_id=? WHERE id=?', (other_task['id'], live_attempt['id']))
+            c.execute('UPDATE attempts SET task_id=? WHERE id=?', (other_task['id'], live_attempt['id']))
             c.execute("UPDATE attempts SET lane='task:shared-root' WHERE id IN (?,?)",
                       (target_attempt['id'], live_attempt['id']))
         elif live_match == 'same_task_without_historical_attempt':
             c.execute('UPDATE jobs SET attempt_id=NULL,created_at=? WHERE id=?',
                       (H.shift(H.now(), seconds=-STALL_MAX-1), target_attempt['job_id']))
-            c.execute('UPDATE turns SET task_id=? WHERE id=?', (target_task['id'], live_attempt['id']))
+            c.execute('UPDATE attempts SET task_id=? WHERE id=?', (target_task['id'], live_attempt['id']))
 
     assert sweep(api) == [] and job_state(api, target_attempt['job_id']) == 'uncertain'
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (H.now(), live_attempt['id']))
-        c.execute('UPDATE turns SET finished_at=? WHERE id=?', (H.now(), live_attempt['id']))
+        c.execute('UPDATE attempts SET settled_at=? WHERE id=?', (H.now(), live_attempt['id']))
     if live_match == 'same_task_without_historical_attempt':
         # With no attempt row, the sweep has no evidence from which to make a recovery decision.
         assert sweep(api) == [] and job_state(api, target_attempt['job_id']) == 'uncertain'
@@ -2203,7 +2203,7 @@ def test_restart_read_only_run_ignores_another_runs_approval_and_merge(api):
         c.execute("INSERT INTO task_links(id,task_id,kind,url,created_at,pr_merged_at) VALUES(?,?,?,?,?,?)",
                   (H.new_id(), task['id'], 'pr', 'https://example.com/acme/tico/pull/9', started, H.now()))
         # The claim already recorded this run's turn under its attempt id; point it at the task.
-        c.execute("UPDATE turns SET task_id=? WHERE id=?", (task['id'], attempt['id']))
+        c.execute("UPDATE attempts SET task_id=? WHERE id=?", (task['id'], attempt['id']))
     assert [d['state'] for d in sweep(api)] == ['queued']
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:botops'").fetchone()

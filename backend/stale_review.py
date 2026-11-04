@@ -185,7 +185,7 @@ def reason(c, row, at):
 
 def _live(c, task_id):
     try:
-        return c.execute("SELECT 1 FROM turns t JOIN attempts a ON a.id=t.id WHERE t.task_id=? "
+        return c.execute("SELECT 1 FROM attempts a WHERE a.task_id=? "
                          "AND a.state IN ('leased','running') LIMIT 1", (task_id,)).fetchone() is not None
     except Exception:               # a local hub has no attempts table
         return False

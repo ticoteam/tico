@@ -313,9 +313,14 @@ def label(c, scope, default=None):
 
 
 # ------------------------------------------------------------------------------------------------ spend
+def clock():
+    """The moment spend is read at when none is given: the real one, unless a demo build pins its own."""
+    return datetime.now(timezone.utc)
+
+
 def bounds(at=None):
     """The current period's key and its [from, to) timestamps: {hourly: (key, from, to), daily: ..., weekly: ..., monthly: ...}."""
-    at = at or datetime.now(timezone.utc)
+    at = at or clock()
     hour = at.replace(minute=0, second=0, microsecond=0)
     half_hour = at.replace(minute=30 if at.minute >= 30 else 0, second=0, microsecond=0)
     day = at.strftime("%Y-%m-%d")
