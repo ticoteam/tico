@@ -45,6 +45,7 @@ class Services:
     def act(self, do, args, ctx):
         self.acted.append((do, args))
         self.keys = [*getattr(self, "keys", []), ctx["key"]]
+        self.producers = [*getattr(self, "producers", []), ctx["producer"]]
         if do in self.fail:
             return {"ok": False, "detail": f"{do} failed"}
         return {"ok": True, "detail": f"{do} done"}

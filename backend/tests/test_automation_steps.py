@@ -164,6 +164,23 @@ def test_the_record_lists_the_rules_that_fired_and_says_where_each_action_came_f
 
 
 # ---------------------------------------------------------------------------------------------- decide
+def test_each_rule_that_fires_produces_under_its_own_identity():
+    services = Services()
+    gate = {"id": "gate", "type": "filter", "rules": [
+        {"when": FROM_NEWS, "then": [{"do": "create_task", "args": {"title": "A"}}], "next": "rule"},
+        {"when": [], "then": [{"do": "create_task", "args": {"title": "B"}}], "to": "legal"}]}
+    E.execute(flow(gate, destinations=LEGAL), MESSAGE, services)
+    assert services.producers == ["gate", "gate@0.1", "gate@0.2"]    # the first rule keeps the step's own id
+
+
+def test_a_single_rule_keeps_the_step_as_the_identity_of_all_its_actions():
+    services = Services()
+    gate = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [
+        {"do": "create_task", "args": {"title": "A"}}, {"do": "label"}]}]}
+    E.execute(flow(gate), MESSAGE, services)
+    assert services.producers == ["gate", "gate"]
+
+
 def test_decide_asks_once_and_keeps_answers_under_out():
     services = Services()
     questions = {"bucket": {"type": "choice", "instructions": "x", "criteria": {"reply": "", "archive": ""}}}

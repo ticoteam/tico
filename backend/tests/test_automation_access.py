@@ -9,7 +9,7 @@ import pytest
 
 from backend import automations
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.test_api import api, get, headers, post  # noqa: F401
 
 WAKE = {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "{{message.subject}}"}}
 
@@ -164,3 +164,13 @@ def test_a_notice_inside_a_destination_is_checked_on_save_too(api, do):
     post(api, "automations", with_chain("ops"))                                  # Ana operates ops
     refused = post(api, "automations", with_chain("cpo"), expected=403)          # Ben's bot
     assert f"may not {do.replace('_', ' ')}" in refused["error"]["detail"]
+
+
+@pytest.mark.parametrize("do", ["wake_bot", "note"])
+def test_a_destination_only_patch_is_checked_for_the_bots_it_names(api, do):
+    gate = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [], "to": "legal"}]}
+    chain = lambda bot: [{"id": "legal", "name": "Legal", "then": [{"do": do, "args": {"bot": bot, "text": "Hi"}}]}]  # noqa: E731
+    aid = post(api, "automations", {**flow(steps=[gate]), "destinations": chain("ops")})["id"]
+    r = api.patch(f"/api/v2/automations/{aid}", json={"destinations": chain("cpo")}, headers=headers("ana-test"))
+    assert r.status_code == 403 and f"may not {do.replace('_', ' ')}" in r.json()["error"]["detail"]
+    assert get(api, f"automations/{aid}")["destinations"] == chain("ops")    # refused: nothing changed
