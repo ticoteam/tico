@@ -10,6 +10,11 @@ def sql(api, query, args=()):
         return [dict(r) for r in c.execute(query, args)]
 
 
+def started(api, aid):
+    """Runs started, counted in SQL: the runs listing shows one page of 25."""
+    return sql(api, "SELECT count(*) AS n FROM automation_runs WHERE automation_id=?", (aid,))[0]["n"]
+
+
 def automation(api, aid):
     got = get(api, f"automations/{aid}")
     return got.get("automation", got)
@@ -24,7 +29,8 @@ def test_a_task_event_runs_one_saved_automation_once_and_not_the_old_engine(api)
     post(api, "tasks", {"owner": "ops", "title": "Once", "body": "Please."})
     assert len(runs(api, aid)["runs"]) == 1
     assert sql(api, "SELECT count(*) AS n FROM rule_task_runs WHERE rule_id=?", (aid,))[0]["n"] == 0
-    assert len(sql(api, "SELECT id FROM task_events WHERE note='Seen'")) == 1
+    assert started(api, aid) == 1
+    assert len(sql(api, "SELECT id FROM tasks WHERE note='Seen'")) == 1
 
 
 def test_a_task_an_automation_makes_starts_no_task_event_automation(api):
@@ -43,9 +49,9 @@ def test_fifty_task_event_runs_an_hour_pause_the_automation(api):
     aid = make(api, {"type": "event", "name": "task.created"}, [NOTE])
     for i in range(50):
         post(api, "tasks", {"owner": "ops", "title": f"Batch {i}", "body": "Please."})
-    assert len(runs(api, aid)["runs"]) == 50
+    assert started(api, aid) == 50
     post(api, "tasks", {"owner": "ops", "title": "Batch 50", "body": "Please."})
-    assert len(runs(api, aid)["runs"]) == 50           # the 51st is not started
+    assert started(api, aid) == 50                      # the 51st is not started
     row = automation(api, aid)
     assert row["enabled"] is False and row["paused"] is True
     assert row["paused_reason"] == "Paused: too many runs"

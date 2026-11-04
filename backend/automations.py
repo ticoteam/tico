@@ -1266,12 +1266,13 @@ def on_event(c, type_, subject, data, actor, access=None):
     from . import event_catalog as CAT
     name = CAT.canonical(type_) or type_
     facts = data() if callable(data) else (data or {})
-    if name.startswith("task.") and isinstance(facts, dict) and "type_id" not in facts:
-        # A task event's type, so an automation can filter on the type it is made for. Only this payload carries it:
-        # outgoing webhooks keep their data.
-        task = H.task(c, subject) or {}
-        facts = {**facts, "type_id": task.get("type_id") or H.GENERAL_TYPE}
     payload = {"event": {"name": name, "subject": subject, "actor": actor, **({"data": facts} if facts else {})}}
+    if name.startswith("task.") and (task := H.task(c, subject)):
+        # The task a task event is about, as its actions read it (`task.id`, the note's and create task's task), and its
+        # type, so a filter can name the type. This payload only: outgoing webhooks keep their data.
+        payload["task"] = _event_task(task)
+        if isinstance(facts, dict):
+            payload["event"]["data"] = {**facts, "type_id": payload["task"]["type_id"]}
     # A trigger may name an event by an alias (a converted routine's `release_published`): it hears the canonical name.
     fire(c, "event", payload, f"{name}:{subject}",
          lambda t: CAT.matches(t["name"], name) or (CAT.canonical(t["name"]) or t["name"]) == name, access=access)
@@ -1283,6 +1284,14 @@ def on_event(c, type_, subject, data, actor, access=None):
             owner = F.owner_ref(facts["owner_id"])
             fire(c, "task_received", {"task": task, "event": {"name": name}}, f"task:{subject}:{name}",
                  lambda t: F.owner_ref(t["to"]) == owner)
+
+
+def _event_task(task):
+    """A task event's task as an automation reads it: the fields its flow names, and its type (the general type when it
+    has none, as hubdb reads it)."""
+    fields = ("id", "title", "body", "status", "requester", "step_id")
+    return {**{k: task.get(renames.current_column("tasks", k)) for k in fields},
+            "type_id": task.get("type_id") or H.GENERAL_TYPE, "owner": task.get("owner_id")}
 
 
 def _received_task(task, owner):
