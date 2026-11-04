@@ -1,9 +1,12 @@
 """Saved automations on the five task events (Dev 666): each event runs one saved automation once, task-triggered
 automation chains run one level deep across all five events, and more than 50 task-event runs in an hour pause the
 automation, which its row reads as "Paused: too many runs"."""
-import pytest
+from datetime import datetime, timedelta, timezone
 
-from backend.tests.test_api import api, get, post  # noqa: F401
+import pytest
+import time_machine
+
+from backend.tests.test_api import api, get, headers, post  # noqa: F401
 from backend import hubdb as H
 from backend.tests.test_automation_triggers import make, runs
 from backend.tests.test_task_trigger_rules import history as task_rule_history_rows, rule as task_rule, task_type
@@ -52,6 +55,40 @@ def test_a_task_an_automation_makes_starts_no_task_event_automation(api):
     assert len(follow) == 1
     why = sql(api, "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND note LIKE '%did not run%'", (follow[0]["id"],))
     assert len(why) == 1 and "automation" in why[0]["note"]
+
+
+def test_task_trigger_action_does_not_start_a_task_event_automation(api):
+    heard = make(api, {"type": "event", "name": "task.created"}, [NOTE])
+    task_rule(api, "task.created", action="create_task", params={"owner": "cpo", "title": "Rule follow-up"},
+              when={"owner": "ops"})
+    original = post(api, "tasks", {"owner": "ops", "title": "Starts a rule", "body": "Please."})
+
+    assert started(api, heard) == 1
+    assert len(runs(api, heard)["runs"]) == 1
+    follow = sql(api, "SELECT id FROM tasks WHERE title='Rule follow-up'")
+    assert len(follow) == 1 and follow[0]["id"] != original["id"]
+    why = sql(api, "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND note LIKE '%did not run%'",
+              (follow[0]["id"],))
+    assert len(why) == 1
+    assert "Task Trigger Action made this change" in why[0]["note"]
+    assert "task-triggered automations run one level deep" in why[0]["note"]
+
+
+def test_a_new_task_starts_a_task_step_automation_for_its_initial_step(api):
+    with api.app.state.store.transaction() as c:
+        typ = task_type(c)
+    first_step = typ["steps"][0]["id"]
+    aid = make(api, {"type": "event", "name": "task.step_changed",
+                     "filters": [{"field": "event.data.step", "op": "is", "value": first_step}]}, [NOTE])
+
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Initial step", "Synthetic body", "bot:ops", type=typ["id"],
+                             lint=False, deduplicate=False)
+    api.app.state.store.automations.drain()
+
+    done = runs(api, aid)["runs"]
+    assert len(done) == 1 and done[0]["trigger_ref"] == f"task.step_changed:{task['id']}"
+    assert started(api, aid) == 1
 
 
 def test_a_routine_made_task_starts_no_task_trigger_and_history_says_skipped(api):
@@ -112,16 +149,27 @@ def test_a_routine_started_bot_turn_does_not_start_a_task_step_trigger(api):
     assert runs == [{"fired": 0}]
 
 
-def test_fifty_task_event_runs_an_hour_pause_the_automation(api):
+def test_fifty_task_event_runs_an_hour_pause_the_automation_until_it_is_reenabled(api):
     aid = make(api, {"type": "event", "name": "task.created"}, [NOTE])
-    for i in range(50):
-        post(api, "tasks", {"owner": "ops", "title": f"Batch {i}", "body": "Please."})
-    assert started(api, aid) == 50
-    post(api, "tasks", {"owner": "ops", "title": "Batch 50", "body": "Please."})
-    assert started(api, aid) == 50                      # the 51st is not started
+    start = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=2)
+    with time_machine.travel(start, tick=False):
+        for i in range(50):
+            post(api, "tasks", {"owner": "ops", "title": f"Batch {i}", "body": "Please."})
+        assert started(api, aid) == 50
+        post(api, "tasks", {"owner": "ops", "title": "Batch 50", "body": "Please."})
+        assert started(api, aid) == 50                      # the 51st is not started
+        row = automation(api, aid)
+        assert row["enabled"] is False and row["paused"] is True
+        assert row["paused_reason"] == "Paused: too many runs"
+
+    with time_machine.travel(start + timedelta(minutes=1), tick=False):
+        response = api.patch(f"/api/v2/automations/{aid}", json={"enabled": True}, headers=headers())
+        assert response.status_code == 200, response.text
+        post(api, "tasks", {"owner": "ops", "title": "After re-enable", "body": "Please."})
+
+    assert started(api, aid) == 51
     row = automation(api, aid)
-    assert row["enabled"] is False and row["paused"] is True
-    assert row["paused_reason"] == "Paused: too many runs"
+    assert row["enabled"] is True and not row.get("paused", False)
 
 
 @pytest.mark.parametrize(("event", "field", "value"), [

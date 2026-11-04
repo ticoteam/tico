@@ -1203,7 +1203,10 @@ def fire(c, kind, payload, ref="", match=None, access=None, only=None):
     counts toward its day. Returns the queued run ids. Never raises: an automation problem must not undo the write
     that triggered it."""
     try:
+        from . import task_trigger_rules
+
         chain = CHAIN.get() or _turn_chain(c)
+        rule_chain = task_trigger_rules._CHAIN.get()
         if len(chain) >= MAX_CHAIN:
             return []
         queued = []
@@ -1224,8 +1227,8 @@ def fire(c, kind, payload, ref="", match=None, access=None, only=None):
             if (access and not access(row)) or not F.all_hold(trigger.get("filters") or [], payload):
                 _count(c, row["id"], "dropped")
                 continue
-            if chain and kind == "event" and not row["builtin"] and _task_trigger(trigger):
-                _chained_task_event(c, row, payload, chain)
+            if (chain or rule_chain) and kind == "event" and not row["builtin"] and _task_trigger(trigger):
+                _chained_task_event(c, row, payload, chain, rule_action=bool(rule_chain and not chain))
                 continue
             rid = queue(c, row, payload, ref, chain=(*chain, row["id"]))
             if rid:
@@ -1242,15 +1245,19 @@ def _task_trigger(trigger):
     return (CAT.canonical(trigger.get("name")) or trigger.get("name")) in TASK_TRIGGER_EVENTS
 
 
-def _chained_task_event(c, row, payload, chain):
-    """Skip a task-triggered automation that would extend an existing chain, and name the routine in task history."""
+def _chained_task_event(c, row, payload, chain, *, rule_action=False):
+    """Skip a task-triggered automation that would extend an existing chain, and name its source in task history."""
     _count(c, row["id"], "dropped")
     subject = (payload.get("event") or {}).get("subject")
-    maker = c.execute("SELECT flow FROM automations WHERE id=?", (chain[-1],)).fetchone()
-    made_by = flow_of(maker)["name"] if maker else chain[-1]
     if subject and H.task(c, subject):
-        text = (f"Automation {flow_of(row)['name']} did not run: routine {made_by} made this change, and task-triggered "
-                "automations run one level deep.")
+        if rule_action:
+            reason = "a Task Trigger Action made this change"
+        else:
+            maker = c.execute("SELECT flow FROM automations WHERE id=?", (chain[-1],)).fetchone()
+            made_by = flow_of(maker)["name"] if maker else chain[-1]
+            reason = f"routine {made_by} made this change"
+        text = (f"Automation {flow_of(row)['name']} did not run: {reason}, and task-triggered automations run one level "
+                "deep.")
         H._task_event(c, subject, H.KEEPER, "automation", None, row["id"], text)
 
 
@@ -1261,9 +1268,11 @@ def _task_pause(c, row, payload, ref):
     if row["builtin"] or name not in TASK_TRIGGER_EVENTS:
         return False
     since = H.shift(H.now(), hours=-1)
-    count = c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=? AND started_at>=? AND "
+    # Re-enabling saves the row; prior runs must not immediately pause it again.
+    updated_at = row.get("updated_at") or ""
+    count = c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=? AND started_at>=? AND started_at>? AND "
                       "substr(trigger_ref,1,instr(trigger_ref,':')-1) IN (?,?,?,?,?)",
-                      (row["id"], since, *TASK_TRIGGER_EVENTS)).fetchone()[0]
+                      (row["id"], since, updated_at, *TASK_TRIGGER_EVENTS)).fetchone()[0]
     if count < TASK_PAUSE_RUNS:
         return False
     flow = {**flow_of(row), "enabled": False}
