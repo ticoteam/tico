@@ -199,7 +199,8 @@ def _filter(flow, state, thread, step, services):
 
     Identities come from where an action is in the flow, never from what ran first, so a retry whose rules match
     differently cannot hand one rule's task to another. In a step shaped as before (`_legacy`) the step's own id is the
-    identity of its first task, as it always was, and a later task of the run is `<step>@<key>.<m>`. In any other step
+    identity of its first task, as it always was, and a later task of the run is `<step>@r<r>.<i>`, its place in the
+    rule: the step's record index (`<key>`) moves when a step is inserted before it, so it is not used. In any other step
     rule r's i-th action is `r<r>.<i>`, and the i-th action of the destination that rule reaches is `r<r>.d<i>`: the
     effect key is `<key>.<slot>` and the producer `<step>@<slot>`."""
     values = values_of(state, thread)
@@ -225,7 +226,7 @@ def _filter(flow, state, thread, step, services):
                 m = len(actions) + len(marked)
                 again = action["do"] == "create_task" and tasked
                 tasked = tasked or action["do"] == "create_task"
-                marked.append((action, source, str(m), f"{step['id']}@{key}.{m}" if again else step["id"]))
+                marked.append((action, source, str(m), f"{step['id']}@{slot}" if again else step["id"]))
             else:
                 marked.append((action, source, slot, f"{step['id']}@{slot}"))
         actions += _chain(services, marked, values, step, key)
