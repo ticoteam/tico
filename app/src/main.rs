@@ -893,12 +893,14 @@ mod updater_integration_tests {
         let (bundles, installed_dir) = (scratch.join("bundles"), scratch.join("installed"));
         std::fs::create_dir_all(&bundles).unwrap();
         std::fs::create_dir_all(&installed_dir).unwrap();
-        let candidate = b"#!/bin/sh\necho Acme Tico 0.3.99\n";
-        let (public_key, signature) = key_and_signature(candidate, CANDIDATE);
-        let (other_key, _) = key_and_signature(candidate, CANDIDATE);
+        // The updater installs only ELF AppImages, and `infer` needs a full 64-byte ELF header to call it one.
+        let mut candidate = b"\x7fELF Acme Tico 0.3.99".to_vec();
+        candidate.resize(64, 0);
+        let (public_key, signature) = key_and_signature(&candidate, CANDIDATE);
+        let (other_key, _) = key_and_signature(&candidate, CANDIDATE);
         // The file names `cargo tauri build --bundles appimage` writes, which app_release.py classifies.
         let appimage = bundles.join(format!("Acme Tico_{CANDIDATE}_amd64.AppImage"));
-        std::fs::write(&appimage, candidate).unwrap();
+        std::fs::write(&appimage, &candidate).unwrap();
         std::fs::write(bundles.join(format!("Acme Tico_{CANDIDATE}_amd64.AppImage.sig")), &signature).unwrap();
         let installed = installed_dir.join("Acme Tico.AppImage");
         let previous = b"#!/bin/sh\necho Acme Tico 0.3.98\n";
