@@ -1325,6 +1325,17 @@ def on_listening(c, intake, post):
     return fire(c, "listening", payload, f"listening:{intake['id']}", lambda t: t["destination"] == intake["destination"])
 
 
+def _run_flow(c, run):
+    """The flow a run works on, as `Hub.go` builds it: its version's steps, with the owner and the rest as they are now.
+    None when the automation or its version is gone."""
+    row = c.execute("SELECT * FROM automations WHERE id=?", (run["automation_id"],)).fetchone()
+    version = c.execute("SELECT flow FROM automation_versions WHERE automation_id=? AND n=?",
+                        (run["automation_id"], run["version"])).fetchone()
+    if not row or not version:
+        return None
+    return {**{k: v for k, v in flow_of(row).items() if k not in VERSIONED}, **json.loads(version["flow"])}
+
+
 def turn_done(c, attempt, outcome, text):
     """A bot's turn ended (after `H.turn_finish` priced it). The run that started it (its notice carries
     `automation_run`) is charged its cost, which counts toward the spend cap, and a run waiting on it takes its answer
@@ -1350,7 +1361,7 @@ def turn_done(c, attempt, outcome, text):
     if state is None:
         c.execute("UPDATE automation_runs SET cost=round(cost+?,6) WHERE id=?", (cost, rid))
         return
-    answered = _take(state, ref, text, cost, ok)
+    answered = _take(state, ref, text, cost, ok, _run_flow(c, run))
     status = (_runnable(c, run["automation_id"]) if answered and run["status"] in ("waiting", "queued")
               else run["status"])
     c.execute("UPDATE automation_runs SET status=?,saved_state=?,cost=?,wake_at=CASE WHEN ? IN ('queued','held') "
@@ -1362,19 +1373,22 @@ def turn_done(c, attempt, outcome, text):
 def _take_parked(c, rid, state):
     """Turns that ended while the run was being worked: their answers and costs on its state, their spend holds
     released."""
+    run = c.execute("SELECT * FROM automation_runs WHERE id=?", (rid,)).fetchone()
+    flow = _run_flow(c, run) if run else None
     for answer in c.execute("SELECT * FROM automation_turn_answers WHERE run_id=? ORDER BY created_at", (rid,)).fetchall():
         if state.get("threads") is not None:
-            _take(state, answer["ref"], answer["text"], answer["cost"], bool(answer["ok"]))
+            _take(state, answer["ref"], answer["text"], answer["cost"], bool(answer["ok"]), flow)
         else:
             state["cost"] = round(state.get("cost", 0) + answer["cost"], 6)
         c.execute("DELETE FROM automation_holds WHERE ref=?", (answer["ref"],))
     c.execute("DELETE FROM automation_turn_answers WHERE run_id=?", (rid,))
 
 
-def _take(state, ref, text, cost, ok):
+def _take(state, ref, text, cost, ok, flow):
     """A turn's end on the run's state: the answer of a waiting step, else the cost of a step it started, else the
-    cost on the run. Returns whether a waiting step took it."""
-    if E.answer(state, ref, text or "", cost, ok=ok):
+    cost on the run. Returns whether a waiting step took it. `flow` is the run's flow as it is now: a choose answer
+    decides its owner against it, as it is recorded."""
+    if E.answer(state, ref, text or "", cost, ok=ok, flow=flow):
         return True
     if not E.charge(state, ref, cost):
         state["cost"] = round(state.get("cost", 0) + cost, 6)
