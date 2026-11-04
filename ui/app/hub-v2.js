@@ -116,11 +116,35 @@ function needsTake(needs) {
   S.v2.needsCount = needs.count ?? S.v2.needs.length; S.v2.needsNext = needs.next || null; S.v2.needsBots = needs.bots || null;
 }
 let NEEDS_READ = 0, NEEDS_KEPT = 0;
+// The six reads a page opens with, asked as one (GET /api/v2/boot, backend/app.py boot_reads): each get() of these
+// paths is answered from it as if asked alone, with that read's own status and ETag. Anything but a 200 (an older
+// server's 404, a lapsed sign-in, a locked company) leaves each get() to ask for itself, as before.
+const BOOT_READS = ['/employees', '/me', '/humans', '/status', '/v2/status', `/v2/needs-you?limit=${NEEDS_PAGE}`];
+function bootReadsPrefetch() {
+  const at = Date.now();
+  const reads = getRaw(`/v2/boot?limit=${NEEDS_PAGE}`)
+    .then(({r, text}) => r.status === 200 ? JSON.parse(text).reads || null : null).catch(() => null);
+  for (const p of BOOT_READS) {
+    if (GET_PREFETCHED.has(p)) continue;
+    GET_PREFETCHED.set(p, {at, raw: reads.then(all => {
+      const part = all?.['/api' + p.split('?')[0]];
+      if (!part || !Number.isInteger(part.status)) return null;
+      const text = JSON.stringify(part.body ?? {});
+      const r = new Response(text, {status: part.status, headers: {'Content-Type': 'application/json'}});
+      if (part.status === 200 && typeof part.etag === 'string' && part.etag) {
+        GET_TAGGED.set(p, {tag: part.etag, text});
+        if (GET_TAGGED.size > 40) GET_TAGGED.delete(GET_TAGGED.keys().next().value);
+      }
+      return {r, text, kept: undefined};
+    }).catch(() => null)});
+  }
+}
 async function v2NeedsRead() {
   const held = S.v2.needsVersion, seq = ++NEEDS_READ;
   // As many as are held, so a list that moved does not drop the pages already read.
   const limit = Math.min(NEEDS_PAGE_MAX, Math.max(NEEDS_PAGE, (S.v2.needs || []).length));
-  const needs = await v2Get(`/v2/needs-you?limit=${limit}` + (held ? `&version=${encodeURIComponent(held)}` : ''), {fresh: true});
+  // The first read may be the one boot asked for with the others (bootReadsPrefetch); every later one is the server's.
+  const needs = await v2Get(`/v2/needs-you?limit=${limit}` + (held ? `&version=${encodeURIComponent(held)}` : ''), {fresh: seq > 1});
   if (!needs) return null;
   if (seq < NEEDS_KEPT) return needs;
   NEEDS_KEPT = seq;

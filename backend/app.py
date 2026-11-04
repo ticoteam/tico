@@ -1174,6 +1174,59 @@ def create_app(settings=None):
     # type. Annotate before that wrapping so actual file/stream responses stay untouched.
     app.router.route_class = DisplayNameRoute
 
+    # GET /api/v2/boot: the six reads every page opens with (ui/app/boot.js), in one round trip. Each is asked of this
+    # same app with the caller's own headers, so it answers exactly as it does alone: its own sign-in, access and
+    # privacy checks, its own status and error, its own ETag. A page that gets anything but a 200 here (an older
+    # server's 404 included) asks the six separately, as before.
+    BOOT_READS = ("/api/employees", "/api/me", "/api/humans", "/api/status", "/api/v2/status", "/api/v2/needs-you")
+    # Headers a part must not inherit: its answer is one plain body, never a 304 or compressed (the whole answer is).
+    BOOT_DROP = {b"accept-encoding", b"if-none-match", b"if-modified-since", b"content-length", b"content-type"}
+
+    async def boot_read(scope, path, query=b""):
+        sub = {key: scope[key] for key in ("type", "asgi", "http_version", "scheme", "client", "server", "root_path")
+               if key in scope}
+        path = scope.get("root_path", "") + path
+        sub.update(method="GET", path=path, raw_path=path.encode(), query_string=query, state={},
+                   headers=[(k, v) for k, v in scope["headers"] if k.lower() not in BOOT_DROP])
+        asked = False
+
+        async def receive():
+            nonlocal asked
+            if not asked:
+                asked = True
+                return {"type": "http.request", "body": b"", "more_body": False}
+            await asyncio.Event().wait()   # no disconnect of its own: the part ends with the request it is in
+
+        answer = {"status": 500, "etag": "", "json": False, "encoded": False, "body": []}
+
+        async def send(message):
+            if message["type"] == "http.response.start":
+                answer["status"] = message["status"]
+                for key, value in message.get("headers", []):
+                    if key.lower() == b"etag":
+                        answer["etag"] = value.decode("latin-1")
+                    elif key.lower() == b"content-type":
+                        answer["json"] = b"json" in value.lower()      # application/json, or a problem+json error
+                    elif key.lower() == b"content-encoding":
+                        answer["encoded"] = True
+            elif message["type"] == "http.response.body":
+                answer["body"].append(message.get("body", b""))
+        await app(sub, receive, send)
+        body = b"".join(answer["body"])
+        return answer["status"], answer["etag"], body if answer["json"] and not answer["encoded"] and body else b"null"
+
+    @app.get("/api/v2/boot")
+    async def boot_reads(request: Request):
+        """The page's opening reads in one answer: {"reads": {path: {status, etag, body}}}, each as that path answers.
+        `limit` is passed on to Needs you, the page's first page of it."""
+        limit = request.query_params.get("limit", "")
+        needs = ("limit=" + limit).encode() if limit.isdigit() and len(limit) <= 4 else b""
+        parts = await asyncio.gather(*(boot_read(request.scope, path, needs if path == "/api/v2/needs-you" else b"")
+                                       for path in BOOT_READS))
+        return fast_json.RawJsonResponse(b'{"reads":{' + b",".join(
+            json.dumps(path).encode() + b':{"status":' + str(status).encode() + b',"etag":' + json.dumps(etag).encode()
+            + b',"body":' + body + b"}" for path, (status, etag, body) in zip(BOOT_READS, parts)) + b"}}")
+
     @app.get("/api/v2/ops/timing")
     def request_timings(request: Request):
         """Where requests spend their time (backend/timing.py): the owner, or BotOps."""

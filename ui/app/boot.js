@@ -25,6 +25,7 @@ window.addEventListener('load', () => {
 (async () => {
   bootMark('boot');
   let configVersion = nativeVisualVersion();
+  bootReadsPrefetch();               // the six reads below, as one request (hub-v2.js)
   // What the first page needs goes out first: a browser opens only a few connections to one server, so the
   // roster and the opening page's own read are not queued behind the sidebar's counts.
   const employees = get('/employees'), meRead = get('/me');
