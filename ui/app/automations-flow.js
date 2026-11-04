@@ -39,10 +39,22 @@ function auQuestionIds(s) {
   const qs = s.questions || (AU?.sets || []).find(x => x.id === s.set)?.questions || {};
   return Object.keys(qs);
 }
+// An action's text under each name the hub reads, first to last (backend/automation_actions.py and
+// connectors/mail/actions.py): the first one set runs. An edit writes `key` and drops the others, so what the editor
+// shows is what runs (a task's label reads tag, then name; name works for mail and tasks alike).
+const AU_ARG_NAMES = {label: {keys: ['label', 'tag', 'name'], key: 'name'}, draft_reply: {keys: ['body', 'text'], key: 'body'},
+  send_reply: {keys: ['body', 'text'], key: 'body'}, wake_bot: {keys: ['text', 'prompt'], key: 'text'},
+  note: {keys: ['text', 'note'], key: 'text'}, post_update: {keys: ['text', 'body'], key: 'text'},
+  call_webhook: {keys: ['webhook'], key: 'webhook', drop: ['endpoint']}};
+function auArg(kind, a) {
+  for (const k of AU_ARG_NAMES[kind]?.keys || []) if (a?.[k]) return a[k];
+  return '';
+}
 const auActionArgs = s => {
   const a = s.args || {};
   const who = a.owner || a.to || a.bot;
-  return who ? 'to ' + auActorName(String(who).includes(':') ? who : 'bot:' + who) : a.name || a.label || a.webhook || a.endpoint || '';
+  return who ? 'to ' + auActorName(String(who).includes(':') ? who : 'bot:' + who)
+    : (s.do === 'label' || s.do === 'call_webhook' ? auArg(s.do, a) : '') || a.name || '';
 };
 
 // Finding steps: a step by id anywhere in the tree, and a container ("root", "<paths id>:<i>", "<paths id>:other").
@@ -239,7 +251,7 @@ const AU_Q_MIN = 0.75, AU_SORT_MIN = 0.5, AU_NOUL_MIN = 0.5;
 // Star is a label (STARRED); the board shows it as its own action.
 function auActKey(x) {
   const d = auThenDo(x), a = (x && typeof x === 'object' && x.args) || {};
-  return d === 'label' && /^starred$/i.test(String(a.name ?? a.tag ?? '')) ? 'star' : d;
+  return d === 'label' && /^starred$/i.test(String(auArg('label', a))) ? 'star' : d;
 }
 // Where a rule goes after its chain, as the engine reads it: its own next, else end when it has a destination or
 // stops, else the next step.
@@ -389,7 +401,7 @@ function auActChip(x) {
   const k = auActKey(x), a = (x && typeof x === 'object' && x.args) || {};
   const who = k === 'create_task' || k === 'assign' ? a.owner : k === 'wake_bot' ? a.bot : '';
   if (who) return auActorName(String(who).includes(':') ? who : 'bot:' + who);
-  if (k === 'label' && (a.name || a.tag)) return 'label ' + (a.name || a.tag);
+  if (k === 'label' && auArg('label', a)) return 'label ' + auArg('label', a);
   if (k === 'forward' && a.to) return String(a.to);
   if (k === 'call_webhook' && a.webhook) return String(a.webhook);
   return AU_BOARD_ACTS[k] || AU_ACTIONS[k] || k;
@@ -401,7 +413,7 @@ function auActLine(x) {
   if (k === 'create_task') return a.owner ? 'Task, ' + name(a.owner) : 'Task';
   if (k === 'assign') return a.owner ? 'Assign to ' + name(a.owner) : 'Assign';
   if (k === 'wake_bot') return a.bot ? 'Message ' + name(a.bot) : 'Message the bot';
-  if (k === 'label') return a.name || a.tag ? 'Label ' + (a.name || a.tag) : 'Label';
+  if (k === 'label') return auArg('label', a) ? 'Label ' + auArg('label', a) : 'Label';
   if (k === 'forward') return a.to ? 'Forward to ' + a.to : 'Forward';
   if (k === 'post_update') return 'Post to Updates';
   return AU_BOARD_ACTS[k] || AU_ACTIONS[k] || k;

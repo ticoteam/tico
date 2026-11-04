@@ -4,6 +4,7 @@
 // `to` and move-on changes (by id when two destinations share a name); a webhook board offers Sort only and no mail
 // actions; deleting down to one destination saves Sort as one routing rule, and a second one again (or a draft) starts
 // with an instruction the hub accepts; a switched-off Sort keeps the step list; the step list's Stop here keeps next;
+// an action's label or reply text shows and saves under the name that runs;
 // a phone stacks the board with no sideways scroll.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -275,6 +276,44 @@ async function saveAny(page) {
       assert.equal(added.length, 1, added.join('\n'));
       assert.match(added[0], /refund.*→ Ops \(log\)$/);
       assert.match(gone[0], /refund.*→ Ops \(ops\)$/);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
+    // An action's text under another name the hub reads first (label or tag before name, text after body): both editors
+    // show what runs, and an edit saves under one name so the edit is what runs.
+    {
+      const aliased = fx => { tweak(fx);
+        const b = fx.automations.find(x => x.id === 'au_board');
+        b.steps[0].rules[2].then = [{do: 'label', args: {label: 'Later', name: 'Unused'}}];
+        b.steps[2].rules[1].then = [{do: 'label', args: {tag: 'Old'}}, {do: 'draft_reply', args: {text: 'Hi'}}];
+        fx.automations.find(x => x.id === 'au_inbox').steps.push(
+          {id: 'lb1', type: 'action', enabled: true, do: 'label', args: {label: 'Later'}},
+          {id: 'lb2', type: 'action', enabled: true, do: 'label', args: {tag: 'Old', name: 'Unused'}}); };
+      const {page, errors, writes} = await openAutomations(browser, {viewport: DESKTOP, hash: '#/automations/au_board', tweak: aliased});
+      await page.waitForSelector('.au-board');
+      assert.match(await page.locator('[data-board="rule:2"]').innerText(), /Later/);
+      await page.locator('[data-board="rule:2"]').click();
+      assert.equal(await page.inputValue('[data-b="item.then.0.args.name"]'), 'Later');
+      await page.fill('[data-b="item.then.0.args.name"]', 'Receipts');
+      let body = await save(page, writes, 'au_board', 4);
+      assert.deepEqual(body.steps[0].rules[2].then, [{do: 'label', args: {name: 'Receipts'}}]);
+      await page.locator('[data-board="q:1"]').click();
+      assert.equal(await page.inputValue('[data-b="item.then.0.args.name"]'), 'Old');
+      assert.equal(await page.inputValue('[data-b="item.then.1.args.body"]'), 'Hi');
+      await page.fill('[data-b="item.then.0.args.name"]', 'New');
+      await page.fill('[data-b="item.then.1.args.body"]', 'Hello');
+      body = await save(page, writes, 'au_board', 5);
+      assert.deepEqual(body.steps[2].rules[1].then, [{do: 'label', args: {name: 'New'}}, {do: 'draft_reply', args: {body: 'Hello'}}]);
+      // The step list's Label step.
+      await page.evaluate(() => { location.hash = '#/automations/au_inbox'; });
+      for (const [id, was, now] of [['lb1', 'Later', 'Receipts'], ['lb2', 'Old', 'New']]) {
+        await page.locator(`.au-card[data-open="${id}"]`).click();
+        assert.equal(await page.inputValue('[data-b="step.args.name"]'), was);
+        await page.fill('[data-b="step.args.name"]', now);
+        await saveAny(page);
+        assert.deepEqual(writes.at(-1).body.steps.find(x => x.id === id).args, {name: now});
+      }
       assert.deepEqual(errors, []);
       await page.close();
     }
