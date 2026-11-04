@@ -417,19 +417,15 @@ pub fn command_program(command: &str) -> String {
     plain_program(command).map(clip).unwrap_or_default()
 }
 
-/// The script of a line that is only `sh`, `bash`, `zsh` or `dash`, one short `-c` flag (`-c`, `-lc`) and one script word.
+/// The script of a line that is only `sh`, `bash`, `zsh` or `dash`, one plain `-c` flag (`-c`, `-lc`, `-ec`) and one script word.
 fn shell_script(command: &str) -> Option<String> {
     if !matches!(plain_program(command)?, "sh" | "bash" | "zsh" | "dash") {
         return None;
     }
     match shell_words(command)?.as_slice() {
-        // A short-option group ending in c (`-c`, `-lc`, `-ec`); `--norc` is a long option, and its next word a file.
-        [_, flag, script]
-            if flag.len() >= 2
-                && flag.starts_with('-')
-                && flag.ends_with('c')
-                && flag[1..].chars().all(|c| c.is_ascii_lowercase()) =>
-        {
+        // Only flag groups whose every option takes no argument: `-o` would take the next word, and `--norc` is a long
+        // option whose next word is a file.
+        [_, flag, script] if matches!(flag.as_str(), "-c" | "-lc" | "-ic" | "-ec" | "-xc" | "-lic" | "-ilc") => {
             Some(script.clone())
         }
         _ => None,
@@ -1223,6 +1219,7 @@ mod tests {
         assert_eq!(command_program("/bin/zsh -lc 'cd /w && hub needs-you show'"), "hub needs-you show");
         assert_eq!(command_program("bash --norc /tmp/customer-private.sh"), "bash");
         assert_eq!(command_program("bash -c-x 'customer-private'"), "bash");
+        assert_eq!(command_program("bash -oc /tmp/customer-private.sh"), "bash");
     }
 
     #[test]
