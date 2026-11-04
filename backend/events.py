@@ -1941,7 +1941,12 @@ def install(app, store, auth, task_views, task_view):
 
         def check():
             watch()
-            sign_in()
+            try:
+                sign_in()
+            except Problem:
+                watch.checked_at = None
+                watch()
+                raise
 
         def poll(c, snapshot, cursor):
             return read_in(c, snapshot, auth, who, cursor, topics=wanted, conversations=conversations, bots=bots,
@@ -1982,6 +1987,8 @@ def install(app, store, auth, task_views, task_view):
                         try:
                             sent, next_cursor, reset, more = await served.poll(check, poll, cursor, threads_scope)
                         except Problem:
+                            for topic, data in watch.drain():
+                                yield _frame(None, topic, data)
                             yield "event: expired\ndata: {}\n\n"
                             return
                         for topic, data in watch.drain():

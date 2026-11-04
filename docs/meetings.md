@@ -184,14 +184,21 @@ format is a `422` that names the problem.
 - **Send to a bot** (the button, `POST /api/meetings/{id}/send`, or `send_to` on import): one Tico task
   for the bot, carrying the notes, the readable transcript and the meeting context. Sending is once;
   asking again for the same bot returns the same task.
-- **Action items.** Beside each meeting are three lists: **Doc updates**, **Tasks** and **Feature
+- **Pending tasks.** Beside each meeting are three lists: **Doc updates**, **Tasks** and **Feature
   requests**. A human adds items (with the quote and time they came from if they like) and the
-  meeting's owner pushes them. Push creates ordinary Tico tasks, never a card in another tool: a
+  readers edit, Send or Dismiss them once the meeting is shared. Send creates ordinary Tico tasks, never a card in another tool: a
   task item becomes a task for its named owner; a doc update becomes a task for `doc-updater`; a
   feature request becomes a task for whoever is primary for the product group. Product area, app and label
   are optional: use your team's names or leave them blank. Existing B/F and CA/PA codes still work.
-  A near-identical open task returns a link (**Push anyway** overrides).
-  Every pushed task ends with a footer naming the meeting and quoting the line.
+  A near-identical open task returns a link only if the sender can read it.
+  Every sent task ends with a footer naming the meeting and quoting the line. Participants-only meetings send
+  private tasks only when every reader (including a bot owner's managers) is already in the meeting.
+  The Recorder applies that check before Save too, using `live_meeting_id` on task creation.
+  Title, owner, due and details autosave after 700 ms or on blur, one write at a time. **Not saved · Retry** keeps
+  a failed draft; Send carries the final fields atomically. Incoming edits leave the focused field alone.
+  The web and saved Recorder views refetch on authorized `meeting_items` events, and close on `gone`.
+  `GET /api/v2/presence?place=meeting:<id>` lists current people; each window heartbeats its own `session_id`
+  every 15 seconds and leaves with `gone: true`. Sessions expire after 30 seconds.
 - **Comments.** Anyone who can open the meeting can add to the thread beside it.
 - **Routines.** `meeting.ready` fires when a team meeting with a transcript is first imported,
   once per meeting however often it is re-imported; a routine written `on: meeting.ready` gets one
