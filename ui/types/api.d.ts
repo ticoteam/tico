@@ -5149,6 +5149,25 @@ export type TeammateAccessView = {
 };
 };
 
+export type ThreadBrowse = {
+  next_cursor: string | null;
+  threads: Array<(ThreadView & {
+  member_count: number;
+})>;
+};
+
+export type ThreadCatchUp = {
+  count: number;
+  items: Array<{
+  mention: boolean;
+  messages: Array<ThreadMessage>;
+  more: number;
+  new_count: number;
+  thread: ThreadView;
+}>;
+  next_cursor: string | null;
+};
+
 export type ThreadCreate = {
   audience?: string;
   audience_group_id?: string | null;
@@ -5156,6 +5175,7 @@ export type ThreadCreate = {
   kind?: string;
   members?: Array<string>;
   parent_message_id?: string | null;
+  pin_for_members?: boolean;
   task_id?: string | null;
   title?: string;
 };
@@ -5164,6 +5184,8 @@ export type ThreadCrumb = {
   id: string;
   title: string;
 };
+
+export type ThreadDmCounts = Record<string, number>;
 
 export type ThreadEarlier = {
   home: string;
@@ -5195,6 +5217,7 @@ export type ThreadMembers = {
 
 export type ThreadMessage = {
   body?: string | null;
+  clipped?: boolean;
   conversation_id?: string;
   created_at?: string;
   deleted?: boolean;
@@ -5225,6 +5248,7 @@ export type ThreadPatch = {
   archived?: boolean | null;
   audience?: string | null;
   audience_group_id?: string | null;
+  pinned_for_everyone?: boolean | null;
   retention_days?: number | null;
   title?: string | null;
 };
@@ -5237,6 +5261,15 @@ export type ThreadPost = {
   refs?: Record<string, unknown>;
   text: string;
   to?: string | null;
+};
+
+export type ThreadRail = {
+  catch_up: number | null;
+  catch_up_ids: Array<string>;
+  dms: ThreadDmCounts;
+  next_cursor: string | null;
+  pinned: Array<ThreadView>;
+  threads: Array<ThreadView>;
 };
 
 export type ThreadReactions = Array<{
@@ -5268,8 +5301,10 @@ export type ThreadSearch = {
 
 export type ThreadSidebar = {
   attention: Array<Record<string, unknown>>;
+  bot_dms?: ThreadDmCounts;
   dms: Array<Record<string, unknown>>;
   next_cursor?: string | null;
+  person_dms?: ThreadDmCounts;
   threads: Array<ThreadView>;
 };
 
@@ -5302,6 +5337,7 @@ export type ThreadView = {
   parent_id?: string | null;
   parent_message_id?: string | null;
   path?: Array<unknown>;
+  pinned_for_everyone: boolean;
   retention_days?: number | null;
   root_id: string;
   task_id?: string | null;
@@ -6035,6 +6071,15 @@ export type AttachTaskFileBody = {
   text?: string | null;
 };
 export type AttachTaskFileResponse = TaskFileResult;
+
+/** GET /api/v2/threads/browse */
+export type BrowseThreadsParams = {
+  cursor?: string | null;
+  limit?: number | null;
+  q?: string | null;
+};
+export type BrowseThreadsBody = never;
+export type BrowseThreadsResponse = ThreadBrowse;
 
 /** POST /api/v2/task-bulk */
 export type BulkChangeTasksParams = {
@@ -8646,6 +8691,14 @@ export type ListTasksParams = {
 export type ListTasksBody = never;
 export type ListTasksResponse = TaskList;
 
+/** GET /api/v2/threads/catch-up */
+export type ListThreadCatchUpParams = {
+  cursor?: string | null;
+  limit?: number | null;
+};
+export type ListThreadCatchUpBody = never;
+export type ListThreadCatchUpResponse = ThreadCatchUp;
+
 /** GET /api/v2/threads/{thread_id}/members */
 export type ListThreadMembersParams = {
   cursor?: string | null;
@@ -8654,6 +8707,14 @@ export type ListThreadMembersParams = {
 };
 export type ListThreadMembersBody = never;
 export type ListThreadMembersResponse = ThreadMembers;
+
+/** GET /api/v2/threads/rail */
+export type ListThreadRailParams = {
+  cursor?: string | null;
+  limit?: number | null;
+};
+export type ListThreadRailBody = never;
+export type ListThreadRailResponse = ThreadRail;
 
 /** GET /api/v2/threads */
 export type ListThreadsParams = {
@@ -8834,6 +8895,13 @@ export type PauseWebhookParams = {
 };
 export type PauseWebhookBody = Pause;
 export type PauseWebhookResponse = WebhookChanged;
+
+/** PUT /api/v2/threads/{thread_id}/pin */
+export type PinThreadParams = {
+  thread_id: string;
+};
+export type PinThreadBody = never;
+export type PinThreadResponse = ThreadView;
 
 /** GET /api/v2/meetings/granola/connect/status */
 export type PollGranolaSignInParams = Record<string, never>;
@@ -10145,6 +10213,14 @@ export type UnlinkSlackLinkParams = {
 };
 export type UnlinkSlackLinkBody = never;
 export type UnlinkSlackLinkResponse = SlackLink;
+
+/** DELETE /api/v2/threads/{thread_id}/pin */
+export type UnpinThreadParams = {
+  "Idempotency-Key": string;
+  thread_id: string;
+};
+export type UnpinThreadBody = never;
+export type UnpinThreadResponse = ThreadView;
 
 /** DELETE /api/v2/messages/{message_id}/reactions/{emoji} */
 export type UnreactToMessageParams = {

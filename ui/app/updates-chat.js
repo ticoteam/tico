@@ -141,12 +141,13 @@ async function updcLoad(chat) {
     const html = rows.join('') || `<div class="updc-empty"><p class="muted">Ask ${esc(info.name)} about today's updates.</p>
       <button class="ghost" type="button" data-updc-hint="${esc(UPDC_HINT)}">${esc(UPDC_HINT)}</button></div>`;
     const time = () => { const wl = working && thread.querySelector('[data-updc-working]'); if (wl) wl.textContent = working; };
-    if (html === rendered) return time();
+    // Compared without the messages' "2m ago" (format.js agoStill): those move in place.
+    if (agoStill(html) === rendered) { agoTick(thread); return time(); }
     stickScroll(thread).update(() => {
       thread.innerHTML = html;
       if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast, reload: snapshot});
     }, {fresh: !!rendered});
-    rendered = html;
+    rendered = agoStill(html);
     time();
   };
   const snapshot = async () => {

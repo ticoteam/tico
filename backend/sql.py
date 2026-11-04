@@ -476,7 +476,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         # Page monitors and the weekly briefings (backend/market_watch.py, backend/market_briefing.py): public pages the
         # team watches and what the Librarian wrote about them, the market's to read.
         "market_watches": "1", "market_briefings": "1",
-        # One history table (backend/migrations/0063_history_events.py), each row read as its subject is: a task's
+        # One history table (backend/migrations/0064_history_events.py), each row read as its subject is: a task's
         # with the task (and its words through the content gate), a goal's with the goal, the company's and the
         # market's by everyone, the strategy's by the owner (its draft's words may be unpublished).
         "history_events": ("CASE subject_type WHEN 'task' THEN subject_id IN (SELECT id FROM tasks) AND "

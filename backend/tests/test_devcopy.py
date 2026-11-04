@@ -244,7 +244,7 @@ def test_a_copy_of_a_database_from_before_usage_facts_keeps_what_the_migration_m
 
 
 def test_a_copy_of_a_database_from_before_the_history_move_keeps_its_change_logs_for_the_move(tmp_path):
-    """devcopy prunes before the copy is migrated: the five change logs migration 0063 moves are kept whole (their rows,
+    """devcopy prunes before the copy is migrated: the five change logs migration 0064 moves are kept whole (their rows,
     and a deleted task's trash snapshot of them), so the move still has every row to copy into history_events."""
     import json
     from backend.tests.test_history_events import OLD, migration
@@ -254,9 +254,9 @@ def test_a_copy_of_a_database_from_before_the_history_move_keeps_its_change_logs
                                                      "old": "open", "new": "done", "actor": "human:ana",
                                                      "created_at": stamp}]}})
     with closing(sqlite3.connect(source)) as c, c:
-        # Before 0063: no history table, the five logs are there, and the migration has not run.
+        # Before 0064: no history table, the five logs are there, and the migration has not run.
         c.execute("DROP TABLE history_events")
-        c.execute("DELETE FROM schema_migrations WHERE version='0063_history_events'")
+        c.execute("DELETE FROM schema_migrations WHERE version='0064_history_events'")
         for statement in OLD:
             c.execute(statement)
         c.execute("INSERT INTO task_events VALUES('t1','task-1','2026-01-01T00:00:00Z','human:ana','status','open',"

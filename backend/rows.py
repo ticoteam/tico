@@ -228,6 +228,16 @@ class ThreadRankingRow(TypedDict):
     updated_at: str
 
 
+class ThreadPinRow(TypedDict):
+    """One actor's pin on a root thread (backend/thread_rail.py): `pinned` 0 unpins it for them over a pin for everyone."""
+    id: str
+    thread_id: str
+    actor: str
+    pinned: int
+    created_at: str
+    updated_at: str
+
+
 class MemoryTidyPacketRow(TypedDict):
     """Trusted runner custody for one editing and verification attempt."""
     attempt_id: str
@@ -299,7 +309,7 @@ class BudgetNodeRow(TypedDict):
 
 class HistoryEventRow(TypedDict):
     """One `history_events` row (SELECT *): one change to a task, a goal, the company profile, the strategy or the
-    market graph (backend/migrations/0063_history_events.py). `kind` is the field that changed or what happened, `data`
+    market graph (backend/migrations/0064_history_events.py). `kind` is the field that changed or what happened, `data`
     a JSON object of the subject type's extras."""
     id: str
     subject_type: str

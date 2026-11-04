@@ -241,7 +241,7 @@ def members_thread(api, members, body=None):
 def test_a_dm_a_person_brought_the_bot_into_is_solicited_and_a_legacy_message_checks_every_recipient(api):
     chart(api)
     # Ben opens a DM with product-design and Cara: product-design may answer there, Cara included.
-    dm = api.post("/api/v2/threads/dm", json={"members": ["bot:product-design", "human:cara"], "body": "Plan?"},
+    dm = api.post("/api/v2/threads/dm", json={"members": ["bot:product-design", "human:cara"], "body": "Plan?", "title": "Plan"},
                   headers=headers("ben-test"))
     assert dm.status_code == 200, dm.text
     r = api.post(f"/api/v2/threads/{dm.json()['id']}/messages", json={"text": "Here is the plan."},

@@ -147,9 +147,9 @@ KEEP = frozenset((
     "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
     "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
     "usage_facts", "usage_meter_reads", "budget_nodes", "task_caps", "reach_settings", "reach_lines",
-    # The five change logs before migration 0063 moved them into history_events. A copy of a database from before that
+    # The five change logs before migration 0064 moved them into history_events. A copy of a database from before that
     # migration still holds them: kept, so the copy's first start moves their rows (it is pruned before it is migrated).
-    # 0063 drops them, so they are named here only until then.
+    # 0064 drops them, so they are named here only until then.
     "task_events", "goal_events", "market_events", "company_events", "strategy_events",
     # A copy of a database from before migrations 0053/0054 still holds these: kept, so the dev server's first start
     # moves them into usage_facts and budget_nodes (the copy is pruned before it is migrated).
@@ -162,7 +162,7 @@ KEEP = frozenset((
     # Native threads (backend/threads.py) and teammate permissions (backend/teammate_access.py). A delivery to an
     # outside destination that has not gone is made moot below, so the copy never sends it.
     "message_deliveries", "message_mentions", "message_reactions", "message_revisions", "sequences",
-    "teammate_accesses", "thread_followers", "thread_members", "thread_routings",
+    "teammate_accesses", "thread_followers", "thread_members", "thread_pins", "thread_routings",
     "message_search_keys",    # the search index's keys (thread_search.py); its FTS table is copied whole too, and search joins messages
 )) | frozenset(finance.DEV_COPY_KEPT)
 # Work still to do: a job or attempt in any other state is finished and kept as history.

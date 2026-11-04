@@ -1075,6 +1075,17 @@ def is_human(actor):
     return actor_kind(actor) == "human"
 
 
+def person_sent(message):
+    """Whether a message is a person's: one a person sent, or the keeper's carrier of one (threads._carrier writes
+    refs.carries = the message and refs.from = its sender). The row-level test is person_sent_sql."""
+    message = message or {}
+    sender = str(message.get("sender_id") or "")
+    if is_human(sender):
+        return True
+    refs = _json(message.get("refs"), {}) or {}
+    return sender == KEEPER and bool(refs.get("carries")) and is_human(str(refs.get("from") or ""))
+
+
 def _json(value, default=None):
     """A stored JSON column as a value. A row a caller already decoded holds the value itself under the column's
     name (row['refs'] is the dict), so a dict or list passes through."""
@@ -1261,7 +1272,7 @@ def _statements(script):
         yield buffer.strip()
 
 
-# The logs migration 0059 moved into history_events. A numbered step that names one is skipped on a file that already
+# The logs migration 0064 moved into history_events. A numbered step that names one is skipped on a file that already
 # has the history table (one whose version was set back, as the upgrade tests do), so the step neither fails on the
 # missing table nor brings it back empty beside the table that replaced it.
 MOVED_TO_HISTORY = re.compile(r"\b(task_events|goal_events|market_events)\b")
@@ -1577,7 +1588,7 @@ def migrate(conn, adopt_legacy=False):
     conn.execute(TASKS_DUE_INDEX)                  # the scheduler's due-date reminder pass
     conn.execute(TASKS_RESUME_INDEX)               # ...and its quiet tasks whose deferred time came (quiet_work.due)
     # A task's history and the Tasks page's stats read history_events through the indexes its migration made
-    # (backend/migrations/0063_history_events.py).
+    # (backend/migrations/0064_history_events.py).
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_occurrences'").fetchone():
         conn.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,created_at DESC)")
@@ -2886,6 +2897,21 @@ def _learner(conn, actor):
                "your manager in chat; a person above you marks onboarding complete when you are ready.")
 
 
+# The built-in Health Monitor's slug (backend/health_monitor.py). Its id is its slug, so its actor is bot:health-monitor.
+HEALTH_MONITOR = "health-monitor"
+
+
+def _botops_only(conn, actor, target):
+    """The Health Monitor gives its fixes to BotOps and never a person a task, a question, a wait on one or a message
+    nobody asked for (docs/health-monitor.md): BotOps decides who to ask. Approvals and support reports do not come
+    here (approval_request writes its own notice), so they are unaffected."""
+    if actor != bot_actor(HEALTH_MONITOR) or not is_human(target or ""):
+        return
+    refuse(conn, actor, "botops-only", "The Health Monitor gives its fixes to BotOps, not to a person: file it with "
+           "`hub task create --owner botops` (or hand a task to it with `hub task update <id> --owner botops`), and "
+           "BotOps decides who to ask")
+
+
 # ----------------------------------------------------------------------------- registry sync
 def default_human(conn):
     """Who an unaddressed human item goes to: the roster's `default_user`, else its first
@@ -3069,6 +3095,7 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
                                   {"ask": "ask", "notice": "notice"}.get(kind, "chat"), allow_held=True)
 
     if kind == "ask":
+        _botops_only(conn, actor, target)
         depth = _ask_depth(conn, actor, refs, in_reply_to)
         if depth > MAX_ASK_DEPTH:
             refuse(conn, actor, "depth",
@@ -6169,6 +6196,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     owner = route(conn, actor, owner)
     _learner(conn, actor)
     target = _reach(conn, actor, owner, allow_planned=allow_planned)
+    _botops_only(conn, actor, target)
     _takes_tasks(conn, actor, target, title, parent_id, routine)
     _learning(conn, actor, target)
     if occurrence and occurrence_step:
@@ -6526,6 +6554,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     # The same owner sent in another form (`cmo` for `bot:cmo`) is no reassignment: nothing to record or wake.
     if owner is not None and resolve_actor(conn, owner) == row["owner_id"]:
         owner = None
+    if owner is not None:
+        _botops_only(conn, actor, resolve_actor(conn, owner))
     mine = (_task_party(conn, actor, row) or type_bot_works(conn, actor, row)
             or task_manager_acts(conn, actor, row))
     if actor == TASK_MANAGER and actor not in (row["owner_id"], row["requester_id"]):
@@ -7286,6 +7316,7 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
         refuse(conn, actor, "waiting_on",
                f"{value} is not a person or an active bot on the team: a task waits on a person with --on, or on "
                "another task with hub task wait <task> --on task:<other> (then --on bot:<its owner> names that bot)")
+    _botops_only(conn, actor, person)
     if not task_private_readable(conn, person, row if private is None else {**row, "private": int(bool(private))}):
         # A private task with no person on it can take one, its guest, when its owning bot waits on them.
         if private is not None or not bot_only(row) and not row.get("guest"):
@@ -7641,7 +7672,7 @@ def _task_changed(conn, task_id, actor, field, old, new, revision):
 
 
 # ----------------------------------------------------------------------------- history
-# What happened to each thing, one row per change, in `history_events` (backend/migrations/0063_history_events.py):
+# What happened to each thing, one row per change, in `history_events` (backend/migrations/0064_history_events.py):
 # a task's, a goal's, the company profile's, the strategy's and the market graph's. `kind` is the field that changed
 # (or what happened), `old`/`new` its values, `data` a JSON object of the type's own extras. A task's rows read the
 # way its old `task_events` rows did through TASK_EVENT_COLUMNS, so its history keeps its shape in every answer.
@@ -7722,6 +7753,14 @@ def unheld_sql(alias="j"):
 
 
 MESSAGE_TASK_SQL = f"coalesce({_task_ref_sql('$.task')}, {_task_ref_sql('$.task_id')}, cv.task_id)"
+
+
+def person_sent_sql(alias="m"):
+    """SQL (person_sent over a row): the message `alias` is a person's, sent by one or by the keeper carrying one. A
+    notice that carries a Home or thread message a bot hears is the person's for the claim's order, fences and
+    protections, as the message itself is."""
+    return (f"({alias}.sender_id LIKE 'human:%' OR ({alias}.sender_id='keeper' "
+            f"AND json_extract({alias}.refs,'$.carries') IS NOT NULL AND json_extract({alias}.refs,'$.from') LIKE 'human:%'))")
 # wait_detail's and answers_to's one-task reads (auto_tasks.prime_waits seeds them for many tasks)
 WAIT_ASKS_SQL = ("SELECT m.id, m.recipient_id FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
                  f"WHERE m.sender_id=? AND m.kind='ask' AND m.superseded_at IS NULL AND {MESSAGE_TASK_SQL}=? "
@@ -8141,7 +8180,7 @@ def stalled_tasks(conn, at=None, task_ids=None, queued_here=None):
     try:
         # A parked bot's queued job that is not a person's message never starts: it is not busy.
         busy = {r[0] for r in conn.execute(
-            "SELECT j.bot_id, max(j.state!='queued' OR coalesce(m.sender_id,'') LIKE 'human:%') FROM jobs j "
+            f"SELECT j.bot_id, max(j.state!='queued' OR coalesce({person_sent_sql()},0)) FROM jobs j "
             "LEFT JOIN messages m ON m.id=j.message_id WHERE j.state IN ('queued','leased','running') " +
             ("AND j.message_id NOT IN (SELECT value FROM json_each(?)) " if queued_here else "") +
             "GROUP BY j.bot_id", (json.dumps(queued_here),) if queued_here else ())

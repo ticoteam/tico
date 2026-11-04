@@ -375,6 +375,11 @@ def test_a_raise_arms_warn_and_cutoff_again(books):
         assert sorted(_events(c, ai)) == ["finance.budget.cutoff"] * 2 + ["finance.budget.warn"] * 2
 
 
+def _shown(body):
+    """What a response shows without its action id: ids are random hex and can contain "1000" by chance."""
+    return json.dumps({k: v for k, v in body.items() if k != "action_id"})
+
+
 def test_a_retry_after_a_revoked_grant_shows_no_amount(api):
     store = api.app.state.store
     with store.transaction() as c:
@@ -390,13 +395,13 @@ def test_a_retry_after_a_revoked_grant_shows_no_amount(api):
     with store.transaction() as c:
         FA.act(c, "human:ana", "view_revoke", {"grant_id": grant.result["grant_id"]}, "revoke")
     again = api.post("/api/v2/finance/actions", json=body, headers=key).json()
-    assert again["action_id"] == first["action_id"] and "1000" not in json.dumps(again)
+    assert again["action_id"] == first["action_id"] and "1000" not in _shown(again)
     seen = get(api, "finance/actions/" + first["action_id"], token="ben-test")
-    assert seen["status"] == first["status"] and "1000" not in json.dumps(seen)
+    assert seen["status"] == first["status"] and "1000" not in _shown(seen)
     with store.transaction() as c:                      # the receipt lapses: Finance replays the action itself
         c.execute("DELETE FROM idempotency WHERE actor='human:ben'")
     lapsed = api.post("/api/v2/finance/actions", json=body, headers=key).json()
-    assert lapsed["action_id"] == first["action_id"] and "1000" not in json.dumps(lapsed)
+    assert lapsed["action_id"] == first["action_id"] and "1000" not in _shown(lapsed)
     get(api, "finance/actions/" + first["action_id"], token="cara-test", expected=404)
     with store.transaction() as c:                      # cara is named to decide it: she reads what she decides
         c.execute("UPDATE fin_actions SET approval_to='human:cara' WHERE id=?", (first["action_id"],))

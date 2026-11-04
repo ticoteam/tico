@@ -1,4 +1,4 @@
-"""One history table (backend/migrations/0063_history_events.py): an existing file's five change logs move into
+"""One history table (backend/migrations/0064_history_events.py): an existing file's five change logs move into
 `history_events` with every value kept, the old tables go, a booted file stays as it is, rows other than a task's are
 append-only, a market subject kind the table does not know refuses the move, and the readers answer what the old
 tables answered (test_the_readers_answer_what_the_old_tables_did)."""
@@ -15,7 +15,7 @@ from backend.config import Settings
 from backend.store import Store
 
 FIXTURES = Path(__file__).parent / "fixtures"
-MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "0063_history_events.py"
+MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "0064_history_events.py"
 OLD = (
     "CREATE TABLE task_events (id TEXT PRIMARY KEY, task_id TEXT, created_at TEXT, actor TEXT, field TEXT, old TEXT, "
     "new TEXT, note TEXT, action_id TEXT, via TEXT)",
@@ -37,7 +37,7 @@ def boot(path):
 
 
 def migration():
-    spec = importlib.util.spec_from_file_location("history_events_0063", MIGRATION)
+    spec = importlib.util.spec_from_file_location("history_events_0064", MIGRATION)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -123,7 +123,7 @@ def test_an_existing_file_moves_on_boot_and_booting_again_changes_nothing(tmp_pa
         for statement in OLD:
             c.execute(statement)
         fill(c)
-        c.execute("DELETE FROM schema_migrations WHERE version='0063_history_events'")
+        c.execute("DELETE FROM schema_migrations WHERE version='0064_history_events'")
     boot(path)
     with sqlite3.connect(path) as c:
         assert not set(SOURCES) & {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}

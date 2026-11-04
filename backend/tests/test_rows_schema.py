@@ -23,6 +23,7 @@ TABLES = {
     rows.MemoryTidyPassRow: "memory_tidy_passes",
     rows.MemoryTidyPacketRow: "memory_tidy_packets",
     rows.ThreadRankingRow: "thread_rankings",
+    rows.ThreadPinRow: "thread_pins",
     rows.FeedbackRow: "feedbacks",
     rows.UsageFactRow: "usage_facts",
     rows.UsageMeterReadRow: "usage_meter_reads",

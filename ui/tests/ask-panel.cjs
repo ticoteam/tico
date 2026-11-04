@@ -357,6 +357,12 @@ const words = text => text.trim().split(/\s+/).length;
     await page.evaluate(() => ASK.refresh());
     assert.equal(await page.locator('#ask-panel [data-ask-thread] [data-kept]').count(), 1, 'a new step leaves the thread be');
     assert.match(await working.innerText(), /^Working · \d+s · Reading tasks$/);
+    // Two minutes on, a message's "5m ago" reads "7m ago": its time moves in place, the thread stays.
+    const stamp = page.locator('#ask-panel [data-ask-thread] [data-ago]').first();
+    assert.equal(await stamp.innerText(), '5m ago');
+    await page.evaluate(() => { const real = Date.now; Date.now = () => real() + 120000; ASK.draw(); Date.now = real; });
+    assert.equal(await page.locator('#ask-panel [data-ask-thread] [data-kept]').count(), 1, 'a message\'s time ticking leaves the thread be');
+    assert.equal(await stamp.innerText(), '7m ago');
     state.execution = {...state.execution, state: 'completed', label: 'Complete', parts: []};
     state.messages.push(msg('w2', 'bot:coo', 'Closed 12 tasks.'));
     await page.evaluate(() => ASK.refresh());

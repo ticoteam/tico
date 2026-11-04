@@ -120,11 +120,12 @@ def _unread_dms(c, viewer, me):
     return out
 
 
-def _holds(c, viewer):
+def _holds(c, viewer, limit=None, operations=HELD_OPERATIONS):
     """Writes held for review that this person reads: the ones they review, their own, and the ones held for them (the
-    person their bot reports up to, org_rule_check.represented). The item clears when the hold is decided."""
+    person their bot reports up to, org_rule_check.represented), the oldest `limit`. The item clears when the hold is
+    decided."""
     from . import org_rule_check
-    return org_rule_check.held_for(c, viewer.who, HELD_OPERATIONS) if viewer.is_person else []
+    return org_rule_check.held_for(c, viewer.who, operations, limit) if viewer.is_person else []
 
 
 def _held_thread(c, viewer, hold_id):

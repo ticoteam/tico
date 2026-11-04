@@ -87,7 +87,7 @@ RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_ch
            "federation_deferrals", "federation_outbox_items", "federation_receipts", "federation_messages",
            "federation_items", "federation_members", "federation_threads", "federation_directory_entries",
            "federation_peerings", "federation_keys", "federation_states",
-           # 0063_history_events moves these five logs into history_events (backend/tests/test_history_events.py).
+           # 0064_history_events moves these five logs into history_events (backend/tests/test_history_events.py).
            "task_events", "goal_events", "market_events", "company_events", "strategy_events"}
 # Moved from runners to runner_states by backend/migrations/0062_runner_states.py after the renames named them.
 RUNNER_STATE = {name for name, _ in importlib.import_module("backend.migrations.0062_runner_states").STATE}
