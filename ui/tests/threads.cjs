@@ -108,6 +108,7 @@ const homes = {'bot:ops': 'h-ops', 'human:bea': 'h-bea', 'human:cy': 'h-cy', 'hu
 let dmRows = null, callsOff = false, railOff = false, threadsOff = false, threadsGate = null;
 // Start call as the server answers it: the call it makes (after a moment), or none.
 let callMade = null, joinRefused = false, startWait = 150;
+let startGate = null, leaveGate = null, callLive = null;
 async function open(browser, who, {phone = false, sse = null} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
@@ -220,10 +221,11 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
     if (one) { seen.reads.push(one[1]); seen.readSeqs.push(one[1] + ':' + JSON.parse(req.postData() || '{}').seq); return json({ok: true}); }
     if (callMade && method === 'POST' && /^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) {
       seen.calls.push('start:' + callMade.id);
-      await new Promise(r => setTimeout(r, startWait));
+      if (startGate) await new Promise(go => startGate.push(go));
+      else await new Promise(r => setTimeout(r, startWait));
       return json({call: callMade});
     }
-    if (/^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) return callsOff && method === 'POST' ? json({error: {code: 'meet_unavailable'}}, 503) : json({calls: [], next_before: null, available: !callsOff});
+    if (/^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) return callsOff && method === 'POST' ? json({error: {code: 'meet_unavailable'}}, 503) : json({calls: callLive ? [callLive] : [], next_before: null, available: !callsOff});
     const settings = p.match(/^\/api\/v2\/threads\/([^/]+)$/);
     if (settings && method === 'PATCH') {
       const body = JSON.parse(req.postData() || '{}');
@@ -260,6 +262,7 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
     const call = p.match(/^\/api\/v2\/calls\/([^/]+)\/(join|leave|end|token)$/);
     if (call) {
       seen.calls.push(call[2] + ':' + call[1]);
+      if (call[2] === 'leave' && leaveGate) await new Promise(go => leaveGate.push(go));
       if (call[2] === 'join' && joinRefused) return json({error: {code: 'call_access_removed'}}, 403);
       if (call[2] === 'join') { await new Promise(r => setTimeout(r, 150)); return json({token: 'tok-' + call[1], url: 'wss://meet.acme.example', call: {id: call[1], connector: 'human:ana'}}); }
       if (call[2] === 'end') return json({error: {code: 'internal', detail: 'Could not end'}}, 500);
@@ -541,6 +544,45 @@ let browser = null;
     await page.locator('#call-bar [data-cb="leave"]').click();
     await page.waitForFunction(() => !document.querySelector('#call-bar'));
     callMade = null; startWait = 150;
+
+    // Start B while in A; its event redraws Join before Start answers. Join waits for A's held leave, then Start
+    // answers and leaves the seat to Join. Hidden or refused, Join owes that seat back once; connected, it keeps it.
+    for (const [id, finish] of [['c8', 'hidden'], ['c9', 'refused'], ['c10', 'joined']]) {
+      await page.evaluate(async id => { window.__rooms.length = 0; await callJoin('t4', {id: id + '-a'}, 'A'); }, id);
+      await page.locator('.thv-call[data-call="start"]').first().waitFor();
+      callMade = {id, state: 'live', connector: 'human:ana'}; startGate = []; leaveGate = [];
+      await page.evaluate(() => { window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'); });
+      for (let i = 0; i < 20 && !startGate.length; i++) await page.waitForTimeout(25);
+      assert.equal(startGate.length, 1, 'Start B waits for its response');
+      callLive = callMade;
+      await page.evaluate(() => threadViewsLive('threads', {kind: 'call.started', thread_id: 't-plan'}));
+      await page.locator('.thv-call[data-call="join"]').first().click();
+      for (let i = 0; i < 20 && !leaveGate.length; i++) await page.waitForTimeout(25);
+      assert.equal(leaveGate.length, 1, 'Join B waits for A to leave');
+      const starts = startGate; startGate = null; starts.forEach(go => go());
+      await page.evaluate(() => window.__starting);
+      assert.deepEqual(await page.evaluate(id => [CALL?.id, CALL_JOINING.get(id)], id), [id + '-a', 1]);
+      assert.equal(seen.calls.filter(c => c === 'leave:' + id).length, 0, 'Start B defers cleanup to Join');
+      if (finish === 'hidden') assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: true});
+      joinRefused = finish === 'refused';
+      const leaves = leaveGate; leaveGate = null; leaves.forEach(go => go());
+      await page.waitForFunction(() => CALL_JOINS === 0);
+      await page.waitForTimeout(150);
+      assert.equal(seen.calls.filter(c => c === 'leave:' + id).length, finish === 'joined' ? 0 : 1,
+        'only an abandoned Join gives Start B\'s seat back, once: ' + seen.calls);
+      assert.equal(seen.calls.filter(c => c === 'join:' + id).length, finish === 'hidden' ? 0 : 1);
+      if (finish === 'joined') {
+        assert.deepEqual(await page.evaluate(() => [CALL?.id, window.__rooms.filter(r => r.mic && !r.gone).length]), [id, 1]);
+        callLive = null;
+        await page.locator('#call-bar [data-cb="leave"]').click();
+        await page.waitForFunction(() => !document.querySelector('#call-bar'));
+      } else {
+        assert.deepEqual(await page.evaluate(() => [CALL, window.__rooms.filter(r => !r.gone).length]), [null, 0]);
+        assert.equal(await page.locator('#call-bar').count(), 0);
+      }
+      callMade = callLive = null; joinRefused = false;
+      await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); CALL_THREADS.set('t-plan', {call: null}); thvDraw(v); });
+    }
 
     // An older sub-thread opened by its link keeps the way back, and reads flat too.
     await page.goto('https://tico-ui.test/#/thread/t-sub');

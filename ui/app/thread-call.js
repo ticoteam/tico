@@ -18,12 +18,19 @@ let CALL_GEN = 0;
 let CALL_JOINS = 0;
 // Call id -> joins of it still on their way, so a cancelled Start call never gives back a seat a Join has taken.
 const CALL_JOINING = new Map();
+// Start's seat waits for the last Join to settle: a cancelled or failed Join still owes it back.
+// Any leave settles it too, so the last Join cannot give it back twice.
+const CALL_OWED = new Set();
 // Named here so scripts/build-icon-font.py keeps them in the icon subset.
 const CALL_ICONS = {mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', bot: 'smart_toy', leave: 'call_end'};
 
 const callCode = e => (typeof e?.body?.error === 'object' ? e.body.error?.code : e?.body?.error) || '';
 const callPath = id => '/v2/calls/' + encodeURIComponent(id);
 const callShareable = () => !!navigator.mediaDevices?.getDisplayMedia;
+function callSeatLeave(id) {
+  CALL_OWED.delete(id);
+  post(callPath(id) + '/leave', {}, undefined, {keepalive: true}).catch(() => {});
+}
 function callViewsDraw(threadId) { for (const v of THV_VIEWS) if (v.id === threadId && !v.gone) thvDraw(v); }
 function callNoted(threadId, e) {
   if (e?.status === 503) CALL_THREADS.set(threadId, {...CALL_THREADS.get(threadId), off: true});
@@ -71,7 +78,10 @@ async function callAction(view, kind) {
     if (gen !== CALL_GEN) {
       // Hidden or overtaken while the call was being made: the server already counts this person in it, so the seat goes
       // back, unless a Join of the same call (from the header the call's start redrew) is in it or on its way.
-      if (kind === 'start' && call?.id && CALL?.id !== call.id && !CALL_JOINING.get(call.id)) post(callPath(call.id) + '/leave', {}, undefined, {keepalive: true}).catch(() => {});
+      if (kind === 'start' && call?.id) {
+        if (CALL_JOINING.get(call.id)) CALL_OWED.add(call.id);
+        else if (CALL?.id !== call.id) callSeatLeave(call.id);
+      }
       return;
     }
     if (call?.id) await callJoin(id, call, threadTitle(view.thread), gen);
@@ -101,7 +111,11 @@ async function callJoin(threadId, call, title, gen = ++CALL_GEN) {
   try { await callJoinNow(threadId, call, title, gen); } finally {
     CALL_JOINS--;
     const left = CALL_JOINING.get(call.id) - 1;
-    if (left) CALL_JOINING.set(call.id, left); else CALL_JOINING.delete(call.id);
+    if (left) CALL_JOINING.set(call.id, left);
+    else {
+      CALL_JOINING.delete(call.id);
+      if (CALL_OWED.delete(call.id) && CALL?.id !== call.id) callSeatLeave(call.id);
+    }
   }
 }
 async function callJoinNow(threadId, call, title, gen) {
@@ -109,7 +123,7 @@ async function callJoinNow(threadId, call, title, gen) {
   if (gen !== CALL_GEN) return;
   const j = await post(callPath(call.id) + '/join', {});
   // Overtaken while joining: this seat is given back and the newer join goes on.
-  const stale = () => { if (gen === CALL_GEN) return false; post(callPath(call.id) + '/leave', {}).catch(() => {}); return true; };
+  const stale = () => { if (gen === CALL_GEN) return false; callSeatLeave(call.id); return true; };
   if (stale()) return;
   const LK = await callLib();
   if (stale()) return;
@@ -186,6 +200,7 @@ async function callLeave({end = false} = {}) {
   } else {
     try { await post(callPath(here.id) + '/leave', {}); } catch {}
   }
+  CALL_OWED.delete(here.id);
   callDone(here);
 }
 function callDone(here) {
@@ -261,7 +276,7 @@ function callHidden() {
   if (here) {
     here.leaving = true;
     callStopLocal(here);
-    post(callPath(here.id) + '/leave', {}).catch(() => {});
+    callSeatLeave(here.id);
     callDone(here);
   }
   return {inCall};
