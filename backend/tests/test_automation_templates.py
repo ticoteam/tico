@@ -1,8 +1,11 @@
 """The inbox templates (backend/automation_templates): each one is a flow the hub checks once its roles are filled; the fill
-resolves roles on the org chart, takes out what the owner may not use, sets the llm step's `as` by owner kind and gives
-a group Sort; a person cannot fill one for an inbox they cannot read; and a fill saves nothing."""
+resolves roles on the org chart to the first bot that can take the work, takes out what the owner may not use, sets the
+llm step's `as` by owner kind and gives a group Sort; a group with no lead to act as is refused (422) when nothing it
+would do can run; a person cannot fill one for an inbox they cannot read; and a fill saves nothing."""
+import json
 from urllib.parse import urlencode
 
+from backend import automation_actions as AA
 from backend import automation_flow as F
 from backend import automation_templates as T
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
@@ -25,6 +28,18 @@ def listed(api, name):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO slack_channels(key,name,readers,created_at,updated_at) VALUES(?,?,?,?,?)",
                   ("#" + name, name, "[]", "2026-10-28T00:00:00Z", "2026-10-28T00:00:00Z"))
+
+
+def set_config(api, bot, key, value):
+    """Set one key of a bot's config (bot_config's JSON), e.g. its profile or harness."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config=json_set(config,?,?) WHERE bot=?", (f"$.{key}", value, bot))
+
+
+def onboarding(api, bot):
+    """A bot that is active on the chart but still onboarding (needs_setup): it learns and takes no task yet."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot=?", (bot,))
 
 
 def fill(api, tid, owner, inbox, token="ana-test", expected=200):
@@ -86,16 +101,22 @@ def test_a_destination_with_no_bot_to_reach_is_dropped_with_what_points_at_it(ap
     assert "support" not in steps["draft"]["choose"]["to"] and steps["draft"]["choose"]["default"] == "me"
 
 
-def test_a_group_owner_gets_sort_not_a_choose(api):
+def test_a_group_owner_gets_sort_and_its_lead_runs_the_task_and_meeting_routes(api):
     set_templates(api, STAFF)
-    gid = post(api, "groups", {"name": "Acme Support"})["id"]
+    gid = post(api, "groups", {"name": "Acme Desk", "add": {"people": ["ana"]}, "lead": "person:ana"})["id"]
     listed(api, "general")                                 # a group reads a Slack channel, not a mailbox
     flow = fill(api, "founder", f"group:{gid}", "slack:#general")
+    F.check(flow)
     assert list(F.choosing(flow["steps"])) == []
     assert all("as" not in step for step in flow["steps"])
     sort = by_id(flow["steps"])["draft"]
     assert sort["type"] == "decide" and sort["level"] == "high"
     assert set(sort["questions"]["route"]["criteria"]) == {"me", "legal", "engineering", "finance", "marketing", "archive"}
+    assert by_id(flow["destinations"])["engineering"]["then"][0]["args"]["owner"] == "bot:cpo"       # the task route
+    route = by_id(flow["steps"])["route"]["rules"]
+    assert any(a["do"] == "draft_reply" for rule in route for a in rule.get("then", []))            # the meeting route
+    with api.app.state.store.read() as c:
+        assert AA.acts_as(c, {"flow": {"owner": f"group:{gid}"}}) == "human:ana"    # the lead is who they run as
 
 
 def test_blank_is_a_sort_to_me_or_archive(api):
@@ -142,3 +163,97 @@ def test_the_cli_fills_the_same_template_as_the_api(api):
     assert [t["id"] for t in cli(api, "ana-test", "templates")["templates"]] == ["founder", "support", "sales", "blank"]
     via_cli = cli(api, "ana-test", "template", "founder", "--owner", "person:ana", "--inbox", "ana@acme.example")
     assert via_cli == fill(api, "founder", "person:ana", "ana@acme.example")
+
+
+def test_an_active_bot_still_onboarding_is_passed_over_for_the_next_one(api):
+    set_templates(api, {**STAFF, "doc-updater": "engineering-lead"})
+    onboarding(api, "cpo")                                 # active on the chart, but it learns and takes no task yet
+    flow = fill(api, "founder", "person:ana", "ana@acme.example")
+    assert by_id(flow["destinations"])["engineering"]["then"][0]["args"]["owner"] == "bot:doc-updater"
+    F.check(flow)
+
+
+def test_a_bot_whose_profile_takes_no_tasks_is_passed_over_for_the_next_one(api):
+    set_templates(api, {**STAFF, "doc-updater": "engineering-lead"})
+    set_config(api, "cpo", "profile", "responder")         # answers in chat and takes no tasks
+    flow = fill(api, "founder", "person:ana", "ana@acme.example")
+    assert by_id(flow["destinations"])["engineering"]["then"][0]["args"]["owner"] == "bot:doc-updater"
+
+
+def test_a_bot_on_a_synced_harness_is_passed_over_for_the_next_one(api):
+    set_templates(api, {**STAFF, "doc-updater": "engineering-lead"})
+    set_config(api, "cpo", "harness", "dots")              # works on another platform and only syncs its chat here
+    flow = fill(api, "founder", "person:ana", "ana@acme.example")
+    assert by_id(flow["destinations"])["engineering"]["then"][0]["args"]["owner"] == "bot:doc-updater"
+
+
+def test_a_wake_that_becomes_a_task_goes_to_the_next_bot_that_takes_one(api):
+    # Marketing's first candidate is onboarding, and Ana may tell neither of Ben's bots: the task goes to the second.
+    set_templates(api, {**STAFF, "cpo": "marketing-lead", "doc-updater": "engineering-lead"})
+    onboarding(api, "cpo")
+    marketing = by_id(fill(api, "founder", "person:ana", "ana@acme.example")["destinations"])["marketing"]
+    assert [a["do"] for a in marketing["then"]] == ["create_task"]
+    assert marketing["then"][0]["args"]["owner"] == "bot:product-design"
+
+
+def test_a_wake_that_becomes_a_task_with_no_bot_left_drops_the_destination(api):
+    set_config(api, "product-design", "profile", "responder")       # the only marketing bot takes no tasks
+    flow = fill(api, "founder", "person:ana", "ana@acme.example")
+    assert "marketing" not in by_id(flow["destinations"])
+    steps = by_id(flow["steps"])
+    assert "partner" not in steps["ask"]["questions"]              # only the rule to Marketing asked it
+    assert all(rule.get("to") != "marketing" for rule in steps["route"]["rules"])
+    assert "marketing" not in steps["draft"]["choose"]["to"]
+    F.check(flow)
+
+
+def test_a_responder_owner_still_gets_a_wake_for_itself(api):
+    set_templates(api, STAFF)
+    set_config(api, "product-design", "profile", "responder")
+    # A wake is a chat message, not a task: the bot may wake itself whatever its profile.
+    with api.app.state.store.read() as c:
+        flow = T.fill(c, "founder", "bot:product-design", "ben@acme.example", api.app.state.store.settings)
+    marketing = by_id(flow["destinations"])["marketing"]
+    assert [a["do"] for a in marketing["then"]] == ["wake_bot"]
+    assert marketing["then"][0]["args"]["bot"] == "bot:product-design"
+
+
+def test_an_onboarding_bot_owner_keeps_only_what_it_may_do(api):
+    set_templates(api, STAFF)
+    onboarding(api, "cpo")                                 # the owner files no task while it learns; its wakes stand
+    with api.app.state.store.read() as c:
+        flow = T.fill(c, "founder", "bot:cpo", "ben@acme.example", api.app.state.store.settings)
+    F.check(flow)
+    assert [d["id"] for d in flow["destinations"]] == ["me", "marketing", "archive"]
+
+
+def test_a_group_with_no_lead_is_refused_with_a_422(api):
+    set_templates(api, STAFF)
+    gid = post(api, "groups", {"name": "Acme Support"})["id"]
+    listed(api, "general")
+    for tid in T.ORDER:                                    # nothing one of them does runs for a group with no lead
+        fill(api, tid, f"group:{gid}", "slack:#general", expected=422)
+
+
+def test_pruning_a_group_with_no_lead_takes_out_the_rules_that_need_someone_to_act(api):
+    steps = T._prune(T.load("founder")["steps"], set(), no_actor=True)
+    assert "meet" not in by_id(steps)["ask"]["questions"]          # its only question was for the reply
+    acts = {a["do"] for step in steps if step["type"] == "filter" for rule in step["rules"] for a in rule.get("then", [])}
+    assert not acts & set(T.NEEDS_ACTOR)
+
+
+def test_every_template_action_is_one_the_engine_runs_and_none_is_unsubscribe(api):
+    for tid in T.ORDER:
+        tpl = T.load(tid)
+        dos = {a["do"] for dest in tpl["destinations"] for a in dest["then"]}
+        dos |= {a["do"] for step in tpl["steps"] if step["type"] == "filter" for rule in step["rules"]
+                for a in rule.get("then", [])}
+        assert dos <= set(F.ACTIONS), tid
+    assert "unsubscribe" not in json.dumps([T.load(tid) for tid in T.ORDER])
+
+
+def test_the_founder_finance_rule_reads_the_wording_and_names_no_vendor(api):
+    rule = next(r for r in T.load("founder")["steps"][0]["rules"] if r.get("to") == "finance")
+    assert [cond["field"] for cond in rule["when"]] == ["message.subject", "message.snippet"]
+    text = json.dumps([T.load(tid) for tid in T.ORDER]).lower()
+    assert not any(name in text for name in ("kapitus", "plaid", "mercury"))

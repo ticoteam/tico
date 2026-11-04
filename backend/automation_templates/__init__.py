@@ -1,9 +1,9 @@
 """The inbox templates a new inbox starts from: founder, support, sales and blank, kept as flow JSON beside this module.
 
 A template names the people its destinations reach by role (`{"role": "legal_lead"}`). `fill` resolves each role to an
-active bot on the org chart, takes out what the owner may not use and returns the flow as the hub would save it:
-`enabled` off, nothing written. The caller checks it with automations._checked, which also tests the inbox and the
-owner's rights, and POST /api/v2/automations saves it.
+active bot on the org chart that can take the work it is given, takes out what the owner may not use and returns the
+flow as the hub would save it: `enabled` off, nothing written. The caller checks it with automations._checked, which also
+tests the inbox and the owner's rights, and POST /api/v2/automations saves it.
 """
 import copy
 import json
@@ -14,8 +14,9 @@ from ..store import H, Problem
 
 HERE = Path(__file__).resolve().parent
 ORDER = ("founder", "support", "sales", "blank")
-# A role is a catalog template (backend/company_file/roles.json). The first active bot made from one of its templates fills
-# it, the bots in chart order by id.
+# A role is a catalog template (backend/company_file/roles.json). The bots made from its templates fill it: each
+# template's bots in chart order by id, the first template's before the next's. The work goes to the first of them that
+# can take it (_pick), so a bot that cannot is skipped, not failed.
 ROLES = {
     "legal_lead": ("general-counsel",),
     "engineering_manager": ("engineering-manager", "engineering-lead"),
@@ -24,6 +25,11 @@ ROLES = {
     "support_lead": ("support-lead",),
     "sales_lead": ("sales-lead",),
 }
+# The actions that act as someone: a task is opened as the owner's actor, a reply is drafted as it (automation_actions
+# _create_task and _actor). A group with no lead to act as cannot run them.
+NEEDS_ACTOR = ("create_task", "draft_reply", "send_reply")
+# The actions a Slack channel shows nothing for (automation_actions._slack): a group hears only Slack channels.
+NO_OP_IN_SLACK = ("archive", "leave_for_you", "label", "forward")
 
 
 def load(tid):
@@ -53,33 +59,58 @@ def _active_by_template(c, chart):
     return found
 
 
-def _role_bot(found, role):
-    for template in ROLES[role]:
-        if found.get(template):
-            return found[template][0]
+def _candidates(found, role):
+    """The bots that could fill `role`, in the order _active_by_template gives them, per template in ROLES' order."""
+    return [slug for template in ROLES[role] for slug in found.get(template, [])]
+
+
+def _takes_task(c, actor, bot, title):
+    """Whether H.task_create would take a task from `actor` for bot `bot` (a bot id), asked without recording a refusal.
+    The gates are task_create's own, in its order: the actor is not an onboarding bot (_learner); the bot is active
+    (_reach) and not onboarding (_learning); and no task rule refuses it, a synced harness or a profile that takes no such
+    task (task_taking_refusal). With no actor at all (a group with no lead) none is taken. `title` is the template's, its
+    placeholders not yet filled in, so a Reviewer, whose profile takes only review and QA requests, is skipped here."""
+    if not actor or (H.is_bot(actor) and H._onboarding(c, H.actor_id(actor))):
+        return False
+    if (H.bot(c, bot) or {}).get("state") != "active" or H._onboarding(c, bot):
+        return False
+    return H.task_taking_refusal(c, actor, "bot:" + bot, title, None, False) is None
+
+
+def _title(args, dest):
+    """The title a task is filed under, as automation_actions._create_task reads it."""
+    return " ".join(str(args.get("title") or dest["name"]).split())[:300]
+
+
+def _pick(c, A, owner, actor, found, dest, do, args, assistant_bot, role):
+    """The action for one role-filled action and the bot it goes to, or None when no candidate takes it. A create_task
+    goes to the first candidate that takes a task. A wake_bot goes to the first candidate the owner may tell: a wake is
+    the runtime's _tell_bot, which checks only that the bot is active, and every candidate is. A candidate the owner may
+    not tell gets a task instead, if it takes one."""
+    title, text = _title(args, dest), args.get("text", "")
+    for bot in _candidates(found, role):
+        if do == "create_task":
+            if _takes_task(c, actor, bot, title):
+                return do, {**args, "owner": "bot:" + bot}
+        elif A.may_tell(c, owner, bot, assistant_bot):
+            return "wake_bot", {**args, "bot": "bot:" + bot}
+        elif _takes_task(c, actor, bot, title):
+            return "create_task", {"title": title, "body": text, "owner": "bot:" + bot}
     return None
 
 
-def _fill_actions(c, A, owner, found, dest, assistant_bot):
-    """The destination's actions for this owner, or None when one of them has no bot to reach (the destination is dropped).
-    A wake a bot the owner may not tell becomes a task for that bot: a task may be opened for any active bot."""
+def _fill_actions(c, A, owner, actor, found, dest, assistant_bot):
+    """The destination's actions for this owner, or None when one of them has no bot that takes it (the destination is
+    dropped)."""
     then = []
     for action in dest.get("then") or []:
         do, args = action["do"], dict(action.get("args") or {})
-        if do == "create_task" and isinstance(args.get("owner"), dict):
-            bot = _role_bot(found, args["owner"]["role"])
-            if bot is None:
+        role = args.get("owner") if do == "create_task" else args.get("bot") if do == "wake_bot" else None
+        if isinstance(role, dict):
+            picked = _pick(c, A, owner, actor, found, dest, do, args, assistant_bot, role["role"])
+            if picked is None:
                 return None
-            args["owner"] = "bot:" + bot
-        elif do == "wake_bot" and isinstance(args.get("bot"), dict):
-            bot = _role_bot(found, args["bot"]["role"])
-            if bot is None:
-                return None
-            if A.may_tell(c, owner, bot, assistant_bot):
-                args = {"bot": "bot:" + bot, "text": args.get("text", "")}
-            else:
-                do = "create_task"
-                args = {"title": args.pop("title", dest["name"]), "body": args.pop("text", ""), "owner": "bot:" + bot}
+            do, args = picked
         then.append({"do": do, "args": args})
     return then
 
@@ -92,11 +123,12 @@ def _asked(rules, out):
 
 
 def _pair(decide, follow):
-    """A decide step with the filter that reads its answers, both pruned. [] when none of its questions is asked any more.
-    A choice needs two options: with one destination left, the filter sends every thread there."""
+    """A decide step with the filter that reads its answers, both pruned. When no rule reads an answer any more, the
+    decide step goes and the filter stays, with the rules that never read one. A choice needs two options: with one
+    destination left, the filter sends every thread there."""
     questions = {qid: q for qid, q in decide["questions"].items() if qid in _asked(follow["rules"], decide.get("out"))}
     if not questions:
-        return []
+        return [follow]
     reached = list(dict.fromkeys(rule["to"] for rule in follow["rules"] if rule.get("to")))
     for question in questions.values():
         if question["type"] == "choice":
@@ -111,13 +143,32 @@ def _pair(decide, follow):
     return [decide, follow]
 
 
-def _prune(steps, gone):
+def _without_actions(rule, dos):
+    """The rule without its actions in `dos`; None when it then has nothing to do and points nowhere."""
+    then = [action for action in rule["then"] if action["do"] not in dos]
+    if not then and not rule.get("to"):
+        return None
+    rule = {key: value for key, value in rule.items() if key != "then"}
+    return {**rule, "then": then} if then else rule
+
+
+def _prune(steps, gone, no_actor=False):
     """The steps with what points at a destination the owner may not use taken out: its rules, the questions only those
-    rules asked, a choice's options that no rule reaches, and an llm step's choices. A step left with nothing goes."""
+    rules asked, a choice's options that no rule reaches, and an llm step's choices. With `no_actor` (a group with no lead
+    to act as) a rule's actions that need someone to act go too. A step left with nothing goes."""
     steps = [copy.deepcopy(step) for step in steps]
     for step in steps:
         if step["type"] == "filter":
-            step["rules"] = [rule for rule in step.get("rules") or [] if rule.get("to") not in gone]
+            kept = []
+            for rule in step.get("rules") or []:
+                if rule.get("to") in gone:
+                    continue
+                if no_actor and rule.get("then"):
+                    rule = _without_actions(rule, NEEDS_ACTOR)
+                    if rule is None:
+                        continue
+                kept.append(rule)
+            step["rules"] = kept
     out, skip = [], set()
     for n, step in enumerate(steps):
         if n in skip:
@@ -161,9 +212,19 @@ def _as_sort(step, tpl):
             {"id": f"{step['id']}_route", "type": "filter", "rules": rules}]
 
 
+def _useful(destinations, steps):
+    """Whether the flow does anything a Slack channel shows: an action other than the no-ops there."""
+    dos = [action["do"] for dest in destinations for action in dest["then"]]
+    dos += [action["do"] for step in steps if step["type"] == "filter" for rule in step.get("rules") or []
+            for action in rule.get("then") or []]
+    return any(do not in NO_OP_IN_SLACK for do in dos)
+
+
 def fill(c, tid, owner, inbox, settings=None):
     """The template `tid` filled in for `owner` on `inbox`: a flow as the hub would save it, `enabled` off. Not checked
-    here (automations._checked does that, with the inbox and the rights); unknown templates and owners are refused."""
+    here (automations._checked does that, with the inbox and the rights). Unknown templates and owners are refused, and so
+    is a group with no lead to act as when nothing the template does would run there."""
+    from .. import automation_actions as AA
     from .. import automations as A
     tpl = load(tid)
     if tpl is None:
@@ -172,20 +233,24 @@ def fill(c, tid, owner, inbox, settings=None):
     kind, _, ident = owner.partition(":")
     if kind not in ("person", "bot", "group") or not ident:
         raise Problem("invalid", "owner is person:<id>, bot:<slug> or group:<id>", 422)
-    if kind == "bot" and H.resolve_bot(c, ident):
-        ident = H.resolve_bot(c, ident)["id"]
+    if kind == "bot" and (found_bot := H.resolve_bot(c, ident)):
+        ident = found_bot["id"]
         owner = f"bot:{ident}"
     chart = A.Chart(c)
     found = _active_by_template(c, chart)
+    actor = AA.acts_as(c, {"flow": {"owner": owner}})
     assistant_bot = getattr(settings, "assistant_bot", None)
     destinations, gone = [], set()
     for dest in tpl["destinations"]:
-        then = _fill_actions(c, A, owner, found, dest, assistant_bot)
-        if then is None:
+        then = _fill_actions(c, A, owner, actor, found, dest, assistant_bot)
+        if then is None or (not actor and any(action["do"] in NEEDS_ACTOR for action in then)):
             gone.add(dest["id"])
         else:
             destinations.append({**{k: v for k, v in dest.items() if k != "then"}, "then": then})
-    steps = _prune(tpl["steps"], gone)
+    steps = _prune(tpl["steps"], gone, no_actor=not actor)
+    if not actor and not _useful(destinations, steps):
+        raise Problem("invalid", f"{owner} has no lead to act as, so the {tpl['name']} template would do nothing in its "
+                      "Slack channel. Give the group a lead first.", 422)
     if kind == "group":
         steps = [kept for step in steps for kept in _as_sort(step, tpl)]
     else:

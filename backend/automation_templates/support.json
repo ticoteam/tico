@@ -1,7 +1,7 @@
 {
   "id": "support",
   "name": "Support desk",
-  "summary": "A shared support inbox. Unsubscribes and promotions are archived; five questions send each message to the desk, engineering, billing, sales or the archive; the last step drafts a reply for review.",
+  "summary": "A shared support inbox. Promotions are archived; five questions send each message to the desk, engineering, billing, sales or the archive; the last step drafts a reply for review.",
   "sort": {
     "instructions": "Where does this message belong? Pick the one that fits best.",
     "criteria": {
@@ -41,9 +41,6 @@
   ],
   "steps": [
     {"id": "rules", "type": "filter", "rules": [
-      {"when": [{"field": "message.unsubscribe", "op": "is", "value": true},
-                {"field": "message.known_sender", "op": "is_not", "value": true}],
-       "to": "archive", "next": "end", "stop": true},
       {"when": [{"field": "message.category", "op": "is", "value": "promotions"}],
        "to": "archive", "next": "end", "stop": true}
     ]},
