@@ -73,6 +73,8 @@ def test_an_unstarted_check_back_wake_is_obsolete_at_claim(api):
     ready(api, r, ["ops"])
     with api.app.state.store.transaction() as c:
         row = task(c)
+        # Under way, not open: an open task of an active bot is an assigned start the claim would hand out instead.
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (row["id"],))
         c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")
         wake = H._wake(c, row, "bot:ops", "Check on it.", {"wake": "check_back", "task": row["id"]}, trigger="check_back")
     assert claim(api, r, "ops") is None, "a legacy check-back nobody has started is obsolete, whatever its task says"
