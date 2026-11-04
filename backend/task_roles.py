@@ -2,7 +2,7 @@
 
 Besides its owner, any number of people or bots can be on a task, each under a role: a row of
 `task_roles` (`task_id`, `role`, `actor`). A role is a short name the team chooses (`developer`,
-`reviewer`, `qa`, `designer`); Tico keeps no list of them and gives them no meaning or rights. A
+`reviewer`, `qa`, `designer`); Tico keeps no list of them. The reserved `participant` role grants read access only on a private task sent from a private meeting. A
 person may hold several roles on one task, and the owner may hold any of them too. What a role
 means downstream (which column waits on whom, a dependency monitor) is the client's to decide.
 

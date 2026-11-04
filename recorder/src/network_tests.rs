@@ -2250,3 +2250,49 @@ fn task_links_keep_old_server_compatibility_and_transient_errors_never_send() {
     assert_eq!(tico.browser_url().unwrap(), "https://acme.example");
     worker.join().unwrap();
 }
+
+#[test]
+fn saved_pending_item_uses_atomic_push_and_live_send_names_its_source() {
+    for saved in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = transcript(&store, "Shared items");
+        let (tico, seen, worker) = server(vec![
+            Some(json!({"actor":"human:test","name":"Test"})),
+            Some(json!({"state":"ended"})),
+            Some(json!({"url":"https://acme.example"})),
+            Some(if saved { json!({"item":{"result_ref":"task-fixture"}}) }
+                 else { json!({"task":{"id":"task-fixture"}}) }),
+        ]);
+        store.update_context(&record.id, |context| {
+            context.live_id = "live-fixture".into();
+            context.live_destination = tico.destination.id.clone();
+            context.live_state = "ended".into();
+            context.items.push(crate::workspace::Item {
+                id: "item-fixture".into(), kind: "task".into(), title: "Final words".into(),
+                ..Default::default()
+            });
+            Ok(())
+        }).unwrap();
+        if saved {
+            store.delivery(&record.id, &crate::store::Delivery {
+                destination_id: tico.destination.id.clone(), meeting_id: "saved-fixture".into(),
+                status: "sent".into(), receipt: json!({"items":{"item-fixture":{"id":"server-item"}}}),
+                error: String::new()
+            }).unwrap();
+        }
+        tico.send_task(&store, &record.id, "item-fixture", "human:ben", "Ben", true).unwrap();
+        worker.join().unwrap();
+        let requests = seen.lock().unwrap();
+        let sent = requests.iter().find(|r| r.0.starts_with("POST ")).unwrap();
+        if saved {
+            assert!(sent.0.starts_with("POST /api/v2/meetings/saved-fixture/items/server-item/push "));
+            assert_eq!(sent.1["text"], "Final words");
+            assert_eq!(sent.1["detail"]["owner"], "human:ben");
+        } else {
+            assert!(sent.0.starts_with("POST /api/v2/tasks "));
+            assert_eq!(sent.1["live_meeting_id"], "live-fixture");
+        }
+        assert_eq!(requests.iter().filter(|r| r.0.starts_with("POST ")).count(), 1);
+    }
+}

@@ -319,6 +319,7 @@ pub struct Recorder {
     last_sync: Instant,
     saved_items: Value,
     items_cursor: u64,
+    items_generation: u64,
     items_at: Instant,
     presence_session: String,
     presence_target: Option<(String, String)>,
@@ -444,6 +445,7 @@ impl Recorder {
             last_sync: Instant::now(),
             saved_items: Value::Null,
             items_cursor: 0,
+            items_generation: 0,
             items_at: Instant::now() - Duration::from_secs(30),
             presence_session: uuid::Uuid::new_v4().to_string(),
             presence_target: None,
@@ -745,6 +747,7 @@ impl Recorder {
     }
     pub fn shared_items_reply(&mut self, data: Value) {
         self.saved_items = data;
+        self.items_generation += 1;
         self.bump();
     }
     fn leave_saved(&mut self) {
@@ -764,7 +767,7 @@ impl Recorder {
         if !visible { self.leave_saved(); }
     }
     fn sync_saved(&mut self) {
-        if !self.visible || self.background.contains("items") || self.items_at.elapsed() < Duration::from_secs(1) {
+        if !self.visible || self.saved_items["gone"] == true || self.background.contains("items") || self.items_at.elapsed() < Duration::from_secs(1) {
             return;
         }
         let Some((destination, remote)) = self.saved_target() else { return; };
@@ -772,6 +775,7 @@ impl Recorder {
         self.items_at = Instant::now();
         let session = self.presence_session.clone();
         let after = self.items_cursor;
+        let generation = self.items_generation;
         let config = self.config.clone();
         let initial = self.saved_items.is_null();
         self.job("items", move || {
@@ -784,12 +788,13 @@ impl Recorder {
                     "/api/v2/events?topics=meeting_items,presence&meeting={remote}&place=meeting:{remote}&after={after}"))? {
                     cursor = cursor.max(seq);
                     if kind == "ready" { cursor = cursor.max(value["seq"].as_u64().unwrap_or(0)); }
-                    if value["gone"] == true { return Ok(json!({"gone":true,"cursor":cursor})); }
+                    if value["gone"] == true { return Ok(json!({"gone":true,"cursor":cursor,"generation":generation})); }
                 }
             }
             let mut data = tico.call(&format!("/api/v2/meetings/{remote}/items"), None, "")?;
             data["presence"] = tico.call(&format!("/api/v2/presence?place=meeting:{remote}"), None, "")?;
             data["cursor"] = json!(cursor);
+            data["generation"] = json!(generation);
             Ok(data)
         });
     }
@@ -1118,7 +1123,9 @@ impl Recorder {
                         }
                         "items" => {
                             self.items_cursor = value["cursor"].as_u64().unwrap_or(self.items_cursor);
-                            self.saved_items = value;
+                            if value["generation"].as_u64() == Some(self.items_generation) {
+                                self.saved_items = value;
+                            }
                         }
                         "live" => {
                             // Polled every few seconds; the window hears about it only on change.
