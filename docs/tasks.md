@@ -1051,9 +1051,12 @@ history and Finished or Closed notice list "Closed with it:" and the subtask tit
 titles hidden even when the parent is private. A closed subtask sends no separate notice to its parties,
 unless it has a leased or running turn: then its parties receive the usual direct-close notice so the
 bot stops working. Already Done, Closed or Declined subtasks keep their status, notes and history.
+Dependency links still clear, but a task closing in the same cascade receives no "Unblocked" notice;
+tasks outside the cascade that become unblocked receive their usual notice.
 An explicit close or finish through the API, CLI or MCP requires the actor's usual close permission
-on every open descendant; a refusal leaves the whole action unchanged, without detaching anything.
-An automatic finish, including a runner reporting its task goal met, closes every open descendant
+and status rules on every open descendant, including steps-only types; a refusal leaves the whole action
+unchanged, without detaching anything.
+An automatic finish, including roadmap completion or a runner reporting its task goal met, closes every open descendant
 the actor may close and leaves the rest open. The parent's history and completion notice list
 "Still open:" with those titles (private subtasks are always "a private subtask"), and each left-open
 subtask's requester receives one notice asking them to close it when ready. Runner output and the

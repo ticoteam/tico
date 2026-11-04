@@ -171,6 +171,50 @@ def test_refused_finish_is_atomic_on_a_direct_db_call(tmp_path, operation):
 
 
 @pytest.mark.parametrize("operation", ["close", "done", "Cancelled"])
+@pytest.mark.parametrize("strict", [True, False])
+def test_bot_requested_steps_only_descendant_obeys_the_direct_close_check(tmp_path, operation, strict):
+    c = hub(tmp_path / "hub.db")
+    board = H.type_create(c, ANA, "Launch", [{"name": "Build", "status": "doing"},
+                          {"name": "Cancelled", "status": "closed"}], mover=True)
+    steps = H.type_create(c, ANA, "Approval", [{"name": "Check", "status": "doing"},
+                          {"name": "Accepted", "status": "closed"}], steps_only=True, mover=True)
+    parent = H.task_create(c, CMO, "Plan the launch", "Original body", CMO,
+                           type=board["id"], step="Build", lint=False)
+    own = make(c, CMO, "Draft the launch copy", SEO, parent)
+    child = H.task_create(c, CMO, "Check the launch copy", "", SEO, parent_id=parent["id"],
+                          type=steps["id"], step="Check", lint=False)
+    deep = make(c, CMO, "Check the launch links", SEO, child)
+    before = [(H.task(c, t["id"]), history(c, t)) for t in (parent, own, child, deep)]
+    refusals = c.execute("SELECT count(*) FROM refusals").fetchone()[0]
+
+    def complete():
+        if operation == "close":
+            return H.task_close(c, CMO, parent["id"], note="Cancelled", strict=strict)
+        return H.task_update(c, CMO, parent["id"], note="Shipped", number=1234, body="Changed body",
+                             labels=["launch"], mover=True, strict=strict,
+                             **({"status": "done"} if operation == "done" else {"step": operation}))
+
+    if strict:
+        with pytest.raises(H.Refused, match="The open subtask .*changes status only by moving it to a step") as exc:
+            complete()
+        assert child["title"] in exc.value.detail
+        assert [(H.task(c, t["id"]), history(c, t)) for t in (parent, own, child, deep)] == before
+        assert not c.execute("SELECT 1 FROM task_tags WHERE task_id=?", (parent["id"],)).fetchone()
+    else:
+        complete()
+        assert H.task(c, parent["id"])["status"] == ("done" if operation == "done" else "closed")
+        assert all(H.task(c, t["id"])["status"] == "closed" for t in (own, deep))
+        assert (H.task(c, child["id"]), history(c, child)) == before[2]
+        assert c.execute("SELECT count(*) FROM refusals").fetchone()[0] == refusals
+        assert any(e["kind"] == "children" and child["title"] in e["new"] and e["new"].startswith("Still open:")
+                   for e in history(c, parent))
+        notices = c.execute("SELECT recipient_id FROM messages WHERE json_extract(refs,'$.task')=? "
+                            "AND json_extract(refs,'$.finish_left_open')=?", (child["id"], parent["id"])).fetchall()
+        assert [r[0] for r in notices] == [CMO]
+    c.close()
+
+
+@pytest.mark.parametrize("operation", ["close", "done", "Cancelled"])
 def test_automatic_finishes_close_permitted_descendants_and_wake_left_open_requesters_once(tmp_path, operation):
     c = hub(tmp_path / "hub.db")
     board = H.type_create(c, ANA, "Launch", [{"name": "Build", "status": "doing"},
@@ -297,6 +341,12 @@ def test_a_runner_goal_finish_keeps_its_event_batch_and_final_result_with_unclos
                               parent_id=parent["id"], lint=False)
         secret = H.task_create(c, "bot:cpo", "Compare confidential salaries", "", "bot:cpo",
                                parent_id=other["id"], private=True, lint=False)
+        typ = H.type_create(c, ANA, "Approval", [{"name": "Check", "status": "doing"},
+                            {"name": "Accepted", "status": "closed"}], steps_only=True, mover=True)
+        steps = H.task_create(c, "bot:ops", "Check the launch links", "", "bot:cpo", parent_id=parent["id"],
+                              type=typ["id"], step="Check", lint=False)
+        steps_before = H.task(c, steps["id"]), history(c, steps)
+        refusals = c.execute("SELECT count(*) FROM refusals").fetchone()[0]
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "goal-thread"}, machine["token"])
     goal = attempt["chat_goal"]
     events = {"events": [
@@ -311,16 +361,116 @@ def test_a_runner_goal_finish_keeps_its_event_batch_and_final_result_with_unclos
         assert H.task(c, parent["id"])["status"] == "done"
         assert H.task(c, own["id"])["status"] == "closed"
         assert H.task(c, other["id"])["status"] == H.task(c, secret["id"])["status"] == "open"
+        assert (H.task(c, steps["id"]), history(c, steps)) == steps_before
+        assert c.execute("SELECT count(*) FROM refusals").fetchone()[0] == refusals
         run = c.execute("SELECT state,final_text FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
         assert tuple(run) == ("completed", "Final runner result")
         assert c.execute("SELECT 1 FROM messages WHERE body='Final runner result'").fetchone()
         notices = [dict(r) for r in c.execute("SELECT * FROM messages WHERE json_extract(refs,'$.finish_left_open')=?",
                                              (parent["id"],))]
-        assert len(notices) == 2
+        assert len(notices) == 3
         bot_notice = next(m for m in notices if m["recipient_id"] == "bot:cpo")
         assert c.execute("SELECT count(*) FROM jobs WHERE message_id=?", (bot_notice["id"],)).fetchone()[0] == 1
         records = json.dumps(history(c, parent))
         assert "Still open:" in records and secret["title"] not in records
+        assert steps["title"] in records
+
+
+@pytest.mark.parametrize("operation", ["close", "done", "Cancelled"])
+def test_cascade_unblocks_outside_work_without_waking_a_sibling_being_closed(api, operation):
+    with api.app.state.store.transaction() as c:
+        board = H.type_create(c, ANA, "Launch", [{"name": "Build", "status": "doing"},
+                              {"name": "Cancelled", "status": "closed"}], mover=True)
+        parent = H.task_create(c, ANA, "Plan the launch", "", "bot:ops", type=board["id"], step="Build", lint=False)
+        blocker = make(c, "bot:ops", "Draft the launch copy", "bot:cpo", parent)
+        sibling = make(c, "bot:ops", "Check the launch copy", "bot:cpo", parent)
+        outside = make(c, ANA, "Publish the release notes", "bot:cpo")
+        # Exercise the blocker closing first, while the sibling is still active.
+        c.execute("UPDATE tasks SET created_at='2020-01-01T00:00:00Z' WHERE id=?", (blocker["id"],))
+        for dependent in (sibling, outside):
+            TR.add_blocker(c, ANA, dependent["id"], blocker["id"])
+        before = c.execute("SELECT coalesce(max(rowid),0) FROM messages").fetchone()[0]
+        if operation == "close":
+            H.task_close(c, ANA, parent["id"])
+        else:
+            H.task_update(c, ANA, parent["id"], **({"status": "done"} if operation == "done" else {"step": operation}))
+        assert all(H.task(c, t["id"])["status"] == "closed" for t in (blocker, sibling))
+        assert H.task(c, outside["id"])["status"] in H.ACTIVE_STATUSES
+        assert all(TR.blocker_ids(c, t["id"]) == [] for t in (sibling, outside))
+        notices = [dict(r) for r in c.execute("SELECT * FROM messages WHERE rowid>? AND body LIKE 'Unblocked: %'", (before,))]
+        assert len(notices) == 1
+        assert notices[0]["recipient_id"] == "bot:cpo"
+        assert json.loads(notices[0]["refs"])["task"] == outside["id"]
+        assert c.execute("SELECT count(*) FROM jobs WHERE message_id=?", (notices[0]["id"],)).fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("status", ["done", "closed"])
+def test_direct_automatic_status_writes_apply_partial_descendant_completion(tmp_path, status):
+    c = hub(tmp_path / "hub.db")
+    parent = make(c, CMO, "Plan the launch", CMO)
+    own = make(c, CMO, "Draft the launch copy", SEO, parent)
+    other = make(c, ANA, "Approve the launch copy", SEO, parent)
+    before = H.task(c, other["id"]), history(c, other)
+    H._set_status(c, CMO, H.task(c, parent["id"]), status=status)
+    assert H.task(c, parent["id"])["status"] == status
+    assert H.task(c, own["id"])["status"] == "closed"
+    assert (H.task(c, other["id"]), history(c, other)) == before
+    assert any(e["kind"] == "children" and e["new"] == "Still open: " + other["title"] for e in history(c, parent))
+    notices = c.execute("SELECT recipient_id FROM messages WHERE json_extract(refs,'$.finish_left_open')=?",
+                        (parent["id"],)).fetchall()
+    assert [r[0] for r in notices] == [ANA]
+    c.close()
+
+
+def test_roadmap_automatic_completion_closes_ordinary_descendants(api):
+    parent = post(api, "tasks", {"owner": "cpo", "title": "Improve exports", "body": "Spec.",
+                                "type": "Product roadmap", "step": "Approved"})
+    engineering = post(api, "tasks", {"owner": "ops", "title": "Build exports", "body": "Implement exports.",
+                                     "type": "Engineering", "relations": [{"task": parent["id"], "kind": "parent"}]})
+    with api.app.state.store.transaction() as c:
+        child = make(c, "bot:cpo", "Review the export guide", "bot:ops", parent)
+        deep = make(c, "bot:ops", "Check the export examples", "bot:cpo", child)
+    post(api, "tasks/" + engineering["id"], {"version": engineering["version"], "close": True})
+    with api.app.state.store.read() as c:
+        assert H.task(c, parent["id"])["status"] == "done"
+        assert all(H.task(c, t["id"])["status"] == "closed" for t in (child, deep))
+        for t in (child, deep):
+            assert any(e["kind"] == "closed_with" and e["new"] == parent["id"] for e in history(c, t))
+        assert any(e["kind"] == "children" and child["title"] in e["new"] for e in history(c, parent))
+
+
+@pytest.mark.parametrize("error", [H.Refused("close", "State changed after preflight"), RuntimeError("Close hook failed")])
+def test_automatic_finish_rolls_back_a_failed_descendant_and_its_queued_triggers(api, monkeypatch, error):
+    from backend.tests.test_task_trigger_rules import rule
+
+    with api.app.state.store.transaction() as c:
+        parent = make(c, "bot:ops", "Plan the launch", "bot:ops")
+        typ = H.type_create(c, ANA, "Approval", [{"name": "Check", "status": "doing"}], mover=True)
+        child = H.task_create(c, "bot:ops", "Review the launch copy", "", "bot:cpo", parent_id=parent["id"],
+                              type=typ["id"], lint=False)
+        own = make(c, "bot:ops", "Check the launch links", "bot:cpo", parent)
+        before = H.task(c, child["id"]), history(c, child)
+    rule(api, "task.closed", action="create_task", params={"owner": "ops", "title": "Unexpected followup"},
+         when={"type": typ["id"]})
+    set_status = H._set_status
+
+    def failing(c, actor, row, *args, **kwargs):
+        result = set_status(c, actor, row, *args, **kwargs)
+        if row["id"] == child["id"]:
+            raise error
+        return result
+
+    monkeypatch.setattr(H, "_set_status", failing)
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:ops", parent["id"], status="done", strict=False)
+        assert H.task(c, parent["id"])["status"] == "done"
+        assert H.task(c, own["id"])["status"] == "closed"
+        assert (H.task(c, child["id"]), history(c, child)) == before
+        assert not c.execute("SELECT 1 FROM tasks WHERE title='Unexpected followup'").fetchone()
+        assert any(e["kind"] == "children" and e["new"] == "Still open: " + child["title"] for e in history(c, parent))
+        notices = c.execute("SELECT recipient_id FROM messages WHERE json_extract(refs,'$.finish_left_open')=?",
+                            (parent["id"],)).fetchall()
+        assert [r[0] for r in notices] == ["bot:ops"]
 
 
 @pytest.mark.parametrize("operation", ["close", "done"])

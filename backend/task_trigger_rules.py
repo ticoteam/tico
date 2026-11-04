@@ -48,6 +48,26 @@ def pending(conn):
         _PENDING.reset(token)
 
 
+@contextmanager
+def savepoint(conn):
+    """Roll back a task write together with the Task Triggers it queued in an enclosing write."""
+    queue = _PENDING.get()
+    queue = queue if queue is not None and queue["conn"] is conn else None
+    start = len(queue["items"]) if queue is not None else 0
+    conn.execute("SAVEPOINT task_write")
+    try:
+        yield
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK TO task_write")
+        if queue is not None:
+            del queue["items"][start:]
+        raise
+    finally:
+        if conn.in_transaction:
+            conn.execute("RELEASE task_write")
+
+
 def enqueue(conn, event, task, actor, revision, *, field=None, new=None):
     if event not in TRIGGERS or H.NO_TRIGGERS.get():
         return
