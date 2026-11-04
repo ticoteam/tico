@@ -29,6 +29,7 @@ const BOOT_ROSTER_WAIT_MS = 10000;
   let configVersion = nativeVisualVersion();
   // What the first page needs goes out first: a browser opens only a few connections to one server, so the
   // roster and the opening page's own read are not queued behind the sidebar's counts.
+  rdNavStart();                       // the sidebar memory's epoch, before /me goes out (redesign.js)
   const employees = get('/employees'), meRead = get('/me');
   // A roster or /me that never answers (a stalled connection, a hub that hangs) ends in the error card below, with
   // Try again, rather than a page that waits for ever.
@@ -41,6 +42,7 @@ const BOOT_ROSTER_WAIT_MS = 10000;
   try {
     const [emps, me, people] = await roster;
     bootMark('roster');
+    rdNavWho(me);                      // the sidebar rows kept for someone else go before this config draws them (redesign.js)
     if (authenticatedConfigPerson(me)) {
       if (SESSION.out || configVersion !== nativeVisualVersion()) return;
       // The page opens on this config now. Only trust for visual frames waits for the desktop app's answer: until
@@ -66,6 +68,7 @@ const BOOT_ROSTER_WAIT_MS = 10000;
     await cleared;
     if (SESSION.out || configVersion !== nativeVisualVersion()) return;
     bootSnapHandOff(); bootSnapRelease();
+    askSync();                         // no one to ask for: Ask's row, there from the first paint, goes (ask-panel.js)
     if (e.timedOut) {
       $('#main').innerHTML = `<section class="card"><h2>Couldn't load Tico</h2><p class="err">${esc(e.message)}</p><button type="button" data-boot-retry>Try again</button></section>`;
       $('#main [data-boot-retry]').onclick = () => location.reload();

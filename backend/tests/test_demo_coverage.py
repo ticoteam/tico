@@ -49,6 +49,11 @@ PAGES = {
     "growth": page("growth/numbers", "months", months=24),
     "finance": page("finance/transactions", "rows"),
     "rules": page("rules", "rules"),
+    # The Rules section's tabs, one row each under Rules (ui/app/org-rules.js reads).
+    "rules-internal": page("rules", "rules", kind="internal"),
+    "rules-external": page("rules", "rules", kind="external"),
+    "rules-due": page("rules/due", "due", next="3660d"),
+    "rules-suggested": page("rules", "rules", status="suggested"),
     "automations": page("automations", "automations", limit=500),
     "learnings": page("learnings", "nights"),
     "usage": page("usage", "rows", **{"from": str(WEEK_AGO.date()), "to": str(NOW.date())}),

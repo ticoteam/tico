@@ -65,23 +65,20 @@ function finHref(path, params = {}) {
 }
 
 // ----------------------------------------------------------------- the sidebar
-// Finance shows in the rail once Finance is set up and the viewer sees something in it; it sits under Strategy and Growth.
-function finNavSync() {
-  const nav = $('#side .side-scroll'); if (!nav) return;
-  const link = nav.querySelector('a[data-nav="finance"]');
-  if (!finCapsOf(FIN_ACCESS, finMe())?.any) { if (link) { link.remove(); renderTree(); } return; }
-  if (link) return;
-  const a = Object.assign(document.createElement('a'), {className: 'nav-link', href: FIN_ROUTE,
-    innerHTML: '<span class="nav-icon" aria-hidden="true">account_balance_wallet</span>Finance'});
-  a.dataset.nav = 'finance';
-  const after = nav.querySelector('a[data-nav="growth"]') || nav.querySelector('a[data-nav="strategy"]');
-  if (after) after.after(a); else nav.prepend(a);
-  renderTree();
+// Finance shows in the rail (index.html, under Strategy and Growth) while Finance is set up and the viewer sees
+// something in it. Until this visit's answer it shows as the last one this browser had for the same person said, and
+// stays hidden with none (ui/app/redesign.js rdNavShow): most people never see Finance, and the few who do see it from
+// their second visit on. Only a definite answer moves it: an access list, or Finance refusing (403) or missing (404).
+// No answer at all (offline, a server error) leaves the row as it is.
+function finNavSync(error) {
+  if (error && ![403, 404].includes(error.status)) return;
+  rdNavShow('finance', !!finCapsOf(FIN_ACCESS, finMe())?.any);
 }
 async function finProbe() {
+  let error = null;
   try { const acc = await get('/v2/finance/access', {fresh: true}); FIN_ACCESS = Array.isArray(acc?.teammates) ? acc : null; }
-  catch { FIN_ACCESS = null; }
-  finNavSync();
+  catch (e) { FIN_ACCESS = null; error = e; }
+  finNavSync(error);
   return FIN_ACCESS;
 }
 // Once a visit, after the first page is drawn (who is signed in is known by then).
@@ -267,7 +264,7 @@ function pageFinance() {
     try { acc = await get('/v2/finance/access', {fresh: true}); } catch (e) { error = e; }
     if (FIN !== state || !$('#fin-body')) return;
     FIN_ACCESS = state.acc = Array.isArray(acc?.teammates) ? acc : null;
-    finNavSync();
+    finNavSync(error);
     if (!state.acc) { $('#fin-body').innerHTML = finNote(error?.message || 'Finance is not set up.'); return; }
     finShow(state);
   })();

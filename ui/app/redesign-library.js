@@ -384,8 +384,7 @@ function rdToolsRoute(r) {
   return false;
 }
 // An old address the redesign's router did not take (ui/app/router.js): Library › Tools at its new one, in place. The
-// router marked the rail for the old address, and the rail may already hold Tools (redesignNav ran first), so it is
-// marked again for the new one.
+// router marked the rail for the old address, so it is marked again for the new one.
 function rdToolsOpen(hash) {
   history.replaceState(null, '', hash);
   S.route = LAST_ROUTE = location.hash;
