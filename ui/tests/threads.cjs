@@ -569,7 +569,7 @@ let browser = null;
       assert.equal(seen.calls.filter(c => c === 'leave:' + id).length, 0, 'Start B defers cleanup to Join');
       if (finish === 'hidden') assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: true});
       joinRefused = finish === 'refused';
-      const leaves = leaveGate; leaveGate = null; leaves.forEach(go => go());
+      const leaves = leaveGate; leaveGate = finish === 'hidden' ? [] : null; leaves.forEach(go => go());
       await page.waitForFunction(() => CALL_JOINS === 0);
       await page.waitForTimeout(150);
       assert.equal(seen.calls.filter(c => c === 'leave:' + id).length, finish === 'joined' ? 0 : 1,
@@ -583,6 +583,24 @@ let browser = null;
       } else {
         assert.deepEqual(await page.evaluate(() => [CALL, window.__rooms.filter(r => !r.gone).length]), [null, 0]);
         assert.equal(await page.locator('#call-bar').count(), 0);
+        if (finish === 'hidden') {
+          // Hold the finalizer's leave while B tries to rejoin: cleanup must finish before the new seat is taken.
+          assert.equal(seen.callSeats.has(id), true, 'B\'s cleanup is held before returning its original seat');
+          const rejoinPosted = await page.evaluate(id => {
+            window.__rejoining = callJoin('t-plan', {id}, 'B');
+            return pendingWrites.has('POST /v2/calls/' + id + '/join\n{}');
+          }, id);
+          assert.equal(rejoinPosted, false, 'rejoining B waits for its pending finalizer leave');
+          const cleanupLeft = page.waitForResponse(r => r.url().endsWith('/calls/' + id + '/leave'));
+          const cleanups = leaveGate; leaveGate = null; cleanups.forEach(go => go());
+          await (await cleanupLeft).finished();
+          await page.evaluate(() => window.__rejoining);
+          assert.equal(seen.callSeats.has(id), true, 'delayed cleanup cannot remove B\'s rejoined seat');
+          assert.deepEqual(await page.evaluate(() => [CALL?.id, window.__rooms.filter(r => r.mic && !r.gone).length]), [id, 1]);
+          callLive = null;
+          await page.locator('#call-bar [data-cb="leave"]').click();
+          await page.waitForFunction(() => !document.querySelector('#call-bar'));
+        }
       }
       callMade = callLive = null; joinRefused = false;
       await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); CALL_THREADS.set('t-plan', {call: null}); thvDraw(v); });

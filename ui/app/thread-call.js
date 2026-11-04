@@ -18,6 +18,8 @@ let CALL_GEN = 0;
 let CALL_JOINS = 0;
 // Call id -> joins of it still on their way, so a cancelled Start call never gives back a seat a Join has taken.
 const CALL_JOINING = new Map();
+// Call id -> all leaves still on their way, so a rejoin cannot get ahead of cleanup of its previous seat.
+const CALL_LEAVING = new Map();
 // Start's seat waits for the last Join to settle: a cancelled or failed Join still owes it back.
 // Any leave settles it too, so the last Join cannot give it back twice.
 const CALL_OWED = new Set();
@@ -33,9 +35,17 @@ function callSeatSettled(id) {
   CALL_OWED.delete(id);
   if (CALL_JOINING.has(id)) CALL_SETTLED.add(id);
 }
+function callPostLeave(id, opts) {
+  const leave = post(callPath(id) + '/leave', {}, undefined, opts).catch(() => {});
+  const pending = Promise.all([CALL_LEAVING.get(id), leave]).then(() => {
+    if (CALL_LEAVING.get(id) === pending) CALL_LEAVING.delete(id);
+  });
+  CALL_LEAVING.set(id, pending);
+  return pending;
+}
 function callSeatLeave(id) {
   callSeatSettled(id);
-  post(callPath(id) + '/leave', {}, undefined, {keepalive: true}).catch(() => {});
+  void callPostLeave(id, {keepalive: true});
 }
 function callViewsDraw(threadId) { for (const v of THV_VIEWS) if (v.id === threadId && !v.gone) thvDraw(v); }
 function callNoted(threadId, e) {
@@ -129,6 +139,10 @@ async function callJoin(threadId, call, title, gen = ++CALL_GEN) {
 async function callJoinNow(threadId, call, title, gen) {
   if (CALL) await callLeave();
   if (gen !== CALL_GEN) return;
+  while (CALL_LEAVING.has(call.id)) {
+    await CALL_LEAVING.get(call.id);
+    if (gen !== CALL_GEN) return;
+  }
   const j = await post(callPath(call.id) + '/join', {});
   // Overtaken while joining: this seat is given back and the newer join goes on.
   const stale = () => { if (gen === CALL_GEN) return false; callSeatLeave(call.id); return true; };
@@ -206,7 +220,7 @@ async function callLeave({end = false} = {}) {
       return;
     }
   } else {
-    try { await post(callPath(here.id) + '/leave', {}); } catch {}
+    await callPostLeave(here.id);
   }
   callSeatSettled(here.id);
   callDone(here);
