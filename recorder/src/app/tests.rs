@@ -139,6 +139,10 @@ fn the_view_lists_the_desktop_apps_orgs_and_which_are_signed_in() {
             {"name":"TIDY","url":"https://tidy.example.com","email":"ana@tidy.example","active":true,"connected":false}
         ])
     );
+    // Allow on a row signs in to that org only: one already signed in, or not in the desktop app, starts nothing.
+    app.sign_in_desktop(Some("https://tico.example.com"));
+    app.sign_in_desktop(Some("https://other.example.com"));
+    assert!(!app.signing_in && !app.busy);
     let orgs = tico_recorder_native::desktop::parse(
         r#"{"version":1,"active":"o_bbbbbbbb","orgs":[{"id":"o_aaaaaaaa","url":"https://a.example.com/"},
             {"id":"o_bbbbbbbb","url":"https://b.example.com/"}]}"#,

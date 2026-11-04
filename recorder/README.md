@@ -49,7 +49,7 @@ Older servers refuse the feature before the picker opens. Physical source select
 
 ## Workflow
 
-- First run, with no org and no recordings, is the sign-in screen: Sign in to Tico uses the orgs the Tico desktop app is signed in to (`view.desktop_orgs`, `sign_in_desktop`); Use a Tico address instead, or a Mac without the desktop app, types an address.
+- First run, with no org and no recordings, is the sign-in screen: it lists the orgs the Tico desktop app is signed in to (`view.desktop_orgs`), each with Allow (`sign_in_desktop` with that org's `url`); Another Tico, or a Mac without the desktop app, types an address.
 - The library is a Recordings list with search, Coming up (calendar events with Record), and recordings grouped by day. Each row shows its org's tile (or This Mac), time · length · org (or This Mac only), and a pill only when it says something: Live, In Tico, Transcribing N, Needs retry. Recordings only on this Mac have Save to Tico, which opens Finish. Delete (hover trash) asks first. The floating Record pill starts a recording; its caret picks audio sources. The org pill in the top bar changes the default org.
 - Sheets and menus close with Esc, innermost first. Esc on a meeting or Settings goes back to the library; ⌘F searches the transcript, ⌘T shows or hides it, ⌘, opens Settings.
 - A meeting is Tasks and Notes on the left, with the stop/levels/timer bar while recording, and the Transcript sidebar on the right. The top bar has Share live, Finish and More (Share screen, Copy meeting link, Pause/Resume sharing, Audio details, Retry failed, Copy transcript, Show/Hide transcript, Discard live share, Delete recording).

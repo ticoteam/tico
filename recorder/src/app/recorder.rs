@@ -2247,14 +2247,18 @@ impl Recorder {
     /// is the default when the Recorder had none). Each approval page opens in the desktop app on that org, which
     /// already has its sign-in, so the person only chooses Allow; the browser shows it when the desktop app can't.
     /// A failure goes on to the next org, except a timeout: nobody is there to choose Allow.
-    pub fn sign_in_desktop(&mut self) {
+    /// With `url`, only that org: Allow on its row.
+    pub fn sign_in_desktop(&mut self, url: Option<&str>) {
         if self.busy {
             return;
         }
-        let orgs = desktop::to_sign_in(
+        let mut orgs = desktop::to_sign_in(
             self.desktop.orgs().unwrap_or_default(),
             &self.config.destinations,
         );
+        if let Some(url) = url {
+            orgs.retain(|org| org.url == url);
+        }
         if orgs.is_empty() {
             return;
         }

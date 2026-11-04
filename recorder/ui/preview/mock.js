@@ -201,7 +201,7 @@
   const scenes = {
     library: () => {},
     // First run with the desktop app's orgs on this Mac: one button signs in.
-    signin: () => { signedOut(); state.desktop_orgs = clone(desktopOrgs); },
+    signin: () => { signedOut(); state.desktop_orgs = clone(desktopOrgs).map((org) => ({ ...org, connected: false })); },
     // First run without the desktop app: type a Tico address.
     'signin-address': () => signedOut(),
     empty: () => signedOut(),
@@ -510,8 +510,10 @@
     confirm_connect: () => { state.status.connect = null; state.status.signing_in = true; },
     sign_in: () => { state.status.signing_in = true; },
     // The desktop app's orgs become this Recorder's orgs.
-    sign_in_desktop: () => {
+    // Allow on one org's row signs in to that org; with no url, every org not signed in yet.
+    sign_in_desktop: ({ url } = {}) => {
       if (!state.desktop_orgs.length) throw new Error('No Tico desktop app on this Mac');
+      state.desktop_orgs.forEach((org) => { if (!url || org.url === url) org.connected = true; });
       state.settings = clone(settings);
       state.library = { rows: [], events, calendar_stale: false, connected: true };
       Object.assign(state.status, { first_run: false, speech: { source: 'tico', stream: true, transcribe: true, tico: 'Tico Team' } });

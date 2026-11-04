@@ -251,9 +251,11 @@ if (!only.length || only.includes('checks')) {
   // Sign in with the desktop app's orgs lands in the library.
   await check('signin', async (page) => {
     await go(page, 'signin');
-    if ((await page.locator('.org-row').count()) !== 4) errors.push('signin: desktop orgs not listed');
-    await page.click('[data-act="signin-desktop"]');
+    if ((await page.locator('.org-row [data-act="signin-desktop"]').count()) !== 3) errors.push('signin: not one Allow per desktop org');
+    await page.click('.org-row [data-act="signin-desktop"][data-url="https://tidy.tico.page"]');
     await page.waitForSelector('.lib-head');
+    const connected = await page.evaluate(() => window.__PREVIEW__.state.desktop_orgs.filter((org) => org.connected).map((org) => org.name));
+    if (connected.join() !== 'TIDY') errors.push(`signin: Allow signed in to ${connected.join() || 'nothing'}, not TIDY`);
   });
   await check('signin-address', async (page) => {
     await go(page, 'signin-address');

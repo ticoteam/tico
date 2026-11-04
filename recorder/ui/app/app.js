@@ -261,22 +261,26 @@
   function signinPage() {
     const st = S.status;
     const desktop = S.desktopOrgs;
+    const address = S.ui.address || !desktop.length;
     let intro = `<div class="intro">${MARK}<div class="brand">${WORDMARK}<span class="sub">Recorder</span></div><p>Record any meeting on this Mac. It goes to the Tico you pick.</p>`;
-    if (st.signing_in) intro += `<div class="waiting"><span class="spin"></span>Choose Allow in your browser…</div>`;
-    else if (S.ui.address || !desktop.length) {
+    if (st.signing_in) intro += `<div class="waiting"><span class="spin"></span>Choose Allow in ${S.ui.signingDesktop ? 'Tico' : 'your browser'}…</div>`;
+    else if (address) {
       intro += `<div class="address"><input class="field" data-model="signin" data-enter="signin" placeholder="your-tico.example" spellcheck="false" aria-label="Tico address"><button class="btn primary" data-act="signin" ${st.busy ? 'disabled' : ''}>Sign in</button></div>`;
-      if (desktop.length) intro += `<button class="link" data-act="address-off">Use the Tico desktop app</button>`;
-    } else {
-      intro += `<button class="btn primary big" data-act="signin-desktop" ${st.busy ? 'disabled' : ''}>Sign in to Tico</button><button class="link" data-act="address-on">Use a Tico address instead</button>`;
+      if (desktop.length) intro += `<button class="link" data-act="address-off">Cancel</button>`;
     }
     intro += errorNotice() + '</div>';
     if (!desktop.length) return `<div class="signin single">${intro}</div>`;
+    // One row per org of the Tico desktop app; Allow signs in to that org.
     let card = `<div class="orgs">`;
     for (const org of desktop) {
-      const tail = org.active ? badge('Default', 'accent') : org.connected ? `<span class="check" aria-label="Added">${icon('check')}</span>` : '';
-      card += `<div class="org-row ${org.active ? 'on' : ''}">${orgTile(org, 's32')}<div class="grow"><div class="name">${esc(org.name)}</div>${org.email ? `<div class="sub">${esc(org.email)}</div>` : ''}</div>${tail}</div>`;
+      const tail = org.connected
+        ? `<span class="check" aria-label="Added">${icon('check')}</span>`
+        : st.signing_in && S.ui.signingDesktop === org.url
+          ? `<span class="spin"></span>`
+          : `<button class="btn small primary" data-act="signin-desktop" data-url="${esc(org.url)}" ${st.busy ? 'disabled' : ''} aria-label="Allow ${esc(org.name)}">Allow</button>`;
+      card += `<div class="org-row">${orgTile(org, 's32')}<div class="grow"><div class="name">${esc(org.name)}</div>${org.email ? `<div class="sub">${esc(org.email)}</div>` : ''}</div>${tail}</div>`;
     }
-    card += `<button class="org-row dim" data-act="address-on"><span class="otile s32 add">+</span><div class="grow"><div class="name">Add organization</div></div></button></div>`;
+    if (!address) card += `<button class="org-row dim" data-act="address-on"><span class="otile s32 add">+</span><div class="grow"><div class="name">Another Tico</div></div></button>`;
     return `<div class="signin">${intro}${card}</div>`;
   }
 
@@ -1329,9 +1333,10 @@
       const id = await act('record', { event });
       if (id) openMeeting(id);
     },
-    'signin-desktop': async () => {
+    'signin-desktop': async (el) => {
+      S.ui.signingDesktop = el.dataset.url;
       // Builds without the desktop contract fall back to typing an address.
-      try { await invoke('sign_in_desktop'); await poll(); } catch (error) { console.error(error); S.ui.address = true; render(); }
+      try { await invoke('sign_in_desktop', { url: el.dataset.url }); await poll(); } catch (error) { console.error(error); S.ui.signingDesktop = ''; S.ui.address = true; render(); }
     },
     'address-on': () => { S.ui.address = true; S.ui.focusNext = '[data-model="signin"]'; render(); },
     'address-off': () => { S.ui.address = false; render(); },

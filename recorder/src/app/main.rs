@@ -97,7 +97,7 @@ commands! {
     save_settings(form: SettingsForm) => |app| app.save_settings(form);
     set_audio(microphone: String, meeting: bool) => |app| app.set_audio(&microphone, meeting);
     sign_in(address: String) => |app| app.sign_in(&address);
-    sign_in_desktop() => |app| app.sign_in_desktop();
+    sign_in_desktop(url: Option<String>) => |app| app.sign_in_desktop(url.as_deref());
     make_default(id: String) => |app| app.make_default(&id);
     import_legacy(directory: String) => |app| app.import_legacy(&directory);
     confirm_connect() => |app| app.confirm_connect();
