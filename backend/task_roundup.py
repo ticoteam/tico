@@ -41,9 +41,10 @@ force hides the task (task_snooze.snoozed) until it ends.
 
 A private task is listed as "a private task <id>", without its title, its follow-up's who and note, its step, or what changed:
 only that a follow-up time has come, that it has an update, that it has gone quiet, or the bare fact of a line. A bot whose
-profile has its sweeps off (rules.sweeps_on: a reviewer, lead, responder or monitor) gets no list at all; a
-manager gets one with its own tasks, its late, exception and backlog lines and its own unanswered questions. Only bots are listed: a person a line would name is never
-told by the roundup.
+profile has its sweeps off (rules.sweeps_on: a reviewer, lead, responder or monitor) is listed its unanswered questions and
+its own follow-up times only: never an idle, late, exception, backlog, assigned or restate line. A manager and a doer get all
+of them. A late ticket or an exception is listed only where its bot reads the task (H.bot_reads_task). Only bots are listed:
+a person a line would name is never told by the roundup.
 
 A bot is sent at most one list per run: registry_metadata `task_roundup:<slug>` holds the run's time it was last sent a
 list, and a bot already sent one since this run's time gets nothing more, so the roundup works at any cadence. Each line's
@@ -122,7 +123,6 @@ def _candidates(c, at, shared):
 def discover(c, at=None):
     """The bots to visit for the run at `at`: active bots with a line to list that were not sent a list in this run. Read
     only. send builds each list again from the live database."""
-    from . import rules
     from .hubdb import _has_table
     if not _has_table(c, "jobs"):       # a hub without jobs has no wakes to send: nothing is listed
         return []
@@ -131,7 +131,7 @@ def discover(c, at=None):
     wanted = _candidates(c, at, shared)
     for bot in H._rows(c.execute("SELECT id FROM bots WHERE state='active' ORDER BY id")):
         slug = bot["id"]
-        if slug not in wanted or _sent_before(c, slug, at) or not rules.sweeps_on(c, slug):
+        if slug not in wanted or _sent_before(c, slug, at):
             continue
         if _list(c, slug, at, shared)[0]:
             plans.append({"slug": slug, "at": at})
@@ -143,9 +143,9 @@ def send(c, plan):
     the bot), and the bot is sent only if it was not already sent one this run. A bot with nothing to list gets no message.
     The run's time, each line's registry key, the consumed follow-ups and the events are written only once the message is
     delivered. Returns how many lines the list named, or 0 when nothing was sent."""
-    from . import rules, run_triggers as RT, task_check_backs
+    from . import run_triggers as RT, task_check_backs
     slug, at = plan["slug"], plan["at"]
-    if _sent_before(c, slug, at) or not _active(c, slug) or not rules.sweeps_on(c, slug):
+    if _sent_before(c, slug, at) or not _active(c, slug):
         return 0
     built = _later(at, _built_at())        # stamped before the read: an update racing it is listed again, never missed
     text, count, shown = _list(c, slug, at, {})
@@ -240,11 +240,13 @@ def _item(tid, line, key, *, due=False, event=None):
 def _list(c, slug, at, shared):
     """The bot's list as one message's text, how many lines it has, and the items shown on it (each with the registry key it
     is recorded under once sent). (None, 0, []) when nothing needs a look."""
-    from . import task_snooze as TS
+    from . import rules, task_snooze as TS
     actor = H.bot_actor(slug)
     now = H.parse_ts(at)
     cutoff = now - timedelta(hours=QUIET_HOURS)
     relist = now - timedelta(days=RELIST_DAYS)
+    # A bot with sweeps off is listed its questions and its own follow-up times only (the module's docstring).
+    sweeping = rules.sweeps_on(c, slug)
     groups = {group: [] for group in range(QUIET + 1)}
     rows = H._rows(c.execute(
         "SELECT * FROM tasks WHERE owner_id=? AND status IN (" + _marks() + ") ORDER BY updated_at",
@@ -257,6 +259,8 @@ def _list(c, slug, at, shared):
         if follow and H.parse_ts(row["check_back_at"]) <= now:
             groups[DUE].append((row["check_back_at"], _item(row["id"], _line(row, _due_reason(follow, private), private),
                                                            LISTED_KEY + row["id"], due=True)))
+            continue
+        if not sweeping:
             continue
         person = _restate(c, row)
         if person and _stale(c, _key("restate", slug, row["id"]), at, timedelta(days=RELIST_DAYS)):
@@ -276,8 +280,9 @@ def _list(c, slug, at, shared):
             reason = (f"Waiting on nothing for {span}" if row["status"] == "waiting"
                       else f"Quiet for {span}, nothing waiting on anyone")
             groups[QUIET].append((quiet_since, _item(row["id"], _line(row, reason, private), LISTED_KEY + row["id"])))
-    for group, sort, item in (_asks_back(c, slug, actor, at) + _late(c, slug, actor, at, shared)
-                              + _exceptions(c, slug, actor, at, shared) + _backlogs(c, slug, actor, at, shared)):
+    sweep_lines = (_late(c, slug, actor, at, shared) + _exceptions(c, slug, actor, at, shared)
+                   + _backlogs(c, slug, actor, at, shared)) if sweeping else []
+    for group, sort, item in _asks_back(c, slug, actor, at) + sweep_lines:
         groups[group].append((sort, item))
     ordered, seen = [], set()
     for group in range(QUIET + 1):

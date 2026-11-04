@@ -208,9 +208,9 @@ def _profile_rules():
         for event, words in which:
             add(profile, f"profile_{profile}_{event}", event, WAKE, words)
 
-    # The task roundup is one grouped wake per bot per run, whatever its profile: each profile that gets one (the sweeping
-    # ones: doer, manager, custom; profiles.SPEC) wakes on it, ahead of its catch-all note.
-    for profile in ("doer", "manager", "custom"):
+    # The task roundup is the one grouped wake per bot per run, whatever its profile: every profile wakes on it, ahead of its
+    # catch-all note. A profile with sweeps off (profiles.SPEC) is listed its questions and its own follow-ups only.
+    for profile in PROFILES:
         add(profile, f"profile_{profile}_roundup", "task_roundup", WAKE, "the task roundup lists its tasks and lines")
     add("reviewer", "profile_reviewer_assignment", "assignment", WAKE, "a review or QA request was filed for it")
     add("reviewer", "profile_reviewer_request", "review_request", WAKE, "a review, QA or Security request")
@@ -262,9 +262,10 @@ def profile_of(conn, bot):
 
 
 def sweeps_on(conn, bot):
-    """Whether the task roundup applies to this bot (its sweeps): False for a reviewer, lead, responder and monitor, and for a
-    custom profile that turned them off. A manager and a doer get one. Fails open: a bot whose profile cannot be read is
-    swept."""
+    """Whether the task roundup lists this bot its sweep lines (late, exception, backlog, assigned, restate, missed update and
+    quiet task): False for a reviewer, lead, responder and monitor, and for a custom profile that turned them off, which are
+    listed their questions and their own follow-ups only. A manager and a doer get all of them. Fails open: a bot whose
+    profile cannot be read is swept."""
     try:
         from . import profiles
         return profiles.sweeps_on(conn, H.actor_id(bot))

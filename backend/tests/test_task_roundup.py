@@ -931,3 +931,22 @@ def test_a_late_ticket_its_manager_cannot_read_by_its_owner_bots_access_is_named
         assert not H.bot_reads_task(c, H.bot_actor("coo"), H.task(c, ticket["id"]))
         assert "coo" not in task_roundup.run(c, DAY)["woke"]
         assert lists(c, "coo") == [], "no title, no step, no line"
+
+
+def test_a_reviewer_is_woken_once_by_its_roundup_and_listed_only_its_returned_question(api):
+    from backend import bot_settings as BS
+    store = api.app.state.store
+    with store.transaction() as c:
+        BS.write(c, "finance", {"profile": "reviewer"})
+        mine = task(c, "Renew the parking permit")
+        settle(c, mine["id"], "finance", ago(days=8))
+        question = H.say(c, "bot:finance", "human:ana", "Which permit number do I use?", kind="ask",
+                         conversation_id=H.task(c, mine["id"])["conversation_id"], refs={"task": mine["id"]})
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (ago(days=8), question["id"]))
+        complete_jobs(c)
+        assert still_needed.sweep(c, H.shift(DAY, hours=3)) == {"bot:finance": [question["id"]]}
+        assert "finance" in task_roundup.run(c, NOON)["woke"]
+        assert queued_roundups(c, "finance") == 1, "the roundup is one queued wake for a reviewer too"
+        body = only_list(c)
+        assert "no answer in two business days" in body
+        assert named_in(body) == 1 and "Quiet for" not in body, "a reviewer gets no idle or quiet line"
