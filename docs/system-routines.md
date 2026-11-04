@@ -1,6 +1,6 @@
 # System routines
 
-System routines are the jobs Tico runs on its own, such as stale ticket reviews and nightly learnings. Task rules close eligible done tasks. Both appear in the same list, separate from bot routines, which are [Automations](routines.md) now.
+System routines are the jobs Tico runs on its own, such as stale ticket reviews. Task rules close eligible done tasks. Both appear in the same list, separate from bot routines, which are [Automations](routines.md) now. Learn runs in [Maintenance](maintenance.md), with its switch and schedule there; its nightly timer and read-only Automations mirror are retired.
 
 Open **Settings → System** (old `#/settings/rules` and `#/settings/routines` links land here too). The page has, top to bottom: **What Tico runs on its own** (this list), **Releases** and **Task Manager**. The same jobs and task rules show read-only on the Automations page. Everyone who can open Settings sees the flat list of built-in jobs and task rules, without group headings. The Task Manager's report shows its schedule as **Hourly on weekdays, 08:00–18:00**, and its row says when the Task Manager is paused.
 
@@ -38,7 +38,7 @@ The list refreshes when you open the tab and at most once a minute while it stay
 | Row | Who can change it | Available controls |
 |---|---|---|
 | Task rule | Members of its department, including humans and bots in nested teams; the owner or an admin for any department | On or off, **Edit**, and schedule presets |
-| **Stale ticket review**, **Nightly learnings**, **KPI stale asks**, **Ask go-ahead** | Owner or admin | On or off, schedule presets, **Run now** |
+| **Stale ticket review**, **KPI stale asks**, **Ask go-ahead** | Owner or admin | On or off, schedule presets, **Run now** |
 | **Task Manager report** | Owner or admin | On or off, schedule presets, **Run now** |
 | **Start fresh when the topic changes** | Owner or admin | On or off |
 | Housekeeping and other fixed built-ins | No switch or schedule editor on this page | Fixed operation; housekeeping cannot be switched off |
@@ -54,7 +54,6 @@ Choose from the presets offered on the row:
 | Task rules, **KPI stale asks**, **Ask go-ahead** | Every 15 minutes, Hourly, Every 4 hours, Daily at a time |
 | **Task Manager report** | Hourly on weekdays 08:00 to 18:00 (the default), Hourly, Every 4 hours, Daily at a time |
 | **Stale ticket review** | Hourly, Every 4 hours, Daily at a time |
-| **Nightly learnings** | Nightly at a time; initially 03:00 |
 
 Times use company time (Pacific). Leave the time field or press Enter to save it. These rows offer no cron expressions or custom intervals.
 
@@ -62,7 +61,7 @@ Task roundup is now [Maintenance's Find stuck step](maintenance.md). Its old swi
 
 **Run now** appears only on the scheduled built-ins in the permissions table. Switch the job on first. It runs through the same checks and caps as its scheduled run, then shows the result on the row. A job asking Decide shows **Running…** while it works. Task rules, **Start fresh when the topic changes** and **Stalled task check** have no **Run now** button.
 
-Nightly learnings runs once per night. A failed, capped, or unconfigured night waits until the next night unless an authorized person uses **Run now**.
+The retired `learnings` Run now endpoint starts Maintenance's Learn step and returns `{run, started}`. Learn is off by default; its switch stays in effect for Run now.
 
 ## Task rules
 
@@ -93,7 +92,7 @@ Only the done-and-untouched trigger and close action are available for task rule
 
 ## Which AI answered
 
-Two jobs ask Decide, Tico's question-answering model: **Stale ticket review** and **Nightly learnings**. Decide tries the [Tico AI Gateway](ai-gateway.md) first, then your own key, then your company's AI provider. This page and the list change none of that. They only show which route answered.
+**Stale ticket review** asks Decide, Tico's question-answering model. Decide tries the [Tico AI Gateway](ai-gateway.md) first, then your own key, then your company's AI provider. This page and the list change none of that. They only show which route answered. Learn also asks Decide; its counts and cost appear in Maintenance.
 
 | Pill | Meaning |
 |---|---|
@@ -129,7 +128,6 @@ Check health runs as a [Maintenance](maintenance.md) step. It has no separate Sy
 | **Books check** | Reads the [Bookkeeper](bookkeeper.md)'s Finance work queue in plain code and opens one "Books check" task for it only when something is new. Nothing new is a quiet run: no task, no model call. Opens nothing while the Bookkeeper is paused. | Hourly |
 | **Books watch** | Reads runway, unusual spend, duplicate charges, price increases and unused subscriptions in plain code and opens one "Watch" task for the [Bookkeeper](bookkeeper.md) only when something new is found. Not a switch: the Bookkeeper's pause stops it. | Daily |
 | **Rules digest** | Once a week, opens the Bookkeeper's "Rules digest" task for the posting rules made in the last seven days. No new rules is a quiet run. Not a switch. | Weekly |
-| **Nightly learnings** (AI) | Reads yesterday's chats, tasks, Slack, mail and meetings and sends each bot what it should remember. See [Learnings](learnings.md). | Nightly at 03:00 |
 | **Due reminders** | Tells a bot when one of its tasks reaches its due time. | Every 10 seconds |
 | **Ask go-ahead** | A bot's question past its deadline goes ahead on its default answer, or expires. | Hourly |
 | **Earlier messages** | Tells each manager of a bot once, in a direct message, when the bot's Home still holds closed history. Plain code: no model is called, and nothing new is a quiet run. Asks nobody answered are on the bot's task roundup. See [Thread helper](thread-helper.md). Not a switch. | Every 15 minutes |

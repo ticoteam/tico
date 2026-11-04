@@ -26,7 +26,7 @@ from . import bot_settings as BS
 LOG = logging.getLogger("tico.learnings")
 
 SOURCES = ("chat", "task", "slack", "mail", "meeting")
-HOUR = 3                        # local hour the night's run starts at
+HOUR = 3                        # local hour of the demo's learning runs
 LOOKBACK_HOURS = 24             # a source with no cursor yet is read this far back
 ITEM_CHARS = 1500
 MEETING_CHARS = 2000
@@ -598,94 +598,12 @@ def run(store, run_id):
         finish(store, run_id, "failed", {**detail, "error": type(exc).__name__})
 
 
-RUN_WORDS = {"capped": "Skipped: Decide is at the team's monthly spend cap", "unconfigured": "Skipped: no decision model"}
-
-
-def recorded(store, run_id):
-    """`run`, then its System routines record (backend/system_routines.py): what was read and sent, the route, the cost."""
-    from . import system_routines as SR
-    record = SR.Run("learnings")
-    run(store, run_id)
-    with store.read() as c:
-        row = c.execute("SELECT status,started_at,read_count,routed_count,detail FROM learning_runs WHERE id=?",
-                        (run_id,)).fetchone()
-    if not row:
-        return
-    detail = json.loads(row["detail"] or "{}")
-    record.started = row["started_at"]
-    if row["status"] == "failed":
-        record.error = "Failed: " + SR.FAILURE_WORDS.get(detail.get("error") or "", "unexpected error")
-    elif row["status"] in RUN_WORDS:
-        record.did(RUN_WORDS[row["status"]])
-    else:
-        sent = detail.get("deliveries") or 0
-        record.did(f"{row['read_count']} read, {SR.count_words(sent, 'bot')} sent learnings")
-    if detail.get("routes"):
-        record.ai(detail["routes"], detail.get("fallback"), detail.get("cost_usd"))
-    SR.write(store, record)
-
-
-def start(store, run_id):
-    """In the background: the decision model's calls take seconds, and nothing may wait on them."""
-    thread = threading.Thread(target=recorded, args=(store, run_id), name="learnings", daemon=True)
-    thread.start()
-    return thread
-
-
 def claim(c, night):
     """A new running row for this night, or None when the night already has one."""
     if c.execute("SELECT 1 FROM learning_runs WHERE night=?", (night,)).fetchone():
         return None
     run_id = H.new_id()
     c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES(?,?,?,?)", (run_id, night, "running", H.now()))
-    return run_id
-
-
-def starts_at(c, at):
-    """Tonight's start (company time) on Settings > Routines (03:00 by default), or None while the run is off there."""
-    from . import system_routines as SR
-    cfg = SR.config_of(c, "learnings")
-    if not cfg["on"]:
-        return None
-    hour, minute = (int(x) for x in (cfg["at"] or f"{HOUR:02d}:00").split(":"))
-    return local(at).replace(hour=hour, minute=minute, second=0, microsecond=0)
-
-
-def claim_tonight(c):
-    """Run now (the Learnings page, Settings > Routines): tonight's run id, claimed now. 409 while it runs or once it
-    ran; an unconfigured, capped or failed night is tried again under the same key."""
-    night = night_of(datetime.now(timezone.utc))
-    found = c.execute("SELECT id,status FROM learning_runs WHERE night=?", (night,)).fetchone()
-    if found and found["status"] == "running":
-        raise Problem("conflict", "Tonight's learning run is still running", 409)
-    if found and found["status"] not in ("unconfigured", "capped", "failed"):
-        raise Problem("conflict", "Tonight's learning run already ran", 409)
-    if found:
-        c.execute("UPDATE learning_runs SET status='running',started_at=?,finished_at=NULL,detail='{}' WHERE id=?",
-                  (H.now(), found["id"]))
-        return found["id"]
-    return claim(c, night)
-
-
-def nightly(store, at):
-    """From the scheduler's tick: once a night, at or after its time (03:00 local unless Settings > Routines says
-    otherwise), and not while switched off there. Off in rehearsal and test servers."""
-    settings = store.settings
-    if settings.rehearsal or settings.test_identities:
-        return None
-    night = night_of(at)
-    # The tick comes every few seconds: once this process has seen the night claimed, it never asks again.
-    if store.__dict__.get("learnings_night") == night:
-        return None
-    with store.read() as c:
-        start_at = starts_at(c, at)
-    if start_at is None or local(at) < start_at:
-        return None
-    with store.transaction() as c:
-        run_id = claim(c, night)
-    store.__dict__["learnings_night"] = night
-    if run_id:
-        start(store, run_id)
     return run_id
 
 
@@ -854,30 +772,13 @@ def readable(c, auth, who, item, mailboxes):
 def install(app, store, auth, mutate):
     @app.post("/api/v2/learnings/run")
     def run_now(request: Request, body: M.Empty):
-        """An owner or admin starts Learn through Maintenance, keeping its switch and due rules."""
-        try:
-            from .maintenance import may_change, run_now as maintenance_run_now
-        except ModuleNotFoundError as exc:
-            if exc.name != __package__ + ".maintenance":
-                raise
-        else:
-            who = request.state.identity
-            may_change(auth, who)
-            run, started = maintenance_run_now(store, auth, who.actor, step="learn",
-                                              key=request.headers.get("idempotency-key"))
-            return {"run": run, "started": started}
-        from . import system_routines
+        """An owner or admin starts Learn through Maintenance; an off step stays off."""
+        from . import maintenance
         who = request.state.identity
-        system_routines.may_change(auth, who, "learnings")
-        with store.read() as c:
-            if not system_routines.config_of(c, "learnings")["on"]:
-                raise Problem("conflict", "Nightly learnings is off. Switch it on to run it.", 409)
-
-        def work(c):
-            return {"id": claim_tonight(c), "night": night_of(datetime.now(timezone.utc))}
-        result = mutate(request, body, work)
-        start(store, result["id"])
-        return result
+        maintenance.may_change(auth, who)
+        run, started = maintenance.run_now(store, auth, who.actor, step="learn",
+                                           key=request.headers.get("idempotency-key"))
+        return {"run": run, "started": started}
 
     @app.get("/api/v2/learnings")
     def nights(request: Request, before: str = "", limit: int = PAGE):

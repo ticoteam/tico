@@ -18,7 +18,7 @@ In order:
 | Clean up | Prunes old rows: events, mail, retry keys, recorder data, finished webhook and automation runs, and Maintenance's own runs older than 30 days. Deadline work stays in the server's hourly check. | Every run |
 | Check health | Plain-code health checks: urgent findings file at once, noisy ones on their second run. Setup problems become BotOps tasks; Tico bugs follow the support report path. | Every run |
 | Find stuck | The task round-up: one grouped list per bot, oldest items first, up to ten bots by default. The standalone timer and System routines control are retired; the legacy Run now endpoint runs this step. | Custom: every 6 hours |
-| Learn | Nightly learnings. Still on its own timer for now. Off by default. | Once a day |
+| Learn (beta) | Scores activity with Tico Decide and keeps up to 15 items per bot for its next Update turn. Off by default. The nightly timer and System routines control are retired; both legacy Run now endpoints run this step. | Once a day |
 | Suggest | Still on its own timer for now. | Once a day |
 | Update | Builds the day's update queue from 05:00, skipping bots with no work unless learnings or suggestions are waiting. The server keeps sending requests and drafting people's updates after the run ends. | Once a day |
 | Dream | The auto dream: starts a dream for up to "Most bots per run" bots (three by default, 1 to 20). | Once a day |
@@ -71,7 +71,11 @@ each of its tasks.
 A switch you chose keeps its value. A switch you never chose takes the new default. The stalled task check switch was removed.
 Find stuck takes the latest saved Task roundup switch when its cutover migration runs, then retires the legacy switch, schedule and Automations mirrors.
 
+Learn takes the latest saved learnings switch at cutover, then retires the old setting and its read-only Automations mirror. Unfinished mirror runs are skipped. Replaying the migration preserves later Maintenance choices.
+
 ## Where to see it
+
+The Learn step's settings include the last seven days of runs, items read, items sent per bot, saved, dropped and cost. `GET /api/v2/maintenance` returns these as the Learn row's `stats` (`days`, `runs`, `items_read`, `items_sent`, `saved`, `dropped`, `cost_usd`).
 
 - API: `GET /api/v2/maintenance`, `PATCH /api/v2/maintenance`, `GET /api/v2/maintenance/runs`, `POST /api/v2/maintenance/run`.
 - CLI: `hub maintenance status`, `hub maintenance set`, `hub maintenance run`, `hub maintenance runs`.

@@ -178,8 +178,8 @@ FIXED = {"bookkeeper_watch": (run_bookkeeper_watch, timedelta(days=1)),
 
 def run_now(store, auth, key, actor):
     """Run now (Settings > Routines): one controlled job, once. A plain-code job runs here and its run record is on its
-    row when this returns (a failure is recorded, not raised); the stale ticket review and the learning run start on
-    their own thread, as when scheduled, and return True. Raises a 409 when that one is already running."""
+    row when this returns (a failure is recorded, not raised); stale ticket review starts on its own thread. Learn
+    runs through Maintenance. Returns whether background work started. Raises a 409 when stale review is running."""
     from .store import Problem
     at = datetime.now(timezone.utc)
     if key in QUICK:
@@ -504,13 +504,6 @@ class Scheduler:
             company_page_readers.tick(self.store)
         except Exception as exc:
             failures.append({"company_page_readers": type(exc).__name__})
-        # The nightly learning run (backend/learnings.py): one row per night claims it; the work runs
-        # in a background thread, so the decision model's calls never hold the write lock.
-        try:
-            from . import learnings
-            learnings.nightly(self.store, at)
-        except Exception as exc:
-            failures.append({"learnings": type(exc).__name__})
         # Maintenance (backend/maintenance.py): the run starts when its schedule says it is due; its steps run on a thread.
         from . import maintenance
         maintenance.tick(self.store, self.execution.auth, at, failures)

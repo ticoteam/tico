@@ -1,8 +1,42 @@
-"""Learn keeps items for Update turns, alongside the old packet receipts."""
+"""Learn keeps items for Update turns, takes the saved switch and retires the nightly timer's mirror."""
 
+import json
 import re
+from datetime import datetime, timezone
 
 FOREIGN_KEYS_OFF = True
+
+
+def _has_table(conn, name):
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
+
+
+def _cutover_learnings(conn):
+    when = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    if _has_table(conn, "registry_metadata") and _has_table(conn, "maintenance_steps"):
+        row = conn.execute("SELECT value FROM registry_metadata WHERE key='system_routines'").fetchone()
+        try:
+            stored = json.loads(row[0]) if row else {}
+        except (TypeError, ValueError):
+            stored = {}
+        if isinstance(stored, dict) and "learnings" in stored:
+            saved = stored.pop("learnings")
+            on = saved.get("on") if isinstance(saved, dict) else None
+            if isinstance(on, bool):
+                conn.execute("UPDATE maintenance_steps SET enabled=?, updated_at=?, updated_by_id='migration' "
+                             "WHERE key='learn'", (int(on), when))
+            # Consuming the old choice keeps a replay from replacing a later Maintenance choice.
+            conn.execute("UPDATE registry_metadata SET value=? WHERE key='system_routines'",
+                         (json.dumps(stored, sort_keys=True),))
+    if _has_table(conn, "automations"):
+        conn.execute("UPDATE automations SET enabled=0, deleted_at=?, updated_at=? WHERE deleted_at IS NULL AND builtin=1 "
+                     "AND json_extract(flow,'$.readonly')=1 "
+                     "AND json_extract(flow,'$.trigger.name')='tico.builtin.job.learnings'", (when, when))
+        if _has_table(conn, "automation_runs"):
+            conn.execute("UPDATE automation_runs SET status='skipped', finished_at=? "
+                         "WHERE status IN ('queued','waiting','running') AND automation_id IN (SELECT id FROM automations "
+                         "WHERE builtin=1 AND json_extract(flow,'$.readonly')=1 "
+                         "AND json_extract(flow,'$.trigger.name')='tico.builtin.job.learnings')", (when,))
 
 
 def _rebuild(conn, table, sql):
@@ -59,3 +93,4 @@ def up(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS learning_deliveries_expiry ON learning_deliveries(recipient,created_at) "
                  "WHERE task_id IS NULL AND update_batch_id IS NULL AND expired_at IS NULL")
     conn.execute("CREATE TABLE IF NOT EXISTS learning_cursors(source TEXT PRIMARY KEY,last_ts TEXT NOT NULL)")
+    _cutover_learnings(conn)

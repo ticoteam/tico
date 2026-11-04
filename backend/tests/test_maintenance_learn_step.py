@@ -7,7 +7,7 @@ import sqlite3
 
 import pytest
 
-from backend import judge, learnings, slack_gateway, updates
+from backend import judge, learnings, maintenance, slack_gateway, updates
 from backend.maintenance_steps import learn as step
 from backend.maintenance_steps import update as update_step
 from backend.store import H
@@ -130,6 +130,45 @@ def test_top_fifteen_per_bot_cost_and_replay_without_packet_tasks(api, monkeypat
             assert len(keys) == 15 and keys[0] == "task:19" and "task:0" not in keys
             assert row["task_id"] is None and row["update_batch_id"] is None
         assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == before
+
+
+def test_maintenance_runs_learn_and_moves_its_cursor_with_its_log(api, monkeypatch):
+    _, calls = scoring(api, monkeypatch, count=2)
+    store = api.app.state.store
+    with store.transaction() as c:
+        maintenance.save_step(c, "human:ana", {"key": "learn", "enabled": True})
+    run, started = maintenance.run_now(store, api.app.state.auth, "human:ana", step="learn", wait=True)
+    assert started and run["ok"] and len(calls) == 2
+    [row] = run["steps"]
+    assert row["step"] == "learn" and row["status"] == "ran" and row["checked"] == 2
+    assert row["cost_usd"] == pytest.approx(0.004)
+    with store.read() as c:
+        settings = c.execute("SELECT * FROM maintenance_steps WHERE key='learn'").fetchone()
+        assert settings["cursor_at"] == row["details"]["window_end"] and settings["last_ran_at"]
+        assert not maintenance.due(settings, H.parse_ts(settings["last_started_at"]))
+        assert c.execute("SELECT read_count FROM learning_runs WHERE id=?", (run["id"],)).fetchone()[0] == 2
+        assert c.execute("SELECT task_id FROM learning_deliveries WHERE run_id=?", (run["id"],)).fetchone()[0] is None
+
+
+def test_maintenance_listing_shows_seven_day_delivery_stats_on_learn(api, monkeypatch):
+    scoring(api, monkeypatch, count=4)
+    run_step(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        row = queue(c)
+        updates.send_request(c, row, delivery=True)
+        learnings.record_saved(c, "ops", row["id"], 2)
+        old = H.shift(H.now(), days=-8)
+        c.execute("INSERT INTO learning_runs(id,night,status,started_at,read_count,detail) "
+                  "VALUES('old',?,'quiet',?,99,?)", (old[:10], old, json.dumps({"cost_usd": 99.0})))
+    reply = api.get("/api/v2/maintenance", headers=headers())
+    assert reply.status_code == 200, reply.text
+    steps = {row["key"]: row for row in reply.json()["steps"]}
+    stats = steps["learn"]["stats"]
+    assert (stats["days"], stats["runs"], stats["items_read"]) == (7, 1, 4)
+    assert stats["items_sent"] == {"ops": 4} and (stats["saved"], stats["dropped"]) == (2, 2)
+    assert stats["cost_usd"] == pytest.approx(0.008)
+    assert all("stats" not in row for key, row in steps.items() if key != "learn")
 
 
 def test_cap_reached_mid_run_keeps_cursors_and_reports_paid_failures(api, monkeypatch):
@@ -476,11 +515,16 @@ def test_same_day_runs_are_not_lost_between_pages_and_stats_cover_seven_days(api
     assert first["nights"][0]["id"] != second["nights"][0]["id"]
 
 
-def test_migration_0094_is_idempotent_and_keeps_old_rows_and_indexes():
+def learn_migration():
     path = Path(__file__).resolve().parents[1] / "migrations" / "0094_learn_beta.py"
     spec = importlib.util.spec_from_file_location("learn_beta", path)
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
+    return migration
+
+
+def test_migration_0094_is_idempotent_and_keeps_old_rows_and_indexes():
+    migration = learn_migration()
     with sqlite3.connect(":memory:") as c:
         c.execute("CREATE TABLE learning_deliveries(run_id TEXT NOT NULL,recipient TEXT NOT NULL,task_id TEXT NOT NULL, "
                   "item_keys TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(run_id,recipient))")
@@ -508,3 +552,65 @@ def test_migration_0094_is_idempotent_and_keeps_old_rows_and_indexes():
         migration.up(c)
         c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES('one','same-day','done','now')")
         c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES('two','same-day','done','now')")
+
+
+@pytest.mark.parametrize("saved,seed,expected", [
+    ({}, 0, 0),
+    ({"learnings": {"at": "04:00"}}, 0, 0),
+    ({"learnings": {"on": False}}, 1, 0),
+    ({"learnings": {"on": True}}, 0, 1),
+])
+def test_learn_cutover_takes_the_latest_saved_switch_once(saved, seed, expected):
+    migration = learn_migration()
+    with sqlite3.connect(":memory:") as c:
+        c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY,value TEXT)")
+        c.execute("CREATE TABLE maintenance_steps(key TEXT PRIMARY KEY,enabled INTEGER,updated_at TEXT,updated_by_id TEXT)")
+        c.execute("INSERT INTO maintenance_steps VALUES('learn',?,'seed','migration')", (seed,))
+        c.execute("INSERT INTO registry_metadata VALUES('system_routines',?)",
+                  (json.dumps({"kpi_asks": {"on": False}, **saved}),))
+        migration.up(c)
+        assert c.execute("SELECT enabled FROM maintenance_steps WHERE key='learn'").fetchone()[0] == expected
+        assert json.loads(c.execute("SELECT value FROM registry_metadata").fetchone()[0]) == {"kpi_asks": {"on": False}}
+        changes = c.total_changes
+        migration.up(c)
+        assert c.total_changes == changes
+        c.execute("UPDATE maintenance_steps SET enabled=?,updated_at='later',updated_by_id='human:ana' WHERE key='learn'",
+                  (1 - expected,))
+        migration.up(c)
+        assert c.execute("SELECT enabled,updated_at,updated_by_id FROM maintenance_steps").fetchone() == (
+            1 - expected, "later", "human:ana")
+
+
+@pytest.mark.parametrize("with_runs", [False, True])
+def test_learn_cutover_retires_only_readonly_builtin_mirrors_and_skips_unfinished_runs(with_runs):
+    migration = learn_migration()
+    with sqlite3.connect(":memory:") as c:
+        c.execute("CREATE TABLE automations(id TEXT PRIMARY KEY,builtin INTEGER,enabled INTEGER,flow TEXT,"
+                  "deleted_at TEXT,updated_at TEXT)")
+        for key, builtin, readonly, trigger, deleted in (
+            ("mirror", 1, True, "learnings", None), ("deleted", 1, True, "learnings", "before"),
+            ("editable", 1, False, "learnings", None), ("custom", 0, True, "learnings", None),
+            ("other", 1, True, "kpi_asks", None),
+        ):
+            flow = {"readonly": readonly, "trigger": {"name": "tico.builtin.job." + trigger}}
+            c.execute("INSERT INTO automations VALUES(?,?,1,?,?, 'before')", (key, builtin, json.dumps(flow), deleted))
+        untouched = c.execute("SELECT * FROM automations WHERE id<>'mirror' ORDER BY id").fetchall()
+        if with_runs:
+            c.execute("CREATE TABLE automation_runs(id TEXT PRIMARY KEY,automation_id TEXT,status TEXT,finished_at TEXT)")
+            for status in ("queued", "waiting", "running", "done", "failed", "skipped"):
+                c.execute("INSERT INTO automation_runs VALUES(?,'mirror',?,?)",
+                          (status, status, None if status in ("queued", "waiting", "running") else "before"))
+            for key in ("deleted", "editable", "custom", "other"):
+                c.execute("INSERT INTO automation_runs VALUES(?,?,'queued',NULL)", (key, key))
+        migration.up(c)
+        mirror = c.execute("SELECT enabled,deleted_at,updated_at FROM automations WHERE id='mirror'").fetchone()
+        assert mirror[0] == 0 and mirror[1] and mirror[1] == mirror[2]
+        assert c.execute("SELECT * FROM automations WHERE id<>'mirror' ORDER BY id").fetchall() == untouched
+        if with_runs:
+            runs = {row[0]: row[1:] for row in c.execute("SELECT id,status,finished_at FROM automation_runs")}
+            assert all(runs[key] == ("skipped", mirror[1]) for key in ("queued", "waiting", "running", "deleted"))
+            assert all(runs[key] == (key, "before") for key in ("done", "failed", "skipped"))
+            assert all(runs[key] == ("queued", None) for key in ("editable", "custom", "other"))
+        before, changes = list(c.iterdump()), c.total_changes
+        migration.up(c)
+        assert list(c.iterdump()) == before and c.total_changes == changes

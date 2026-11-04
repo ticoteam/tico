@@ -34,7 +34,7 @@ that is a link. The old files are left in place, unread (`runner-rs/src/harness_
 
 A stateless bot keeps no memory at all: Counsel, by its template (`hubdb.STATELESS_BY_TEMPLATE`), or any bot whose config
 says `stateless: true`. Nothing is copied into its checkout, its prompt says not to read or write `memory/`, `knowledge/`
-or `state.md`, its memory folders are not committed for it, and the nightly learnings skip it. Each task is judged from
+or `state.md`, its memory folders are not committed for it, and Learn skips it. Each task is judged from
 its own text (see [sessions](sessions.md)).
 
 ## Where it comes from
@@ -128,6 +128,10 @@ Tico Decide, and keeps each bot's top items for that bot's next Update turn (`ba
 `backend/learnings.py`). No bot reads Slack or mail for this itself. Learn has its own source cursors; Run now
 uses Maintenance's step rules.
 
+The nightly timer and its System routines control are retired. Learn uses Maintenance's schedule and its own
+"How often" setting (once a day by default). A saved learnings on/off choice carries over at cutover; an inherited
+default becomes off. The old read-only Automations mirror is soft-deleted and its unfinished runs are skipped.
+
 **What is read**, newer than the last run (the first run looks back 24 hours), at most 600 items:
 
 - **Chats**: what people wrote in threads with bots. DMs (your Assistant, your Librarian
@@ -165,7 +169,7 @@ at most 100 candidate items; when several runs are pending, the highest scores g
 as not sent. Original items stay readable on the Learnings page. The bot follows its memory working rules,
 commits its changes and reports `learnings_saved: n`, including zero, in its final reply or the update's structured
 fields. Saved counts are attributed to the oldest contributing run first. Drops count only reported items;
-an absent or invalid count stays unreported. Learn's run details and `learnings.beta_stats(c, days=7)` show reads,
+an absent or invalid count stays unreported. Learn's run details, its Maintenance settings and `learnings.beta_stats(c, days=7)` show reads,
 items sent per bot, saved, dropped, unreported, not sent, expired and cost. Decide meters calls under the monthly cap,
 including paid failures; a capped run sends nothing and keeps its cursors.
 
@@ -176,6 +180,7 @@ its source today (the thread, task, mailbox or meeting); anything else is counte
 stay readable.
 
 - `POST /api/v2/learnings/run` (owner or admin): Maintenance Run now with `step=learn`; an off step stays off.
+- `POST /api/v2/system-routines/learnings/run` is the same Maintenance Run now. Both routes return `{run, started}`, join a live run and accept an Idempotency-Key.
 - `GET /api/v2/learnings?before=&limit=`: nights, newest first.
 - `GET /api/v2/learnings/{id}`: one night's sections.
 - `GET /api/v2/learnings/{id}/packets/{bot}`: one recipient's packet.
