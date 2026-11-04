@@ -77,13 +77,7 @@ const rowText = (page, id) => page.locator(`tr.au-row[data-row="${id}"] td.au-tt
       assert.ok(!labels.some(l => RAW.test(l)), 'no dotted ids among the choices');
       assert.equal(labels.at(-1), 'Custom…', 'Custom… comes last');
       assert.equal(await page.locator('.au-ed [data-b="trigger.name"]').count(), 0, 'no name box for a catalog event');
-      await pick.selectOption('task.done');
-      await page.locator('.au-ed .au-save').click();
-      await page.waitForFunction(() => document.querySelector('.au-trig .au-c1')?.textContent === 'Task finished');
-      const saved = writes.find(w => w.method === 'PATCH' && w.body?.trigger);
-      assert.deepEqual(saved.body.trigger, {type: 'event', name: 'task.done'});
       // A name of one's own: Custom… and a box for it; saved exactly as typed.
-      await page.locator('.au-card[data-open="trigger"]').click();
       await pick.selectOption('__custom');
       const name = page.locator('.au-ed [data-b="trigger.name"]');
       await name.waitFor();
@@ -99,6 +93,16 @@ const rowText = (page, id) => page.locator(`tr.au-row[data-row="${id}"] td.au-tt
       assert.equal(await pick.locator('option:checked').innerText(), 'Custom…');
       await pick.selectOption('tico.notice');
       assert.equal(await page.locator('.au-ed [data-b="trigger.name"]').count(), 0);
+      await page.locator('.au-ed [data-op="close"]').click();
+      // A task event offers the five task triggers only (Dev 666): no Custom…, and the one picked is saved.
+      await page.locator('.au-card[data-open="trigger"]').click();
+      await pick.selectOption('task.done');
+      await page.locator('.au-ed .au-save').click();
+      await page.waitForFunction(() => document.querySelector('.au-trig .au-c1')?.textContent === 'Task finished');
+      const saved = writes.filter(w => w.method === 'PATCH' && w.body?.trigger).at(-1);
+      assert.deepEqual(saved.body.trigger, {type: 'event', name: 'task.done'});
+      await page.locator('.au-card[data-open="trigger"]').click();
+      assert.deepEqual(await pick.locator('option').allInnerTexts(), ['Task created', 'Task step changed', 'Task finished', 'Task declined', 'Task closed']);
       await page.locator('.au-ed [data-op="close"]').click();
       // One the catalog does not list opens on Custom… with its name filled in.
       await page.evaluate(() => { location.hash = '#/automations/au_custom'; });
