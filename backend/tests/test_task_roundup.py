@@ -56,6 +56,8 @@ def started(c, tid, slug, when):
     c.execute("INSERT OR IGNORE INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r-roundup','box','ana','h',?)",
               (when,))
     conv = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (tid,)).fetchone()[0]
+    # Created a day before the turn, as settle dates its history: the task's assignment floor is its creation.
+    c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(when, days=-1), tid))
     mid = H.new_id()
     c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
               "VALUES(?,?,?,?,'task','',?,?)",
