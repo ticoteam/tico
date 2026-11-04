@@ -4,8 +4,11 @@ The person asks to connect (`POST /api/v2/mail/google/connect`) and gets Google'
 own OAuth client (TICO_GOOGLE_OAUTH_CLIENT_ID/SECRET, run by whoever runs this server; nobody makes a Google
 Cloud project, a service account or domain-wide delegation). Google sends their browser back to
 `/api/v2/mail/google/callback`, which checks the state belongs to the same person and keeps the one-time code.
-The computer that syncs mail (runner_support/connectors.py) claims it, asks this server to trade it for the grant, confirms
-the account that signed in is the mailbox asked for and keeps the grant (connectors/mail/oauth.py `finish`).
+The computer hosting the person's message bot claims it (a disconnect goes to the computer holding the grant), asks this
+server to trade it for the grant, confirms the account that signed in is the mailbox asked for and keeps the grant
+(connectors/mail/oauth.py `finish`). With no bot computer, a publisher takes a first connect, as before. A reconnect that
+moves the grant does not revoke the old one at Google: that would end the new grant too (one client, one person). The
+old holder's refresh token is inert, since only this server can add the secret and it refreshes only the current grant.
 
 The OAuth client secret never leaves this server. It is one secret for every team on Tico's public app, so no
 computer holds it: the code exchange (`/exchange`) and every later refresh (`/token`) go through here. The server
@@ -37,14 +40,16 @@ from fastapi.responses import RedirectResponse
 from pydantic import Field
 from typing import Literal
 
+from . import google_rights
 from . import models as M
 from . import routines
+from .google_workspace import oauth_client
 from .store import H, P, Problem
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS google_connects(
  person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, oauth_state TEXT, verifier TEXT, code TEXT,
- kind TEXT, message TEXT, hint TEXT, can TEXT, runner_id TEXT, holder TEXT, started_at REAL, created_at TEXT NOT NULL,
+ kind TEXT, message TEXT, hint TEXT, can TEXT, runner_id TEXT, holder TEXT, client_id TEXT, started_at REAL, created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS google_connects_oauth_state ON google_connects(oauth_state) WHERE oauth_state IS NOT NULL;
 CREATE TABLE IF NOT EXISTS google_mail_holders(runner_id TEXT PRIMARY KEY, holds INTEGER NOT NULL, seen_at REAL NOT NULL);
@@ -116,6 +121,8 @@ MESSAGES = {
                  "Try again in a few minutes. You can also remove Tico at myaccount.google.com/permissions."),
     "unknown": ("The computer that syncs your mail did not say whether the connection finished.",
                 "Connect again. If it keeps happening, check that computer is online."),
+    "reconnect": ("Tico's Google app was changed on this server, so this connection has to be made again.",
+                  "Connect again."),
 }
 
 
@@ -138,8 +145,9 @@ class TokenRequest(M.Contract):
     scopes: list[str] = Field(min_length=1, max_length=4)
 
 
-def configured(settings):
-    return bool(settings.google_oauth_client_id and settings.google_oauth_client_secret)
+def configured(c, settings):
+    """Whether Connect Google has an OAuth client: the server's environment, else the one an admin set."""
+    return oauth_client(c, settings) is not None
 
 
 def redirect_uri(settings):
@@ -155,11 +163,10 @@ def post_token(fields):
         return json.loads(answer.read().decode() or "{}")
 
 
-def google_token(settings, fields):
+def google_token(client, fields):
     """Google's answer to a code exchange or a refresh with this server's client added. A refusal is a Problem
     naming only Google's reason as a kind (TOKEN_ERRORS); Google's body and the request never reach a log."""
-    fields = dict(fields, client_id=settings.google_oauth_client_id,
-                  client_secret=settings.google_oauth_client_secret)
+    fields = dict(fields, client_id=client[0], client_secret=client[1])
     try:
         answer = post_token(fields)
     except urllib.error.HTTPError as e:
@@ -213,9 +220,9 @@ def expire(c):
               "updated_at=? WHERE status IN ('finishing','revoking') AND started_at<?", (H.now(), now - CLAIM_SECONDS))
 
 
-def view(row, settings, mailbox, syncing):
+def view(row, mailbox, syncing, configured_now):
     status = row["status"] if row else "none"
-    out = {"configured": configured(settings), "mailbox": mailbox, "syncing": syncing, "status": status,
+    out = {"configured": configured_now, "mailbox": mailbox, "syncing": syncing, "status": status,
            "scopes": READ_SCOPES, "can": [], "updated_at": row["updated_at"] if row else None,
            "kind": None, "message": None, "hint": None}
     if row and status == "connected":
@@ -234,32 +241,49 @@ def view(row, settings, mailbox, syncing):
     return out
 
 
-def claimable(c, runner_id, holds):
-    """The next connect or disconnect this computer may take, or None.
+def _credentialed_publishers(c, runner_id):
+    """The other publishers that said recently that they hold mail credentials. Only publishers are recorded
+    (google_claim), so a non-publisher's grant or answer never holds a first connect back."""
+    return [row[0] for row in c.execute(
+        "SELECT h.runner_id FROM google_mail_holders h JOIN runners r ON r.id=h.runner_id AND r.revoked_at IS NULL "
+        "WHERE h.runner_id<>? AND h.holds=1 AND h.seen_at>?", (runner_id, time.time() - HOLDER_SECONDS)).fetchall()]
 
-    A person's row belongs to the computer that holds their grant (`holder`): a reconnect or a disconnect goes only
-    there, so a revoke never runs where there is nothing to revoke while the grant stays live elsewhere. A row with no
-    live holder (a first connect) goes to a computer that already holds mail credentials, so mail stays on one
-    computer; any of the publishing computers takes it only when none has said so recently."""
+
+def claimable(c, runner_id, holds, named=False):
+    """The next connect or disconnect this computer may take, or None (plan v5 V).
+
+    google_rights.takes decides each row. With the person's message bot on a live computer, that computer takes the first
+    connect and the reconnect, online or not: a publisher waits for it rather than taking the connect, and a reconnect
+    goes there whoever held the earlier grant (the old holder's refreshes are then refused, see google_refresh). A
+    disconnect goes to the holder, the only computer that can revoke the grant it holds. With no bot computer, the holder
+    keeps its grant; a publisher takes a first connect, or a grant whose holder was removed, unless another publisher has
+    said it holds mail credentials recently and takes that row."""
     expire(c)
-    elsewhere = c.execute(
-        "SELECT 1 FROM google_mail_holders h JOIN runners r ON r.id=h.runner_id AND r.revoked_at IS NULL "
-        "WHERE h.runner_id<>? AND h.holds=1 AND h.seen_at>? UNION ALL SELECT 1 FROM google_connects g "
-        "JOIN runners r ON r.id=g.holder AND r.revoked_at IS NULL WHERE g.holder<>? LIMIT 1",
-        (runner_id, time.time() - HOLDER_SECONDS, runner_id)).fetchone()
-    return c.execute(
-        "SELECT g.* FROM google_connects g LEFT JOIN runners r ON r.id=g.holder AND r.revoked_at IS NULL "
-        "WHERE g.status IN ('ready','disconnecting') AND (g.holder=? OR (r.id IS NULL AND ?)) "
-        "ORDER BY g.updated_at LIMIT 1", (runner_id, 1 if holds or not elsewhere else 0)).fetchone()
+    rows = c.execute("SELECT * FROM google_connects WHERE status IN ('ready','disconnecting') "
+                     "ORDER BY updated_at").fetchall()
+    if not rows:
+        return None
+    hosts, live = google_rights.inbox_hosts(c), google_rights.live_runners(c)
+    others = _credentialed_publishers(c, runner_id)
+    for row in rows:
+        # A publisher without mail credentials defers to another publisher that has them, but only one that takes this
+        # row (google_rights.takes): a computer holding some other mailbox never holds this one back.
+        elsewhere = any(google_rights.takes(other, True, row, hosts, live) for other in others)
+        orphan = named and (holds or not elsewhere)     # a publisher, unless another publisher with credentials takes it
+        if google_rights.takes(runner_id, orphan, row, hosts, live):
+            return row
+    return None
 
 
-def pending(c, runner_id):
+def pending(c, runner_id, named=False):
     """Whether a connect or disconnect waits for this computer, which has no mail credentials yet (otherwise its
     connectors job runs anyway): the job then runs for it (backend/connectors.py)."""
-    return claimable(c, runner_id, False) is not None
+    return claimable(c, runner_id, False, named) is not None
 
 
-def install(app, store, publisher, mutate):
+def install(app, store, member, mutate):
+    """The four routes a computer takes its part of a connect or disconnect on. `member(c, who)` returns the computer
+    and whether it is a publisher; each route then applies the narrow gate of plan v4 O, never publisher() alone."""
     settings = store.settings
 
     def person_view(c, who):
@@ -269,7 +293,7 @@ def install(app, store, publisher, mutate):
         row = c.execute("SELECT * FROM google_connects WHERE person_id=?", (pid,)).fetchone()
         if row and row["mailbox"] != mailbox:
             row = None                  # their mailbox changed since: the old connection says nothing about this one
-        return view(row, settings, mailbox, syncing)
+        return view(row, mailbox, syncing, configured(c, settings))
 
     @app.get("/api/v2/mail/google")
     def google_status(request: Request):
@@ -286,7 +310,8 @@ def install(app, store, publisher, mutate):
         def work(c):
             who = request.state.identity
             pid = require_self(who)
-            if not configured(settings):
+            client = oauth_client(c, settings)
+            if client is None:
                 raise Problem("google_app", "This Tico server has no Google app set up, so Connect Google is not "
                                             "available yet. Whoever runs the server sets TICO_GOOGLE_OAUTH_CLIENT_ID "
                                             "and TICO_GOOGLE_OAUTH_CLIENT_SECRET (docs/mail.md).", 409)
@@ -294,7 +319,7 @@ def install(app, store, publisher, mutate):
             state = secrets.token_urlsafe(24)
             verifier = secrets.token_urlsafe(64)
             challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
-            query = {"client_id": settings.google_oauth_client_id, "redirect_uri": redirect_uri(settings),
+            query = {"client_id": client[0], "redirect_uri": redirect_uri(settings),
                      "response_type": "code", "scope": " ".join(READ_SCOPES), "access_type": "offline",
                      "prompt": "consent", "login_hint": mailbox, "state": state, "code_challenge": challenge,
                      "code_challenge_method": "S256"}
@@ -354,18 +379,29 @@ def install(app, store, publisher, mutate):
         """The next connect or disconnect for the computer that syncs mail. A connect carries no code and no
         secret: the computer asks `/exchange` for the grant, and the code is spent there."""
         with store.transaction() as c:
-            runner = publisher(c, request.state.identity)
+            runner, named = member(c, request.state.identity)
             holds = bool(body and body.holds_mail)
-            c.execute("INSERT INTO google_mail_holders(runner_id,holds,seen_at) VALUES(?,?,?) ON CONFLICT(runner_id) "
-                      "DO UPDATE SET holds=excluded.holds,seen_at=excluded.seen_at", (runner["id"], int(holds), time.time()))
+            # Only a publisher's answer is kept: claimable lets a publisher without credentials defer to one that has them.
+            if named:
+                c.execute("INSERT INTO google_mail_holders(runner_id,holds,seen_at) VALUES(?,?,?) ON CONFLICT(runner_id) "
+                          "DO UPDATE SET holds=excluded.holds,seen_at=excluded.seen_at",
+                          (runner["id"], int(holds), time.time()))
+            else:
+                c.execute("DELETE FROM google_mail_holders WHERE runner_id=?", (runner["id"],))
             # Only recent answers count (claimable), so older ones and revoked computers' go.
             c.execute("DELETE FROM google_mail_holders WHERE seen_at<? OR runner_id IN "
                       "(SELECT id FROM runners WHERE revoked_at IS NOT NULL)", (time.time() - HOLDER_SECONDS,))
-            row = claimable(c, runner["id"], holds)
+            # The narrow gate (plan v4 O): a publisher, or a computer that hosts someone's message bot, or one holding a grant.
+            hosted = any(host["runner"] == runner["id"] for host in google_rights.inbox_hosts(c).values())
+            if not named and not hosted and not c.execute(
+                    "SELECT 1 FROM google_connects WHERE holder=? LIMIT 1", (runner["id"],)).fetchone():
+                raise Problem("forbidden", google_rights.FORBIDDEN, 403)
+            row = claimable(c, runner["id"], holds, named)
             if not row:
                 return {"connect": None}
             action = "connect" if row["status"] == "ready" else "disconnect"
-            if action == "connect" and not configured(settings):
+            client = oauth_client(c, settings) if action == "connect" else None
+            if action == "connect" and client is None:
                 c.execute("UPDATE google_connects SET status='failed',kind='app_config',code=NULL,verifier=NULL,"
                           "updated_at=? WHERE person_id=?", (H.now(), row["person_id"]))
                 return {"connect": None}
@@ -374,7 +410,7 @@ def install(app, store, publisher, mutate):
                        row["person_id"]))
             out = {"id": row["person_id"], "action": action, "mailbox": row["mailbox"]}
             if action == "connect":
-                out.update(client_id=settings.google_oauth_client_id, broker="server")
+                out.update(client_id=client[0], broker="server")
             return {"connect": out}
 
     @app.post("/api/v2/connectors/mail/google/{person_id}/exchange")
@@ -382,19 +418,24 @@ def install(app, store, publisher, mutate):
         """Trade a claimed connect's code for its grant, for the computer that claimed it, once. The code and the
         verifier are cleared before Google is asked; the answer goes to that computer and is not kept here."""
         with store.transaction() as c:
-            runner = publisher(c, request.state.identity)
+            runner, named = member(c, request.state.identity)
             row = c.execute("SELECT * FROM google_connects WHERE person_id=?", (person_id,)).fetchone()
             if (not row or row["runner_id"] != runner["id"] or row["status"] != "finishing" or not row["code"]
                     or not row["verifier"]):
                 raise Problem("state", "No sign-in code waits for this computer to exchange", 409)
+            hosts, live = google_rights.inbox_hosts(c), google_rights.live_runners(c)
+            if not google_rights.takes(runner["id"], named, row, hosts, live):
+                raise Problem("forbidden", google_rights.FORBIDDEN, 403)
             code, verifier = row["code"], row["verifier"]
             c.execute("UPDATE google_connects SET code=NULL,verifier=NULL,updated_at=? WHERE person_id=?",
                       (H.now(), person_id))
-        if not configured(settings):
+        with store.read() as c:
+            client = oauth_client(c, settings)
+        if client is None:
             raise Problem("google_refused", "This Tico server has no Google app set up", 409,
                           extra={"kind": "app_config"})
-        answer = google_token(settings, {"grant_type": "authorization_code", "code": code, "code_verifier": verifier,
-                                         "redirect_uri": redirect_uri(settings)})
+        answer = google_token(client, {"grant_type": "authorization_code", "code": code, "code_verifier": verifier,
+                                       "redirect_uri": redirect_uri(settings)})
         if answer.get("refresh_token"):
             with store.transaction() as c:
                 c.execute("UPDATE google_connects SET pending_hash=? WHERE person_id=? AND runner_id=? AND "
@@ -410,19 +451,29 @@ def install(app, store, publisher, mutate):
         if not wanted <= SERVICE_SCOPES[body.service]:
             raise Problem("scope", f"A {body.service} token from Connect Google carries only its read-only scopes", 422)
         with store.transaction() as c:
-            runner = publisher(c, request.state.identity)
-            held = c.execute("SELECT 1 FROM google_connects WHERE lower(mailbox)=? AND holder=? AND grant_hash=? "
+            runner, named = member(c, request.state.identity)
+            held = c.execute("SELECT * FROM google_connects WHERE lower(mailbox)=? AND holder=? AND grant_hash=? "
                              "LIMIT 1", (body.mailbox.strip().lower(), runner["id"],
                                          fingerprint(body.refresh_token))).fetchone()
             if not held:
                 # Also a grant whose connected result never reached the server: the computer reconnects.
                 raise Problem("not_this_grant", "This computer holds no Connect Google grant from this server for that "
                                                 "mailbox", 403)
-        if not configured(settings):
+            # The one rule (google_rights.takes): the computer hosting the person's message bot, or, with no host, the holder.
+            # A grant that moved away from its bot's computer is refused here, and the answer says to reconnect (the mail CLI
+            # stops on it).
+            hosts, live = google_rights.inbox_hosts(c), google_rights.live_runners(c)
+            if not google_rights.takes(runner["id"], named, held, hosts, live):
+                raise Problem("not_this_grant", "This computer no longer runs the message bot for that mailbox, so it does "
+                                                "not refresh its Connect Google grant. Reconnect it in Settings > Google.",
+                              403)
+        with store.read() as c:
+            client = oauth_client(c, settings)
+        if client is None:
             raise Problem("google_refused", "This Tico server has no Google app set up", 409,
                           extra={"kind": "app_config"})
-        answer = google_token(settings, {"grant_type": "refresh_token", "refresh_token": body.refresh_token,
-                                         "scope": " ".join(sorted(wanted))})
+        answer = google_token(client, {"grant_type": "refresh_token", "refresh_token": body.refresh_token,
+                                       "scope": " ".join(sorted(wanted))})
         returned = set(str(answer.get("scope") or "").split())
         if returned - wanted:
             raise Problem("google_refused", "Google answered with more access than was asked for", 409,
@@ -435,12 +486,15 @@ def install(app, store, publisher, mutate):
     @app.post("/api/v2/connectors/mail/google/{person_id}/result")
     def google_result(person_id: str, request: Request, body: ConnectorResult):
         with store.transaction() as c:
-            runner = publisher(c, request.state.identity)
+            runner, named = member(c, request.state.identity)
             row = c.execute("SELECT * FROM google_connects WHERE person_id=?", (person_id,)).fetchone()
             if not row:
                 raise Problem("not_found", "No Google connect is waiting for this person", 404)
             if row["runner_id"] != runner["id"] or row["status"] not in ("finishing", "revoking"):
                 raise Problem("state", "This Google connect is not this computer's to finish", 409)
+            hosts, live = google_rights.inbox_hosts(c), google_rights.live_runners(c)
+            if not google_rights.takes(runner["id"], named, row, hosts, live):
+                raise Problem("forbidden", google_rights.FORBIDDEN, 403)
             if (row["status"] == "finishing") != (body.status != "disconnected"):
                 raise Problem("state", "That result does not answer this request", 409)
             kind = body.kind if body.kind in KINDS else ("error" if body.status == "failed" else None)
@@ -450,12 +504,17 @@ def install(app, store, publisher, mutate):
             holder = {"connected": runner["id"], "disconnected": None}.get(body.status, row["holder"])
             # Likewise the grant the server will refresh: the new one once connected, none once revoked.
             grant_hash = {"connected": row["pending_hash"], "disconnected": None}.get(body.status, row["grant_hash"])
+            # The client it is recorded with: this server's now, for a connect that succeeded. A failed reconnect keeps
+            # the earlier grant's client, and a revoked grant has none to keep.
+            client = oauth_client(c, settings) if body.status == "connected" else None
+            client_id = client[0] if client else row["client_id"]
             c.execute("UPDATE google_connects SET status=?,kind=?,message=?,hint=?,can=?,holder=?,grant_hash=?,"
-                      "pending_hash=NULL,oauth_state=NULL,verifier=NULL,code=NULL,updated_at=? WHERE person_id=?",
+                      "client_id=?,pending_hash=NULL,oauth_state=NULL,verifier=NULL,code=NULL,updated_at=? "
+                      "WHERE person_id=?",
                       (body.status, kind if failed else None, body.message if failed else None,
                        body.hint if failed else None,
                        json.dumps(sorted(set(body.can))) if body.status == "connected" else None, holder, grant_hash,
-                       H.now(), person_id))
+                       client_id, H.now(), person_id))
             H.event(c, "human:" + person_id, "mail.google." + body.status, row["mailbox"],
                     {"kind": kind} if body.status == "failed" else {})
             if body.status == "connected" and row["mailbox"]:

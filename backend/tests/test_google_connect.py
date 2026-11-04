@@ -122,7 +122,7 @@ def test_the_mail_computer_finishes_it_and_the_code_is_cleared(app):
     assert r.status_code == 403                                      # a person never sees the code again
     machine = runner(app)
     with app.app.state.store.transaction() as c:
-        assert google_connect.pending(c, machine["runner_id"])
+        assert google_connect.pending(c, machine["runner_id"], named=True)   # the owner's computer publishes
     assert get(app, "runners/connectors", machine["token"])["connectors"] == ["mail"]
     claimed = post(app, "connectors/mail/google/claim", {}, machine["token"])["connect"]
     assert claimed == {"id": "cara", "action": "connect", "mailbox": "cara@acme.example", "client_id": CLIENT,
