@@ -22,16 +22,20 @@ run for it (a queued, leased or running job in its conversation), and either:
 A follow-up time (tasks.check_back_at) is set only by a person or a bot: its check_back_explicit history row names the
 time. When it has come, the task is listed first on its owner bot's list as "Follow-up time set by <who> has come: <note>"
 (the note trimmed), and the time is then cleared, so it is listed once. Tico sets no follow-up time of its own, and a
-task a person owns is on no bot's list.
+task a person owns is on no bot's list. A date a snooze left behind is not a follow-up: it holds nothing, and a snooze in
+force hides the task (task_snooze.snoozed) until it ends.
 
-A private task is listed as "a private task <id>", without its title. A bot whose profile has its stall sweeps off
-(rules.sweeps_on) gets no list.
+A private task is listed as "a private task <id>", without its title, its follow-up's who and note, or what changed: only
+that a follow-up time has come, that it has an update, or that it has gone quiet. A bot whose profile has its stall sweeps off (rules.sweeps_on) gets no
+list.
 
 A bot is sent at most one list per run: registry_metadata `task_roundup:<slug>` holds the run's time it was last sent a
 list, and a bot already sent one since this run's time gets nothing more, so the roundup works at any cadence. Each task's
-last listing is kept (`task_roundup:task:<id>`). Both are written only once the message is delivered: a bot run by a
-computer is delivered when its job is queued, and an external inbox (no computer, no job) when the message is written. A
-message a rule held is not counted as sent.
+last listing is kept (`task_roundup:task:<id>`) as the time its list was built, not the run's time, so an update that lands
+after the run's time but before the build is not listed again. Both are written only once the message is delivered: a bot
+run by a computer is delivered when its job is queued, and an external inbox (no computer, no job) when the message is
+written. A message a rule held is not counted as sent. The list is written to the bot's own notice room with Tico, where
+no person is a member, so the roundup never notifies a person.
 
 The scheduler selects the bots in one read transaction (discover), then sends each one in its own short transaction (send),
 which rebuilds that bot's list from the live database before it writes anything."""
@@ -110,13 +114,14 @@ def send(c, plan):
     slug, at = plan["slug"], plan["at"]
     if _sent_before(c, slug, at) or not _active(c, slug) or not _owns_live(c, slug) or not rules.sweeps_on(c, slug):
         return 0
+    built = _later(at, _built_at())        # stamped before the read: an update racing it is listed again, never missed
     text, count, shown, due = _list(c, slug, at)
     if not text:
         return 0
     actor = H.bot_actor(slug)
     with isolated(c, WAKE, slug):
         try:
-            message = H._write_message(c, H.KEEPER, actor, text, rules._bot_room(c, slug), "notice",
+            message = H._write_message(c, H.KEEPER, actor, text, _room(c, slug), "notice",
                                        RT.stamp({"wake": WAKE}, WAKE), None, None)
         except H.Refused:
             return 0                    # not told this run: a later run may try again
@@ -126,7 +131,7 @@ def send(c, plan):
                   (SENT_KEY + slug, at))
         for tid in shown:
             c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                      (LISTED_KEY + tid, at))
+                      (LISTED_KEY + tid, built))
         for tid in due:
             task_check_backs.consume(c, tid, H.KEEPER)
         H.event(c, H.KEEPER, EVENT, slug, {"at": at, "tasks": count, "follow_ups": len(due)})
@@ -154,6 +159,17 @@ def _later(*times):
     return max((t for t in times if t), default="")
 
 
+def _built_at():
+    """The time a list is built, stamped as the checkpoint of each task on it. Tests pin it (it is the wall clock otherwise)."""
+    return H.now()
+
+
+def _room(c, slug):
+    """The bot's own notice room with Tico: the keeper and the bot are its only members, so a list reaches the bot and no
+    person is told about a task. (rules._bot_room picks the operator's room or a shared room, where people are.)"""
+    return H._pair_conversation(c, H.KEEPER, H.bot_actor(slug), "notice", allow_held=True)
+
+
 def _list(c, slug, at):
     """The bot's list as one message's text, how many tasks it names, the ids it names, and the ids of its follow-ups among
     them (cleared once it is sent). A follow-up whose time has come goes first. (None, 0, [], []) when nothing needs a look."""
@@ -168,26 +184,24 @@ def _list(c, slug, at):
     for row in rows:
         if not H.task_private_readable(c, actor, row) or TS.snoozed(row, at) or _running(c, slug, row):
             continue
+        private = H.task_private(c, row)
         follow = _follow_up(c, row)
         if follow and H.parse_ts(row["check_back_at"]) <= now:
-            who, note = follow
-            reason = f"Follow-up time set by {who} has come" + (f": {note}" if note else ".")
-            due.append((row["check_back_at"], row["id"], _line(c, row, reason)))
+            due.append((row["check_back_at"], row["id"], _line(row, _due_reason(follow, private), private)))
             continue
         last_turn = _last_turn(c, row, slug, actor)
         listed = _listed(c, row["id"])
         news = _news(c, row, actor, _later(last_turn, listed))
         if news:
             count, when, what = news
-            reason = f"Update you may have missed: {what} ({count} since you last worked on it)"
-            missed.append((when, row["id"], _line(c, row, reason)))
+            missed.append((when, row["id"], _line(row, _missed_reason(count, what, private), private)))
             continue
         quiet_since = _later(row["updated_at"], last_turn, _latest(c, row))
         if H.parse_ts(quiet_since) <= cutoff and not _holds(c, row, at) and (listed is None or H.parse_ts(listed) <= relist):
             span = _days(now - H.parse_ts(quiet_since))
             reason = (f"Waiting on nothing for {span}" if row["status"] == "waiting"
                       else f"Quiet for {span}, nothing waiting on anyone")
-            quiet.append((quiet_since, row["id"], _line(c, row, reason)))
+            quiet.append((quiet_since, row["id"], _line(row, reason, private)))
     if not due and not missed and not quiet:
         return None, 0, [], []
     ordered = ([(tid, line) for _, tid, line in sorted(due)]
@@ -223,12 +237,27 @@ def _follow_up(c, row):
     return _who(c, found[0]), note
 
 
+def _due_reason(follow, private):
+    """A due follow-up's reason: who set it and its note. A private task says only that the time has come."""
+    if private:
+        return "Follow-up time has come."
+    who, note = follow
+    return f"Follow-up time set by {who} has come" + (f": {note}" if note else ".")
+
+
+def _missed_reason(count, what, private):
+    """A missed update's reason: what changed and by whom, and how many. A private task gets the count only."""
+    detail = "" if private else f": {what}"
+    return f"Update you may have missed{detail} ({count} since you last worked on it)"
+
+
 def _marks():
     return ",".join("?" for _ in H.ACTIVE_STATUSES)
 
 
-def _line(c, row, reason):
-    if H.task_private(c, row):
+def _line(row, reason, private):
+    """One task's line. A private task is named by its id alone, so its `reason` must already be private-safe."""
+    if private:
         return f"- a private task {row['id'][:8]}: {reason}"
     title = " ".join((row["title"] or "").split())[:TITLE_CHARS] or "Untitled"
     return f"- {row['id'][:8]} {title}: {reason}"
@@ -240,10 +269,11 @@ def _days(delta):
 
 
 def _holds(c, row, at):
-    """Whether something holds the task: a person it waits on, a follow-up time still to come, a live blocker, or a wait
-    recorded for it (an unanswered ask included)."""
+    """Whether something holds the task off the quiet list: a person it waits on, an explicit follow-up time still to come
+    (a date nobody set, or one a snooze left behind, holds nothing), a live blocker, or a wait recorded for it (an unanswered
+    ask included). A snooze in force is not here: _list skips the task while task_snooze.snoozed."""
     from . import task_relations as TR
-    later = bool(row.get("check_back_at") and H.parse_ts(row["check_back_at"]) > H.parse_ts(at))
+    later = bool(_follow_up(c, row) and H.parse_ts(row["check_back_at"]) > H.parse_ts(at))
     return (bool(row.get("waiting_on")) or later
             or TR.live_blocker(c, row["id"], H.ACTIVE_STATUSES) is not None
             or H.recorded_wait(c, dict(row), at) is not None)

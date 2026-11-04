@@ -384,7 +384,9 @@ still reaches its report.
 
 Tico does not wake a bot once for each stalled task, and does not escalate repeated stalls to BotOps. Each bot gets at
 most one list in each run of the task roundup (three times a day by default, at 6am, noon and 6pm company time): the tasks that have a missed update or have gone quiet (see
-[System routines](system-routines.md)).
+[System routines](system-routines.md)). The list goes only to the bot, in its own notice room with Tico, so the roundup
+never tells a person about a task. A private task is named by its id alone: who set its follow-up and its note, and what
+changed on it, stay out of the line.
 
 A task blocked by its own subtask is allowed (a question for a person in a subtask works that way),
 but relating it returns a warning: a subtask kept open until its parent finishes, such as a hold or

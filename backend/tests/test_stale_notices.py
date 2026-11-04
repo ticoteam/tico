@@ -152,3 +152,39 @@ def test_a_legacy_check_whose_turn_already_started_is_kept_to_finish_it(api):
     with api.app.state.store.read() as c:
         assert queued(c, late) == "canceled"
         assert queued(c, started) != "canceled", "a turn that started and yielded is the rest of its turn, not a stale check"
+
+
+def check_back_refusal(api, machine, job_id):
+    """job_refusal's verdict on one queued job, as the claim asks it, with nothing busy."""
+    from backend import execution
+    with api.app.state.store.read() as c:
+        runner = c.execute("SELECT * FROM runners_with_state WHERE id=?", (machine["runner_id"],)).fetchone()
+        ready = execution.readiness_document(runner["readiness"])
+        job = H._rows(c.execute("SELECT * FROM jobs WHERE id=?", (job_id,)))[0]
+        return execution.job_refusal(c, job, {}, ready, set(), execution.lanes_on(runner), execution.roots_on(runner))
+
+
+def test_a_check_back_whose_turn_started_or_a_person_resumed_is_not_refused_as_obsolete_while_check_backs_are_off(api):
+    # With the check-backs off every check-back is stale (task_check_backs.stale) and the claim refuses it, but the rest of a
+    # turn that started, or that a person resumed, runs: obsolete_notices_sql keeps those, and so must the refusal.
+    r = fleet(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        row = task(c)
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")         # the new-task notices are not this test
+        back = H._wake(c, row, "bot:ops", "Check on it.", {"wake": "check_back", "task": row["id"]}, trigger="check_back")
+        job_id = c.execute("SELECT id FROM jobs WHERE message_id=?", (back["id"],)).fetchone()[0]
+    assert check_back_refusal(api, r, job_id) == "obsolete_check_back", "unstarted, with the check-backs off, it is stale"
+    now = H.now()
+    with store.transaction() as c:
+        runner_id = c.execute("SELECT id FROM runners LIMIT 1").fetchone()[0]
+        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,started_at) "
+                  "VALUES('attempt-check-back',?,'ops',?,1,'hash-check-back','running',?,?,?)",
+                  (job_id, runner_id, H.shift(now, minutes=30), now, now))
+        c.execute("UPDATE jobs SET attempt_id='attempt-check-back' WHERE id=?", (job_id,))
+    assert check_back_refusal(api, r, job_id) != "obsolete_check_back", "a turn that started is the rest of it: it runs"
+    with store.transaction() as c:
+        c.execute("UPDATE attempts SET started_at=NULL WHERE id='attempt-check-back'")
+        c.execute("INSERT INTO job_recovery(job_id,attempt_id,decision,note,actor,created_at) "
+                  "VALUES(?,'attempt-check-back','resume','Carry on.',?,?)", (job_id, H.human_actor("ana"), now))
+    assert check_back_refusal(api, r, job_id) != "obsolete_check_back", "a person resumed it: it runs"

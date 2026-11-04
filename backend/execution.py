@@ -2140,7 +2140,7 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
     task = H.task(c, task_id) if task_id else None
     refs = message.get("refs") or {}
     from . import task_check_backs
-    if task_check_backs.stale(c, message, job["bot_id"]):
+    if task_check_backs.stale(c, message, job["bot_id"], job):
         return "obsolete_check_back"
     check_back = message["sender_id"] == H.KEEPER and refs.get("wake") == "check_back"
     if task and task['owner_id'] == 'bot:' + job['bot_id'] and auto_tasks.put_back_held(c, task) and not refs.get('run_now') and not check_back:

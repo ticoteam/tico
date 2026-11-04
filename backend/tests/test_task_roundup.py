@@ -2,11 +2,13 @@
 each active bot at most one wake, with one list of its tasks that have a missed update, have gone quiet, or have a follow-up
 time that has come. A task waiting on a person or a live blocker with nothing new is not listed, a task waiting on nothing is
 listed once quiet a day, Tico's own notices and check-backs are not news, a task with a run already queued is not listed, a
-bot with nothing to list gets no message, a private task is named without its title, and a quiet task is listed again only
-after seven days. Synthetic fixtures only."""
+bot with nothing to list gets no message, a private task is named without its title or any detail of it, a list reaches the
+bot alone, and a quiet task is listed again only after seven days. Synthetic fixtures only."""
 import importlib
 import json
 from datetime import datetime, timezone
+
+import pytest
 
 from backend import scheduler, task_check_backs, task_roundup
 from backend import task_relations as TR
@@ -15,6 +17,12 @@ from backend.tests.test_api import api  # noqa: F401
 
 DAY = "2026-11-03T14:00:00.000000Z"     # the 6am run (company time is Pacific, PST on this date); fixed for the tests
 NOON = H.shift(DAY, hours=6)            # the noon run, 20:00 UTC
+
+
+@pytest.fixture(autouse=True)
+def build_clock(monkeypatch):
+    """A list is built at its run's time unless a test moves the build clock, so the checkpoints the tests read are the runs'."""
+    monkeypatch.setattr(task_roundup, "_built_at", lambda: DAY)
 
 
 def ago(**kw):
@@ -571,3 +579,78 @@ def test_a_bot_whose_tasks_need_no_look_gets_no_message_and_no_sent_mark(api):
         assert lists(c) == []
         assert c.execute("SELECT count(*) FROM registry_metadata WHERE key LIKE 'task_roundup:%'").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM events WHERE action='task_roundup.sent'").fetchone()[0] == 0
+
+
+def test_a_private_task_names_neither_its_follow_up_who_or_note_nor_what_changed(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        due = H.task_create(c, H.human_actor("ana"), "Confidential merger plan", "Keep it quiet.", "bot:finance",
+                            lint=False, private=True)
+        settle(c, due["id"], "finance", ago(days=3))
+        task_check_backs.set_time(c, H.task(c, due["id"]), ago(hours=1), "Ask Ben about the merger terms",
+                                  actor=H.human_actor("ana"), at=ago(hours=3))
+        moved = H.task_create(c, H.human_actor("ana"), "Second confidential errand", "Keep it quiet too.", "bot:finance",
+                              lint=False, private=True)
+        settle(c, moved["id"], "finance", ago(days=2))
+        note(c, moved["id"], H.human_actor("ben"), ago(hours=1))
+        complete_jobs(c)
+        assert "finance" in task_roundup.run(c, DAY)["woke"]
+        body = only_list(c)
+        assert f"- a private task {due['id'][:8]}: Follow-up time has come." in body
+        assert f"- a private task {moved['id'][:8]}: Update you may have missed (" in body
+        for secret in ("merger", "Ask Ben", "Ana", "Ben", "a message from", "Confidential", "Second confidential"):
+            assert secret not in body, secret
+
+
+def test_an_update_after_the_run_but_before_its_list_is_built_is_listed_once(api, monkeypatch):
+    store = api.app.state.store
+    with store.transaction() as c:
+        idle = task(c, "Renew the parking permit")
+        settle(c, idle["id"], "finance", ago(days=2))
+        note(c, idle["id"], H.human_actor("ana"), H.shift(DAY, minutes=2))      # after the run's time, before the build
+        complete_jobs(c)
+        built = H.shift(DAY, minutes=5)
+        monkeypatch.setattr(task_roundup, "_built_at", lambda: built)
+        assert "finance" in task_roundup.run(c, DAY)["woke"]
+        assert "Update you may have missed: a message from" in only_list(c)
+        stored = c.execute("SELECT value FROM registry_metadata WHERE key=?", (f"task_roundup:task:{idle['id']}",)).fetchone()
+        assert stored[0] == built, "the checkpoint is the build's time, not the run's"
+        assert "finance" not in task_roundup.run(c, NOON)["woke"], "the update is in the list already: not news again"
+        assert len(lists(c)) == 1
+
+
+def test_a_list_is_written_to_the_bot_alone_so_no_person_gets_a_delivery_for_it(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        idle = task(c, "Renew the parking permit")       # finance is Ana's bot: her personal room is where a list used to go
+        settle(c, idle["id"], "finance", ago(days=2))
+        complete_jobs(c)
+        assert "finance" in task_roundup.run(c, DAY)["woke"]
+        message_id, conversation_id = c.execute("SELECT id, conversation_id FROM messages WHERE recipient_id=? "
+                                                "AND refs LIKE '%task_roundup%'", (H.bot_actor("finance"),)).fetchone()
+        assert c.execute("SELECT count(*) FROM conversations WHERE id=? AND participants LIKE '%human:%'",
+                         (conversation_id,)).fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM message_deliveries WHERE message_id=? AND recipient LIKE 'human:%'",
+                         (message_id,)).fetchone()[0] == 0
+
+
+def test_a_date_a_snooze_left_behind_holds_nothing_while_a_snooze_in_force_or_an_explicit_follow_up_does(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        left = task(c, "Renew the parking permit")
+        task_check_backs.set_time(c, H.task(c, left["id"]), H.shift(DAY, hours=2), "Look again", at=DAY, system=True)
+        settle(c, left["id"], "finance", ago(days=2))            # a date nobody set, as a snooze leaves it: it holds nothing
+        snoozed = task(c, "Plan the offsite")
+        c.execute("UPDATE tasks SET snoozed_until=?, snoozed_by_id='human:ana' WHERE id=?",
+                  (H.shift(DAY, hours=2), snoozed["id"]))
+        settle(c, snoozed["id"], "finance", ago(days=2))         # a snooze in force hides the task
+        explicit = task(c, "Chase the quote")
+        task_check_backs.set_time(c, H.task(c, explicit["id"]), H.shift(DAY, hours=2), "Check the quote",
+                                  actor=H.human_actor("ana"), at=DAY)
+        settle(c, explicit["id"], "finance", ago(days=2))        # an explicit follow-up still to come holds it
+        complete_jobs(c)
+        assert "finance" in task_roundup.run(c, DAY)["woke"]
+        body = only_list(c)
+        assert f"{left['id'][:8]} Renew the parking permit: Quiet for 2 days, nothing waiting on anyone" in body
+        assert snoozed["id"][:8] not in body
+        assert explicit["id"][:8] not in body

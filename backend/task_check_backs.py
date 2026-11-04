@@ -692,11 +692,22 @@ def finished_turn(c, aid, bot, task_id, at=None):
             repair(c, row, at)
 
 
-def stale(c, message, bot):
+def continuing(c, job):
+    """Whether a queued job is the rest of a turn already under way: its attempt started (a drain's time limit and a shared
+    login's hold cap yield one), or a person resumed it (job_recovery 'resume'). execution.obsolete_notices_sql keeps these."""
+    started = c.execute("SELECT 1 FROM attempts WHERE id=? AND started_at IS NOT NULL", (job["attempt_id"],)).fetchone()
+    resumed = c.execute("SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=? AND decision='resume'",
+                        (job["id"], job["attempt_id"])).fetchone()
+    return started is not None or resumed is not None
+
+
+def stale(c, message, bot, job=None):
     H = _H()
     refs = message.get("refs") or {}
     if message.get("sender_id") != H.KEEPER or refs.get("wake") != "check_back":
         return False
+    if job is not None and continuing(c, job):
+        return False                    # the rest of a turn already under way: it runs (as obsolete_notices_sql keeps it)
     row = H.task(c, H._task_ref(refs.get("task")) or "")
     return (not row or not enabled(c) or row.get("check_back_at") != refs.get("check_back_at")
             or actor_for(row) != "bot:" + bot or bool(human_snooze(row, H.now())))
