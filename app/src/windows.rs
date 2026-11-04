@@ -5,10 +5,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(not(target_os = "linux"))]
 use std::sync::Mutex;
+use std::time::Duration;
 
 use serde_json::Value;
 use tauri::webview::{NewWindowFeatures, NewWindowResponse, PageLoadEvent, PageLoadPayload, Webview, WebviewBuilder};
 use tauri::window::{Window, WindowBuilder};
+use tauri::utils::config::BackgroundThrottlingPolicy;
 use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Rect, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_window_state::StateFlags;
@@ -17,8 +19,8 @@ use uuid::Uuid;
 use crate::bridge::bridge_script;
 use crate::config::{self, Config};
 use crate::orgs::Org;
-use crate::visual_origin;
-use crate::{active_org, connection, refresh_chrome, select_connection, App, AppState, MIN_HEIGHT, MIN_WIDTH, USER_AGENT};
+use crate::visual_origin::{self, VisualOrigin};
+use crate::{active_org, connection, refresh_chrome, signin, timing, App, AppState, MIN_HEIGHT, MIN_WIDTH, USER_AGENT};
 
 pub(crate) fn build_server_window(app: &App) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window("server") {
@@ -126,7 +128,8 @@ pub(crate) fn build_window(app: &App) -> tauri::Result<()> {
         keep_title_bar_reachable(app, &build_main(app)?);
     }
     if active_webview(app).is_none() {
-        open_org_webview(app, &org)?;
+        open_org_webview(app, &org, true)?;
+        note_shown(&mut app.state::<AppState>().shown.lock().unwrap(), &org.id, KEEP_ALIVE);
     }
     sync_rail(app)?;
     layout(app);
@@ -142,6 +145,8 @@ fn build_main(app: &App) -> tauri::Result<Window> {
         // Where a first launch opens; a saved frame replaces it.
         .center()
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
+        // The hub page's own dark background (ui/styles/tokens.css --g0), behind a page that has not painted yet.
+        .background_color(tauri::window::Color(0x13, 0x14, 0x13, 0xff))
         .visible(false);
     // The native title bar drags the window on every page, including sign-in pages that are
     // not ours; an overlay title bar would leave dragging to each page.
@@ -185,18 +190,31 @@ fn bounds(x: f64, y: f64, width: f64, height: f64) -> Rect {
     Rect { position: LogicalPosition::new(x, y).into(), size: LogicalSize::new(width, height).into() }
 }
 
-/// Places the rail and the open org's page side by side, filling the window. Logical units throughout.
+/// The window's content size, in logical units.
+fn content_size(app: &App) -> Option<(f64, f64)> {
+    let window = main_window(app)?;
+    let (size, scale) = (window.inner_size().ok()?, window.scale_factor().ok()?);
+    Some((size.width as f64 / scale, size.height as f64 / scale))
+}
+
+/// Where an org's page goes: beside the rail, or, for a page built hidden, as large but off to the left of the
+/// window, so that it never covers the open page, even for the moment before it is hidden.
+fn page_bounds(app: &App, on_screen: bool) -> Rect {
+    let (width, height) = content_size(app).unwrap_or((1240.0, 820.0));
+    let left = if app.get_webview(RAIL).is_some() { RAIL_WIDTH } else { 0.0 };
+    let page = (width - left).max(1.0);
+    bounds(if on_screen { left } else { -(page + 1000.0) }, 0.0, page, height)
+}
+
+/// Places the rail and the open org's page side by side, filling the window. Logical units throughout. A prefetched
+/// page keeps its bounds until it is shown.
 pub(crate) fn layout(app: &App) {
-    let Some(window) = main_window(app) else { return };
-    let (Ok(size), Ok(scale)) = (window.inner_size(), window.scale_factor()) else { return };
-    let (width, height) = (size.width as f64 / scale, size.height as f64 / scale);
-    let rail = app.get_webview(RAIL);
-    let left = if rail.is_some() { RAIL_WIDTH } else { 0.0 };
-    if let Some(rail) = rail {
+    let Some((_, height)) = content_size(app) else { return };
+    if let Some(rail) = app.get_webview(RAIL) {
         let _ = rail.set_bounds(bounds(0.0, 0.0, RAIL_WIDTH, height));
     }
     if let Some(page) = active_webview(app) {
-        let _ = page.set_bounds(bounds(left, 0.0, (width - left).max(1.0), height));
+        let _ = page.set_bounds(page_bounds(app, true));
     }
 }
 
@@ -222,20 +240,42 @@ pub(crate) fn local_page(url: &url::Url) -> bool {
     url.scheme() == "tauri" || matches!(url.host_str(), Some("tauri.localhost") | Some("localhost"))
 }
 
-/// Opens an org's page as a child of the main window, on the org's own data store (macOS 14+).
-fn open_org_webview(app: &App, org: &Org) -> tauri::Result<()> {
+/// The first page of an org's webview: the hub's own sign-in for an org Tico sign-in just added (its session is
+/// already in the org's store, so the sign-in goes straight through to the hub's root), otherwise the usual one.
+pub(crate) fn first_page(usual: url::Url, hub: &url::Url, sign_in: bool) -> url::Url {
+    if !sign_in {
+        return usual;
+    }
+    hub.join(signin::LOGIN_PATH).unwrap_or(usual)
+}
+
+/// Opens an org's page as a child of the main window, on the org's own data store (macOS 14+). A page built for a
+/// prefetch (`on_screen` false) loads hidden, off to the side, until a switch shows it.
+fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<()> {
     let (Some(window), Some(home)) = (main_window(app), Home::of(org)) else { return Ok(()) };
     grant_org(app, &home)?;
+    timing::mark(app, &home.id, "granted");
     let config = Config::new(home.hub.clone());
-    let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), true);
+    // A prefetch that is never shown leaves the flag for the page that is.
+    let sign_in = {
+        let state = app.state::<AppState>();
+        let mut list = state.orgs.lock().unwrap();
+        if on_screen { list.take_sign_in(&home.id) } else { list.get(&home.id).is_some_and(|org| org.sign_in) }
+    };
+    let start = first_page(config.start_url(), &home.hub, sign_in);
+    let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), Some(home.id.clone()));
     #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
-    let mut builder = WebviewBuilder::new(org_label(&home.id), WebviewUrl::External(config.start_url()))
+    let mut builder = WebviewBuilder::new(org_label(&home.id), WebviewUrl::External(start))
         .user_agent(USER_AGENT)
         // Files dropped on a page reach it (chat composers, task files): Tauri's own drop handler would swallow them on macOS.
         .disable_drag_drop_handler()
-        .devtools(true)
+        // Web inspector in debug builds, and in a release built with `--features devtools`.
+        .devtools(cfg!(any(debug_assertions, feature = "devtools")))
+        // A hidden WKWebView is an inactive one, and WebKit's default suspends it (macOS 14+): a prefetched page would
+        // stop loading until shown. Throttling slows its timers, which the hub's boot runs on, so neither is used.
+        .background_throttling(BackgroundThrottlingPolicy::Disabled)
         .initialization_script(&bridge_script(app))
-        .on_new_window(new_window_handler(app, home.clone()))
+        .on_new_window(new_window_handler(app, home.clone(), true))
         .on_navigation(navigate)
         .on_page_load(move |_, payload| page(payload));
     #[cfg(target_os = "macos")]
@@ -244,7 +284,12 @@ fn open_org_webview(app: &App, org: &Org) -> tauri::Result<()> {
             builder = builder.data_store_identifier(*store.as_bytes());
         }
     }
-    window.add_child(builder, LogicalPosition::new(0.0, 0.0), LogicalSize::new(1240.0, 820.0))?;
+    let frame = page_bounds(app, on_screen);
+    let webview = window.add_child(builder, frame.position, frame.size)?;
+    if !on_screen {
+        let _ = webview.hide();
+    }
+    timing::mark(app, &home.id, "created");
     // The page now holds its own store, so a store Tico sign-in held for it can go.
     #[cfg(target_os = "macos")]
     if let Some(store) = home.store {
@@ -265,42 +310,256 @@ fn grant_org(app: &App, home: &Home) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Makes another org the open one: its page replaces the old one in the main window. The old page closes first,
-/// so the two never run at once. No restart and no new sign-in: the org's own store keeps its sign-in.
+/// How many org pages stay open: the open one only, so a switch closes the previous page once the new one is on
+/// screen. A prefetched page (see `prefetch`) is apart from these.
+pub(crate) const KEEP_ALIVE: usize = 1;
+
+/// Records that `id`'s page is on screen, most recent last, and returns the orgs whose pages go: the least recently
+/// shown beyond `keep`.
+pub(crate) fn note_shown(order: &mut Vec<String>, id: &str, keep: usize) -> Vec<String> {
+    order.retain(|shown| shown != id);
+    order.push(id.to_string());
+    let over = order.len().saturating_sub(keep.max(1));
+    order.drain(..over).collect()
+}
+
+/// Makes another org the open one: its page replaces the old one in the main window. A page already built (a
+/// prefetch) is shown at once, as far as it has loaded; otherwise a new one opens. The old page closes once the new
+/// one is on screen. No restart and no new sign-in: the org's own store keeps its sign-in.
 pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
+    timing::begin(app, id);
     let state = app.state::<AppState>();
     let _changing = state.changing.lock().unwrap();
-    let org = {
+    timing::mark(app, id, "lock");
+    let (org, was_open) = {
         let mut orgs = state.orgs.lock().unwrap();
         if orgs.get(id).is_none() {
             return Ok(());
         }
+        let was_open = orgs.active().is_some_and(|org| org.id == id);
         orgs.set_active(id);
-        orgs.active().cloned()
+        (orgs.active().cloned(), was_open)
     };
     let Some(org) = org else { return Ok(()) };
-    if app.get_webview(&org_label(&org.id)).is_some() {
+    let live = app.get_webview(&org_label(&org.id));
+    if was_open && live.is_some() {
+        timing::finish(app, id, "already open");
         refresh_chrome(app);
         return Ok(());
     }
     let Some(home) = Home::of(&org) else { return Ok(()) };
-    // The connection follows the open org before its page opens, and the status starts over.
-    select_connection(&state, Some(Config::new(home.hub.clone())));
+    {
+        let mut prefetch = state.prefetch.lock().unwrap();
+        if prefetch.org.as_deref() == Some(id) {
+            prefetch.org = None;
+            prefetch.serial += 1;
+        }
+    }
+    // The connection follows the open org, and the status starts over.
+    select_org(&state, Config::new(home.hub.clone()), live.is_some());
     *state.status.lock().unwrap() = crate::hub::HubStatus::default();
     if main_window(app).is_none() {
         build_window(app)?;
-        show_window(app);
-    } else {
-        for (label, webview) in app.webviews() {
-            if label.starts_with("org-") {
-                let _ = webview.close();
-            }
-        }
-        open_org_webview(app, &org)?;
+        show_when_painted(app);
+    } else if let Some(page) = &live {
         layout(app);
+        let _ = page.show();
+        let _ = page.set_focus();
+        state.orgs.lock().unwrap().take_sign_in(id);
+    } else {
+        open_org_webview(app, &org, true)?;
+        layout(app);
+    }
+    timing::shown(app, id);
+    let gone = note_shown(&mut state.shown.lock().unwrap(), id, KEEP_ALIVE);
+    for other in gone.iter().filter(|other| other.as_str() != id) {
+        if let Some(page) = app.get_webview(&org_label(other)) {
+            let _ = page.close();
+        }
     }
     refresh_chrome(app);
     Ok(())
+}
+
+/// The open org's server becomes the connection. Its page's visual allowance comes along when the page was already
+/// built (a prefetch sent it while hidden); a new page sends its own.
+fn select_org(state: &AppState, config: Config, built: bool) {
+    let mut connection = state.connection.lock().unwrap();
+    let mut visual = state.visual_origin.lock().unwrap();
+    let mut parked = state.parked_visual.lock().unwrap();
+    *visual = None;
+    if built && parked.as_ref().is_some_and(|parked| parked.serves(Some(&config.hub))) {
+        *visual = parked.take();
+    }
+    *connection = Some(config);
+}
+
+/// The page built ahead of a click: at most one, for the org the pointer last rested on in the rail.
+#[derive(Default)]
+pub(crate) struct Prefetch {
+    pub(crate) org: Option<String>,
+    serial: u64,
+}
+
+/// How long a prefetched page waits for its click once the pointer leaves its org.
+const PREFETCH_FOR: Duration = Duration::from_secs(10);
+
+/// The pointer rested on an org in the rail: its page is built hidden, so a click shows it at once. It replaces the
+/// page built for another org. Nothing for the open org, and nothing before the main window exists.
+pub(crate) fn prefetch(app: &App, id: &str) -> tauri::Result<()> {
+    let state = app.state::<AppState>();
+    let _changing = state.changing.lock().unwrap();
+    let org = {
+        let list = state.orgs.lock().unwrap();
+        if list.active().is_some_and(|org| org.id == id) {
+            return Ok(());
+        }
+        list.get(id).cloned()
+    };
+    let Some(org) = org else { return Ok(()) };
+    if main_window(app).is_none() {
+        return Ok(());
+    }
+    let built = app.get_webview(&org_label(id)).is_some();
+    let replaced = {
+        let mut prefetch = state.prefetch.lock().unwrap();
+        // A pending close for the org the pointer is back on is called off.
+        prefetch.serial += 1;
+        if prefetch.org.as_deref() == Some(id) && built {
+            return Ok(());
+        }
+        prefetch.org.replace(id.to_string())
+    };
+    if let Some(old) = replaced.filter(|old| old != id) {
+        close_unused(app, &old);
+    }
+    if built {
+        return Ok(());
+    }
+    timing::hover(app, id);
+    open_org_webview(app, &org, false)
+}
+
+/// The pointer left the org it rested on: its prefetched page closes unless a click (or another rest on it) comes
+/// within `PREFETCH_FOR`.
+pub(crate) fn leave(app: &App) {
+    let serial = {
+        let state = app.state::<AppState>();
+        let mut prefetch = state.prefetch.lock().unwrap();
+        if prefetch.org.is_none() {
+            return;
+        }
+        prefetch.serial += 1;
+        prefetch.serial
+    };
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(PREFETCH_FOR).await;
+        let state = app.state::<AppState>();
+        let _changing = state.changing.lock().unwrap();
+        let unused = {
+            let mut prefetch = state.prefetch.lock().unwrap();
+            if prefetch.serial != serial {
+                return;
+            }
+            prefetch.org.take()
+        };
+        if let Some(id) = unused {
+            close_unused(&app, &id);
+        }
+    });
+}
+
+/// Closes a prefetched page that was never shown. Callers hold `changing`.
+fn close_unused(app: &App, id: &str) {
+    let state = app.state::<AppState>();
+    let open = state.orgs.lock().unwrap().active().is_some_and(|org| org.id == id);
+    if open || state.shown.lock().unwrap().iter().any(|shown| shown == id) {
+        return;
+    }
+    *state.parked_visual.lock().unwrap() = None;
+    timing::drop_prefetch(app, id);
+    if let Some(page) = app.get_webview(&org_label(id)) {
+        let _ = page.close();
+    }
+}
+
+/// An org went: its page is no longer counted as shown or prefetched. Callers hold `changing` and close the page.
+pub(crate) fn forget_page(app: &App, id: &str) {
+    let state = app.state::<AppState>();
+    state.shown.lock().unwrap().retain(|shown| shown != id);
+    let mut prefetch = state.prefetch.lock().unwrap();
+    if prefetch.org.as_deref() == Some(id) {
+        prefetch.org = None;
+        prefetch.serial += 1;
+        *state.parked_visual.lock().unwrap() = None;
+    }
+}
+
+/// Whether the main window is waiting for its first org page to paint before it shows.
+static AWAITING_PAINT: AtomicBool = AtomicBool::new(false);
+/// The longest the window waits for that.
+const PAINT_WAIT: Duration = Duration::from_secs(3);
+
+/// Shows the main window once the open org's page has loaded, so it never shows blank first; after `PAINT_WAIT` it
+/// shows anyway. With no org page (the setup window) it shows at once.
+pub(crate) fn show_when_painted(app: &App) {
+    if main_window(app).is_none() || active_webview(app).is_none() {
+        return show_window(app);
+    }
+    AWAITING_PAINT.store(true, Ordering::SeqCst);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(PAINT_WAIT).await;
+        if AWAITING_PAINT.swap(false, Ordering::SeqCst) {
+            log::info!("the first org page took over {} s to load, so the window shows without it", PAINT_WAIT.as_secs());
+            show_window(&app);
+        }
+    });
+}
+
+/// The open org's page finished a load: the window shows, if it was waiting for that.
+fn painted(app: &App) {
+    if AWAITING_PAINT.swap(false, Ordering::SeqCst) {
+        show_window(app);
+    }
+}
+
+#[cfg(test)]
+mod page_tests {
+    use super::*;
+
+    fn order(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|id| id.to_string()).collect()
+    }
+
+    #[test]
+    fn pages_go_least_recently_shown_first_beyond_the_cap() {
+        let mut shown = Vec::new();
+        assert!(note_shown(&mut shown, "a", 2).is_empty());
+        assert!(note_shown(&mut shown, "b", 2).is_empty());
+        assert_eq!(note_shown(&mut shown, "a", 2), Vec::<String>::new(), "showing a kept page again closes nothing");
+        assert_eq!(shown, order(&["b", "a"]));
+        assert_eq!(note_shown(&mut shown, "c", 2), order(&["b"]));
+        assert_eq!(shown, order(&["a", "c"]));
+        // The cap in use: only the open page stays.
+        assert_eq!(note_shown(&mut shown, "d", KEEP_ALIVE), order(&["a", "c"]));
+        assert_eq!(shown, order(&["d"]));
+        assert!(note_shown(&mut shown, "d", KEEP_ALIVE).is_empty(), "the open page never closes itself");
+        assert_eq!(note_shown(&mut shown, "e", 0), order(&["d"]), "a cap below one still keeps the open page");
+        assert_eq!(shown, order(&["e"]));
+    }
+
+    #[test]
+    fn a_tico_sign_in_org_opens_on_the_hub_sign_in_once() {
+        let hub = url::Url::parse("https://team.example.com/").unwrap();
+        assert_eq!(first_page(hub.clone(), &hub, true).as_str(), "https://team.example.com/auth/login");
+        assert_eq!(first_page(hub.clone(), &hub, false), hub);
+        let prefixed = url::Url::parse("https://team.example.com/tico/").unwrap();
+        assert_eq!(first_page(prefixed.clone(), &prefixed, true).as_str(), "https://team.example.com/tico/auth/login");
+        let local = url::Url::parse("http://localhost:8765/api/v2/local-signin?token=t&next=%2F").unwrap();
+        assert_eq!(first_page(local.clone(), &url::Url::parse("http://localhost:8765/").unwrap(), false), local);
+    }
 }
 
 /// Clears one org's cookies and storage when its page is not open: through a hidden 1x1 webview on its store.
@@ -326,35 +585,76 @@ pub(crate) fn clear_store(app: &App, org: &Org) -> tauri::Result<()> {
 /// browser. Each webview keeps its own `signing_in` and its own hub, so a window opened for one org keeps
 /// following that org after the person switches to another. Embedded frames navigate through the same
 /// handler with nothing to tell them apart, so only the top-level page ends a sign-in, by committing on the
-/// hub origin; and only the hub's own logins start one.
-fn sign_in_hooks(app: &App, hub: Option<url::Url>, visuals: bool) -> (impl Fn(&url::Url) -> bool + Send + 'static, impl Fn(PageLoadPayload<'_>) + Send + Sync + 'static) {
+/// hub origin; and only the hub's own logins start one. `page_org` is the org of an org page (the main window's
+/// children, which also follow visual links); other windows have none.
+fn sign_in_hooks(app: &App, hub: Option<url::Url>, page_org: Option<String>) -> (impl Fn(&url::Url) -> bool + Send + 'static, impl Fn(PageLoadPayload<'_>) + Send + Sync + 'static) {
     let signing_in = Arc::new(AtomicBool::new(false));
+    let visuals = page_org.is_some();
     let (opener, page_app) = (app.clone(), app.clone());
-    let (committed, page_hub) = (signing_in.clone(), hub.clone());
-    let navigate = move |url: &url::Url| stays_in_app(&opener, &signing_in, visuals, hub.as_ref(), url);
+    let (committed, page_hub, loaded_org) = (signing_in.clone(), hub.clone(), page_org.clone());
+    let navigate = move |url: &url::Url| {
+        if let Some(org) = &page_org {
+            timing::mark(&opener, org, &format!("nav {}", url.host_str().unwrap_or(url.scheme())));
+        }
+        stays_in_app(&opener, &signing_in, page_org.as_deref(), hub.as_ref(), url)
+    };
     // `Started` is the top-level page committing, with its address; frames never send it.
     let page = move |payload: PageLoadPayload<'_>| {
-        if matches!(payload.event(), PageLoadEvent::Started) {
-            top_level_window(&page_app.state::<AppState>(), &committed, visuals, page_hub.as_ref(), payload.url());
+        let url = payload.url();
+        let host = url.host_str().unwrap_or(url.scheme());
+        match payload.event() {
+            PageLoadEvent::Started => {
+                if let Some(org) = &loaded_org {
+                    timing::mark(&page_app, org, &format!("load started {host}"));
+                }
+                top_level_window(&page_app.state::<AppState>(), &committed, visuals, page_hub.as_ref(), url);
+            }
+            PageLoadEvent::Finished => {
+                if let Some(org) = &loaded_org {
+                    timing::loaded(&page_app, org, &format!("load finished {host}"));
+                    if active_org(&page_app).is_some_and(|open| &open.id == org) {
+                        painted(&page_app);
+                    }
+                }
+            }
         }
     };
     (navigate, page)
 }
 
-fn stays_in_app(opener: &App, signing_in: &AtomicBool, visuals: bool, hub: Option<&url::Url>, url: &url::Url) -> bool {
-    let stays = follow_window(&opener.state::<AppState>(), signing_in, visuals, hub, url);
-    if !stays {
+/// Whether a window follows a navigation; one it does not follow opens in the default browser, except from a page
+/// that is not on screen (a prefetch), which opens nothing.
+fn stays_in_app(opener: &App, signing_in: &AtomicBool, page_org: Option<&str>, hub: Option<&url::Url>, url: &url::Url) -> bool {
+    let stays = follow_window(&opener.state::<AppState>(), signing_in, page_org.is_some(), hub, url);
+    let on_screen = page_org.is_none_or(|org| active_org(opener).is_some_and(|open| open.id == org));
+    if !stays && on_screen {
         let _ = opener.opener().open_url(url.as_str(), None::<&str>);
     }
     stays
 }
 
+/// The visual allowance of the page on `hub`: the open page's, or the prefetched page's while it is hidden. Neither
+/// page ever reads or clears the other's.
+fn own_visual<'a>(open: &'a mut Option<VisualOrigin>, parked: &'a mut Option<VisualOrigin>, hub: Option<&url::Url>) -> Option<&'a mut Option<VisualOrigin>> {
+    if open.as_ref().is_some_and(|visual| visual.serves(hub)) {
+        Some(open)
+    } else if parked.as_ref().is_some_and(|visual| visual.serves(hub)) {
+        Some(parked)
+    } else {
+        None
+    }
+}
+
 pub(crate) fn follow_window(state: &AppState, signing_in: &AtomicBool, visuals: bool, hub: Option<&url::Url>, url: &url::Url) -> bool {
     let mut visual = state.visual_origin.lock().unwrap();
-    let allowed = if visuals { visual.as_ref() } else { None };
+    let mut parked = state.parked_visual.lock().unwrap();
+    let own = own_visual(&mut visual, &mut parked, hub);
+    let allowed = if visuals { own.as_ref().and_then(|own| own.as_ref()) } else { None };
     let stays = follow(hub, allowed, signing_in, url);
     if visuals && (navigation(hub, false, url) == Navigation::Start || session_exit(hub, url)) {
-        *visual = None;
+        if let Some(own) = own {
+            *own = None;
+        }
     }
     stays
 }
@@ -362,10 +662,13 @@ pub(crate) fn follow_window(state: &AppState, signing_in: &AtomicBool, visuals: 
 pub(crate) fn top_level_window(state: &AppState, signing_in: &AtomicBool, visuals: bool, hub: Option<&url::Url>, url: &url::Url) {
     if visuals {
         let mut visual = state.visual_origin.lock().unwrap();
+        let mut parked = state.parked_visual.lock().unwrap();
         // A new top-level Hub page must authenticate and send its config again. A permitted
         // visual commit changes neither its allowance nor sign-in state.
-        if !visual.as_ref().is_some_and(|visual| visual.permits(hub, url)) {
-            *visual = None;
+        if let Some(own) = own_visual(&mut visual, &mut parked, hub) {
+            if !own.as_ref().is_some_and(|visual| visual.permits(hub, url)) {
+                *own = None;
+            }
         }
     }
     top_level_page(hub, signing_in, url);
@@ -459,10 +762,13 @@ fn new_window_target(hub: Option<&url::Url>, url: &url::Url) -> NewWindow {
 }
 
 /// Where a page's new window goes: a hub file opens in a window of its own, on the page's org; other links open in
-/// the default browser.
-fn new_window_handler(app: &App, home: Home) -> impl Fn(url::Url, NewWindowFeatures) -> NewWindowResponse<tauri::Wry> + Send + 'static {
+/// the default browser. An org page (`org_page`) that is not on screen (a prefetch) opens nothing.
+fn new_window_handler(app: &App, home: Home, org_page: bool) -> impl Fn(url::Url, NewWindowFeatures) -> NewWindowResponse<tauri::Wry> + Send + 'static {
     let opener = app.clone();
     move |url, _| {
+        if org_page && !active_org(&opener).is_some_and(|open| open.id == home.id) {
+            return NewWindowResponse::Deny;
+        }
         match new_window_target(Some(&home.hub), &url) {
             NewWindow::Hub => {
                 // Built off the web view's own callback, which may not block on a new window.
@@ -483,7 +789,7 @@ fn open_hub_window(app: &App, url: url::Url, home: &Home) {
     let label = format!("hub-{}", NEXT.fetch_add(1, Ordering::Relaxed));
     #[cfg(not(target_os = "linux"))]
     let opened = url.clone();
-    let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), false);
+    let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), None);
     #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
         .title(config::app_name())
@@ -491,7 +797,7 @@ fn open_hub_window(app: &App, url: url::Url, home: &Home) {
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
         .user_agent(USER_AGENT)
         .disable_drag_drop_handler()
-        .on_new_window(new_window_handler(app, home.clone()))
+        .on_new_window(new_window_handler(app, home.clone(), false))
         .on_navigation(navigate)
         .on_page_load(move |_, payload| page(payload));
     #[cfg(target_os = "macos")]
@@ -736,7 +1042,7 @@ pub(crate) fn open_meeting_window(app: &App, home: &Home, id: &str) {
     }
     let mut url = home.hub.clone();
     url.set_fragment(Some(&format!("/meetings?meeting={id}&window=1")));
-    let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), false);
+    let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), None);
     #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
         .title("Meeting")
@@ -745,7 +1051,7 @@ pub(crate) fn open_meeting_window(app: &App, home: &Home, id: &str) {
         .resizable(true)
         .user_agent(USER_AGENT)
         .disable_drag_drop_handler()
-        .on_new_window(new_window_handler(app, home.clone()))
+        .on_new_window(new_window_handler(app, home.clone(), false))
         .on_navigation(navigate)
         .on_page_load(move |_, payload| page(payload));
     #[cfg(target_os = "macos")]

@@ -67,22 +67,51 @@ fn server_document(hub: Option<&url::Url>, label: &str, open: Option<&str>, docu
     })
 }
 
+/// What a page that is not on screen (a prefetch) may still post: about itself only, so that it is ready when shown.
+/// Everything else (windows, menus, updates, the log) is the open page's alone.
+fn own_page_call(name: &str) -> bool {
+    matches!(name, "orgInfo" | "visualOrigin" | "multiOrg")
+}
+
+/// The org whose page this is, when the page is at that org's own origin: any org page, open or not.
+fn page_org(app: &App, webview: &Webview) -> Option<String> {
+    let id = webview.label().strip_prefix("org-")?;
+    let hub = app.state::<AppState>().orgs.lock().unwrap().get(id)?.hub();
+    let document = webview.url().ok();
+    server_document(hub.as_ref(), webview.label(), Some(webview.label()), document.as_ref()).then(|| id.to_string())
+}
+
+/// `{origin}`, or `{origin, files}` from a page that saw `visualFiles` in this shell's features: Tico file hosting's
+/// address, which shows pages and SVG when the server has no visual origin. Anything else clears.
+fn visual_from(hub: Option<&url::Url>, body: Option<&Value>) -> Option<visual_origin::VisualOrigin> {
+    fn text(value: Option<&Value>) -> Option<&str> { value.map_or(Some(""), Value::as_str) }
+    let raw = body.and_then(Value::as_object)
+        .filter(|object| object.contains_key("origin") && object.keys().all(|key| key == "origin" || key == "files"))
+        .and_then(|object| Some((text(object.get("origin"))?, text(object.get("files"))?)));
+    hub.zip(raw).and_then(|(hub, (raw, files))| visual_origin::VisualOrigin::with_files(hub, raw, files))
+}
+
 fn set_visual_origin(state: &AppState, label: &str, document: Option<&url::Url>, body: Option<&Value>) -> Result<bool, String> {
     let list = state.orgs.lock().unwrap();
     let open = list.active().map(|org| org_label(&org.id));
+    if open.as_deref() != Some(label) {
+        // The prefetched page, hidden: its allowance waits apart from the open page's until it is shown.
+        let prefetched = state.prefetch.lock().unwrap().org.clone();
+        let hub = prefetched.filter(|id| org_label(id) == label).and_then(|id| list.get(&id).and_then(|org| org.hub()));
+        if hub.is_none() || !server_document(hub.as_ref(), label, Some(label), document) {
+            return Err("Only the selected server's page may configure visuals.".into());
+        }
+        let mut parked = state.parked_visual.lock().unwrap();
+        *parked = visual_from(hub.as_ref(), body);
+        return Ok(parked.is_some());
+    }
     let connection = state.connection.lock().unwrap();
     let hub = connection.as_ref().map(|c| &c.hub);
     if !server_document(hub, label, open.as_deref(), document) {
         return Err("Only the selected server's page may configure visuals.".into());
     }
     let mut visual = state.visual_origin.lock().unwrap();
-    // `{origin}`, or `{origin, files}` from a page that saw `visualFiles` in this shell's features: Tico file
-    // hosting's address, which shows pages and SVG when the server has no visual origin. Anything else clears.
-    fn text(value: Option<&Value>) -> Option<&str> { value.map_or(Some(""), Value::as_str) }
-    let raw = body.and_then(Value::as_object)
-        .filter(|object| object.contains_key("origin") && object.keys().all(|key| key == "origin" || key == "files"))
-        .and_then(|object| Some((text(object.get("origin"))?, text(object.get("files"))?)));
-    *visual = hub.zip(raw).and_then(|(hub, (raw, files))| visual_origin::VisualOrigin::with_files(hub, raw, files));
+    *visual = visual_from(hub, body);
     Ok(visual.is_some())
 }
 
@@ -96,7 +125,10 @@ pub(crate) fn bridge_reply(name: &str, count: usize) -> Value {
 /// also post `windowMode`, which is ignored now that the window has one mode.
 #[tauri::command]
 pub(crate) fn bridge(app: App, webview: Webview, name: String, body: Option<Value>) -> Result<Value, String> {
-    if !from_server(&app, &webview) { return Err("Only the selected server's page may call the app.".into()); }
+    let caller = if from_server(&app, &webview) || own_page_call(&name) { page_org(&app, &webview) } else { None };
+    let Some(caller) = caller else { return Err("Only the selected server's page may call the app.".into()) };
+    // The page's first call: the app on it is up (for the switch timing in the log).
+    crate::timing::ready(&app, &caller, &name);
     match name.as_str() {
         "visualOrigin" => return set_visual_origin(&app.state::<AppState>(), webview.label(), webview.url().ok().as_ref(), body.as_ref()).map(Value::Bool),
         "openWindow" => {
@@ -181,7 +213,7 @@ mod visual_bridge_tests {
     const LABEL: &str = "org-o_7f3a0001";
 
     fn org(id: &str, url: &str, name: &str, email: &str) -> Org {
-        Org { id: id.into(), url: url.into(), store: None, name: name.into(), email: email.into(), added_at: String::new() }
+        Org { id: id.into(), url: url.into(), store: None, name: name.into(), email: email.into(), added_at: String::new(), sign_in: false }
     }
 
     /// One org, open, on its own page's label.
@@ -293,6 +325,30 @@ mod visual_bridge_tests {
             assert!(state.visual_origin.lock().unwrap().is_none(), "{top}");
         }
         assert!(!session_exit(Some(&hub), &url::Url::parse("https://other.example.com/api/v2/logout").unwrap()));
+    }
+
+    #[test]
+    fn a_prefetched_page_keeps_its_own_visual_allowance_apart_from_the_open_one() {
+        const OTHER: &str = "https://tidy.example.com/";
+        let doc = Document { version: 1, active: Some(ORG.into()), orgs: vec![org(ORG, HUB, "", ""), org("o_bbbbbbbb", OTHER, "", "")] };
+        let state = AppState::new(Orgs::new(doc, None), Some(Config::new(url::Url::parse(HUB).unwrap())));
+        let (hub, other) = (url::Url::parse(HUB).unwrap(), url::Url::parse(OTHER).unwrap());
+        let body = serde_json::json!({"origin": ASSETS});
+        assert!(set_visual_origin(&state, "org-o_bbbbbbbb", Some(&other), Some(&body)).is_err(), "not prefetched: refused");
+        state.prefetch.lock().unwrap().org = Some("o_bbbbbbbb".into());
+        assert!(set_visual_origin(&state, "org-o_bbbbbbbb", Some(&hub), Some(&body)).is_err(), "only at its own origin");
+        assert_eq!(set_visual_origin(&state, "org-o_bbbbbbbb", Some(&other), Some(&body)), Ok(true));
+        assert!(state.visual_origin.lock().unwrap().is_none(), "the open page's allowance is untouched");
+        assert!(state.parked_visual.lock().unwrap().as_ref().unwrap().serves(Some(&other)));
+        // The open page's own allowance and navigation never touch the hidden page's, nor the other way round.
+        assert_eq!(set_visual_origin(&state, LABEL, Some(&hub), Some(&body)), Ok(true));
+        let signing_in = AtomicBool::new(false);
+        top_level_window(&state, &signing_in, true, Some(&other), &url::Url::parse("https://accounts.google.com/").unwrap());
+        assert!(state.visual_origin.lock().unwrap().is_some());
+        assert!(state.parked_visual.lock().unwrap().is_none());
+        // Only calls about the page itself are let through from a page that is not on screen.
+        for name in ["orgInfo", "visualOrigin", "multiOrg"] { assert!(own_page_call(name)); }
+        for name in ["openWindow", "checkForUpdates", "showLog", "showOrgMenu", "addOrg", "windowMode"] { assert!(!own_page_call(name)); }
     }
 
     #[test]

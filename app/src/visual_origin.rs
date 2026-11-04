@@ -25,6 +25,11 @@ impl VisualOrigin {
         Some(Self { hub: hub.clone(), origin, files })
     }
 
+    /// Whether this allowance belongs to the page on `hub`.
+    pub fn serves(&self, hub: Option<&Url>) -> bool {
+        hub == Some(&self.hub)
+    }
+
     pub fn permits(&self, hub: Option<&Url>, url: &Url) -> bool {
         hub == Some(&self.hub)
             && (is_visual_navigation(self.origin.as_ref(), url) || is_files_visual_navigation(self.files.as_ref(), url))

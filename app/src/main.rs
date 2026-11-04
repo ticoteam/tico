@@ -14,6 +14,7 @@ mod orgs;
 mod visual_origin;
 mod bridge;
 mod signin;
+mod timing;
 mod windows;
 
 
@@ -42,7 +43,8 @@ const MIN_HEIGHT: u32 = 400;
 // Lines of the shell's log a Support diagnostics bundle carries.
 pub(crate) const LOG_LINES: usize = 200;
 
-/// The shell's state. When more than one lock is held, they are taken in this order: orgs, connection, visual_origin.
+/// The shell's state. When more than one lock is held, they are taken in this order: changing, orgs, prefetch,
+/// connection, visual_origin, parked_visual.
 struct AppState {
     connection: Mutex<Option<Config>>,
     visual_origin: Mutex<Option<visual_origin::VisualOrigin>>,
@@ -56,6 +58,14 @@ struct AppState {
     // Held while the open org changes or an org goes, so a switch and a removal never interleave. Never taken on
     // the main thread: a switch waits on it for webview work.
     pub(crate) changing: Mutex<()>,
+    // The orgs whose pages are open, least recently shown first (windows::KEEP_ALIVE of them).
+    shown: Mutex<Vec<String>>,
+    // The page built hidden for the org the pointer rests on in the rail, and the visual allowance it sent while
+    // hidden, which becomes the open one when it is shown.
+    prefetch: Mutex<windows::Prefetch>,
+    parked_visual: Mutex<Option<visual_origin::VisualOrigin>>,
+    // Switches being timed, for the log.
+    traces: Mutex<Vec<timing::Trace>>,
 }
 
 impl AppState {
@@ -68,6 +78,10 @@ impl AppState {
             owned: Mutex::new(Vec::new()),
             granted: Mutex::new(HashSet::new()),
             changing: Mutex::new(()),
+            shown: Mutex::new(Vec::new()),
+            prefetch: Mutex::new(windows::Prefetch::default()),
+            parked_visual: Mutex::new(None),
+            traces: Mutex::new(Vec::new()),
         }
     }
 }
@@ -109,7 +123,7 @@ fn main() {
         .plugin(autostart_plugin(identifier))
         // The real list is read in setup, once the app's folders are known.
         .manage(AppState::new(Orgs::new(Document::default(), None), None))
-        .invoke_handler(tauri::generate_handler![app_log, bridge, connect_server, server_address, setup_info, cancel_setup, rail_orgs, rail_switch, rail_add, rail_menu, signin::tico_signin])
+        .invoke_handler(tauri::generate_handler![app_log, bridge, connect_server, server_address, setup_info, cancel_setup, rail_orgs, rail_switch, rail_hover, rail_add, rail_menu, signin::tico_signin])
         .setup(move |app| {
             match applog::attach(log_dir(app.handle()).as_deref()) {
                 Some(path) => log::info!("{} {} starting; this log is {}", config::app_name(), app.package_info().version, applog::shown(&path)),
@@ -148,7 +162,8 @@ fn main() {
             }
             start_polling(app.handle().clone());
             start_updates(app.handle().clone());
-            show_window(app.handle());
+            // Once the org page has painted, so the window never shows blank first.
+            windows::show_when_painted(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -381,6 +396,7 @@ async fn remove_org(app: &App, id: &str) {
                 let _ = window.close();
             }
         }
+        windows::forget_page(app, id);
         if let Some(page) = app.get_webview(&org_label(id)) {
             let _ = page.close();
         }
@@ -428,6 +444,7 @@ async fn remove_org(app: &App, id: &str) {
                 if active_org(app).is_some() { return refresh_chrome(app); }
                 select_connection(&state, None);
                 *state.status.lock().unwrap() = HubStatus::default();
+                state.shown.lock().unwrap().clear();
                 // The setup window first, so that the app keeps a window while the main one goes.
                 let _ = build_server_window(app);
                 if let Some(window) = main_window(app) {
@@ -448,7 +465,18 @@ fn rail_orgs(app: App, webview: tauri::Webview) -> Result<Value, String> {
 #[tauri::command]
 async fn rail_switch(app: App, webview: tauri::Webview, id: String) -> Result<(), String> {
     only_rail(&webview)?;
+    timing::click(&app, &id, "click");
     switch_to(&app, &id).map_err(|e| e.to_string())
+}
+
+/// The pointer rested on an org in the rail (`id`), or left it (none): its page is built hidden ahead of a click.
+#[tauri::command]
+async fn rail_hover(app: App, webview: tauri::Webview, id: Option<String>) -> Result<(), String> {
+    only_rail(&webview)?;
+    match id {
+        Some(id) => windows::prefetch(&app, &id).map_err(|e| e.to_string()),
+        None => Ok(windows::leave(&app)),
+    }
 }
 
 #[tauri::command]
@@ -559,6 +587,7 @@ fn menu_event(app: &App, id: &str) {
     }
     if let Some(org) = id.strip_prefix("org-switch:") {
         let (app, org) = (app.clone(), org.to_string());
+        timing::click(&app, &org, "menu");
         tauri::async_runtime::spawn(async move {
             if let Err(e) = switch_to(&app, &org) {
                 log::warn!("could not open the org: {e}");

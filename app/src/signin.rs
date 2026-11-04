@@ -261,6 +261,29 @@ async fn remove_store(app: &App, store: Uuid) -> bool {
     false
 }
 
+/// Whether a server has the hub's own sign-in (`/auth/login`, TICO_AUTH_PROXY=oidc), so an org added through Tico
+/// sign-in opens there and goes straight in on the copied session instead of showing the hub's sign-in page. Only a
+/// clear no counts: a 404, or Cloudflare Access in front (that hub signs in through Access, not its own page).
+/// No redirects are followed and no cookies are sent.
+async fn has_login(hub: Url) -> bool {
+    let Ok(http) = reqwest::Client::builder().timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none()).no_proxy().build() else { return true };
+    let Ok(login) = hub.join(LOGIN_PATH) else { return false };
+    match http.head(login).send().await {
+        Ok(response) => login_answer(Some(response.status().as_u16()), config::behind_access(&response)),
+        Err(_) => login_answer(None, false),
+    }
+}
+
+/// The hub's sign-in path, relative to its address (backend/oidc.py LOGIN_PATH).
+pub(crate) const LOGIN_PATH: &str = "auth/login";
+
+/// What the answer to `HEAD /auth/login` says: no route (404) or Access in front means no; anything else, including
+/// no answer, means yes, as a server Tico sign-in names is a Tico hub with its own sign-in.
+fn login_answer(status: Option<u16>, behind_access: bool) -> bool {
+    status != Some(404) && !behind_access
+}
+
 /// Adds the picked servers as orgs, signed in through the issuer's session, and opens the first new one (or, when
 /// every pick is already an org, the first of those). Only this sign-in's own window is used or closed, and if that
 /// window goes before the orgs are added, nothing is added.
@@ -282,6 +305,8 @@ async fn finish(app: &App, session: &Session, picks: Option<Picks>) {
         picks.orgs.iter().filter(|hub| list.find_hub(hub).is_none()).map(|hub| (hub.clone(), Uuid::new_v4())).collect()
     };
     let prepared: Vec<Uuid> = fresh.iter().map(|(_, store)| *store).collect();
+    // Whether each new server has the hub's own sign-in, asked while the session is copied.
+    let probes: Vec<_> = fresh.iter().map(|(hub, _)| tauri::async_runtime::spawn(has_login(hub.clone()))).collect();
     #[cfg(target_os = "macos")]
     if !fresh.is_empty() {
         note_pending(app, &prepared, &[]);
@@ -294,6 +319,11 @@ async fn finish(app: &App, session: &Session, picks: Option<Picks>) {
             None => log::warn!("Tico sign-in: the window closed before its session was copied"),
         }
     }
+    let mut fresh_flagged = Vec::with_capacity(fresh.len());
+    for ((hub, store), probe) in fresh.into_iter().zip(probes) {
+        fresh_flagged.push((hub, store, probe.await.unwrap_or(true)));
+    }
+    let fresh = fresh_flagged;
     // Added under the list's lock, after checking once more that this sign-in was not cancelled meanwhile, and leaving
     // out any server that became an org meanwhile (added by address, say).
     let committed = {
@@ -508,6 +538,16 @@ async fn copy_cookies(window: &tauri::WebviewWindow, host: String, stores: Vec<U
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_clear_no_keeps_a_tico_sign_in_org_off_the_hub_sign_in() {
+        assert!(login_answer(Some(302), false), "the hub's sign-in redirects to the issuer");
+        assert!(login_answer(Some(405), false), "a GET-only route still exists");
+        assert!(login_answer(Some(200), false));
+        assert!(login_answer(None, false), "no answer: a Tico server is taken to have it");
+        assert!(!login_answer(Some(404), false), "no such route: the root opens");
+        assert!(!login_answer(Some(302), true), "Cloudflare Access in front: the root opens");
+    }
+
     use super::*;
 
     fn portal() -> Url {
@@ -626,7 +666,7 @@ mod tests {
 
     fn org(id: &str, store: Option<Uuid>) -> Org {
         Org { id: id.into(), url: "https://acme.example.com/".into(), store: store.map(|store| store.to_string()),
-              name: String::new(), email: String::new(), added_at: String::new() }
+              name: String::new(), email: String::new(), added_at: String::new(), sign_in: false }
     }
 
     #[test]
