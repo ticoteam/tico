@@ -883,6 +883,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn a_signed_out_profile_forgets_its_account() {
+        let _guard = crate::readiness::probe_tests::PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("tico-signout-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("codex")).unwrap();
         let config = json!({"profiles": {"out-test": {"dir": dir.to_string_lossy()}}});
@@ -907,6 +908,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn a_profile_added_or_taken_out_is_reported_at_once_not_from_the_minute_cache() {
+        let _guard = crate::readiness::probe_tests::PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("tico-report-set-{}", uuid::Uuid::new_v4().simple()));
         let names = |rows: &[Value]| rows.iter().map(|r| text_of(&r["name"])).filter(|n| n.starts_with("set-")).collect::<Vec<_>>();
         let one = json!({"profiles": {"set-one": {"dir": dir.join("one").to_string_lossy()}}});
@@ -919,6 +921,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn rows_probed_while_a_sign_in_finished_are_not_kept() {
+        let _guard = crate::readiness::probe_tests::PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         use std::sync::atomic::{AtomicUsize, Ordering};
         let dir = std::env::temp_dir().join(format!("tico-report-race-{}", uuid::Uuid::new_v4().simple()));
         let config = json!({"profiles": {"race-test": {"dir": dir.to_string_lossy()}}});

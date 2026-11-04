@@ -12,8 +12,7 @@ from . import goals as G
 from . import placement, run_triggers
 from . import system_routines as SR
 from .batch_work import isolated
-from .store import (H, encode, reclaim_free_pages, sweep_credential_uses, sweep_deltas, sweep_events, sweep_idempotency,
-                    sweep_mail, sweep_tokens)
+from .store import H, encode
 
 
 def stamp(at):
@@ -169,32 +168,9 @@ def run_thread_retention(store, auth, at, failures=None):
         run.did(SR.words_of(purged, "message", "Nothing past its time"), quiet=not purged)
 
 
-def run_task_roundup(store, auth, at, failures=None):
-    # Three times a day by default (6am, noon and 6pm company time), each active bot gets at most one list of its tasks:
-    # a follow-up time that came, an unanswered question, a task to restate, a late Dev ticket, a manager's engineering
-    # exceptions, a step's backlog, a missed update or a task gone quiet (backend/task_roundup.py). Plain code: no model call,
-    # and nothing to list is a quiet run. The run is the schedule's time at or before this tick, and a bot already sent a
-    # list since that time gets no more. The lists are read in one read transaction; each bot is then sent in its own short
-    # transaction, which rebuilds its list from the live database.
-    from . import task_roundup
-    with SR.recording(store, "task_roundup", failures) as run:
-        with store.read_transaction() as c:
-            run_at = SR.occurrence(SR.config_of(c, "task_roundup"), at)
-            plans = task_roundup.discover(c, stamp(run_at))
-        woke, listed = [], 0
-        for plan in plans:
-            with store.transaction() as c:
-                count = task_roundup.send(c, plan)
-            if count:
-                woke.append(plan["slug"])
-                listed += count
-        run.did(SR.words_of({"bots woken": woke, "tasks listed": listed}, none="Nothing to list"), quiet=not woke)
-
-
 QUICK = {"kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
          "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report,
-         "bookkeeper_check": run_bookkeeper_check,
-         "task_roundup": run_task_roundup}
+         "bookkeeper_check": run_bookkeeper_check}
 
 # The Bookkeeper's Watch (daily) and rules digest (weekly): their own cadence, not controlled jobs (CONTROLS has the
 # a person switches). The Bookkeeper's pause is their off switch.
@@ -231,10 +207,6 @@ def run_now(store, auth, key, actor):
             run_id = learnings.claim_tonight(c)
         learnings.start(store, run_id)
         running = True
-    elif key == "auto_dream":
-        from . import dream_auto
-        dream_auto.run_now(store, auth)
-        running = False
     else:
         raise Problem("invalid", "Nothing to run", 422)
     with store.transaction() as c:
@@ -548,12 +520,9 @@ class Scheduler:
             learnings.nightly(self.store, at)
         except Exception as exc:
             failures.append({"learnings": type(exc).__name__})
-        # The nightly auto dreams (backend/dream_auto.py): a bot whose memory changed a lot gets a dream; claimed per night.
-        try:
-            from . import dream_auto
-            dream_auto.nightly(self.store, self.execution.auth, at)
-        except Exception as exc:
-            failures.append({"auto_dream": type(exc).__name__})
+        # Maintenance (backend/maintenance.py): the run starts when its schedule says it is due; its steps run on a thread.
+        from . import maintenance
+        maintenance.tick(self.store, self.execution.auth, at, failures)
         try:
             from . import memory_tidy_controls
             from .store import Problem
@@ -587,43 +556,19 @@ class Scheduler:
             failures.append({"webhook_delivery": type(exc).__name__})
         self.finance_tick(at, failures)
         if self.swept is None or at - self.swept >= timedelta(hours=1):
-            # Outside the scheduling transaction: the sweep takes its own short write
-            # locks. Marked first so a failing sweep retries hourly, not every tick.
+            # Deadline work that cannot wait for Clean up (backend/maintenance_steps/clean_up.py holds the pruning). Marked
+            # first, so a failing sweep retries hourly, not every tick.
             self.swept = at
-            with SR.recording(self.store, "cleanup") as run:
+            try:
                 with self.store.transaction() as c:
-                    c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND julianday(json_extract(detail,'$.failed_at')) < julianday(?) - 30", (stamp(at),))
-                    # A duplicate is not a failure (batch_work.isolated); rows an older server wrote for one go.
-                    c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND last_error LIKE '%: duplicate: %'")
-                    SR.prune(c)                                # each system job keeps its last runs
-                    from . import rules
-                    rules.prune_events(c)                      # the webhook rules' repeat ledger keeps 30 days
-                    from . import webhook_delivery
-                    webhook_delivery.prune(c, stamp(at))       # outgoing webhooks: events and finished sends keep a month
-                    from . import automations
-                    automations.prune(c, stamp(at))            # automation runs: step detail keeps 30 days
                     from . import webhooks
-                    webhooks.auto_disable(c, stamp(at))        # an endpoint that failed every attempt for five days is turned off
-                sweep_idempotency(self.store, stamp(at))
-                sweep_mail(self.store, stamp(at))
-                sweep_deltas(self.store, stamp(at))            # finished runs' streamed text pieces keep a day (store.DELTA_RETENTION_DAYS)
-                sweep_tokens(self.store, stamp(at))            # finished runs' token rows keep a week (store.TOKEN_RETENTION_DAYS)
-                sweep_events(self.store, stamp(at))            # bookkeeping events keep 7 or 30 days (store.EVENT_NOISE_ACTIONS, EVENT_SWEEP_ACTIONS)
-                sweep_credential_uses(self.store, stamp(at))   # one-time: old credential use rows to one per USE_WINDOW (store.TRIM_MAX a pass)
-                reclaim_free_pages(self.store)                 # the pages those sweeps freed go back to the disk (store.VACUUM_PASS_MAX a pass)
-                from . import events
-                events.sweep(self.store, stamp(at))            # live events keep a day
-                from . import triggers
-                triggers.sweep(self.store, stamp(at))          # webhook bodies keep their trigger's days, delivery ids 30
-                from . import flight
-                flight.sweep(self.store, at.timestamp())       # the flight recorder's minutes become hours
-                from . import performance
-                performance.sweep(self.store, at.timestamp())  # computers' minutes become ten-minute points
+                    webhooks.auto_disable(c, stamp(at))           # an endpoint that failed every attempt for five days is off
                 from . import support_triage
-                support_triage.sweep(self.store, stamp(at))    # a support ticket waits here at most an hour
+                support_triage.sweep(self.store, stamp(at))      # a support ticket waits here at most an hour
                 from . import screening
-                screening.sweep(self.store, stamp(at))         # a screened item waits at most an hour; verdicts keep 30 days
-                run.did("Done")
+                screening.sweep(self.store, stamp(at))           # a screened item waits at most an hour
+            except Exception as exc:
+                failures.append({"deadlines": type(exc).__name__})
         if self.goals_checked is None or at - self.goals_checked >= timedelta(hours=1):
             # Data goes stale as time passes, so every goal's automatic colour is worked out again once an
             # hour, whether or not a reading arrived (a person's colour is only ever suggested over).

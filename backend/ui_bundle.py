@@ -89,10 +89,17 @@ class Bundle:
         self.gz = {path: gzip.compress(body, 6, mtime=0) for path, body in self.parts.items()}
         self.gz_etag = {k: v[:-1] + '-gzip"' for k, v in self.etag.items()}
         self.page_etag = _etag(page)
+        self.whole_etag = {kind: _etag(body)[:-1] + '-whole"' for kind, body in (("js", self.js), ("css", self.css))}
+        self.whole_gz = {}
         # What the page's own tags carry (`?v=`, the hash of each whole bundle), joined: a page that finds a different
         # one in the config is out of date.
-        self.version = {"js": _etag(self.js)[1:17], "css": _etag(self.css)[1:17]}
+        self.version = {kind: tag[1:17] for kind, tag in self.whole_etag.items()}
         self.build = self.version["js"] + "." + self.version["css"]
+
+    def gzip_whole(self, kind):
+        if kind not in self.whole_gz:
+            self.whole_gz[kind] = gzip.compress(getattr(self, kind), 6, mtime=0)
+        return self.whole_gz[kind]
 
 
 def _etag(data):

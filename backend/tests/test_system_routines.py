@@ -25,18 +25,17 @@ def test_every_built_in_job_is_listed_with_its_group_word_and_control_availabili
     assert [j["key"] for j in data["jobs"]] == [job.key for job in SR.JOBS] + ["task-rule-close-after-done"]
     assert {k for k, j in jobs.items() if j["controllable"]} == {
         "stale_review", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
-        "stall_triage", "bookkeeper_check", "memory_tidy", "auto_dream",
-        "task_roundup"}
-    assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "learnings", "stall_triage", "thread_routing", "thread_rank"}
-    # Housekeeping is always on, except the one housekeeping job a person may switch (Task roundup).
+        "bookkeeper_check", "memory_tidy"}
+    assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "learnings", "thread_routing", "thread_rank"}
+    # Housekeeping has no switch; Task roundup's switch moved to Maintenance Find stuck.
     assert all(j["needed"] == (j["group"] == "housekeeping" and not j["controllable"]) for j in jobs.values())
-    assert jobs["task_roundup"]["group"] == "housekeeping" and jobs["task_roundup"]["needed"] is False
+    assert "task_roundup" not in jobs
     assert jobs["thread_followups"]["name"] == "Earlier messages"
     assert jobs["thread_followups"]["then"] == [SR.ACTIONS["tell_earlier_messages"][0]]
     assert jobs["stale_review"]["schedule"] == "Hourly" and jobs["learnings"]["schedule"] == "Nightly at 03:00"
     for key in ("due_reminders", "ask_deadlines", "approval_expiry"):
         assert jobs[key]["group"] == "reminders"
-    for key in ("stall_checks", "snooze_ends", "cleanup", "gateway_check", "billing_check", "directory_sync"):
+    for key in ("stall_checks", "snooze_ends", "gateway_check", "billing_check", "directory_sync"):
         assert jobs[key]["group"] == "housekeeping"
 
 
@@ -46,7 +45,7 @@ def test_a_scheduler_tick_records_each_run_with_its_result_and_next_run(api):
     Scheduler(store, api.app.state.execution).tick(at)
     jobs, _ = rows(api)
     for key in ("ask_deadlines", "approval_expiry", "stall_checks", "health_scan", "kpi_asks",
-                "due_reminders", "snooze_ends", "cleanup"):
+                "due_reminders", "snooze_ends"):
         assert jobs[key]["last"] and jobs[key]["last"]["ok"], key
         assert jobs[key]["last"]["result"], key
     nxt = H.parse_ts(jobs["ask_deadlines"]["next"])
