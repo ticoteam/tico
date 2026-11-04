@@ -19,8 +19,9 @@ destination's) in any other. With the run's id it is the effect's idempotency ke
 the step. `checkpoint(state)` follows every step, so the hub saves the run before the next step starts.
 
 A choose step (an `llm` step with `choose`) reads its answer when it comes in (`answer`, `read_choice`), and its reply
-and the chosen destination's chain run as the thread's next step (`_resume`): the reply is keyed `<record>.0`, the chain
-`<record>.1` on, so a resumed run repeats none of them.
+and the chosen destination's chain run as the thread's next step (`_resume`): the reply is keyed `<record>.0`, and each
+destination's chain has its own slots, `<record>.<1 + index * MAX_DESTINATION_ACTIONS + i>`, so a resumed run repeats
+none of them and never reuses another destination's result.
 
 services:
   judge(state, questions, label, level) -> {"answers": {...}, "cost_usd": n}, or None while Decide is off
@@ -438,8 +439,10 @@ def _answered(state, thread, wait, text, cost, ok):
 
 def _resume(flow, state, thread, step, services):
     """A choose step's effects, once its answer was read (`_answered`): the reply when the body is not blank, then the
-    chosen destination's chain. The reply is keyed `<record>.0` and the chain's effects follow it (`<record>.1` on), so a
-    run resumed after a crash repeats none of them (`_once`). A refused reply ends the step without its chain."""
+    chosen destination's chain. The reply is keyed `<record>.0`; each destination has its own slots from `<record>.1`
+    (`1 + index * MAX_DESTINATION_ACTIONS + i`), so a run resumed after a crash repeats none of them (`_once`), and a
+    default chain never reuses the result of the destination it replaced. A refused reply ends the step without its
+    chain."""
     choice = thread.pop("choice")
     rec = choice["record"]
     record, values, actions = state["steps"][rec], values_of(state, thread), []
@@ -453,9 +456,10 @@ def _resume(flow, state, thread, step, services):
         ctx = {"values": values, "step": step["id"], "key": f"{rec}.0", "producer": f"{step['id']}@{rec}.0"}
         actions.append({"do": do, "from": "reply", **services.act(do, {"body": choice["body"]}, ctx)})
     if all(action.get("ok") for action in actions):
-        dest = {d["id"]: d for d in flow.get("destinations") or []}[choice["to"]]
-        chain = [(action, {"from": "destination", "destination": dest["id"]}, str(1 + i), f"{step['id']}@{rec}.{1 + i}")
-                 for i, action in enumerate(dest.get("then") or [])]
+        index = next(n for n, d in enumerate(flow.get("destinations") or []) if d["id"] == choice["to"])
+        dest, base = flow["destinations"][index], 1 + index * F.MAX_DESTINATION_ACTIONS
+        chain = [(action, {"from": "destination", "destination": dest["id"]}, str(base + i),
+                  f"{step['id']}@{rec}.{base + i}") for i, action in enumerate(dest.get("then") or [])]
         actions += _chain(services, chain, values, step, str(rec))
     failed = not all(action.get("ok") for action in actions)
     record["outputs"] = {**record["outputs"], "to": choice["to"], "actions": actions}
