@@ -109,3 +109,11 @@ def test_a_demo_task_and_meeting_link_to_each_other(api):
     response = api.get(f'/api/v2/tasks/{task}/meetings')
     assert response.status_code == 200, response.text
     assert meeting in {row['meeting_id'] for row in response.json()['meetings']}
+
+
+def test_task_pages_have_demo_data(api):
+    pages = api.get("/api/v2/pages?bot=marketing-lead").json()["pages"]
+    shown = api.get("/api/v2/pages/" + pages[0]["file_id"]).json()
+    task_place = next(p["place"] for p in shown["pinned"] if p["place"].startswith("task:"))
+    pins = api.get("/api/v2/places/" + task_place).json()["pins"]
+    assert any(p.get("page", {}).get("file_id") == pages[0]["file_id"] for p in pins)

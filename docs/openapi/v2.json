@@ -11445,7 +11445,10 @@
         ],
         "responses": {
           "200": {
-            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md \u00a79); an `activity` one also carries `counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` (how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as `GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `version`, each bot's count (`bots`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
+            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. A `bulk: true` event without `id` means read task lists in full.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md \u00a79); an `activity` one also carries `counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` (how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as `GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `version`, each bot's count (`bots`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
+            "x-task-event-schema": {
+              "$ref": "#/components/schemas/TaskEvent"
+            },
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -12251,7 +12254,7 @@
     },
     "/api/v2/files/search": {
       "get": {
-        "summary": "Search the files the caller may read by title and text, best first, each with an excerpt",
+        "summary": "Search the files the caller may read by title and text, filtered by kind, best first with an excerpt",
         "operationId": "searchFiles",
         "parameters": [
           {
@@ -12272,6 +12275,16 @@
               "type": "integer",
               "default": 20,
               "title": "Limit"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Kind"
             }
           }
         ],
@@ -25971,7 +25984,7 @@
         ]
       },
       "get": {
-        "summary": "Pages the caller may read: `ids` (up to 50) in that order, leaving out the unreadable; else newest first by bot or task",
+        "summary": "Pages the caller may read: `ids` (up to 50) in that order, leaving out the unreadable; else newest first by bot or task (filed on or pinned to it)",
         "operationId": "listPages",
         "parameters": [
           {
@@ -26248,7 +26261,7 @@
     },
     "/api/v2/pins": {
       "post": {
-        "summary": "Pin page:<file id> or card:<id> at a place: a bot its own, to its sidebar or task; a person who arranges the Dashboard or a team page there",
+        "summary": "Pin page:<file id> or card:<id> at a place: a bot its own, to its sidebar or task; any person who may read a task there, without widening page access; a person who arranges the Dashboard or a team page there",
         "operationId": "addPin",
         "requestBody": {
           "content": {
@@ -26379,7 +26392,7 @@
         ]
       },
       "delete": {
-        "summary": "Unpin; a card pinned nowhere else goes with it",
+        "summary": "Unpin; on a task, whoever pinned it, its owner or requester, or the org owner; a card pinned nowhere else goes with it",
         "operationId": "removePin",
         "parameters": [
           {
@@ -60606,6 +60619,10 @@
           "can_edit": {
             "type": "boolean"
           },
+          "can_link": {
+            "type": "boolean",
+            "description": "Task places: whether the reader may link a readable page; does not grant card or pin management"
+          },
           "month": {
             "type": "string",
             "description": "growth: the month its cards read (YYYY-MM)"
@@ -60646,6 +60663,10 @@
                 },
                 "card": {
                   "$ref": "#/components/schemas/Card"
+                },
+                "can_unpin": {
+                  "type": "boolean",
+                  "description": "Task pins: whether this reader may unlink it"
                 },
                 "page": {
                   "type": "object",
@@ -67863,6 +67884,53 @@
           "has_more",
           "messages",
           "task"
+        ],
+        "additionalProperties": true
+      },
+      "TaskEvent": {
+        "type": "object",
+        "properties": {
+          "seq": {
+            "type": "integer"
+          },
+          "actor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "The last change kind for this task in the batch"
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true,
+            "description": "All change kinds for this task in the batch; files invalidates files and linked pages"
+          },
+          "task": {
+            "$ref": "#/components/schemas/Task"
+          },
+          "gone": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actor",
+          "at",
+          "id",
+          "kind",
+          "kinds",
+          "seq"
         ],
         "additionalProperties": true
       },

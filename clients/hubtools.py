@@ -2924,9 +2924,10 @@ def pin_remove(api, args):
 
 @tool("hub_file_search", "Search the files you may read, every bot's and people's uploads alike, by title and text "
       "(Markdown, text, a page's words, a CSV's header and first rows): best first, each with an excerpt.",
-      {"q": _s("Words to find"), "limit": {"type": "integer", "minimum": 1, "maximum": 50}}, required=("q",))
+      {"q": _s("Words to find"), "kind": {"enum": ["page", "document", "image", "data", "media", "other"]},
+       "limit": {"type": "integer", "minimum": 1, "maximum": 50}}, required=("q",))
 def files_search(api, args):
-    return api.get("files/search", q=args["q"], limit=args.get("limit"))
+    return api.get("files/search", q=args["q"], limit=args.get("limit"), kind=args.get("kind"))
 
 
 @tool("hub_file_read", "Read one version of a file you may read, in full, as text (Markdown, text, HTML, CSV): the "
@@ -3070,7 +3071,7 @@ def pages_publish(api, args):
 
 @tool("hub_page_list", "Pages you may read, newest first: title, bot, version, when updated, cadence, data date, and "
       "whether one is out of date or replaced.",
-      {"bot": _s("Only this bot's pages"), "task": _s("Only this task's pages"),
+      {"bot": _s("Only this bot's pages"), "task": _s("Pages filed on or pinned to this task"),
        "archived": {"type": "boolean", "description": "Archived pages instead"},
        "limit": {"type": "integer", "minimum": 1, "maximum": 50}, "cursor": _s("next_cursor from the previous page")})
 def pages_list(api, args):
