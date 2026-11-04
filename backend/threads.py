@@ -3308,8 +3308,8 @@ def reply_quotes(c, v, items):
     """{message id: its `reply_to`} for these shown timeline messages: the message each answers (`in_reply_to`, a
     carrier read as what it carries), else a sub-thread message's parent. `{"id", "author", "author_name", "excerpt"}`
     when the viewer reads it, `{"id", "hidden": true}` when not, None for no quote. A run's reply in a DM or Home quotes
-    nothing: it answers the message right above it. Two queries for the targets and one for the threads, whatever the
-    page."""
+    nothing: it answers the message right above it. Two queries for the targets, one for the threads and one readable
+    check of the targets' threads, whatever the page."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     items = [i for i in items if i.get("id") and not i.get("hidden") and not i.get("deleted")]
     if not items:
@@ -3337,8 +3337,11 @@ def reply_quotes(c, v, items):
         if mid in found:
             found[mid] = sources.get(source) or {}
     known = v.known(c)
+    # The targets' threads in one check (an old branch each quoted message may sit in), then each message's own.
+    open_to = readable_ids(c, v, [m.get("conversation_id") for m in found.values() if m.get("id")])
     shown = {mid: m for mid, m in found.items()
-             if m.get("id") and m.get("seq") is not None and message_readable(c, v, m)}
+             if m.get("id") and m.get("seq") is not None and m.get("conversation_id") in open_to
+             and message_readable(c, v, m, thread_checked=True)}
     from .names import lookup
     names = lookup(c, {known.name(m.get("sender_id") or "", m["conversation_id"]) for m in shown.values()} - {""})
     out = {}
