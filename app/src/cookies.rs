@@ -35,8 +35,6 @@ pub(crate) fn matching(cookies: Vec<Cookie>, url: &Url) -> Vec<(String, String)>
 #[cfg(target_os = "macos")]
 pub(crate) async fn for_url<R: Runtime>(webview: &Webview<R>, url: &Url) -> Option<Vec<(String, String)>> {
     use block2::RcBlock;
-    use objc2::rc::Retained;
-    use objc2::runtime::AnyObject;
     use objc2_foundation::{NSArray, NSHTTPCookie};
     use objc2_web_kit::WKWebView;
     use std::ptr::NonNull;
@@ -44,14 +42,9 @@ pub(crate) async fn for_url<R: Runtime>(webview: &Webview<R>, url: &Url) -> Opti
     let (sender, mut answer) = tokio::sync::mpsc::unbounded_channel::<Vec<Cookie>>();
     // Runs on the main thread and returns at once; WebKit calls the block later, also on the main thread.
     webview.with_webview(move |platform| unsafe {
-        // tauri-runtime-wry 2.11 hands over the page, its controller and its window each retained once more and never
-        // releases them (fixed upstream in 2.12.0): taking ownership here releases them when this closure ends, so a
-        // poll leaks nothing. `runtime_still_over_retains` fails once the runtime is upgraded past 2.11.
-        let _controller = Retained::<AnyObject>::from_raw(platform.controller().cast());
-        let _window = Retained::<AnyObject>::from_raw(platform.ns_window().cast());
-        // The page's live WKWebView. The store is the page's own: an org with its own data store answers with that
-        // store's cookies.
-        let Some(view) = Retained::<WKWebView>::from_raw(platform.inner().cast()) else { return };
+        // `inner` is the page's live WKWebView while this closure runs, lent by the runtime. The store is the page's
+        // own: an org with its own data store answers with that store's cookies.
+        let view = &*platform.inner().cast::<WKWebView>();
         let store = view.configuration().websiteDataStore().httpCookieStore();
         let reply = RcBlock::new(move |cookies: NonNull<NSArray<NSHTTPCookie>>| {
             let cookies = cookies.as_ref().to_vec().iter().map(|cookie| Cookie {
@@ -96,16 +89,5 @@ mod tests {
         // A secure cookie never goes over plain HTTP to a remote host.
         let plain = matching(cookies, &Url::parse("http://hub.example.com/api/status").unwrap());
         assert_eq!(plain, vec![("dotted".into(), "dotted-value".into())]);
-    }
-
-    /// `for_url` releases the extra retains tauri-runtime-wry 2.11 leaves on `with_webview`'s objects. 2.12.0 stopped
-    /// adding them; on that runtime the releases would free objects still in use, so they must go with the upgrade.
-    #[test]
-    fn runtime_still_over_retains() {
-        let lock = include_str!("../Cargo.lock");
-        let version = lock.split("[[package]]").find(|entry| entry.contains("\nname = \"tauri-runtime-wry\"\n"))
-            .and_then(|entry| entry.lines().find_map(|line| line.strip_prefix("version = \"")))
-            .map(|version| version.trim_end_matches('"')).unwrap();
-        assert!(version.starts_with("2.11."), "tauri-runtime-wry {version}: remove the releases in cookies::for_url");
     }
 }
