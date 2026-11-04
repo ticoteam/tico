@@ -2306,7 +2306,8 @@ class LoadSnapshot(Contract):
 
 class StartPlace(Contract):
     # The reasons runner-rs reports while a claimed turn gives its computer place back (execute.rs wait_before_start).
-    waiting: Literal["", "shared login", "pre-start requirements", "Docker turn user"] = ""
+    waiting: str = Field(default="", max_length=40,
+                         pattern=r"^(?:|shared login|pre-start requirements|Docker turn user|computer busy: memory (?:100|[1-9]?[0-9])%)$")
 
 
 class Started(Contract):

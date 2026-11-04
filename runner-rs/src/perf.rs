@@ -414,7 +414,7 @@ pub fn memory_percent() -> Option<f64> {
     (mem.total > 0).then(|| 100.0 * mem.total.saturating_sub(mem.available) as f64 / mem.total as f64)
 }
 
-/// Start waiters share a reading for at most a second, so a full computer does not spawn a Mac probe per waiter.
+/// Linux start waiters share a memory reading for at most a second, independently of diagnostics.
 pub async fn start_memory() -> Option<f64> {
     static SAMPLE: std::sync::OnceLock<tokio::sync::Mutex<Option<(Instant, Option<f64>)>>> = std::sync::OnceLock::new();
     let mut kept = SAMPLE.get_or_init(Default::default).lock().await;

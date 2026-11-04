@@ -53,7 +53,7 @@ The computers list, each computer's pop-up and **Settings → Health** show four
 |---|---|
 | **Running** | The turn has started. |
 | **Starting** | The computer has reserved a place and is preparing the turn. |
-| **Waiting** | The turn needs a login, quota, a free lane or another pre-start requirement. Each reason shows its count and oldest wait. |
+| **Waiting** | The turn needs a login, quota, available memory, a free lane or another pre-start requirement. Each reason shows its count and oldest wait. |
 | **Queued** | The work is in line to be picked up. |
 
 For example, **3 running · 2 starting · 7 waiting for quota (oldest 2 h) · 5 queued** separates work from its waits.
@@ -82,11 +82,17 @@ never reported is not held. The server also ends a run that has gone silent (no 
 once it is past its bot's max_run_minutes plus 5 minutes, without waiting for the computer.
 This includes turns with a reservation that have not started yet. Running turns continue. New starts resume when
 the hold clears. A person's own message to a bot (a chat, a message in its task) passes CPU overload and stale
-reports, ahead of the waiting turns, when the computer has a free turn. Memory pressure holds everyone's new
-starts. The runner also checks current memory before preparation and execution, including fallbacks, so a surge
-between samples holds new starts even with diagnostics off. Its local hold uses the same 85% and 80% thresholds;
-while waiting it gives its start place back and keeps its delivery lease. This does not cap the memory of tools
-already running inside a turn, or change your account, model or computer size.
+reports, ahead of the waiting turns, when the computer has a free turn. On Linux computers (including cloud machines
+and Docker), memory pressure also holds a person's messages. On Macs and computers whose platform is unknown,
+a person's messages pass the server's memory hold too.
+
+The Linux runner also checks current memory before starting a harness or preparing its thread, including when a
+fallback is the first harness for the turn. Its local hold uses the same 85% and 80% thresholds, even with diagnostics
+off. While waiting it gives its start place back and keeps its delivery lease. The run, Computers and Health say
+**waiting: computer busy: memory N%**. Once a harness has been allocated for the turn, the runner does not park it on
+local memory pressure: that allocation is already made. The Mac runner never parks a turn on local memory readings;
+macOS's Memory Used includes memory it can reclaim through compression and swap. This does not cap the memory of
+tools already running inside a turn, or change your account, model or computer size.
 
 During an update, server and runner negotiate the start rules through heartbeat and claim. Older runners retain
 their existing delivery leases, including preparation already underway, until they update. Those starts have no new

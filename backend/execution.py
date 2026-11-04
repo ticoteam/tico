@@ -3366,12 +3366,11 @@ class Execution:
 
     def held_starts(self, c, runner_id):
         """(people_only, answer) for a computer that holds new starts: overloaded, not reporting, memory high, or with turns already waiting
-        to start there. A person's own message may pass CPU overload and stale reports, but not memory pressure;
+        to start there. A person's own message passes CPU overload and stale reports; only Linux memory holds it;
         with none eligible, `answer` is the claim's answer at once. Capacity still applies to that message."""
         hold = start_places.computer_hold(c, runner_id)
-        if hold and (hold[0] == start_places.MEMORY_HOLD or
-                     (hold[0] == 'computer busy' and start_places.memory_held(c, runner_id))):
-            return False, {"attempt": None, "waiting": hold[1]}
+        if hold and (person_hold := start_places.computer_hold(c, runner_id, person=True)):
+            return False, {"attempt": None, "waiting": person_hold[1]}
         if not hold and not start_places.ready_waiting(c, runner_id):
             return False, None
         return True, (None if start_places.person_queued(c, runner_id) else self.held_answer(c, runner_id))

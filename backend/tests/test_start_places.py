@@ -543,6 +543,8 @@ def test_memory_at_85_holds_new_starts_and_they_start_again_below_80(api):
 def test_memory_pressure_holds_a_persons_message_even_when_the_computer_is_overloaded(api):
     """Human priority must not start another process on a memory-starved computer."""
     computer = bot_waiting_for_finance(api, sender='human:ana')
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET platform='linux' WHERE id=?", (computer['runner_id'],))
     overload(api, computer, mem=.96)
     assert claim(api, computer, 'finance') is None
     from backend.start_places import computer_hold
@@ -557,6 +559,8 @@ def test_memory_pressure_holds_a_persons_message_even_when_the_computer_is_overl
 def test_memory_pressure_revokes_a_persons_unused_start_place_and_later_resumes_it(api):
     """A grant made before the sample cannot bypass the memory brake at the final start acknowledgement."""
     computer = bot_waiting_for_finance(api, sender='human:ana')
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET platform='linux' WHERE id=?", (computer['runner_id'],))
     attempt = claim(api, computer, 'finance')
     aid = attempt['id']
     memory(api, computer, .86)
@@ -571,6 +575,21 @@ def test_memory_pressure_revokes_a_persons_unused_start_place_and_later_resumes_
     memory(api, computer, .79)
     assert post(api, f'attempts/{aid}/start-place', {}, computer['token'])['reserved']
     assert post(api, f'attempts/{aid}/started', {'thread_id': 'synthetic-thread'}, computer['token'])['started']
+
+
+@pytest.mark.parametrize('platform,held', [('darwin', False), ('linux', True), (None, False)])
+def test_a_person_at_90_percent_memory_waits_only_on_linux(api, platform, held):
+    computer = bot_waiting_for_finance(api, sender='human:ana')
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE runners SET platform=? WHERE id=?', (platform, computer['runner_id']))
+    memory(api, computer, .90)
+    attempt = claim(api, computer, 'finance')
+    if held:
+        assert attempt is None
+        assert any(w['reason'] == 'computer busy: memory' for w in waits_of(api, computer))
+    else:
+        assert attempt is not None
+        assert post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'human-answer'}, computer['token'])['started']
 
 
 def test_memory_between_80_and_85_admits_a_start_when_none_waits(api):

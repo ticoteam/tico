@@ -294,12 +294,50 @@ def test_a_persons_message_carried_to_another_bot_in_a_task_reads_as_the_person(
     assert (shown["message_id"], shown["bot_id"], shown["state"], shown["from_person"]) == ("msg-carry", "coo", "queued", True)
     assert humans and all(h is True for h in humans), "the carried message keeps its person's priority"
     from backend.tests.test_start_places import memory, overload
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET platform='linux' WHERE id=?", (machine['runner_id'],))
     overload(api, machine)
     assert 'computer busy' not in get(api, f"tasks/{tid}")["execution"]["label"]
     memory(api, machine, .86)
     assert 'computer busy: memory' in get(api, f"tasks/{tid}")["execution"]["label"]
     memory(api, machine, .79)
     assert 'computer busy: memory' not in get(api, f"tasks/{tid}")["execution"]["label"]
+
+
+def test_local_memory_wait_is_visible_with_diagnostics_off_and_clears_on_start(api):
+    from backend.tests.test_api import headers
+    machine = runner(api, 'ana')
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    tid = post(api, 'tasks', {'owner': 'ops', 'title': 'Wait before preparing'})['id']
+    attempt = claim(api, machine)
+    aid, rid = attempt['id'], machine['runner_id']
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET performance='off',platform='linux' WHERE id=?", (rid,))
+    reason = 'computer busy: memory 98%'
+    assert not post(api, f'attempts/{aid}/start-place', {'waiting': reason}, machine['token'])['reserved']
+    shown = get(api, f'tasks/{tid}')['execution']
+    assert shown['state'] == 'leased' and shown['waiting'] == shown['label'] == 'Waiting: ' + reason
+    with api.app.state.store.read() as c:
+        cid = H.task(c, tid)['conversation_id']
+    assert get(api, f'conversations/{cid}/snapshot')['execution']['waiting'] == 'Waiting: ' + reason
+    assert get(api, f'tasks/{tid}/run-view')['runs'][0]['waiting'] == 'Waiting: ' + reason
+    for path, key in [('operations', 'machines'), ('computers', 'computers'), ('health', 'computers')]:
+        computer = next(m for m in get(api, path)[key] if m['id'] == rid)
+        assert computer['turn_counts']['waiting'] == 1 and computer['turn_counts']['starting'] == 0
+        assert reason in computer['turn_summary']
+    check = next(c for c in get(api, 'health')['checks'] if c['id'] == 'runner_load:' + rid)
+    assert check['status'] == 'warn' and reason in check['summary']
+    assert 'below 80%' in check['summary']
+    invalid = api.post(f'/api/v2/attempts/{aid}/start-place', json={'waiting': 'computer busy: memory 101%'},
+                       headers=headers(machine['token']))
+    assert invalid.status_code == 422
+    assert post(api, f'attempts/{aid}/start-place', {}, machine['token'])['reserved']
+    assert get(api, f'tasks/{tid}')['execution']['label'] == 'Starting'
+    post(api, f'attempts/{aid}/started', {'thread_id': 'memory-recovered'}, machine['token'])
+    assert get(api, f'tasks/{tid}')['execution']['waiting'] is None
+    assert get(api, f'tasks/{tid}/run-view')['runs'][0]['waiting'] is None
+    assert not any(c['id'] == 'runner_load:' + rid for c in get(api, 'health')['checks'])
 
 
 def test_an_opt_in_login_queue_names_the_holder_only_to_who_may_see_it(api, queued_login):

@@ -671,6 +671,8 @@ pub(crate) struct Flags {
     /// Why the hub stopped the turn when it said (a quarantine, Dev 573); a person's Stop gives none.
     pub(crate) stop_reason: Mutex<Option<String>>,
     pub(crate) done: AtomicBool,
+    /// A harness allocated for this turn must not park on the memory it just allocated.
+    pub(crate) harness_started: AtomicBool,
     pub(crate) done_notify: Notify,
     pub(crate) deadline: Mutex<Instant>,
 }
@@ -765,20 +767,24 @@ impl Runner {
     /// One ask for a computer place: false while this computer is full or the server says wait.
     async fn try_start_place(&self, attempt: &Value, flags: &Flags) -> Result<bool, Fail> {
         #[cfg(not(test))]
-        let memory = crate::perf::start_memory().await;
+        let memory = if cfg!(target_os = "linux") && !flags.harness_started.load(Ordering::SeqCst) {
+            crate::perf::start_memory().await
+        } else { None };
         // Synthetic turns must not depend on the test host's load; memory admission tests supply their readings.
         #[cfg(test)]
-        let memory = Some(0.0);
-        self.start_place_with_memory(attempt, flags, memory).await
+        let memory = Some(if tests::MEMORY_RISES_AFTER_START.with(|on| on.get())
+            && hosts::TEST_STARTS.with(|starts| starts.get()) > 0 { 98.0 } else { 0.0 });
+        self.start_place_with_memory(attempt, flags, memory, crate::runner::platform()).await
     }
 
-    async fn start_place_with_memory(&self, attempt: &Value, flags: &Flags, memory: Option<f64>) -> Result<bool, Fail> {
+    async fn start_place_with_memory(&self, attempt: &Value, flags: &Flags, memory: Option<f64>, platform: &str) -> Result<bool, Fail> {
         let aid = text_of(&attempt["id"]);
         unstopped(flags)?;
         if flags.lost.load(Ordering::SeqCst) || Instant::now() >= *flags.deadline.lock().unwrap()
             || self.stop.load(Ordering::SeqCst) {
             return Err(Fail::runtime("Lease expired before the turn started"));
         }
+        let memory = memory.filter(|_| platform == "linux" && !flags.harness_started.load(Ordering::SeqCst));
         let memory_held = {
             let mut held = self.memory_hold.lock().unwrap();
             if let Some(mem) = memory {
@@ -787,9 +793,9 @@ impl Runner {
             memory.is_some() && *held
         };
         if memory_held {
-            // The server's minute-old sample may still say there is room. Release preparation's place too;
-            // the delivery lease stays alive while this turn waits, including a person's message or a fallback.
-            self.wait_before_start(attempt, "pre-start requirements").await?;
+            // The server's minute-old sample may still say there is room. Keep the delivery lease, but release
+            // the start place before allocating a harness, including for a person's message or a fallback.
+            self.wait_before_start(attempt, &format!("computer busy: memory {:.0}%", memory.unwrap())).await?;
             return Ok(false);
         }
         if attempt.get("start_reservation_seconds").is_none() {
@@ -830,7 +836,15 @@ impl Runner {
     async fn wait_before_start(&self, attempt: &Value, reason: &str) -> Result<(), Fail> {
         if attempt.get("start_reservation_seconds").is_some() {
             let aid = text_of(&attempt["id"]);
-            self.client.post(&format!("attempts/{aid}/start-place"), &json!({"waiting": reason}), None).await?;
+            let path = format!("attempts/{aid}/start-place");
+            match self.client.post(&path, &json!({"waiting": reason}), None).await {
+                // Older servers accept only the original closed list of wait reasons.
+                Err(e) if e.status == 422 && reason.starts_with("computer busy: memory ") => {
+                    self.client.post(&path, &json!({"waiting": "pre-start requirements"}), None).await?;
+                },
+                Err(e) => return Err(e.into()),
+                Ok(_) => {},
+            }
             self.places.lock().unwrap().remove(&aid);
         }
         Ok(())
@@ -1320,6 +1334,7 @@ impl Runner {
             stopped: AtomicBool::new(false),
             stop_reason: Mutex::new(None),
             done: AtomicBool::new(false),
+            harness_started: AtomicBool::new(false),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs_f64((lease - 15.0).max(0.0))),
         });
@@ -1643,6 +1658,9 @@ impl Runner {
                 }
                 crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
             }
+            self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
+            // Warm acquisition can start a harness too. Memory admission ends before either path allocates it.
+            flags.harness_started.store(true, Ordering::SeqCst);
             let made = if session_runtime != runtime {
                 let make = |home: &Path, _: &Env| AntigravityHost::new(home, vec!["agy".into()], tx.clone());
                 // A fresh stateless chat turn starts a new process, never the last one's (warm.rs discard).
@@ -2110,6 +2128,10 @@ impl Runner {
                     crate::checkout_groups::grant(uid, &crate::checkout_groups::gate(paths.clone()).await);
                     self.turn_git(&mut vault, &mut hop_env, &paths)?;
                     crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
+                }
+                if !flags.harness_started.load(Ordering::SeqCst) {
+                    self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
+                    flags.harness_started.store(true, Ordering::SeqCst);
                 }
                 let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_config, &hop_env, selected.as_ref(), tx)?);
                 if let Some(held) = login_held.as_mut() {
@@ -2825,6 +2847,7 @@ mod tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     thread_local! {
+        pub(super) static MEMORY_RISES_AFTER_START: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         pub(super) static RENEW_EVERY: RefCell<Option<Duration>> = const { RefCell::new(None) };
         pub(super) static RUN_CLOCK: RefCell<VecDeque<Instant>> = const { RefCell::new(VecDeque::new()) };
         pub(super) static RUN_RELAY: RefCell<Option<crate::gateway_relay::Relay>> = const { RefCell::new(None) };
@@ -2852,6 +2875,7 @@ mod tests {
             HOST_CLAUDE.with(|claude| claude.set(false));
             RUN_SESSION.with(|on| on.set(None));
             HOST_CODEX.with(|env| env.borrow_mut().take());
+            MEMORY_RISES_AFTER_START.with(|on| on.set(false));
             hosts::TEST_STARTS.with(|starts| starts.set(0));
         }
     }
@@ -3029,7 +3053,7 @@ mod tests {
         let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
         let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
         let turn = json!({"id": "a1", "start_reservation_seconds": 180});
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_started: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(30)) };
         runner.active.lock().unwrap().extend(["a1".into(), "another-waiter".into()]);
         runner.places.lock().unwrap().insert("a1".into());
@@ -3057,7 +3081,7 @@ mod tests {
     }
 
     fn lease_flags() -> Flags {
-        Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
+        Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_started: AtomicBool::new(false),
                 done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(30)) }
     }
 
@@ -3073,17 +3097,17 @@ mod tests {
         let flags = lease_flags();
         runner.active.lock().unwrap().insert("a1".into());
         runner.places.lock().unwrap().extend(["a1".into(), "already-running".into()]);
-        assert!(!runner.start_place_with_memory(&turn, &flags, Some(98.0)).await.unwrap());
+        assert!(!runner.start_place_with_memory(&turn, &flags, Some(98.0), "linux").await.unwrap());
         assert!(!runner.places.lock().unwrap().contains("a1"));
         assert!(runner.active.lock().unwrap().contains("a1"), "waiting keeps the delivery lease");
         assert!(runner.places.lock().unwrap().contains("already-running"), "existing work keeps running");
-        assert!(!runner.start_place_with_memory(&turn, &flags, Some(82.0)).await.unwrap());
+        assert!(!runner.start_place_with_memory(&turn, &flags, Some(82.0), "linux").await.unwrap());
         runner.places.lock().unwrap().remove("already-running");
-        assert!(runner.start_place_with_memory(&turn, &flags, Some(79.0)).await.unwrap());
+        assert!(runner.start_place_with_memory(&turn, &flags, Some(79.0), "linux").await.unwrap());
         let requests = seen.lock().unwrap();
         assert_eq!(requests.len(), 3);
-        assert!(requests[0].contains("pre-start requirements") && requests[1].contains("pre-start requirements"));
-        assert!(!requests[2].contains("pre-start requirements"), "recovery asks for a fresh grant");
+        assert!(requests[0].contains("computer busy: memory 98%") && requests[1].contains("computer busy: memory 82%"));
+        assert!(!requests[2].contains("computer busy: memory"), "recovery asks for a fresh grant");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -3092,12 +3116,42 @@ mod tests {
         let (runner, dir) = lease_runner("http://127.0.0.1:9", "legacy-memory-admission");
         let turn = json!({"id": "a1"});
         let flags = lease_flags();
-        assert!(!runner.start_place_with_memory(&turn, &flags, Some(85.0)).await.unwrap());
-        assert!(!runner.start_place_with_memory(&turn, &flags, Some(80.0)).await.unwrap());
-        assert!(runner.start_place_with_memory(&turn, &flags, Some(79.9)).await.unwrap());
-        assert!(runner.start_place_with_memory(&turn, &flags, None).await.unwrap(), "unknown memory is not invented");
+        assert!(!runner.start_place_with_memory(&turn, &flags, Some(85.0), "linux").await.unwrap());
+        assert!(!runner.start_place_with_memory(&turn, &flags, Some(80.0), "linux").await.unwrap());
+        assert!(runner.start_place_with_memory(&turn, &flags, Some(79.9), "linux").await.unwrap());
+        assert!(runner.start_place_with_memory(&turn, &flags, None, "linux").await.unwrap(), "unknown memory is not invented");
         flags.stopped.store(true, Ordering::SeqCst);
-        assert!(runner.start_place_with_memory(&turn, &flags, Some(98.0)).await.is_err());
+        assert!(runner.start_place_with_memory(&turn, &flags, Some(98.0), "linux").await.is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn macos_memory_never_parks_a_turn_even_with_a_previous_hold() {
+        let (url, seen) = crate::client::tests::serve(vec![(200, r#"{"reserved":true}"#)]).await;
+        let (runner, dir) = lease_runner(&url, "mac-memory-admission");
+        let turn = json!({"id": "a1", "start_reservation_seconds": 180});
+        *runner.memory_hold.lock().unwrap() = true;
+        assert!(runner.start_place_with_memory(&turn, &lease_flags(), Some(98.0), "darwin").await.unwrap());
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        assert!(!seen.lock().unwrap()[0].contains("waiting"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_older_server_can_still_park_a_local_memory_wait() {
+        let (url, seen) = crate::client::tests::serve(vec![
+            (422, r#"{"error":{"code":"validation","detail":"waiting"}}"#),
+            (200, r#"{"reserved":false}"#),
+        ]).await;
+        let (runner, dir) = lease_runner(&url, "old-memory-wait");
+        let turn = json!({"id": "a1", "start_reservation_seconds": 180});
+        runner.places.lock().unwrap().insert("a1".into());
+        assert!(!runner.start_place_with_memory(&turn, &lease_flags(), Some(98.0), "linux").await.unwrap());
+        assert!(runner.places.lock().unwrap().is_empty());
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].contains("computer busy: memory 98%"));
+        assert!(requests[1].contains("pre-start requirements"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -3200,7 +3254,7 @@ mod tests {
         let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
         let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
         let turn = json!({"id": "a1", "start_reservation_seconds": 180});
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_started: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(30)) };
         runner.places.lock().unwrap().insert("a1".into());
         runner.pre_start_lock(&turn, &flags, async { Ok(()) }).await.unwrap();
@@ -3396,7 +3450,7 @@ mod tests {
         *runner.runtime_rows.lock().unwrap() = Default::default();
 
         let login = crate::login_turns::Login::new("codex", "");
-        let flags = || Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
+        let flags = || Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_started: AtomicBool::new(false),
                                done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let over = |f: &Flags| runner.login_wait_over(f, &login).unwrap_or_default();
         assert_eq!(over(&flags()), "");
@@ -3593,9 +3647,10 @@ mod tests {
         (url, seen, server)
     }
 
-    #[tokio::test]
-    async fn execute_holds_its_claim_through_unblocked_preparation() {
+    async fn execute_after_harness_memory_rises(fallback: bool) {
         let _controls = RunControls;
+        hosts::TEST_STARTS.with(|starts| starts.set(0));
+        MEMORY_RISES_AFTER_START.with(|on| on.set(true));
         let dir = std::env::temp_dir().join(format!("tico-bounded-prepare-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi/turn.jsonl");
@@ -3607,20 +3662,37 @@ mod tests {
         let config = crate::config::Config::load(&path).unwrap();
         let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
         let runner = Arc::new(Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap()));
+        runner.runtime_rows.lock().unwrap().insert("pi".into(), json!({"installed": true, "authenticated": "ready"}));
         runner.places.lock().unwrap().insert("prepare-1".into());
-        let attempt = json!({"id":"prepare-1", "job_id":"j1", "bot":"ops", "token":"synthetic-turn",
+        let mut attempt = json!({"id":"prepare-1", "job_id":"j1", "bot":"ops", "token":"synthetic-turn",
             "start_reservation_seconds":180, "lease_seconds":120, "conversation":{"id":"c1","kind":"chat"},
             "message":{"id":"m1","from_actor":"human:ana@acme.example","body":"Next","refs":{}},
             "history":[], "config":{"runtime":"pi","harness":"pi","model":"kimi-k3"}});
+        if fallback {
+            attempt["config"] = json!({"runtime": "claude", "harness": "claude", "model": "synthetic-primary",
+                "primary_held": "2099-01-01T00:00:00Z", "fallback": {"harness": "pi", "model": "synthetic-fallback"}});
+        }
         tokio::time::timeout(Duration::from_secs(30), runner.clone().execute(attempt)).await.unwrap().unwrap();
         server.abort();
         let requests = seen.lock().unwrap();
+        assert_eq!(hosts::TEST_STARTS.with(|starts| starts.get()), 1);
         assert!(requests.iter().any(|(_, path, _)| path.ends_with("/started")), "the fixture must actually start");
+        assert!(requests.iter().any(|(_, path, body)| path.ends_with("/complete") && body["outcome"] == "completed"));
         let places: Vec<_> = requests.iter().filter(|(_, path, _)| path.ends_with("/start-place")).collect();
         assert!(!places.is_empty());
         assert!(places.iter().all(|(_, _, body)| body.get("waiting").is_none()),
                 "unblocked preparation must keep its claim instead of permitting unbounded new workers");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn execute_holds_its_claim_when_memory_rises_after_primary_harness_start() {
+        execute_after_harness_memory_rises(false).await;
+    }
+
+    #[tokio::test]
+    async fn execute_holds_its_claim_when_memory_rises_after_fallback_harness_start() {
+        execute_after_harness_memory_rises(true).await;
     }
 
     async fn expired_gateway_harness_is_not_started(fallback: bool) {
@@ -3733,7 +3805,7 @@ for line in sys.stdin:
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let t = host.start_turn("th1", "Write the release notes", None).await.unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_started: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
         let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
@@ -3809,7 +3881,7 @@ for line in sys.stdin:
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let t = host.start_turn("th1", "Write the release notes", None).await.unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_started: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
         let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
@@ -4814,7 +4886,7 @@ for line in sys.stdin:
         let (runner, dir, server) = drain_test_runner(300).await;
         let login = Login::new("codex", &format!("drain-{}", uuid::Uuid::new_v4()));
         let held = crate::login_turns::try_take(&login.key, &Turn::new("holder", "", Class::Other)).unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_started: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let turns: Vec<_> = (0..3).map(|i| Turn::new(&format!("waiter{i}"), "", Class::Other).of(&format!("work{i}"), &format!("a{i}"))).collect();
         for turn in &turns { runner.state.record(&json!({"id": turn.attempt, "bot": turn.bot})).unwrap(); }
@@ -4860,7 +4932,7 @@ for line in sys.stdin:
         let th = host.start_thread("ops", &settings).await.unwrap();
         runner.state.save_session("ops", "c-cap", "pi", &th).unwrap();
         let t = host.start_turn(&th, "Wait", None).await.unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false), harness_started: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
         let d = Drive { aid: "a-cap", host: &host, thread: &th, effort: None, limit: Instant::now() + Duration::from_secs(60), limit_name: "synthetic drain", flags: &flags,

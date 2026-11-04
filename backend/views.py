@@ -925,7 +925,7 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
         label = 'Saved — ' + org_turns.REASON
     elif (location.get("machine") or {}).get("runner_id") and (
             hold := computer_hold(c, location["machine"]["runner_id"], person=human)):
-        # A person's priority cannot make memory available for another process.
+        # On Linux, a person's priority cannot make memory available for another process.
         label = "Saved — waiting: " + hold[1]
     elif not location["ready"]:
         problems = (location.get("readiness") or {}).get("problems") or []
@@ -1007,7 +1007,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     """The newest run in this conversation as the chat shows it while it works: its state, a label and its reply so
     far, or None. `bot` keeps to that bot's runs (a task's page follows its owner's session); `people` also takes the
     run for a message a person sent, whichever bot it went to (a person's task answered by the bot that asked it).
-    A run waiting for its ChatGPT login (backend/login_waits.py) says so in `waiting` and its label; `auth` lets it
+    A run waiting for memory or its ChatGPT login (backend/login_waits.py) says so in `waiting` and its label; `auth` lets it
     name the bot holding it."""
     person = H.person_sent_sql()
     which = (f"AND (j.bot_id=? OR {person}) " if bot and people else "AND j.bot_id=? " if bot
@@ -1015,9 +1015,10 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     # A send the duplicate trigger dismissed (wake_presets.HOLD_TRIGGER) repeats a run still going: the chat shows that run.
     # person_sent: the message is a person's, or the keeper carrier of one (the sender alone is the keeper).
     job = c.execute(f"SELECT j.*,m.sender_id AS sender,{person} AS person_sent,a.state AS attempt_state,a.lease_until,"
-                    "a.stop_requested_at,a.started_at AS attempt_started_at "
+                    "a.stop_requested_at,a.started_at AS attempt_started_at,p.wait_reason AS start_wait_reason "
                     "FROM jobs j JOIN messages m ON m.id=j.message_id "
-                    "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
+                    "LEFT JOIN attempts a ON a.id=j.attempt_id LEFT JOIN start_places p ON p.attempt_id=a.id "
+                    "WHERE m.conversation_id=? "
                     "AND coalesce(json_extract(m.refs,'$.maintenance'),'')!='checkpoint' "
                     "AND NOT (j.state='canceled' AND coalesce(j.wake_class,'')='duplicate') "
                     + which + "ORDER BY m.rowid DESC LIMIT 1", (cid, bot) if bot else (cid,)).fetchone()
@@ -1046,6 +1047,8 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
             # Before it starts, or after: a fallback hop takes its own login once the turn has started.
             from .login_waits import waiting as login_wait
             waiting = login_wait(c, job["attempt_id"], job["bot_id"], who, auth)
+            if state == "leased" and (job["start_wait_reason"] or "").startswith(start_places.MEMORY_HOLD):
+                waiting = "Waiting: " + job["start_wait_reason"]
             label = waiting or label
         readiness_reason = ""
         if state == "queued":

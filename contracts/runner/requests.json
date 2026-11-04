@@ -2225,12 +2225,8 @@
    "properties": {
     "waiting": {
      "default": "",
-     "enum": [
-      "",
-      "shared login",
-      "pre-start requirements",
-      "Docker turn user"
-     ],
+     "maxLength": 40,
+     "pattern": "^(?:|shared login|pre-start requirements|Docker turn user|computer busy: memory (?:100|[1-9]?[0-9])%)$",
      "title": "Waiting",
      "type": "string"
     }
