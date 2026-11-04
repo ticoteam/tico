@@ -180,8 +180,8 @@ They do not rely on the original sign-up email.
 | Email | When it is sent | What it tells you |
 |---|---|---|
 | Grace started | When grace starts. | Your servers keep running until the UTC stop time unless credit is added. Your data is kept. |
-| Stop time changed | After a real stop-time move during grace. | The new UTC stop time and how to sign in to request credit. |
-| Reminder | 24 hours before the current stop, if it was more than 24 hours away when scheduled. | The stop time and how to sign in to request credit. |
+| Stop time changed | After a real stop-time move during grace. | The new UTC stop time and how to contact support for more credit. |
+| Reminder | 24 hours before the current stop, if it was more than 24 hours away when scheduled. | The stop time and how to contact support for more credit. |
 | Servers stopped | After the stop completes. | The actual successful stop time and confirmation that your data is kept. |
 
 After a change, a stop more than 24 hours away gets one reminder at the new stop time minus 24 hours.
