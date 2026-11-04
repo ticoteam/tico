@@ -112,6 +112,65 @@ def named_in(body):
     return len([line for line in body.split("\n") if line.startswith("- ") and not line.startswith("- and ")])
 
 
+def moved_task(c):
+    from backend import bot_home_merge, rooms
+    mine = task(c, "Reconcile the account")
+    old = H.open_conversation(c, "human:ana", ["human:ana", "bot:finance"], kind="chat",
+                              scope=rooms.PERSONAL, owner_actor="human:ana", room_key="finance", allow_held=True)["id"]
+    c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (old, mine["id"]))
+    settle(c, mine["id"], "finance", ago(days=2))
+    complete_jobs(c)
+    result = bot_home_merge.merge(c)
+    assert not result["errors"] and not result["pending"], result
+    home = bot_home_merge.home_for(c, old, create=False)
+    assert home and home != old
+    return H.task(c, mine["id"]), home
+
+
+def home_note(c, home, tid, sender, when):
+    mid = H.new_id()
+    c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
+              "VALUES(?,?,?,'bot:finance','say','Account update',?,?)",
+              (mid, home, sender, json.dumps({"task": tid}), when))
+    return mid
+
+
+def test_roundup_reads_task_activity_across_moved_and_archived_homes(api):
+    from backend import bot_home_merge, threads
+    with api.app.state.store.transaction() as c:
+        mine, home = moved_task(c)
+        home_note(c, home, mine["id"], "human:ana", ago(hours=2))
+        c.execute("UPDATE conversations SET archived_at=? WHERE id=?", (ago(hours=1), home))
+        current = threads.home(c, "bot:finance", create=True)["id"]
+        assert current != home
+        assert home in bot_home_merge.history_ids(c, mine["conversation_id"])
+        assert task_roundup._news(c, mine, "bot:finance", ago(days=2))[0] == 1
+        assert task_roundup._latest(c, mine) == ago(hours=2)
+        # An unrelated Home exchange must neither count as news nor move the bot's task clock.
+        home_note(c, current, "another-task", "human:ana", ago(minutes=30))
+        home_note(c, current, "another-task", "bot:finance", ago(minutes=20))
+        assert task_roundup._last_turn(c, mine, "finance", "bot:finance") == ago(days=2)
+        assert "finance" in task_roundup.run(c, DAY)["woke"]
+        assert "Update you may have missed: a message from" in only_list(c)
+        assert "(1 since you last worked on it)" in only_list(c)
+        home_note(c, current, mine["id"], "bot:finance", ago(minutes=10))
+        assert task_roundup._last_turn(c, mine, "finance", "bot:finance") == ago(minutes=10)
+        assert task_roundup._news(c, mine, "bot:finance", ago(minutes=10)) is None
+
+
+def test_roundup_does_not_wake_a_task_already_queued_in_its_home(api):
+    with api.app.state.store.transaction() as c:
+        mine, home = moved_task(c)
+        mid = home_note(c, home, mine["id"], "human:ana", ago(hours=1))
+        c.execute("INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,'finance','queued',?)",
+                  (H.new_id(), mid, ago(hours=1)))
+        assert "finance" not in task_roundup.run(c, DAY)["woke"]
+        assert lists(c) == []
+        complete_jobs(c)
+        assert "finance" in task_roundup.run(c, DAY)["woke"]
+        assert "Update you may have missed" in only_list(c)
+
+
 def test_a_task_blocked_on_a_person_with_nothing_new_is_not_listed_until_the_blocker_is_closed_before_the_turn(api):
     store = api.app.state.store
     with store.transaction() as c:

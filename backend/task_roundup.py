@@ -24,7 +24,8 @@ A task is named once on a list, whatever its reason.
 
 A missed update is a task the bot owns, live (H.ACTIVE_STATUSES), readable to it, not snoozed, not already being run for it
 (a queued, leased or running job in its conversation), where someone other than the bot and Tico did something on it since
-the later of the bot's last turn on it and the last time it was listed. That is a message written or edited in its conversation;
+the later of the bot's last turn on it and the last time it was listed. That is a message written or edited in its conversation
+or tagged with the task in a Home its room moved into;
 a change of the task itself (status, owner, step, waiting_on, due, title, body or acceptance; a task's creation row is not
 news, but a step or status set later on a task that had none is); a comment edited or deleted; a blocker taken off it; a
 blocker that finished (taken off by Tico: "a blocker is done", or kept on a roadmap item); or a subtask that finished, by
@@ -521,14 +522,31 @@ def _holds(c, row, at):
             or H.recorded_wait(c, dict(row), at) is not None)
 
 
+def _messages(c, row):
+    """The task's room and its messages in the Homes the room moved into. Other Home chat is not task activity."""
+    from . import bot_home_merge, message_links
+    clauses, args = ["m.conversation_id=?"], [row["conversation_id"]]
+    for cid in bot_home_merge.history_ids(c, row["conversation_id"])[1:]:
+        clause = (f"m.conversation_id=? AND ({H.task_ref_sql('m.refs')} OR "
+                  f"{H.task_ref_sql('m.refs', '$.task_id')})")
+        args += [cid, row["id"], row["id"], row["id"], row["id"]]
+        ids = message_links.named(c, row["id"], cid)
+        if ids is not None:
+            clause += " AND m.id IN (SELECT value FROM json_each(?))"
+            args.append(H._dump(sorted(ids)))
+        clauses.append("(" + clause + ")")
+    return "(" + " OR ".join(clauses) + ")", args
+
+
 def _last_turn(c, row, slug, actor):
     """When the bot last worked on the task: its latest turn on it, or a message or history row it wrote on it."""
+    messages, args = _messages(c, row)
     return c.execute(
         "SELECT max(x) FROM (SELECT max(created_at) AS x FROM attempts WHERE bot_id=? AND task_id=? "
         "AND (job_id IS NULL OR trigger IS NOT NULL) "
-        "UNION ALL SELECT max(created_at) FROM messages WHERE conversation_id=? AND sender_id=? AND deleted_at IS NULL "
+        f"UNION ALL SELECT max(created_at) FROM messages m WHERE {messages} AND sender_id=? AND deleted_at IS NULL "
         "UNION ALL SELECT max(created_at) FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id=?)",
-        (slug, row["id"], row["conversation_id"], actor, row["id"], actor)).fetchone()[0]
+        (slug, row["id"], *args, actor, row["id"], actor)).fetchone()[0]
 
 
 def _readable(c, actor, rows):
@@ -538,10 +556,11 @@ def _readable(c, actor, rows):
 
 def _news(c, row, actor, base):
     """(count, latest time, what the latest was) of what others did on the task since `base`, or None."""
-    tid, conv = row["id"], row["conversation_id"]
+    tid = row["id"]
+    messages, args = _messages(c, row)
     horizon = H.shift(row["created_at"], seconds=CREATED_WITHIN)
-    msgs, msg_when = c.execute(f"SELECT count(*), max({_WHEN}) FROM messages WHERE conversation_id=? AND {_FROM_OTHERS}",
-                               (conv, actor, H.KEEPER, base, base)).fetchone()
+    msgs, msg_when = c.execute(f"SELECT count(*), max({_WHEN}) FROM messages m WHERE {messages} AND {_FROM_OTHERS}",
+                               (*args, actor, H.KEEPER, base, base)).fetchone()
     hist = c.execute(f"SELECT count(*) FROM history_events WHERE {_MISSED_HIST}",
                      (tid, horizon, base, actor, H.KEEPER)).fetchone()[0]
     # A blocker taken off the task: a blocked_by row with no new value and the blocker's id as its old value. It is news
@@ -570,8 +589,8 @@ def _news(c, row, actor, base):
         return None
     options = []
     if msgs:
-        sender = c.execute(f"SELECT sender_id FROM messages WHERE conversation_id=? AND {_FROM_OTHERS} "
-                           f"ORDER BY {_WHEN} DESC LIMIT 1", (conv, actor, H.KEEPER, base, base)).fetchone()[0]
+        sender = c.execute(f"SELECT sender_id FROM messages m WHERE {messages} AND {_FROM_OTHERS} "
+                           f"ORDER BY {_WHEN} DESC LIMIT 1", (*args, actor, H.KEEPER, base, base)).fetchone()[0]
         options.append((msg_when, f"a message from {_who(c, sender)}"))
     if hist:
         latest = c.execute(f"SELECT created_at, kind, actor_id FROM history_events WHERE {_MISSED_HIST} "
@@ -594,8 +613,9 @@ def _news(c, row, actor, base):
 def _latest(c, row):
     """The newest thing that resets the quiet clock: a message written or edited by anyone but Tico, or a change of the task
     itself (TASK_KINDS) by anyone, Tico's status moves included. Tico's bookkeeping does not reset it."""
-    msg = c.execute(f"SELECT max({_WHEN}) FROM messages WHERE conversation_id=? AND deleted_at IS NULL "
-                    "AND sender_id IS NOT NULL AND sender_id<>?", (row["conversation_id"], H.KEEPER)).fetchone()[0]
+    messages, args = _messages(c, row)
+    msg = c.execute(f"SELECT max({_WHEN}) FROM messages m WHERE {messages} AND deleted_at IS NULL "
+                    "AND sender_id IS NOT NULL AND sender_id<>?", (*args, H.KEEPER)).fetchone()[0]
     hist = c.execute(f"SELECT max(created_at) FROM history_events WHERE {_LATEST_HIST}", (row["id"],)).fetchone()[0]
     return _later(msg, hist) or None
 
@@ -607,11 +627,12 @@ def _who(c, actor):
 
 
 def _running(c, slug, row):
-    """Whether a job for this bot in the task's conversation is queued, leased or running: it is being woken already."""
+    """Whether a job for this bot on the task is queued, leased or running, including one in a moved room's Home."""
     try:
+        messages, args = _messages(c, row)
         return c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
-                         "AND j.state IN ('queued','leased','running') AND m.conversation_id=? LIMIT 1",
-                         (slug, row["conversation_id"])).fetchone() is not None
+                         f"AND j.state IN ('queued','leased','running') AND {messages} LIMIT 1",
+                         (slug, *args)).fetchone() is not None
     except sqlite3.OperationalError:    # a local hub has no jobs table
         return False
 
