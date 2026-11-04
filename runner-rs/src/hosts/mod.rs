@@ -405,6 +405,8 @@ const HUB_PATHS: &[&str] = &[
 /// program never reach the summary, and a line whose quoting does not close, or whose program is not a plain path, gives
 /// nothing.
 pub fn command_program(command: &str) -> String {
+    // A heredoc's body is text, never a command: only the line before it is read.
+    let command = if command.contains("<<") { command.split('\n').next().unwrap_or("") } else { command };
     if let Some(words) = hub_run(command) {
         return hub_summary(&words);
     }
@@ -417,12 +419,9 @@ pub fn command_program(command: &str) -> String {
 
 /// The words of the line's `hub` run, from its `hub` word on: the first run whose first word after assignments and
 /// redirections is `hub`. The line is cut at its separators only here, and only the command path is read from the run
-/// (through `hub_summary`), so a mis-split can at worst name a real command path. A line with a heredoc is never split:
-/// its body is text, and a `hub ...` line inside it runs nothing (`cat <<'EOF'` then `hub approval approve` reads `cat`).
+/// (through `hub_summary`), so a mis-split can at worst name a real command path. `command_program` has already cut a
+/// heredoc's body off, so a `hub ...` line inside one is never read.
 fn hub_run(command: &str) -> Option<Vec<String>> {
-    if command.contains("<<") {
-        return None;
-    }
     command_runs(command).into_iter().find_map(|run| {
         let words = shell_words(run)?;
         let at = program_index(&words)?;
@@ -1228,6 +1227,9 @@ mod tests {
         assert_eq!(command_program("cat <<'EOF'\nhub approval approve\nEOF"), "cat");
         assert_eq!(command_program("cat > /tmp/x <<EOF && echo ok\nhub task close 7f3a\nEOF"), "cat");
         assert_eq!(command_program("hub automation create --file - <<'EOF'\n{\"name\": \"x\"}\nEOF"), "hub automation create");
+        assert_eq!(command_program("cd /w && hub automation create --file - <<'EOF'\n{\"name\": \"x\"}\nEOF"), "hub automation create");
+        assert_eq!(command_program("<<'EOF'\nhub approval approve\nEOF"), "");
+        assert_eq!(command_program("<<EOF\ncustomer-private\nEOF"), "");
     }
 
     #[test]
