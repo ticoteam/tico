@@ -435,7 +435,7 @@ def _engineering_types(c):
 
 def _backlogs(c, slug, actor, at, shared):
     """A step over its backlog (backend/step_backlog.py), on each bot it names, on the oldest ticket waiting there. Relisted
-    after the step's every_hours while it stays over. A snoozed oldest ticket lists nothing, as its wake did before."""
+    after the step's every_hours while it stays over. A snoozed oldest ticket lists nothing for its owner, as its wake did before."""
     from . import step_backlog, task_snooze as TS
     out = []
     for warning in _shared(shared, "backlog", lambda: step_backlog.warnings(c)):
@@ -443,7 +443,8 @@ def _backlogs(c, slug, actor, at, shared):
             continue
         first = warning["first"]
         key = _key("backlog", slug, warning["key"])
-        if (not H.task_private_readable(c, actor, first) or H.task_private(c, first) or TS.snoozed(first, at)
+        snoozed_for_owner = actor == first.get("owner_id") and TS.snoozed(first, at)
+        if (not H.task_private_readable(c, actor, first) or H.task_private(c, first) or snoozed_for_owner
                 or not _stale(c, key, at, timedelta(hours=warning["every_hours"]))):
             continue
         event = (step_backlog.EVENT, first["id"], {"key": warning["key"], "step": warning["step"],
