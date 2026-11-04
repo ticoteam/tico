@@ -125,14 +125,20 @@ def unknown_holder(c, aid):
     return not row or not row["finished_at"] or row["finished_at"] < H.shift(H.now(), seconds=-HOLDER_GONE_S)
 
 
-def paused(c, aid, state, result_json):
+def paused(c, aid, state, result_json, stop_requested_at):
     """Why a run paused for a shared login or an update, including a hand-back reported after lease expiry."""
-    if state not in ("interrupted", "expired"):
+    from .run_diagnostics import stop_supersedes
+
+    if state not in ("interrupted", "expired") or stop_supersedes(stop_requested_at, state):
         return None
     try:
         result = json.loads(result_json or "{}") or {}
     except (TypeError, ValueError):
         result = {}
+    # A completion can withdraw the earlier pause when its fallback session cannot resume. Without a completion,
+    # the saved event still explains a lease that expired before the runner could hand the turn back.
+    if isinstance(result, dict) and ("yielded" in result or "outcome" in result) and not result.get("yielded"):
+        return None
     line = _payload(c, aid, "status", "yielded").get("yielded")
     if isinstance(line, str) and line.strip():
         return clip(line, 200)

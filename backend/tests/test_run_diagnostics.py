@@ -176,6 +176,32 @@ def test_a_planned_pause_reason_is_scrubbed_and_never_taken_from_reply_text(api)
     assert secret not in reason and 'private partial reply' not in reason
 
 
+@pytest.mark.parametrize('late', [False, True])
+def test_a_saved_pause_event_does_not_override_a_completion_that_cannot_resume(api, late):
+    from backend.execution import STALL_MAX
+
+    machine, _, a = start(api)
+    line = "Paused at the computer's drain time limit; work and session saved, queued to continue"
+    post(api, f"attempts/{a['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'yielded': line}}]}, machine['token'])
+    if late:
+        with api.app.state.store.transaction() as c:
+            c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (H.shift(H.now(), seconds=-1), a['id']))
+            api.app.state.execution.expire(c)
+            # A completion beyond the recovery window is filed against the expired run without restoring its lease.
+            c.execute('UPDATE attempts SET finished_at=? WHERE id=?',
+                      (H.shift(H.now(), seconds=-STALL_MAX - 1), a['id']))
+        assert listed(api, a['id'])['end_reason'] == line
+        assert get(api, f"tasks/{a['task']['id']}/run-view")['runs'][0]['paused'] == line
+    post(api, f"attempts/{a['id']}/complete",
+         {'outcome': 'interrupted', 'yielded': False, 'fallback': 'claude', 'last_seq': 1}, machine['token'])
+    assert listed(api, a['id'])['end_reason'] == (
+        'Computer lost or heartbeat stopped (attempt lease expired)' if late else
+        'Process interrupted (no exit status reported)')
+    run = get(api, f"tasks/{a['task']['id']}/run-view")['runs'][0]
+    assert run['id'] == a['id'] and run['paused'] is None and run['job_state'] == 'uncertain'
+
+
 def test_a_late_update_hand_back_keeps_its_saved_pause_and_does_not_use_a_start_retry(api, monkeypatch):
     from backend import execution
 
@@ -226,6 +252,8 @@ def test_canceling_an_expired_run_takes_precedence_over_its_late_pause(api):
                   {'outcome': 'interrupted', 'yielded': True, 'last_seq': 1}, machine['token'])
     assert result['filed']
     assert listed(api, a['id'])['end_reason'] == 'Canceled by human:ana'
+    run = get(api, f"tasks/{a['task']['id']}/run-view")['runs'][0]
+    assert run['id'] == a['id'] and run['paused'] is None
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM attempts WHERE id=?', (a['id'],)).fetchone()[0] == 'expired'
         assert c.execute('SELECT state FROM jobs WHERE id=?', (a['job_id'],)).fetchone()[0] == 'canceled'

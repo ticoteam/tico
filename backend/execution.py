@@ -5583,7 +5583,7 @@ class Execution:
             # Paused at its hold cap so another turn could use the shared login: it is back in the queue and
             # continues next, so the bot is idle with the pause line, not crashed until the continuation starts.
             from .login_waits import paused
-            settle_status(c, row["bot_id"], "idle", paused(c, aid, "interrupted", '{"yielded": true}'),
+            settle_status(c, row["bot_id"], "idle", paused(c, aid, "interrupted", '{"yielded": true}', row["stop_requested_at"]),
                           claimed=row["created_at"])
         elif retryable:
             # Not a crash and not a limit: the box's sign-in lapsed. Say so plainly, leave the

@@ -71,8 +71,13 @@ def keep_stderr(c, row: AttemptRow, text):
     return {'kept': True, 'bytes': len(value.encode())}
 
 
+def stop_supersedes(stop_requested_at, outcome):
+    """A Stop wins over an interrupted or failed turn, while an already completed turn stays finished."""
+    return bool(stop_requested_at) and outcome != 'completed'
+
+
 def reason(c, row: AttemptRow, outcome, summary=''):
-    if row['stop_requested_at'] and outcome != 'completed':
+    if stop_supersedes(row['stop_requested_at'], outcome):
         from .quarantine_stops import stopped_by
         # A quarantine's Stop reads as the quarantine, never as a lost computer or the keeper (Dev 573).
         return stopped_by(c, row) or 'Canceled by ' + row['stop_requested_at']
@@ -87,7 +92,7 @@ def reason(c, row: AttemptRow, outcome, summary=''):
         return RESTART_TEXT
     # A saved pause event or late yield report explains even an expired lease. Stop above still takes precedence.
     from .login_waits import paused
-    yielded = paused(c, row['id'], row['state'], row['result'])
+    yielded = paused(c, row['id'], row['state'], row['result'], row['stop_requested_at'])
     if yielded:
         return scrub(yielded)[:500]
     if row['state'] == 'expired':
