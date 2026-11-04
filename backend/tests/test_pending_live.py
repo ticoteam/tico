@@ -46,6 +46,11 @@ def test_private_audience_and_participant_read_access(api):
         assert auth.task(c, carried, sent['result_ref'])
         assert c.execute('SELECT id FROM tasks WHERE id=? AND (' + auth.task_sql(c, carried) + ')',
                          (sent['result_ref'],)).fetchone()
+    with api.app.state.store.transaction() as c:
+        row = events.H.task(c, sent['result_ref'])
+        assert events.H.task_private_readable(c, 'human:ben', row)
+        c.execute("DELETE FROM task_roles WHERE task_id=? AND role='participant' AND actor='human:ben'", (row['id'],))
+        assert not events.H.task_private_readable(c, 'human:ben', row)
 
 
 def test_redacts_mutation_replay_listing_and_outbox(api):
