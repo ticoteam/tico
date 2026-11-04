@@ -82,7 +82,7 @@ def shown(card):
 
 
 def start_turn(c, task_id):
-    """A bot's turn on the task begins, as a runner's claim writes it: a running attempt and its turn, while the task
+    """A bot's turn on the task begins, as a runner's claim writes it: a running attempt on the task, while the task
     row itself stays as it was."""
     other = H.task_create(c, "human:ana", "Elsewhere " + H.new_id(), "x", "bot:ops")
     H.task_comment(c, "human:ana", other["id"], "Please look at this")
@@ -91,7 +91,7 @@ def start_turn(c, task_id):
     aid = H.new_id()
     c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
               "VALUES(?,?,'ops','r1',1,?,'running',?,?)", (aid, job, aid, H.shift(H.now(), seconds=600), H.now()))
-    c.execute("INSERT INTO turns(id,bot,started_at,task_id) VALUES(?,'ops',?,?)", (aid, H.now(), task_id))
+    c.execute("UPDATE attempts SET trigger='task',task_id=? WHERE id=?", (task_id, aid))
 
 
 def an_hour_on(store):

@@ -65,7 +65,7 @@ def big_org(api, first, last, groups_=8):
                       (slug, slug, slug, "", H.now()))
             c.execute("INSERT INTO bot_config(bot,owner_id,team) VALUES(?,?,?)", (slug, "ana", teams[n % len(teams)]))
             BS.write(c, slug, {"name": slug, "runtime": "fake", "model": "m", "host": "keeper"})
-            c.execute("INSERT INTO turns(id,bot,started_at,finished_at,est_cost_usd,billing) VALUES(?,?,?,?,?,?)",
+            c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,est_cost_usd,billing) VALUES(?,?,?,?,?,?)",
                       (H.new_id(), slug, H.now(), H.now(), 0.25, "api"))
             usage_limits.save_own(c, slug, {"daily_usd": 10}, "human:ana")
         for gid in org:

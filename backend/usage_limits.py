@@ -314,8 +314,7 @@ def label(c, scope, default=None):
 
 # ------------------------------------------------------------------------------------------------ spend
 def clock():
-    """The moment the spend windows are read at. A demo build pins it to its own clock (demo_seed.fixed), so a build
-    that straddles a window boundary stores the same spend in every run."""
+    """The moment spend is read at when none is given: the real one, unless a demo build pins its own."""
     return datetime.now(timezone.utc)
 
 

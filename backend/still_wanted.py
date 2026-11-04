@@ -23,7 +23,7 @@ def _last_activity(row):
 def _live(conn, task_id):
     """A run on this task is leased or going: it is not idle, whatever its timestamps say."""
     try:
-        return conn.execute("SELECT 1 FROM turns t JOIN attempts a ON a.id=t.id WHERE t.task_id=? "
+        return conn.execute("SELECT 1 FROM attempts a WHERE a.task_id=? "
                             "AND a.state IN ('leased','running') LIMIT 1", (task_id,)).fetchone() is not None
     except sqlite3.OperationalError:     # a local hub has no attempts table
         return False
@@ -43,7 +43,7 @@ def idle_tasks(conn, at=None):
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     out = []
     for row in H._rows(conn.execute(
-            f"SELECT * FROM tasks WHERE status IN ({marks}) AND updated_at<? "
+            f"SELECT * FROM {H.TASKS} tasks WHERE status IN ({marks}) AND updated_at<? "
             "AND coalesce(checkpoint_at,'')<? ORDER BY updated_at", (*H.ACTIVE_STATUSES, cutoff, cutoff))):
         if H.TS.snoozed(row, at):
             continue                     # set aside until a date: its owner hears when that comes

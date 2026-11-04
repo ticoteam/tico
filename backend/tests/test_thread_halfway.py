@@ -387,3 +387,49 @@ def test_a_thousand_open_wakes_for_one_bot_are_read_in_a_bounded_number_of_state
     say(api, thread["id"], "@ops and this one?")
     with store.read() as c:
         assert set(thread_bot_status.candidates(c, thread["id"])) == {"bot:ops"}
+
+
+def test_a_run_that_is_thinking_says_so_and_a_thought_wakes_the_chat(api):
+    machine = machine_for(api)
+    thread = new_thread(api)
+    say(api, thread["id"], "@ops can you check this?")
+    attempt = claim(api, machine)
+    store = api.app.state.store
+
+    def status_changes():
+        with store.read() as c:
+            return c.execute("SELECT COUNT(*) FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=?",
+                             (thread["id"],)).fetchone()[0]
+    assert bot_status(api, thread["id"])[0]["detail"] == thread_bot_status.STARTING
+    with store.transaction() as c:          # the last status went out long ago, so the next one is not held back
+        c.execute("UPDATE changes SET created_at='2020-01-01T00:00:00.000Z' WHERE topic='threads' AND kind='bot_status' "
+                  "AND subject_id=?", (thread["id"],))
+    before = status_changes()
+    with store.transaction() as c:
+        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,9001,'delta',?,?)",
+                  (attempt["id"], '{"delta_kind": "thought", "text": "Checking the thread"}', H.now()))
+    assert status_changes() == before + 1
+    assert bot_status(api, thread["id"])[0]["detail"] == thread_bot_status.THINKING
+    with store.transaction() as c:          # a thought within five seconds of the last status is held back
+        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,9002,'delta',?,?)",
+                  (attempt["id"], '{"delta_kind": "thought", "text": "Still checking"}', H.now()))
+    assert status_changes() == before + 1
+    with store.transaction() as c:
+        c.execute("UPDATE changes SET created_at='2020-01-01T00:00:00.000Z' WHERE topic='threads' AND kind='bot_status' "
+                  "AND subject_id=?", (thread["id"],))
+        assert thread_bot_status.send_trailing(c) == 1
+    assert status_changes() == before + 2
+
+
+def test_a_thought_after_a_tool_reads_as_thinking():
+    import sqlite3
+    c = sqlite3.connect(":memory:")
+    c.execute("CREATE TABLE attempt_events(attempt_id TEXT, seq INTEGER, kind TEXT, payload TEXT, created_at TEXT)")
+
+    def add(seq, kind, payload):
+        c.execute("INSERT INTO attempt_events VALUES('a', ?, ?, ?, '2026-11-04T00:00:00.000Z')", (seq, kind, payload))
+    add(1, "tool", '{"tool": "Bash", "status": "completed", "summary": "npm", "item_id": "t1"}')
+    add(2, "delta", '{"delta_kind": "thought", "text": "Checking what failed"}')
+    assert thread_bot_status._step(c, "a") == thread_bot_status.THINKING
+    add(3, "tool", '{"tool": "Bash", "status": "started", "summary": "git", "item_id": "t2"}')
+    assert thread_bot_status._step(c, "a") != thread_bot_status.THINKING

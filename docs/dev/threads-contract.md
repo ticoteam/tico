@@ -5,8 +5,8 @@ track builds against this page. Owner: `threads/core`. A change here is announce
 ("contract:"), and additive changes are preferred over renames.
 
 Terms in UI and docs: **Thread, Home, DM, Sub-thread, Call**. Internally the table stays `conversations` and a
-thread id **is** a conversation id. `turns.thread_id` (like `bot_sessions`) is a provider session: never read or
-reuse it as a thread id.
+thread id **is** a conversation id. `bots.thread_id` and `attempts.thread_id` are provider sessions: never read or
+reuse them as thread ids.
 
 ## 0. Files core owns
 
@@ -503,7 +503,7 @@ first:
  "since": "<wait start>", "run_id": "<attempt id>|null", "fix": {"label": "Fix", "href": "#/settings/computers"}|null}
 ```
 - `working`: its run for this root is running; `detail` is the run's current step (its last tool or progress line,
-  "Writing a reply", "Starting").
+  "Writing a reply", "Thinking", "Starting").
 - `up_next`: it is running elsewhere; "Finishing <task title>" or "Finishing # <thread title>" only when the viewer
   reads that task or thread, else "Busy with other work".
 - `cant_reply`, `fix` set: paused or draining → "Paused" (bot Info); its computer offline or none → "Its computer is

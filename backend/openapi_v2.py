@@ -465,8 +465,8 @@ STABLE = [
     ("/api/v2/assistant/decisions", "get", "Assistant", "listAssistantDecisions",
      "The approvals your Assistant decided for you, with your words and whether each can still be undone", None),
     ("/api/v2/assistant/read-back", "post", "Assistant", "readBackAssistantApprovals",
-     "The Assistant only: post the list of approvals it is about to approve for you in your chat; only those may then "
-     "be approved on your yes", None),
+     "The Assistant only: post the list of approvals it is about to approve for you in your chat, with an optional note "
+     "of its own words above it; only the listed ones may then be approved on your yes", None),
     # Goals and KPIs (docs/goals-and-kpis.md)
     ("/api/v2/strategy-bot", "get", "Goals", "getStrategyBot",
      "The Strategy Bot's name, whether its regular checks run, how much it does (its level, "
@@ -756,7 +756,7 @@ SCHEMAS = {
                      parts=items(obj({"kind": {"enum": ["progress", "reply", "tool"]}, "text": "s", "at": "s"})) | {
                          "description": "The run's pieces so far, in order, while it is leased or running (empty otherwise). "
                                         "`reply` and `progress` are what the bot wrote (`progress` when a tool call follows it); "
-                                        "`tool` is a short label such as \"Ran hub task create\", never its arguments or output"}),
+                                        "`tool` is a short label such as \"Filing a task\" or \"Ran npm\", never its arguments or output"}),
     "Conversation": obj({"id": "s", "kind": "s", "subject": "s", "participants": items({"type": "string"}),
                          "created_at": "s", "last_message_at": "s", "closed_at": "n"}),
     "TaskStep": obj({"id": "s", "type_id": "s", "name": "s", "public_name": "s", "position": "i", "status": "s",

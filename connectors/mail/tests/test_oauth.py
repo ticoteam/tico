@@ -289,6 +289,14 @@ class ReadOnlyRefusals(Base):
         self.assertIsNone(oauth.require(None, "labels", "ana@acme.example", "label mail"))
         oauth.require([G + "gmail.modify"], "drafts", "ana@acme.example", "write drafts")   # modify covers drafts
 
+    def test_the_full_calendar_scope_covers_event_writes_and_read_only_calendar_does_not(self):
+        oauth.require([G + "calendar"], "calendar-write", "ana@acme.example", "add calendar events")   # a Workspace token
+        oauth.require([G + "gmail.modify"], "labels", "ana@acme.example", "label mail")
+        with self.assertRaises(Refused) as caught:
+            oauth.require([G + "calendar.events.readonly", G + "calendar.freebusy"], "calendar-write",
+                          "ana@acme.example", "add calendar events")
+        self.assertIn("read-only at Google", caught.exception.msg)
+
     def test_a_turn_with_a_supervisor_token_refuses_the_same_writes(self):
         os.environ[auth.SOCKET_ENV], os.environ["HUB_TOKEN"] = "/tmp/none.sock", "attempt"
         with patch("runner_support.credential_socket.request_mail",

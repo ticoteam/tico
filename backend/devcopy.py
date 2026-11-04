@@ -73,6 +73,9 @@ EMPTY = (
     "model_subscriptions", "computer_subscriptions", "attempt_subscriptions", "pending_subscription_fallbacks", "subscription_connects",
     # mail, Slack, GitHub, Granola, meeting bots, support
     "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
+    # Settings > Google: the Workspace key (sealed), setup codes and the OAuth client secret (sealed), and the health each
+    # computer reported. A copy holds none of them (google_connects.client_id goes with its table).
+    "google_workspaces", "google_setup_codes", "google_oauth_clients", "connector_reports",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
     "support_tickets", "support_access", "support_access_log",
     # Agent inbox bodies/codes and delivery cursors never enter a rehearsal copy.
@@ -143,7 +146,8 @@ KEEP = frozenset((
     "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
     "memory_tidy_cards", "memory_tidy_keeps", "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_versions",
     "system_runs", "tags", "task_assets",
-    "task_check_models", "task_delegations", "history_events", "task_file_reviews", "task_links", "task_relations",
+    "task_check_models", "task_delegations", "history_events", "task_file_reviews", "task_holds", "task_links",
+    "task_relations",
     "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
     "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
     "usage_facts", "usage_meter_reads", "budget_nodes", "task_caps", "reach_settings", "reach_lines",
@@ -153,6 +157,7 @@ KEEP = frozenset((
     "task_events", "goal_events", "market_events", "company_events", "strategy_events",
     # A copy of a database from before migrations 0053/0054 still holds these: kept, so the dev server's first start
     # moves them into usage_facts and budget_nodes (the copy is pruned before it is migrated).
+    # A copy from before migration 0072 still holds turns (the run records, now attempts rows): kept until 0072 moves them.
     "turn_usage_segments", "usage_limits", "usage_pools",
     "feedbacks",       # 👍/👎 on bot work (backend/feedback.py)
     # Shared records (backend/records): locations, items and projects
@@ -166,6 +171,9 @@ KEEP = frozenset((
     "message_routes",
     "message_search_keys",    # the search index's keys (thread_search.py); its FTS table is copied whole too, and search joins messages
     "home_merges", "home_merge_messages",   # where each person's old chat with a bot went (backend/bot_home_merge.py)
+    # The Google Workspace generation counter (backend/google_workspace.py): no secrets, and kept so a copy never issues
+    # a number that an older setup code already holds.
+    "google_setup_generations",
 )) | frozenset(finance.DEV_COPY_KEPT)
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.
@@ -300,6 +308,16 @@ def revoke_automation_secrets(c):
                   + (", headers='[]'" if "headers" in columns else ""))
 
 
+def open_attempts(c):
+    """(WHERE clause, args) for the attempts a copy removes as still open. A run with no job has no lease, so it is open
+    until settled_at; a job-backed attempt is open until finished_at, or while its state is open. A file from before
+    migration 0072 has no settled_at and no run without a job."""
+    open_state = "finished_at IS NULL OR state IN (%s)" % ",".join("?" * len(OPEN_ATTEMPTS))
+    if "settled_at" in {row[1] for row in c.execute('PRAGMA table_info("attempts")')}:
+        return "(job_id IS NULL AND settled_at IS NULL) OR (job_id IS NOT NULL AND (%s))" % open_state, OPEN_ATTEMPTS
+    return open_state, OPEN_ATTEMPTS
+
+
 def prune(c, days, keep_automations=False):
     """Empty what can act, revoke every token, cut history to `days`. Returns {table: rows removed}."""
     removed = {}
@@ -339,7 +357,7 @@ def prune(c, days, keep_automations=False):
     if "jobs" in present:
         delete("jobs", "state IN (%s)" % ",".join("?" * len(OPEN_JOBS)), OPEN_JOBS)
     if "attempts" in present:
-        delete("attempts", "finished_at IS NULL OR state IN (%s)" % ",".join("?" * len(OPEN_ATTEMPTS)), OPEN_ATTEMPTS)
+        delete("attempts", *open_attempts(c))
     stamp = now()
     if days:
         cutoff = shift(stamp, days=-days)
@@ -352,6 +370,10 @@ def prune(c, days, keep_automations=False):
                 f" AND {quote(key)} NOT IN (SELECT {quote(col)} FROM {quote(child)} WHERE {quote(col)} IS NOT NULL)"
                 for child, col, key in refs)
             delete(table, where, (cutoff,))
+    # A copy from before migration 0072 keeps its turns whole (KEEP). A run the cut removed must not come back through
+    # its turns row as a lease-less run, so the record goes with its attempts row.
+    if "attempts" in present and "turns" in present:
+        delete("turns", "id NOT IN (SELECT id FROM attempts)")
     # Kept rows keep no way in: a value no token hashes to (the columns are NOT NULL UNIQUE where not nullable).
     if "agents" in present:
         c.execute("UPDATE agents SET token_hash='devcopy-revoked:'||bot, revoked_at=coalesce(revoked_at,?), "
@@ -359,7 +381,8 @@ def prune(c, days, keep_automations=False):
     if "runners" in present:
         c.execute("UPDATE runners SET token_hash='devcopy-revoked:'||id, revoked_at=coalesce(revoked_at,?)", (stamp,))
     if "attempts" in present:
-        c.execute("UPDATE attempts SET token_hash='devcopy-revoked:'||id, lease_until=coalesce(finished_at,created_at)")
+        c.execute("UPDATE attempts SET token_hash='devcopy-revoked:'||id, lease_until=coalesce(finished_at,created_at) "
+                  "WHERE job_id IS NOT NULL")
     # A row that points at one just removed goes too (attempt_events of an attempt, oauth_grants of a token):
     # repeated until no foreign key is broken by what this run removed.
     touched, frontier = set(removed), set(removed)
@@ -422,8 +445,9 @@ def build(source, dest, days=30, force=False, keep_automations=False):
         left = [t for t in emptied(c, keep_automations) if c.execute(f"SELECT 1 FROM {quote(t)} LIMIT 1").fetchone()]
         if left:
             raise SystemExit("devcopy: tables not empty after pruning: " + ", ".join(left))
+        where, args = open_attempts(c)
         live = c.execute("SELECT count(*) FROM attempts WHERE token_hash NOT LIKE 'devcopy-revoked:%' "
-                         "OR finished_at IS NULL").fetchone()[0] if "attempts" in tables(c) else 0
+                         f"OR ({where})", args).fetchone()[0] if "attempts" in tables(c) else 0
         if live:
             raise SystemExit("devcopy: an unfinished or unrevoked attempt survived pruning")
         present = tables(c)

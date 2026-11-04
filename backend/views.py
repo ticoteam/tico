@@ -116,8 +116,8 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
     found = list(c.execute(
             "SELECT a.id,a.bot_id,a.started_at,a.created_at,a.finished_at,a.state,a.result,j.message_id FROM attempts a "
             "JOIN jobs j ON j.id=a.job_id WHERE a.state IN ('failed','expired') " + ("AND a.bot_id=? " if bot is not None else "") +
-            "AND (? IS NULL OR coalesce(a.finished_at,a.created_at)>=?) AND NOT EXISTS "
-            "(SELECT 1 FROM turns t WHERE t.id=a.id) ORDER BY coalesce(a.finished_at,a.created_at) DESC LIMIT ?",
+            "AND (? IS NULL OR coalesce(a.finished_at,a.created_at)>=?) AND a.trigger IS NULL "
+            "ORDER BY coalesce(a.finished_at,a.created_at) DESC LIMIT ?",
             ((bot,) if bot is not None else ()) + (since, since, limit)))
     stored = H.prime_messages(c, [row["message_id"] for row in found])
     privacy.prime_messages(c, list(stored.values()))
@@ -801,6 +801,26 @@ def operation_issues(c, who, auth):
                 continue
             add("service", row["service"] + " needs attention", row["last_error"] or "The last check failed.",
                 needs_person=bool(detail.get("needs_person")), action=detail.get("action"))
+        # Google connections: the Workspace key that stopped working, and a person's grant held on a computer other
+        # than their message bot's (backend/google_connect.py, google_workspace.py).
+        from . import google_rights, google_workspace
+        key = google_workspace.active(c)
+        if key and key["status"] == "failing":
+            add("google_workspace", "The Google Workspace key is failing",
+                key["last_error"] or "Google has refused the Workspace key for too long.",
+                needs_person=True, action="Check the key in Settings > Google.")
+        labels = {row["id"]: row["label"] for row in c.execute("SELECT id,label FROM runners_with_state")}
+        hosts = google_rights.inbox_hosts(c)
+        for grant in c.execute("SELECT person_id,mailbox,holder FROM google_connects WHERE status='connected' "
+                               "AND holder IS NOT NULL AND grant_hash IS NOT NULL").fetchall():
+            host = (hosts.get(grant["person_id"]) or {}).get("runner")
+            if host and host != grant["holder"]:
+                holder = labels.get(grant["holder"]) or "another computer"
+                bot_computer = labels.get(host) or "the computer that runs their message bot"
+                add("google_grant", grant["mailbox"] + "'s Google grant is on " + holder,
+                    grant["mailbox"] + "'s Google grant is on " + holder + ". Reconnect in Settings > Google to move it "
+                    "to " + bot_computer + ", where their message bot runs.", machine=grant["holder"], needs_person=True,
+                    action="Open Settings > Google")
         # A connector that stopped refreshing (the Mac lost the network, or the sync hung) writes no
         # error, so its age is checked while a Mac is online: calendar refreshes every 45 s, mail
         # reports every 10 minutes.
@@ -1079,7 +1099,7 @@ KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "setup": 1, "
 # for the person to do on it until the bot restates it (backend/restate_asks.py asks it to).
 
 
-_VISIBLE_TASK_SQL = "SELECT * FROM tasks WHERE id=? AND (%s)"
+_VISIBLE_TASK_SQL = f"SELECT * FROM {H.TASKS} tasks WHERE id=? AND (%s)"
 
 
 def _prime_person_origins(c, visible_sql, ids):
@@ -2243,10 +2263,10 @@ def install_views(app, store, auth, mutate, task_view):
         from . import cloud_machines
         # Each bot's cloud machine, own or shared, Tico Cloud only (backend/cloud_machines.py): one read for every bot.
         cloud_rows = cloud_machines.rows(c) if cloud_machines.offered(c, store.settings) else None
-        # Each bot's last finished run, one turns_bot_finished seek per bot rather than a sort of every run there is.
+        # Each bot's last finished run, one attempts_bot_settled seek per bot rather than a sort of every run there is.
         latest_run = {slug: tid for slug, tid in c.execute(
-            "SELECT b.id,(SELECT t.id FROM turns t WHERE t.bot=b.id AND t.finished_at IS NOT NULL "
-            "ORDER BY t.finished_at DESC,t.id DESC LIMIT 1) FROM bots b") if tid}
+            "SELECT b.id,(SELECT t.id FROM attempts t WHERE t.bot_id=b.id AND t.settled_at IS NOT NULL "
+            "ORDER BY t.settled_at DESC,t.id DESC LIMIT 1) FROM bots b") if tid}
         from .usage_records import ran_on
         run_views = ran_on(c, list(latest_run.values()))
         latest_models = {}
@@ -2270,7 +2290,7 @@ def install_views(app, store, auth, mutate, task_view):
         open_tasks = {}
         read_now = [slug for slug in shown if access.get(slug, auth.FULL)["read"]]
         for part in H.chunks(read_now):
-            for task in H._rows(c.execute("SELECT * FROM tasks WHERE owner_id IN (" + ",".join("?" * len(part)) +
+            for task in H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE owner_id IN (" + ",".join("?" * len(part)) +
                                           ") AND status IN ('open','doing')", ["bot:" + slug for slug in part])):
                 open_tasks.setdefault(H.actor_id(task["owner_id"]), []).append(task)
         # Each bot's task flow counts, all bots at once: the wait and step checks are read once for every task.
@@ -2748,7 +2768,7 @@ def install_views(app, store, auth, mutate, task_view):
         who = request.state.identity
         human_only(who)
         with store.read() as c:
-            turn = c.execute("SELECT * FROM turns WHERE id=?", (run_id,)).fetchone()
+            turn = H.turn(c, run_id)
             if not turn:
                 turn = next((r for r in failed_attempts(c, who, auth) if r["id"] == run_id), None)
             if not turn:

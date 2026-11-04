@@ -172,8 +172,8 @@ def live_masks(unsettled):
     return {"attempts": {"final_text": hidden("final_text"),
                          "result": f"CASE WHEN source.id NOT IN ({unsettled}) THEN source.result "
                                         "WHEN json_valid(source.result) THEN json_remove(source.result,'$.text') "
-                                        "ELSE NULL END"},
-            "turns": {"summary": hidden("summary")}}
+                                        "ELSE NULL END",
+                         "summary": hidden("summary")}}
 # Read-only views built over the caller's connection: name -> (base tables it reads, SELECT over `{table}`, the
 # caller's own filtered view of each, and `{all_table}`, its unfiltered inner view). A total adds up only rows the
 # caller may read: a bucket of one run would otherwise tell them that run exists, what it cost and whether it acted.
@@ -182,10 +182,9 @@ DERIVED = {
     # Runs per week (Monday, UTC), bot, trigger and purpose, with tokens and outcome (backend/run_triggers.py).
     # A run from before triggers were recorded reads `unknown`, and is counted, never dropped. Input is the run's
     # measured usage (every primary and fallback segment). A run from before measured usage has its one-number
-    # count in input_tokens (migration 76). An attempt that never got a
-    # turn row (one that failed or expired before it started) is counted too, as `unknown`, with no tokens or outcome;
-    # one whose turn the caller may not read is not turnless, and is not counted.
-    "run_weekly": (("turns", "attempts"), """
+    # count in input_tokens (migration 76). An attempt with no run record (a job and no `trigger`: one that failed or
+    # expired before it started) is counted too, as `unknown`, in the week it started, with no tokens or outcome.
+    "run_weekly": (("attempts",), """
         SELECT date(started_at, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
                coalesce(purpose, 'unknown') AS purpose,
                count(*) AS runs,
@@ -202,17 +201,15 @@ DERIVED = {
                round(100.0 * sum(coalesce(outcome, '') = 'no_change') / count(*), 1) AS no_change_pct,
                round(100.0 * sum(coalesce(outcome, '') = 'nothing_to_do') / count(*), 1) AS nothing_to_do_pct,
                round(100.0 * sum(outcome IS NULL) / count(*), 1) AS unknown_pct
-        FROM (SELECT started_at, bot, trigger_kind, purpose, input_tokens, cached_tokens, output_tokens,
+        FROM (SELECT CASE WHEN trigger IS NULL THEN coalesce(started_at, created_at) ELSE created_at END AS started_at,
+                     bot_id AS bot, trigger_kind, purpose, input_tokens, cached_tokens, output_tokens,
                      outcome, did_nothing, rotated
-              FROM {turns} WHERE started_at IS NOT NULL
-              UNION ALL
-              SELECT coalesce(a.started_at, a.created_at), a.bot_id, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-              FROM {attempts} a WHERE NOT EXISTS (SELECT 1 FROM {all_turns} t WHERE t.id = a.id))
+              FROM {attempts})
         GROUP BY 1, 2, 3, 4"""),
     # Runs per week, bot and wake rule (backend/rules.py): the rule that woke the run, with its tokens and how many did
     # nothing. A run from before rules, or whose message carried none, reads `unknown`. Same token sums as run_weekly.
-    "rule_weekly": (("turns",), """
-        SELECT date(started_at, '-6 days', 'weekday 1') AS week, bot, coalesce(rule_id, 'unknown') AS rule,
+    "rule_weekly": (("attempts",), """
+        SELECT date(created_at, '-6 days', 'weekday 1') AS week, bot_id AS bot, coalesce(rule_id, 'unknown') AS rule,
                count(*) AS runs,
                sum(coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)) AS input_tokens,
                sum(coalesce(cached_tokens, 0)) AS cached_input_tokens,
@@ -220,7 +217,7 @@ DERIVED = {
                sum(coalesce(outcome, '') = 'acted') AS acted,
                sum(coalesce(did_nothing, 0) = 1) AS did_nothing,
                round(100.0 * sum(coalesce(did_nothing, 0) = 1) / count(*), 1) AS did_nothing_pct
-        FROM {turns} WHERE started_at IS NOT NULL
+        FROM {attempts} WHERE (job_id IS NULL OR trigger IS NOT NULL)
         GROUP BY 1, 2, 3"""),
 }
 # Totals over rows the reader may not read one by one, built only for the owner and a bot the owner granted them
@@ -434,6 +431,8 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "tags": tag_gate, "task_tags": by_task,
         "task_delegations": by_task,
         "task_requesters": by_task, "task_reminders": by_task, "task_assets": by_task, "task_links": by_task, "task_roles": by_task,
+        # A task's moves to Blocked and snoozes, open and past (migration 0075), read with their task.
+        "task_holds": by_task,
         # A relation is read only when the caller may read both of its tasks.
         "task_relations": "from_task IN (SELECT id FROM tasks) AND to_task IN (SELECT id FROM tasks)",
         "message_assets": by_message,
@@ -445,11 +444,12 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "bot_control": bots_visible("bot"),
         "bot_transitions": bots_visible("bot"), "assignments": bots_visible("bot"),
         "schedule_config": by_schedule, "schedule_occurrences": f"{by_schedule} AND (task_id IS NULL OR {by_task})",
-        "turns": f"{bots_visible('bot')} AND (message_id IS NULL OR {by_message}) AND "
-                 f"(task_id IS NULL OR {by_task}) AND " + attempt_gate,
-        "deltas": "turn_id IN (SELECT id FROM turns)" + (f" AND turn_id NOT IN ({unsettled})" if unsettled else ""),
+        "deltas": "attempt_id IN (SELECT id FROM attempts)" + (f" AND attempt_id NOT IN ({unsettled})" if unsettled else ""),
         "jobs": f"{bots_visible('bot_id')} AND {by_message}",
-        "attempts": by_job + " AND " + attempt_gate, "job_recovery": by_job + " AND " + by_attempt,
+        # A run with a job is read with its job; one recorded with no lease (the demo seed, a run from before leases)
+        # with its bot and the message that started it. Either way its task, when it has one, must be readable too.
+        "attempts": (f"(CASE WHEN job_id IS NULL THEN {bots_visible('bot_id')} AND (message_id IS NULL OR {by_message}) "
+                     f"ELSE {by_job} END) AND (task_id IS NULL OR {by_task}) AND " + attempt_gate), "job_recovery": by_job + " AND " + by_attempt,
         "attempt_events": by_attempt + " AND " + content_gate(("payload",)) + (
             f" AND NOT (kind IN ('delta','message') AND attempt_id IN ({unsettled}))" if unsettled else ""),
         "attempt_inputs": by_attempt, "attempt_conversations": by_attempt,

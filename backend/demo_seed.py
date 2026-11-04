@@ -62,8 +62,8 @@ def fixed(clock):
     # Inbound keeps a message's body for 90 days from when it arrived, counted on the demo's clock: a demo built months
     # after its dates keeps every body.
     inbound.now = lambda: clock.at.timestamp()
-    # Spend windows (30 minutes, hour, day...) are read at the demo's moment too; the real clock would put a build that
-    # straddles a window boundary on the other side of it from its twin.
+    # Spend windows (an hour, a day) are read on the demo's clock too, so two builds of one `now` save the same limits
+    # whichever side of an hour the machine's clock is on.
     usage_limits.clock = lambda: clock.at
     hubdb.new_id = lambda: str(uuid.uuid5(NAMESPACE, str(next(counter))))
     # Time-ordered ids (messages, deliveries) and the product's own random ids for threads and calls.

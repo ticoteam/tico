@@ -154,7 +154,7 @@ def test_a_run_from_a_conversation_the_reader_cannot_open_stays_out(api, monkeyp
     events(api, machine, direct["id"], [("tool", {"tool": "Bash", "status": "started", "item_id": "p1",
                                                   "summary": "payroll-export.sh", "parent_id": None, "background": True})])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE turns SET task_id=? WHERE id=?", (tid, direct["id"]))
+        c.execute("UPDATE attempts SET task_id=? WHERE id=?", (tid, direct["id"]))
     assert {r["id"] for r in get(api, f"tasks/{tid}/run-view")["runs"]} == {shared["id"], direct["id"]}
     monkeypatch.setattr("backend.run_view.ATTEMPT_LIMIT", 1)
     seen = get(api, f"tasks/{tid}/run-view", token="cara-test")
@@ -183,7 +183,7 @@ def test_the_task_page_follows_its_session_live_and_each_reply_keeps_its_steps(a
                                ("tool", {"tool": "mcp__hub__task_create", "status": "completed", "item_id": "c1"})])
     live = get(api, f"tasks/{tid}")["execution"]
     assert (live["state"], live["run_id"], live["bot_id"]) == ("running", aid, "ops")
-    assert live["parts"][-1] == {**live["parts"][-1], "kind": "tool", "text": "Ran hub task create"}
+    assert live["parts"][-1] == {**live["parts"][-1], "kind": "tool", "text": "Filing a task"}
     events(api, machine, aid, [("message", {"text": "Counted: 42 words.", "final": True})], first=3)
     post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": "Counted: 42 words.", "last_seq": 3},
          machine["token"])

@@ -17,20 +17,26 @@ def runs(api):
     """The fixture's one real run, finished at once, and a function adding finished runs beside it."""
     _, _, attempt = setup_attempt(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE turns SET finished_at=started_at WHERE id=?", (attempt["id"],))
+        c.execute("UPDATE attempts SET settled_at=created_at WHERE id=?", (attempt["id"],))
         base = dict(c.execute("SELECT * FROM attempts WHERE id=?", (attempt["id"],)).fetchone())
 
     def add(c, rid, start, end, events=()):
-        row = {**base, "id": rid, "token_hash": rid, "state": "completed"}
+        # A finished run is one attempts row: the claim's copy, with its run record written on it.
+        row = {**base, "id": rid, "token_hash": rid, "state": "completed", "created_at": B.stamp(start),
+               "settled_at": B.stamp(end) if end else None, "trigger": "task", "exit": "completed"}
         c.execute(f"INSERT INTO attempts({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
-        run(c, rid, start, end, events)
+        events_of(c, rid, events)
     add.bot_token = attempt["token"]
     return add
 
 
 def run(c, rid, start, end, events=()):
-    c.execute("INSERT INTO turns(id,bot,started_at,finished_at,trigger,exit) VALUES(?,?,?,?,?,?)",
+    c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,trigger,exit) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at,settled_at=excluded.settled_at,trigger=excluded.trigger,exit=excluded.exit",
               (rid, "ops", B.stamp(start), B.stamp(end) if end else None, "task", "completed"))
+    events_of(c, rid, events)
+
+
+def events_of(c, rid, events):
     for seq, (at, kind) in enumerate(events, 1):
         c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,?,?,?,?)",
                   (rid, seq, kind, "{}", B.stamp(at)))
@@ -142,7 +148,7 @@ def test_a_finish_that_changes_and_a_run_older_than_the_weeks_both_count(api, mo
     assert reads == [], "a finished run that hasn't changed is not read again"
     # Its result arrives late, three hours in: the same counter counts the new finish.
     with store.transaction() as c:
-        c.execute("UPDATE turns SET finished_at=? WHERE id='late'", (B.stamp(stopped + timedelta(hours=3)),))
+        c.execute("UPDATE attempts SET settled_at=? WHERE id='late'", (B.stamp(stopped + timedelta(hours=3)),))
     with store.read_transaction() as c:
         assert week(counter.count(c, now=NOW), MONDAY)["bot_hours"] == 3.0
     assert reads == ["late"]

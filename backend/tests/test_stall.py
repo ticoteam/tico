@@ -9,6 +9,7 @@ from backend import milestone_waits as MW
 from backend.store import H
 from backend.tests.test_api import api  # noqa: F401
 from backend.enqueue import enqueue_stored
+from backend.tests.hold_rows import set_holds
 
 
 def aged(c, task_id, minutes):
@@ -299,7 +300,10 @@ def test_todays_hold_with_no_date_snooze_or_resume_still_wakes_its_parent_and_is
 
 
 def _later(c, task_id, column, hours):
-    c.execute(f"UPDATE tasks SET {column}=? WHERE id=?", (H.shift(H.now(), seconds=hours * 3600), task_id))
+    if column == "snoozed_until":
+        set_holds(c, task_id, snoozed_until=H.shift(H.now(), seconds=hours * 3600))
+    else:
+        c.execute(f"UPDATE tasks SET {column}=? WHERE id=?", (H.shift(H.now(), seconds=hours * 3600), task_id))
 
 
 @pytest.mark.parametrize("wait", ["due", "snooze", "resume", "milestone"])

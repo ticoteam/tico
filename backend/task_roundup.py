@@ -177,7 +177,7 @@ def _list(c, slug, at):
     cutoff = now - timedelta(hours=QUIET_HOURS)
     relist = now - timedelta(days=RELIST_DAYS)
     due, missed, quiet = [], [], []
-    rows = H._rows(c.execute("SELECT * FROM tasks WHERE owner_id=? AND status IN (" + _marks() + ") ORDER BY updated_at",
+    rows = H._rows(c.execute("SELECT * FROM " + H.TASKS + " tasks WHERE owner_id=? AND status IN (" + _marks() + ") ORDER BY updated_at",
                              (actor, *H.ACTIVE_STATUSES)))
     for row in rows:
         if not H.task_private_readable(c, actor, row) or TS.snoozed(row, at) or _running(c, slug, row):
@@ -280,7 +280,8 @@ def _holds(c, row, at):
 def _last_turn(c, row, slug, actor):
     """When the bot last worked on the task: its latest turn on it, or a message or history row it wrote on it."""
     return c.execute(
-        "SELECT max(x) FROM (SELECT max(started_at) AS x FROM turns WHERE bot=? AND task_id=? "
+        "SELECT max(x) FROM (SELECT max(created_at) AS x FROM attempts WHERE bot_id=? AND task_id=? "
+        "AND (job_id IS NULL OR trigger IS NOT NULL) "
         "UNION ALL SELECT max(created_at) FROM messages WHERE conversation_id=? AND sender_id=? AND deleted_at IS NULL "
         "UNION ALL SELECT max(created_at) FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id=?)",
         (slug, row["id"], row["conversation_id"], actor, row["id"], actor)).fetchone()[0]

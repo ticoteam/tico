@@ -21,7 +21,13 @@ NOON = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
 
 def _turn(c, bot, finished, cost, model="tico-medium", billing="api", tid=None):
     tid = tid or f"t{bot}{finished}{model}"
-    c.execute("INSERT INTO turns(id, bot, started_at, finished_at, model, est_cost_usd, billing) VALUES(?,?,?,?,?,?,?)",
+    if c.execute("SELECT 1 FROM attempts WHERE id=?", (tid,)).fetchone():
+        # A claimed run already has its attempts row: its run record is written onto that row.
+        c.execute("UPDATE attempts SET settled_at=?, usage_model=?, est_cost_usd=?, billing=?, trigger='message' WHERE id=?",
+                  (finished, model, cost, billing, tid))
+        return tid
+    c.execute("INSERT INTO attempts(id, bot_id, created_at, settled_at, trigger, usage_model, est_cost_usd, billing) "
+              "VALUES(?,?,?,?,'message',?,?,?)",
               (tid, bot, finished, finished, model, cost, billing))
     return tid
 

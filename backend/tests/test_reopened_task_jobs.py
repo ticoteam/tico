@@ -5,6 +5,7 @@ from backend import auto_tasks, execution, health, quiet_work
 from backend.store import H
 from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_task_lanes import task_bot
+from backend.tests.hold_rows import set_holds
 
 
 def reopened(api, sweep=True):
@@ -48,8 +49,7 @@ def test_reopened_job_keeps_real_gates_and_health_reports_them(api, gate):
     task = reopened(api)
     with api.app.state.store.transaction() as c:
         if gate == 'snooze':
-            c.execute('UPDATE tasks SET snoozed_until=? WHERE id=?',
-                      (H.shift(H.now(), days=1), task['id']))
+            set_holds(c, task['id'], snoozed_until=H.shift(H.now(), days=1))
         elif gate == 'blocker':
             blocker = H.task_create(c, 'human:ana', 'Supply installation evidence', 'Supply the evidence.',
                                     'human:ben', lint=False)
