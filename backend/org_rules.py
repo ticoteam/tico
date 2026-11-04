@@ -608,7 +608,8 @@ def settings_for(c, bot, ctx=None):
     out.append({"text": text, "source": "bot_access", "edit": {"page": "bot", "anchor": "access"}})
 
     mail = mail_settings.stored(c, bot)
-    sends = bool(mail and mail["outbound_send"])
+    from .google_workspace import permissions
+    sends = bool(mail and mail["outbound_send"]) and permissions(c)["send_mail"]   # the company's Send mail too
     out.append({"text": f"{name} {'can send mail' if sends else 'cannot send mail outside Tico'}",
                 "source": "mail_settings", "edit": {"page": "settings", "anchor": "people"}})
 

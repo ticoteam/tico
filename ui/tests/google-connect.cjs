@@ -1,6 +1,6 @@
-// Offline browser regression: Settings > Inbox, Connect Google (ui/google-connect.js). A person connects their own
-// mailbox (read only with Tico's shared app); a Workspace policy denial is shown as the admin's; only Google's own
-// sign-in page is opened.
+// Offline browser regression: Settings > Google, Connect your account (ui/google-connect.js). A member connects their own
+// mailbox (read only with Tico's shared app) and sees no setup; a Workspace policy denial is shown as the admin's; only
+// Google's own sign-in page is opened.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -52,6 +52,9 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('[data-settings-tab=inbox]').click();
     const pane = page.locator('#set-google');
     await pane.locator('[role=alert]').waitFor();
+    // A member is never asked how to connect Google and never sees its setup or the team: only their own account.
+    assert.equal((await pane.locator('[data-google-card=account] h3').innerText()).trim(), 'Connect your account');
+    assert.equal(await pane.locator('[data-google-choose], [data-google-card=workspace], [data-google-how], .google-team').count(), 0);
     assert.match(await pane.innerText(), /Google Workspace for acme\.example has a policy that blocks Tico/);
     assert.match(await pane.innerText(), /only to read your mail and calendar/);
 

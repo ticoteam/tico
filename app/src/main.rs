@@ -26,7 +26,6 @@ use std::time::Duration;
 use serde_json::Value;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, State, WindowEvent};
-#[cfg(target_os = "macos")]
 use tauri::RunEvent;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
@@ -45,7 +44,7 @@ const MIN_HEIGHT: u32 = 400;
 pub(crate) const LOG_LINES: usize = 200;
 
 /// The shell's state. When more than one lock is held, they are taken in this order: changing, orgs, prefetch,
-/// connection, visual_origin, parked_visual.
+/// connection, visual_origin, parked_visual, shown, kept, capture.
 struct AppState {
     connection: Mutex<Option<Config>>,
     visual_origin: Mutex<Option<visual_origin::VisualOrigin>>,
@@ -60,8 +59,15 @@ struct AppState {
     // Held while the open org changes or an org goes, so a switch and a removal never interleave. Never taken on
     // the main thread: a switch waits on it for webview work.
     pub(crate) changing: Mutex<()>,
-    // The orgs whose pages are open, least recently shown first (windows::KEEP_ALIVE of them).
+    // The orgs whose pages are open, least recently shown first: the open org's last, and before it those kept
+    // hidden since a switch away (`kept`), windows::KEEP_ALIVE in all at most. A prefetched page is not among them.
     shown: Mutex<Vec<String>>,
+    // The pages kept hidden after a switch away, each closing windows::KEEP_FOR after it went hidden unless it is
+    // shown again first, with the visual allowance each had when open.
+    kept: Mutex<windows::Kept>,
+    // What each org's page says it captures (bridge `capture`): a hint for whether a switch away keeps that page
+    // hidden or closes it (windows::keeps).
+    capture: Mutex<HashMap<String, windows::CaptureNote>>,
     // The page built hidden for the org the pointer rests on in the rail, and the visual allowance it sent while
     // hidden, which becomes the open one when it is shown.
     prefetch: Mutex<windows::Prefetch>,
@@ -84,6 +90,8 @@ impl AppState {
             granted: Mutex::new(HashSet::new()),
             changing: Mutex::new(()),
             shown: Mutex::new(Vec::new()),
+            kept: Mutex::new(windows::Kept::default()),
+            capture: Mutex::new(HashMap::new()),
             prefetch: Mutex::new(windows::Prefetch::default()),
             parked_visual: Mutex::new(None),
             traces: Mutex::new(Vec::new()),
@@ -187,6 +195,8 @@ fn main() {
                 #[cfg(target_os = "macos")]
                 WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
+                    // The open org's next page, after a quit too, opens where this one is.
+                    windows::remember_open_place(window.app_handle());
                     let _ = window.hide();
                 }
                 // A meeting window left open must not keep the app running with no main window.
@@ -201,13 +211,15 @@ fn main() {
         .build(context)
         .expect("the app could not start")
         .run(|app, event| {
+            // Quitting: the open org's next page, at the next launch, opens where this one is.
+            if let RunEvent::Exit = event {
+                windows::remember_open_place(app);
+            }
             // A click on the Dock icon while the main window is hidden.
             #[cfg(target_os = "macos")]
             if let RunEvent::Reopen { .. } = event {
                 if !main_window(app).and_then(|w| w.is_visible().ok()).unwrap_or(false) { show_window(app); }
             }
-            #[cfg(not(target_os = "macos"))]
-            let _ = (app, event);
         });
 }
 
@@ -440,6 +452,8 @@ async fn remove_org(app: &App, id: &str) {
                     select_connection(&state, None);
                     *state.status.lock().unwrap() = HubStatus::default();
                     state.shown.lock().unwrap().clear();
+                    *state.kept.lock().unwrap() = windows::Kept::default();
+                    state.capture.lock().unwrap().clear();
                     // The setup window first, so that the app keeps a window while the main one goes.
                     let _ = build_server_window(app);
                     if let Some(window) = main_window(app) {

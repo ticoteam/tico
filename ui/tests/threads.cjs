@@ -106,6 +106,8 @@ const homes = {'bot:ops': 'h-ops', 'human:bea': 'h-bea', 'human:cy': 'h-cy', 'hu
 // What a block below changes for the pages it opens: DM rows as the server sends them, a server with calls off, and
 // one without the rail (GET /v2/threads/rail answers 404).
 let dmRows = null, callsOff = false, railOff = false, threadsOff = false, threadsGate = null;
+// Start call as the server answers it: the call it makes (after a moment), or none.
+let callMade = null, joinRefused = false, startWait = 150;
 async function open(browser, who, {phone = false, sse = null} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
@@ -121,7 +123,11 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
       Track: {Source: {ScreenShare: 'screen'}}, DisconnectReason: {PARTICIPANT_REMOVED: 'removed'},
       Room: class {
         constructor() { this.mic = false; this.gone = false; this.remoteParticipants = new Map(); const room = this;
-          this.localParticipant = {setMicrophoneEnabled: async on => { room.mic = on; }, setScreenShareEnabled: async () => {}}; window.__rooms.push(this); }
+          // The microphone's track, as a publication: stopped is what a hidden page must do to it.
+          this.mic_track = {stopped: false, stop() { this.stopped = true; }};
+          this.localParticipant = {trackPublications: new Map(), setMicrophoneEnabled: async on => {
+            room.mic = on; if (on) room.localParticipant.trackPublications.set('mic', {track: room.mic_track}); }, setScreenShareEnabled: async () => {}};
+          window.__rooms.push(this); }
         on() { return this; }
         async connect(url, token) { this.token = token; await new Promise(r => setTimeout(r, 200)); }
         disconnect() { this.gone = true; }
@@ -212,6 +218,11 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
       messages: [{...msg('x1', 1, 'human:bea', 'Morning.'), thread_id: tl[1]}]});
     const one = p.match(/^\/api\/v2\/threads\/([^/]+)\/read$/);
     if (one) { seen.reads.push(one[1]); seen.readSeqs.push(one[1] + ':' + JSON.parse(req.postData() || '{}').seq); return json({ok: true}); }
+    if (callMade && method === 'POST' && /^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) {
+      seen.calls.push('start:' + callMade.id);
+      await new Promise(r => setTimeout(r, startWait));
+      return json({call: callMade});
+    }
     if (/^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) return callsOff && method === 'POST' ? json({error: {code: 'meet_unavailable'}}, 503) : json({calls: [], next_before: null, available: !callsOff});
     const settings = p.match(/^\/api\/v2\/threads\/([^/]+)$/);
     if (settings && method === 'PATCH') {
@@ -249,6 +260,7 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
     const call = p.match(/^\/api\/v2\/calls\/([^/]+)\/(join|leave|end|token)$/);
     if (call) {
       seen.calls.push(call[2] + ':' + call[1]);
+      if (call[2] === 'join' && joinRefused) return json({error: {code: 'call_access_removed'}}, 403);
       if (call[2] === 'join') { await new Promise(r => setTimeout(r, 150)); return json({token: 'tok-' + call[1], url: 'wss://meet.acme.example', call: {id: call[1], connector: 'human:ana'}}); }
       if (call[2] === 'end') return json({error: {code: 'internal', detail: 'Could not end'}}, 500);
       return json({ok: true});
@@ -471,6 +483,64 @@ let browser = null;
     await page.locator('#call-bar [data-cb="leave"]').click();
     await page.waitForFunction(() => !document.querySelector('#call-bar'));
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+
+    // The desktop app hides the page to show another org's (window.ticoPageHidden; no pagehide comes then): a live
+    // call stops its microphone and leaves at once, and a join still on its way never turns the microphone on.
+    assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: false});
+    await page.evaluate(() => { window.__rooms.length = 0; void callJoin('t-plan', {id: 'c3'}, 'C').catch(() => {}); });
+    await page.waitForFunction(() => window.__rooms.some(r => r.mic));
+    assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: true});
+    assert.deepEqual(await page.evaluate(() => window.__rooms.map(r => ({stopped: r.mic_track.stopped, gone: r.gone}))), [{stopped: true, gone: true}]);
+    assert.equal(await page.locator('#call-bar').count(), 0, 'the call bar goes with the call');
+    for (let i = 0; i < 20 && !seen.calls.includes('leave:c3'); i++) await page.waitForTimeout(50);
+    assert.ok(seen.calls.includes('leave:c3'), 'the hidden page gives its seat back');
+    for (const wait of [0, 260]) {      // still joining on the server, then connecting to the room
+      await page.evaluate(() => { window.__rooms.length = 0; window.__joining = callJoin('t-plan', {id: 'c4'}, 'D').catch(() => {}); });
+      await page.waitForTimeout(wait);
+      assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: true}, 'a join on its way counts as in a call');
+      await page.evaluate(() => window.__joining);
+      await page.waitForTimeout(250);
+      assert.deepEqual(await page.evaluate(() => window.__rooms.map(r => ({mic: r.mic, gone: r.gone}))), wait ? [{mic: false, gone: true}] : [],
+        'no microphone after the page went hidden');
+      assert.equal(await page.locator('#call-bar').count(), 0);
+    }
+    assert.equal(seen.calls.filter(c => c === 'leave:c4').length, 2, 'each overtaken join gives its seat back: ' + seen.calls);
+    // Hidden while Start call is still making the call: in a call already, the call made is never joined, and the seat
+    // creation gave goes back.
+    callMade = {id: 'c5', state: 'live', connector: 'human:ana'};
+    await page.evaluate(() => { window.__rooms.length = 0; window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'); });
+    for (let i = 0; i < 20 && !seen.calls.includes('start:c5'); i++) await page.waitForTimeout(25);
+    assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: true}, 'a call being made counts as in a call');
+    await page.evaluate(() => window.__starting);
+    await page.waitForTimeout(450);
+    assert.ok(!seen.calls.includes('join:c5'), 'the call made while hidden is not joined: ' + seen.calls);
+    assert.equal(seen.calls.filter(c => c === 'leave:c5').length, 1, 'the call made while hidden gives its seat back: ' + seen.calls);
+    assert.deepEqual(await page.evaluate(() => window.__rooms.length), 0);
+    assert.equal(await page.locator('#call-bar').count(), 0);
+    // A join the server refuses still says so: Start call's own join number is the one the join checks.
+    callMade = {id: 'c6', state: 'live', connector: 'human:ana'}; joinRefused = true;
+    await page.evaluate(() => callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'));
+    assert.ok(seen.calls.includes('join:c6'), 'the call made is joined: ' + seen.calls);
+    await page.locator('.thv-call-note', {hasText: 'Removed from call'}).waitFor();
+    await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); CALL_THREADS.set('t-plan', {...CALL_THREADS.get('t-plan'), removed: false}); thvDraw(v); });
+    callMade = null; joinRefused = false;
+    // Start call still on its way, the call's start redraws the header to Join, and Join gets in first: when Start
+    // answers, its cleanup leaves that seat alone and the call stays connected.
+    callMade = {id: 'c7', state: 'live', connector: 'human:ana'}; startWait = 800;
+    await page.evaluate(() => { window.__rooms.length = 0; window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'); });
+    for (let i = 0; i < 20 && !seen.calls.includes('start:c7'); i++) await page.waitForTimeout(25);
+    await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); CALL_THREADS.set('t-plan', {...CALL_THREADS.get('t-plan'), call: {id: 'c7', state: 'live'}}); thvDraw(v); });
+    await page.locator('.thv-call[data-call="join"]').first().click();
+    await page.waitForFunction(() => CALL?.id === 'c7' && window.__rooms.some(r => r.mic));
+    await page.evaluate(() => window.__starting);
+    await page.waitForTimeout(150);
+    assert.ok(!seen.calls.includes('leave:c7'), 'the Join that got in first keeps its seat: ' + seen.calls);
+    assert.equal(seen.calls.filter(c => c === 'join:c7').length, 1, 'Start call does not join again: ' + seen.calls);
+    assert.deepEqual(await page.evaluate(() => [CALL?.id, window.__rooms.filter(r => !r.gone).length]), ['c7', 1], 'the call stays connected');
+    assert.equal(await page.locator('#call-bar').count(), 1);
+    await page.locator('#call-bar [data-cb="leave"]').click();
+    await page.waitForFunction(() => !document.querySelector('#call-bar'));
+    callMade = null; startWait = 150;
 
     // An older sub-thread opened by its link keeps the way back, and reads flat too.
     await page.goto('https://tico-ui.test/#/thread/t-sub');
