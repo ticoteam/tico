@@ -2,7 +2,7 @@
 //! follows, the window frame kept between launches, and the page's eval and reload.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 #[cfg(not(target_os = "linux"))]
 use std::sync::Mutex;
@@ -475,7 +475,7 @@ fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<bool
         let sign_in = if on_screen { list.take_sign_in(&home.id) } else { list.get(&home.id).is_some_and(|org| org.sign_in) };
         let last = list.get(&home.id).and_then(|org| org.last_url.clone());
         // A new page has captured nothing yet.
-        state.capturing.lock().unwrap().remove(&home.id);
+        state.capture.lock().unwrap().remove(&home.id);
         (sign_in, last)
     };
     let start = opening_page(config.start_url(), &home.hub, sign_in, last.as_deref());
@@ -493,7 +493,12 @@ fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<bool
         .initialization_script(&bridge_script(app))
         .on_new_window(new_window_handler(app, home.clone(), true))
         .on_navigation(navigate)
-        .on_page_load(move |_, payload| page(payload));
+        .on_page_load(move |webview, payload| {
+            if payload.event() == PageLoadEvent::Started {
+                close_if_kept(&webview);
+            }
+            page(payload)
+        });
     #[cfg(target_os = "macos")]
     {
         if let Some(store) = home.store {
@@ -598,6 +603,11 @@ impl Kept {
         self.pages.iter().any(|page| page.org == id)
     }
 
+    /// Whether `id`'s page is still hidden since the hiding with `ticket`.
+    pub(crate) fn holds(&self, id: &str, ticket: u64) -> bool {
+        self.pages.iter().any(|page| page.org == id && page.ticket == ticket)
+    }
+
     /// `id`'s close with `ticket` is due: whether the page is still hidden since that hiding (it goes now), not shown
     /// or hidden again meanwhile.
     pub(crate) fn expire(&mut self, id: &str, ticket: u64) -> bool {
@@ -690,25 +700,28 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
     // one was removed) goes on to be shown, and the connection with it.
     if let (true, true, true, Some(page)) = (was_open, showing, connected, &live) {
         layout_page(app, page);
-        show_page(page);
+        let _ = page.show();
         timing::finish(app, id, "already open");
         refresh_chrome(app);
         return Ok(());
     }
-    // The page on screen as the switch begins: kept hidden from here on, unless it is in a call, which ends and
-    // closes it (`ending`). Told now, before the next page shows: its call stops sending at once (`HIDE_PAGE`).
-    let (outgoing, ending) = {
+    // The page on screen as the switch begins: kept hidden from here on, unless it may be capturing (`keeps`), when
+    // it closes instead (`ending`), its microphone and camera stopped first. Told now, before the next page shows, so
+    // its own call ends cleanly (`HIDE_PAGE`).
+    let leaving = {
         let shown = state.shown.lock().unwrap();
         let kept = state.kept.lock().unwrap();
-        let capturing = state.capturing.lock().unwrap();
-        leaving_page(outgoing_page(&shown, &kept, id), &capturing)
+        outgoing_page(&shown, &kept, id)
     };
-    let leaving = outgoing.as_deref().or(ending.as_deref()).and_then(|other| org_page(app, other));
-    if let Some(page) = &leaving {
+    let leaving_page = leaving.as_deref().and_then(|other| org_page(app, other));
+    if let Some(page) = &leaving_page {
         let _ = page.eval(HIDE_PAGE);
     }
-    // A switch that fails leaves that page on screen, where it may capture again.
-    let stay = || if let Some(page) = &leaving { show_page(page) };
+    let keep = leaving_page.as_ref().is_none_or(|page| {
+        let note = leaving.as_deref().and_then(|other| state.capture.lock().unwrap().get(other).copied()).unwrap_or_default();
+        keeps(native_capture_now(page), note)
+    });
+    let (outgoing, ending) = if keep { (leaving, None) } else { (None, leaving) };
     if main_window(app).is_none() {
         // The window opens on the open org, so the org is made the open one first, and put back if that fails.
         state.orgs.lock().unwrap().set_active(id);
@@ -717,13 +730,12 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
             if let Some(previous) = &previous {
                 state.orgs.lock().unwrap().set_active(&previous.id);
             }
-            stay();
             return Err(e);
         }
         show_when_painted(app);
     } else if let Some(page) = &live {
         layout_page(app, page);
-        show_page(page);
+        let _ = page.show();
         let _ = page.set_focus();
         // The flag is used up only by a page that went to the hub's sign-in with it: a prefetch built on it. A kept
         // page used it up when it was first shown (it is never the prefetch: see `prefetch`).
@@ -732,7 +744,6 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
         }
     } else if let Err(e) = open_org_webview(app, &org, true) {
         log::warn!("could not open an org's page, so the open org stays: {e}");
-        stay();
         return Err(e);
     }
     state.orgs.lock().unwrap().set_active(id);
@@ -765,8 +776,8 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
         } else if ending.as_deref() == Some(other) {
             remember_place(app, other, &page);
             let _ = page.close();
-            state.capturing.lock().unwrap().remove(other);
-            log::info!("org page {other} closed: it was in a call");
+            state.capture.lock().unwrap().remove(other);
+            log::info!("org page {other} closed: it may be capturing");
         } else {
             let _ = page.hide();
         }
@@ -785,34 +796,152 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
 }
 
 /// What the page on screen runs as a switch away begins: its own leave (`window.ticoPageHidden`, which ends a call
-/// and a join on its way: ui/app/thread-call.js), then every capture track stops whatever the page's version
-/// (`__ticoCapture`, bridge::CAPTURE_SCRIPT), and media it was playing pauses: it is no longer on screen.
+/// and a join on its way: ui/app/thread-call.js), and media it was playing pauses: it is no longer on screen. Only
+/// for a clean leave: whether the page is then kept is `keeps`, which does not trust the page.
 const HIDE_PAGE: &str = "try { window.ticoPageHidden && window.ticoPageHidden(); } catch (e) {}\n\
-    try { window.__ticoCapture && window.__ticoCapture.hide(); } catch (e) {}\n\
     document.querySelectorAll('video, audio').forEach(m => { try { m.pause(); } catch (e) {} });";
 
-/// Shows a page, which may capture again (see `HIDE_PAGE`).
-fn show_page(page: &Webview) {
-    let _ = page.eval("try { window.__ticoCapture && window.__ticoCapture.show(); } catch (e) {}");
-    let _ = page.show();
+/// How often a kept page is checked for capture while hidden.
+const WATCH_EVERY: Duration = Duration::from_secs(1);
+/// The longest a capture check waits for WebKit's answer: no answer counts as capturing.
+#[cfg(target_os = "macos")]
+const CAPTURE_ANSWER: Duration = Duration::from_secs(1);
+
+/// What a page's own webview says about its microphone and camera. Each platform builds only some of these.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum Native {
+    /// Neither is captured, nor muted.
+    Idle,
+    /// One is captured or muted: both were stopped as this was asked.
+    Capturing,
+    /// No answer in time, or the webview is gone.
+    Unknown,
+    /// This platform's webview cannot tell (Linux, Windows).
+    Unsupported,
 }
 
-/// The page left by a switch (`outgoing`), as (kept, ending): one whose page says it is capturing (a call) is not
-/// kept but closed, so its microphone and screen go with it.
-pub(crate) fn leaving_page(outgoing: Option<String>, capturing: &HashSet<String>) -> (Option<String>, Option<String>) {
-    match outgoing {
-        Some(other) if capturing.contains(&other) => (None, Some(other)),
-        outgoing => (outgoing, None),
+/// What a page said about its capture (bridge `capture`) since its page was built: a hint only, which a page can get
+/// around.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CaptureNote {
+    pub(crate) live: bool,
+    pub(crate) ever: bool,
+    /// It asked to share its screen, which WebKit does not tell the shell about.
+    pub(crate) display: bool,
+}
+
+/// Whether a page left by a switch, or kept since one, stays kept: only when nothing says it may be capturing. On
+/// macOS WebKit's own answer decides for the microphone and camera, and a page that ever said it asked to share its
+/// screen (which WebKit cannot tell) is closed. Elsewhere a page that ever said it captured anything is closed.
+/// Closing is always safe: the page opens again where it was.
+pub(crate) fn keeps(native: Native, note: CaptureNote) -> bool {
+    match native {
+        Native::Idle => !note.display,
+        Native::Unsupported => !(note.live || note.ever || note.display),
+        Native::Capturing | Native::Unknown => false,
     }
 }
 
 /// What org `id`'s page said about its capture (bridge `capture`).
-pub(crate) fn note_capture(capturing: &mut HashSet<String>, id: &str, live: bool) {
-    if live {
-        capturing.insert(id.to_string());
-    } else {
-        capturing.remove(id);
+pub(crate) fn note_capture(notes: &mut HashMap<String, CaptureNote>, id: &str, live: bool, display: bool) {
+    let note = notes.entry(id.to_string()).or_default();
+    note.live = live;
+    note.ever |= live;
+    note.display |= display;
+}
+
+/// Asks `page`'s WKWebView whether it captures the microphone or camera (captured or muted), stopping both if so,
+/// and calls `answer` with that, on the main thread. Answers whether the question went.
+#[cfg(target_os = "macos")]
+fn ask_capture(page: &Webview, answer: impl FnOnce(bool) + Send + 'static) -> bool {
+    use objc2_web_kit::{WKMediaCaptureState, WKWebView};
+    page.with_webview(move |platform| unsafe {
+        // `inner` is the page's live WKWebView while this closure runs, lent by the runtime. Both states are
+        // macOS 12+; the app needs 14.
+        let view = &*platform.inner().cast::<WKWebView>();
+        let on = view.microphoneCaptureState() != WKMediaCaptureState::None || view.cameraCaptureState() != WKMediaCaptureState::None;
+        if on {
+            view.setMicrophoneCaptureState_completionHandler(WKMediaCaptureState::None, None);
+            view.setCameraCaptureState_completionHandler(WKMediaCaptureState::None, None);
+        }
+        answer(on);
+    }).is_ok()
+}
+
+/// `page`'s capture, waiting here for WebKit's answer (never on the main thread, which gives it).
+fn native_capture_now(page: &Webview) -> Native {
+    #[cfg(target_os = "macos")]
+    {
+        let (sender, answer) = std::sync::mpsc::channel();
+        if !ask_capture(page, move |on| { let _ = sender.send(on); }) {
+            return Native::Unknown;
+        }
+        match answer.recv_timeout(CAPTURE_ANSWER) {
+            Ok(true) => Native::Capturing,
+            Ok(false) => Native::Idle,
+            Err(_) => Native::Unknown,
+        }
     }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = page;
+        Native::Unsupported
+    }
+}
+
+/// `page`'s capture, for a task.
+async fn native_capture(page: &Webview) -> Native {
+    #[cfg(target_os = "macos")]
+    {
+        let (sender, answer) = tokio::sync::oneshot::channel();
+        if !ask_capture(page, move |on| { let _ = sender.send(on); }) {
+            return Native::Unknown;
+        }
+        match tokio::time::timeout(CAPTURE_ANSWER, answer).await {
+            Ok(Ok(true)) => Native::Capturing,
+            Ok(Ok(false)) => Native::Idle,
+            _ => Native::Unknown,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = page;
+        Native::Unsupported
+    }
+}
+
+/// A kept page started a new document while hidden (a reload, or a navigation of its own): it closes, as a page
+/// hidden from the person never starts over unseen. On a task, under `changing` as every close is (the main thread,
+/// which this is called on, never waits for it); a page shown again meanwhile stays.
+fn close_if_kept(page: &Webview) {
+    let Some(id) = org_of(page.label()).map(str::to_string) else { return };
+    let app = page.app_handle().clone();
+    if !app.state::<AppState>().kept.lock().unwrap().contains(&id) {
+        return;
+    }
+    let label = page.label().to_string();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let _changing = state.changing.lock().unwrap();
+        let Some(page) = org_page(&app, &id).filter(|page| page.label() == label) else { return };
+        if !forget_reloaded(&mut state.shown.lock().unwrap(), &mut state.kept.lock().unwrap(), &id) {
+            return;
+        }
+        let _ = page.close();
+        state.capture.lock().unwrap().remove(&id);
+        log::info!("org page {id} closed: it loaded again while hidden");
+    });
+}
+
+/// `close_if_kept`'s bookkeeping: whether `id`'s page is still kept, and if so it is counted no longer.
+pub(crate) fn forget_reloaded(shown: &mut Vec<String>, kept: &mut Kept, id: &str) -> bool {
+    if !kept.contains(id) {
+        return false;
+    }
+    kept.forget(id);
+    shown.retain(|shown| shown != id);
+    true
 }
 
 /// Closes org `id`'s kept page `KEEP_FOR` after it went hidden (`ticket`), unless it was shown (or hidden again,
@@ -820,7 +949,25 @@ pub(crate) fn note_capture(capturing: &mut HashSet<String>, id: &str, live: bool
 fn close_later(app: &App, id: String, ticket: u64) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(KEEP_FOR).await;
+        // Checked every `WATCH_EVERY` meanwhile: a page that captures while hidden (a join that finishes, or a page
+        // that gets around its own leave) has its microphone and camera stopped, and closes at once.
+        let mut waited = Duration::ZERO;
+        let why = loop {
+            if waited >= KEEP_FOR {
+                break format!("hidden for {} s", KEEP_FOR.as_secs());
+            }
+            tokio::time::sleep(WATCH_EVERY).await;
+            waited += WATCH_EVERY;
+            let state = app.state::<AppState>();
+            if !state.kept.lock().unwrap().holds(&id, ticket) {
+                return;
+            }
+            let Some(page) = org_page(&app, &id) else { return };
+            let note = state.capture.lock().unwrap().get(&id).copied().unwrap_or_default();
+            if !keeps(native_capture(&page).await, note) {
+                break "it may be capturing".to_string();
+            }
+        };
         let state = app.state::<AppState>();
         let _changing = state.changing.lock().unwrap();
         // Checked before anything changes. The open org's page is never closed here: one still kept as it became the
@@ -833,8 +980,8 @@ fn close_later(app: &App, id: String, ticket: u64) {
         if let Some(page) = org_page(&app, &id) {
             remember_place(&app, &id, &page);
             let _ = page.close();
-            state.capturing.lock().unwrap().remove(&id);
-            log::info!("org page {id} closed: hidden for {} s", KEEP_FOR.as_secs());
+            state.capture.lock().unwrap().remove(&id);
+            log::info!("org page {id} closed: {why}");
         }
     });
 }
@@ -1065,7 +1212,7 @@ pub(crate) fn forget_page(app: &App, id: &str) {
     if forget_org(&mut state.shown.lock().unwrap(), &mut state.kept.lock().unwrap(), &mut prefetch, id) {
         *state.parked_visual.lock().unwrap() = None;
     }
-    state.capturing.lock().unwrap().remove(id);
+    state.capture.lock().unwrap().remove(id);
 }
 
 /// `forget_page`'s bookkeeping: answers whether `id` was the prefetch, whose allowance then goes too.
@@ -1166,15 +1313,16 @@ mod page_tests {
     /// A switch as `switch_to` keeps its books: the page on screen goes hidden, `id`'s is shown (its close off), and
     /// pages past the cap go. Answers the pages to close now and the hidden page with its close's ticket.
     fn switch(shown: &mut Vec<String>, kept: &mut Kept, id: &str) -> (Vec<String>, Option<(String, u64)>) {
-        let (gone, hidden, ending) = switch_from_calls(shown, kept, &HashSet::new(), id);
+        let (gone, hidden, ending) = switch_keeping(shown, kept, true, id);
         assert_eq!(ending, None);
         (gone, hidden)
     }
 
-    /// `switch_to`'s bookkeeping, with the orgs whose pages say they are capturing: (gone, kept, ending).
-    fn switch_from_calls(shown: &mut Vec<String>, kept: &mut Kept, capturing: &HashSet<String>, id: &str)
+    /// `switch_to`'s bookkeeping, with whether the page left is kept (`keeps`): (gone, kept, ending).
+    fn switch_keeping(shown: &mut Vec<String>, kept: &mut Kept, keep: bool, id: &str)
         -> (Vec<String>, Option<(String, u64)>, Option<String>) {
-        let (outgoing, ending) = leaving_page(outgoing_page(shown, kept, id), capturing);
+        let leaving = outgoing_page(shown, kept, id);
+        let (outgoing, ending) = if keep { (leaving, None) } else { (None, leaving) };
         kept.show(id);
         let hidden = outgoing.map(|other| { let ticket = kept.hide(&other, None); (other, ticket) });
         if let Some(other) = &ending {
@@ -1184,35 +1332,61 @@ mod page_tests {
     }
 
     #[test]
-    fn a_page_in_a_call_is_closed_by_a_switch_away_not_kept() {
-        let (mut shown, mut kept, mut capturing) = (Vec::new(), Kept::default(), HashSet::new());
-        switch_from_calls(&mut shown, &mut kept, &capturing, "a");
-        // A's page starts a call (its microphone is on), and the switch to B closes it rather than keep it.
-        note_capture(&mut capturing, "a", true);
-        let (gone, hidden, ending) = switch_from_calls(&mut shown, &mut kept, &capturing, "b");
-        assert_eq!((gone, hidden, ending.as_deref()), (vec![], None, Some("a")));
-        assert!(!kept.contains("a") && kept.pages.is_empty());
-        assert_eq!(shown, order(&["b"]), "a closed page is not counted against the cap");
-        // Back to A opens a new page; once B's call has ended (its page says so), B is kept as usual.
-        capturing.remove("a");
-        note_capture(&mut capturing, "b", true);
-        note_capture(&mut capturing, "b", false);
-        let (gone, hidden, ending) = switch_from_calls(&mut shown, &mut kept, &capturing, "a");
-        assert!(gone.is_empty() && ending.is_none() && hid(hidden).as_deref() == Some("b") && kept.contains("b"));
-        // Only the page left matters: another org's call does not close it.
-        note_capture(&mut capturing, "c", true);
-        assert_eq!(leaving_page(Some("a".into()), &capturing), (Some("a".into()), None));
-        assert_eq!(leaving_page(None, &capturing), (None, None));
+    fn only_a_page_nothing_says_is_capturing_is_kept() {
+        let idle = CaptureNote::default();
+        let mut notes = HashMap::new();
+        // macOS: WebKit's answer decides for the microphone and camera, whatever the page said.
+        assert!(keeps(Native::Idle, idle));
+        note_capture(&mut notes, "a", true, false);
+        assert!(keeps(Native::Idle, notes["a"]), "a page that says it captures, where WebKit says it does not");
+        assert!(!keeps(Native::Capturing, idle), "a page that got around its own report");
+        assert!(!keeps(Native::Unknown, idle), "no answer in time closes");
+        // A screen share, which WebKit cannot tell: asked for once, the page is never kept.
+        note_capture(&mut notes, "b", false, true);
+        note_capture(&mut notes, "b", false, false);
+        assert_eq!(notes["b"], CaptureNote { live: false, ever: false, display: true });
+        assert!(!keeps(Native::Idle, notes["b"]));
+        // Elsewhere: a page that ever captured anything is closed, even after its call ended.
+        assert!(keeps(Native::Unsupported, idle));
+        note_capture(&mut notes, "a", false, false);
+        assert_eq!(notes["a"], CaptureNote { live: false, ever: true, display: false });
+        assert!(!keeps(Native::Unsupported, notes["a"]));
+        assert!(!keeps(Native::Unsupported, notes["b"]));
     }
 
     #[test]
-    fn the_page_left_ends_its_call_and_stops_capture_whatever_its_version() {
-        // Its own leave, then the shell's stop for any capture track whatever the page's version, then media.
-        let leave = HIDE_PAGE.find("window.ticoPageHidden()").unwrap();
-        let stop = HIDE_PAGE.find("window.__ticoCapture.hide()").unwrap();
-        assert!(leave < stop && HIDE_PAGE.contains("m.pause()"));
-        // Each step runs even when one before it throws.
-        assert_eq!(HIDE_PAGE.matches("try {").count(), 3);
+    fn a_page_that_may_be_capturing_is_closed_by_a_switch_away_not_kept() {
+        let (mut shown, mut kept) = (Vec::new(), Kept::default());
+        switch_keeping(&mut shown, &mut kept, true, "a");
+        let (gone, hidden, ending) = switch_keeping(&mut shown, &mut kept, false, "b");
+        assert_eq!((gone, hidden, ending.as_deref()), (vec![], None, Some("a")));
+        assert!(!kept.contains("a") && kept.pages.is_empty());
+        assert_eq!(shown, order(&["b"]), "a closed page is not counted against the cap");
+        // Back to A opens a new page; B, capturing nothing, is kept as usual.
+        let (gone, hidden, ending) = switch_keeping(&mut shown, &mut kept, true, "a");
+        assert!(gone.is_empty() && ending.is_none() && hid(hidden.clone()).as_deref() == Some("b") && kept.contains("b"));
+        // While kept, its close checks it is still that hiding.
+        let ticket = hidden.unwrap().1;
+        assert!(kept.holds("b", ticket) && !kept.holds("b", ticket + 1) && !kept.holds("a", ticket));
+    }
+
+    #[test]
+    fn a_kept_page_that_loads_again_while_hidden_is_closed() {
+        let (mut shown, mut kept) = (Vec::new(), Kept::default());
+        switch(&mut shown, &mut kept, "a");
+        switch(&mut shown, &mut kept, "b");
+        assert!(forget_reloaded(&mut shown, &mut kept, "a"));
+        assert!(!kept.contains("a") && shown == order(&["b"]));
+        // The open page, or one shown again before the close ran, stays.
+        assert!(!forget_reloaded(&mut shown, &mut kept, "b"));
+        assert_eq!(shown, order(&["b"]));
+    }
+
+    #[test]
+    fn the_page_left_runs_its_own_leave_and_nothing_it_could_undo() {
+        assert!(HIDE_PAGE.contains("window.ticoPageHidden()") && HIDE_PAGE.contains("m.pause()"));
+        assert!(!HIDE_PAGE.contains("__tico"), "no page-reachable switch for capture");
+        assert_eq!(HIDE_PAGE.matches("try {").count(), 2);
     }
 
     fn hid(hidden: Option<(String, u64)>) -> Option<String> {

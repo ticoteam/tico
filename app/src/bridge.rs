@@ -36,41 +36,38 @@ const ORG_SCRIPT: &str = r#"
 })();
 "#;
 
-/// The microphone, camera and screen a page captures, as this shell sees them whatever the page's version: the page
-/// says `capture` ({live}) when it starts or stops sending any, so a switch away closes a page in a call rather
-/// than keep it hidden; `window.__ticoCapture.hide()`, which a switch away runs, stops every capture track at once,
-/// and refuses new ones until `show()`, so a join that finishes while hidden turns nothing on.
+/// What a page captures, as it says (`capture`: {live, display}) whatever the page's version: whether it is sending a
+/// microphone, camera or screen now, and whether it ever shared its screen. Only a hint, which a page can get around:
+/// the keep-or-close rule at a switch asks WebKit itself on macOS (windows::native_capture), and closes a page that
+/// ever shared its screen, which WebKit cannot tell; elsewhere a page that ever captured anything is closed.
 const CAPTURE_SCRIPT: &str = r#"
 (() => {
-  const media = navigator.mediaDevices, Track = window.MediaStreamTrack;
-  if (!media || !Track || !window.__TAURI__ || !window.__TAURI__.core || window.__ticoCapture) return;
+  const Media = window.MediaDevices, Track = window.MediaStreamTrack;
+  if (!Media || !Track || !window.__TAURI__ || !window.__TAURI__.core) return;
   const invoke = window.__TAURI__.core.invoke;
   const live = new Set();
-  let hidden = false, said = false;
+  let said = '', display = false;
   const say = () => {
     for (const track of live) if (track.readyState !== 'live') live.delete(track);
-    if ((live.size > 0) === said) return;
-    said = live.size > 0;
-    invoke('bridge', {name: 'capture', body: {live: said}}).catch(() => {});
+    const now = JSON.stringify({live: live.size > 0, display});
+    if (now === said) return;
+    said = now;
+    invoke('bridge', {name: 'capture', body: JSON.parse(now)}).catch(() => {});
   };
   const stop = Track.prototype.stop, clone = Track.prototype.clone;
   const watch = track => { live.add(track); track.addEventListener('ended', say); return track; };
-  const end = () => { for (const track of live) { try { stop.call(track); } catch (e) {} } say(); };
   Track.prototype.stop = function () { stop.call(this); if (live.has(this)) say(); };
   Track.prototype.clone = function () { const copy = clone.call(this); if (live.has(this)) watch(copy); return copy; };
   for (const name of ['getUserMedia', 'getDisplayMedia']) {
-    const ask = media[name];
+    const ask = Media.prototype[name];
     if (typeof ask !== 'function') continue;
-    media[name] = function (...args) {
-      if (hidden) return Promise.reject(new DOMException('The page is not on screen', 'NotAllowedError'));
-      return ask.apply(this, args).then(stream => {
-        stream.getTracks().forEach(watch);
-        if (hidden) end(); else say();
-        return stream;
-      });
+    const wrapped = function (...args) {
+      if (name === 'getDisplayMedia') { display = true; say(); }
+      return ask.apply(this, args).then(stream => { stream.getTracks().forEach(watch); say(); return stream; });
     };
+    Media.prototype[name] = wrapped;
+    if (navigator.mediaDevices && Object.prototype.hasOwnProperty.call(navigator.mediaDevices, name)) navigator.mediaDevices[name] = wrapped;
   }
-  Object.defineProperty(window, '__ticoCapture', {value: Object.freeze({hide() { hidden = true; end(); }, show() { hidden = false; }})});
 })();
 "#;
 
@@ -216,8 +213,8 @@ pub(crate) fn bridge(app: App, webview: Webview, name: String, body: Option<Valu
         }
         // The page started or stopped sending a microphone, camera or screen (CAPTURE_SCRIPT).
         "capture" => {
-            let live = body.as_ref().and_then(|b| b.get("live")).and_then(Value::as_bool).unwrap_or(false);
-            crate::windows::note_capture(&mut app.state::<AppState>().capturing.lock().unwrap(), &caller, live);
+            let flag = |name: &str| body.as_ref().and_then(|b| b.get(name)).and_then(Value::as_bool).unwrap_or(false);
+            crate::windows::note_capture(&mut app.state::<AppState>().capture.lock().unwrap(), &caller, flag("live"), flag("display"));
         }
         // The org menu, at the page's point. It lists the shell's own orgs; the page is told nothing back.
         "showOrgMenu" => if orgs::multi_org_build() { popup_orgs(&app) },
@@ -668,10 +665,10 @@ mod visual_bridge_tests {
     }
 
     #[test]
-    fn every_page_reports_its_capture_and_stops_it_when_hidden() {
+    fn every_page_reports_its_capture() {
         for several in [false, true] {
             let script = script_for("0.5.0", several);
-            assert!(script.contains("name: 'capture'") && script.contains("__ticoCapture"));
+            assert!(script.contains("name: 'capture'") && !script.contains("__ticoCapture"), "nothing the page can call to switch it off");
             assert!(script.contains("'getUserMedia', 'getDisplayMedia'"));
         }
     }

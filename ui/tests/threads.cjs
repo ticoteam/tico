@@ -106,6 +106,8 @@ const homes = {'bot:ops': 'h-ops', 'human:bea': 'h-bea', 'human:cy': 'h-cy', 'hu
 // What a block below changes for the pages it opens: DM rows as the server sends them, a server with calls off, and
 // one without the rail (GET /v2/threads/rail answers 404).
 let dmRows = null, callsOff = false, railOff = false, threadsOff = false, threadsGate = null;
+// Start call as the server answers it: the call it makes (after a moment), or none.
+let callMade = null;
 async function open(browser, who, {phone = false, sse = null} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
@@ -216,6 +218,11 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
       messages: [{...msg('x1', 1, 'human:bea', 'Morning.'), thread_id: tl[1]}]});
     const one = p.match(/^\/api\/v2\/threads\/([^/]+)\/read$/);
     if (one) { seen.reads.push(one[1]); seen.readSeqs.push(one[1] + ':' + JSON.parse(req.postData() || '{}').seq); return json({ok: true}); }
+    if (callMade && method === 'POST' && /^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) {
+      seen.calls.push('start:' + callMade.id);
+      await new Promise(r => setTimeout(r, 150));
+      return json({call: callMade});
+    }
     if (/^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) return callsOff && method === 'POST' ? json({error: {code: 'meet_unavailable'}}, 503) : json({calls: [], next_before: null, available: !callsOff});
     const settings = p.match(/^\/api\/v2\/threads\/([^/]+)$/);
     if (settings && method === 'PATCH') {
@@ -497,6 +504,17 @@ let browser = null;
       assert.equal(await page.locator('#call-bar').count(), 0);
     }
     assert.equal(seen.calls.filter(c => c === 'leave:c4').length, 2, 'each overtaken join gives its seat back: ' + seen.calls);
+    // Hidden while Start call is still making the call: in a call already, and the call made is never joined.
+    callMade = {id: 'c5', state: 'live', connector: 'human:ana'};
+    await page.evaluate(() => { window.__rooms.length = 0; window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'); });
+    for (let i = 0; i < 20 && !seen.calls.includes('start:c5'); i++) await page.waitForTimeout(25);
+    assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: true}, 'a call being made counts as in a call');
+    await page.evaluate(() => window.__starting);
+    await page.waitForTimeout(450);
+    assert.ok(!seen.calls.includes('join:c5'), 'the call made while hidden is not joined: ' + seen.calls);
+    assert.deepEqual(await page.evaluate(() => window.__rooms.length), 0);
+    assert.equal(await page.locator('#call-bar').count(), 0);
+    callMade = null;
 
     // An older sub-thread opened by its link keeps the way back, and reads flat too.
     await page.goto('https://tico-ui.test/#/thread/t-sub');

@@ -56,16 +56,24 @@ function callHeadHTML(view) {
 }
 async function callAction(view, kind) {
   const id = view.id, info = CALL_THREADS.get(id) || {};
+  // Counted as a join on its way from the click, so a page hidden while the call is being made says it is in one,
+  // and never joins the call once it is made.
+  const gen = ++CALL_GEN;
+  CALL_JOINS++;
   try {
     let call = info.call;
     if (kind === 'start') {
       call = await post(`/v2/threads/${encodeURIComponent(id)}/calls`, {});
       call = call?.call || call;
     }
+    if (gen !== CALL_GEN) return;
     if (call?.id) await callJoin(id, call, threadTitle(view.thread));
   } catch (e) {
+    if (gen !== CALL_GEN) return;
     if (callCode(e) === 'call_in_progress') { void callLoad(view); toast('A call already started here'); return; }
     callNoted(id, e);
+  } finally {
+    CALL_JOINS--;
   }
 }
 
