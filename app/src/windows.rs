@@ -132,6 +132,11 @@ mod capability_tests {
         let other: tauri::utils::acl::RemoteUrlPattern = b["remote"]["urls"][0].as_str().unwrap().parse().unwrap();
         assert!(own.test(&acme) && !own.test(&tidy));
         assert!(other.test(&tidy) && !other.test(&acme));
+        // No core permissions: they let a page listen to app events (Tauri delivers targeted events to listeners on
+        // any target) and list every window and webview, which name the other orgs.
+        let permissions: Vec<&str> = a["permissions"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(permissions.iter().all(|p| !p.starts_with("core:")), "{permissions:?}");
+        assert!(permissions.contains(&"allow-bridge") && permissions.contains(&"dialog:allow-confirm"));
     }
 
     #[test]
@@ -291,6 +296,7 @@ fn grant_org(app: &App, home: &Home) -> tauri::Result<()> {
 /// so the two never run at once. No restart and no new sign-in: the org's own store keeps its sign-in.
 pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
     let state = app.state::<AppState>();
+    let _changing = state.changing.lock().unwrap();
     let org = {
         let mut orgs = state.orgs.lock().unwrap();
         if orgs.get(id).is_none() {
@@ -552,9 +558,16 @@ fn open_hub_window(app: &App, url: url::Url, home: &Home) {
     }
 }
 
-/// Remembers which org a window belongs to, so removing the org closes it.
+/// Remembers which org a window belongs to, so removing the org closes it. A window built after its org was removed
+/// closes at once: the check and the record happen under the org list's lock, which removal takes first.
 fn owned_by(app: &App, label: &str, org: &str) {
-    app.state::<AppState>().owned.lock().unwrap().push((label.to_string(), org.to_string()));
+    let state = app.state::<AppState>();
+    let list = state.orgs.lock().unwrap();
+    if list.get(org).is_some() {
+        state.owned.lock().unwrap().push((label.to_string(), org.to_string()));
+    } else if let Some(window) = app.get_webview_window(label) {
+        let _ = window.close();
+    }
 }
 
 /// Forgets a window that has closed.

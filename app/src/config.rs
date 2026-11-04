@@ -31,7 +31,7 @@ pub fn validate_url(raw: &str) -> Result<Url, String> {
     Ok(hub)
 }
 
-fn configured_url(raw: &str) -> Result<Url, String> {
+pub fn configured_url(raw: &str) -> Result<Url, String> {
     let mut hub = Url::parse(raw.trim()).map_err(|_| "Enter a full server address, such as https://tico.example.com.")?;
     if hub.host_str().is_none() || !matches!(hub.scheme(), "https" | "http") {
         return Err("Use an HTTP or HTTPS server address.".into());

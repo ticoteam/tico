@@ -39,7 +39,7 @@ pub struct Org {
 impl Org {
     /// The server address, if this app opens it.
     pub fn hub(&self) -> Option<Url> {
-        config::validate_url(&self.url).ok()
+        config::configured_url(&self.url).ok()
     }
 
     /// The org's own web data store, if it has one.
@@ -314,6 +314,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("tico-orgs-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir.join(FILE_NAME)
+    }
+
+    #[test]
+    fn a_saved_http_server_still_opens() {
+        // Saved, built-in and environment addresses keep today's rules; only adding an org asks for HTTPS.
+        let mut org = sample("o_0000000a", "https://acme.example.com/");
+        org.url = "http://team.example.com/".into();
+        assert_eq!(org.hub().unwrap().as_str(), "http://team.example.com/");
+        org.url = "not an address".into();
+        assert!(org.hub().is_none());
     }
 
     #[test]

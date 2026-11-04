@@ -54,6 +54,9 @@ struct AppState {
     owned: Mutex<Vec<(String, String)>>,
     // The orgs whose page capability is granted. Ids are never reused, so a grant never has to be taken back.
     granted: Mutex<HashSet<String>>,
+    // Held while the open org changes or an org goes, so a switch and a removal never interleave. Never taken on
+    // the main thread: a switch waits on it for webview work.
+    pub(crate) changing: Mutex<()>,
 }
 
 impl AppState {
@@ -66,6 +69,7 @@ impl AppState {
             orgs: Mutex::new(orgs),
             owned: Mutex::new(Vec::new()),
             granted: Mutex::new(HashSet::new()),
+            changing: Mutex::new(()),
         }
     }
 }
@@ -284,9 +288,10 @@ fn rail_list(app: &App) -> Value {
     Value::Array(items)
 }
 
-/// Tells the rail that the list changed. Only the rail hears it: an org's page must not learn of the other orgs.
+/// Tells the rail that the list changed. The event carries nothing: Tauri also delivers targeted events to listeners
+/// on any target, so the rail reads the list itself through `rail_orgs`, which only the rail may call.
 fn emit_orgs(app: &App) {
-    let _ = app.emit_to(EventTarget::webview(RAIL), "orgs-changed", rail_list(app));
+    let _ = app.emit_to(EventTarget::webview(RAIL), "orgs-changed", ());
 }
 
 /// The setup window, to add an org: from the rail, the menu, or the bridge. Spawned, as window creation is.
@@ -346,26 +351,36 @@ fn ask_remove(app: &App, org: &Org) {
 async fn remove_org(app: &App, id: &str) {
     let (removed, was_open) = {
         let state = app.state::<AppState>();
-        let mut list = state.orgs.lock().unwrap();
-        let was_open = list.active().is_some_and(|org| org.id == id);
-        let removed = list.remove(id);
+        let _changing = state.changing.lock().unwrap();
+        let (removed, was_open) = {
+            let mut list = state.orgs.lock().unwrap();
+            let was_open = list.active().is_some_and(|org| org.id == id);
+            (list.remove(id), was_open)
+        };
+        for label in take_owned(app, id) {
+            if let Some(window) = app.get_webview_window(&label) {
+                let _ = window.close();
+            }
+        }
+        if let Some(page) = app.get_webview(&org_label(id)) {
+            let _ = page.close();
+        }
         (removed, was_open)
     };
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     let Some(removed) = removed else { return };
-    for label in take_owned(app, id) {
-        if let Some(window) = app.get_webview_window(&label) {
-            let _ = window.close();
-        }
-    }
-    if let Some(page) = app.get_webview(&org_label(id)) {
-        let _ = page.close();
-    }
     #[cfg(target_os = "macos")]
     {
         match removed.store_id() {
             Some(store) => {
-                if let Err(e) = app.remove_data_store(*store.as_bytes()).await {
+                // A page that just closed holds its store for a moment, so try again a few times before clearing.
+                let mut removed_store = app.remove_data_store(*store.as_bytes()).await;
+                for _ in 0..6 {
+                    if removed_store.is_ok() { break; }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    removed_store = app.remove_data_store(*store.as_bytes()).await;
+                }
+                if let Err(e) = removed_store {
                     // The store is still in use: its data is cleared at least, and the list no longer names it.
                     log::warn!("could not delete an org's data store, so clearing it instead: {e}");
                     if let Err(e) = clear_store(app, &removed) { log::warn!("could not clear an org's data store: {e}"); }

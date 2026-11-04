@@ -7,7 +7,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::orgs;
 use crate::windows::{open_meeting_window, org_label, Home};
-use crate::{active_org, add_org, applog, emit_orgs, log_dir, org_count, popup_orgs, update_now, visual_origin, App, AppState, LOG_LINES};
+use crate::{add_org, applog, emit_orgs, log_dir, org_count, popup_orgs, update_now, visual_origin, App, AppState, LOG_LINES};
 
 /// The page's side of the bridge: `window.ticoNative(name).postMessage(body)`, which
 /// `nativeHandler(name)` in ui/app/native.js looks for; `/TicoHub/` in the user agent marks the
@@ -102,7 +102,9 @@ pub(crate) fn bridge(app: App, webview: Webview, name: String, body: Option<Valu
         "openWindow" => {
             // `recording` is what an older page called it.
             let id = body.as_ref().and_then(|b| b.get("meeting").or_else(|| b.get("recording"))).and_then(Value::as_str);
-            if let (Some(id), Some(home)) = (id, active_org(&app).and_then(|org| Home::of(&org))) {
+            // The caller's own org, from its label: a switch since the check must not open it on another org.
+            let caller = webview.label().strip_prefix("org-").and_then(|org| app.state::<AppState>().orgs.lock().unwrap().get(org).cloned());
+            if let (Some(id), Some(home)) = (id, caller.and_then(|org| Home::of(&org))) {
                 open_meeting_window(&app, &home, id);
             }
         }
