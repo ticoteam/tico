@@ -19,6 +19,12 @@ const DATA = {
   '/api/v2/task-types': {types: []},
 };
 const answer = p => p in DATA ? DATA[p] : unrouted(p);
+// PROFILE=real: each read's own time, as a busy hub answers (the slow ones are health and counts); the boot call answers
+// when its slowest part does, at most BUDGET_MS, leaving out a slower part (backend/app.py boot_part_budget).
+const REAL = {'/api/me': 150, '/api/employees': 500, '/api/humans': 300, '/api/status': 900, '/api/v2/status': 400, '/api/v2/needs-you': 600};
+const BUDGET_MS = 800, RTT_MS = 60;
+const real = process.env.PROFILE === 'real';
+const cost = p => real ? (REAL[p] ?? 200) + RTT_MS : API_MS;
 
 async function context(browser) {
   const ctx = await browser.newContext({serviceWorkers: 'block', viewport: {width: 1280, height: 820}});
@@ -39,12 +45,16 @@ async function context(browser) {
       const file = uiFile(p.slice('/tico/ui/'.length));
       if (fs.existsSync(file)) { await wait(FILE_MS); return route.fulfill({path: file}); }
     }
-    await wait(API_MS);
     if (p === '/api/v2/boot') {
+      const parts = ['/api/employees', '/api/me', '/api/humans', '/api/status', '/api/v2/status', '/api/v2/needs-you'];
+      const times = parts.map(r => real ? REAL[r] : API_MS);
+      const kept = parts.filter((_, i) => times[i] <= BUDGET_MS);
+      await wait(Math.min(BUDGET_MS, Math.max(...times)) + (real ? RTT_MS : 0));
       const reads = {};
-      for (const r of ['/api/employees', '/api/me', '/api/humans', '/api/status', '/api/v2/status', '/api/v2/needs-you']) reads[r] = {status: 200, body: answer(r)};
+      for (const r of kept) reads[r] = {status: 200, body: answer(r)};
       return route.fulfill({contentType: 'application/json', body: JSON.stringify({reads})});
     }
+    await wait(cost(p));
     return route.fulfill({contentType: 'application/json', body: JSON.stringify(answer(p))});
   });
   return ctx;
@@ -66,10 +76,11 @@ const median = xs => { const s = [...xs].sort((a, b) => a - b); return Math.roun
       await page.goto('about:blank');
       await page.goto('http://acme.test/#/tasks');
       const b = await shown(page);
+      if (i === 0) console.log(JSON.stringify({returning_marks: b}));
       warm.push(Math.min(b.fresh, b.snap ?? Infinity)); warmFresh.push(b.fresh);
       await ctx.close();
     }
-    console.log(JSON.stringify({tree: path.basename(tree), api_ms: API_MS, file_ms: FILE_MS, runs: RUNS,
+    console.log(JSON.stringify({tree: path.basename(tree), profile: real ? 'real' : 'flat', api_ms: API_MS, file_ms: FILE_MS, runs: RUNS,
       cold_content_ms: median(cold), returning_content_ms: median(warm), returning_fresh_ms: median(warmFresh)}));
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
