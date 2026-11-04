@@ -177,8 +177,7 @@ def test_replacement_also_requires_same_owner_name_platform_newer_enrollment_and
     # image's machine id), even after it checks in again.
     ready(api, stale, [])
     assert computers.sweep(store, H.now()) == []
-    with store.transaction() as c:
-        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), stale["runner_id"]))
+    runner(api, label="Acme Mac", device_id=DEVICE_ID)   # enrolled after the old computer's last contact
     assert computers.sweep(store, H.now()) == [old["runner_id"]]
     assert {other_owner["runner_id"], other_name["runner_id"]} <= {
         r["id"] for r in get(api, "computers")["computers"]}

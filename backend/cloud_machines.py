@@ -115,7 +115,6 @@ CREATE TABLE IF NOT EXISTS cloud_machines(
  active_at REAL, heartbeat_at REAL, ttl_s INTEGER, next_try_at REAL, failures INTEGER NOT NULL DEFAULT 0,
  problem TEXT NOT NULL DEFAULT '', problem_at TEXT, wake_key TEXT, woke_at REAL,
  enroll_by REAL, enroll_fails INTEGER NOT NULL DEFAULT 0, changed_by TEXT, updated_at TEXT, stop_until REAL);
-CREATE INDEX IF NOT EXISTS cloud_machines_starting_runner ON cloud_machines(runner_id) WHERE state='starting';
 CREATE TABLE IF NOT EXISTS cloud_machine_codes(
  code_hash TEXT PRIMARY KEY, bot TEXT NOT NULL, created_at TEXT NOT NULL);
 """
