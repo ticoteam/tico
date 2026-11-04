@@ -431,9 +431,9 @@ def _resume(flow, state, thread, step, services):
         actions.append({"do": do, "from": "reply", **services.act(do, {"body": choice["body"]}, ctx)})
     if all(action.get("ok") for action in actions):
         dest = {d["id"]: d for d in flow.get("destinations") or []}[choice["to"]]
-        chain = [(action, {"from": "destination", "destination": dest["id"]}, False)
-                 for action in dest.get("then") or []]
-        actions += _chain(services, chain, values, step, str(rec), len(actions))
+        chain = [(action, {"from": "destination", "destination": dest["id"]}, str(1 + i), f"{step['id']}@{rec}.{1 + i}")
+                 for i, action in enumerate(dest.get("then") or [])]
+        actions += _chain(services, chain, values, step, str(rec))
     failed = not all(action.get("ok") for action in actions)
     record["outputs"] = {**record["outputs"], "to": choice["to"], "actions": actions}
     if failed:
