@@ -8149,6 +8149,9 @@ def stalled_tasks(conn, at=None, task_ids=None, queued_here=None):
         (shift(at, seconds=-STALL_MINUTES * 60), *(task_ids or ()))))
     if not rows:
         return []
+    # Every candidate's live blockers in set reads (own_stuck_blockers and the checks below use them), not one read a row.
+    live = TR.live_blockers_many(conn, [row["id"] for row in rows], ACTIVE_STATUSES)
+    prime_own_stuck(conn, live)
     parked = parked_bots(conn)
     try:
         # A parked bot's queued job that is not a person's message never starts: it is not busy.
@@ -8182,8 +8185,8 @@ def stalled_tasks(conn, at=None, task_ids=None, queued_here=None):
             continue        # deferred: its deadline brings it (backend/delivery.py)
         if row.get("resume"):
             continue        # a run said when to pick it up (backend/quiet_work.py): that brings it back
-        own = own_stuck_blockers(conn, row, at)
-        if not own and (row["status"] == "waiting" or TR.live_blocker(conn, row["id"], ACTIVE_STATUSES)):
+        own = own_stuck_blockers(conn, row, at, blockers=live[row["id"]])
+        if not own and (row["status"] == "waiting" or live[row["id"]]):
             continue
         quiet = int((base - parse_ts(row["updated_at"])).total_seconds() // 60)
         out.append({**row, "quiet_minutes": quiet, **({"held": "needs_setup"} if slug in parked else {}),

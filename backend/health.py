@@ -2169,41 +2169,33 @@ def view(c, who, settings, auth, github, config):
                              + ("." if len(heavy) <= 5 else f"; and {len(heavy) - 5} more."),
                              [_fix("Open Usage", "#/usage")]))
 
-    # Successful model turns can still make no task progress. Infrastructure and failed-run
-    # checks alone miss that loop. Use the same task visibility as the rest of Tico.
-    # Waiting tasks can also escalate when held only by their own quiet subtasks.
-    candidates = c.execute(
-        "SELECT id,title,number,owner_id,updated_at,status,waiting_on FROM tasks "
+    # Successful model turns can still make no task progress; infrastructure and failed-run checks miss that loop.
+    # What is stalled is hubdb.stalled_tasks, as Task Manager lists it. Only bot tasks this reader can see, not private
+    # ones; a waiting parent is named only when its blockers are readable too, so its diagnosis reveals no activity the
+    # reader cannot see.
+    candidates = [row["id"] for row in c.execute(
+        "SELECT id FROM tasks "
         "WHERE owner_id LIKE 'bot:%' AND status IN ('open','doing','waiting') "
         f"AND coalesce(private,1)=0 AND ({auth.task_sql(c, who)}) "
-        # A waiting parent's diagnosis must not reveal the activity of an unreadable blocker.
         "AND (status<>'waiting' OR NOT EXISTS (SELECT 1 FROM task_relations r "
         "WHERE r.to_task=tasks.id AND r.kind='blocks' AND r.from_task IN "
         f"(SELECT tasks.id FROM tasks WHERE status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
-        f"AND NOT coalesce(({auth.task_sql(c, who)}),0)))) "
-        # Redundant with the EXISTS; lets SQLite start from the few escalated tasks, not every task.
-        "AND tasks.id IN (SELECT target FROM events WHERE action='task.stall_escalated') "
-        "AND EXISTS (SELECT 1 FROM events e WHERE e.action='task.stall_escalated' "
-        "AND e.target=tasks.id AND e.created_at>=tasks.updated_at) ORDER BY updated_at", H.ACTIVE_STATUSES).fetchall()
-    # own_stuck_blockers is [] for a task with no live blocker: one read gives every waiting candidate's live blockers,
-    # so the rest cost no read each, and the reads those blockers need are set reads too (H.prime_own_stuck).
-    from .task_relations import live_blockers_many
-    blockers = live_blockers_many(c, [row["id"] for row in candidates if row["status"] == "waiting"], H.ACTIVE_STATUSES)
-    H.prime_own_stuck(c, blockers)
-    stalled = [row for row in candidates
-               if row["status"] != "waiting" or (blockers.get(row["id"])
-                                                 and H.own_stuck_blockers(c, dict(row), blockers=blockers[row["id"]]))]
+        f"AND NOT coalesce(({auth.task_sql(c, who)}),0))))", H.ACTIVE_STATUSES).fetchall()]
+    # A bot still in setup is held (its own check says so): a run for it would only queue, so there is no recovery to name.
+    stalled = []
+    for part in H.chunks(candidates) if candidates else []:
+        stalled += [row for row in H.stalled_tasks(c, H.now(), task_ids=part) if not row.get("held")]
+    stalled.sort(key=lambda row: row["updated_at"])
     if stalled:
         items = [{"bot": H.actor_id(row["owner_id"]), "name": row["title"][:200], "task": row["id"],
-                  "quiet_minutes": quiet_minutes(row["updated_at"]),
+                  "quiet_minutes": row["quiet_minutes"],
                   "text": f"#{row['number'] or row['id']} {row['title'][:200]} (owner {row['owner_id']}): "
-                          f"no progress for {quiet_minutes(row['updated_at'])} min; check the recovery diagnosis or record the missing dependency",
+                          f"no progress for {row['quiet_minutes']} min; move it or record what it waits on",
                   "fix": "hub task show " + row["id"],
                   "fixes": [_fix("Open task", "#/tasks/" + row["id"])]}
                  for row in stalled[:DIAGNOSTIC_LIMIT]] if full or kind == "bot" else []
         checks.append(_check("stalled_tasks", "Tasks not progressing", "warn",
-                             _diagnostic_summary(f"{_plural(len(stalled), 'task')} did not progress after repeated automatic runs. "
-                                                 "Recovery was requested.", items),
+                             _diagnostic_summary(f"{_plural(len(stalled), 'task')} quiet with nothing set to move them.", items),
                              [_fix("Open tasks", "#/tasks")] if full else [], items=items))
 
     checks.extend(_aged_pr_checks(c, who, auth, full, kind))

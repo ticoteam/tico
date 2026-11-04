@@ -47,12 +47,15 @@ def test_stalled_health_does_not_disclose_another_persons_private_task(environme
     add_bot(api, 'helper')
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, 'human:riley', 'Private repair request', '', 'bot:helper', private=True)
-        H.event(c, H.KEEPER, 'task.stall_escalated', task['id'], {'wakes': 3})
+        c.execute("UPDATE jobs SET state='completed'")
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), seconds=-3600), task['id']))
+    with api.app.state.store.read() as c:
+        assert task['id'] in [row['id'] for row in H.stalled_tasks(c)], 'real detection names it'
     assert 'stalled_tasks' not in health_of(api)[1]
 
 
 @pytest.mark.parametrize('hidden', [False, 'private', 'activity'])
-def test_an_escalated_task_waiting_on_its_own_quiet_hold_is_not_progressing(environment, hidden):
+def test_a_task_waiting_on_its_own_quiet_hold_is_not_progressing(environment, hidden):
     api = environment()
     add_bot(api, 'helper')
     add_bot(api, 'holder')
@@ -64,7 +67,6 @@ def test_an_escalated_task_waiting_on_its_own_quiet_hold_is_not_progressing(envi
         c.execute("UPDATE jobs SET state='completed'")
         c.execute("UPDATE tasks SET private=0, updated_at=? WHERE id IN (?,?)",
                   (H.shift(H.now(), seconds=-3600), window['id'], hold['id']))
-        H.event(c, H.KEEPER, 'task.stall_escalated', window['id'], {'wakes': 3})
         if hidden == 'private':
             c.execute("UPDATE tasks SET private=1 WHERE id=?", (hold['id'],))
         elif hidden == 'activity':
@@ -79,7 +81,20 @@ def test_an_escalated_task_waiting_on_its_own_quiet_hold_is_not_progressing(envi
         if hidden or status == 'review':
             assert check is None
         else:
-            assert check['status'] == 'warn' and [item['task'] for item in check['items']] == [window['id']]
+            # The hold is quiet with nothing set to move it, so it is named as well.
+            assert check['status'] == 'warn' and {item['task'] for item in check['items']} == {window['id'], hold['id']}
+
+
+def test_a_bot_task_nothing_moves_is_named_as_not_progressing(environment):
+    api = environment()
+    add_bot(api, 'helper')
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, 'human:morgan', 'Repair the queue', '', 'bot:helper', private=False)
+        c.execute("UPDATE jobs SET state='completed'")
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), hours=-1), task['id']))
+    check = health_of(api)[1]['stalled_tasks']
+    assert check['status'] == 'warn' and [item['task'] for item in check['items']] == [task['id']]
+    assert 'Repair the queue' in check['summary']
 
 
 def test_an_offline_computer_holds_its_bots(environment):
@@ -1153,7 +1168,7 @@ def test_roadmap_suggestions_warn_from_the_routing_rule_and_only_to_administrato
     assert health(pm="archived", headers=as_person(api, "quinn")) is None
 
 
-def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment, monkeypatch):
+def test_health_names_queued_bot_for_bot_reader(environment, monkeypatch):
     api = environment()
     runner = enrolled(api)
     add_bot(api, "helper")
@@ -1171,7 +1186,6 @@ def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment, m
                  for title in ('Repair the queue', 'Check the diagnosis')]
         for task in tasks:
             c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (old, task['id']))
-            H.event(c, H.KEEPER, 'task.stall_escalated', task['id'], {'wakes': 3})
         c.execute("UPDATE bots SET state='paused' WHERE slug='helper'")
     headers = signed_in('observer-bot')
     body, checks = health_of(api, headers)
@@ -1180,8 +1194,6 @@ def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment, m
     assert queued['fix'] == 'hub run list helper' and queued['fixes']
     issues = api.get('/api/v2/health/issues', headers=headers).json()['issues']
     assert next(i for i in issues if i['kind'] == 'queue') == {**queued, 'kind': 'queue', 'severity': 'high'}
-    assert {i['task'] for i in issues if i['kind'] == 'stalled_tasks'} == {t['id'] for t in tasks}
-    assert all(t['title'] in checks['stalled_tasks']['summary'] for t in tasks)
 
     # Capacity stays an explained queue; bots no longer receive a no-slot alert.
     with api.app.state.store.transaction() as c:
