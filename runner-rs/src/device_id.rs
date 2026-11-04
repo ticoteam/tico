@@ -54,7 +54,8 @@ fn detect() -> Option<String> {
 
 pub fn get() -> &'static Option<String> {
     static ID: OnceLock<Option<String>> = OnceLock::new();
-    ID.get_or_init(detect)
+    // A container's machine id comes from its image, shared by every container made from it: it proves nothing.
+    ID.get_or_init(|| if crate::follow::kind() == "docker" { None } else { detect() })
 }
 
 pub fn report(body: &mut Value) {

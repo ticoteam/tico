@@ -173,8 +173,12 @@ def test_replacement_also_requires_same_owner_name_platform_newer_enrollment_and
         c.execute("UPDATE runners SET created_at=? WHERE id=?", (H.shift(H.now(), hours=-80), stale["runner_id"]))
         runner_states.save(c, stale["runner_id"], last_seen_at=H.shift(H.now(), hours=-75))
     assert computers.sweep(store, H.now()) == []
-    # A newer enrollment that predates the old computer's last contact becomes a replacement when it checks in again.
+    # A newer enrollment made while the old computer still checked in is another computer (a clone or a shared
+    # image's machine id), even after it checks in again.
     ready(api, stale, [])
+    assert computers.sweep(store, H.now()) == []
+    with store.transaction() as c:
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), stale["runner_id"]))
     assert computers.sweep(store, H.now()) == [old["runner_id"]]
     assert {other_owner["runner_id"], other_name["runner_id"]} <= {
         r["id"] for r in get(api, "computers")["computers"]}
@@ -202,6 +206,29 @@ def test_retirement_keeps_nested_reported_logins(api, field, report):  # noqa: F
     with store.transaction() as c:
         runner_states.save(c, rid, **{field: json.dumps(report)})
     assert computers.sweep(store, H.now()) == []
+
+
+@pytest.mark.parametrize("hold", ["google_grant", "google_holder", "google_mail", "meetings"])
+def test_retirement_keeps_a_computer_holding_a_google_grant_or_meeting_importer(api, hold):  # noqa: F811
+    from backend import google_connect
+    old, _ = replaced_computer(api)
+    store, rid = api.app.state.store, old["runner_id"]
+    with store.transaction() as c:
+        google_connect.ensure_schema(c)
+        if hold.startswith("google_") and hold != "google_mail":
+            column = "runner_id" if hold == "google_grant" else "holder"
+            c.execute(f"INSERT INTO google_connects(person_id,mailbox,status,{column},created_at,updated_at) "
+                      "VALUES('ana','ana@example.com','connected',?,?,?)", (rid, H.now(), H.now()))
+        elif hold == "google_mail":
+            c.execute("INSERT INTO google_mail_holders(runner_id,holds,seen_at) VALUES(?,1,0)", (rid,))
+        else:
+            c.execute("INSERT INTO meeting_importers(source,enabled,runner_id,updated_by,updated_at) "
+                      "VALUES('zoom',1,?,'ana',?)", (rid, H.now()))
+    assert computers.sweep(store, H.now()) == []
+    if hold == "meetings":
+        with store.transaction() as c:
+            c.execute("UPDATE meeting_importers SET enabled=0 WHERE source='zoom'")
+        assert computers.sweep(store, H.now()) == [rid]
 
 
 def test_retirement_keeps_a_sharing_browser_exit_until_sharing_is_off(api):  # noqa: F811

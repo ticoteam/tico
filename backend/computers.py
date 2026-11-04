@@ -29,6 +29,21 @@ def disconnect(store, runner_id):
         sessions.push_bot_generation(bot, "computer removed")
 
 
+def _service_holds(c):
+    """Exclusions for services a computer may hold: a Google grant or mail hold, an enabled meeting importer. Some of
+    these tables are made by their module on first use, so only the ones present are checked."""
+    have = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN "
+                                    "('google_connects','google_mail_holders','meeting_importers')")}
+    sql = ""
+    if "google_connects" in have:
+        sql += " AND NOT EXISTS (SELECT 1 FROM google_connects g WHERE g.runner_id=r.id OR g.holder=r.id)"
+    if "google_mail_holders" in have:
+        sql += " AND NOT EXISTS (SELECT 1 FROM google_mail_holders g WHERE g.runner_id=r.id)"
+    if "meeting_importers" in have:
+        sql += " AND NOT EXISTS (SELECT 1 FROM meeting_importers i WHERE i.runner_id=r.id AND i.enabled=1)"
+    return sql
+
+
 def sweep(store, at):
     """Retire unused enrollments of the same device under the heartbeat/assignment write lock."""
     cutoff = H.shift(at, seconds=-UNASSIGNED_OFFLINE_RETIRE_SECONDS)
@@ -37,8 +52,9 @@ def sweep(store, at):
             "SELECT r.id,r.label,(SELECT n.id FROM runners_with_state n "
             "WHERE n.revoked_at IS NULL AND n.owner_id=r.owner_id AND n.label=r.label AND n.platform=r.platform "
             "AND n.device_id=r.device_id "
-            "AND n.created_at>r.created_at AND (n.created_at>coalesce(r.last_seen_at,r.created_at) "
-            "OR n.last_seen_at>coalesce(r.last_seen_at,r.created_at)) "
+            # The new enrollment began after the old one's last contact: two that were ever up at once are distinct
+            # computers (a cloned VM or a shared image's machine id), however alike their identity reads.
+            "AND n.created_at>coalesce(r.last_seen_at,r.created_at) "
             "ORDER BY n.created_at DESC,n.id DESC LIMIT 1) AS replacement_id "
             "FROM runners_with_state r WHERE r.revoked_at IS NULL AND r.device_id IS NOT NULL "
             "AND coalesce(r.last_seen_at,r.created_at)<? "
@@ -53,8 +69,8 @@ def sweep(store, at):
             "WHERE j.key IN ('signed_in','authenticated','sign_in') AND (j.type='true' OR j.value='ready')) "
             "AND NOT EXISTS (SELECT 1 FROM json_tree(r.capabilities) j "
             "WHERE j.key IN ('signed_in','authenticated','sign_in') AND (j.type='true' OR j.value='ready')) "
-            "AND NOT EXISTS (SELECT 1 FROM bot_settings b WHERE json_extract(b.app_delivery,'$.computer')=r.id)",
-            (cutoff,)) if r["replacement_id"]]
+            "AND NOT EXISTS (SELECT 1 FROM bot_settings b WHERE json_extract(b.app_delivery,'$.computer')=r.id)"
+            + _service_holds(c), (cutoff,)) if r["replacement_id"]]
         for computer in replaced:
             revoke(c, H.KEEPER, computer["id"], at=at,
                    reason="No bots assigned and offline for over 24 hours; "
