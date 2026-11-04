@@ -377,7 +377,7 @@ class ConnectorPublisher:
         self.cycle += 1
         self.calendar_action_tick()
         request = self.client.get("connectors/calendar/targets")
-        snapshots, failing = [], []
+        snapshots, failing, read = [], [], []
         for person in request["people"]:
             email = person["email"]
             if self.blocked(email):
@@ -391,6 +391,7 @@ class ConnectorPublisher:
                 progress=600))
             try:
                 snapshots.append({"email": email, "events": self.fetch(email, request["hours"])})
+                read.append(email)
                 account.recovered()
                 self.delegated(email)
             except Exception as exc:
@@ -401,8 +402,8 @@ class ConnectorPublisher:
                 failing.append({"account": email, "reason": failure_reason(exc)})
         failing += self.delegation_failures(person["email"] for person in request["people"])
         if snapshots:
-            self.client.post("connectors/calendar/snapshots", {"snapshots": snapshots})
-        self.report("calendar", failing)
+            self._post_with_ok("connectors/calendar/snapshots", {"snapshots": snapshots, "ok_accounts": read})
+        self.report("calendar", failing, read)
         return len(snapshots)
 
     def blocked(self, address):
@@ -443,13 +444,24 @@ class ConnectorPublisher:
         return [{"account": address, "reason": "delegation"} for address in addresses
                 if self.domains.get(domain_of(address), {}).get("down")]
 
-    def report(self, service, failing):
+    def report(self, service, failing, ok_accounts):
         """Tell the hub how this refresh went (Settings shows a failing account; a clean report is
-        the heartbeat). Best effort: a hub it can't reach shows as a stale connector instead."""
+        the heartbeat). `ok_accounts` are the accounts read successfully this tick: the hub clears their failures and no
+        others. Best effort: a hub it can't reach shows as a stale connector instead."""
         try:
-            self.client.post("connectors/health", {"service": service, "failing": failing})
+            self._post_with_ok("connectors/health", {"service": service, "failing": failing, "ok_accounts": ok_accounts})
         except Exception:
             pass
+
+    def _post_with_ok(self, path, body):
+        """Post a body that carries ok_accounts. A hub from before the field refuses the extra key (its models forbid
+        unknown fields), so that post is sent once more without it: the recovery waits for the hub to be updated."""
+        try:
+            return self.client.post(path, body)
+        except APIError as exc:
+            if exc.status != 422 or "ok_accounts" not in body:
+                raise
+            return self.client.post(path, {key: value for key, value in body.items() if key != "ok_accounts"})
 
     def mail_tick(self):
         if self.last_mail_sync is not None and time.monotonic() - self.last_mail_sync < self.mail_interval:
@@ -460,7 +472,7 @@ class ConnectorPublisher:
         boxes = request.get("mailboxes") or []
         self.mail_boxes = [box["address"] for box in boxes]
         posted = 0
-        failing = []
+        failing, read = [], []
         live = [box for box in boxes if not self.blocked(box["address"])]
         if live:
             # One mailbox per due tick: first-run backfill is one messages.get per id.
@@ -473,6 +485,7 @@ class ConnectorPublisher:
                 progress=600))
             try:
                 posted = self._mail_mailbox(address, box, request.get("batch") or MAIL_BATCH)
+                read.append(address)
                 account.recovered()
                 self.delegated(address)
             except Exception as exc:
@@ -482,7 +495,7 @@ class ConnectorPublisher:
                     account.failed(exc)
                     failing.append({"account": address, "reason": failure_reason(exc)})
         if boxes:
-            self.report("mail", failing + self.delegation_failures(box["address"] for box in boxes))
+            self.report("mail", failing + self.delegation_failures(box["address"] for box in boxes), read)
         self.last_mail_sync = time.monotonic()
         return posted
 
