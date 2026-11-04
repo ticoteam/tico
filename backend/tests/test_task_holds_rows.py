@@ -172,10 +172,10 @@ def test_with_no_0072_row_no_run_record_is_repaired(conn):
     conn.execute(ATTEMPTS)
     conn.execute("INSERT INTO attempts VALUES('moved',NULL,'ops',NULL,'2026-10-02T00:00:00.000000Z','ok',NULL,NULL,NULL)")
     up(conn)
-    assert conn.execute("SELECT trigger FROM attempts").fetchall() == [(None,)]
+    assert [row[0] for row in conn.execute("SELECT trigger FROM attempts")] == [None]
     applied_0072(conn, at=None)
     up(conn)
-    assert conn.execute("SELECT trigger FROM attempts").fetchall() == [(None,)]
+    assert [row[0] for row in conn.execute("SELECT trigger FROM attempts")] == [None]
 
 
 def test_a_copy_that_moves_fewer_holds_than_the_columns_hold_stops_the_migration(conn, monkeypatch):
