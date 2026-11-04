@@ -274,6 +274,20 @@ def test_a_changed_applied_file_refuses_to_boot(tmp_path, monkeypatch):
         boot(path)
 
 
+def test_every_shipped_migration_file_keeps_its_checksum():
+    """The fixture lists each migration that shipped (v0.5.108) with the SHA-256 of its file then. A database that applied
+    one records that checksum, and a start refuses a file whose checksum changed (`_verify`): a shipped file is never
+    edited, a fix is a new migration. A shipped file that is gone fails too."""
+    shipped = [line.split() for line in (FIXTURES / "shipped_migration_checksums.txt").read_text().splitlines()]
+    assert shipped and all(len(row) == 2 for row in shipped)
+    changed = []
+    for name, digest in shipped:
+        path = migrations.DIRECTORY / name
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            changed.append(name)
+    assert not changed, "Shipped migrations edited or removed (write a new migration instead): " + ", ".join(changed)
+
+
 @pytest.mark.parametrize("version", ["0099_from_the_future", f"legacy_user_version_{migrations.NEWEST_USER_VERSION + 1}"])
 def test_a_database_with_a_migration_this_code_does_not_know_is_refused_untouched(tmp_path, version):
     path = fresh(tmp_path)

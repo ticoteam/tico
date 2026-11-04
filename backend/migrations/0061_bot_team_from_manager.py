@@ -114,8 +114,6 @@ def up(conn):
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if not {"bot_config", "registry_metadata"} <= tables:
         return                                   # a new file: the module's tables are made after the migrations
-    if "config" not in {row[1] for row in conn.execute("PRAGMA table_info(bot_config)")}:
-        return                                   # 0068 moved the declarations to bot_settings: this ran before that
     groups, roots, people, inbox = _roster(conn)
     bots = _bots(conn)
     assistant = _assistant()
