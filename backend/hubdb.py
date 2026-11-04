@@ -3958,7 +3958,7 @@ def migrate_task_privacy(conn):
     if not had_privacy:
         humans = {row[0] for row in conn.execute('SELECT id FROM humans')}
         bots = {row[0] for row in conn.execute('SELECT slug FROM bots')}
-        # Numbered step 23 runs on a file from before migration 0068 (the declaration still in bot_config.config);
+        # Numbered step 23 runs on a file from before migration 0070 (the declaration still in bot_config.config);
         # the store's cloud step 57 runs after the migrations (the declaration in bot_settings).
         if not _has_table(conn, 'bot_config'):
             configs = {}

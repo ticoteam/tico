@@ -6,7 +6,7 @@ from contextlib import closing
 
 import pytest
 
-from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0068
+from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0070
 from backend.finance import actions as FA
 from backend.finance.store import schema
 from backend.tests.test_finance_fixtures import (  # noqa: F401

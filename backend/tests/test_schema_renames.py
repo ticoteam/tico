@@ -91,7 +91,7 @@ RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_ch
            "task_events", "goal_events", "market_events", "company_events", "strategy_events"}
 # Moved from runners to runner_states by backend/migrations/0062_runner_states.py after the renames named them.
 RUNNER_STATE = {name for name, _ in importlib.import_module("backend.migrations.0062_runner_states").STATE}
-# Moved out of its table by migration 0068 (backend/migrations/0068_bot_settings.py) into the table named here: the
+# Moved out of its table by migration 0070 (backend/migrations/0070_bot_settings.py) into the table named here: the
 # declaration is in bot_settings, which backend/tests/test_bot_settings.py checks.
 MOVED = {("bot_config", "config_json"): "bot_settings"}
 

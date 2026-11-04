@@ -275,7 +275,7 @@ def test_a_changed_applied_file_refuses_to_boot(tmp_path, monkeypatch):
 
 
 def test_every_shipped_migration_file_keeps_its_checksum():
-    """The fixture lists each migration that shipped (v0.5.108) with the SHA-256 of its file then. A database that applied
+    """The fixture lists each migration that shipped (v0.5.109) with the SHA-256 of its file then. A database that applied
     one records that checksum, and a start refuses a file whose checksum changed (`_verify`): a shipped file is never
     edited, a fix is a new migration. A shipped file that is gone fails too."""
     shipped = [line.split() for line in (FIXTURES / "shipped_migration_checksums.txt").read_text().splitlines()]
@@ -315,8 +315,8 @@ def test_cloud_version_is_the_newest_cloud_step_store_writes():
 
 
 def restore_config(c):
-    """Before migration 0068, the migrations 0043 and 0061 read bot_config.config, which 0068 drops: a rerun of them from
-    before 0068 needs the column back, each declaration copied into it from bot_settings. A no-op while it is there."""
+    """Before migration 0070, the migrations 0043 and 0061 read bot_config.config, which 0070 drops: a rerun of them from
+    before 0070 needs the column back, each declaration copied into it from bot_settings. A no-op while it is there."""
     if "config" in {row[1] for row in c.execute("PRAGMA table_info(bot_config)")}:
         return
     c.execute("ALTER TABLE bot_config ADD COLUMN config TEXT NOT NULL DEFAULT '{}'")
@@ -332,7 +332,7 @@ def _config_restored(path):
 def _back_to_before(path, version):
     """The file as it was before `version` ran: the migration rows from it on are forgotten, so the next boot runs them."""
     with sqlite3.connect(path) as c:
-        if version <= "0068":
+        if version <= "0070_bot_settings":
             restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy_%'", (version,))
 

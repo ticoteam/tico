@@ -15,8 +15,8 @@ from backend import bot_settings as BS
 from backend.store import H
 from backend.tests.test_api import api, post, setup_attempt  # noqa: F401
 
-# The table's DDL: migration 0068 owns it (bot_settings.py has none).
-_BOT_SETTINGS_TABLE = importlib.import_module("backend.migrations.0068_bot_settings").TABLE
+# The table's DDL: migration 0070 owns it (bot_settings.py has none).
+_BOT_SETTINGS_TABLE = importlib.import_module("backend.migrations.0070_bot_settings").TABLE
 
 
 def _mark(c):

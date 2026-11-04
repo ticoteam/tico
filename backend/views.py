@@ -471,8 +471,7 @@ def _lapsed_plan(c, bot, runner_id, document, detail):
         return detail
     from . import model_subscriptions, providers
     runner = c.execute("SELECT id, capabilities FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
-    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
-    filled = providers.fill(providers.load(c), json.loads(config[0] or "{}") if config else {})
+    filled = providers.fill(providers.load(c), BS.read(c, bot))
     if not runner or not signed_in_by_lapsed_plan(document, detail,
                                                   model_subscriptions.covered_runtimes(c, dict(runner), filled)):
         return detail

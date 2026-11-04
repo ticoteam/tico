@@ -1,6 +1,6 @@
 import json
 
-from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0068
+from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0070
 from backend.auth import Auth
 from backend.backup import restore_snapshot, snapshot
 from backend.config import Settings

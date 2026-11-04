@@ -28,7 +28,7 @@ FIELDS = (
 )
 TYPES = dict(FIELDS)
 COLUMNS = tuple(key for key, _ in FIELDS)
-# The table's DDL lives in migration 0068 (backend/migrations/0068_bot_settings.py), the one place schema changes go.
+# The table's DDL lives in migration 0070 (backend/migrations/0070_bot_settings.py), the one place schema changes go.
 # A path no declared key uses: where config_sql sets an absent structured setting, then removes.
 _NOTHING = "$.__absent__"
 

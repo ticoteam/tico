@@ -1,5 +1,5 @@
 """A bot's declared settings live in bot_settings (backend/bot_settings.py): each declaration reads back as it was
-written, from Python and from SQL alike, and migration 0068 moves every existing bot_config.config there without
+written, from Python and from SQL alike, and migration 0070 moves every existing bot_config.config there without
 losing a key."""
 import importlib.util
 import json
@@ -84,7 +84,7 @@ def test_update_and_remove_keep_the_rest_of_the_declaration(tmp_path):
 
 
 def _old_shape(path):
-    """A database as main before migration 0068 left it: bot_config.config holds the declaration, a trigger reads it."""
+    """A database as main before migration 0070 left it: bot_config.config holds the declaration, a trigger reads it."""
     boot(path)
     with sqlite3.connect(path) as c:
         for name, in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='bot_settings'").fetchall():
@@ -92,7 +92,7 @@ def _old_shape(path):
         c.execute("DROP TABLE bot_settings")
         c.execute("ALTER TABLE bot_config ADD COLUMN config TEXT NOT NULL DEFAULT '{}'")
         c.execute("CREATE TRIGGER old_reads_config AFTER UPDATE OF config ON bot_config BEGIN SELECT 1; END")
-        c.execute("DELETE FROM schema_migrations WHERE version='0068_bot_settings'")
+        c.execute("DELETE FROM schema_migrations WHERE version='0070_bot_settings'")
         rows = [("full", {**SETTINGS, **ODD}), ("empty", {}), ("broken", None), ("list", [1, 2]),
                 *((f"many{n}", {"model": f"m{n}", "turns_per_day": n, "team": "ops"}) for n in range(1200))]
         for bot, config in rows:
@@ -123,9 +123,9 @@ def _migration(name):
     return module
 
 
-def test_migration_0061_gives_a_team_that_0068_moves_into_bot_settings(tmp_path):
-    """Migration 0061 (a team-less bot takes its manager's group) runs before 0068 on a database from before the move:
-    the team it writes into the config is in bot_settings after 0068, and its team column is kept."""
+def test_migration_0061_gives_a_team_that_0070_moves_into_bot_settings(tmp_path):
+    """Migration 0061 (a team-less bot takes its manager's group) runs before 0070 on a database from before the move:
+    the team it writes into the config is in bot_settings after 0070, and its team column is kept."""
     path = tmp_path / "hub.db"
     _old_shape(path)
     people = {"people": [{"id": "ana", "team": "engineering"}], "org_groups": {"engineering": {"name": "Engineering"}}}
@@ -149,11 +149,11 @@ def test_migration_0061_gives_a_team_that_0068_moves_into_bot_settings(tmp_path)
 
 
 def test_the_migrations_that_read_the_column_skip_a_new_file():
-    """On an empty file the migrations run before any module table exists: 0043, 0061 and 0068 find no bots, bot_config
-    or registry, so they change nothing. On a real new file hubdb's first step has made bots, and 0068 makes bot_settings
+    """On an empty file the migrations run before any module table exists: 0043, 0061 and 0070 find no bots, bot_config
+    or registry, so they change nothing. On a real new file hubdb's first step has made bots, and 0070 makes bot_settings
     beside it; the store's own schema makes bot_config in its new shape."""
     conn = sqlite3.connect(":memory:")
-    for name in ("0043_drop_bot_legacy_columns", "0061_bot_team_from_manager", "0068_bot_settings"):
+    for name in ("0043_drop_bot_legacy_columns", "0061_bot_team_from_manager", "0070_bot_settings"):
         _migration(name).up(conn)
     assert conn.execute("SELECT count(*) FROM sqlite_master").fetchone()[0] == 0
 
@@ -187,7 +187,7 @@ def test_migration_moves_every_declaration_drops_the_column_and_runs_once(tmp_pa
         triggers = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
         assert "old_reads_config" not in triggers
         assert {"repository_new_bot_default", "wake_preset_hold", "changes_runner_bot_settings_update"} <= triggers
-        # Finance's trigger on a bot's manager names bot_config but not its config column, so 0068 keeps it.
+        # Finance's trigger on a bot's manager names bot_config but not its config column, so 0070 keeps it.
         bot_config_triggers = [sql for (sql,) in c.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND tbl_name='bot_config'")]
         assert any("reports_to" in sql for sql in bot_config_triggers)
         _no_reader_of_the_column(c)

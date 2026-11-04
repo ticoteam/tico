@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0068
+from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0070
 from backend import automation_flow as F
 from backend import hubdb as H
 from backend import redesign_migration as M

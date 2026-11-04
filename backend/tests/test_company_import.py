@@ -8,7 +8,7 @@ from unittest import mock
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0068
+from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0070
 from backend import company_file as C
 from backend import market_spend as MS
 from backend import people_remove, views

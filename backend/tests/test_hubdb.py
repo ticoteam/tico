@@ -22,8 +22,8 @@ from backend import task_relations as TR
 from backend import wake_presets as WP
 from backend import bot_settings as BS
 
-# The table's DDL: migration 0068 owns it (bot_settings.py has none).
-_BOT_SETTINGS_TABLE = importlib.import_module("backend.migrations.0068_bot_settings").TABLE
+# The table's DDL: migration 0070 owns it (bot_settings.py has none).
+_BOT_SETTINGS_TABLE = importlib.import_module("backend.migrations.0070_bot_settings").TABLE
 
 EMPLOYEES = {
     "coo": {"display_name": "COO", "status": "active", "host": "keeper", "runtime": "codex",
