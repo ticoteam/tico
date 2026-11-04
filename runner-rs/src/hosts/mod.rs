@@ -422,13 +422,14 @@ fn shell_script(command: &str) -> Option<String> {
     let words = shell_words(command)?;
     let [shell, flag, script] = words.as_slice() else { return None };
     // The line itself reads `<shell> <flag> ` as written, unquoted, so no quoting, separator or redirection changes them.
+    let blank = [' ', '\t'];
     let plain = shell.chars().all(|c| c.is_ascii_alphanumeric() || "._+/-".contains(c))
         && command
-            .trim_start()
+            .trim_start_matches(blank)
             .strip_prefix(shell.as_str())
-            .filter(|rest| rest.starts_with([' ', '\t']))
-            .and_then(|rest| rest.trim_start().strip_prefix(flag.as_str()))
-            .is_some_and(|rest| rest.starts_with([' ', '\t']));
+            .filter(|rest| rest.starts_with(blank))
+            .and_then(|rest| rest.trim_start_matches(blank).strip_prefix(flag.as_str()))
+            .is_some_and(|rest| rest.starts_with(blank));
     let name = shell.rsplit('/').next().unwrap_or(shell);
     // Only flag groups whose every option takes no argument: `-o` would take the next word, and `--norc` is a long
     // option whose next word is a file.
@@ -444,11 +445,12 @@ fn shell_script(command: &str) -> Option<String> {
 fn plain_program(text: &str) -> Option<&str> {
     static START: OnceLock<Regex> = OnceLock::new();
     let start = START.get_or_init(|| {
-        // An assignment's value is plain characters, '...' (anything but a quote) or "..." (no `$`, backtick or
+        // Only a space or a tab separates words (a shell keeps `\r` or a no-break space inside one), and a newline
+        // ends the command. An assignment's value is plain characters, '...' (anything but a quote) or "..." (no `$`, backtick or
         // backslash), so where it ends is exact and nothing in it can run.
         Regex::new(concat!(
-            r#"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"\\$`]*"|[A-Za-z0-9._/:@%+,-])*\s+)*"#,
-            r"([A-Za-z0-9._+/-]+)(?:[\s;|&]|$)"
+            r#"^[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"\\$`]*"|[A-Za-z0-9._/:@%+,-])*[ \t]+)*"#,
+            r"([A-Za-z0-9._+/-]+)(?:[ \t\n;|&]|$)"
         ))
         .unwrap()
     });
@@ -1229,6 +1231,9 @@ mod tests {
         assert_eq!(command_program("bash;<<\\'\n-c\n'customer-private\n'"), "bash");
         assert_eq!(command_program("bash; -c /tmp/customer-private.json"), "bash");
         assert_eq!(command_program("bash \"-\\c\" /tmp/customer-private.json"), "bash");
+        assert_eq!(command_program("bash \n-c /tmp/customer-private.json"), "bash");
+        assert_eq!(command_program("NOTE=\rcustomer-private"), "");
+        assert_eq!(command_program("NOTE=\u{a0}customer-private"), "");
     }
 
     #[test]
