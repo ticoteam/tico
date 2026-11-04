@@ -421,7 +421,8 @@ mod tests {
             // Another request's state is not this one's answer; this one's is.
             assert!(get(port, "/opened?state=other").starts_with("HTTP/1.1 404"));
             assert!(get(port, "/opened?state=s1").starts_with("HTTP/1.1 204"));
-            std::thread::sleep(Duration::from_millis(400));
+            // Past the time the browser would have opened without that answer.
+            std::thread::sleep(Duration::from_secs(3));
             get(
                 port,
                 "/callback?state=s1&code=c1&iss=https%3A%2F%2Fr.example.com%2Fapi%2Fv2%2Foauth",
@@ -432,7 +433,7 @@ mod tests {
             "s1",
             "https://r.example.com/api/v2/oauth",
             Some((
-                Duration::from_millis(300),
+                Duration::from_secs(2),
                 Box::new(|| browser.store(true, Ordering::SeqCst)),
             )),
         )
