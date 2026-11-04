@@ -206,6 +206,7 @@ mod tests {
             email: String::new(),
             added_at: String::new(),
             sign_in: false,
+            last_url: None,
         };
         Orgs::new(
             Document {
