@@ -374,7 +374,7 @@ let browser = null;
     assert.equal(await quoted('s1'), 'm2');
     assert.equal(await quoted('s1a'), 's1');
     assert.equal(await quoted('s2'), 'm2');
-    assert.equal(await page.locator('.th-msg[data-mid="s1"] .th-quote-who').textContent(), 'Ana');
+    assert.equal(await page.locator('.th-msg[data-mid="s1"] .th-quote-who').textContent(), 'You', 'the viewer\'s own message, as their name reads');
     assert.equal(await page.locator('.th-msg[data-mid="m1"] .th-quote').count(), 0);
     // A turn's steps load when their fold opens.
     await page.locator('.th-msg[data-mid="m5"] details.run-steps summary').click();

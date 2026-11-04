@@ -230,8 +230,9 @@ function thvFlash(view, mid) {
   view.flashTimer = setTimeout(() => { if (view.flash === mid) { view.flash = ''; thvDraw(view); } }, 1600);
 }
 async function thvGoTo(view, mid) {
-  const row = view.el.querySelector(`.th-msg[data-mid="${CSS.escape(mid)}"]`);
-  if (row) { thvFlash(view, mid); row.scrollIntoView({block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'}); return; }
+  const at = () => view.el.querySelector(`.th-msg[data-mid="${CSS.escape(mid)}"]`);
+  // Found after the flash's redraw, which may put a new node in the old one's place.
+  if (at()) { thvFlash(view, mid); at()?.scrollIntoView({block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'}); return; }
   if (await thvFocus(view, mid, {flash: true}) || view.gone) return;
   // Not in this view's pages (a sub-thread's message, or past what it reads): its thread opens at it.
   const root = view.thread?.root_id || view.id;
