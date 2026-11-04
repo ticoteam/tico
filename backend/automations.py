@@ -521,6 +521,7 @@ def _checked(c, flow, settings=None, access=True, saved=None, aid=None, wake_ste
     except F.Invalid as exc:
         raise Problem("invalid", str(exc), 422)
     flow = _bot_ids(c, flow)
+    _chooser_fits(flow)
     if flow["trigger"]["type"] == "due":
         # Stored on the flow, so a later change to the company's zone does not move the routine.
         flow["trigger"] = {"open_days": D.OPEN_DAYS, "tz": D.zone_of({}), **flow["trigger"]}
@@ -702,6 +703,17 @@ def may_tell(c, owner, bot, assistant_bot=None):
         return False
     team = P.team_of(bot, chart.employees, chart.roster)
     return any(team in P.group_and_below(gid, chart.roster) for gid in led)
+
+
+def _chooser_fits(flow):
+    """A choose step's turn runs as its owner: a person's flow on the person's own Assistant, a bot's flow as the bot
+    (F.check refuses a group's flow). `flow` is as `_bot_ids` stored it, so both names are ids."""
+    kind, _, ident = str(flow["owner"]).partition(":")
+    want = f"assistant:{ident}" if kind == "person" else f"bot:{ident}"
+    for step in F.choosing(flow.get("steps")):
+        if step["as"] != want:
+            raise Problem("forbidden", f"{step['id']} runs its turn as {want}: a choose step's turn is its owner's own",
+                          403)
 
 
 def _assistants(steps):
@@ -1944,9 +1956,11 @@ class Hub:
 
 # ---------------------------------------------------------------------------------------------------- mail actions
 def _entries(record):
-    """The action results in a step record: an action step's own, a filter rule's each."""
+    """The action results in a step record: an action step's own, a filter rule's each, a choose step's reply and chain
+    (its outputs carry `actions` once its answer is read). An llm step without choose keeps its outputs as its one entry."""
     outputs = record.get("outputs") or {}
-    acts = outputs.get("actions") if record.get("type") == "filter" else [outputs]
+    listed = record.get("type") == "filter" or (record.get("type") == "llm" and "actions" in outputs)
+    acts = outputs.get("actions") if listed else [outputs]
     return [a for a in acts or [] if isinstance(a, dict)]
 
 

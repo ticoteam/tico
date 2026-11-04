@@ -55,6 +55,8 @@ class Services:
             raise RuntimeError("no such bot")
         if ctx.get("cap") is not None and self.spent_30m() + ctx["cost"] >= ctx["cap"]:
             return None
+        if "held" in self.fail:   # a webhook's screening held the text for a person: no turn is started
+            return {"ref": f"held_{len(self.turns) + 1}", "held": True}
         self.turns.append({"who": who, "prompt": prompt, "wait": wait})
         return {"ref": f"msg_{len(self.turns)}"}
 
