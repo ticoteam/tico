@@ -1686,7 +1686,10 @@ mod tests {
         assert_eq!(std::fs::read_to_string(mirror.join("config")).unwrap(), "[broken\n");
         assert!(lock.exists());
         std::fs::remove_file(lock).unwrap();
-        assert!(manager.fill_mirror("acme/web", &mirror, &prefix, "main", f.remote.to_str().unwrap(), "acme/web", &f.env, &f.env, 10, epoch_s(), true).await.is_ok());
+        if let Err(problem) = manager.fill_mirror("acme/web", &mirror, &prefix, "main", f.remote.to_str().unwrap(), "acme/web", &f.env, &f.env, 10, epoch_s(), true).await {
+            let reason = match problem { Fail::Msg(m) => m, Fail::Timeout(s) => format!("timeout: {s}"), Fail::Disk => "disk full".into(), Fail::Other => "I/O error".into() };
+            panic!("mirror repair failed: {reason}");
+        }
         assert_eq!(sh(&mirror, &["rev-parse", "main"]), sh(&f.seed, &["rev-parse", "HEAD"]));
         assert!(mirror.join("tico-fetched-at").exists());
         let broken: Vec<_> = std::fs::read_dir(&manager.mirrors).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("acme__web.git.broken-")).collect();
@@ -1700,7 +1703,10 @@ mod tests {
         std::fs::write(mirror.join("not-rebuilt"), "keep").unwrap();
         sh(&f.seed, &["commit", "-q", "--allow-empty", "-m", "later"]);
         sh(&f.seed, &["push", "-q"]);
-        assert!(manager.fill_mirror("acme/web", &mirror, &prefix, "main", f.remote.to_str().unwrap(), "acme/web", &f.env, &f.env, 10, epoch_s(), true).await.is_ok());
+        if let Err(problem) = manager.fill_mirror("acme/web", &mirror, &prefix, "main", f.remote.to_str().unwrap(), "acme/web", &f.env, &f.env, 10, epoch_s(), true).await {
+            let reason = match problem { Fail::Msg(m) => m, Fail::Timeout(s) => format!("timeout: {s}"), Fail::Disk => "disk full".into(), Fail::Other => "I/O error".into() };
+            panic!("mirror repair failed: {reason}");
+        }
         assert!(!ref_lock.exists() && mirror.join("not-rebuilt").exists());
         assert_eq!(sh(&mirror, &["rev-parse", "main"]), sh(&f.seed, &["rev-parse", "HEAD"]));
     }

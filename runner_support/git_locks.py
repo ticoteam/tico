@@ -31,6 +31,16 @@ def inaccessible_git(process):
         return True
 
 
+def exited(process):
+    if not process.exists():
+        return True
+    try:
+        # Linux zombies no longer own descriptors or a cwd. Unknown state remains a possible live owner.
+        return (process / "stat").read_text().rsplit(") ", 1)[1][:1] in ("Z", "X")
+    except (OSError, IndexError):
+        return False
+
+
 def related(cwd, arguments, environment, roots):
     """Unknown paths cannot establish that a live Git command belongs elsewhere."""
     def inside(value, base):
@@ -98,7 +108,7 @@ def unused(path, lock, roots=()):
                     if not args[0] or related(cwd, args, environment, roots):
                         return False
                 except (OSError, StopIteration):
-                    if process.exists():
+                    if not exited(process):
                         return False
                     continue
             try:

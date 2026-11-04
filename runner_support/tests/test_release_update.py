@@ -596,6 +596,10 @@ def test_closed_git_lock_is_owned_by_cwd_arguments_or_environment(tmp_path, monk
     assert git_locks.unused(lock, lock.stat(), (checkout, metadata))
     (process / "environ").unlink()
     assert not git_locks.unused(lock, lock.stat(), (checkout, metadata))
+    (process / "stat").write_text("123 (git) Z 1 0 0\n")
+    assert git_locks.unused(lock, lock.stat(), (checkout, metadata))
+    (process / "stat").write_text("123 (git) S 1 0 0\n")
+    assert not git_locks.unused(lock, lock.stat(), (checkout, metadata))
 
 
 def test_recovery_sidecar_serializes_and_keeps_the_stale_inode(tmp_path, monkeypatch):

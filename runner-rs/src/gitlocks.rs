@@ -73,6 +73,15 @@ fn related(cwd: &Path, args: &[String], environment: &[String], roots: &[PathBuf
 }
 
 #[cfg(target_os = "linux")]
+fn exited(process: &Path) -> bool {
+    if !process.exists() { return true; }
+    // A zombie has released its descriptors and cwd; an unreadable live process still blocks recovery.
+    std::fs::read_to_string(process.join("stat")).ok()
+        .and_then(|s| s.rsplit_once(") ").map(|(_, rest)| matches!(rest.chars().next(), Some('Z' | 'X'))))
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
 fn git_related(process: &Path, roots: &[PathBuf]) -> Option<bool> {
     let cwd = std::fs::read_link(process.join("cwd")).ok()?;
     let args = std::fs::read_to_string(process.join("cmdline")).ok()?;
@@ -89,7 +98,7 @@ async fn unused(_path: &Path, lock: &std::fs::Metadata, roots: &[PathBuf]) -> bo
         let Ok(process) = process else { return false };
         if !process.file_name().to_string_lossy().bytes().all(|c| c.is_ascii_digit()) { continue; }
         if inaccessible_git(&process.path()) && git_related(&process.path(), roots) != Some(false) {
-            if process.path().exists() { return false; }
+            if !exited(&process.path()) { return false; }
             continue;
         }
         let files = match std::fs::read_dir(process.path().join("fd")) {
@@ -394,6 +403,11 @@ mod tests {
         assert_eq!(git_related(&process, &roots), Some(false));
         std::fs::remove_file(process.join("environ")).unwrap();
         assert_eq!(git_related(&process, &roots), None);
+        assert!(!exited(&process), "unreadable live Git remains a possible owner");
+        std::fs::write(process.join("stat"), "123 (git) Z 1 0 0\n").unwrap();
+        assert!(exited(&process), "a zombie cannot own a closed lock");
+        std::fs::write(process.join("stat"), "123 (git) S 1 0 0\n").unwrap();
+        assert!(!exited(&process));
         std::fs::remove_dir_all(root).unwrap();
     }
 
