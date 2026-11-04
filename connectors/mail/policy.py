@@ -842,14 +842,9 @@ def switch(slug, manifest=None):
     cannot read it cannot tell an onboarding bot from an Active one. `asks` / `asks_forward` are what bot.yaml
     requests, for messages."""
     if str(slug).strip().lower() == OWNER:
-        from . import access                            # noqa: PLC0415 - avoids a cycle
-        if access.owner_proof():
-            return {"on": True, "forward_to": [], "source": "owner", "detail": "the owner", "asks": True,
-                    "asks_forward": [], "read": True, "onboarding": False}
-        # access.employee refuses such a run first; anything that reaches here as the owner unvouched sends nothing.
-        return {"on": False, "forward_to": [], "source": "none", "asks": False, "asks_forward": [], "read": False,
-                "onboarding": False, "company_off": False,
-                "detail": "Tico did not vouch for this run as the owner (" + OWNER + ")"}
+        # The owner has no per-bot switch; the company's Send mail still holds its every send (oauth.company_allows).
+        return {"on": True, "forward_to": [], "source": "owner", "detail": "the owner", "asks": True,
+                "asks_forward": [], "read": True, "onboarding": False}
     try:
         from . import access                            # noqa: PLC0415 - avoids a cycle
         if manifest is None:
@@ -886,16 +881,15 @@ UNREAD = "unread"                                       # company(): Tico could 
 
 
 def company(slug):
-    """The company's What Tico may do for `slug`'s run, as {organize_mail, send_mail, change_calendar}, from Tico's
-    mail setting for the bot (backend/mail_settings.py) and nothing the run says itself.
+    """The company's What Tico may do for `slug`'s run, as {organize_mail, send_mail, change_calendar}, from Tico and
+    nothing the run says itself: a bot's from its mail setting (backend/mail_settings.py), the owner's (the runner's
+    own commands, a person's run) from the runner's read (runner_company). It holds everyone who acts through Tico.
 
-    None (no gate) for an owner run Tico vouched for (access.owner_proof; mail-action reads the runner's own, see
-    runner_company) and for a server that answers without the fields (an older one). UNREAD when the setting could not
-    be read: a bot's writes are refused then, and its reads go on. An owner run Tico did not vouch for gets nothing."""
-    from . import access                                # noqa: PLC0415 - avoids a cycle
+    None for a server that answers without the fields (an older one). UNREAD when the setting could not be read: the
+    run's writes are refused then, and its reads go on."""
     slug = str(slug or "").strip().lower()
     if slug == OWNER:
-        return None if access.owner_proof() else dict.fromkeys(COMPANY_FIELDS, False)
+        return runner_company()
     row = _server_row(slug)
     if row is None:
         return UNREAD
@@ -914,8 +908,9 @@ RUNNER_GET = None
 
 
 def runner_company():
-    """What Tico may do for an automation's mail action: the runner asks Tico itself, as a bot's run does, so nothing
-    on the action's stdin decides it. UNREAD when Tico could not be asked."""
+    """What Tico may do for an owner run (an automation's mail action, a calendar booking, a person's own run): asked
+    of Tico over the runner's registration, as a bot's run asks for its own, so nothing on stdin decides it. UNREAD
+    when Tico could not be asked, a run without the registration included."""
     try:
         if RUNNER_GET is not None:
             answer = RUNNER_GET("connectors/mail/targets")

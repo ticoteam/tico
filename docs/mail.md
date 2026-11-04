@@ -439,14 +439,12 @@ grant). A draft is the first step of a send, so Send mail on allows one, and Tic
 (`hub/drafted`, `hub/handled/<bot>`) go with the draft or send they record. With Send mail off no bot sends mail, whatever
 its own **Mail sending** switch says (and no approval lifts it), and an automation's send becomes a draft. With it on,
 each bot still needs its own switch (Settings > Bots > Edit > Mail sending; see [Turning sending on](#turning-sending-on)).
-The connector reads the boxes from Tico for each run: a bot's from its mail setting, an automation's mail action from
-the runner's own read (`GET /api/v2/connectors/mail/targets`), never from the action itself. When Tico cannot be asked, a
-bot's writes are refused ("Tico couldn't check the company's mail settings; try again") and its reads go on.
-`--as <owner handle>` holds every verb and skips these boxes, so it is only for a run Tico vouches for through
-`GET /api/v2/me`: a person's token in `HUB_TOKEN`, or the runner's own registration on the mail commands it runs. No
-token, a bot's token, `HUB_BOT` naming the owner, or a failed lookup is refused. The lookup goes to the Tico server in the
-computer's runner registration (`runner.json`), never to one an environment variable names. Change calendar needs
-`calendar.events`.
+These settings apply to everyone who acts through Tico: bots, automations, the runner's own calendar bookings, people
+and the Assistant. An admin who wants Tico to send turns Send mail on. The connector reads the boxes from Tico for each
+run: a bot's from its mail setting, everything else (`--as <owner handle>`, which the runner's mail actions and calendar
+bookings use) from the runner's own read (`GET /api/v2/connectors/mail/targets`), never from the run itself. When Tico
+cannot be asked, writes are refused ("Tico couldn't check the company's mail settings; try again") and reads go on; a
+run without the runner's registration can't ask, so it only reads. Change calendar needs `calendar.events`.
 
 A box turned off takes effect on the next token: Connect Google asks Google only for what is ticked, each refresh leaves
 out a write turned off (the grant keeps it, so turning it back on needs no new sign-in), and Whole Workspace tokens are
