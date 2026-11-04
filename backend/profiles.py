@@ -8,15 +8,17 @@ bot-scope built-in wake rows (rules.PROFILE_RULES) and a few numbers and flags:
     reviewer   its review/QA request, verdicts, people note                 review/QA tasks   no      review/QA requests
     lead       people, escalations, approvals, tickets daily digest         no                no      any
                it asked for that ended
-    manager    people, work given to it, its timers,   note                 no                no      any
-               its exceptions list
+    manager    people, work given to it, its timers,   note                 no                yes     any
+               its roundup
     responder  people                                  note                 no                no      none
     monitor    its watcher, people                     note                 yes               no      its watcher's tasks
     custom     as set: the rows are in the rules table
 
 The numbers are the batch window and scope, the sweep gap (least time between two runs of the same sweep) and, for a
 lead, the hour of the digest. They are the profile's own and a bot may carry its own values (`profile_options`): the
-one a former Token saver bot keeps is a 30-minute window. `pulls`, `sweeps` and `takes` are fixed by the profile
+one a former Token saver bot keeps is a 30-minute window. Every profile wakes on its task roundup, the one grouped wake per
+bot per run; `sweeps` says whether the roundup also lists it its late, exception, backlog, assigned, restate, missed and quiet
+tasks (a profile with sweeps off gets its questions and its own follow-ups on it). `pulls`, `sweeps` and `takes` are fixed by the profile
 except on `custom`, which reads them from its options. `pulls` limits only what Tico starts by itself when nothing woke
 the bot; a task a wake rule woke it for (a lead's assignment) always runs. Nothing here grants a right: a profile
 only decides what wakes a bot and which tasks it is given.
@@ -77,10 +79,10 @@ SPEC = {
     LEAD: {**BASE, "label": "Lead", "pulls": "none", "sweeps": False, "digest_hour": DIGEST_HOUR, "batch_scope": "bot",
            "description": "Directs others. Wakes for people, escalations and approvals; the rest is one digest a day."},
     # A type's manager that works by exception (backend/pipeline_exceptions.py): ticket news is a note for its next run.
-    MANAGER: {**BASE, "label": "Manager", "pulls": "none", "sweeps": False, "batch_scope": "bot",
-              "description": "Works from one exceptions list, sent about hourly when it has a new entry. Wakes for people, "
-                             "work given to it and its own timers; ticket news, verdicts and subtask results wait for "
-                             "its next run."},
+    MANAGER: {**BASE, "label": "Manager", "pulls": "none", "sweeps": True, "batch_scope": "bot",
+              "description": "Works by exception from its task roundup: late tickets, exceptions and backlogs. Wakes for people, "
+                             "work given to it, its roundup and its own timers; ticket news, verdicts and subtask results "
+                             "wait for its next run."},
     RESPONDER: {**BASE, "label": "Responder", "pulls": "none", "sweeps": False, "takes": "none",
                 "description": "Answers people in chat. Wakes for people only and takes no tasks."},
     MONITOR: {**BASE, "label": "Monitor", "sweeps": False, "takes": "watcher",
@@ -168,7 +170,7 @@ def effective(config):
 def summary(name, spec):
     """One line saying what the numbers mean for this profile."""
     from .wake_presets import _duration
-    sweep = f"; a stall check or routine runs at most every {_duration(spec['sweep_seconds'])}" if spec["sweeps"] else ""
+    sweep = f"; a routine runs at most every {_duration(spec['sweep_seconds'])}" if spec["sweeps"] else ""
     if name == DOER or (name == CUSTOM and spec["sweeps"]):
         return f"News about its tasks waits up to {_duration(spec['batch_seconds'])}{sweep}."
     if name == CUSTOM and spec["digest_hour"] is not None:     # a Lead's description and hour picker say it already
@@ -202,7 +204,8 @@ def config_of(c, bot):
 
 
 def sweeps_on(c, bot):
-    """Whether a stall or status check may wake this bot's tasks (rules.sweeps_on)."""
+    """Whether the task roundup lists this bot its sweep lines (rules.sweeps_on): a reviewer, lead, responder or monitor gets
+    only its questions and its own follow-ups on it, and so does a custom profile with sweeps off."""
     spec = spec_of(config_of(c, bot))
     return True if spec is None else bool(spec["sweeps"])
 

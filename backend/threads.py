@@ -1501,7 +1501,8 @@ NO_WAKE_REF_KEYS = ("follow_up", "card", "earlier_messages")
 
 
 def quiet_notice(message):
-    """A follow-up nudge, an update card or a closed-history notice (refs.follow_up, refs.card, refs.earlier_messages) is read,
+    """A legacy follow-up nudge (refs.follow_up), an update card or a closed-history notice (refs.card, refs.earlier_messages)
+    is read,
     never a reason to start a run."""
     refs = (message or {}).get("refs") or {}
     return isinstance(refs, dict) and any(refs.get(k) for k in NO_WAKE_REF_KEYS)

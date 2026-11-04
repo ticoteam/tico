@@ -85,7 +85,7 @@ def test_still_needed_returns_the_question_and_reopens_its_bot_task_without_a_se
         assert withdrawn_label(c, question["id"]).startswith(f"Withdrawn before {ana} saw it: no answer in two")
         row = H.task(c, tid)
         assert row["status"] == "open" and "nothing left to wait on" in row["note"]
-        assert notices(c, "bot:ops") == []      # still needed? sent its own one notice
+        assert notices(c, "bot:ops") == []      # still needed? sends no notice of its own: the roundup lists it
 
 
 def test_the_last_child_finishing_reopens_a_bot_task_and_one_of_two_keeps_it_waiting_on_the_other(api):
@@ -138,11 +138,6 @@ def test_a_note_only_update_keeps_the_tracked_reason_and_never_names_an_untracke
         assert row["blocked_reason"] == task_holds.NOTHING
         H.task_update(c, "bot:ops", loose, note="Still waiting on Chris Hawkins")
         assert H.task(c, loose)["blocked_reason"] == task_holds.NOTHING
-        # The stranded clock runs from when the wait on nothing began, not from the note.
-        old = H.shift(H.now(), hours=-3)
-        set_holds(c, loose, blocked_since=old)
-        assert (loose, "open") in H.sweep_stranded(c)
-        assert held not in [t for t, _ in H.sweep_stranded(c, H.shift(H.now(), hours=3))]
 
 
 def test_a_person_s_task_stays_put_and_an_owner_s_own_hold_is_kept(api):

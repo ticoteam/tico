@@ -38,7 +38,7 @@ The list refreshes when you open the tab and at most once a minute while it stay
 | Row | Who can change it | Available controls |
 |---|---|---|
 | Task rule | Members of its department, including humans and bots in nested teams; the owner or an admin for any department | On or off, **Edit**, and schedule presets |
-| **Stale ticket review**, **Nightly learnings**, **Still wanted?**, **KPI stale asks**, **Ask go-ahead** | Owner or admin | On or off, schedule presets, **Run now** |
+| **Stale ticket review**, **Nightly learnings**, **KPI stale asks**, **Ask go-ahead** | Owner or admin | On or off, schedule presets, **Run now** |
 | **Health scan** | Owner only | On or off, schedule presets, **Run now** |
 | **Task Manager report** | Owner or admin | On or off, schedule presets, **Run now** |
 | **Task roundup** | Owner or admin | On or off, schedule preset, **Run now** |
@@ -55,7 +55,7 @@ Choose from the presets offered on the row:
 
 | Row | Presets |
 |---|---|
-| Task rules, **Still wanted?**, **KPI stale asks**, **Health scan**, **Ask go-ahead** | Every 15 minutes, Hourly, Every 4 hours, Daily at a time |
+| Task rules, **KPI stale asks**, **Health scan**, **Ask go-ahead** | Every 15 minutes, Hourly, Every 4 hours, Daily at a time |
 | **Task Manager report** | Hourly on weekdays 08:00 to 18:00 (the default), Hourly, Every 4 hours, Daily at a time |
 | **Stale ticket review** | Hourly, Every 4 hours, Daily at a time |
 | **Nightly learnings** | Nightly at a time; initially 03:00 |
@@ -125,7 +125,6 @@ Built-ins appear in one flat list. This table gives their default schedules; sav
 |---|---|---|
 | **Start assigned tasks** | Starts eligible assigned work on a free computer turn; respects task caps, usage holds, and computer capacity. | When a turn is free |
 | **Stale ticket review** (AI) | Finds open tasks that look finished or forgotten and suggests to each owner what to do. See [Stale ticket review](tasks.md#stale-ticket-review). | Hourly |
-| **Still wanted?** | Asks a task's person once whether a task idle for a week is still wanted. | Daily at 09:00 |
 | **KPI stale asks** | Asks a KPI's keeper for a reading when it goes out of date, and a goal's owner when a KPI goes off track. | Hourly |
 | **Health scan** | Checks Tico's health and wakes the Health Monitor only for a finding the last scan did not have. | Hourly |
 | **Task Manager report** | Looks for stalled tasks, overdue asks, review tickets without a PR, merged work whose step did not move and similar, and opens one "Task check" task per department for the [Task Manager](task-manager.md) only when there is something. Nothing to report is a quiet run: no task, no model call. | Hourly on weekdays, 08:00 to 18:00 |
@@ -135,13 +134,13 @@ Built-ins appear in one flat list. This table gives their default schedules; sav
 | **Nightly learnings** (AI) | Reads yesterday's chats, tasks, Slack, mail and meetings and sends each bot what it should remember. See [Learnings](learnings.md). | Nightly at 03:00 |
 | **Due reminders** | Tells a bot when one of its tasks reaches its due time. | Every 10 seconds |
 | **Ask go-ahead** | A bot's question past its deadline goes ahead on its default answer, or expires. | Hourly |
-| **Follow-ups** | Nudges a person once, in their thread, when a bot's ask to them stays unanswered for a day. Plain code: no model is called, and nothing to nudge is a quiet run. See [Thread helper](thread-helper.md). Not a switch. | Every 15 minutes |
+| **Earlier messages** | Tells each manager of a bot once, in a direct message, when the bot's Home still holds closed history. Plain code: no model is called, and nothing new is a quiet run. Asks nobody answered are on the bot's task roundup. See [Thread helper](thread-helper.md). Not a switch. | Every 15 minutes |
 | **Email digest** | Emails a person once an hour the threads they follow on digest that have new messages: each title, its unread count and a link, never the messages. Nothing new is a quiet run. Each person turns theirs off under Email digests. See [Thread helper](thread-helper.md). Not a switch. | Hourly |
 | **Approval expiry** | Takes approvals and asks nobody will act on out of Needs you. | Hourly |
-| **Unanswered questions** | On weekday mornings, sends questions unanswered for two business days back to their bots. | Hourly |
+| **Unanswered questions** | On weekday mornings, questions unanswered for two business days go back to their bots as lines on the bots' task roundup, never as a wake. | Hourly |
 | **Stalled task check** (AI) | Not run. Stall checks no longer wake a bot about one quiet task, so Decide reads none of them. | When it happens |
-| **Stall checks** | Every minute: tells a manager when Dev work runs late at its step, reports backlogs, allocates waiting tickets, closes timed-out checks, and drops queued work its bot can no longer read. It does not wake a bot about one stalled task. | Every minute |
-| **Task roundup** | Each run (three times a day by default, at 6am, noon and 6pm company time) sends each bot at most one list of its tasks that have an update it may have missed (a message from someone else, a change to the task by someone else, or a subtask or blocker that finished since it last worked on it) or have gone quiet for a day with nothing holding them, including a task left waiting on nothing, or have a follow-up time that a person or a bot set and that has come. Tico's own notices and check-backs do not count. The list goes only to the bot, in its own notice room, so no person is told about a task. Plain code: no model is called, and nothing to list is a quiet run. | Three times a day, at 6am, noon and 6pm company time |
+| **Stall checks** | Every minute: allocates waiting tickets, closes timed-out checks, drops queued work its bot can no longer read, and alerts once when an Engineering task has been blocked over four hours (to its manager, or else its requester). It does not wake a bot about one stalled task: the task roundup lists those. | Every minute |
+| **Task roundup** | Each run (three times a day by default, at 6am, noon and 6pm company time) sends each bot at most one list of its tasks, with these lines in order: a follow-up time that came (listed once, then cleared), an unanswered question, an assignment not started an hour after it was given (listed once), a task to restate, a Dev ticket late at its step (on its manager's list, relisted every seven days while it stays late), an engineering exception on a manager's list, a step's backlog (on each bot it names, relisted every `every_hours` while it stays over), a task with a missed update, and a task gone quiet for a day with nothing holding it. Managers and doers sweep (a custom bot can turn it off), so they get every line; a reviewer, lead, responder or monitor gets its unanswered questions and its own follow-up times only. Only tasks the bot owns that are still live are listed. The list goes only to the bot, in its own notice room, so no person is told about a task. The roundup is the one grouped wake for a bot's tasks: a per-task wake becomes a line on this list. Tico's own notices and check-backs do not count as a missed update. Plain code: no model is called, and nothing to list is a quiet run. | Three times a day, at 6am, noon and 6pm company time |
 | **Turn fixer** | Frees turns proven dead (lease lost and process gone, or stopped before they started) with a note on the task; holds a dead turn that may have pushed, sent or paid for BotOps instead of retrying it; keeps one Health finding per busy-turns incident and hands what it cannot fix to BotOps. See [Computers](computers.md#the-turn-fixer). | Every 10 seconds |
 | **Waiting checks** | Turns a bot's plain ask to a person into a small task. It no longer sends a waiting task back to work; a waiting task that waits on nothing is listed on the task roundup after a day. | Hourly |
 | **Snooze ends** | Brings snoozed tasks back when their date comes and starts deferred runs that are due. | Every 10 seconds |

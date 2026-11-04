@@ -24,7 +24,7 @@ function system(role) {
     job('stale_review', 'Stale ticket review', ctl({ai: true, route: 'Gateway', fallback: null, group: 'checks', preset: 'hourly', presets: AI,
       then: ['check stale tickets', 'suggest to each owner: mark done, close or check it'], on: true,
       spent_this_month_usd: 0.42, next: soon, last: {started_at: before, finished_at: before, ok: true, result: '9 checked, 2 suggestions', runs: 1}})),
-    job('still_wanted', 'Still wanted?', ctl({schedule: 'Daily at 09:00', preset: 'daily', at: '09:00', presets: ALL, group: 'checks', next: soon,
+    job('kpi_asks', 'KPI stale asks', ctl({schedule: 'Daily at 09:00', preset: 'daily', at: '09:00', presets: ALL, group: 'checks', next: soon,
       when: ['every day at 09:00'], last: {started_at: before, finished_at: before, ok: false, result: 'Failed: the database was busy', runs: 1}})),
     job('health_scan', 'Health scan', ctl({group: 'checks', preset: 'hourly', presets: ALL, owner_only: true, can_change: owner})),
     job('memory_tidy', 'Nightly memory tidy', ctl({on: false, schedule: 'Nightly at 03:30', group: 'learning', preset: 'daily', at: '03:30', presets: [{key: 'daily', label: 'Daily at a time'}], pilots: [], pilot_models: [{model: 'codex:gpt-6.1-sol', label: 'GPT-6.1 Sol', efforts: ['low', 'high']}, {model: 'claude:claude-sonnet-5-5', label: 'Sonnet 5.5', efforts: ['low', 'high']}]})),
@@ -131,7 +131,7 @@ const saved = async (page, writes, count, key) => {
       assert.equal(await row(page, 'stale_review').locator('[data-sysr-dept]').innerText(), 'Engineering');
       const stale = await row(page, 'stale_review').innerText();
       assert.match(stale, /Stale ticket review[\s\S]*AI: Gateway[\s\S]*\$0\.42 this month[\s\S]*9 checked, 2 suggestions[\s\S]*20m ago[\s\S]*in 40m/);
-      const failed = row(page, 'still_wanted').locator('[data-sysr-result]');
+      const failed = row(page, 'kpi_asks').locator('[data-sysr-result]');
       assert.equal(await failed.innerText(), 'Failed: the database was busy');
       assert.notEqual(await failed.evaluate(el => getComputedStyle(el).color), await row(page, 'stale_review').locator('[data-sysr-result]').evaluate(el => getComputedStyle(el).color), 'a failure is red');
       assert.equal(await row(page, 'learnings').locator('[data-sysr-fallback]').innerText(), 'Ran on your own key: Gateway unavailable');
@@ -161,10 +161,10 @@ const saved = async (page, writes, count, key) => {
         // The six (and Topic changed) have a switch; an AI job is never offered every 15 minutes.
         const presets = key => row(page, key).locator('[data-sysr-preset] option').evaluateAll(els => els.map(el => el.value));
         assert.deepEqual(await presets('stale_review'), ['hourly', '4h', 'daily']);
-        assert.deepEqual(await presets('still_wanted'), ['15m', 'hourly', '4h', 'daily']);
+        assert.deepEqual(await presets('kpi_asks'), ['15m', 'hourly', '4h', 'daily']);
         assert.equal(await row(page, 'learnings').locator('[data-sysr-preset]').count(), 0, 'one choice: its time');
         assert.equal(await row(page, 'learnings').locator('[data-sysr-at]').inputValue(), '03:00');
-        assert.equal(await row(page, 'still_wanted').locator('[data-sysr-at]').inputValue(), '09:00');
+        assert.equal(await row(page, 'kpi_asks').locator('[data-sysr-at]').inputValue(), '09:00');
         assert.equal(await row(page, 'topic_fresh').locator('[data-sysr-on]').isChecked(), false);
         assert.equal(await row(page, 'topic_fresh').locator('[data-sysr-run]').count(), 0, 'a switch only');
         // Stalled task check runs on a happening: a switch, no schedule choice, no Run now (the server has nothing to run).
@@ -186,16 +186,16 @@ const saved = async (page, writes, count, key) => {
         await row(page, 'stale_review').locator('[data-sysr-run]').click();
         await page.waitForFunction(() => /4 checked, 1 suggestion/.test(document.querySelector('[data-system-routine="stale_review"] [data-sysr-result]')?.textContent || ''));
         // The daily time saves once, when the box is left, not after the hour alone.
-        const at = row(page, 'still_wanted').locator('[data-sysr-at]');
+        const at = row(page, 'kpi_asks').locator('[data-sysr-at]');
         await at.click();
         await page.keyboard.type('1030');
         await page.keyboard.type('AM');
         assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-sysr-at]')), true, 'focus stays while typing');
         await page.keyboard.press('Enter');
-        await saved(page, writes, 4, 'still_wanted');
+        await saved(page, writes, 4, 'kpi_asks');
         assert.deepEqual(writes, [{method: 'PUT', key: 'stale_review', body: {preset: '4h'}},
           {method: 'PUT', key: 'topic_fresh', body: {on: true}}, {method: 'POST', key: 'stale_review', body: {}},
-          {method: 'PUT', key: 'still_wanted', body: {at: '10:30'}}]);
+          {method: 'PUT', key: 'kpi_asks', body: {at: '10:30'}}]);
       }
       assert.deepEqual(asked, ['GET']);
       assert.deepEqual(errors, []);

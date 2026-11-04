@@ -3,12 +3,14 @@ task above it, Dev 627), on a chat reply, on its fallback date, or back to its b
 
 from datetime import datetime, timezone
 
-from backend import approval_expiry, ask_deadlines, still_needed
+from backend import approval_expiry, ask_deadlines, still_needed, task_roundup
 from backend.scheduler import Scheduler
 from backend.store import H
 from backend.tests.test_tasks_board import api, get, post  # noqa: F401
 
 ANA, OPS, CPO = "human:ana", "bot:ops", "bot:cpo"
+NOON_WED = "2026-10-21T19:00:00.000000Z"       # Wed 12:00 Pacific: a task roundup run
+EVENING_WED = "2026-10-22T01:00:00.000000Z"    # Wed 18:00 Pacific: the next one
 
 
 def pick(c, task_id, text="Which month should the report use?", refs=None, default=None, by=OPS):
@@ -39,6 +41,17 @@ def cached_matches(c):
 
 def wakes(c, message_id):
     return c.execute("SELECT count(*) FROM jobs WHERE message_id=?", (message_id,)).fetchone()[0]
+
+
+def roundup_messages(c, bot):
+    """The task roundup lists sent to a bot, oldest first."""
+    return c.execute("SELECT id, body FROM messages WHERE recipient_id=? AND refs LIKE '%task_roundup%' "
+                     "ORDER BY created_at", (bot,)).fetchall()
+
+
+def gone_back_line(title):
+    """The roundup line for a question asked on a task titled `Pick a <what>`, asked as "Which <what>?"."""
+    return f'no answer in two business days to "Which {title[7:]}?"'
 
 
 def test_a_question_closes_with_its_own_task_and_outlives_a_task_above_it(api):
@@ -107,10 +120,14 @@ def test_unanswered_questions_go_back_to_their_bot_in_one_weekday_morning_wake(a
         sent = still_needed.sweep(c, wednesday)
         assert list(sent) == [OPS] and set(sent[OPS]) == {a["id"] for a in asks}
         assert not any(listed(c, t["id"]) for t in tasks)
-        wake = c.execute("SELECT id, body FROM messages WHERE recipient_id=? AND body LIKE 'Still needed?%'", (OPS,)).fetchall()
-        assert len(wake) == 1 and all(f"Which {t['title'][7:]}?" in wake[0]["body"] for t in tasks)
-        assert wakes(c, wake[0]["id"]) == 1
         assert still_needed.sweep(c, "2026-10-21T18:00:00.000000Z") == {}      # once a morning
+        # No wake of their own: the bot's noon roundup names each one, once, in its single list.
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")      # the creation wakes ran
+        assert "ops" in task_roundup.run(c, NOON_WED)["woke"]
+        found = roundup_messages(c, OPS)
+        assert len(found) == 1 and wakes(c, found[0]["id"]) == 1
+        assert all(found[0]["body"].count(gone_back_line(t["title"])) == 1 for t in tasks)
+        assert "ops" not in task_roundup.run(c, EVENING_WED)["woke"], "not listed again"
         again = pick(c, tasks[0]["id"], "Which venue? The Hall or the Barn.")     # re-asked; the other two dropped
         assert [t["id"] for t in tasks if listed(c, t["id"])] == [tasks[0]["id"]]
         assert H.open_task_asks(c, H.task(c, tasks[0]["id"]))[0]["id"] == again["id"]
@@ -174,15 +191,17 @@ def test_old_undated_questions_go_back_only_in_the_weekday_batch_of_the_hourly_s
     def tick(at):
         Scheduler(store, execution).tick(datetime.fromisoformat(at).replace(tzinfo=timezone.utc))
         with store.read() as c:
-            return [r[0] for r in c.execute("SELECT body FROM messages WHERE recipient_id=? AND sender_id=? AND "
-                                            "(kind='answer' OR body LIKE 'Still needed?%')", (OPS, H.KEEPER))]
+            return [t["id"] for t, a in zip(tasks, asks) if H.message(c, a["id"])["superseded_at"]]
 
     assert tick("2026-10-17T17:00:00") == []           # Saturday: no batch, and no ask expires on its own
     assert tick("2026-10-19T14:00:00") == []           # Monday 7:00 Pacific: before the batch
-    sent = tick("2026-10-19T15:30:00")                 # Monday 8:30 Pacific: one wake with all three
-    assert len(sent) == 1 and all(f"Which {t['title'][7:]}?" in sent[0] for t in tasks)
-    with store.read() as c:
+    assert set(tick("2026-10-19T15:30:00")) == {t["id"] for t in tasks}   # Monday 8:30 Pacific: all three go back
+    with store.transaction() as c:
         assert not any(listed(c, t["id"]) for t in tasks)
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")  # the creation wakes ran
+        task_roundup.run(c, "2026-10-19T19:00:00.000000Z")                 # Monday 12:00 Pacific: the roundup
+        found = roundup_messages(c, OPS)
+        assert all(sum(body.count(gone_back_line(t["title"])) for body in [r["body"] for r in found]) == 1 for t in tasks)
 
 
 def asking(c):

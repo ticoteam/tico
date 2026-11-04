@@ -2159,7 +2159,7 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
     task = H.task(c, task_id) if task_id else None
     refs = message.get("refs") or {}
     from . import task_check_backs
-    if task_check_backs.stale(c, message, job["bot_id"], job):
+    if task_check_backs.stale(c, message, job):
         return "obsolete_check_back"
     check_back = message["sender_id"] == H.KEEPER and refs.get("wake") == "check_back"
     if task and task['owner_id'] == 'bot:' + job['bot_id'] and auto_tasks.put_back_held(c, task) and not refs.get('run_now') and not check_back:
@@ -2206,8 +2206,6 @@ def obsolete_notices_sql(c):
     itself SQLite starts from every keeper notice ever sent, tens of milliseconds on each of a runner's claims."""
     # A held job waits: a wake preset's or a quota reset's until its release, a claim's until its wait ends. The pass
     # takes it once it is free, and the claim then closes the item its hold opened (claim_holds.clear).
-    from . import task_check_backs
-    check_backs_on = task_check_backs.enabled(c)
     return ("FROM assignments x CROSS JOIN jobs j CROSS JOIN message_refs m "
             f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
             f"WHERE x.runner_id=? AND j.bot_id=x.bot AND j.state='queued' AND {H.unheld_sql()} AND m.id=j.message_id "
@@ -2217,13 +2215,6 @@ def obsolete_notices_sql(c):
             "OR m.kind='notice' "
             "AND ((m.ref_wake IN ('check_back','status_check','stalled','step_status') AND NOT EXISTS "
             "(SELECT 1 FROM attempts ya WHERE ya.id=j.attempt_id AND ya.started_at IS NOT NULL)) OR "
-            f"(m.ref_wake='check_back' AND {'' if check_backs_on else '1=0 AND '}("
-            "t.check_back_at IS NOT json_extract(m.refs,'$.check_back_at') OR "
-            "(EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=t.id AND sh.kind='snoozed' "
-            "AND sh.released_at IS NULL AND sh.until_at>?3 AND sh.by_id LIKE 'human:%')) OR t.status='closed' OR "
-            "(t.status IN ('done','declined') AND (t.requester_id NOT LIKE 'bot:%' OR t.requester_id=t.owner_id)) OR "
-            "m.recipient_id<>CASE WHEN t.status IN ('done','declined') THEN t.requester_id "
-            "WHEN t.owner_id LIKE 'bot:%' THEN t.owner_id ELSE t.requester_id END)) OR "
             "(t.status IN ('done','closed','declined') "
             "AND coalesce(json_extract(m.refs,'$.caused_by'),'') NOT LIKE 'human:%' "
             "AND coalesce(m.ref_wake,'')<>'check_back') "
@@ -2253,8 +2244,7 @@ def obsolete_notices_sql(c):
 
 def suppress_notice(c, job, task_id, reason):
     """Cancel one queued keeper notice nothing needs any more: its job, its claim hold, its delivery mark, the status a
-    stop left on its bot, and a job.suppress event. The claim does this for obsolete_notices_sql; task_check_backs does it
-    for a check-back whose due time moved, so a stale one cannot hold the next notice on a computer that never wakes."""
+    stop left on its bot, and a job.suppress event. The claim does this for obsolete_notices_sql."""
     c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job['id'],))
     claim_holds.clear(c, job['id'], "Its run is no longer needed.")
     c.execute("UPDATE messages SET delivered_at=coalesce(delivered_at,?) WHERE id=?", (H.now(), job['message_id']))
@@ -5292,8 +5282,6 @@ class Execution:
                 H.mark_delivered(c, H.KEEPER, extra["message_id"])
                 H.event(c, H.KEEPER, "job.coalesce", extra["id"], {"attempt_id": aid, "job_id": row["job_id"]})
         if body.outcome == "completed":
-            from . import task_check_backs
-            task_check_backs.finished_turn(c, aid, row["bot_id"], work_task_id(msg, conv))
             # Check obligations before settle clears unworked carried_by receipts.
             quiet_work.settle(c, aid, row["bot_id"], row["started_at"] or row["created_at"])
         # A push from the task's worktrees is the run acting too, though only its runner saw it.
@@ -5335,7 +5323,7 @@ class Execution:
                 c.execute("UPDATE tasks SET checkpoint_blocked=1 WHERE id=?", (checkpoint_task["id"],))
                 checkpoint_task = None
         # A turn that only said why it stopped leaves the task where it stood: its line is no place to pick the work up
-        # from, and a checkpoint would have the same-state rule hold the stall checks.
+        # from, and a checkpoint would have the legacy same-state rule hold stall and status checks on it.
         if (body.outcome == "completed" or yielded or source_pause) and not notice_only and body.text and checkpoint_task:
             # Where the task stood after this turn: a later turn that cannot resume this session
             # starts from it (runner prompt). It is not the task's activity, so `updated_at` stays.

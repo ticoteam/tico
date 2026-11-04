@@ -71,7 +71,7 @@ def _row(it, actor):
     if it.get("person_ask"):
         row["ask"] = it["person_ask"]
     if it.get("ask_missing"):
-        # Nothing to decide yet: the bot has been asked to say plainly what it needs (backend/restate_asks.py).
+        # Nothing to decide yet: the bot has not yet said plainly what it needs.
         row["ask_missing"] = True
     if (it.get("ask") or {}).get("body"):
         row["question"] = _clip(it["ask"]["body"], 1500)
