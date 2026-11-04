@@ -1764,6 +1764,22 @@ def create_app(settings=None):
                 counts[state] = counts.get(state, 0) + 1
         return counts
 
+    @app.get("/api/v2/system/suggestions")
+    def suggestion_settings(request: Request):
+        from . import suggestions
+        owner_only(request.state.identity, "sees suggestion privacy settings")
+        with store.read() as c:
+            return suggestions.privacy(c, settings)
+
+    @app.put("/api/v2/system/suggestions")
+    def suggestion_settings_save(request: Request, body: M.SuggestionSettings):
+        from . import suggestions
+        owner_only(request.state.identity, "changes suggestion privacy settings")
+        if body.share_stats_for_suggestions is not None:
+            person_only(request.state.identity, "consents to sharing suggestion statistics")
+        return mutate(request, body, lambda c: suggestions.save_privacy(
+            c, settings, request.state.identity.actor, body.model_dump(exclude_none=True)))
+
     @app.get("/api/v2/system/usage-count")
     def usage_count_status(request: Request):
         owner_only(request.state.identity, "sees the anonymous usage count settings")

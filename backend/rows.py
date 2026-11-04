@@ -21,6 +21,25 @@ class MeetingTaskLinkRow(TypedDict):
     created_at: str
 
 
+class SuggestionRow(TypedDict):
+    id: str
+    fingerprint: str
+    owner_role: str
+    owner_bot_id: str | None
+    title: str
+    body: str
+    condition: str
+    cooldown_days: int
+    status: str
+    update_batch_id: str | None
+    delivered_at: str | None
+    cooldown_until: str | None
+    outcome: str | None
+    outcome_reported_at: str | None
+    created_at: str
+    updated_at: str
+
+
 class TaskRow(TypedDict):
     """One `tasks` row (SELECT *)."""
     id: str
