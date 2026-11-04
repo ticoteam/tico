@@ -46,6 +46,12 @@ TRACE = os.environ.get("SIM_TRACE") == "1"
 FAMILY_MODEL = {"claude": "claude-opus-5-5", "gpt": "gpt-6.1-sol", "grok": "grok-4.6"}   # a model Tico's catalog lists
 
 
+def refusal_code(reply):
+    """The code in a refusal's error body (`{"error": {"code": ...}}`), or None."""
+    error = reply.get("error") if isinstance(reply, dict) else None
+    return error.get("code") if isinstance(error, dict) else None
+
+
 class Bot:
     def __init__(self, world, slug, role, rng, style=None, family="claude", model=None, slots=4):
         self.world, self.slug, self.role, self.rng = world, slug, role, rng
@@ -59,6 +65,8 @@ class Bot:
         self.lost = []              # turns its computer lost going off, filed when it comes back
         self.unfinished = set()     # messages whose turn ended without an answer: running one again is a retry
         self.runtime, self.held = PRIMARY, False   # where its turn runs: held, the turn runs on a fallback
+        self.parked = False         # its claimed turn is leased but waits for a computer place before it starts
+        self.parked_since = None
 
     @property
     def token(self):
@@ -75,7 +83,8 @@ class Bot:
     TAIL = {"build": (180, 240), "fix": (60, 120), "review": (30, 60), "qa": (40, 60), "plan": (60, 120)}
 
     def start(self, attempt):
-        """Begin a claimed turn: read what woke the bot, and decide how long the turn runs. It acts when it ends."""
+        """Begin a claimed turn: read what woke the bot, and ask the server to start it. A start refused for a computer
+        place parks the turn (see begin). Returns whether the turn started; it acts when its run ends."""
         w = self.world
         self._token = attempt["token"]
         self.attempt = attempt
@@ -92,10 +101,62 @@ class Bot:
                        # The claimed message is the turn's prompt, carried in the claim's reply: the inputs poll never
                        # returns it, since no input row is written for it.
                        "prompt": message.get("id")}
-        w.post(f"attempts/{attempt['id']}/started", {"thread_id": "sim"}, token=w.runner["token"])
+        return self.begin() == "started"
+
+    def begin(self):
+        """Ask the server to start the claimed turn. Answers "started", "parked" (no computer place is free: start_wait,
+        so the turn stays leased and waits), or "gone" (its lease lapsed while it waited)."""
+        w, attempt = self.world, self.attempt
+        status, reply = w.request("post", f"attempts/{attempt['id']}/started", {"thread_id": "sim"},
+                                  token=w.runner["token"])
+        code = refusal_code(reply) if 400 <= status < 500 else None
+        if code == "start_wait":
+            if not self.parked:
+                self.parked, self.parked_since = True, w.now()
+                self.record["parked"] = True
+            return "parked"
+        if code == "stale_lease":
+            self.lose()
+            return "gone"
+        if 400 <= status < 500:
+            raise Refusal(status, str(reply))
+        self.parked = False
+        self.record["at"] = w.now()
         if self.slug in w.steer_bots:
             self.steer()
+        task = attempt.get("task")   # the claim's view of the ticket, as start() read it (minutes and kind_of_turn key it)
         self.ends = w.now() + __import__("datetime").timedelta(minutes=self.minutes(task))
+        return "started"
+
+    def retry_start(self):
+        """A parked turn asks for a computer place again, as the runner's wait does (runner-rs execute.rs
+        wait_start_place): a place starts it at once, and a stop before the start ends it unstarted."""
+        w, attempt = self.world, self.attempt
+        status, reply = w.request("post", f"attempts/{attempt['id']}/start-place", {}, token=w.runner["token"])
+        if status >= 500:
+            return
+        if status >= 400:
+            if refusal_code(reply) == "stale_lease":
+                return self.lose()
+            raise Refusal(status, str(reply))
+        if reply.get("stop"):
+            return self.stop_unstarted()
+        if reply.get("reserved"):
+            self.begin()
+
+    def stop_unstarted(self):
+        """A parked turn the server stopped before its start (its task finished while it waited, or a person stopped
+        it): the runner ends it unstarted, and the server settles it as interrupted."""
+        attempt, record = self.attempt, self.record
+        self.attempt = self.record = None
+        self.parked = False
+        self.finish(attempt, "interrupted")
+        record["action"] = "stopped before it started"
+        return self.log(record)
+
+    def due(self, now):
+        """Whether a started turn has run its time and ends now. A parked turn has not started, so it has no end yet."""
+        return self.running and not self.parked and now >= self.ends
 
     def minutes(self, task):
         if not task or self.limited_until and self.world.now() < self.limited_until:
@@ -171,10 +232,12 @@ class Bot:
         return getattr(self, "attempt", None) is not None
 
     def lose(self):
-        """The computer went off mid-turn: the turn did not finish, and the runner remembers it."""
+        """The turn is gone from its computer: the computer went off mid-turn, or the turn's lease lapsed while it waited
+        for a place. It did not finish, and the runner remembers it."""
         self.lost.append(self.attempt)
         self.unfinished.add((self.attempt.get("message") or {}).get("id"))
         self.attempt = self.record = None
+        self.parked = False
 
     def recover(self):
         """Back on, the runner files each turn it lost as the real runner does on a restart."""
