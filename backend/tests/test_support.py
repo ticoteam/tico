@@ -150,7 +150,7 @@ def test_demo_mode_and_the_off_switch_refuse_everything(environment, hq, monkeyp
     for call in (lambda: file(api), lambda: api.get("/api/v2/support/compose", headers=signed_in()),
                  lambda: api.post("/api/v2/support/tickets/refresh", headers=signed_in())):
         assert call().status_code == 409
-    assert api.get("/api/v2/support/tickets", headers=signed_in()).json() == {"enabled": False, "tickets": [], "unread": 0}
+    assert api.get("/api/v2/support/tickets", headers=signed_in()).json() == {"enabled": False, "tickets": [], "unread": 0, "unread_own": 0}
     assert hq.seen == []
     # A ticket filed while support was on: once it is off, nothing about it, or anything else, reaches HQ.
     api = environment()
@@ -489,7 +489,7 @@ def test_without_ids_only_the_message_goes(environment, hq):  # noqa: F811  (the
     bot = as_bot(api)
     approval = draft(api, bot, include_ids=False).json()
     decide(api, approval["id"])
-    assert send(api, bot, approval["id"]).json()["ticket"]["sent"] == {}
+    assert send(api, bot, approval["id"]).json()["ticket"]["sent"] == {"source": "bot_report"}
     assert json.loads(hq.seen[-1].content) == {"message": REPORT, "source": "bot_report"}
 
 
@@ -1086,3 +1086,34 @@ def test_a_rule_send_leaves_no_unread_notice_for_the_default_person_and_needs_yo
         unread = {m["id"] for m in H.inbox(c, person)["messages"]}
     assert kind == "notice" and read_at and delivered_at          # the message stays, as history, and it is read
     assert mid not in unread                                       # no unread notice for the default person
+
+
+def test_a_ticket_says_who_filed_it_and_only_the_persons_own_replies_count_for_the_dot(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
+    """The page opens the chat by itself only for a reply on a ticket the person wrote. `source` says who filed each
+    ticket and `unread_own` counts just those replies; `unread` still counts every reply, since the chat shows them all.
+    A bot's report the team rule sent at once is filed as a bot's. A ticket kept before `source` was stored is told apart
+    by its request key: a bot's report by its approval's key, the Health Monitor's by `health:`."""
+    monkeypatch.setattr(support, "FRESH_S", 0)
+    api = environment()
+    mine = file(api).json()["id"]
+    bot = as_bot(api)
+    r = draft(api, bot).json()                                  # the team rule is on by default: sent at once
+    assert r["sent"] is True and r["ticket"]["sent"]["source"] == "bot_report"
+    bot_ticket = r["ticket"]["id"]
+    hq_mine, hq_bot = list(hq.tickets)                          # HQ's ids, in filing order
+    hq.staff_replies(hq_mine, "Try a reload")
+    hq.staff_replies(hq_bot, "The report is with the team")
+    assert api.post("/api/v2/support/tickets/refresh", headers=signed_in()).status_code == 200
+    listed = api.get("/api/v2/support/tickets", headers=signed_in()).json()
+    assert {t["id"]: t["source"] for t in listed["tickets"]} == {mine: "person", bot_ticket: "bot_report"}
+    assert listed["unread"] == 2 and listed["unread_own"] == 1
+
+    # Tickets kept before `source` was stored, told apart by their request keys.
+    health = file(api, message="Sync stalled since 0.3.47").json()["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE support_tickets SET sent='{}' WHERE id=?", (bot_ticket,))
+        c.execute("UPDATE support_tickets SET request_key='health:sig', sent='{}' WHERE id=?", (health,))
+    listed = api.get("/api/v2/support/tickets", headers=signed_in()).json()
+    assert {t["id"]: t["source"] for t in listed["tickets"]} == {mine: "person", bot_ticket: "bot_report",
+                                                                 health: "health_monitor"}
+    assert listed["unread"] == 2 and listed["unread_own"] == 1

@@ -269,11 +269,23 @@ def _last_activity(row):
     return max((t for t in times if t and t.tzinfo), default=EPOCH)
 
 
+def _source(row, sent):
+    """Who filed a ticket, as HQ's `source` names it. A ticket the person wrote keeps `sent` as it always was; any other
+    filer is kept in `sent`. A ticket filed before that was kept is told apart by its request key: a bot's report a
+    person approved is `approval:`, the Health Monitor's direct report is `health:`."""
+    if sent.get("source") in SOURCES:
+        return sent["source"]
+    key = row["request_key"] or ""
+    if key.startswith("health:"):
+        return "health_monitor"
+    return "bot_report" if key.startswith("approval:") else "person"
+
+
 def view(row):
     """A ticket as the page sees it. The HQ secret and id are not in it."""
-    messages = _stored_messages(row)
+    messages, sent = _stored_messages(row), json.loads(row["sent"] or "{}")
     return {"id": row["id"], "created_at": row["created_at"], "status": row["status"], "message": row["message"],
-            "email": row["email"], "sent": json.loads(row["sent"] or "{}"), "messages": messages,
+            "email": row["email"], "sent": sent, "source": _source(row, sent), "messages": messages,
             "unread": sum(1 for m in messages if m["from"] == "staff" and m["id"] > row["seen_id"])}
 
 
@@ -437,10 +449,12 @@ class Support:
         if not hq_id or not hq_secret:
             raise Problem("support_unreachable", "Could not reach Tico support. Try again in a moment.", 502, retryable=True)
         ticket_id = "sup_" + secrets.token_hex(6)
+        # Kept with the ticket who filed it, unless it is the person's own (view() reads that back: ui/support.js).
+        kept = sent if source == "person" else {**sent, "source": source}
         with self.store.transaction() as c:
             c.execute("INSERT INTO support_tickets(id,actor,created_at,status,message,email,sent,hq_id,hq_secret,"
                       "request_key) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                      (ticket_id, who.actor, H.now(), "open", message, email, encode(sent), hq_id,
+                      (ticket_id, who.actor, H.now(), "open", message, email, encode(kept), hq_id,
                        self.vault.cipher.seal(c, _context(ticket_id), hq_secret), key or None))
             H.event(c, who.actor, "support.filed", ticket_id, {"email": bool(email), "ids": bool({k: v for k, v in sent.items() if k != "diagnostics"}),
                                                               "diagnostics": "diagnostics" in sent})
@@ -634,7 +648,10 @@ class Support:
             rows = c.execute("SELECT * FROM support_tickets WHERE actor=? ORDER BY created_at DESC, id DESC LIMIT ?",
                              (who.actor, LISTED)).fetchall()
         tickets = [view(r) for r in rows]
-        return {"enabled": True, "tickets": tickets, "unread": sum(t["unread"] for t in tickets)}
+        # `unread_own` counts only the replies on the person's own tickets: what the ? shows and what opens the chat.
+        # A bot's report's reply is in the chat too, and counts in `unread`.
+        return {"enabled": True, "tickets": tickets, "unread": sum(t["unread"] for t in tickets),
+                "unread_own": sum(t["unread"] for t in tickets if t["source"] == "person")}
 
     def _pull(self, row):
         """Ask HQ about one ticket and keep the answer. Returns False when HQ could not be reached."""
@@ -716,7 +733,7 @@ def install(app, store, settings, census):
     def support_list(request: Request):
         who = person(request)
         if off_reason(settings):
-            return {"enabled": False, "tickets": [], "unread": 0}
+            return {"enabled": False, "tickets": [], "unread": 0, "unread_own": 0}
         return support.listing(who)
 
     @app.get("/api/v2/support/compose")

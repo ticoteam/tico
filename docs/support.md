@@ -10,7 +10,7 @@ is sent and kept.
 The **?** beside Search (on a computer, at the end of the sidebar's Ask row; on a phone, beside Search in the More
 drawer) opens a chat with the **Tico team**. It is its own conversation, apart from the Assistant: on a computer a panel
 over the bottom left of the page, on a phone the whole screen above the tab bar. The **?** carries a dot when the team
-has written something you haven't seen.
+has replied to one of your requests and you haven't seen it.
 
 - It is one ongoing conversation, oldest at the top, opening at the newest message; when messages arrive while you are
   reading further up, it doesn't move you. Your messages are dark bubbles on the right, the team's are on the left, with
@@ -58,8 +58,9 @@ grouped, and how many entries were evicted or omitted. Computer heartbeat time d
 This is redacted technical evidence, not an anonymous ticket: the message and optional email/install ID may identify you.
 The allowlist and examples are in [PRIVACY.md](../PRIVACY.md#support-diagnostics).
 
-The team's messages appear in the chat, put a dot on the **?** and, while the chat is closed, raise a notice ("The Tico
-team replied.") with **Open**. Having the chat open marks everything read; there is no Mark read or Refresh button.
+A reply to a request you wrote opens the chat by itself, once, with the reply in it; if you are typing in a field or a
+dialog is open, it waits until you are not. Replies to a bot's report appear in the chat only: they neither open it nor
+put a dot on the **?**. Having the chat open marks everything read; there is no Mark read or Refresh button.
 Messages are checked when you open the chat, when the app regains focus or comes back into view, and on the timer below.
 Background refresh preserves your draft, focus and scroll position.
 

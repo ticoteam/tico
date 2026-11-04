@@ -72,7 +72,8 @@
   let state = {enabled: null, tickets: [], unread: 0}, pop = null, timer, busyRefresh = null, stateRevision = 0;
   // `inFlight`: the send on its way, settled either way; `deleting`: Delete chat history running.
   let inFlight = null, deleting = false;
-  let owner = '', toasted = 0, compose = null, editor = null, opener = null, loading = null, sending = null;
+  // `lastOwn`: the person's own unread replies this tab has been told of. A rise above it opens the chat once (announceReply).
+  let owner = '', lastOwn = 0, announceWaiting = false, compose = null, editor = null, opener = null, loading = null, sending = null;
   // The one draft: what is in the box and what goes with it. `kind` is only for a message that starts a new ticket.
   const newDraft = () => ({message: '', diag: false, perf: 24, bundle: null, key: uid(), kind: 'support', report: null});
   let draft = newDraft();
@@ -110,15 +111,32 @@
     }
     document.dispatchEvent(new CustomEvent('tico:support'));
   }
+  // The person's own tickets' unread replies (ticket.source is `person`): the ? counts these, and only these, and they open
+  // the chat. A bot's report's replies are in the chat, with no dot and no opening (backend/support.py `_source`).
+  const ownUnread = list => list.reduce((n, t) => n + (t.source === 'person' ? t.unread || 0 : 0), 0);
   function accept(data) {
-    state = {enabled: data.enabled !== false, tickets: data.tickets || [], unread: data.unread || 0};
-    if (state.unread > toasted && !isOpen()) say(`The ${NAME} replied.`, false, {label: 'Open', run: () => open()});
-    toasted = state.unread;
+    state = {enabled: data.enabled !== false, tickets: data.tickets || [], unread: data.unread_own || 0};
+    if (state.unread > lastOwn) announceWaiting = true;
+    lastOwn = state.unread;
     mark();
+    announceReply();
     if (!isOpen()) return;
     render();
     // A reply that lands while the chat is in front of the person is read; while it is still opening, open() reads.
-    if (!loading && state.unread && document.hasFocus()) void readVisible();
+    if (!loading && state.tickets.some(t => t.unread) && document.hasFocus()) void readVisible();
+  }
+  // The chat opens by itself for a new reply on one of the person's own tickets, once. Never over anything the person
+  // is in: a field they are typing in, a dialog, the Ask panel, the phone's drawer, Needs you, a hidden tab. Then it
+  // waits, and opens when that ends: focus leaving a field, a dialog closing, the tab coming back, or the next check.
+  const typing = el => !!el && (el.matches?.('input, textarea, select') || el.isContentEditable === true);
+  const occupied = () => document.hidden || typing(document.activeElement) || !!document.querySelector('dialog[open], .needs-you')
+    || document.body.classList.contains('ask-open') || document.body.classList.contains('drawer');
+  function announceReply() {
+    if (!announceWaiting) return;
+    if (isOpen() || !state.unread) { announceWaiting = false; return; }
+    if (occupied()) return;
+    announceWaiting = false;
+    void open();
   }
   function note(message, error = false) {
     const el = pop?.querySelector('[data-connection]');
@@ -163,8 +181,8 @@
       if (revision !== stateRevision) return;
       stateRevision++;
       state.tickets = state.tickets.map(x => read.find(n => n.id === x.id) || x);
-      state.unread = state.tickets.reduce((n, x) => n + (x.unread || 0), 0);
-      toasted = state.unread; mark(); render();
+      state.unread = ownUnread(state.tickets);
+      lastOwn = state.unread; mark(); render();
     } catch (_) { /* unread until the chat is opened again */ }
   }
   // While a message is on its way nothing that could send it again or change it can be pressed, however often the
@@ -638,7 +656,7 @@
           state.tickets = left;
           throw new Error(`Could not delete all of your chat history; ${left.length} conversation${left.length === 1 ? '' : 's'} left. Try again.`);
         }
-        state.tickets = []; state.unread = 0; toasted = 0;
+        state.tickets = []; state.unread = 0; lastOwn = 0;
         deleting = false; mark(); asking(false); render(); renderComposer(); focusBox();
       } catch (error) { askErr.textContent = error.message; askErr.hidden = false; mark(); }
       finally { deleting = false; yes.disabled = !!sending; lockSending(false); }
@@ -683,7 +701,7 @@
   // Loads this person's conversation and the reply email a new ticket carries; a failure keeps what was loaded before.
   async function load() {
     const actor = typeof S === 'undefined' ? '' : S.me?.id;
-    if (owner !== actor) { stateRevision++; if (owner) browserFailures.length = 0; owner = actor; draft = newDraft(); compose = null; state = {enabled: null, tickets: [], unread: 0}; }
+    if (owner !== actor) { stateRevision++; if (owner) browserFailures.length = 0; owner = actor; draft = newDraft(); compose = null; state = {enabled: null, tickets: [], unread: 0}; lastOwn = 0; announceWaiting = false; }
     try {
       const revision = stateRevision;
       const data = await call('GET', '/support/tickets');
@@ -694,6 +712,7 @@
   }
   async function open() {
     build();
+    announceWaiting = false;      // the person is looking now: nothing left to announce
     if (!isOpen()) {
       opener = document.activeElement !== document.body ? document.activeElement : null;
       pop.showModal();
@@ -722,8 +741,11 @@
     if (state.tickets.some(t => !ended(t))) void refresh();
     schedule();
   };
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { wake(); void pollAccess(); } });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { wake(); void pollAccess(); announceReply(); } });
   window.addEventListener('focus', wake);
+  // A reply waiting for the person to be free (announceReply) opens when a field loses focus or a dialog closes.
+  document.addEventListener('focusout', () => { if (announceWaiting) setTimeout(announceReply, 0); });
+  document.addEventListener('close', () => { if (announceWaiting) setTimeout(announceReply, 0); }, true);
   window.addEventListener('load', () => setTimeout(async () => {
     if (typeof S === 'undefined' || !S.me || state.enabled !== null) return;
     const revision = stateRevision;
