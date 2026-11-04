@@ -308,10 +308,11 @@ def test_every_source_writes_its_topic(api):
     assert logged(lambda c: c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) "
                                       "VALUES(?,99,'delta','{}',?)", (aid, H.now()))) == {("runs", "output")}
     assert logged(lambda c: c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (H.now(), aid))) == set()
-    # A run in a thread starting or ending moves that thread's bot status too.
+    # A thread run's or its job's state change moves that thread's bot status too.
     assert logged(lambda c: c.execute("UPDATE attempts SET state='running' WHERE id=?", (aid,))) == {
         ("runs", "attempt"), ("threads", "bot_status")}
-    assert logged(lambda c: c.execute("UPDATE jobs SET state='completed' WHERE attempt_id=?", (aid,))) == {("runs", "job")}
+    assert logged(lambda c: c.execute("UPDATE jobs SET state='completed' WHERE attempt_id=?", (aid,))) == {
+        ("runs", "job"), ("threads", "bot_status")}
     assert logged(lambda c: c.execute("INSERT INTO bot_status(bot,state) VALUES('finance','idle')")) == {("bots", "status")}
     assert logged(lambda c: c.execute("UPDATE bot_status SET updated_at='x' WHERE bot='finance'")) == set()
     assert logged(lambda c: c.execute("UPDATE bots SET state='paused' WHERE slug='finance'")) == {("bots", "state")}
