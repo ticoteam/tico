@@ -292,9 +292,12 @@ text at the doors it comes in by, before a bot reads it. Change it in **Settings
 | Mail | An inbound message a bot reads (`hub inbound read`): the subject and body | Warn |
 | Ideas | The public roadmap's suggestion form: the title and summary | Warn |
 | Watchers | A watcher's new task, except the Support Agent's HQ tickets, which [support triage](support.md#support-triage) checks | Warn |
+| Documents | A document or a link that Counsel reads to suggest rules (Rules › External): the file's text, or the page the link fetches | Warn |
+| Slack | A message a person sends a bot in Slack (a DM or an @mention), and a message in a channel linked to a thread, with its edits | Warn |
 
-Each door is **Off**, **Warn** or **Hold**. Mail is only ever marked, so it offers Off and Warn. For now every door
-starts at Warn, which only observes: nothing is held until you set a door to Hold. The defaults are one constant,
+Each door is **Off**, **Warn** or **Hold**. Mail is only ever marked, so it offers Off and Warn. Only the decision
+model's score can hold an item: the pattern check only warns. Every door defaults to Warn, which only observes:
+nothing is held until you set a door to Hold. The six defaults are one constant,
 `DEFAULTS` in `backend/screening.py`; Hold becomes the default for webhooks, ideas and watchers once the live eval
 (`python -m evals.screening.run --live`) and a week of `screening.warned` rows show the hold line is safe.
 
